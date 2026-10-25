@@ -325,9 +325,11 @@ export const revokeReplay = internalMutation({
 /* The live grant behind an OAuth access token, or null. `access` is what the
  * token's own scopes allow (lib/access.ts credentialAccess). A revoked token
  * counts as gone, and so does one issued in a browser session before the
- * session ended, such as at sign-out (lib/oauthProvider.ts endSessionAccess).
+ * session ended, such as at sign-out (lib/sessionEnd.ts endSessionAccess).
  * So does a token bound to a DPoP key, whose proof Qivo cannot check
- * (lib/oauthProvider.ts never issues one). */
+ * (lib/oauthProvider.ts never issues one), and one whose client lost its
+ * link to the resource, which Better Auth checks only when it issues a
+ * token. That link costs one indexed read of the component per call. */
 export const lookupAccess = internalQuery({
   args: { tokenHash: v.string(), resource: v.string() },
   handler: async (ctx, args) => {
@@ -377,11 +379,19 @@ export const lookupAccess = internalQuery({
       model: 'oauthClient',
       where: [{ field: 'clientId', value: row.client_id }],
     })) as { disabled?: boolean } | null
+    const link = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: 'oauthClientResource',
+      where: [
+        { field: 'clientId', value: row.client_id },
+        { field: 'resourceId', value: args.resource },
+      ],
+    })
     const user = await findAuthUser(ctx, row.auth_user_id)
     const profile = await byId(ctx, 'profiles', row.profile_id)
     if (
       !client ||
       client.disabled ||
+      !link ||
       !user ||
       loginBanned(user, Date.now()) ||
       !profile?.active ||
@@ -401,7 +411,7 @@ export const lookupAccess = internalQuery({
 })
 
 /** Deletes an ended session's record once the access tokens issued before
- * it have expired (lib/oauthProvider.ts endSessionAccess). */
+ * it have expired (lib/sessionEnd.ts endSessionAccess). */
 export const forgetEndedSession = internalMutation({
   args: { id: v.id('oauth_ended_sessions') },
   handler: async (ctx, { id }) => {

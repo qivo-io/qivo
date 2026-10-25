@@ -3271,10 +3271,29 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         any,
         Name
       >;
+      deleteSpentTokens: FunctionReference<
+        "mutation",
+        "internal",
+        { expiredBefore: number; numItems: number; revokedBefore: number },
+        any,
+        Name
+      >;
       deleteUnusedClients: FunctionReference<
         "mutation",
         "internal",
         { before: number; clientIds: Array<string> },
+        any,
+        Name
+      >;
+      revokeAccessTokens: FunctionReference<
+        "mutation",
+        "internal",
+        {
+          cursor: string | null;
+          now: number;
+          numItems: number;
+          userId: string;
+        },
         any,
         Name
       >;

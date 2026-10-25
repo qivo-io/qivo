@@ -437,10 +437,16 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      put in a URL, so the row that was clicked is remembered
      instead and the pane says so. */
   const paneIssue = openIssue ? P.issueById[openIssue] : null
+  // the task the pane showed, kept while the address names it once the task
+  // left the board, so its window stays and says so (IssueDetail TaskGone)
+  const paneShown = useRef<{ at: string; id: string } | null>(null)
+  if (paneIssue && openIssue) paneShown.current = { at: openIssue, id: paneIssue.id }
+  else if (paneShown.current?.at !== openIssue) paneShown.current = null
+  const paneId = paneIssue ? paneIssue.id : (paneShown.current?.id ?? null)
   const [deadItem, setDeadItem] = useState(null as string | null) // item id (= issue uuid)
   // Back or Forward to a task still to arrive (App pendingTask): the pane
   // says it is loading
-  const waiting = !paneIssue && !deadItem && !!openIssue && P.stillLoading() !== null
+  const waiting = !paneId && !deadItem && !!openIssue && P.stillLoading() !== null
   // deadItem while its task may be one still to arrive (selectNow)
   const arriving = useRef<string | null>(null)
   /* The pane is the discussion alone — no details column fits beside a 380px
@@ -480,13 +486,13 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // place goes back only when the pane closed since this last ran.
   const restoredFor = useRef<string | null>(null)
   useEffect(() => {
-    const at = `${mobile}\n${!!paneIssue}\n${deadItem}`
+    const at = `${mobile}\n${!!paneId}\n${deadItem}`
     if (restoredFor.current === at) return
     restoredFor.current = at
-    if (mobile && !paneIssue && !deadItem && listScrollRef.current) {
+    if (mobile && !paneId && !deadItem && listScrollRef.current) {
       listScrollRef.current.scrollTop = queueScrollTop.current
     }
-  }, [mobile, !!paneIssue, deadItem])
+  }, [mobile, !!paneId, deadItem])
 
   // Escape leaves the inbox (Settings/Archive parity) — but only once the
   // pane is clear, innermost first. Anything that owns Escape — popovers, the
@@ -497,7 +503,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
-      if (paneIssue) return // the task window has it, and closes on it
+      if (paneId) return // the task window has it, and closes on it
       if (deadItem) {
         setDeadItem(null)
         return
@@ -513,7 +519,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
-  }, [onExit, paneIssue, deadItem, waiting, openTask])
+  }, [onExit, paneId, deadItem, waiting, openTask])
 
   const q = mobile ? '' : search.trim()
   const visible = P.messageGroups
@@ -606,7 +612,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   return (
     <div
       data-inbox
-      data-inbox-mobile-detail={mobile && (paneIssue || deadItem || waiting) ? '' : undefined}
+      data-inbox-mobile-detail={mobile && (paneId || deadItem || waiting) ? '' : undefined}
       className="inbox-layout animate-in fade-in slide-in-from-bottom-1"
     >
       {/* left: the message list */}
@@ -833,13 +839,13 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           switching rows remounts it — the same reset an in-place issue swap
           does inside the floating window, and the only thing that re-freezes
           the New mark for the item just clicked. */}
-      <div className={`inbox-detail-frame${paneIssue ? '' : ' inbox-detail-frame--note'}`}>
-        {paneIssue ? (
+      <div className={`inbox-detail-frame${paneId ? '' : ' inbox-detail-frame--note'}`}>
+        {paneId ? (
           <IssueDetail
             embedded
             modalActive={!poppedOut}
-            key={paneIssue.id}
-            issueId={paneIssue.id}
+            key={paneId}
+            issueId={paneId}
             unreadTs={unreadTs}
             onClose={closeTask}
             closeLabel="Back to inbox"
@@ -1012,10 +1018,10 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           released out from under itself when this closed. `onOpen` is the
           PANE's, so following a subtask in here moves both and there is never
           a second task to come back to. */}
-      {paneIssue && poppedOut && (
+      {paneId && poppedOut && (
         <UnsentScopeContext.Provider value={popScope}>
           <IssueDetail
-            issueId={paneIssue.id}
+            issueId={paneId}
             holdThread
             unreadTs={undefined} // the pane already consumed this visit's New mark
             onPopOut={undefined} // this IS the pop-out

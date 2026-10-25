@@ -11,7 +11,7 @@
  * large for the old single query. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api, components } from '../_generated/api'
+import { api, components, internal } from '../_generated/api'
 import * as peopleModule from '../adminPeople'
 import { type AdminUserPage, PEOPLE_PAGE } from '../adminPeople'
 import {
@@ -328,6 +328,46 @@ describe('the Users page', () => {
     const rows = await allUsers(asOp, '')
     expect(rows.find((r) => r.profile_id === f.user.id)?.last_sign_in_at).toBe(
       new Date(now - 10 * DAY + 1599).toISOString(),
+    )
+  })
+
+  it('keeps the last sign-in of a login whose sessions have all ended', async () => {
+    const t = newT()
+    const { f } = await peopleFixture(t)
+    const asOp = await operator(t)
+    const now = Date.now()
+    const signedInAt = now - 20 * DAY
+    // The user's only session, used for a week, ended: a sign-out, a ban or
+    // the nightly cleanup deleted it and kept its sign-in.
+    await t.mutation(internal.usage.keepSignIn, {
+      auth_user_id: f.user.auth_user_id as string,
+      created_at: signedInAt,
+      updated_at: signedInAt + 7 * DAY,
+    })
+    // an earlier session of the admin's ended, and a later one is live
+    await t.mutation(internal.usage.keepSignIn, {
+      auth_user_id: f.admin.auth_user_id as string,
+      created_at: now - 30 * DAY,
+      updated_at: now - 29 * DAY,
+    })
+    await t.mutation(components.betterAuth.adapter.create, {
+      input: {
+        model: 'session',
+        data: {
+          token: uuid(),
+          userId: f.admin.auth_user_id as string,
+          expiresAt: now + DAY,
+          createdAt: now - DAY,
+          updatedAt: now - DAY,
+        },
+      },
+    })
+    const rows = await allUsers(asOp, '')
+    expect(rows.find((r) => r.profile_id === f.user.id)?.last_sign_in_at).toBe(
+      new Date(signedInAt).toISOString(),
+    )
+    expect(rows.find((r) => r.profile_id === f.admin.id)?.last_sign_in_at).toBe(
+      new Date(now - DAY).toISOString(),
     )
   })
 

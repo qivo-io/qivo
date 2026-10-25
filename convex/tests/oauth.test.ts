@@ -8,9 +8,9 @@ import { generateCodeChallenge } from 'better-auth/oauth2'
 import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import { createAuth } from '../auth'
+import * as authTriggers from '../authTriggers'
 import { findMany } from '../betterAuth/adapter'
 import authSchema from '../betterAuth/schema'
-import * as demo from '../demo'
 import { LIMITS, NAME_MAX } from '../lib/limits'
 import { NO_ORGANIZATION, ORGANIZATION_GONE } from '../lib/oauth'
 import { sha256hex } from '../machine/auth'
@@ -1095,6 +1095,23 @@ describe('OAuth consent and resource binding', () => {
     await oauthRefusal(await refresh(f, clientId, renewed.refresh_token), ['invalid_target'])
   })
 
+  it('refuses an access token at once when its client loses the resource link', async () => {
+    const f = await fixture()
+    const linked = await connect(f)
+    const clientId = linked.request.clientId
+    expect(await toolData(await mcp(f, linked.access_token, 'list_projects'))).toBeInstanceOf(Array)
+    await unlink(f, clientId)
+    await deniedAccess(f, linked.access_token)
+    // a link to another resource does not stand in for the MCP one
+    await runInAuth(f.t, (ctx) =>
+      ctx.db.insert('oauthClientResource', {
+        clientId,
+        resourceId: 'https://other.example.test/api',
+      }),
+    )
+    await deniedAccess(f, linked.access_token)
+  })
+
   it('requires S256 PKCE and refuses signed consent query tampering and scope expansion', async () => {
     const f = await fixture()
     const clientId = await register(f)
@@ -1396,9 +1413,9 @@ describe('OAuth revocation, replay and live account checks', () => {
     const c = await connect(f)
     const sessions = () => runInAuth(f.t, async (ctx) => await ctx.db.query('session').collect())
     const [session] = await sessions()
-    // The session's delete trigger (lib/oauthProvider.ts endSessionAccess).
+    // The session's delete trigger (lib/sessionEnd.ts endSession).
     const trigger = () =>
-      vi.spyOn(demo.onDelete as unknown as { _handler: () => Promise<void> }, '_handler')
+      vi.spyOn(authTriggers.onDelete as unknown as { _handler: () => Promise<void> }, '_handler')
     // Every delete of the session fails, Better Auth's and Qivo's second try.
     const end = trigger().mockRejectedValue(new Error('injected session end failure'))
     const failed = await signOut(f)
@@ -1458,6 +1475,195 @@ describe('OAuth revocation, replay and live account checks', () => {
     expect(ended).toHaveLength(121)
     await deniedAccess(f, c.access_token)
     await deniedAccess(f, `qvo_${lastToken}`)
+  })
+
+  it('ends an expired session at its expiry when the nightly cleanup deletes it', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    // The session expires just after its access token was issued. Only a
+    // refresh can issue one after then, such as the planted one.
+    const renewed = 'planted-access-after-the-expiry'
+    const expiresAt = await runInAuth(f.t, async (ctx) => {
+      const issued = await ctx.db.query('oauthAccessToken').unique()
+      const session = await ctx.db.query('session').unique()
+      if (!issued || !session) throw new Error('the connection has no session or token')
+      await ctx.db.patch(session._id, { expiresAt: issued._creationTime + 1 })
+      return issued._creationTime + 1
+    })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const plantedAt = await runInAuth(f.t, async (ctx) => {
+      const issued = await ctx.db.query('oauthAccessToken').unique()
+      if (!issued) throw new Error('the connection has no access token')
+      const { _id, _creationTime, ...fields } = issued
+      const id = await ctx.db.insert('oauthAccessToken', {
+        ...fields,
+        token: await sha256hex(renewed),
+      })
+      return (await ctx.db.get(id))?._creationTime ?? 0
+    })
+    expect(plantedAt).toBeGreaterThan(expiresAt)
+    await f.t.mutation(internal.authRetention.expireSessions, {})
+    expect(await runInAuth(f.t, (ctx) => ctx.db.query('session').collect())).toEqual([])
+    await deniedAccess(f, c.access_token)
+    expect(await toolData(await mcp(f, `qvo_${renewed}`, 'list_projects'))).toBeInstanceOf(Array)
+  })
+
+  it('ends every access token of an expired session that a ban ends, also one a refresh issued after the expiry', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    const renewed = 'planted-access-after-the-expiry'
+    await runInAuth(f.t, async (ctx) => {
+      const issued = await ctx.db.query('oauthAccessToken').unique()
+      const session = await ctx.db.query('session').unique()
+      if (!issued || !session) throw new Error('the connection has no session or token')
+      await ctx.db.patch(session._id, { expiresAt: issued._creationTime + 1 })
+    })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    await runInAuth(f.t, async (ctx) => {
+      const issued = await ctx.db.query('oauthAccessToken').unique()
+      if (!issued) throw new Error('the connection has no access token')
+      const { _id, _creationTime, ...fields } = issued
+      await ctx.db.insert('oauthAccessToken', { ...fields, token: await sha256hex(renewed) })
+    })
+    expect(await toolData(await mcp(f, `qvo_${renewed}`, 'list_projects'))).toBeInstanceOf(Array)
+    // Better Auth ends every session of the login, as a ban does, through
+    // the delete trigger that every one of its deletes runs.
+    await f.t.run(async (ctx) =>
+      (await createAuth(ctx).$context).internalAdapter.deleteUserSessions(f.userId),
+    )
+    expect(await runInAuth(f.t, (ctx) => ctx.db.query('session').collect())).toEqual([])
+    await deniedAccess(f, c.access_token)
+    await deniedAccess(f, `qvo_${renewed}`)
+  })
+
+  it('keeps a connection and its replay check when the nightly cleanup deletes its spent tokens', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    const rotated = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
+    const rows = () =>
+      runInAuth(f.t, async (ctx) => ({
+        access: (await ctx.db.query('oauthAccessToken').collect()).length,
+        refresh: (await ctx.db.query('oauthRefreshToken').collect()).length,
+      }))
+    expect(await rows()).toEqual({ access: 2, refresh: 2 })
+    // The cleanup as it runs once the first access token has expired and an
+    // hour after the refresh revoked the first refresh token.
+    await runInAuth(f.t, async (ctx) => {
+      const first = (await ctx.db.query('oauthAccessToken').collect())[0]
+      await ctx.db.patch(first._id, { expiresAt: Date.now() - 1 })
+    })
+    const deleted = await f.t.mutation(components.betterAuth.oauth.deleteSpentTokens, {
+      expiredBefore: Date.now(),
+      revokedBefore: Date.now() + 1,
+      numItems: 100,
+    })
+    expect(deleted).toBe(2)
+    expect(await rows()).toEqual({ access: 1, refresh: 1 })
+    expect(await toolData(await mcp(f, rotated.access_token, 'list_projects'))).toBeInstanceOf(
+      Array,
+    )
+    // A replay of the deleted refresh token still ends the whole grant,
+    // through the hash Qivo keeps of every used one.
+    await oauthRefusal(await refresh(f, c.request.clientId, c.refresh_token), ['invalid_grant'])
+    await deniedAccess(f, rotated.access_token)
+    await oauthRefusal(await refresh(f, c.request.clientId, rotated.refresh_token), [
+      'invalid_grant',
+    ])
+  })
+
+  it("keeps a used refresh token's hash while the token could be accepted, and the nightly cleanup deletes it then", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const f = await fixture()
+      const start = Date.now()
+      const day = 86_400_000
+      const c = await connect(f)
+      // the first refresh token is used at once, the second two minutes
+      // later, and the third after 29 days
+      const second = await tokens(await refresh(f, c.request.clientId, c.refresh_token))
+      vi.setSystemTime(start + 2 * 60_000)
+      const third = await tokens(await refresh(f, c.request.clientId, second.refresh_token))
+      vi.setSystemTime(start + 29 * day)
+      const fourth = await tokens(await refresh(f, c.request.clientId, third.refresh_token))
+      // the night 31 days and a minute after the first use
+      vi.setSystemTime(start + 31 * day + 60_000)
+      await f.t.mutation(internal.authRetention.expireTokens, {})
+      const hashes = await f.t.run((ctx) => ctx.db.query('oauth_credential_uses').collect())
+      expect(hashes.map((row) => [row.kind, row.used_at])).toEqual([
+        ['authorization_code', new Date(start).toISOString()],
+        ['refresh_token', new Date(start + 2 * 60_000).toISOString()],
+        ['refresh_token', new Date(start + 29 * day).toISOString()],
+      ])
+      // The first token's hash is gone: its replay is refused, and the grant
+      // goes on.
+      await oauthRefusal(await refresh(f, c.request.clientId, c.refresh_token), ['invalid_grant'])
+      const fifth = await tokens(await refresh(f, c.request.clientId, fourth.refresh_token))
+      expect(await toolData(await mcp(f, fifth.access_token, 'list_projects'))).toBeInstanceOf(
+        Array,
+      )
+      // The second expired a day ago, and its hash is kept for that day: its
+      // replay still ends the whole grant.
+      await oauthRefusal(await refresh(f, c.request.clientId, second.refresh_token), [
+        'invalid_grant',
+      ])
+      await deniedAccess(f, fifth.access_token)
+      await oauthRefusal(await refresh(f, c.request.clientId, fifth.refresh_token), [
+        'invalid_grant',
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ends every session of the login at a password reset, and the access tokens issued in them', async () => {
+    const f = await fixture()
+    const c = await connect(f)
+    // a second browser of the same login
+    const other = await http(f.t, '/api/auth/sign-in/email', {
+      ...body({ email: f.profile.email, password: PASSWORD }),
+      headers: { 'Content-Type': 'application/json', Origin: APP, 'better-auth-cookie': '' },
+    })
+    expect(other.status).toBe(200)
+    const sessions = () => runInAuth(f.t, async (ctx) => await ctx.db.query('session').collect())
+    expect(await sessions()).toHaveLength(2)
+    // the operator's recovery link, which a reset request mails too
+    const operator = await f.t.mutation(components.betterAuth.adapter.create, {
+      input: {
+        model: 'user',
+        data: {
+          name: 'Operator',
+          email: 'operator@test.local',
+          emailVerified: true,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      },
+    })
+    await f.t.run(async (ctx) => {
+      await ctx.db.insert('platform_admins', {
+        auth_user_id: operator._id as string,
+        note: 'test operator',
+        created_at: new Date().toISOString(),
+      })
+    })
+    const { link } = await f.t
+      .withIdentity({ subject: operator._id as string })
+      .action(api.adminAuth.recoveryLink, { email: f.profile.email as string })
+    const url = new URL(link)
+    const landing = await http(f.t, `${url.pathname}${url.search}`)
+    expect(landing.status).toBe(302)
+    const token = new URL(landing.headers.get('location') as string).searchParams.get('token')
+    const reset = await http(f.t, '/api/auth/reset-password', {
+      ...body({ token, newPassword: 'Hermetic OAuth replacement 271828!' }),
+      headers: { 'Content-Type': 'application/json', Origin: APP },
+    })
+    expect(reset.status, await reset.clone().text()).toBe(200)
+    expect(await sessions()).toEqual([])
+    // the access token issued in the approving session stops at once
+    await deniedAccess(f, c.access_token)
+    // and each session's months are kept
+    const months = await f.t.run(async (ctx) => await ctx.db.query('usage_sign_ins').collect())
+    expect(months.map((row) => row.auth_user_id)).toEqual([f.userId])
   })
 
   it('signs out from a connect page whose signed request has expired', async () => {

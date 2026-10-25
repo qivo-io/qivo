@@ -90,7 +90,7 @@ const EXCLUDED_TABLES = [
   'oauth_connections',
   'oauth_credential_uses',
   // Keyed by a browser session, not by an organization, and gone within
-  // hours (lib/oauthProvider.ts endSessionAccess).
+  // hours (lib/sessionEnd.ts endSessionAccess).
   'oauth_ended_sessions',
   'panorama_images',
   'panorama_calendar',

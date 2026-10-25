@@ -9,7 +9,7 @@
  * adds the ones it deletes to usage_counts by the month they finished, and
  * a month's count is those plus the deliveries still stored. Better Auth
  * deletes a sign-in session at sign-out, so the months a deleted session
- * was used in are kept as usage_sign_ins rows (keepSignIns).
+ * was used in are kept as usage_sign_ins rows (lib/signIns.ts).
  *
  * Each page function reads at most USAGE_PAGE of one range and returns
  * where the next page starts. They are plain functions over a QueryCtx;
@@ -26,12 +26,10 @@ import {
   type MonthBytes,
   monthOf,
   monthRange,
-  monthsBetween,
   ORG_METRICS,
   overlapShare,
   PERSON_MAIL,
   type PersonMail,
-  retentionCutoff,
   type UsageCounts,
   type UsageMetric,
 } from '../lib/usage'
@@ -137,29 +135,21 @@ export async function storedMonthBytes(
   return (await countRow(ctx, undefined, month, metric))?.count ?? null
 }
 
-/** Keeps the months a sign-in session of login `authUserId` was used in,
- * from its creation to its last refresh, as Better Auth deletes it.
- * Months older than retention keeps are left out, so a session holds at
- * most about 27. Nothing is kept on the demo deployment. */
-export async function keepSignIns(
-  ctx: MutationCtx,
-  authUserId: string,
-  session: { createdAt: number; updatedAt: number },
-  now: number,
-): Promise<void> {
-  if (isDemoDeployment()) return
-  const oldest = monthRange(retentionCutoff(now))?.start ?? now
-  const months = monthsBetween(
-    Math.max(session.createdAt, oldest),
-    Math.min(session.updatedAt, now),
-  )
-  for (const month of months) {
-    const kept = await ctx.db
-      .query('usage_sign_ins')
-      .withIndex('by_user_month', (q) => q.eq('auth_user_id', authUserId).eq('month', month))
-      .first()
-    if (kept === null) await ctx.db.insert('usage_sign_ins', { auth_user_id: authUserId, month })
-  }
+/** Kept months a last sign-in is looked for in, newest first: all that
+ * retention keeps of one login, about 27. A session that is used every week
+ * is refreshed and lives on, so its sign-in month can be far older than the
+ * months it was used in last. */
+const LAST_SIGN_IN_MONTHS = 30
+
+/** When login `authUserId` last signed in among the sessions that have
+ * ended, in ms, or null when none kept it (lib/signIns.ts keepSignIns). */
+export async function keptSignInAt(ctx: QueryCtx, authUserId: string): Promise<number | null> {
+  const rows = await ctx.db
+    .query('usage_sign_ins')
+    .withIndex('by_user_month', (q) => q.eq('auth_user_id', authUserId))
+    .order('desc')
+    .take(LAST_SIGN_IN_MONTHS)
+  return rows.find((row) => row.signed_in_at !== undefined)?.signed_in_at ?? null
 }
 
 /** Deletes the kept sign-in months of a deleted login. Retention keeps
@@ -383,7 +373,7 @@ type Session = { createdAt: number; updatedAt: number }
 type Sessions = { page: Session[]; isDone: boolean; continueCursor: string }
 
 /** Whether login `authUserId` has a kept sign-in for the month: a session
- * that ended was used in it (keepSignIns). */
+ * that ended was used in it (lib/signIns.ts keepSignIns). */
 async function keptSignIn(ctx: QueryCtx, authUserId: string, span: Span): Promise<boolean> {
   const kept = await ctx.db
     .query('usage_sign_ins')
@@ -399,9 +389,9 @@ async function keptSignIn(ctx: QueryCtx, authUserId: string, span: Span): Promis
  * the userId index: whether one of them was created before the month ended
  * and created or refreshed after it began, and where the next page starts
  * while none was. A bound on updatedAt would make the adapter scan the whole
- * table, as no index has it. Better Auth keeps a session that expired until
- * its cookie is presented, so a login can hold many, and every one is read
- * until one matches.
+ * table, as no index has it. A login can hold many sessions, such as one
+ * per device and expired ones the nightly cleanup has not deleted yet
+ * (authRetention.ts), and every one is read until one matches.
  */
 export async function sessionsPage(
   ctx: QueryCtx,

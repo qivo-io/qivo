@@ -6217,6 +6217,23 @@ export const PLANNER = {
       scanned: data.scanned,
     }
   },
+  /** Task `uuid` in the archive, for the task window once the task has left
+      the board: `row` is the task as the Archived tasks page shows it, or
+      null when that page lists it for none of this person's projects, as
+      for a task that was deleted. Null on a transport or server error.
+      Never part of the snapshot (issues.archivedTask). */
+  fetchArchivedTask: async (uuid: string): Promise<{ row: ArchivedIssueVM | null } | null> => {
+    let data: FunctionReturnType<typeof api.issues.archivedTask>
+    try {
+      data = await convex.query(api.issues.archivedTask, { id: uuid })
+    } catch (e) {
+      console.error('[qivo] archived task fetch failed:', e)
+      return null
+    }
+    if (data === null) return { row: null }
+    const key = `${ISSUE_PREFIX}-${data.num}`
+    return { row: shapeArchivedIssue(data, handleFor(data.id, data.org_id, key), key) }
+  },
   /** Whether the snapshot holds task `uuid` as an active task, such as an
       archived one that a restore brought back. */
   isLiveTask: (uuid: string): boolean => rows.issues.has(uuid),

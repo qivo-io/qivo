@@ -724,7 +724,8 @@ nothing and issues no code.
 must reach the same Convex backend. The issuer is `CONVEX_SITE_URL + /api/auth`
 and the browser consent page uses `SITE_URL + /app/~/connect`. Each client
 is linked to the canonical resource when it registers, and Qivo refuses a
-client that is not linked to it with `invalid_target`. Changing the
+client that is not linked to it with `invalid_target`. An access token stops
+working at its next request once its client loses that link. Changing the
 canonical resource therefore ends every existing connection, and each
 client must register again, which usually means removing the connector and
 adding it again. See `.env.example`.
@@ -773,13 +774,23 @@ access tokens issued in that session, so the client's next request gets HTTP
 `401`; its refresh token, which `offline_access` keeps, renews access without
 a new approval. The access tokens also end when the session is deleted some
 other way, such as when Qivo removes an expired session that is used again,
-and for every session that ends at once. A ban ends them too, but a banned
-login cannot renew access until the ban is lifted. A session that only
-expires and is never used again stays stored, so its access tokens run to
-their own expiry, at most one hour. Its revoked grant and replay hashes are retained so old signed consent
-and credentials cannot revive it. Reuse of a consumed code or refresh token revokes the
+and for every session that ends at once. A password reset ends every
+session of the login, so it ends the access tokens issued in each of them,
+and their refresh tokens renew access as after a sign-out. A ban ends every access token of
+the login, also one a refresh issued after its session ended, and a banned
+login cannot renew access until the ban is lifted. A session that expires
+ends at its expiry. Qivo deletes expired sessions every night, and the
+access tokens issued in one before it expired stop working then or at their
+own expiry, at most one hour after they were issued, whichever comes first.
+A deleted connection's revoked grant is retained, with the hash of its code, so old signed
+consent and credentials cannot revive it. Reuse of a consumed code or refresh token revokes the
 connection, including credentials issued by a concurrent refresh; clients
-must serialize refresh requests. A fresh connection creates a new grant.
+must serialize refresh requests. Qivo keeps a consumed refresh token's hash
+for at least 31 days after its use, the token's 30-day lifetime plus a day,
+until the next nightly cleanup deletes it. A reuse of the token after that
+is still refused, but it no longer revokes the connection. A client that
+refreshes at most once an hour keeps at most 768 such hashes a connection,
+32 days of refreshes. A fresh connection creates a new grant.
 
 The OAuth provider is Better Auth `1.7.12`, which fixes the resource-binding
 advisory [GHSA-p2fr-6hmx-4528](https://github.com/advisories/GHSA-p2fr-6hmx-4528)

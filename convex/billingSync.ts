@@ -1,5 +1,5 @@
 import { makeFunctionReference } from 'convex/server'
-import { type Infer, type ObjectType, v } from 'convex/values'
+import { ConvexError, type Infer, type ObjectType, v } from 'convex/values'
 import type { Doc, Id } from './_generated/dataModel'
 import {
   internalAction,
@@ -18,6 +18,7 @@ import {
   getPolarSubscription,
   ingestPolarEvents,
   listPolarSubscriptions,
+  PolarError,
   type PolarSubscription,
   parsePolarSubscription,
   polarConfigured,
@@ -50,9 +51,19 @@ const releaseRef = makeFunctionReference<
 const reconcileRef = makeFunctionReference<'action', { org_id: string }, null>(
   'billingSync:reconcile',
 )
-const requestSyncRef = makeFunctionReference<'mutation', { org_id: string }, null>(
-  'billingSync:requestSync',
+const processWebhookRef = makeFunctionReference<'action', { event_id: string }, null>(
+  'billingSync:processWebhook',
 )
+const claimWebhookRef = makeFunctionReference<
+  'mutation',
+  { event_id: string },
+  { subscription_id: string; claim: string } | null
+>('billingSync:claimWebhook')
+const webhookFailedRef = makeFunctionReference<
+  'mutation',
+  { event_id: string; claim: string; error: string; refused?: boolean },
+  null
+>('billingSync:webhookFailed')
 const eventsRef = makeFunctionReference<'query', Record<string, never>, Doc<'billing_events'>[]>(
   'billingSync:pendingEvents',
 )
@@ -387,156 +398,178 @@ export const requestSync = internalMutation({
   },
 })
 
-/** Applies a Polar subscription, from a webhook or reconciliation, to the
- * organization's billing row. Stale or out-of-order events are ignored. It
- * opens the paid period's record when a new period starts and starts the
- * period's storage sample (storageStep), or starts a sample again that has
- * gone STORAGE_STALL_MS without a step, up to STORAGE_ATTEMPTS starts, and a
- * stopped one again STORAGE_RETRY_MS after it stopped. Then it starts or
- * stops the read-only period before deletion (model/orgRetention.ts). */
+/** Applies a Polar subscription, from a webhook delivery or reconciliation,
+ * to the organization's billing row (applySubscription). With `event_id` it
+ * is a delivery's: one already processed changes nothing, and a stored one
+ * (receiveWebhook) is marked processed and asks for the organization's
+ * reconciliation in the same transaction. */
 export const apply = internalMutation({
   args: { payload: v.string(), event_id: v.optional(v.string()) },
   handler: async (ctx, { payload, event_id }) => {
     if (!billingEnabled()) return null
     if (payload.length > 1_048_576) throw badRequest('Invalid billing event.')
-    if (
-      event_id &&
-      (await ctx.db
-        .query('billing_webhooks')
-        .withIndex('by_event', (q) => q.eq('event_id', event_id))
-        .unique())
-    )
-      return null
+    const receipt = event_id === undefined ? null : await receiptOf(ctx, event_id)
+    if (receipt && !receipt.pending) return null
     const remote = parsePolarSubscription(JSON.parse(payload))
-    require(remote.externalCustomerId, badRequest('Subscription has no Qivo organization.'))
-    const sub = await subscriptionFor(ctx, remote.externalCustomerId)
-    require(sub, badRequest('Subscription has no assigned organization plan.'))
-    const plan = await byId(ctx, 'billing_plans', sub.plan_id)
-    require(plan?.polar_product_id === remote.productId, badRequest(
-      'Subscription product does not match the assigned plan.',
-    ))
+    const orgId = await applySubscription(ctx, remote)
     const now = isoNow()
-    const modified = new Date(
-      remote.modifiedAt ?? remote.startedAt ?? remote.currentPeriodStart,
-    ).toISOString()
-    require(remote.seats !== undefined && remote.seats >= plan.minimum_seats, badRequest(
-      'Subscription quantity is invalid.',
-    ))
-    const incomingId = remote.id
-    // A late notification for an old canceled subscription cannot revoke its
-    // paid replacement. One live provider subscription per organization.
-    const different = sub.polar_subscription_id && sub.polar_subscription_id !== incomingId
-    if (different && !['pending', 'canceled', 'unpaid'].includes(sub.status)) return null
-    if (
-      different &&
-      sub.current_period_start &&
-      remote.currentPeriodStart < Date.parse(sub.current_period_start)
-    )
-      return null
-    if (!different && sub.provider_modified_at && modified < sub.provider_modified_at) return null
-    if (
-      !different &&
-      sub.provider_modified_at === modified &&
-      sub.status === 'canceled' &&
-      remote.status !== 'canceled'
-    )
-      return null
-    const status =
-      remote.status === 'incomplete' || remote.status === 'incomplete_expired'
-        ? 'pending'
-        : remote.status
-    const start = new Date(remote.currentPeriodStart).toISOString()
-    const end = new Date(remote.currentPeriodEnd).toISOString()
-    // The canceled subscription a checkout replaces cannot be that
-    // checkout's outcome (reserveCheckout opens one only after the end), so
-    // reading it again keeps the checkout while it is polled (nextSyncDue).
-    // A checkout past that has no live subscription to wait for any more.
-    const predecessor =
-      sub.polar_subscription_id === incomingId &&
-      sub.status === 'canceled' &&
-      status === 'canceled' &&
-      checkoutPolled(sub, Date.now())
-    const fields = {
-      polar_subscription_id: incomingId,
-      polar_customer_id: remote.customerId,
-      provider_modified_at: modified,
-      status,
-      current_period_start: start,
-      current_period_end: end,
-      billed_seats: remote.seats,
-      cancel_at_period_end: remote.cancelAtPeriodEnd,
-      ended_at: remote.endedAt === undefined ? undefined : new Date(remote.endedAt).toISOString(),
-      past_due_at: status === 'past_due' ? (sub.past_due_at ?? now) : undefined,
-      ...(predecessor
-        ? {}
-        : { checkout_id: undefined, checkout_url: undefined, checkout_expires_at: undefined }),
-      // a free period that Polar now bills gets no more reminders (reminders)
-      remind_at: null,
-    } satisfies Partial<Doc<'billing_subscriptions'>>
-    /* A reconciliation that finds nothing new leaves the row as it is, so
-       the queries that read it do not run again and updated_at keeps the
-       time of the last change, which a canceled subscription's service end
-       counts from (model/orgRetention.ts). An absent field equals one set
-       to undefined. */
-    if (Object.entries(fields).some(([key, value]) => sub[key as keyof typeof fields] !== value)) {
-      const next = { ...fields, updated_at: now }
-      await ctx.db.patch(sub._id, { ...next, retention_at: retentionDue({ ...sub, ...next }) })
-    }
-    const period = await ctx.db
-      .query('billing_periods')
-      .withIndex('by_subscription_period', (q) =>
-        q.eq('subscription_id', incomingId).eq('period_start', start),
-      )
-      .unique()
-    if (!period && (status === 'active' || status === 'past_due')) {
-      const counts = await getBillableUsers(ctx, sub.org_id)
-      const periodId = await ctx.db.insert('billing_periods', {
-        org_id: sub.org_id,
-        subscription_id: incomingId,
-        plan_id: plan.id,
-        period_start: start,
-        period_end: end,
-        seats: remote.seats,
-        profile_ids: counts.users.map((p) => p.profile_id),
-        created_at: now,
+    if (receipt) {
+      await ctx.db.patch(receipt._id, {
+        pending: undefined,
+        next_attempt_at: undefined,
+        claim: undefined,
+        processed_at: now,
       })
-      await startStorageSample(ctx, periodId)
-    } else if (period && period.storage_bytes === undefined) {
-      const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
-      // A stopped sample has no run until its retry starts one.
-      const stopped = period.storage_failed_at !== undefined && period.storage_run === undefined
-      if (stopped) {
-        // eventReady sends a storage charge only for a current period of a
-        // live subscription, so a retry outside one could charge nothing
-        const chargeable =
-          (status === 'active' || status === 'past_due') &&
-          remote.endedAt === undefined &&
-          period.period_end > ago(-STORAGE_STALL_MS)
-        if (chargeable && (period.storage_failed_at ?? '') < ago(STORAGE_RETRY_MS))
-          await retryStoppedSample(ctx, period)
-      } else if ((period.storage_run_at ?? '') < ago(STORAGE_STALL_MS)) {
-        await restartStorageSample(ctx, period)
-      }
-    }
-    if (event_id)
+      await requestBillingSync(ctx, orgId)
+    } else if (event_id !== undefined)
       await ctx.db.insert('billing_webhooks', {
         event_id,
-        subscription_id: incomingId,
+        subscription_id: remote.id,
         received_at: now,
+        processed_at: now,
       })
-    if (sub.status !== status || sub.current_period_start !== start || different)
-      await audit(ctx, {
-        actor_email: 'polar',
-        action: 'billing.subscription',
-        target_org_id: sub.org_id,
-        detail: { subscription_id: incomingId, status, period_start: start, seats: remote.seats },
-      })
-    // An ended subscription starts the read-only period before deletion; a
-    // new one stops a deletion that billing started.
-    await syncOrgRemoval(ctx, sub.org_id)
     return null
   },
 })
+
+/** The receipt of Polar delivery `event_id`, or null. */
+const receiptOf = (ctx: QueryCtx, event_id: string) =>
+  ctx.db
+    .query('billing_webhooks')
+    .withIndex('by_event', (q) => q.eq('event_id', event_id))
+    .unique()
+
+/* Applies `remote` to its organization's billing row and answers the
+ * organization's id. Stale or out-of-order states are ignored. It opens the
+ * paid period's record when a new period starts and starts the period's
+ * storage sample (storageStep), or starts a sample again that has gone
+ * STORAGE_STALL_MS without a step, up to STORAGE_ATTEMPTS starts, and a
+ * stopped one again STORAGE_RETRY_MS after it stopped. Then it starts or
+ * stops the read-only period before deletion (model/orgRetention.ts). */
+async function applySubscription(ctx: MutationCtx, remote: PolarSubscription): Promise<string> {
+  require(remote.externalCustomerId, badRequest('Subscription has no Qivo organization.'))
+  const sub = await subscriptionFor(ctx, remote.externalCustomerId)
+  require(sub, badRequest('Subscription has no assigned organization plan.'))
+  const plan = await byId(ctx, 'billing_plans', sub.plan_id)
+  require(plan?.polar_product_id === remote.productId, badRequest(
+    'Subscription product does not match the assigned plan.',
+  ))
+  const now = isoNow()
+  const modified = new Date(
+    remote.modifiedAt ?? remote.startedAt ?? remote.currentPeriodStart,
+  ).toISOString()
+  require(remote.seats !== undefined && remote.seats >= plan.minimum_seats, badRequest(
+    'Subscription quantity is invalid.',
+  ))
+  const incomingId = remote.id
+  // A late notification for an old canceled subscription cannot revoke its
+  // paid replacement. One live provider subscription per organization.
+  const different = sub.polar_subscription_id && sub.polar_subscription_id !== incomingId
+  if (different && !['pending', 'canceled', 'unpaid'].includes(sub.status)) return sub.org_id
+  if (
+    different &&
+    sub.current_period_start &&
+    remote.currentPeriodStart < Date.parse(sub.current_period_start)
+  )
+    return sub.org_id
+  if (!different && sub.provider_modified_at && modified < sub.provider_modified_at)
+    return sub.org_id
+  if (
+    !different &&
+    sub.provider_modified_at === modified &&
+    sub.status === 'canceled' &&
+    remote.status !== 'canceled'
+  )
+    return sub.org_id
+  const status =
+    remote.status === 'incomplete' || remote.status === 'incomplete_expired'
+      ? 'pending'
+      : remote.status
+  const start = new Date(remote.currentPeriodStart).toISOString()
+  const end = new Date(remote.currentPeriodEnd).toISOString()
+  // The canceled subscription a checkout replaces cannot be that
+  // checkout's outcome (reserveCheckout opens one only after the end), so
+  // reading it again keeps the checkout while it is polled (nextSyncDue).
+  // A checkout past that has no live subscription to wait for any more.
+  const predecessor =
+    sub.polar_subscription_id === incomingId &&
+    sub.status === 'canceled' &&
+    status === 'canceled' &&
+    checkoutPolled(sub, Date.now())
+  const fields = {
+    polar_subscription_id: incomingId,
+    polar_customer_id: remote.customerId,
+    provider_modified_at: modified,
+    status,
+    current_period_start: start,
+    current_period_end: end,
+    billed_seats: remote.seats,
+    cancel_at_period_end: remote.cancelAtPeriodEnd,
+    ended_at: remote.endedAt === undefined ? undefined : new Date(remote.endedAt).toISOString(),
+    past_due_at: status === 'past_due' ? (sub.past_due_at ?? now) : undefined,
+    ...(predecessor
+      ? {}
+      : { checkout_id: undefined, checkout_url: undefined, checkout_expires_at: undefined }),
+    // a free period that Polar now bills gets no more reminders (reminders)
+    remind_at: null,
+  } satisfies Partial<Doc<'billing_subscriptions'>>
+  /* A reconciliation that finds nothing new leaves the row as it is, so
+     the queries that read it do not run again and updated_at keeps the
+     time of the last change, which a canceled subscription's service end
+     counts from (model/orgRetention.ts). An absent field equals one set
+     to undefined. */
+  if (Object.entries(fields).some(([key, value]) => sub[key as keyof typeof fields] !== value)) {
+    const next = { ...fields, updated_at: now }
+    await ctx.db.patch(sub._id, { ...next, retention_at: retentionDue({ ...sub, ...next }) })
+  }
+  const period = await ctx.db
+    .query('billing_periods')
+    .withIndex('by_subscription_period', (q) =>
+      q.eq('subscription_id', incomingId).eq('period_start', start),
+    )
+    .unique()
+  if (!period && (status === 'active' || status === 'past_due')) {
+    const counts = await getBillableUsers(ctx, sub.org_id)
+    const periodId = await ctx.db.insert('billing_periods', {
+      org_id: sub.org_id,
+      subscription_id: incomingId,
+      plan_id: plan.id,
+      period_start: start,
+      period_end: end,
+      seats: remote.seats,
+      profile_ids: counts.users.map((p) => p.profile_id),
+      created_at: now,
+    })
+    await startStorageSample(ctx, periodId)
+  } else if (period && period.storage_bytes === undefined) {
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+    // A stopped sample has no run until its retry starts one.
+    const stopped = period.storage_failed_at !== undefined && period.storage_run === undefined
+    if (stopped) {
+      // eventReady sends a storage charge only for a current period of a
+      // live subscription, so a retry outside one could charge nothing
+      const chargeable =
+        (status === 'active' || status === 'past_due') &&
+        remote.endedAt === undefined &&
+        period.period_end > ago(-STORAGE_STALL_MS)
+      if (chargeable && (period.storage_failed_at ?? '') < ago(STORAGE_RETRY_MS))
+        await retryStoppedSample(ctx, period)
+    } else if ((period.storage_run_at ?? '') < ago(STORAGE_STALL_MS)) {
+      await restartStorageSample(ctx, period)
+    }
+  }
+  if (sub.status !== status || sub.current_period_start !== start || different)
+    await audit(ctx, {
+      actor_email: 'polar',
+      action: 'billing.subscription',
+      target_org_id: sub.org_id,
+      detail: { subscription_id: incomingId, status, period_start: start, seats: remote.seats },
+    })
+  // An ended subscription starts the read-only period before deletion; a
+  // new one stops a deletion that billing started.
+  await syncOrgRemoval(ctx, sub.org_id)
+  return sub.org_id
+}
 
 /* Starts a period's storage sample, or starts it again, and counts the
  * start. A new run id stops any earlier run at its next step. */
@@ -846,18 +879,205 @@ export const reconcile = internalAction({
   },
 })
 
-// A verified webhook wakes a fresh provider read. Replaying an old event
-// therefore cannot restore canceled access or roll billing periods backward.
-export const webhook = internalAction({
+/* Polar fails a delivery that takes over 10 seconds to answer, retries it
+ * up to 10 times over about half an hour to an hour, and disables the
+ * endpoint after 10 deliveries in a row failed every try. So a delivery is
+ * stored and answered at once (receiveWebhook) and processed afterwards
+ * (processWebhook), however slow or broken Polar's API is meanwhile. */
+
+/** Processing attempts a stored delivery gets: the next starts 30 seconds
+ * after a failure, doubling up to an hour, about three hours in all. Then
+ * it is given up (giveUpWebhook), and the reconciliation reads the
+ * subscription anyway. A refusal from applying the subscription (apply)
+ * gives it up at once: each attempt reads Polar and Qivo afresh, so another
+ * would refuse it again until one of them changes, and a change at Polar
+ * sends an event of its own. */
+export const WEBHOOK_ATTEMPTS = 10
+
+/** How long one processing attempt holds its delivery: past the adapter's
+ * 15-second Polar timeout and the writes after it. */
+export const WEBHOOK_LEASE_MS = 2 * 60_000
+
+/** How long a receipt is kept to recognize a repeated delivery. Polar's own
+ * retries end within about an hour, and a repeat after this reads Polar
+ * again, which changes nothing a fresh read would not. */
+export const WEBHOOK_RETENTION_MS = 30 * DAY_MS
+
+/** Stored deliveries the minute's sweep starts again at most. */
+export const WEBHOOK_PAGE = { size: 20 }
+
+/** Stores a verified Polar subscription delivery and schedules its
+ * processing, for the webhook to answer at once (billingHttp.ts). A repeated
+ * delivery of an event still pending or processed, as Polar sends when an
+ * answer is lost, stores and schedules nothing more. A repeat of an event
+ * given up (giveUpWebhook), as an operator sends from Polar's dashboard once
+ * the cause is fixed, starts it again as if it had just arrived, with all
+ * WEBHOOK_ATTEMPTS. Each delivery stored or started again deletes up to two
+ * receipts older than WEBHOOK_RETENTION_MS, which keeps the table to about
+ * the deliveries of that period without a job of its own. */
+export const receiveWebhook = internalMutation({
   args: { event_id: v.string(), subscription_id: v.string() },
   handler: async (ctx, { event_id, subscription_id }): Promise<null> => {
-    const remote = await getPolarSubscription(subscription_id)
-    await ctx.runMutation(applyRef, { payload: subscriptionPayload(remote), event_id })
-    if (remote.externalCustomerId)
-      await ctx.runMutation(requestSyncRef, { org_id: remote.externalCustomerId })
+    const receipt = await receiptOf(ctx, event_id)
+    if (receipt && receipt.failed_at === undefined) return null
+    const now = Date.now()
+    // the scheduled run takes the first attempt; the sweep starts it again
+    // only once this lease has passed without one
+    const fresh = {
+      received_at: iso(now),
+      pending: true as const,
+      attempts: 0,
+      next_attempt_at: iso(now + WEBHOOK_LEASE_MS),
+    }
+    // an attempt from before the redelivery no longer holds it (webhookFailed)
+    if (receipt)
+      await ctx.db.patch(receipt._id, { ...fresh, claim: undefined, failed_at: undefined })
+    else await ctx.db.insert('billing_webhooks', { event_id, subscription_id, ...fresh })
+    await ctx.scheduler.runAfter(0, processWebhookRef, { event_id })
+    const expired = await ctx.db
+      .query('billing_webhooks')
+      .withIndex('by_received', (q) => q.lt('received_at', iso(now - WEBHOOK_RETENTION_MS)))
+      .take(2)
+    for (const row of expired) await ctx.db.delete(row._id)
     return null
   },
 })
+
+/** Takes a stored delivery for one processing attempt, holding it for
+ * WEBHOOK_LEASE_MS, and answers its subscription id and the attempt's own
+ * claim, which its failure names (webhookFailed), or null when it is done,
+ * held by another attempt or billing is off. A delivery whose attempts all
+ * started, the last without recording its end, is given up. */
+export const claimWebhook = internalMutation({
+  args: { event_id: v.string() },
+  handler: async (
+    ctx,
+    { event_id },
+  ): Promise<{ subscription_id: string; claim: string } | null> => {
+    if (!billingEnabled() || !polarConfigured()) return null
+    const receipt = await receiptOf(ctx, event_id)
+    const now = Date.now()
+    if (!receipt?.pending) return null
+    const attempts = receipt.attempts ?? 0
+    if (attempts > 0 && (receipt.next_attempt_at ?? '') > iso(now)) return null
+    if (attempts >= WEBHOOK_ATTEMPTS) {
+      await giveUpWebhook(ctx, receipt, 'the last attempt did not finish')
+      return null
+    }
+    const claim = newUuid()
+    await ctx.db.patch(receipt._id, {
+      attempts: attempts + 1,
+      claim,
+      next_attempt_at: iso(now + WEBHOOK_LEASE_MS),
+    })
+    return { subscription_id: receipt.subscription_id, claim }
+  },
+})
+
+/** Records the failure of the processing attempt that took the delivery
+ * with `claim` (claimWebhook). The next starts after 30 seconds, doubling up
+ * to an hour (the sweep starts it), and the last gives the delivery up. A
+ * refusal from applying the subscription (`refused`) gives it up at once
+ * (WEBHOOK_ATTEMPTS). A failure from an attempt that no longer holds the
+ * delivery changes nothing, so it cannot give up a delivery another attempt
+ * may still process: one that outlived its lease after the sweep started
+ * the next, or one from before a redelivery started the delivery again
+ * (receiveWebhook), whose attempts count from one again. */
+export const webhookFailed = internalMutation({
+  args: {
+    event_id: v.string(),
+    claim: v.string(),
+    error: v.string(),
+    refused: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { event_id, claim, error, refused }): Promise<null> => {
+    const receipt = await receiptOf(ctx, event_id)
+    if (!receipt?.pending || receipt.claim !== claim) return null
+    const attempt = receipt.attempts ?? 0
+    if (refused || attempt >= WEBHOOK_ATTEMPTS) {
+      await giveUpWebhook(ctx, receipt, error)
+      return null
+    }
+    const wait = Math.min(60 * 60_000, 30_000 * 2 ** (attempt - 1))
+    await ctx.db.patch(receipt._id, { next_attempt_at: iso(Date.now() + wait) })
+    return null
+  },
+})
+
+/* Stops processing a delivery, with a billing.webhook_failed audit row that
+ * names its last error for the operator (Qivo Admin, Audit). When an
+ * organization's billing holds the subscription, it names that organization
+ * in the row and asks for the organization's reconciliation. A subscription
+ * Qivo has not applied yet, such as a new one, has no such organization. A
+ * redelivery of the event starts the delivery again (receiveWebhook). */
+async function giveUpWebhook(ctx: MutationCtx, receipt: Doc<'billing_webhooks'>, error: string) {
+  await ctx.db.patch(receipt._id, {
+    pending: undefined,
+    next_attempt_at: undefined,
+    claim: undefined,
+    failed_at: isoNow(),
+  })
+  // first rather than unique: a throw here would keep the delivery pending
+  const sub = await ctx.db
+    .query('billing_subscriptions')
+    .withIndex('by_provider', (q) => q.eq('polar_subscription_id', receipt.subscription_id))
+    .first()
+  await audit(ctx, {
+    actor_email: 'polar',
+    action: 'billing.webhook_failed',
+    target_org_id: sub?.org_id,
+    detail: {
+      event_id: receipt.event_id,
+      subscription_id: receipt.subscription_id,
+      attempts: receipt.attempts ?? 0,
+      error: error.slice(0, 200),
+    },
+  })
+  if (sub) await requestBillingSync(ctx, sub.org_id)
+}
+
+/** One processing attempt of a stored delivery. It reads the subscription
+ * from Polar afresh, so a replayed or reordered event cannot restore
+ * canceled access or roll billing periods backward, and applies it (apply),
+ * which marks the delivery processed and asks for the organization's
+ * reconciliation. A failure is recorded with the attempt's claim
+ * (webhookFailed), for a later attempt, or to give the delivery up when
+ * applying refused it. An attempt that outlived its lease still applies
+ * what it read while the delivery is pending, as applying ignores a state
+ * older than the stored one. */
+export const processWebhook = internalAction({
+  args: { event_id: v.string() },
+  handler: async (ctx, { event_id }): Promise<null> => {
+    const claimed = await ctx.runMutation(claimWebhookRef, { event_id })
+    if (claimed === null) return null
+    try {
+      const remote = await getPolarSubscription(claimed.subscription_id)
+      await ctx.runMutation(applyRef, { payload: subscriptionPayload(remote), event_id })
+    } catch (e) {
+      await ctx.runMutation(webhookFailedRef, {
+        event_id,
+        claim: claimed.claim,
+        ...webhookError(e),
+      })
+    }
+    return null
+  },
+})
+
+/** What a processing attempt's failure was, for the audit row of a delivery
+ * given up: Polar's error code and status, or the refusal applying it gave.
+ * Never the response or the request. `refused` marks that refusal (a
+ * bad_request ConvexError, see applySubscription), which no retry changes;
+ * the Polar adapter throws PolarError instead. */
+function webhookError(e: unknown): { error: string; refused: boolean } {
+  if (e instanceof PolarError)
+    return { error: `polar ${e.code}${e.status ? ` ${e.status}` : ''}`, refused: false }
+  const data = e instanceof ConvexError ? e.data : null
+  return {
+    error: typeof data?.message === 'string' ? data.message : 'error',
+    refused: data?.code === 'bad_request',
+  }
+}
 
 export const pendingEvents = internalQuery({
   args: {},
@@ -971,12 +1191,13 @@ export const pump = internalAction({
  * A due time waits for the first sweep at or after it, so a time here is
  * met up to a minute late, except an interval a reconciliation counts from
  * its own end (after), which the sweep that many minutes after the one
- * that started it meets. A minute with nothing due reads six index ranges
- * and writes nothing. Pump and the reminders run in their own
- * transactions, so a failure in either cannot undo the reconciliations
- * this one starts. The reminders that are due and the rows without a
- * reminder time each start their own chain of steps, so neither waits for
- * the other. */
+ * that started it meets. It also starts the attempts of stored webhook
+ * deliveries that are due (processWebhook), WEBHOOK_PAGE at a time. A
+ * minute with nothing due reads seven index ranges and writes nothing.
+ * Pump, the deliveries and the reminders run in their own transactions, so
+ * a failure in any cannot undo the reconciliations this one starts. The
+ * reminders that are due and the rows without a reminder time each start
+ * their own chain of steps, so neither waits for the other. */
 export const sweep = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
@@ -1018,6 +1239,13 @@ export const sweep = internalMutation({
       )
       .first()
     if (event) await ctx.scheduler.runAfter(0, pumpRef, {})
+    // stored deliveries whose attempt failed, or never started or ended
+    const deliveries = await ctx.db
+      .query('billing_webhooks')
+      .withIndex('by_pending', (q) => q.eq('pending', true).lte('next_attempt_at', iso(now)))
+      .take(WEBHOOK_PAGE.size)
+    for (const receipt of deliveries)
+      await ctx.scheduler.runAfter(0, processWebhookRef, { event_id: receipt.event_id })
     for (const lane of ['due', 'unset'] as const)
       if (await reminded(ctx, lane, now).first())
         await ctx.scheduler.runAfter(0, noticesRef, { now, lane, cursor: null })

@@ -151,6 +151,27 @@ crons.interval(
 // (auditRetention.ts).
 crons.daily('expire-audit-log', { hourUTC: 4, minuteUTC: 45 }, internal.auditRetention.expire, {})
 
+// Deletes the sign-in sessions that have expired, each through the
+// cleanup's session delete trigger. The empty arguments start a run; each
+// step schedules the next, and the last writes an expire_sessions row when
+// it deleted any (authRetention.ts).
+crons.daily(
+  'expire-sessions',
+  { hourUTC: 4, minuteUTC: 55 },
+  internal.authRetention.expireSessions,
+  {},
+)
+
+// Deletes the OAuth access and refresh tokens that protect nothing any more,
+// and the hashes of used refresh tokens that could no longer be accepted,
+// the same way, with an expire_oauth_tokens row (authRetention.ts).
+crons.daily(
+  'expire-oauth-tokens',
+  { hourUTC: 5, minuteUTC: 5 },
+  internal.authRetention.expireTokens,
+  {},
+)
+
 // Stores each organization's usage for the month that just ended, after the
 // nightly jobs. On the 1st the empty arguments start the run; each step
 // schedules the next and the last writes a usage_month row. On the other

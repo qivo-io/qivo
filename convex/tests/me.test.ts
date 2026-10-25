@@ -147,6 +147,10 @@ async function plantOauth(t: T, f: OrgFixture, profile: Doc<'profiles'>, scopes:
       data: { clientId, redirectUris: ['https://client.example/callback'], scopes },
     },
   })
+  // the link registration gives a client (oauthConnections.ts lookupAccess)
+  await t.mutation(components.betterAuth.adapter.create, {
+    input: { model: 'oauthClientResource', data: { clientId, resourceId: mcpResource() } },
+  })
   const connectionId = uuid()
   await t.run((ctx) =>
     ctx.db.insert('oauth_connections', {

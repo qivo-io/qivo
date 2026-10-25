@@ -52,6 +52,7 @@ import {
   type ArchivedPageRow,
   archiveCursorText,
   archivedPageCore,
+  archivedTaskCore,
   parseArchiveCursor,
 } from './lib/archivedTasks'
 import { byId } from './lib/db'
@@ -137,8 +138,9 @@ const assertWritable = (ctx: MeCtx, projectId: string): Promise<void> =>
 
 /* --------------------------------------------------------------- archived
  * Issue reads that live OUTSIDE the snapshot: the Archived tasks page's
- * paged list (P.fetchArchivedPage) and, deprecated, the whole-archive read
- * that browser tabs and desktop clients from before it still call.
+ * paged list (P.fetchArchivedPage), the task window's look-up of its own
+ * task (P.fetchArchivedTask) and, deprecated, the whole-archive read that
+ * browser tabs and desktop clients from before it still call.
  *
  * issues_select stayed can_see_project(project_id) (0003:165) for archived
  * rows too — fetchAll excluded them by filter, not by policy — so the fence
@@ -189,6 +191,17 @@ export const archivedPage = authedQuery({
       scanned: page.scanned,
     }
   },
+})
+
+/** The archived task `id` as archivedPage shows it to the caller, or null
+ * when archivedPage lists it for none of the caller's projects: the task is
+ * active, deleted, unknown or in a project the caller cannot see, which all
+ * answer alike (lib/archivedTasks.ts archivedTaskCore). The task window asks
+ * it once its task has left the board, to say whether it was archived. */
+export const archivedTask = authedQuery({
+  args: { id: v.string() },
+  handler: async (ctx, { id }): Promise<ArchivedPageRow | null> =>
+    await archivedTaskCore(ctx, ctx.myProfiles, id),
 })
 
 /** Deprecated: the Archived tasks page reads archivedPage. Kept for one

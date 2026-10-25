@@ -1,6 +1,6 @@
 import { v } from 'convex/values'
 import { stream } from 'convex-helpers/server/stream'
-import type { Doc } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
 import { type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
 import schema from './schema'
 
@@ -106,5 +106,75 @@ export const deleteClients = mutation({
     const deleting = clients.slice(0, numItems)
     for (const client of deleting) await deleteClient(ctx, client)
     return { count: deleting.length, isDone: clients.length <= numItems }
+  },
+})
+
+/** Deletes up to `numItems` OAuth token rows that protect nothing any more,
+ * and answers how many it deleted (app authRetention.ts expireTokens):
+ * - An access token that expired before `expiredBefore`. /mcp refuses it
+ *   anyway (oauthConnections.ts lookupAccess), and revoking it changes
+ *   nothing.
+ * - A refresh token that expired before `expiredBefore`. Better Auth refuses
+ *   an expired one before it looks at its revocation, so even its replay
+ *   detection never reads one.
+ * - A refresh token revoked before `revokedBefore`, such as one a refresh
+ *   rotated. Qivo's adapter hides a revoked one from Better Auth
+ *   (lib/oauthAdapter.ts), and Qivo detects its replay by the hash it keeps
+ *   of a used one while it could still be accepted (oauth_credential_uses),
+ *   so the row protects nothing.
+ * A row without an expiry or a revocation time is kept. */
+export const deleteSpentTokens = mutation({
+  args: { expiredBefore: v.number(), revokedBefore: v.number(), numItems: v.number() },
+  handler: async (ctx, args) => {
+    let left = args.numItems
+    const remove = async (rows: Array<{ _id: Id<'oauthAccessToken' | 'oauthRefreshToken'> }>) => {
+      for (const row of rows) await ctx.db.delete(row._id)
+      left -= rows.length
+    }
+    await remove(
+      await ctx.db
+        .query('oauthAccessToken')
+        .withIndex('expiresAt', (q) => q.gt('expiresAt', 0).lt('expiresAt', args.expiredBefore))
+        .take(left),
+    )
+    if (left > 0)
+      await remove(
+        await ctx.db
+          .query('oauthRefreshToken')
+          .withIndex('expiresAt', (q) => q.gt('expiresAt', 0).lt('expiresAt', args.expiredBefore))
+          .take(left),
+      )
+    if (left > 0)
+      await remove(
+        await ctx.db
+          .query('oauthRefreshToken')
+          .withIndex('revoked', (q) => q.gt('revoked', 0).lt('revoked', args.revokedBefore))
+          .take(left),
+      )
+    return args.numItems - left
+  },
+})
+
+/** Revokes, as of `now`, the access tokens of login `userId` on one page of
+ * its tokens that have neither expired nor been revoked, and answers where
+ * the next page starts, or null when no token is left. A ban revokes them
+ * all (app adminAuth.ts setBan), also those issued in a session that had
+ * already ended, which the session's end does not reach. */
+export const revokeAccessTokens = mutation({
+  args: {
+    userId: v.string(),
+    now: v.number(),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const page = await stream(ctx.db, schema)
+      .query('oauthAccessToken')
+      .withIndex('userId', (q) => q.eq('userId', args.userId))
+      .paginate({ cursor: args.cursor, numItems: args.numItems })
+    for (const token of page.page)
+      if (token.revoked == null && (token.expiresAt ?? 0) > args.now)
+        await ctx.db.patch(token._id, { revoked: args.now })
+    return page.isDone ? null : page.continueCursor
   },
 })

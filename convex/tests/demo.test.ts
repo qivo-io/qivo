@@ -54,7 +54,7 @@ async function anonymousLogin(on = t) {
           updatedAt: now,
         },
       },
-      onCreateHandle: await createFunctionHandle(internal.demo.onCreate),
+      onCreateHandle: await createFunctionHandle(internal.authTriggers.onCreate),
     }),
   )
   const session = await on.run(async (ctx) =>
@@ -69,7 +69,7 @@ async function anonymousLogin(on = t) {
           updatedAt: now,
         },
       },
-      onCreateHandle: await createFunctionHandle(internal.demo.onCreate),
+      onCreateHandle: await createFunctionHandle(internal.authTriggers.onCreate),
     }),
   )
   const as = on.withIdentity({ subject: user._id as string, sessionId: session._id as string })

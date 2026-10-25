@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { LOGIN_PURGE } from '../adminAuth'
+import { authComponent } from '../auth'
 import authSchema from '../betterAuth/schema'
 import { expectRefusal, newT, plantSeat, runInAuth, type T, uuid, withOrg } from './helpers.setup'
 
@@ -125,6 +126,52 @@ describe('operator gate', () => {
       'forbidden',
       /platform admins only/,
     )
+  })
+})
+
+describe('a ban', () => {
+  it('revokes every valid access token of the login, also one whose session had already ended', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const op = await plantOperator(t)
+    const now = Date.now()
+    const plant = (userId: string, expiresAt: number) =>
+      runInAuth(t, (ctx) =>
+        ctx.db.insert('oauthAccessToken', {
+          token: uuid(),
+          clientId: 'client',
+          // a session that a sign-out or the nightly cleanup already deleted
+          sessionId: 'ended-session',
+          userId,
+          scopes: ['qivo:read'],
+          expiresAt,
+        }),
+      )
+    const live = await plant(f.user.auth_user_id as string, now + 3_600_000)
+    const expired = await plant(f.user.auth_user_id as string, now - 1)
+    const others = await plant(f.viewer.auth_user_id as string, now + 3_600_000)
+    // Better Auth's own ban needs the operator's admin session, which the
+    // test identity does not carry; it is what deletes the sessions.
+    const banUser = vi.fn(async () => ({}))
+    const getAuth = vi
+      .spyOn(authComponent, 'getAuth')
+      .mockResolvedValue({ auth: { api: { banUser } }, headers: new Headers() } as never)
+    await t
+      .withIdentity({ subject: op.userId })
+      .action(api.adminAuth.banUser, { email: f.user.email as string })
+    getAuth.mockRestore()
+    expect(banUser).toHaveBeenCalledWith({
+      body: { userId: f.user.auth_user_id },
+      headers: expect.any(Headers),
+    })
+    const revoked = await runInAuth(t, async (ctx) =>
+      Object.fromEntries(
+        (await ctx.db.query('oauthAccessToken').collect()).map((row) => [row._id, row.revoked]),
+      ),
+    )
+    expect(revoked[live]).toEqual(expect.any(Number))
+    expect(revoked[expired]).toBeUndefined()
+    expect(revoked[others]).toBeUndefined()
   })
 })
 

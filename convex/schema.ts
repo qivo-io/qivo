@@ -738,11 +738,28 @@ export default defineSchema({
     .index('by_org_period', ['org_id', 'period_start'])
     .index('by_pending', ['finished_at', 'next_attempt_at']),
 
+  /* One verified Polar subscription delivery, by Polar's event id, stored
+   * before the webhook answers and processed afterwards (billingSync.ts
+   * receiveWebhook). A row without `pending` is done, as every row written
+   * before deliveries were stored first is. */
   billing_webhooks: defineTable({
     event_id: v.string(),
     subscription_id: v.string(),
     received_at: v.string(),
-  }).index('by_event', ['event_id']),
+    // set until the delivery is processed or given up
+    pending: v.optional(v.literal(true)),
+    // processing attempts so far, and when the next may start
+    attempts: v.optional(v.number()),
+    next_attempt_at: v.optional(v.string()),
+    // the claim of the attempt that holds the delivery (claimWebhook)
+    claim: v.optional(v.string()),
+    processed_at: v.optional(v.string()),
+    // when processing was given up after WEBHOOK_ATTEMPTS
+    failed_at: v.optional(v.string()),
+  })
+    .index('by_event', ['event_id'])
+    .index('by_pending', ['pending', 'next_attempt_at'])
+    .index('by_received', ['received_at']),
 
   billing_notices: defineTable({
     key: v.string(),
@@ -794,11 +811,14 @@ export default defineSchema({
 
   // A month a login's sign-in session was used in, kept when Better Auth
   // deletes the session at sign-out or once it expired, so the month still
-  // counts the person as active (model/usage.ts keepSignIns). Deleted after
+  // counts the person as active (lib/signIns.ts keepSignIns). Deleted after
   // USAGE_RETENTION_DAYS and with the login.
   usage_sign_ins: defineTable({
     auth_user_id: v.string(),
     month: v.string(), // YYYY-MM
+    // the latest sign-in in this month among the ended sessions, in ms, for
+    // Qivo Admin's last sign-in (adminPeople.ts)
+    signed_in_at: v.optional(v.number()),
   })
     .index('by_user_month', ['auth_user_id', 'month'])
     .index('by_month', ['month']),
@@ -1644,7 +1664,10 @@ export default defineSchema({
     .index('by_client', ['client_id', 'approved_at', 'authorization_expires_at']),
 
   // Retained hash tombstones catch replay even after the provider deletes its
-  // code/refresh rows. Never store a bearer credential here.
+  // code/refresh rows. Never store a bearer credential here. A used refresh
+  // token's hash is kept while the token could still be accepted, plus a
+  // day, and a code's for the connection's life (authRetention.ts
+  // expireTokens).
   oauth_credential_uses: defineTable({
     connection_id: v.string(),
     credential_hash: v.string(),
@@ -1652,12 +1675,13 @@ export default defineSchema({
     used_at: v.optional(v.string()),
   })
     .index('by_hash', ['kind', 'credential_hash'])
-    .index('by_connection', ['connection_id']),
+    .index('by_connection', ['connection_id'])
+    .index('by_used', ['kind', 'used_at']),
 
   // A browser session that ended, such as at sign-out or a ban. The OAuth
   // access tokens issued in it before `ended_at` are refused
   // (oauthConnections.ts lookupAccess). The row goes once every such token
-  // has expired (lib/oauthProvider.ts endSessionAccess).
+  // has expired (lib/sessionEnd.ts endSessionAccess).
   oauth_ended_sessions: defineTable({
     session_id: v.string(),
     ended_at: v.number(),

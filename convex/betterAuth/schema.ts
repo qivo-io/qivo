@@ -18,6 +18,12 @@ export const tables = {
     .index('providerId_userId', ['providerId', 'userId'])
     .index('userId', ['userId']),
   oauthConsent: generatedTables.oauthConsent.index('clientId_referenceId_userId', ['clientId', 'referenceId', 'userId']),
+  /* The nightly token cleanup finds the rows that protect nothing any more
+   * by these (oauth.ts deleteSpentTokens). */
+  oauthAccessToken: generatedTables.oauthAccessToken.index('expiresAt', ['expiresAt']),
+  oauthRefreshToken: generatedTables.oauthRefreshToken
+    .index('expiresAt', ['expiresAt'])
+    .index('revoked', ['revoked']),
 }
 
 export default defineSchema(tables)

@@ -182,7 +182,11 @@ export const recoveryLink = platformAction({
 /* Session-bound: banUser/unbanUser run Better Auth's adminMiddleware against
  * the headers getAuth builds from the caller's session. No banExpiresIn ⇒ the
  * ban never expires — the '87600h' idiom's successor — and banUser also
- * revokes the target's live sessions (stronger than GoTrue's ban was). */
+ * revokes the target's live sessions (stronger than GoTrue's ban was). A ban
+ * then revokes every access token of the login (revokeLoginAccess), so none
+ * issued before it works again after an unban. Its MCP refresh tokens stay,
+ * as at sign-out, and issue nothing while the ban lasts
+ * (oauthConnections.ts claimIssuance). */
 async function setBan(
   ctx: OperatorActionCtx,
   rawEmail: string,
@@ -202,7 +206,31 @@ async function setBan(
     target_profile_id: p.id,
     detail: { email },
   })
+  if (ban) await revokeLoginAccess(ctx, p.auth_user_id)
   return { ok: true }
+}
+
+/** Access tokens of a login one revocation step reads. */
+const REVOKE_PAGE = 500
+
+/* Revokes every access token of login `authUserId` that is still valid. A
+ * ban ends the login's sessions, and with them the tokens issued in each,
+ * but a token a refresh issued after its session had already ended, by a
+ * sign-out or the nightly cleanup of expired sessions (authRetention.ts),
+ * belongs to no session left to end. The ban refuses those while it lasts
+ * (oauthConnections.ts lookupAccess); this keeps them refused after an
+ * unban. Each page is its own transaction, and the ban holds already. */
+async function revokeLoginAccess(ctx: ActionCtx, authUserId: string) {
+  const now = Date.now()
+  let cursor: string | null = null
+  do
+    cursor = await ctx.runMutation(components.betterAuth.oauth.revokeAccessTokens, {
+      userId: authUserId,
+      now,
+      cursor,
+      numItems: REVOKE_PAGE,
+    })
+  while (cursor !== null)
 }
 
 export const banUser = platformAction({
@@ -356,10 +384,12 @@ async function removeAuthUserRows(ctx: MutationCtx, userId: string): Promise<voi
   await purgeTokenRows(ctx, userId)
 }
 
-/* Rows a login piles up without bound. Better Auth keeps an expired session
- * until someone presents it, and every MCP token refresh adds an access
- * token and a refresh token, keeping the used refresh token as revoked.
- * Roadmap undo receipts expire within a day but allow 1,000 per session key. */
+/* Rows a login piles up. Better Auth keeps an expired session until someone
+ * presents it or the nightly cleanup deletes it, and every MCP token refresh
+ * adds an access token and a refresh token, keeping the used refresh token
+ * as revoked, until the nightly cleanup deletes the spent ones
+ * (authRetention.ts). Roadmap undo receipts expire within a day but allow
+ * 1,000 per session key. */
 const LOGIN_TOKEN_MODELS = ['session', 'oauthAccessToken', 'oauthRefreshToken'] as const
 
 /** Size of one token purge step. Tests lower it. */
