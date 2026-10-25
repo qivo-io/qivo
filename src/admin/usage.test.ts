@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { UsageMonth } from './api'
-import { pickerMonths, UNATTRIBUTED_COLUMNS, USAGE_COLUMNS, usageCsv } from './usage'
+import { peopleMonths, pickerMonths, UNATTRIBUTED_COLUMNS, USAGE_COLUMNS, usageCsv } from './usage'
 
 const counts = Object.fromEntries(
   USAGE_COLUMNS.map((c, i) => [c.key, i]),
@@ -16,6 +16,8 @@ const table = (rows: UsageMonth['rows']): UsageMonth => ({
     background_bytes: 900,
   },
   rows,
+  failed: [],
+  status: { partial: true, run: null },
 })
 
 const row = (name: string): UsageMonth['rows'][number] => ({
@@ -28,7 +30,10 @@ const row = (name: string): UsageMonth['rows'][number] => ({
 
 describe('the usage CSV', () => {
   it('writes one line per organization with raw counts, quoting names that need it', () => {
-    const [head, line, outside, end] = usageCsv(table([row('Acme, "North"')])).split('\r\n')
+    const csv = usageCsv(table([row('Acme, "North"')]))
+    // a byte order mark, so a spreadsheet reads the names as UTF-8
+    expect(csv.startsWith('﻿month,')).toBe(true)
+    const [head, line, outside, end] = csv.slice(1).split('\r\n')
     expect(head.split(',')).toEqual([
       'month',
       'org_id',
@@ -37,12 +42,15 @@ describe('the usage CSV', () => {
       ...UNATTRIBUTED_COLUMNS,
       'api_estimated',
       'computed_at',
+      'month_partial',
     ])
     expect(line.startsWith('2026-03,o1,"Acme, ""North""",0,1,2,3,,5,')).toBe(true)
     expect(line).toContain(',1500000,')
-    expect(line.endsWith(',,,,,true,2026-04-01T05:15:00.000Z')).toBe(true)
+    expect(line.endsWith(',,,,,true,2026-04-01T05:15:00.000Z,true')).toBe(true)
     // what belongs to no organization, in its own columns
-    expect(outside).toBe(`2026-03,,No organization,${','.repeat(USAGE_COLUMNS.length)}900,4,2,1,,`)
+    expect(outside).toBe(
+      `2026-03,,No organization,${','.repeat(USAGE_COLUMNS.length)}900,4,2,1,,,true`,
+    )
     expect(end).toBe('')
   })
 
@@ -63,6 +71,16 @@ describe('the usage CSV', () => {
     expect(line('=HYPERLINK("x","y")')).toContain(',"\'=HYPERLINK(""x"",""y"")",')
     // a plain name stays as it is
     expect(line('Pine Studio')).toContain(',Pine Studio,')
+  })
+})
+
+describe('the people breakdown months', () => {
+  it('adds a month the organization holds that the picker lacks, newest first', () => {
+    expect(peopleMonths(['2026-03', '2026-02'], ['2026-02', '2026-04'])).toEqual([
+      '2026-04',
+      '2026-03',
+      '2026-02',
+    ])
   })
 })
 

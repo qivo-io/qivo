@@ -531,11 +531,14 @@ const SEED_STEPS = [
 ]
 
 /* REST and MCP calls a month for Qivo Admin's Usage page: Atlas through the
- * team's CI, Nora and Leo through their desktop assistant. */
+ * team's CI with an agent key, Nora and Leo through their desktop assistant
+ * with an MCP token. The demo stores no such credentials, so the
+ * organization's API access page lists them as deleted ones, with these
+ * calls, and its totals agree with its list. */
 const USAGE_CALLERS = [
-  { key: 'atlas', credential: 'Northstar CI', calls: 4200 },
-  { key: 'nora', credential: 'Claude Desktop', calls: 380 },
-  { key: 'leo', credential: 'Claude Desktop', calls: 150 },
+  { key: 'atlas', table: 'agent_keys', credential: 'Northstar CI', calls: 4200 },
+  { key: 'nora', table: 'mcp_tokens', credential: 'Claude Desktop', calls: 380 },
+  { key: 'leo', table: 'mcp_tokens', credential: 'Claude Desktop', calls: 150 },
 ] as const
 /* Invitation emails in each of the five closed months, newest first. */
 const USAGE_INVITES = [3, 1, 0, 2, 1]
@@ -555,7 +558,8 @@ async function seedUsage(ctx: MutationCtx, org: Doc<'organizations'>, now: strin
   )
   for (const caller of USAGE_CALLERS) {
     const profile_id = await id(`person:${caller.key}`)
-    const credential_id = `marketing_demo:${caller.key}`
+    // `<table>:<uuid>`, the form usage rows name a credential in (apiAccess.ts)
+    const credential_id = `${caller.table}:${await id(`usage-credential:${caller.key}`)}`
     for (const [i, month] of months.entries()) {
       // The current month is under way, so it holds about a third of a month.
       const calls = Math.round((caller.calls * (i === 0 ? 0.35 : 1)) / (1 + 0.12 * i))

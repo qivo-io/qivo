@@ -32,18 +32,63 @@ import {
   usageMonth,
 } from '../api'
 import { AdminEmptyState, AdminPageHeader, AdminToolbar, ErrorNote, Loading } from '../ui'
-import { type Column, fmtMonth, pickerMonths, USAGE_COLUMNS, usageCsv } from '../usage'
+import {
+  type Column,
+  fmtMonth,
+  peopleMonths,
+  pickerMonths,
+  USAGE_COLUMNS,
+  usageCsv,
+} from '../usage'
 
 const fmtValue = (column: Column, value: number | null): string =>
   value === null ? '—' : column.bytes ? fmtBytes(value) : value.toLocaleString()
 
+/* Saves `text` as a file. The link is in the page while it is clicked and
+   its URL lives a minute, as some browsers read it after click returns
+   (panels/OrganizationExport.tsx). */
 function download(name: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
   link.href = url
   link.download = name
+  document.body.appendChild(link)
   link.click()
-  URL.revokeObjectURL(url)
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+const plural = (n: number, one: string, many: string) =>
+  `${n.toLocaleString()} ${n === 1 ? one : many}`
+
+/* The status line's account of the month: when and for how many
+   organizations it was stored, whether its counters began during it, and
+   the organizations whose current figures failed to load. */
+function monthNote(table: UsageMonth): string {
+  const { run, partial } = table.status
+  const newest = table.rows.reduce<string | null>(
+    (at, row) =>
+      row.computed_at !== null && (at === null || row.computed_at > at) ? row.computed_at : at,
+    null,
+  )
+  const parts = [
+    table.current
+      ? 'This month so far, computed now.'
+      : run?.finished_at
+        ? `Stored ${fmtWhen(run.finished_at)} for ${plural(run.saved, 'organization', 'organizations')}${run.failed > 0 ? `, ${run.failed.toLocaleString()} failed` : ''}.`
+        : run
+          ? `The monthly job has not finished this month: ${plural(run.saved, 'organization', 'organizations')} stored so far. It continues within a day.`
+          : newest
+            ? `Stored ${fmtWhen(newest)}.`
+            : 'No usage was stored for this month.',
+  ]
+  if (partial)
+    parts.push(
+      'Counting began during this month, so its mail, webhook deliveries and active people may be too low.',
+    )
+  if (table.failed.length > 0)
+    parts.push(`Not computed: ${table.failed.map((org) => org.name).join(', ')}.`)
+  return parts.join(' ')
 }
 
 type Sort = { key: UsageField | 'name'; desc: boolean }
@@ -120,7 +165,7 @@ export function Usage() {
             <Button
               type="button"
               variant="primary"
-              disabled={!table || table.rows.length === 0}
+              disabled={!table}
               onClick={() => table && download(`qivo-usage-${table.month}.csv`, usageCsv(table))}
             >
               Download CSV
@@ -143,11 +188,7 @@ export function Usage() {
         </NativeSelect>
         {table && (
           <p role="status" className="text-sm text-text-2">
-            {table.current
-              ? 'This month so far, computed now.'
-              : table.rows.length === 0
-                ? 'No usage was stored for this month.'
-                : `Stored ${fmtWhen(table.rows[0]?.computed_at ?? null)}.`}{' '}
+            {monthNote(table)}{' '}
             {outside &&
               `Account mail, not assigned to an organization: ${outside.mail_verification} verification, ${outside.mail_password_reset} password reset, ${outside.mail_account_notes} account notes. Account backgrounds, which belong to a login: ${outside.background_bytes === null ? 'not stored for this month' : fmtBytes(outside.background_bytes)}.`}
           </p>
@@ -271,6 +312,13 @@ function SortHead({
   )
 }
 
+/* What a month's heading adds to its name: that it is under way, and
+   that its counting began during it. */
+function monthTags(m: OrgUsageMonth): string {
+  const tags = [m.computed_at === null && 'so far', m.partial && 'partial'].filter(Boolean)
+  return tags.length > 0 ? ` (${tags.join(', ')})` : ''
+}
+
 /* One organization's months side by side, newest first, and on request who
    did what in one of them. */
 function OrgUsage({
@@ -284,6 +332,7 @@ function OrgUsage({
   onBack: () => void
 }) {
   const [months, setMonths] = useState<OrgUsageMonth[] | null>(null)
+  const [currentFailed, setCurrentFailed] = useState(false)
   const [error, setError] = useState('')
   const [peopleMonth, setPeopleMonth] = useState('')
   const [people, setPeople] = useState<UsagePeople | null>(null)
@@ -297,9 +346,11 @@ function OrgUsage({
     orgUsageMonths(org.org_id)
       .then((result) => {
         if (!active) return
-        const newest = [...result].reverse()
+        const newest = [...result.months].reverse()
         setMonths(newest)
-        setPeopleMonth(newest[0]?.month ?? '')
+        setCurrentFailed(result.current_failed)
+        // Every month the organization holds is among the options.
+        setPeopleMonth(newest[0]?.month ?? choices[0])
       })
       .catch((cause: Error) => {
         if (active) setError(cause.message)
@@ -307,10 +358,18 @@ function OrgUsage({
     return () => {
       active = false
     }
-  }, [org.org_id])
+  }, [org.org_id, choices])
   useEffect(() => {
     heading.current?.focus()
   }, [])
+  const options = useMemo(
+    () =>
+      peopleMonths(
+        choices,
+        (months ?? []).map((m) => m.month),
+      ),
+    [choices, months],
+  )
 
   function loadPeople() {
     const request = ++peopleRequest.current
@@ -347,6 +406,11 @@ function OrgUsage({
         !error && <Loading />
       ) : (
         <>
+          {currentFailed && (
+            <p role="status" className="text-sm text-text-2">
+              This month could not be computed now. The stored months are shown.
+            </p>
+          )}
           <Card className="min-w-0 gap-0 overflow-x-auto py-0 shadow-card">
             <Table>
               <TableHeader>
@@ -355,7 +419,7 @@ function OrgUsage({
                   {months.map((m) => (
                     <TableHead key={m.month} className="text-right">
                       {fmtMonth(m.month)}
-                      {m.computed_at === null ? ' (so far)' : ''}
+                      {monthTags(m)}
                     </TableHead>
                   ))}
                 </TableRow>
@@ -379,6 +443,12 @@ function OrgUsage({
               </TableBody>
             </Table>
           </Card>
+          {months.some((m) => m.partial) && (
+            <p className="text-sm text-text-2">
+              Partial marks a month whose counting began during it, so its mail, webhook deliveries
+              and active people may be too low.
+            </p>
+          )}
           <Card className="min-w-0 gap-3 p-5 shadow-card">
             <div className="text-md font-semibold">People</div>
             <p className="text-sm text-text-2">
@@ -396,7 +466,7 @@ function OrgUsage({
                   setPeopleBusy(false)
                 }}
               >
-                {choices.map((m) => (
+                {options.map((m) => (
                   <option key={m} value={m}>
                     {fmtMonth(m)}
                   </option>

@@ -2,15 +2,20 @@
  * (src/admin/views/Usage.tsx), so limits and add-on prices can be set from
  * what organizations really use.
  *
- * A closed month is a stored usage_months row per organization. The monthly
- * cron starts closeMonth early on the 1st for the month that just ended. Each
- * step handles USAGE_PAGE.orgs organizations, CONCURRENCY at a time, and
- * schedules the next; the last writes one usage_month audit row with the
- * number of organizations saved and failed. An organization whose figures
- * fail to load is logged and skipped, so one cannot stop the others. A rerun
- * for the same month, `npx convex run usage:closeMonth '{"month":"YYYY-MM"}'`,
+ * A closed month is a stored usage_months row per organization that existed
+ * before it ended. The daily cron calls closeMonth, which on the 1st starts
+ * the run for the month that just ended. Each step handles USAGE_PAGE.orgs
+ * organizations, CONCURRENCY at a time, and keeps the run's progress in the
+ * month's usage_runs row; the last marks the run finished and writes one
+ * usage_month audit row with the number of organizations saved and failed.
+ * An organization whose figures fail to load is logged and skipped, so one
+ * cannot stop the others, and a step that stopped, such as at a restart, is
+ * resumed by the next day's call. A rerun for the same month,
+ * `npx convex run usage:closeMonth '{"month":"YYYY-MM"}'`, starts over and
  * replaces each organization's row. Its members, counters and stored bytes
- * are then the values at the rerun.
+ * are then the values at the rerun. The daily call also records when the job
+ * first saw each month, which tells a month whose counters began during it
+ * (model/usage.ts monthStatus).
  *
  * The current month is never stored. The page computes it from the same
  * reads when an operator opens it (monthTable, orgMonths), and the
@@ -20,7 +25,9 @@
  *
  * The reads are in model/usage.ts. Each internal query is one transaction
  * over one bounded page, and an action strings them together, so no
- * transaction grows with an organization. A month's figures come from many
+ * transaction grows with an organization except the head, whose billable
+ * seats come from getBillableUsers, the read Billing makes of every profile
+ * of the organization in one transaction. A month's figures come from many
  * snapshots, so a write during a run may count in one figure and not yet in
  * another. Rows older than USAGE_RETENTION_DAYS are deleted monthly
  * (expire), and an organization's deletion takes its rows
@@ -29,7 +36,7 @@
 import { makeFunctionReference } from 'convex/server'
 import { type ObjectType, v } from 'convex/values'
 import { literals } from 'convex-helpers/validators'
-import { internal } from './_generated/api'
+import { components, internal } from './_generated/api'
 import {
   type ActionCtx,
   internalAction,
@@ -51,6 +58,7 @@ import {
   vUsageCounts,
 } from './lib/usage'
 import { audit } from './model/admin'
+import { newUuid } from './model/orgs'
 import {
   activityPage,
   apiPage,
@@ -61,12 +69,16 @@ import {
   filesPage,
   forgetSignIns,
   keepSignIns,
+  type MonthStatus,
   monthSpan,
+  monthStatus,
   type PerPerson,
   personMail,
   profilesPage,
   retainedDeliveries,
+  runRow,
   type Span,
+  seeMonth,
   setPersonFiles,
   storedPersonFiles,
   taskCommentsPage,
@@ -171,11 +183,19 @@ export const countPersonMail = internalMutation({
   },
 })
 
-/** Keeps the months of a sign-in session Better Auth deleted, at sign-out
- * or when an expired one is presented (auth.ts), so they still count. */
+/** Keeps the months of a sign-in session that ended (auth.ts keepSignIn),
+ * so they still count. A login already deleted keeps nothing: its deletion
+ * forgot its months (adminAuth.ts removeAuthUserRows), and reading the user
+ * here orders the two transactions. */
 export const keepSignIn = internalMutation({
   args: { auth_user_id: v.string(), created_at: v.number(), updated_at: v.number() },
   handler: async (ctx, a): Promise<null> => {
+    if (isDemoDeployment()) return null
+    const user = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: 'user',
+      where: [{ field: '_id', value: a.auth_user_id }],
+    })
+    if (user === null) return null
     await keepSignIns(
       ctx,
       a.auth_user_id,
@@ -382,14 +402,18 @@ export async function orgUsage(
 
 /* ------------------------------------------------------ the monthly job */
 
-/** One page of organization ids, in creation order. */
+/** One page of organization ids, in creation order, leaving out the ones
+ * created at `before` or later, which did not exist in the month. */
 export const orgPage = internalQuery({
-  args: { cursor: vCursor },
-  handler: async (ctx, { cursor }): Promise<{ ids: string[]; next: Cursor }> => {
+  args: { cursor: vCursor, before: v.string() },
+  handler: async (ctx, { cursor, before }): Promise<{ ids: string[]; next: Cursor }> => {
     const page = await ctx.db
       .query('organizations')
       .paginate({ cursor, numItems: USAGE_PAGE.orgs, maximumBytesRead: USAGE_PAGE.bytes })
-    return { ids: page.page.map((org) => org.id), next: page.isDone ? null : page.continueCursor }
+    return {
+      ids: page.page.filter((org) => org.created_at < before).map((org) => org.id),
+      next: page.isDone ? null : page.continueCursor,
+    }
   },
 })
 
@@ -426,15 +450,6 @@ export const saveMonth = internalMutation({
   },
 })
 
-/** Records a finished run in the platform audit log. */
-export const finishMonth = internalMutation({
-  args: { month: v.string(), saved: v.number(), failed: v.number() },
-  handler: async (ctx, detail): Promise<null> => {
-    await audit(ctx, { actor_email: 'system', action: 'usage_month', detail })
-    return null
-  },
-})
-
 /** Reads and stores organization `org_id`'s row for the closed `month`.
  * False when the organization is gone or being deleted. */
 async function storeOrgMonth(
@@ -465,19 +480,12 @@ async function backgroundBytes(ctx: Runner): Promise<number> {
   return bytes
 }
 
-/** Stores the bytes of account backgrounds with a closed month. */
-export const savePersonFiles = internalMutation({
-  args: { month: v.string(), bytes: v.number() },
-  handler: async (ctx, { month, bytes }): Promise<null> => {
-    await setPersonFiles(ctx, month, bytes)
-    return null
-  },
-})
-
-/** Refuses a key that is not a month, and a month that has not ended. */
+/** Refuses a key that is not a month, a month that has not ended, and one
+ * older than retention keeps. */
 function closedMonth(month: string, now: number): void {
   spanOf(month)
   require(month < monthOf(now), badRequest('only a month that has ended can be stored'))
+  require(month >= retentionCutoff(now), badRequest('that month is older than usage is kept'))
 }
 
 /** Stores one organization's closed month, for the marketing demo's seed,
@@ -493,21 +501,101 @@ export const closeOrgMonth = internalAction({
   },
 })
 
+/** A run step that began longer ago than this has stopped, since an action
+ * runs for 10 minutes at most. The daily job then resumes its run. */
+export const RUN_STALLED_MS = 15 * 60_000
+
+/** What one step of a run reads: its next page of organizations and the
+ * organizations the run saved and failed on so far. */
+type RunStep = { run: string; cursor: Cursor; saved: number; failed: number }
+
+/**
+ * Claims the next step of the run that stores the closed `month`, recording
+ * when it began, or null when there is nothing to do. With `run`, it
+ * continues that run while it is still the month's run. Without, it starts
+ * one: an operator's rerun (`fresh`) starts over, and the daily job starts
+ * the month once and resumes a run whose last step stopped, under a new id
+ * so a step of the old one could not write. Each call also records that the
+ * job saw the month of `now` (usage_runs seen_at).
+ */
+export const claimStep = internalMutation({
+  args: { month: v.string(), run: v.optional(v.string()), fresh: v.boolean(), now: v.number() },
+  handler: async (ctx, a): Promise<RunStep | null> => {
+    await seeMonth(ctx, monthOf(a.now), a.now)
+    await seeMonth(ctx, a.month, a.now)
+    const row = await runRow(ctx, a.month)
+    if (row === null) return null
+    const step = {
+      run: row.run ?? newUuid(),
+      cursor: row.cursor ?? null,
+      saved: row.saved ?? 0,
+      failed: row.failed ?? 0,
+    }
+    if (a.run !== undefined) {
+      if (row.run !== a.run || row.finished_at !== undefined) return null
+    } else if (a.fresh || row.run === undefined) {
+      Object.assign(step, { run: newUuid(), cursor: null, saved: 0, failed: 0 })
+    } else if (row.finished_at !== undefined || a.now - (row.step_at ?? 0) < RUN_STALLED_MS) {
+      return null
+    } else step.run = newUuid()
+    await ctx.db.patch(row._id, { ...step, step_at: a.now, finished_at: undefined })
+    return step
+  },
+})
+
+/**
+ * Records a finished step of run `run` of `month`. While pages remain it
+ * schedules the next step, in this transaction, so a step cannot end
+ * without its successor. After the last page it stores the bytes of account
+ * backgrounds, or counts one more failure when they could not be read
+ * (null), marks the run finished and writes one usage_month row to the
+ * platform audit log. Does nothing once another run took the month.
+ */
+export const endStep = internalMutation({
+  args: {
+    month: v.string(),
+    run: v.string(),
+    cursor: vCursor,
+    saved: v.number(),
+    failed: v.number(),
+    background_bytes: v.optional(v.union(v.number(), v.null())),
+  },
+  handler: async (ctx, a): Promise<null> => {
+    const row = await runRow(ctx, a.month)
+    if (row === null || row.run !== a.run || row.finished_at !== undefined) return null
+    const { month, run, cursor, saved } = a
+    if (cursor !== null) {
+      await ctx.db.patch(row._id, { cursor, saved, failed: a.failed })
+      await ctx.scheduler.runAfter(0, closeMonthRef, { month, run })
+      return null
+    }
+    const failed = a.failed + (typeof a.background_bytes === 'number' ? 0 : 1)
+    if (typeof a.background_bytes === 'number') await setPersonFiles(ctx, month, a.background_bytes)
+    await ctx.db.patch(row._id, { cursor, saved, failed, finished_at: Date.now() })
+    await audit(ctx, {
+      actor_email: 'system',
+      action: 'usage_month',
+      detail: { month, saved, failed },
+    })
+    return null
+  },
+})
+
 const closeArgs = {
   // the month to store; the month before the current one when absent
   month: v.optional(v.string()),
-  cursor: v.optional(vCursor),
-  // organizations the run's earlier steps saved and failed on
-  saved: v.optional(v.number()),
-  failed: v.optional(v.number()),
+  // the run a scheduled step continues; absent for a start
+  run: v.optional(v.string()),
 }
 const closeMonthRef = makeFunctionReference<'action', ObjectType<typeof closeArgs>, null>(
   'usage:closeMonth',
 )
 
-/** One step of the monthly job. Empty arguments start a run for the month
- * that just ended. Refuses the current month and later ones, which are not
- * closed. Does nothing on the demo deployment. */
+/** One step of the usage job: one page of organizations. The daily cron
+ * calls it without arguments, which starts or resumes the run for the month
+ * that just ended until it finished; `{"month": "YYYY-MM"}` reruns a closed
+ * month from the start. Refuses the current month and later ones, which
+ * are not closed. Does nothing on the demo deployment. */
 export const closeMonth = internalAction({
   args: closeArgs,
   handler: async (ctx, a): Promise<null> => {
@@ -515,11 +603,18 @@ export const closeMonth = internalAction({
     const now = Date.now()
     const month = a.month ?? previousMonth(now)
     closedMonth(month, now)
-    const page: { ids: string[]; next: Cursor } = await ctx.runQuery(internal.usage.orgPage, {
-      cursor: a.cursor ?? null,
+    const step: RunStep | null = await ctx.runMutation(internal.usage.claimStep, {
+      month,
+      run: a.run,
+      fresh: a.month !== undefined && a.run === undefined,
+      now,
     })
-    let saved = a.saved ?? 0
-    let failed = a.failed ?? 0
+    if (step === null) return null
+    const page: { ids: string[]; next: Cursor } = await ctx.runQuery(internal.usage.orgPage, {
+      cursor: step.cursor,
+      before: spanOf(month).to,
+    })
+    let { saved, failed } = step
     await inParallel(page.ids, async (org_id) => {
       try {
         if (await storeOrgMonth(ctx, org_id, month, now)) saved += 1
@@ -532,23 +627,23 @@ export const closeMonth = internalAction({
         })
       }
     })
-    if (page.next !== null) {
-      await ctx.scheduler.runAfter(0, closeMonthRef, { month, cursor: page.next, saved, failed })
-      return null
-    }
-    try {
-      await ctx.runMutation(internal.usage.savePersonFiles, {
-        month,
-        bytes: await backgroundBytes(ctx),
+    let background_bytes: number | null | undefined
+    if (page.next === null)
+      background_bytes = await backgroundBytes(ctx).catch((e: unknown) => {
+        console.error('[usage] account backgrounds not counted', {
+          month,
+          name: (e as Error)?.name ?? 'error',
+        })
+        return null
       })
-    } catch (e) {
-      failed += 1
-      console.error('[usage] account backgrounds not counted', {
-        month,
-        name: (e as Error)?.name ?? 'error',
-      })
-    }
-    await ctx.runMutation(internal.usage.finishMonth, { month, saved, failed })
+    await ctx.runMutation(internal.usage.endStep, {
+      month,
+      run: step.run,
+      cursor: page.next,
+      saved,
+      failed,
+      background_bytes,
+    })
     return null
   },
 })
@@ -558,15 +653,15 @@ export const USAGE_EXPIRY = { page: 200 }
 
 const expireRef = makeFunctionReference<'mutation', Record<string, never>, null>('usage:expire')
 
-/** Deletes usage_months, usage_counts and usage_sign_ins rows of months
- * older than USAGE_RETENTION_DAYS, a page of each at a time, scheduling the
- * next step while a full page came back. */
+/** Deletes usage_months, usage_counts, usage_runs and usage_sign_ins rows
+ * of months older than USAGE_RETENTION_DAYS, a page of each at a time,
+ * scheduling the next step while a full page came back. */
 export const expire = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
     const cutoff = retentionCutoff(Date.now())
     let full = false
-    for (const table of ['usage_months', 'usage_counts', 'usage_sign_ins'] as const) {
+    for (const table of ['usage_months', 'usage_counts', 'usage_runs', 'usage_sign_ins'] as const) {
       const rows = await ctx.db
         .query(table)
         .withIndex('by_month', (q) => q.lt('month', cutoff))
@@ -658,35 +753,76 @@ function askedMonth(month: string, now: number): { current: boolean } {
   return { current: month === current }
 }
 
-/** The Usage page's table for `month`: every organization's row, and what
- * belongs to no organization, account mail and account backgrounds. A
- * closed month shows its stored rows, and an organization without one is
- * left out; the current month is computed now for every organization. */
+/** The status of `month` (model/usage.ts monthStatus). */
+export const status = internalQuery({
+  args: { month: v.string() },
+  handler: async (ctx, { month }): Promise<MonthStatus> =>
+    monthStatus(await runRow(ctx, month), month),
+})
+
+/** Every month's status that retention keeps, by month. */
+export const statuses = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<Record<string, MonthStatus>> => {
+    // One row per month, so retention keeps about 27.
+    const rows = await ctx.db.query('usage_runs').collect()
+    return Object.fromEntries(rows.map((row) => [row.month, monthStatus(row, row.month)]))
+  },
+})
+
+/** Logs an organization whose current month could not be computed. */
+function liveFailed(org_id: string, e: unknown): void {
+  console.error('[usage] current month not computed', {
+    org_id,
+    name: (e as Error)?.name ?? 'error',
+  })
+}
+
+/** The Usage page's table for `month`: every organization's row, what
+ * belongs to no organization, account mail and account backgrounds, and
+ * the month's status. A closed month shows its stored rows, and an
+ * organization without one is left out; the current month is computed now
+ * for every organization, and one whose figures fail to load is named in
+ * `failed` instead. */
 export const monthTable = platformAction({
   args: { month: v.string() },
   handler: async (
     ctx,
     { month },
-  ): Promise<{ month: string; current: boolean; rows: UsageRow[]; unattributed: Unattributed }> => {
+  ): Promise<{
+    month: string
+    current: boolean
+    rows: UsageRow[]
+    unattributed: Unattributed
+    failed: { org_id: string; name: string }[]
+    status: MonthStatus
+  }> => {
     const now = Date.now()
     const { current } = askedMonth(month, now)
     const orgs = await allOrgs(ctx)
     const names = new Map(orgs.map((org) => [org.id, org.name]))
     const rows: UsageRow[] = []
+    const failed: { org_id: string; name: string }[] = []
     if (current) {
+      // undefined for an organization whose figures failed to load
       const live = await inParallel(orgs, async (org) => {
-        const usage = await orgUsage(ctx, org.id, month, now)
-        return usage === null
-          ? null
-          : {
-              org_id: org.id,
-              name: org.name,
-              counts: usage.counts,
-              api_estimated: usage.api_estimated,
-              computed_at: null,
-            }
+        try {
+          return { org, usage: await orgUsage(ctx, org.id, month, now) }
+        } catch (e) {
+          liveFailed(org.id, e)
+          return { org, usage: undefined }
+        }
       })
-      for (const row of live) if (row !== null) rows.push(row)
+      for (const { org, usage } of live)
+        if (usage === undefined) failed.push({ org_id: org.id, name: org.name })
+        else if (usage !== null)
+          rows.push({
+            org_id: org.id,
+            name: org.name,
+            counts: usage.counts,
+            api_estimated: usage.api_estimated,
+            computed_at: null,
+          })
     } else {
       await eachPage(
         (cursor) => ctx.runQuery(internal.usage.monthRows, { month, cursor }),
@@ -700,26 +836,46 @@ export const monthTable = platformAction({
     const unattributed = current
       ? { ...stored, background_bytes: await backgroundBytes(ctx) }
       : stored
-    return { month, current, rows, unattributed }
+    const status: MonthStatus = await ctx.runQuery(internal.usage.status, { month })
+    return { month, current, rows, unattributed, failed, status }
   },
 })
 
+/** One month of one organization on the Usage page, with whether its
+ * counters may have missed part of it. */
+export type OrgMonth = StoredRow & { month: string; partial: boolean }
+
 /** One organization's stored months side by side with the current month,
- * oldest first. */
+ * oldest first. When the current month fails to load, the stored ones are
+ * still returned, with `current_failed`. */
 export const orgMonths = platformAction({
   args: { org_id: v.string() },
-  handler: async (ctx, { org_id }): Promise<(StoredRow & { month: string })[]> => {
+  handler: async (ctx, { org_id }): Promise<{ months: OrgMonth[]; current_failed: boolean }> => {
     const now = Date.now()
     const month = monthOf(now)
     const stored: (StoredRow & { month: string })[] = await ctx.runQuery(internal.usage.orgRows, {
       org_id,
     })
-    const live = await orgUsage(ctx, org_id, month, now)
-    if (live === null) return stored
-    return [
-      ...stored,
-      { org_id, month, counts: live.counts, api_estimated: live.api_estimated, computed_at: null },
-    ]
+    const statuses: Record<string, MonthStatus> = await ctx.runQuery(internal.usage.statuses, {})
+    const partial = (m: string) => statuses[m]?.partial ?? true
+    const months = stored.map((row) => ({ ...row, partial: partial(row.month) }))
+    let live: OrgUsage | null
+    try {
+      live = await orgUsage(ctx, org_id, month, now)
+    } catch (e) {
+      liveFailed(org_id, e)
+      return { months, current_failed: true }
+    }
+    if (live !== null)
+      months.push({
+        org_id,
+        month,
+        counts: live.counts,
+        api_estimated: live.api_estimated,
+        computed_at: null,
+        partial: partial(month),
+      })
+    return { months, current_failed: false }
   },
 })
 

@@ -77,9 +77,18 @@ function cell(value: string | number | boolean | null): string {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 
+/** The months the people breakdown offers, newest first: the picker's
+ * months and any other month the organization's figures hold, such as a
+ * month that began after the picker was built. */
+export function peopleMonths(choices: readonly string[], months: readonly string[]): string[] {
+  return [...new Set([...choices, ...months])].sort().reverse()
+}
+
 /** The month as CSV: one line per organization with every count in whole
  * units (bytes, not formatted sizes), then one line for what belongs to no
- * organization, in columns of its own. */
+ * organization, in columns of its own. `month_partial` marks a month whose
+ * counters began during it (convex/model/usage.ts monthStatus). It starts
+ * with a byte order mark, so a spreadsheet reads it as UTF-8. */
 export function usageCsv(table: UsageMonth): string {
   const head = [
     'month',
@@ -89,7 +98,9 @@ export function usageCsv(table: UsageMonth): string {
     ...UNATTRIBUTED_COLUMNS,
     'api_estimated',
     'computed_at',
+    'month_partial',
   ]
+  const partial = table.status.partial
   const blank = (n: number) => Array.from({ length: n }, () => null)
   const lines = table.rows.map((row) => [
     table.month,
@@ -99,6 +110,7 @@ export function usageCsv(table: UsageMonth): string {
     ...blank(UNATTRIBUTED_COLUMNS.length),
     row.api_estimated,
     row.computed_at,
+    partial,
   ])
   lines.push([
     table.month,
@@ -108,6 +120,7 @@ export function usageCsv(table: UsageMonth): string {
     ...UNATTRIBUTED_COLUMNS.map((key) => table.unattributed[key]),
     null,
     null,
+    partial,
   ])
-  return `${[head, ...lines].map((line) => line.map(cell).join(',')).join('\r\n')}\r\n`
+  return `\ufeff${[head, ...lines].map((line) => line.map(cell).join(',')).join('\r\n')}\r\n`
 }

@@ -22,6 +22,7 @@ import { getBillableUsers } from '../lib/billableUsers'
 import { deletionBegun, subscriptionFor } from '../lib/billingAccess'
 import { isDemoDeployment } from '../lib/demo'
 import {
+  DAY_MS,
   monthOf,
   monthRange,
   monthsBetween,
@@ -34,7 +35,7 @@ import {
   type UsageCounts,
   type UsageMetric,
 } from '../lib/usage'
-import { usageKeyRanges } from './billingUsage'
+import { usageKeyRanges, usagePeriod } from './billingUsage'
 import { countersRow } from './orgs'
 
 /** Rows per page and the bytes one page's range may read. Tests lower them. */
@@ -43,8 +44,9 @@ export const USAGE_PAGE = {
   orgs: 50,
   /** Activity, attachment, Deleted items, delivery and API usage rows. */
   rows: 2000,
-  /** Profiles, each with one read of its sessions and its picture. */
-  profiles: 200,
+  /** Profiles, each with its picture and up to SESSION_PAGES reads of its
+   * login's sessions. */
+  profiles: 50,
   /** Tasks, each with one read of its comments stored since the month began. */
   issues: 200,
   /** Comments read with their task; a task with more is paged on its own. */
@@ -150,6 +152,48 @@ export async function forgetSignIns(ctx: MutationCtx, authUserId: string): Promi
     await ctx.db.delete(row._id)
 }
 
+/** The usage_runs row of `month`, or null. */
+export const runRow = (ctx: QueryCtx, month: string) =>
+  ctx.db
+    .query('usage_runs')
+    .withIndex('by_month', (q) => q.eq('month', month))
+    .unique()
+
+/** Writes the usage_runs row of `month`, seen now, unless it has one. */
+export async function seeMonth(ctx: MutationCtx, month: string, now: number): Promise<void> {
+  if ((await runRow(ctx, month)) === null)
+    await ctx.db.insert('usage_runs', { month, seen_at: now })
+}
+
+/** What the page says about a month beside its rows: whether its counters
+ * may have missed part of it, and how the run that stores it went. */
+export type MonthStatus = {
+  /** Mail, deleted webhook deliveries and ended sign-in sessions were
+   * counted only from some time in the month, or after it: the usage job
+   * first saw the month after its first day, or never. */
+  partial: boolean
+  /** The run that stored the closed month, null when none ran. */
+  run: { saved: number; failed: number; finished_at: string | null } | null
+}
+
+/** The status of `month` from its usage_runs row, or of a month without
+ * one. */
+export function monthStatus(row: Doc<'usage_runs'> | null, month: string): MonthStatus {
+  const start = monthRange(month)?.start ?? 0
+  return {
+    partial: row === null || row.seen_at >= start + DAY_MS,
+    run:
+      row?.run === undefined
+        ? null
+        : {
+            saved: row.saved ?? 0,
+            failed: row.failed ?? 0,
+            finished_at:
+              row.finished_at === undefined ? null : new Date(row.finished_at).toISOString(),
+          },
+  }
+}
+
 /** A month's start and end in milliseconds and as ISO text. */
 export type Span = { start: number; end: number; from: string; to: string }
 
@@ -186,6 +230,13 @@ export type UsageHead = {
  * cross the month's start or end. Its calls are then split by time, as if
  * they came at an even rate over the part of the period that has passed,
  * and `estimated` says so.
+ *
+ * A bucket with no recorded end, such as a pending interval that was never
+ * adopted or an old one keyed by complimentary_start, runs to now while it
+ * is the bucket calls go to now. Otherwise it ends where the next known
+ * period starts (another bucket, a recorded period, the subscription's
+ * current period or its end), and without one its calls count in the month
+ * it began, so they never spread into months it did not reach.
  */
 export async function apiBuckets(
   ctx: QueryCtx,
@@ -203,17 +254,49 @@ export async function apiBuckets(
   const sub = await subscriptionFor(ctx, orgId)
   const keys = totals.map((row) => row.period_start)
   const ranges = await usageKeyRanges(ctx, orgId, sub, keys)
+  const boundaries = ranges.some((range) => range.end === null)
+    ? await knownStarts(ctx, orgId, sub, keys)
+    : []
+  const current = usagePeriod(sub, now).key
   let estimated = false
   ranges.forEach((range, i) => {
     const from = Date.parse(range.start)
     if (Number.isNaN(from)) return
-    const to = Math.min(range.end === null ? now : Date.parse(range.end), now)
-    const share = overlapShare(from, to, span.start, span.end)
+    const next = boundaries.find((at) => at > from)
+    const end =
+      range.end !== null ? Date.parse(range.end) : keys[i] === current ? now : (next ?? from)
+    const share = overlapShare(from, Math.min(end, now), span.start, span.end)
     if (share <= 0) return
-    if (share < 1) estimated = true
+    // An open bucket without a known end is placed in its first month.
+    if (share < 1 || (range.end === null && keys[i] !== current && next === undefined))
+      estimated = true
     buckets.push({ key: keys[i], share })
   })
   return { buckets, estimated }
+}
+
+/** The instants, ascending, where a usage bucket of organization `orgId`
+ * can begin or its subscription ended: its other bucket keys, its recorded
+ * periods' starts and the subscription's current period start and end. */
+async function knownStarts(
+  ctx: QueryCtx,
+  orgId: string,
+  sub: Doc<'billing_subscriptions'> | null,
+  keys: readonly string[],
+): Promise<number[]> {
+  const periods = await ctx.db
+    .query('billing_periods')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .collect()
+  return [
+    ...keys,
+    ...periods.map((row) => row.period_start),
+    sub?.current_period_start,
+    sub?.ended_at,
+  ]
+    .map((at) => (at === undefined ? Number.NaN : Date.parse(at)))
+    .filter((at) => !Number.isNaN(at))
+    .sort((a, b) => a - b)
 }
 
 /** The organization's seats, counters, counted mail and webhook deliveries
@@ -277,12 +360,17 @@ const tally = (map: Map<string, number>, id: string | undefined, n = 1) => {
 const listOf = (map: Map<string, number>): PerPerson => [...map].map(([id, n]) => ({ id, n }))
 
 type Session = { createdAt: number; updatedAt: number }
+type Sessions = { page: Session[]; isDone: boolean; continueCursor: string }
 
 /** Whether login `authUserId` had a sign-in session created before the
- * month ended and created or refreshed after it began: a deleted one kept
- * by keepSignIns, or one still stored. It reads the newest SESSIONS_READ
- * stored sessions through the userId index; a bound on updatedAt would make
- * the adapter scan the whole table, as no index has it. */
+ * month ended and created or refreshed after it began: an ended one kept by
+ * keepSignIns, or one still stored. It reads the stored sessions newest
+ * first through the userId index, skipping the ones created after the
+ * month, and checks at most SESSIONS_READ older ones; a bound on updatedAt
+ * would make the adapter scan the whole table, as no index has it. Better
+ * Auth keeps a session that expired until its cookie is presented, so a
+ * login can hold many; a month further back than its newest SESSIONS_READ
+ * sessions before the month's end can then miss one still stored. */
 async function signedIn(ctx: QueryCtx, authUserId: string, span: Span): Promise<boolean> {
   const kept = await ctx.db
     .query('usage_sign_ins')
@@ -291,18 +379,38 @@ async function signedIn(ctx: QueryCtx, authUserId: string, span: Span): Promise<
     )
     .first()
   if (kept !== null) return true
-  const sessions = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
-    model: 'session',
-    where: [{ field: 'userId', value: authUserId }],
-    sortBy: { field: 'createdAt', direction: 'desc' },
-    paginationOpts: { numItems: SESSIONS_READ, cursor: null },
-  })) as { page: Session[] }
-  return sessions.page.some((s) => s.createdAt < span.end && s.updatedAt >= span.start)
+  let cursor: Cursor = null
+  let checked = 0
+  for (let read = 0; read < SESSION_PAGES; read++) {
+    const sessions = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
+      model: 'session',
+      where: [{ field: 'userId', value: authUserId }],
+      sortBy: { field: 'createdAt', direction: 'desc' },
+      paginationOpts: { numItems: SESSIONS_READ, cursor },
+    })) as Sessions
+    for (const s of sessions.page) {
+      if (s.createdAt >= span.end) continue
+      if (s.updatedAt >= span.start) return true
+      if (++checked >= SESSIONS_READ) return false
+    }
+    if (sessions.isDone) return false
+    cursor = sessions.continueCursor
+  }
+  return false
 }
 
-/** Sessions read per login. A login holds one per device it stays signed
- * in on. */
+/** Sessions read per page of a login's sessions, and the most created
+ * before the month's end that one check reads. */
 const SESSIONS_READ = 50
+/** Pages of a login's sessions one check reads at most, so the sessions
+ * created after the month cannot make a profiles page read without bound. */
+const SESSION_PAGES = 4
+
+/** Whether profile `p` held its seat in the month with its login: it is
+ * active, and was created or claimed before the month ended. A seat that
+ * was deactivated counts only through its changes, comments and calls. */
+const seatHeld = (p: Doc<'profiles'>, span: Span) =>
+  p.active && (p.accepted_at ?? p.created_at) < span.to
 
 /** One page of profiles: guests and agents among the active ones, the
  * bytes of their pictures, and the ones signed in during the month. */
@@ -320,7 +428,11 @@ export async function profilesPage(ctx: QueryCtx, orgId: string, span: Span, cur
     if (p.active && p.kind === 'agent') agents += 1
     if (p.avatar_storage_id !== undefined)
       avatar_bytes += (await ctx.db.system.get(p.avatar_storage_id))?.size ?? 0
-    if (p.auth_user_id !== undefined && (await signedIn(ctx, p.auth_user_id, span)))
+    if (
+      p.auth_user_id !== undefined &&
+      seatHeld(p, span) &&
+      (await signedIn(ctx, p.auth_user_id, span))
+    )
       active.push(p.id)
   }
   return { guests, agents, avatar_bytes, active, next: nextOf(page) }

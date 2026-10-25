@@ -40,23 +40,28 @@ export function monthsBetween(from: number, to: number): string[] {
   }
 }
 
-const DAY_MS = 86_400_000
+/** One day in milliseconds. */
+export const DAY_MS = 86_400_000
 
-/** Days a usage_months, usage_counts or usage_sign_ins row is kept after
- * its month. */
+/** Days a usage_months, usage_counts, usage_runs or usage_sign_ins row is
+ * kept after its month. */
 export const USAGE_RETENTION_DAYS = 800
 
 /** The oldest month whose rows are kept at `now`. Older ones are deleted
  * (usage.ts expire). */
 export const retentionCutoff = (now: number): string => monthOf(now - USAGE_RETENTION_DAYS * DAY_MS)
 
-/* The counts one usage row holds. Members are counted when the row is
- * computed, which for a closed month is just after it ended; the rest count
- * what happened during the month.
+/* The counts one usage row holds. Seats, guests, agents, tasks, projects
+ * and stored bytes are counted when the row is computed, which for a closed
+ * month is just after it ended; the rest count what happened during the
+ * month.
  * - billable: the seats Qivo bills (lib/billableUsers.ts), agents included
  * - guests, agents: active guest and agent profiles
- * - active_people: profiles that made a change, wrote a comment, made a REST
- *   or MCP call or had a sign-in session created or refreshed in the month
+ * - active_people: profiles that made a change, wrote a comment or made a
+ *   REST or MCP call in the month, and active profiles whose login had a
+ *   sign-in session created or refreshed in it while it held the seat. A
+ *   session names no organization, so a sign-in counts in every
+ *   organization where the login holds an active seat.
  * - active_tasks, live_projects: org_counters, null until it is counted
  * - changes: activity rows; comments: comments stored in the month
  * - api_calls: REST and MCP calls (see api_estimated on the row)

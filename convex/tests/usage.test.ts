@@ -10,9 +10,11 @@ import { type DefaultFunctionArgs, type FunctionReference, getFunctionName } fro
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { createAuth } from '../auth'
 import { overlapShare, spread } from '../lib/usage'
+import { deleteOrgDeep } from '../model/cascade'
 import { USAGE_PAGE } from '../model/usage'
-import { orgUsage, USAGE_EXPIRY } from '../usage'
+import { orgUsage, RUN_STALLED_MS, USAGE_EXPIRY } from '../usage'
 import {
   as,
   expectRefusal,
@@ -38,6 +40,12 @@ type FetchInit = { method?: string; headers?: Record<string, string>; body?: str
 const http = (t: T, path: string, init?: FetchInit): Promise<Response> =>
   (t as unknown as { fetch(path: string, init?: FetchInit): Promise<Response> }).fetch(path, init)
 const runSteps = (t: T) => t.finishAllScheduledFunctions(() => vi.runAllTimers())
+/** The test backend as the runner orgUsage reads through. */
+const runner = (t: T) =>
+  ({
+    runQuery: (ref: FunctionReference<'query', 'internal'>, args: DefaultFunctionArgs) =>
+      t.query(ref, args),
+  }) as Parameters<typeof orgUsage>[0]
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -398,6 +406,10 @@ describe('the monthly job', () => {
     await expect(t.action(internal.usage.closeMonth, { month: '2026-04' })).rejects.toThrow(
       /only a month that has ended/,
     )
+    // 800 days before RUN is in January 2024.
+    await expect(t.action(internal.usage.closeMonth, { month: '2023-12' })).rejects.toThrow(
+      /older than usage is kept/,
+    )
     vi.stubEnv('APP_MODE', 'demo')
     await t.action(internal.usage.closeMonth, { month: MARCH })
     expect(await storedRows(t)).toEqual([])
@@ -419,6 +431,99 @@ describe('the monthly job', () => {
     await t.action(internal.usage.closeMonth, { month: MARCH })
     await runSteps(t)
     expect((await storedRows(t)).map((row) => row.org_id)).toEqual([f.otherOrg.id])
+  })
+
+  it('stores no row for an organization created after the month ended', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run(async (ctx) => {
+      await ctx.db.patch(f.otherOrg._id, { created_at: iso('2026-04-01T03:00:00Z') })
+    })
+    await t.action(internal.usage.closeMonth, { month: MARCH })
+    await runSteps(t)
+    expect((await storedRows(t)).map((row) => row.org_id)).toEqual([f.org.id])
+  })
+
+  it('resumes a run whose step stopped the next day, and runs a finished month once', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    Object.assign(USAGE_PAGE, { orgs: 1 })
+    await t.action(internal.usage.closeMonth, {})
+    // The first step stored one organization; its successor is lost, as at a
+    // restart.
+    await t.run(async (ctx) => {
+      for (const job of await ctx.db.system.query('_scheduled_functions').collect())
+        if (job.state.kind === 'pending') await ctx.scheduler.cancel(job._id)
+    })
+    expect(await storedRows(t)).toHaveLength(1)
+    // A call while the step may still run leaves it.
+    await t.action(internal.usage.closeMonth, {})
+    await runSteps(t)
+    expect(await storedRows(t)).toHaveLength(1)
+    vi.setSystemTime(RUN + RUN_STALLED_MS + 1)
+    await t.action(internal.usage.closeMonth, {})
+    await runSteps(t)
+    expect((await storedRows(t)).map((row) => row.org_id).sort()).toEqual(
+      [f.org.id, f.otherOrg.id].sort(),
+    )
+    // The next day's call finds the month finished.
+    vi.setSystemTime(RUN + 86_400_000)
+    await t.action(internal.usage.closeMonth, {})
+    await runSteps(t)
+    const audits = await t.run((ctx) =>
+      ctx.db
+        .query('platform_audit_log')
+        .filter((q) => q.eq(q.field('action'), 'usage_month'))
+        .collect(),
+    )
+    expect(audits.map((row) => row.detail)).toEqual([{ month: MARCH, saved: 2, failed: 0 }])
+  })
+})
+
+describe('REST and MCP calls', () => {
+  /** Plants a bucket of 9,000 calls keyed by `key` with no recorded end, as
+   * a pending interval that was never adopted leaves. */
+  const openBucket = (t: T, f: OrgFixture, key: string) =>
+    t.run(async (ctx) => {
+      await ctx.db.insert('billing_usage_totals', {
+        org_id: f.org.id,
+        period_start: key,
+        calls: 9000,
+        reported_api_blocks: 0,
+      })
+      await ctx.db.insert('billing_usage', usageRow(f.org.id, f.user.id, key, 9000))
+    })
+  const callsIn = async (t: T, f: OrgFixture, month: string) =>
+    (await orgUsage(runner(t), f.org.id, month, Date.now()))?.counts.api_calls
+  const marchCalls = (t: T, f: OrgFixture) => callsIn(t, f, MARCH)
+
+  it('counts an open bucket no longer written to in its first month only', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await openBucket(t, f, iso('2026-01-10'))
+    expect(await marchCalls(t, f)).toBe(0)
+    expect(await callsIn(t, f, '2026-01')).toBe(9000)
+  })
+
+  it('ends an open bucket where the next known period begins', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await openBucket(t, f, iso('2026-02-20'))
+    // A recorded period of another subscription from 10 March.
+    await t.run(async (ctx) => {
+      await ctx.db.insert('billing_periods', {
+        org_id: f.org.id,
+        subscription_id: uuid(),
+        plan_id: uuid(),
+        period_start: iso('2026-03-10'),
+        period_end: iso('2026-04-10'),
+        seats: 5,
+        profile_ids: [],
+        created_at: iso('2026-03-10'),
+      })
+    })
+    // 20 February to 10 March is 18 days, 9 of them in March.
+    expect(await marchCalls(t, f)).toBe(4500)
   })
 })
 
@@ -623,9 +728,118 @@ describe('sign-ins', () => {
       { auth_user_id: userId, month: '2024-01' },
       { auth_user_id: userId, month: '2024-02' },
     ])
-    // Deleting the login deletes them.
+    // Deleting the login deletes them, and a session of it that ends later
+    // keeps nothing.
     await t.mutation(internal.adminAuth.deleteOrphanLogin, { email: 'ghost@test.local' })
     expect(await kept(t)).toEqual([])
+    await t.mutation(internal.usage.keepSignIn, {
+      auth_user_id: userId,
+      created_at: Date.parse('2026-03-02'),
+      updated_at: Date.parse('2026-03-03'),
+    })
+    expect(await kept(t)).toEqual([])
+  })
+
+  /** The environment Better Auth's options need (auth.ts createAuth). */
+  const authEnv = () => {
+    vi.stubEnv('SITE_URL', APP)
+    vi.stubEnv('CONVEX_SITE_URL', 'https://some.convex.site')
+    vi.stubEnv('BETTER_AUTH_SECRET', 'usage-hermetic-secret-not-a-real-deployment-271828')
+  }
+  /** Runs Better Auth's own session and login removal, as a ban or a
+   * deleted login does. */
+  const internalAdapter = (t: T) => ({
+    deleteUserSessions: (userId: string) =>
+      t.run(async (ctx) =>
+        (await createAuth(ctx).$context).internalAdapter.deleteUserSessions(userId),
+      ),
+    deleteSession: (token: string) =>
+      t.run(async (ctx) => (await createAuth(ctx).$context).internalAdapter.deleteSession(token)),
+    deleteUser: (userId: string) =>
+      t.run(async (ctx) => (await createAuth(ctx).$context).internalAdapter.deleteUser(userId)),
+  })
+  const sessions = (t: T) => runInAuth(t, (ctx) => ctx.db.query('session').collect())
+
+  it('keeps the months of every session Better Auth ends in one call', async () => {
+    authEnv()
+    const t = newT()
+    const f = await withOrg(t)
+    // Better Auth's own delete hooks reach only the first 100 sessions it
+    // reads; the session's delete trigger runs for each one deleted.
+    for (let i = 0; i < 100; i++) await session(t, f.user, '2026-02-02', '2026-02-03')
+    await session(t, f.user, '2026-01-05', '2026-01-06')
+    await internalAdapter(t).deleteUserSessions(f.user.auth_user_id as string)
+    expect(await sessions(t)).toEqual([])
+    expect((await kept(t)).map((row) => row.month).sort()).toEqual(['2026-01', '2026-02'])
+  })
+
+  it('ends a session whose months cannot be kept', async () => {
+    authEnv()
+    const t = newT()
+    const f = await withOrg(t)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const token = uuid()
+    // A creation time that is not a time makes keeping its months throw.
+    await runInAuth(t, async (ctx) => {
+      await ctx.db.insert('session', {
+        token,
+        userId: f.user.auth_user_id as string,
+        createdAt: Number.NaN,
+        updatedAt: Date.parse('2026-03-03'),
+        expiresAt: RUN + 86_400_000,
+      })
+    })
+    await internalAdapter(t).deleteSession(token)
+    expect(await sessions(t)).toEqual([])
+    expect(await kept(t)).toEqual([])
+    expect(error).toHaveBeenCalledWith('[usage] sign-in not kept', expect.anything())
+  })
+
+  it('forgets the months of a login Better Auth deletes', async () => {
+    authEnv()
+    const t = newT()
+    const userId = await login(t, 'leaving@test.local')
+    await t.run(async (ctx) => {
+      await ctx.db.insert('usage_sign_ins', { auth_user_id: userId, month: '2026-02' })
+    })
+    await runInAuth(t, async (ctx) => {
+      await ctx.db.insert('session', {
+        token: uuid(),
+        userId,
+        createdAt: Date.parse('2026-03-02'),
+        updatedAt: Date.parse('2026-03-03'),
+        expiresAt: RUN + 86_400_000,
+      })
+    })
+    // Its session ends first and keeps March, then the login goes with both.
+    await internalAdapter(t).deleteUser(userId)
+    expect(await sessions(t)).toEqual([])
+    expect(await kept(t)).toEqual([])
+  })
+
+  const signedInIds = async (t: T, f: OrgFixture) =>
+    (await t.query(internal.usage.profiles, { org_id: f.org.id, month: MARCH, cursor: null }))
+      .active
+
+  it('counts a sign-in only on an active seat the login held in the month', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (const p of [f.user, f.viewer, f.admin]) await session(t, p, '2026-03-02', '2026-03-03')
+    await t.run(async (ctx) => {
+      await ctx.db.patch(f.viewer._id, { active: false })
+      // claimed after March ended
+      await ctx.db.patch(f.admin._id, { accepted_at: iso('2026-04-01T01:00:00Z') })
+    })
+    expect(await signedInIds(t, f)).toEqual([f.user.id])
+  })
+
+  it('finds a session of the month behind the ones created after it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await session(t, f.user, '2026-03-02', '2026-03-03')
+    for (let i = 0; i < 60; i++)
+      await session(t, f.user, '2026-04-01T01:00:00Z', '2026-04-01T02:00:00Z')
+    expect(await signedInIds(t, f)).toEqual([f.user.id])
   })
 })
 
@@ -637,6 +851,7 @@ describe('retention and deletion', () => {
     await t.run(async (ctx) => {
       for (const month of ['2023-11', '2023-12', '2024-01', MARCH]) {
         await ctx.db.insert('usage_sign_ins', { auth_user_id: 'login', month })
+        await ctx.db.insert('usage_runs', { month, seen_at: Date.parse(`${month}-01`) })
         await ctx.db.insert('usage_counts', {
           org_id: f.org.id,
           month,
@@ -659,11 +874,13 @@ describe('retention and deletion', () => {
       months: (await ctx.db.query('usage_months').collect()).map((row) => row.month).sort(),
       counts: (await ctx.db.query('usage_counts').collect()).map((row) => row.month).sort(),
       sign_ins: (await ctx.db.query('usage_sign_ins').collect()).map((row) => row.month).sort(),
+      runs: (await ctx.db.query('usage_runs').collect()).map((row) => row.month).sort(),
     }))
     expect(left).toEqual({
       months: ['2024-01', MARCH],
       counts: ['2024-01', MARCH],
       sign_ins: ['2024-01', MARCH],
+      runs: ['2024-01', MARCH],
     })
   })
 
@@ -715,6 +932,30 @@ describe('retention and deletion', () => {
     expect(left.org.map((org) => org.id)).toEqual([f.otherOrg.id])
     expect(left.months.map((row) => row.org_id)).toEqual([f.otherOrg.id])
     expect(await orgCounts(t)).toEqual([])
+  })
+
+  it('goes with an organization a fixture deletes at once', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.action(internal.usage.closeMonth, { month: MARCH })
+    await runSteps(t)
+    await t.run(async (ctx) => {
+      for (const org_id of [f.org.id, f.otherOrg.id])
+        await ctx.db.insert('usage_counts', {
+          org_id,
+          month: MARCH,
+          metric: 'mail_invitations',
+          count: 1,
+        })
+      await deleteOrgDeep(ctx, f.org)
+    })
+    const left = await t.run(async (ctx) => ({
+      months: (await ctx.db.query('usage_months').collect()).map((row) => row.org_id),
+      counts: (await ctx.db.query('usage_counts').collect())
+        .filter((row) => row.org_id !== undefined)
+        .map((row) => row.org_id),
+    }))
+    expect(left).toEqual({ months: [f.otherOrg.id], counts: [f.otherOrg.id] })
   })
 })
 
@@ -787,8 +1028,9 @@ describe('Qivo Admin', () => {
       'bad_request',
       /not begun/,
     )
-    const months = await op.action(api.usage.orgMonths, { org_id: f.org.id })
+    const { months, current_failed } = await op.action(api.usage.orgMonths, { org_id: f.org.id })
     expect(months.map((m) => m.month)).toEqual([MARCH, '2026-04'])
+    expect(current_failed).toBe(false)
     const { people } = await op.action(api.usage.orgPeople, { org_id: f.org.id, month: MARCH })
     const byName = Object.fromEntries(people.map((p) => [p.name, p]))
     expect(byName.user).toMatchObject({ changes: 3, comments: 2, api_calls: 25, signed_in: true })
@@ -801,5 +1043,59 @@ describe('Qivo Admin', () => {
     expect(byName.admin).toMatchObject({ changes: 1, comments: 0, api_calls: 0, signed_in: false })
     expect(byName.Relay).toMatchObject({ api_calls: 5 })
     expect(people).toHaveLength(3)
+  })
+
+  it('names an organization whose current month fails and shows the rest', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const op = await operator(t)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await t.action(internal.usage.closeMonth, { month: MARCH })
+    await runSteps(t)
+    // Two rows for one count make that organization's reads fail.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 2; i++)
+        await ctx.db.insert('usage_counts', {
+          org_id: f.org.id,
+          month: '2026-04',
+          metric: 'mail_invitations',
+          count: 1,
+        })
+    })
+    const april = await op.action(api.usage.monthTable, { month: '2026-04' })
+    expect(april.rows.map((row) => row.org_id)).toEqual([f.otherOrg.id])
+    expect(april.failed).toEqual([{ org_id: f.org.id, name: 'Testbed Labs' }])
+    const { months, current_failed } = await op.action(api.usage.orgMonths, { org_id: f.org.id })
+    expect(months.map((m) => m.month)).toEqual([MARCH])
+    expect(current_failed).toBe(true)
+  })
+
+  it('says how a month was stored, and marks one whose counting began during it', async () => {
+    const t = newT()
+    await withOrg(t)
+    const op = await operator(t)
+    // The job first ran on 1 February: January is partial, February whole.
+    vi.setSystemTime(Date.parse('2026-02-01T05:15:00Z'))
+    await t.action(internal.usage.closeMonth, {})
+    await runSteps(t)
+    vi.setSystemTime(Date.parse('2026-03-01T05:15:00Z'))
+    await t.action(internal.usage.closeMonth, {})
+    await runSteps(t)
+    const status = async (month: string) =>
+      (await op.action(api.usage.monthTable, { month })).status
+    expect(await status('2026-01')).toEqual({
+      partial: true,
+      run: { saved: 2, failed: 0, finished_at: '2026-02-01T05:15:00.000Z' },
+    })
+    expect(await status('2026-02')).toMatchObject({ partial: false, run: { saved: 2 } })
+    expect(await status('2026-03')).toEqual({ partial: false, run: null })
+    const { months } = await op.action(api.usage.orgMonths, {
+      org_id: (await t.run((ctx) => ctx.db.query('organizations').first()))?.id as string,
+    })
+    expect(months.map((m) => [m.month, m.partial])).toEqual([
+      ['2026-01', true],
+      ['2026-02', false],
+      ['2026-03', false],
+    ])
   })
 })

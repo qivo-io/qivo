@@ -2,7 +2,7 @@ import { getCurrentAuthContext } from '@better-auth/core/context'
 import { type BetterAuthOptions, betterAuth } from 'better-auth/minimal'
 import { admin } from 'better-auth/plugins'
 import { anonymous } from 'better-auth/plugins/anonymous'
-import { makeFunctionReference } from 'convex/server'
+import { type GenericMutationCtx, makeFunctionReference } from 'convex/server'
 import {
   type AuthFunctions,
   createClient,
@@ -151,18 +151,22 @@ async function countAuthMail(ctx: GenericCtx<DataModel>, intent: AuthLetterInten
   }
 }
 
-/** Keeps the months a deleted sign-in session was used in, for the usage
- * figures. A failure is logged and never fails the sign-out. */
+/** Keeps the months a sign-in session was used in as the session ends, for
+ * the usage figures. It runs in the session's delete trigger after
+ * endSessionAccess, so it runs for every session Better Auth ends, one at a
+ * time or many in one call: sign-out, revoked sessions, a password change or
+ * reset, a ban, a deleted login and an expired session's cleanup. Its
+ * writes are a nested transaction, so a failure rolls back only them, is
+ * logged and never stops the session from ending. */
 async function keepSignIn(
-  ctx: GenericCtx<DataModel>,
-  session: { userId: string; createdAt: Date | number; updatedAt: Date | number },
+  ctx: GenericMutationCtx<DataModel>,
+  session: { userId: string; createdAt: number; updatedAt: number },
 ) {
-  if (!isRunMutationCtx(ctx)) return
   try {
     await ctx.runMutation(internal.usage.keepSignIn, {
       auth_user_id: session.userId,
-      created_at: new Date(session.createdAt).getTime(),
-      updated_at: new Date(session.updatedAt).getTime(),
+      created_at: session.createdAt,
+      updated_at: session.updatedAt,
     })
   } catch (e) {
     console.error('[usage] sign-in not kept', { name: (e as Error)?.name ?? 'error' })

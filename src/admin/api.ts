@@ -42,7 +42,8 @@ export type BillingPlans = FunctionReturnType<typeof api.adminBilling.listPlans>
 /* Monthly usage per organization (convex/usage.ts). */
 export type UsageMonth = FunctionReturnType<typeof api.usage.monthTable>
 export type UsageRow = UsageMonth['rows'][number]
-export type OrgUsageMonth = FunctionReturnType<typeof api.usage.orgMonths>[number]
+export type OrgUsageMonths = FunctionReturnType<typeof api.usage.orgMonths>
+export type OrgUsageMonth = OrgUsageMonths['months'][number]
 export type UsagePeople = FunctionReturnType<typeof api.usage.orgPeople>
 
 /* ConvexError.data = { code, message, reason? } (convex/lib/functions.ts) —
@@ -93,7 +94,7 @@ export const platformStats = (): Promise<PlatformStats> =>
 /* A closed month's stored rows, or the current month computed now. */
 export const usageMonth = (month: string): Promise<UsageMonth> =>
   runAction(api.usage.monthTable, { month }).catch(mapError)
-export const orgUsageMonths = (orgId: string): Promise<OrgUsageMonth[]> =>
+export const orgUsageMonths = (orgId: string): Promise<OrgUsageMonths> =>
   runAction(api.usage.orgMonths, { org_id: orgId }).catch(mapError)
 export const orgUsagePeople = (orgId: string, month: string): Promise<UsagePeople> =>
   runAction(api.usage.orgPeople, { org_id: orgId, month }).catch(mapError)

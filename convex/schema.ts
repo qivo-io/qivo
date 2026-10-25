@@ -770,6 +770,27 @@ export default defineSchema({
     .index('by_user_month', ['auth_user_id', 'month'])
     .index('by_month', ['month']),
 
+  // One UTC month of the usage job (usage.ts). The daily job first writes
+  // it during the month, when it saw the month begin (`seen_at`); counting
+  // mail, deleted webhook deliveries and ended sign-in sessions began about
+  // then, so a month first seen after its first day is partial. Once the
+  // month has ended, the run that stores its usage_months rows keeps its
+  // progress here, so a run that stopped resumes from its next page. Deleted
+  // after USAGE_RETENTION_DAYS.
+  usage_runs: defineTable({
+    month: v.string(), // YYYY-MM
+    seen_at: v.number(),
+    // The run under way or done: its id, which its steps carry, the next
+    // page of organizations, the organizations saved and failed so far, when
+    // its last step began and when it finished.
+    run: v.optional(v.string()),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    saved: v.optional(v.number()),
+    failed: v.optional(v.number()),
+    step_at: v.optional(v.number()),
+    finished_at: v.optional(v.number()),
+  }).index('by_month', ['month']),
+
   organizations: defineTable({
     id: v.string(),
     name: v.string(),
