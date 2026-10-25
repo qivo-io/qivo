@@ -1,5 +1,5 @@
 import type { UnsentScope } from './leaveGuard'
-import { goTo, refuseMove, returning, returnTo, voidReturn } from './pageHistory'
+import { goTo, refuseMove, returning, returnStepLanded, returnTo, voidReturn } from './pageHistory'
 
 /* A Back or Forward the app refuses because it would close a window that
    holds unsent text (components/DiscardPrompt).
@@ -32,10 +32,13 @@ export function createPopRefusal(ask: Ask) {
         the address it left back itself. */
     refuse(event: PopStateEvent, scopes: UnsentScope[]): boolean {
       const { from, to } = refuseMove()
-      // a return by position that another move overtook asks nothing
-      if (held && !returning()) held = null
+      // the step of a return by position that another move overtook: the
+      // page returns from where it landed, and the move still refused is the
+      // person's latest
+      const stepped = !!held && returnStepLanded()
+      if (held && !returning() && !stepped) held = null
       if (
-        !held &&
+        (!held || stepped) &&
         !returnTo(from, () => {
           const refused = held
           held = null
@@ -44,7 +47,7 @@ export function createPopRefusal(ask: Ask) {
       )
         return false
       event.stopImmediatePropagation()
-      held = { reached: to, scopes }
+      if (!stepped) held = { reached: to, scopes }
       return true
     },
     /** App took a Back or Forward that closes nothing held: a return still

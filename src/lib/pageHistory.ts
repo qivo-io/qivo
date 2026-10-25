@@ -102,8 +102,10 @@ let ret: {
 } | null = null
 // without the Navigation API, the step of a return that another move
 // overtook: it may land as the next popstate, as a move like any other, so
-// a refusal until then waits for it rather than step again (returnTo)
+// a refusal until then waits for it rather than step again (returnTo), and
+// the page writes no history. Whether the latest popstate was that step.
 let stray: number | null = null
+let strayLanded = false
 // returns whose navigate event fired since the page last pushed an entry:
 // WebKit runs a return that a person's move merged with once more, as a
 // reload of the entry it reached, which the page cancels (onNavigate)
@@ -321,7 +323,11 @@ function onPop(event: PopStateEvent) {
   leaving = false
   moved = here !== null && from.at !== null ? here - from.at : null
   // the overtaken return's step landed, or another move came first
-  stray = null
+  strayLanded = stray !== null && moved === stray
+  if (stray !== null) {
+    stray = null
+    settleSoon()
+  }
   // the open layers this move left, top first (an entry without a position
   // is below them all), for the layers' listener after App's
   popped = [...open]
@@ -333,9 +339,7 @@ function onPop(event: PopStateEvent) {
   // a Back from a marker to an entry of its run, which shows the same page
   const inRun =
     moved !== null && moved < 0 && tokenIn(from.state) !== null && -moved <= depthIn(from.state)
-  // not while a step of the page's may still be on its way: Firefox can drop
-  // a step after which the page writes history
-  if (inRun && last.url !== from.url && !stepped) replace!(last.state, '', from.url)
+  if (inRun && last.url !== from.url) replace!(last.state, '', from.url)
   if (firstEntry) {
     // the person's Back came first and stopped on a spare over the first
     // entry: the step goes on from there, as only a Back can race it
@@ -526,6 +530,7 @@ export function installPageHistory(target: Window = window) {
     leaving = false
     ret = null
     stray = null
+    strayLanded = false
     reruns = 0
     unloading = false
     waiting = []
@@ -594,8 +599,9 @@ export function leavePage() {
   go(-depthIn(current().history.state) - 1)
 }
 
-/** Whether the refusal's return or the first-entry step is on its way. */
-export const historyBusy = () => !!ret || settling
+/** Whether the refusal's return, the step of one another move overtook, or
+    the first-entry step is on its way. */
+export const historyBusy = () => !!ret || stray !== null || settling
 
 /** Runs `fn` now, or once the page's own move on its way has landed. */
 export function whenQuiet(fn: () => void) {
@@ -678,6 +684,10 @@ export function voidReturn() {
 
 /** Whether the refusal's return is on its way. */
 export const returning = () => !!ret
+
+/** Whether the latest popstate was the step of a return that another move
+    overtook, rather than a move of the person's. */
+export const returnStepLanded = () => strayLanded
 
 /** Moves to `to` as the person's own move, heard: Discard taking a refused
     move again. By key with the Navigation API, else by position; nothing

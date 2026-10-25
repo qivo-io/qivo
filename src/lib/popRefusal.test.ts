@@ -7,6 +7,7 @@ import {
   historyBusy,
   installPageHistory,
   listenBackLayers,
+  onHistorySettled,
   openLayer,
   pushPage,
   reloadPage,
@@ -307,6 +308,34 @@ describe('without the Navigation API', () => {
       expect(browser.urls()).toEqual(['/a', '/b', '/task', '/d', '/e'])
     },
   )
+
+  it("writes no address while the overtaken return's step is on its way, as App's address sync would", async () => {
+    const browser = await refusing(['/a', '/b', '/task', '/d', '/e'], 2)
+    // App writes the page's address once the page's own moves have landed
+    const stop = onHistorySettled(() => {
+      if (!historyBusy() && browser.here() !== '/task') pushPage({}, '/task')
+    })
+    browser.person.back()
+    browser.person.back()
+    await settleMoves()
+    stop()
+    expect(browser.here()).toBe('/task')
+    expect(browser.urls()).toEqual(['/a', '/b', '/task', '/d', '/e'])
+    expect(browser.ask).toHaveBeenCalledTimes(1)
+  })
+
+  it("takes the person's latest refused move on Discard, not the return's own step", async () => {
+    const browser = await refusing(['/a', '/b', '/c', '/task'], 3)
+    browser.person.back()
+    browser.person.back()
+    await settleMoves()
+    expect(browser.here()).toBe('/task')
+    expect(browser.ask).toHaveBeenCalledTimes(1)
+    browser.scope.discard()
+    browser.discard()
+    await settleMoves()
+    expect(browser.here()).toBe('/b')
+  })
 
   it('ends on the page shown after a pick from the Back menu and a Forward before the return ran', async () => {
     const browser = await refusing(['/a', '/b', '/task'], 2)

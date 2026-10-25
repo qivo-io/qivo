@@ -119,6 +119,25 @@ describe('a layer that closes by itself', () => {
     expect(browser.here()).toBe('/page/renamed')
   })
 
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    'carries an address written in place down two spares through two quick Backs, in %s',
+    async (engine) => {
+      const browser = page(['/before', '/page'], engine)
+      const dialog = await layer()
+      const menu = await layer()
+      // as App names a task whose organization's address changed
+      browser.history.replaceState(browser.history.state, '', '/page/renamed')
+      finishLayer(menu)
+      finishLayer(dialog)
+      browser.person.back()
+      browser.person.back()
+      await settleMoves()
+      browser.person.pick(1)
+      await settleMoves()
+      expect(browser.here()).toBe('/page/renamed')
+    },
+  )
+
   it('gives its spare to the next page, so Back returns to the page under it', async () => {
     const browser = page(['/before', '/page'])
     finishLayer(await layer())
