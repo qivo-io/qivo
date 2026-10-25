@@ -267,6 +267,21 @@ describe('useMobileBackLayer', () => {
     expect(heard).toEqual(['/page'])
   })
 
+  it('closes once for a close repeated while the page steps back over another marker', async () => {
+    const onClose = vi.fn()
+    const show = await layers({ a: { open: true, onClose }, b: true })
+    // b finishes, so the page steps back over its marker, and a closes
+    // twice while that step is on its way
+    await show({ a: { open: true, onClose }, b: false })
+    await act(async () => {
+      closes.a()
+      closes.a()
+    })
+    await settle()
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(heard).toEqual(['/page'])
+  })
+
   it('asks once for a refused close repeated before its Back step lands', async () => {
     // a dialog holding unsent text asks instead of closing
     const onClose = vi.fn(() => false)
