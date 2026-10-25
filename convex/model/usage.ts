@@ -44,19 +44,30 @@ export const USAGE_PAGE = {
   orgs: 50,
   /** Activity, attachment, Deleted items, delivery and API usage rows. */
   rows: 2000,
-  /** Profiles, each with its picture and up to SESSION_PAGES reads of its
-   * login's sessions. */
-  profiles: 50,
+  /** Profiles, each with one read of its login's sessions and its picture. */
+  profiles: 200,
+  /** Sessions one read of a login's sessions takes past its first page. */
+  sessions: 200,
   /** Tasks, each with one read of its comments stored since the month began. */
   issues: 200,
-  /** Comments read with their task; a task with more is paged on its own. */
-  comments: 50,
+  /** Comments read with their task; a task with more is paged on its own.
+   * Few enough that one task's read stays small even for comments stored
+   * before the body limit, which can reach Convex's 1 MiB document limit. */
+  comments: 5,
   /** Bytes the paged range of one page may read. */
   bytes: 8 * 1024 * 1024,
   /** Bytes of comments one page of tasks may read, by docBytes, before the
    * rest of its tasks are paged on their own. */
-  commentBytes: 4 * 1024 * 1024,
+  commentBytes: 3 * 1024 * 1024,
 }
+
+const MIB = 1024 * 1024
+
+/** The most one comments page may read, in bytes, at Convex's 1 MiB
+ * document limit: its tasks, the comments within the budget and the last
+ * task's first read. It must stay under the 16 MiB a transaction may read. */
+export const pageReadBound = () =>
+  USAGE_PAGE.bytes / 2 + MIB + USAGE_PAGE.commentBytes + (USAGE_PAGE.comments + 1) * MIB
 
 /** An upper bound of a document's size: no UTF-16 unit takes more than 3
  * bytes in UTF-8. */
@@ -362,49 +373,47 @@ const listOf = (map: Map<string, number>): PerPerson => [...map].map(([id, n]) =
 type Session = { createdAt: number; updatedAt: number }
 type Sessions = { page: Session[]; isDone: boolean; continueCursor: string }
 
-/** Whether login `authUserId` had a sign-in session created before the
- * month ended and created or refreshed after it began: an ended one kept by
- * keepSignIns, or one still stored. It reads the stored sessions newest
- * first through the userId index, skipping the ones created after the
- * month, and checks at most SESSIONS_READ older ones; a bound on updatedAt
- * would make the adapter scan the whole table, as no index has it. Better
- * Auth keeps a session that expired until its cookie is presented, so a
- * login can hold many; a month further back than its newest SESSIONS_READ
- * sessions before the month's end can then miss one still stored. */
-async function signedIn(ctx: QueryCtx, authUserId: string, span: Span): Promise<boolean> {
+/** Whether login `authUserId` has a kept sign-in for the month: a session
+ * that ended was used in it (keepSignIns). */
+async function keptSignIn(ctx: QueryCtx, authUserId: string, span: Span): Promise<boolean> {
   const kept = await ctx.db
     .query('usage_sign_ins')
     .withIndex('by_user_month', (q) =>
       q.eq('auth_user_id', authUserId).eq('month', monthOf(span.start)),
     )
     .first()
-  if (kept !== null) return true
-  let cursor: Cursor = null
-  let checked = 0
-  for (let read = 0; read < SESSION_PAGES; read++) {
-    const sessions = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
-      model: 'session',
-      where: [{ field: 'userId', value: authUserId }],
-      sortBy: { field: 'createdAt', direction: 'desc' },
-      paginationOpts: { numItems: SESSIONS_READ, cursor },
-    })) as Sessions
-    for (const s of sessions.page) {
-      if (s.createdAt >= span.end) continue
-      if (s.updatedAt >= span.start) return true
-      if (++checked >= SESSIONS_READ) return false
-    }
-    if (sessions.isDone) return false
-    cursor = sessions.continueCursor
-  }
-  return false
+  return kept !== null
 }
 
-/** Sessions read per page of a login's sessions, and the most created
- * before the month's end that one check reads. */
+/**
+ * One page of login `authUserId`'s stored sessions, newest first through
+ * the userId index: whether one of them was created before the month ended
+ * and created or refreshed after it began, and where the next page starts
+ * while none was. A bound on updatedAt would make the adapter scan the whole
+ * table, as no index has it. Better Auth keeps a session that expired until
+ * its cookie is presented, so a login can hold many, and every one is read
+ * until one matches.
+ */
+export async function sessionsPage(
+  ctx: QueryCtx,
+  authUserId: string,
+  span: Span,
+  cursor: Cursor,
+  numItems: number,
+): Promise<{ used: boolean; next: Cursor }> {
+  const sessions = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
+    model: 'session',
+    where: [{ field: 'userId', value: authUserId }],
+    sortBy: { field: 'createdAt', direction: 'desc' },
+    paginationOpts: { numItems, cursor },
+  })) as Sessions
+  const used = sessions.page.some((s) => s.createdAt < span.end && s.updatedAt >= span.start)
+  return { used, next: used ? null : nextOf(sessions) }
+}
+
+/** Sessions read per login in a profiles page. A login with more is read
+ * on, a page at a time (usage.ts sessions). */
 const SESSIONS_READ = 50
-/** Pages of a login's sessions one check reads at most, so the sessions
- * created after the month cannot make a profiles page read without bound. */
-const SESSION_PAGES = 4
 
 /** Whether profile `p` held its seat in the month with its login: it is
  * active, and was created or claimed before the month ended. A seat that
@@ -413,7 +422,9 @@ const seatHeld = (p: Doc<'profiles'>, span: Span) =>
   p.active && (p.accepted_at ?? p.created_at) < span.to
 
 /** One page of profiles: guests and agents among the active ones, the
- * bytes of their pictures, and the ones signed in during the month. */
+ * bytes of their pictures, the ones signed in during the month, and the
+ * ones whose login holds more sessions than the page read, with where to
+ * read on (`unsure`). */
 export async function profilesPage(ctx: QueryCtx, orgId: string, span: Span, cursor: Cursor) {
   const page = await ctx.db
     .query('profiles')
@@ -423,19 +434,23 @@ export async function profilesPage(ctx: QueryCtx, orgId: string, span: Span, cur
   let agents = 0
   let avatar_bytes = 0
   const active: string[] = []
+  const unsure: { id: string; auth_user_id: string; cursor: string }[] = []
   for (const p of page.page) {
     if (p.active && p.org_role === 'guest') guests += 1
     if (p.active && p.kind === 'agent') agents += 1
     if (p.avatar_storage_id !== undefined)
       avatar_bytes += (await ctx.db.system.get(p.avatar_storage_id))?.size ?? 0
-    if (
-      p.auth_user_id !== undefined &&
-      seatHeld(p, span) &&
-      (await signedIn(ctx, p.auth_user_id, span))
-    )
+    const login = p.auth_user_id
+    if (login === undefined || !seatHeld(p, span)) continue
+    if (await keptSignIn(ctx, login, span)) {
       active.push(p.id)
+      continue
+    }
+    const first = await sessionsPage(ctx, login, span, null, SESSIONS_READ)
+    if (first.used) active.push(p.id)
+    else if (first.next !== null) unsure.push({ id: p.id, auth_user_id: login, cursor: first.next })
   }
-  return { guests, agents, avatar_bytes, active, next: nextOf(page) }
+  return { guests, agents, avatar_bytes, active, unsure, next: nextOf(page) }
 }
 
 /** One page of the month's activity rows, with the changes per actor. */
@@ -468,9 +483,10 @@ const commentIn = (comment: Doc<'comments'>, span: Span) =>
  * USAGE_PAGE.comments comments stored since the month began, and every task
  * after the page's comments reach USAGE_PAGE.commentBytes, is named in
  * `deferred` and paged on its own (taskCommentsPage). So the tasks (half of
- * USAGE_PAGE.bytes), the comments and the one task read past the budget
- * stay well under the 16 MiB a transaction may read. Tasks in Deleted items
- * are left out with their comments.
+ * USAGE_PAGE.bytes, plus the one that passes it), the comments up to the
+ * budget and the one task read past it, at most USAGE_PAGE.comments + 1
+ * comments of up to 1 MiB, stay under the 16 MiB a transaction may read
+ * (pageReadBound). Tasks in Deleted items are left out with their comments.
  */
 export async function commentsPage(ctx: QueryCtx, orgId: string, span: Span, cursor: Cursor) {
   const page = await ctx.db

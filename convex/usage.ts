@@ -79,6 +79,7 @@ import {
   runRow,
   type Span,
   seeMonth,
+  sessionsPage,
   setPersonFiles,
   storedPersonFiles,
   taskCommentsPage,
@@ -112,6 +113,15 @@ export const profiles = internalQuery({
   args: { org_id: v.string(), month: v.string(), cursor: vCursor },
   handler: async (ctx, { org_id, month, cursor }) =>
     await profilesPage(ctx, org_id, spanOf(month), cursor),
+})
+
+/** One more page of login `auth_user_id`'s sessions, for a profile whose
+ * login holds more than a profiles page reads (model/usage.ts
+ * sessionsPage). */
+export const sessions = internalQuery({
+  args: { auth_user_id: v.string(), month: v.string(), cursor: vCursor },
+  handler: async (ctx, { auth_user_id, month, cursor }) =>
+    await sessionsPage(ctx, auth_user_id, spanOf(month), cursor, USAGE_PAGE.sessions),
 })
 
 export const activity = internalQuery({
@@ -289,6 +299,7 @@ export async function orgUsage(
     avatar_bytes: 0,
     ...top.counted,
   }
+  const unsure: { id: string; auth_user_id: string; cursor: string }[] = []
   await eachPage(
     (cursor) => ctx.runQuery(internal.usage.profiles, { org_id, month, cursor }),
     (page) => {
@@ -296,8 +307,22 @@ export async function orgUsage(
       counts.agents += page.agents
       counts.avatar_bytes += page.avatar_bytes
       for (const id of page.active) person(id).signed_in = true
+      unsure.push(...page.unsure)
     },
   )
+  // A login with more sessions than a profiles page reads is read to the end.
+  for (const { id, auth_user_id, cursor: first } of unsure) {
+    let cursor: Cursor = first
+    while (cursor !== null) {
+      const page: { used: boolean; next: Cursor } = await ctx.runQuery(internal.usage.sessions, {
+        auth_user_id,
+        month,
+        cursor,
+      })
+      if (page.used) person(id).signed_in = true
+      cursor = page.next
+    }
+  }
   await eachPage(
     (cursor) => ctx.runQuery(internal.usage.activity, { org_id, month, cursor }),
     (page) => {

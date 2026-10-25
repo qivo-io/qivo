@@ -32,7 +32,7 @@ describe('the usage CSV', () => {
   it('writes one line per organization with raw counts, quoting names that need it', () => {
     const csv = usageCsv(table([row('Acme, "North"')]))
     // a byte order mark, so a spreadsheet reads the names as UTF-8
-    expect(csv.startsWith('﻿month,')).toBe(true)
+    expect(csv.startsWith('\ufeffmonth,')).toBe(true)
     const [head, line, outside, end] = csv.slice(1).split('\r\n')
     expect(head.split(',')).toEqual([
       'month',
@@ -43,15 +43,30 @@ describe('the usage CSV', () => {
       'api_estimated',
       'computed_at',
       'month_partial',
+      'month_unfinished',
+      'failed',
     ])
     expect(line.startsWith('2026-03,o1,"Acme, ""North""",0,1,2,3,,5,')).toBe(true)
     expect(line).toContain(',1500000,')
-    expect(line.endsWith(',,,,,true,2026-04-01T05:15:00.000Z,true')).toBe(true)
+    expect(line.endsWith(',,,,,true,2026-04-01T05:15:00.000Z,true,false,false')).toBe(true)
     // what belongs to no organization, in its own columns
     expect(outside).toBe(
-      `2026-03,,No organization,${','.repeat(USAGE_COLUMNS.length)}900,4,2,1,,,true`,
+      `2026-03,,No organization,${','.repeat(USAGE_COLUMNS.length)}900,4,2,1,,,true,false,`,
     )
     expect(end).toBe('')
+  })
+
+  it('names the organizations that failed and a month whose run has not finished', () => {
+    const month: UsageMonth = {
+      ...table([row('Pine')]),
+      failed: [{ org_id: 'o2', name: 'Fir Works' }],
+      status: { partial: false, run: { saved: 1, failed: 0, finished_at: null } },
+    }
+    const lines = usageCsv(month).slice(1).split('\r\n')
+    const empty = ','.repeat(USAGE_COLUMNS.length + UNATTRIBUTED_COLUMNS.length + 2)
+    expect(lines[1].endsWith(',false,true,false')).toBe(true)
+    expect(lines[2]).toBe(`2026-03,o2,Fir Works${empty},false,true,true`)
+    expect(lines[3].endsWith(',false,true,')).toBe(true)
   })
 
   it('writes a name a spreadsheet would run as a formula as text', () => {

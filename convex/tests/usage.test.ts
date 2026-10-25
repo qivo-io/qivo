@@ -13,7 +13,7 @@ import type { Doc } from '../_generated/dataModel'
 import { createAuth } from '../auth'
 import { overlapShare, spread } from '../lib/usage'
 import { deleteOrgDeep } from '../model/cascade'
-import { USAGE_PAGE } from '../model/usage'
+import { pageReadBound, USAGE_PAGE } from '../model/usage'
 import { orgUsage, RUN_STALLED_MS, USAGE_EXPIRY } from '../usage'
 import {
   as,
@@ -316,6 +316,10 @@ describe('the monthly job', () => {
       mail_account_notes: 0,
       background_bytes: 59,
     })
+  })
+
+  it('reads less in a comments page than a transaction may, even for 1 MiB comments', () => {
+    expect(pageReadBound()).toBeLessThan(16 * 1024 * 1024)
   })
 
   it('reads a page’s other tasks on their own once its comments pass the byte budget', async () => {
@@ -886,13 +890,18 @@ describe('sign-ins', () => {
     expect(await signedInIds(t, f)).toEqual([f.user.id])
   })
 
-  it('finds a session of the month behind the ones created after it', async () => {
+  it('reads every session of a login to find one of the month', async () => {
     const t = newT()
     const f = await withOrg(t)
     await session(t, f.user, '2026-03-02', '2026-03-03')
-    for (let i = 0; i < 60; i++)
+    // More sessions created after March than a profiles page and one more
+    // page read, so the check goes on page by page.
+    for (let i = 0; i < 260; i++)
       await session(t, f.user, '2026-04-01T01:00:00Z', '2026-04-01T02:00:00Z')
-    expect(await signedInIds(t, f)).toEqual([f.user.id])
+    expect(await signedInIds(t, f)).toEqual([])
+    const usage = await orgUsage(runner(t), f.org.id, MARCH, Date.now())
+    expect(usage?.people.find((p) => p.profile_id === f.user.id)?.signed_in).toBe(true)
+    expect(usage?.counts.active_people).toBe(1)
   })
 })
 

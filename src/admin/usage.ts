@@ -85,10 +85,13 @@ export function peopleMonths(choices: readonly string[], months: readonly string
 }
 
 /** The month as CSV: one line per organization with every count in whole
- * units (bytes, not formatted sizes), then one line for what belongs to no
- * organization, in columns of its own. `month_partial` marks a month whose
- * counters began during it (convex/model/usage.ts monthStatus). It starts
- * with a byte order mark, so a spreadsheet reads it as UTF-8. */
+ * units (bytes, not formatted sizes), one line without counts per
+ * organization whose current figures failed to load (`failed`), then one
+ * line for what belongs to no organization, in columns of its own.
+ * `month_partial` marks a month whose counters began during it
+ * (convex/model/usage.ts monthStatus) and `month_unfinished` a closed month
+ * whose run has not finished, so some organizations may be missing. It
+ * starts with a byte order mark, so a spreadsheet reads it as UTF-8. */
 export function usageCsv(table: UsageMonth): string {
   const head = [
     'month',
@@ -99,8 +102,11 @@ export function usageCsv(table: UsageMonth): string {
     'api_estimated',
     'computed_at',
     'month_partial',
+    'month_unfinished',
+    'failed',
   ]
-  const partial = table.status.partial
+  const { partial, run } = table.status
+  const unfinished = !table.current && run !== null && run.finished_at === null
   const blank = (n: number) => Array.from({ length: n }, () => null)
   const lines = table.rows.map((row) => [
     table.month,
@@ -111,7 +117,19 @@ export function usageCsv(table: UsageMonth): string {
     row.api_estimated,
     row.computed_at,
     partial,
+    unfinished,
+    false,
   ])
+  for (const org of table.failed)
+    lines.push([
+      table.month,
+      org.org_id,
+      org.name,
+      ...blank(USAGE_COLUMNS.length + UNATTRIBUTED_COLUMNS.length + 2),
+      partial,
+      unfinished,
+      true,
+    ])
   lines.push([
     table.month,
     null,
@@ -121,6 +139,8 @@ export function usageCsv(table: UsageMonth): string {
     null,
     null,
     partial,
+    unfinished,
+    null,
   ])
   return `\ufeff${[head, ...lines].map((line) => line.map(cell).join(',')).join('\r\n')}\r\n`
 }
