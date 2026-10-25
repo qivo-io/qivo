@@ -34,7 +34,8 @@ export function createPopRefusal(ask: Ask) {
       const { from, to } = refuseMove()
       // the step of a return by position that another move overtook: the
       // page returns from where it landed, and the move still refused is the
-      // person's latest
+      // person's latest. A known limit: a move of the person's by the same
+      // step cannot be told from it, so Discard then takes the move before.
       const stepped = !!held && returnStepLanded()
       if (held && !returning() && !stepped) held = null
       if (

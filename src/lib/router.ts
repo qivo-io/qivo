@@ -338,7 +338,12 @@ function taskNamed(open: string) {
   const it = P.issueById[open]
   if (!it) {
     const was = named.get(open)
-    return was && orgSegment(was.org) === ORG_NONE ? { ...was, key: was.uuid } : was
+    if (!was) return was
+    const seg = orgSegment(was.org)
+    if (seg === ORG_NONE) return { ...was, key: was.uuid }
+    // its organization's address may change after the task left
+    was.seg = seg
+    return was
   }
   named.delete(open)
   named.set(open, { org: it.org, key: it.key, uuid: it.uuid, seg: orgSegment(it.org) })

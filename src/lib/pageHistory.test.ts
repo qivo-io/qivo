@@ -289,6 +289,19 @@ describe('a layer that closes by itself', () => {
     },
   )
 
+  it('takes no step past the first entry when Firefox queued Backs reach it', async () => {
+    const browser = page(['/a', '/b', '/page'], 'firefox')
+    finishLayer(await layer())
+    // the third Back reaches the first entry, with no entry before it
+    browser.person.back()
+    browser.person.back()
+    browser.person.back()
+    await settleMoves()
+    expect(browser.here()).toBe('/a')
+    expect(browser.heard.at(-1)).toBe('/a')
+    expect(historyBusy()).toBe(false)
+  })
+
   it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
     'goes on one step per spare, so two quick Backs over two spares leave two pages, in %s',
     async (engine) => {
@@ -402,6 +415,22 @@ describe("a spare over the session's first entry", () => {
     expect(layerOf(browser.history.state)).toBe(next.marker)
     expect(browser.urls()).toEqual(['/page', '/page'])
   })
+
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    'steps off a spare left by the lower of two layers after a Back closed the upper one, in %s',
+    async (engine) => {
+      const browser = page(['/page'], engine)
+      const dialog = await layer()
+      await layer()
+      browser.person.back()
+      await settleMoves()
+      // the dialog closes by itself; the menu's marker is a Forward entry
+      finishLayer(dialog)
+      await settleMoves()
+      expect(browser.index()).toBe(0)
+      expect(historyBusy()).toBe(false)
+    },
+  )
 
   it('takes one step for two layers that close together, and a Back first leaves the page on that entry', async () => {
     const browser = page(['/page'])

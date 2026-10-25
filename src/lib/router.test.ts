@@ -363,6 +363,17 @@ describe('buildPath', () => {
         openIssue: open,
       }),
     ).toBe(true)
+    // also when the organization's address changed after the task left
+    store.orgs = [...store.orgs, { id: ACME, slug: 'acme' } as (typeof store.orgs)[number]]
+    store.issueById[open] = { ...store.issues[0], id: open, uuid: open, key: 'QN-5', org: ACME }
+    expect(buildPath({ inboxOpen: true, openIssue: open })).toBe('/app/acme/inbox/tasks/qn-5')
+    delete store.issueById[open]
+    store.orgs = store.orgs.map((o) => (o.id === ACME ? { ...o, slug: 'acme2' } : o))
+    expect(buildPath({ inboxOpen: true, openIssue: open })).toBe('/app/acme2/inbox/tasks/qn-5')
+    store.orgs = store.orgs.filter((o) => o.id !== ACME)
+    expect(
+      pathMatchesState('/app/acme2/inbox/tasks/qn-5', { inboxOpen: true, openIssue: open }),
+    ).toBe(true)
     // while another task's address, or another page's, is still a move
     expect(
       pathMatchesState('/app/acme/inbox/tasks/qn-6', { inboxOpen: true, openIssue: open }),

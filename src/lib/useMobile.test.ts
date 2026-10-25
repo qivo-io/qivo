@@ -79,10 +79,10 @@ describe('useMobile', () => {
   })
 })
 
-/* The phone layers open over a page share one marker. A layer that closes
-   by itself, as a finished dialog does, moves nothing: the marker stays as a
-   spare once none is open, and one Back still leaves the page, since the
-   page goes on from a spare (lib/pageHistory). */
+/* Each open phone layer has a marker of its own. A layer that closes by
+   itself, as a finished dialog does, moves nothing: its marker stays as a
+   spare, and one Back still leaves the page, since the page goes on from a
+   spare (lib/pageHistory). */
 describe('useMobileBackLayer', () => {
   type Layers = Record<string, boolean | { open: boolean; onClose?: () => unknown }>
   let removeHistory = () => {}

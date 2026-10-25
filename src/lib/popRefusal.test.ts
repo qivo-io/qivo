@@ -212,6 +212,48 @@ describe.each(['chromium', 'firefox', 'webkit'] as const)(
   },
 )
 
+describe('a return that a move the app took overtook', () => {
+  it.each(['chromium', 'webkit', 'firefox'] as const)(
+    'lands heard, with no going-on, when that move reached a spare of the page shown, in %s',
+    async (engine) => {
+      const browser = browserWindow('/a', engine)
+      const removeHistory = installPageHistory(browser.window)
+      pushPage({}, '/x')
+      const stopLayers = listenBackLayers(browser.window)
+      remove = () => {
+        stopLayers()
+        removeHistory()
+      }
+      // a dialog over /x closed by itself; the person left /x and came back
+      const dialog = openLayer(() => {})
+      await Promise.resolve()
+      finishLayer(dialog)
+      browser.person.back()
+      await settleMoves()
+      browser.person.forward()
+      await settleMoves()
+      expect(browser.urls()).toEqual(['/a', '/x', '/x'])
+      expect(browser.index()).toBe(1)
+      const scope = createUnsentScope()
+      scope.hold('comment')
+      const ask = vi.fn()
+      const refusal = createPopRefusal(ask)
+      browser.window.addEventListener('popstate', (event) => {
+        if (!(event instanceof PopStateEvent)) return
+        if (browser.here() !== '/x' && refusal.refuse(event, [scope])) return
+        refusal.accepted()
+      })
+      // a refused Back, then a pick of the spare before the return runs
+      browser.person.back()
+      browser.person.pick(2)
+      await settleMoves()
+      expect(browser.here()).toBe('/x')
+      expect(ask).not.toHaveBeenCalled()
+      expect(historyBusy()).toBe(false)
+    },
+  )
+})
+
 describe.each(['webkit', 'ios'] as const)('WebKit, %s', (engine) => {
   it('cancels the reload of each of two merged returns', async () => {
     const browser = await refusing(['/e1', '/e2', '/e3', '/e4', '/e5'], 3, engine)
@@ -280,7 +322,7 @@ describe('without the Navigation API', () => {
     expect(browser.applied).toEqual(['/c'])
   })
 
-  it('takes a move that lands before the return as the move, and returns from it', async () => {
+  it('takes a second Back that lands before the return as the move, and returns from it', async () => {
     const browser = await refusing(['/a', '/b', '/c', '/d'], 3)
     // a second Back before the return has run
     browser.person.back()
@@ -334,6 +376,23 @@ describe('without the Navigation API', () => {
     browser.scope.discard()
     browser.discard()
     await settleMoves()
+    expect(browser.here()).toBe('/b')
+  })
+
+  it('ends on the page shown after Back, Back and Forward before the return ran', async () => {
+    const browser = await refusing(['/a', '/b', '/c', '/task'], 3)
+    browser.person.back()
+    browser.person.back()
+    browser.person.forward()
+    await settleMoves()
+    expect(browser.here()).toBe('/task')
+    expect(browser.ask).toHaveBeenCalledTimes(1)
+    expect(historyBusy()).toBe(false)
+    browser.scope.discard()
+    browser.discard()
+    await settleMoves()
+    // a known limit: the Forward goes by the overtaken return's own step,
+    // so it is taken for that step, and Discard takes the Back before it
     expect(browser.here()).toBe('/b')
   })
 
