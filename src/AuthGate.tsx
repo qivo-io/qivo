@@ -875,7 +875,8 @@ export function AuthGate() {
   // form only while the server would create the organization.
   if (phase === 'noProfile') {
     const deleting = P.seatsDeleting()
-    const create = deleting ? deleting.create : 'now'
+    // an answer without `create`, from an older backend, keeps the form
+    const create = deleting?.create ?? 'now'
     return shell(
       <form onSubmit={createOrg}>
         <div
@@ -926,14 +927,17 @@ export function AuthGate() {
           </Button>
         ) : (
           create === 'after_deletion' && (
-            // loads again, which shows the form once the deletion removed
-            // the seat
+            // the screen does not follow the deletion: a reload asks again,
+            // and shows the form once the deletion removed the seat, or the
+            // sign-in once the session ended. It takes focus, as the name
+            // field does on the form.
             <Button
               type="button"
               variant="primary"
               className="[width:100%] [justify-content:center]"
               disabled={signOutPending}
-              onClick={() => void load()}
+              autoFocus
+              onClick={() => location.reload()}
             >
               Check again
             </Button>

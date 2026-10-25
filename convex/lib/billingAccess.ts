@@ -138,17 +138,18 @@ export async function removedWithOrg(
   return removed !== null && (await deletionRunning(ctx, removed.org_id))
 }
 
-/** Whether `profile` is its login's home seat: accepted, and not a guest's.
- * A login holds one at most, and while it holds one it cannot create an
- * organization (identity.ts createOrganization). */
+/** Whether `profile` is a home seat of its login: accepted, and not a
+ * guest's. Joining demotes a second one to a guest (identity.ts), though an
+ * admin who promotes a guest can give a login two. While a login holds any,
+ * it cannot create an organization (identity.ts createOrganization). */
 export const isHomeSeat = (profile: Pick<Doc<'profiles'>, 'org_role' | 'accepted_at'>) =>
   profile.org_role !== 'guest' && profile.accepted_at !== undefined
 
 /** When a login whose seats a running organization deletion holds may
  * create an organization: `now` with no home seat, `after_deletion` while
- * the deletion has not deleted its home seat yet, which its first phase
+ * deletions have not deleted its home seats yet, which their first phase
  * does, and `blocked` while an organization that is not being deleted
- * holds it, as a deactivated member's. */
+ * holds one, as a deactivated member's. */
 export type SeatlessCreate = 'now' | 'after_deletion' | 'blocked'
 
 /** Whether a running organization deletion holds a seat of the login
@@ -163,13 +164,18 @@ export async function seatHeldByDeletion(
   authUserId: string,
 ): Promise<SeatlessCreate | null> {
   let held = false
-  let home: Doc<'profiles'> | undefined
+  // whether a home seat is in an organization that is not being deleted
+  let kept = false
+  let homes = 0
   const profiles = ctx.db
     .query('profiles')
     .withIndex('by_auth', (q) => q.eq('auth_user_id', authUserId))
   for await (const profile of profiles) {
-    if (isHomeSeat(profile)) home = profile
-    if (!held) held = await deletionBegun(ctx, profile.org_id)
+    const deleting = await deletionBegun(ctx, profile.org_id)
+    held ||= deleting
+    if (!isHomeSeat(profile)) continue
+    homes += 1
+    kept ||= !deleting
   }
   if (!held) {
     const removed = ctx.db
@@ -181,8 +187,8 @@ export async function seatHeldByDeletion(
     }
   }
   if (!held) return null
-  if (home === undefined) return 'now'
-  return (await deletionBegun(ctx, home.org_id)) ? 'after_deletion' : 'blocked'
+  if (homes === 0) return 'now'
+  return kept ? 'blocked' : 'after_deletion'
 }
 
 export function addCalendarMonths(iso: string, months: number): string {

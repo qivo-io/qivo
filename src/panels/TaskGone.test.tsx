@@ -457,7 +457,7 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     expect(onClose).not.toHaveBeenCalled()
     expect(window.showToast).not.toHaveBeenCalledWith(`Archived ${task.key}`)
     expect(window.showToast).toHaveBeenCalledWith(
-      `Someone else archived ${task.key} first. The reason you typed was not used.`,
+      `${task.key} was already archived. The reason you typed was not used.`,
     )
     // the delivery that drops the task leaves the note as it is
     snap.issues.splice(0, 1)
@@ -508,6 +508,45 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     expect(hasUnsaved()).toBe(true)
   })
 
+  it('asks about an edited reason that an archive kept, although the earlier one was copied', async () => {
+    const task = await open()
+    await openFate()
+    const field = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+    if (!field) throw new Error('the Archive or delete window did not open')
+    await type(field, 'Superseded by the rework')
+    await dropTask({ archived: true })
+    const writeText = vi.fn(async (_text: string) => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await click(button('Copy reason'))
+    const { hasUnsaved } = await import('../lib/leaveGuard')
+    expect(hasUnsaved()).toBe(false)
+    await click(button('Restore'))
+    await bringBack()
+    // the same reason, which the clipboard holds, still needs no question
+    expect(hasUnsaved()).toBe(false)
+    await click(document.querySelector<HTMLElement>('[aria-label="Task actions"]'))
+    await click(document.querySelector<HTMLElement>('[data-task-fate]'))
+    const next = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+    if (!next) throw new Error('the Archive or delete window did not open again')
+    await type(next, 'Moved to the next release')
+    // it was archived again before this window's Archive
+    archive = [{ ...snap.issues[0], archived_at: '2026-09-14T09:10:00.000Z' }]
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'issues:archive' ? { issue: null, archived: false } : null,
+    )
+    await click(modalButton('Archive'))
+    await act(async () => {
+      await vi.waitFor(() => {
+        if (!document.querySelector('[data-task-gone-reason]')) throw new Error('no note yet')
+      })
+    })
+    expect(document.querySelector('[data-task-gone-reason] p')?.textContent).toBe(
+      'Moved to the next release',
+    )
+    expect(note()?.textContent).toContain(task.key)
+    expect(hasUnsaved()).toBe(true)
+  })
+
   /* Someone else archives the task and restores it while this window's
      archive is on its way, which then changes nothing. The deliveries say
      so in one, or one after the other, which takes the task away under the
@@ -543,7 +582,7 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
         'Moved to the next release',
       )
       expect(window.showToast).toHaveBeenCalledWith(
-        `Someone else archived ${task.key} first. The reason you typed was not used.`,
+        `${task.key} was already archived. The reason you typed was not used.`,
       )
       expect(document.querySelector('[data-task-gone]')).toBeNull()
       expect(onClose).not.toHaveBeenCalled()

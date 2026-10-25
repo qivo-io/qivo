@@ -226,12 +226,19 @@ describe('a login with no seat', () => {
     )
     expect(field('organization-name')).toBeNull()
     expect(buttonNamed('Create organization')).toBeUndefined()
-    // once the deletion removed the seat, the next load offers the form
-    planner.seatsDeleting.mockReturnValue({ deleting: true, create: 'now' })
-    const loads = planner.initStore.mock.calls.length
+    // the screen does not follow the deletion, so Check again reloads
+    expect(document.activeElement).toBe(buttonNamed('Check again'))
+    const reload = stubLocation()
     await act(async () => buttonNamed('Check again')?.click())
+    expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the form for a deletion answer without a create state, from an older backend', async () => {
+    signIn()
+    planner.seatsDeleting.mockReturnValue({ deleting: true } as SeatsDeleting)
+    await render()
     await vi.waitFor(() => expect(field('organization-name')).not.toBeNull())
-    expect(planner.initStore.mock.calls.length).toBe(loads + 1)
+    expect(container.textContent).toContain('You can create a new organization.')
   })
 
   it('offers no new organization to a login whose home seat another organization holds', async () => {

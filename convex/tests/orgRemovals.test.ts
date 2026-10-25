@@ -1154,30 +1154,42 @@ describe('calls through access a running deletion has deleted', () => {
     expect(await root()).toBeNull()
   })
 
-  it('offer no new organization to a guest whose home seat another organization holds', async () => {
-    const { t, f } = await deleting()
-    // the other organization's admin, deactivated there, is a guest in the
-    // organization being deleted
-    const { _id, _creationTime, ...home } = f.otherAdmin
-    await t.run(async (ctx) => {
-      await ctx.db.patch(_id, { active: false })
-      await ctx.db.insert('profiles', {
-        ...home,
-        id: uuid(),
-        org_id: f.org.id,
-        org_role: 'guest',
-        active: true,
+  /* The other organization's admin, deactivated there, holds a seat in the
+   * organization being deleted: a guest's, or a home seat of its own that
+   * an admin's promotion of the guest made, newer than the first. */
+  for (const role of ['guest', 'user'] as const) {
+    it(`offer no new organization to a ${role} whose home seat another organization holds`, async () => {
+      const { t, f } = await deleting()
+      const { _id, _creationTime, ...home } = f.otherAdmin
+      await t.run(async (ctx) => {
+        await ctx.db.patch(_id, { active: false })
+        await ctx.db.insert('profiles', {
+          ...home,
+          id: uuid(),
+          org_id: f.org.id,
+          org_role: role,
+          active: true,
+        })
       })
+      expect(await as(t, f.otherAdmin).query(api.workspace.root, {})).toEqual({
+        deleting: true,
+        create: 'blocked',
+      })
+      await expectRefusal(
+        createOrg(t, f.otherAdmin),
+        'rule',
+        /^you already belong to an organization$/,
+      )
     })
-    expect(await as(t, f.otherAdmin).query(api.workspace.root, {})).toEqual({
+  }
+
+  it('let a guest whose only seat is in the organization being deleted create one at once', async () => {
+    const { t, f } = await deleting()
+    expect(await as(t, f.guest).query(api.workspace.root, {})).toEqual({
       deleting: true,
-      create: 'blocked',
+      create: 'now',
     })
-    await expectRefusal(
-      createOrg(t, f.otherAdmin),
-      'rule',
-      /^you already belong to an organization$/,
-    )
+    expect(typeof (await createOrg(t, f.guest))).toBe('string')
   })
 
   it('tell a deactivated member and their token the same before the deletion reaches them', async () => {

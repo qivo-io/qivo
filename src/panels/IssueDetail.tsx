@@ -1049,7 +1049,7 @@ function TaskGone({
   /** the reason typed for the Archive or delete window, which nothing sent */
   unusedReason: string | null
   /** the reason is on the clipboard, so closing need not ask about it */
-  onCopied: () => void
+  onCopied: (reason: string) => void
   onClose: () => void
   mobile: boolean
 }) {
@@ -1079,7 +1079,7 @@ function TaskGone({
     if (!unusedReason) return
     void copyText(unusedReason).then((ok) => {
       if (ok) {
-        onCopied()
+        onCopied(unusedReason)
         window.showToast?.('Copied the reason')
         return
       }
@@ -1406,10 +1406,11 @@ function IssueDetail({
   // while it was open, which nothing sent (TaskGone)
   const fateReason = useRefID('')
   const [unusedReason, setUnusedReason] = useStateID<string | null>(null)
-  // whether that reason was copied. Until then it holds the window's close
-  // and a reload, also once a restore brings the task back, when it waits
-  // in the next Archive or delete window, whose own field then holds it.
-  const [reasonCopied, setReasonCopied] = useStateID(false)
+  // the text Copy reason put on the clipboard. Until that is the kept
+  // reason, the reason holds the window's close and a reload, also once a
+  // restore brings the task back, when it waits in the next Archive or
+  // delete window, whose own field then holds it.
+  const [copiedReason, setCopiedReason] = useStateID<string | null>(null)
   // the task this window shows now, for work that finishes after a switch;
   // updated once a render commits, never during one
   const shownIssue = useRefID(issueId)
@@ -1503,7 +1504,7 @@ function IssueDetail({
     setFateOpen(false)
     fateReason.current = ''
     setUnusedReason(null)
-    setReasonCopied(false)
+    setCopiedReason(null)
     setActFilter('comments')
     setEditingComment(null)
     setDescOpen(!embedded)
@@ -1590,7 +1591,7 @@ function IssueDetail({
   }
   useUpdateBlocker(editTitle && !!it && titleDraft !== it.title)
   useUnsaved(editTitle && !!it && titleDraft !== it.title, 'title')
-  const reasonUnsent = unusedReason !== null && !reasonCopied && !fateOpen
+  const reasonUnsent = unusedReason !== null && unusedReason !== copiedReason && !fateOpen
   useUpdateBlocker(reasonUnsent)
   useUnsaved(reasonUnsent, 'reason')
   // the task left the board: its window's own state goes too, the title
@@ -1602,12 +1603,11 @@ function IssueDetail({
     if (!gone) return
     if (editTitle && titleDraft !== gone.title) sayDiscarded('title')
     const reason = fateOpen ? fateReason.current.trim() : (unusedReason ?? '')
-    // the clipboard still holds a kept reason that was copied
-    const copied = reasonCopied && reason === unusedReason
+    const copied = copiedReason
     resetWindow()
     if (!reason) return
     setUnusedReason(reason)
-    setReasonCopied(copied)
+    setCopiedReason(copied)
   }, [goneUuid])
   // a kept title draft: the rename that refused its save becomes the title
   // the next save sends as seen, once the screen shows it
@@ -2750,7 +2750,7 @@ function IssueDetail({
               // the open Archive or delete window's reason, in the render
               // where the task goes, before the effect above keeps it
               unusedReason={fateOpen ? fateReason.current.trim() || null : unusedReason}
-              onCopied={() => setReasonCopied(true)}
+              onCopied={setCopiedReason}
               onClose={onClose}
               mobile={mobile}
             />
@@ -3736,14 +3736,14 @@ function IssueDetail({
           }}
         />
       )}
-      {/* stacked like the Move dialog */}
-      {it && fateOpen && (
+      {/* stacked like the Move dialog. While its own archive or delete is on
+          its way, it stays mounted when the task is off the board for a
+          moment (it shows nothing then), so it comes back still busy and
+          with the choices the person made. */}
+      {issueId && fateOpen && (it || leaving.current === issueId) && (
         <ArchiveOrDeleteTaskModal
-          issueId={it.id}
-          // the reason it held, when the window opens again because the
-          // task left the board and came back while it was open, else the
-          // one kept from before a restore (the task menu sets it)
-          initialReason={fateReason.current}
+          issueId={issueId}
+          initialReason={unusedReason ?? ''}
           onReasonChange={(reason) => {
             fateReason.current = reason
           }}
@@ -3755,6 +3755,8 @@ function IssueDetail({
           }}
           focusAfterClose={taskActionsButton}
           onArchive={async (reason, keepSubtasks) => {
+            // the window shows, and so can be used, only with the task
+            if (!it) return false
             const shown = it.key
             const opened = issueId
             leaving.current = opened
@@ -3765,18 +3767,19 @@ function IssueDetail({
               return false
             }
             if (archived === 'already') {
-              // someone else archived it first, so this call posted no
-              // reason. The toast says so whatever the deliveries show next,
-              // such as a restore that brings the task back at once.
+              // it was archived before this call, which posted no reason.
+              // The toast says so whatever the deliveries show next, such as
+              // a restore that brings the task back at once. It names no
+              // one: another person, another tab and auto-archive look alike.
               if (leaving.current === opened) leaving.current = null
-              const unused = reason ? ' The reason you typed was not used.' : ''
-              if (shownIssue.current !== opened) {
-                if (reason) window.showToast?.(`${shown} was already archived.${unused}`)
-                return true
-              }
-              window.showToast?.(`Someone else archived ${shown} first.${unused}`)
-              // and restored it since: the window stays open with the
-              // reason, to archive the task again
+              const shownNow = shownIssue.current === opened
+              if (shownNow || reason)
+                window.showToast?.(
+                  `${shown} was already archived.${reason ? ' The reason you typed was not used.' : ''}`,
+                )
+              if (!shownNow) return true
+              // and restored since: the window stays open with the reason,
+              // to archive the task again
               if (P.issueById[it.id]) return false
               // the task window shows the note and keeps the reason to copy
               // (TaskGone), and a restore then keeps it for the next window
@@ -3795,6 +3798,7 @@ function IssueDetail({
             return true
           }}
           onDelete={async (subtasks, reason) => {
+            if (!it) return false
             const shown = it.key
             const opened = issueId
             leaving.current = opened

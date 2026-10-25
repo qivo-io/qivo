@@ -263,9 +263,9 @@ no longer here. If Qivo cannot check the archive, the window says so, and
 as a comment, a new title or remaining hours, is discarded then, and Qivo
 says so. A reason you typed in **Archive or delete…** stays in the window,
 which says it was not used, and **Copy reason** copies it. Once the task is
-back, the next **Archive or delete…** starts with that reason. If someone
-else archives the task just before your **Archive**, Qivo says that your
-reason was not used and keeps it the same way.
+back, the next **Archive or delete…** starts with that reason. If the task
+was already archived when you chose **Archive**, Qivo says that your reason
+was not used, and a window that still shows the task keeps it the same way.
 
 ## Deleting
 
