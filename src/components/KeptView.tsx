@@ -51,8 +51,10 @@ const HIDDEN = '[content-visibility:hidden] !h-0 ![flex:none]'
 /** Runs `callback` in a task once the next frame has painted. */
 const afterPaint = (callback: () => void) => requestAnimationFrame(() => postMessageTask(callback))
 
-/** How long a leaving view waits for the page to be idle at most. */
-const LEAVE_WAIT_MS = 2000
+/** How long a leaving view waits for the page to be idle at most: longer
+    than a 2,000-task Board takes to mount in slices, which leaves no idle
+    time, so the removal does not land on the person's next click. */
+const LEAVE_WAIT_MS = 10_000
 
 /* In a tab the person cannot see, frames wait until it shows again, and a
    view that leaves there, such as a kept page released after a while
