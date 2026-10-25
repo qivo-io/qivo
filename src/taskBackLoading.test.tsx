@@ -15,11 +15,11 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    App shows, is held the same way. A project in scope deleted meanwhile
    goes with the task's arrival, and the task opens in the one left. A page
    moved meanwhile names itself, and earns an entry where it would with the
-   task open. A held address of another organization never shows a home
-   task with the same number. Settings opens meanwhile, but its pages that
-   read every task wait. Back to a task
-   or project that is gone, once every task has loaded, names the page it
-   shows in place. */
+   task open. A task that arrives while a refused Back steps back is named
+   once that step lands. A held address of another organization never
+   shows a home task with the same number. Settings opens meanwhile, but
+   its pages that read every task wait. Back to a task or project that is
+   gone, once every task has loaded, names the page it shows in place. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -29,6 +29,29 @@ vi.mock('./lib/convex', async () => {
   const { liveOver } = await import('./store/guard/liveDouble.setup')
   double.live = liveOver(network)
   return { convex: network, live: double.live }
+})
+/* App refuses a Back or Forward only when it would close unsent text,
+   which no window holds while these tasks load, so a test that needs a
+   refused one's step back on its way stands it in (`on`) until a popstate
+   lands it. Otherwise App's refusal is the real one. */
+const refusing = vi.hoisted(() => ({ on: false }))
+vi.mock('./lib/popRefusal', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./lib/popRefusal')>()
+  return {
+    createPopRefusal: (...args: Parameters<typeof real.createPopRefusal>) => {
+      const refusal = real.createPopRefusal(...args)
+      return {
+        ...refusal,
+        stepping: () => refusing.on || refusal.stepping(),
+        landed(event: PopStateEvent) {
+          if (!refusing.on) return refusal.landed(event)
+          refusing.on = false
+          event.stopImmediatePropagation()
+          return true
+        },
+      }
+    },
+  }
 })
 vi.mock('./lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -72,6 +95,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  refusing.on = false
   await act(async () => root.unmount())
   double.live?.holdWindow(null)
   container.remove()
@@ -400,6 +424,28 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
       expect(history.length).toBe(entries + more)
     },
   )
+
+  it('names the task that arrived while a refused Back stepped back, once it landed', async () => {
+    const { org } = await bootLoading()
+    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/tasks/QN-2`)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    // a refused Back steps back to this entry, and the task arrives meanwhile
+    refusing.on = true
+    await arrive()
+    await waitFor(
+      () => document.body.textContent?.includes('Run the soak test'),
+      "the task's window",
+    )
+    expect(location.pathname).toBe(`/app/${org}/board/tasks/QN-2`)
+    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    // the task's own address, in place
+    expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-2`)
+    const entries = history.length
+    // and the next move earns its entry
+    await switchView('Overview')
+    expect(history.length).toBe(entries + 1)
+  })
 
   it('says in the Inbox that the task still loads, then opens it there', async () => {
     const { org } = await bootLoading()

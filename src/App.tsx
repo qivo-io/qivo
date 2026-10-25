@@ -997,9 +997,9 @@ function App() {
   const settingsReturn = useRef(NO_RETURN)
   const syncReturn = useRef(NO_RETURN)
   const replaceNextHistory = useRef(false)
-  // each time closed phone layers' markers are gone (lib/useMobile): the
-  // url sync waited, and no popstate listener hears the page's step back
-  // over them, so it looks again
+  // each time a step back the url sync waited for ends: over closed phone
+  // layers' markers (lib/useMobile), which no popstate listener hears, or
+  // over a refused Back or Forward (onPop), so it looks again
   const [settled, setSettled] = useState(0)
   useEffect(() => onHistorySettled(() => setSettled((n) => n + 1)), [])
   /* The address Back or Forward reached while tasks still load, when it
@@ -1171,6 +1171,9 @@ function App() {
   }, [addrMoved, scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev])
   useEffect(() => {
     const onPop = (event: PopStateEvent) => {
+      // this popstate ends the step back over a refused Back or Forward,
+      // landed or overtaken, which the url sync waited for
+      if (refusal.stepping()) setSettled((n) => n + 1)
       // the step back over a refused Back or Forward, which then asks
       if (refusal.landed(event)) return
       // a Remaining number typed on Team sync and not yet committed: history
