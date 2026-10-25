@@ -176,7 +176,14 @@ async function boot(address: string, phone: boolean, second = false) {
   const gone = structuredClone(snap)
   gone.issues = []
   gone.delivered_at = '2026-09-15T09:00:00.000Z'
-  return () => act(async () => publish(gone))
+  const drop = () => act(async () => publish(gone))
+  // publishes the workspace without the Work sub-project and its task
+  const dropWork = () => {
+    const next = structuredClone(gone)
+    next.projects = next.projects.filter((p) => p.id !== 'work')
+    return act(async () => publish(next))
+  }
+  return Object.assign(drop, { dropWork })
 }
 
 describe('a phone layer that closes with the move it started', { timeout: 30_000 }, () => {
@@ -260,6 +267,53 @@ describe('a task someone else removes while the Inbox shows it', { timeout: 30_0
     await settle()
     expect(location.pathname).toBe('/app/testbed/inbox/tasks/qn-1')
     expect(history.length).toBe(entries)
+  })
+})
+
+describe('a project page whose project leaves while its delete waits', { timeout: 30_000 }, () => {
+  it("keeps the page and its waiting window on a phone's Back", async () => {
+    const live = await boot('/app/testbed/settings/project/2', true)
+    const summary = { tasks: 1, archived_tasks: 0, more: false, sub_projects: [] }
+    network.query.mockImplementation((ref) =>
+      Promise.resolve(getFunctionName(ref) === 'projects:removalSummary' ? summary : null),
+    )
+    let accept = () => {}
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'projects:deleteDeep'
+        ? new Promise((resolve) => {
+            accept = () => resolve(null)
+          })
+        : Promise.resolve(null),
+    )
+    await press('Archive or delete…')
+    const remove = await waitFor(
+      () =>
+        document.querySelector<HTMLInputElement>('[data-fate-card="delete"] input[type="radio"]'),
+      'the delete choice',
+    )
+    await act(async () => remove.click())
+    const deleteButton = await waitFor(
+      () =>
+        [...document.querySelectorAll<HTMLButtonElement>('[data-modal-shell] button')].find((b) =>
+          b.textContent?.trim().startsWith('Delete '),
+        ),
+      'the delete button',
+    )
+    await act(async () => deleteButton.click())
+    await settle()
+    const address = location.pathname
+    // the delivery that drops the sub-project lands before the answer
+    await live.dropWork()
+    await settle()
+    expect(location.pathname).toBe(address)
+    // the person's Back from the window's marker reaches the page's entry
+    await act(async () => history.back())
+    await settle()
+    expect(document.querySelector('[data-modal-shell]')).not.toBeNull()
+    expect(location.pathname).toBe(address)
+    await act(async () => accept())
+    await settle()
+    expect(document.querySelector('[data-modal-shell]')).toBeNull()
   })
 })
 

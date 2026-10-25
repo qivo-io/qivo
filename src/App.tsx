@@ -64,6 +64,7 @@ import {
   buildPath,
   heldRef,
   holdTask,
+  namesProjectPage,
   ORG_NONE,
   orgSegmentOf,
   parseHash,
@@ -1230,7 +1231,12 @@ function App() {
             ? 'overview'
             : was.view,
         openIssue: r.issue || held || null,
-        settingsPage: r.settings || null,
+        // a project page held while its project left (Settings) keeps its
+        // own address, which parses to no project now: a Back within it,
+        // as from its Archive or delete window, stays on the page
+        settingsPage: namesProjectPage(location.pathname, was.settingsPage)
+          ? was.settingsPage
+          : r.settings || null,
         inboxOpen: !!r.inbox,
         projectsOpen: !!r.projects,
         sync: r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null,

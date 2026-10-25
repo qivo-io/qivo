@@ -358,8 +358,10 @@ function taskNamed(open: string) {
 const namedProjects = new Map<string, { org: string; seg: string; num: number }>()
 
 /** Whether `path` names the settings page of the project `page` names by
-    the organization and number it was last named by. */
-function projectNamedBefore(path: string, page: string | null | undefined) {
+    the organization and number it was last named by: the page's own
+    address, also once its project left the store while the page is held
+    (App onPop keeps the page then). */
+export function namesProjectPage(path: string, page: string | null | undefined) {
   const was = page?.startsWith('project:') ? namedProjects.get(page.slice(8)) : undefined
   const seg = path.split('/').filter(Boolean)
   return (
@@ -575,7 +577,7 @@ export function pathMatchesState(path: string, s: UiState): boolean {
   if (r.settings || s.settingsPage)
     return (
       (r.settings || null) === (s.settingsPage || null) ||
-      (!!r.settings && projectNamedBefore(path, s.settingsPage))
+      (!!r.settings && namesProjectPage(path, s.settingsPage))
     )
   /* Inside Team sync, a new step or scope rewrites the address in place: the
      walk must not fill the history, and Back leaves the page. Opening or
