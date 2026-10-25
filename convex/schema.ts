@@ -1544,12 +1544,13 @@ export default defineSchema({
     .index('by_profile', ['profile_id'])
     .index('by_due', ['due_at']),
 
-  // At most one row: when the read-message sweep finished giving every
-  // profile with a retention period a message_sweeps row, which covers the
-  // messages read before that table existed. No row makes the next run do
-  // it (jobs.ts sweepReadMessages).
+  // At most one row: the run of the read-message sweep's last finished full
+  // pass, which gave every profile with a read message under a retention
+  // period a message_sweeps row due no later than that message. A run
+  // starts with the full pass when this row is missing or older than
+  // jobs.ts SWEEP_FULL_AFTER_MS (sweepReadMessages).
   message_sweep_seeds: defineTable({
-    seeded_at: v.string(), // ISO instant
+    seeded_at: v.string(), // ISO instant, the run's start
   }),
 
   user_prefs: defineTable({

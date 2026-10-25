@@ -1301,7 +1301,7 @@ describe('sweepReadMessages — retention follows the person', () => {
     const rows = await auditRows(t, 'sweep_read_messages')
     expect(rows).toHaveLength(1)
     expect(rows[0].actor_email).toBe('system')
-    // the viewer and withOrg's agent have a period, one page
+    // the viewer's read message is due, one page
     expect(rows[0].detail).toEqual({ pages: 1, wake: false })
   })
 
@@ -1426,13 +1426,14 @@ describe('sweepReadMessages — retention follows the person', () => {
     )
 
     expect(pages.reduce((sum, page) => sum + page.deleted, 0)).toBe(5)
-    // The seed gives every profile with a period a due row: withOrg's agent
-    // and the five, in uuid order. withOrg's people keep read messages.
+    // The full pass gives each profile with a period and a read message a
+    // row due when that message is, here the five, in uuid order. withOrg's
+    // agent has nothing read and its people keep read messages.
     const ids = (await t.run((ctx) => ctx.db.query('profiles').collect()))
-      .filter((p) => messageRetentionDays(p) !== null)
+      .filter((p) => p.name.startsWith('Bot '))
       .map((p) => p.id)
       .sort()
-    expect(ids).toHaveLength(6)
+    expect(ids).toHaveLength(5)
     const lists = (await scheduled(t, 'sweepDueProfiles')).map((job) => job.args[0].profiles)
     expect(lists).toEqual([ids.slice(0, 4), ids.slice(4)])
     const rows = await auditRows(t, 'sweep_read_messages')
@@ -1765,6 +1766,68 @@ describe('sweepReadMessages reads only what is due', () => {
     expect((await auditRows(t, 'sweep_read_messages')).map((r) => r.detail)).toEqual([
       { pages: 1, wake: false },
     ])
+  })
+})
+
+describe('sweepReadMessages keeps a sweep row for every read message', () => {
+  it('a full pass every 28th night finds a read message whose row is missing or late, and changes only those rows', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const start = Date.now()
+    const at = (days: number) => new Date(start + days * DAY).toISOString()
+    const agent = (name: string, over: Partial<WithoutSystemFields<Doc<'profiles'>>> = {}) =>
+      plantSeat(t, { org_id: f.org.id, kind: 'agent', name, plannable_hours: undefined, ...over })
+    const sweepRows = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query('message_sweeps').collect()).map((row) => [row.profile_id, row.due_at]),
+      )
+    // nothing is read yet, so the first run's full pass adds no row
+    expect(await sweepAt(t, at(0))).toEqual([])
+    expect(await sweepRows()).toEqual([])
+    // read without a row, as a restore from an older backup leaves it, due
+    // under withOrg's agent's default seven days from the eighth day
+    const missed = await plantMessage(t, {
+      org_id: f.org.id,
+      recipient_id: f.agent.id,
+      issue_id: uuid(),
+      read_at: at(1),
+    })
+    // a row due too late, as a rollback and a roll forward can leave it
+    const late = await agent('Late')
+    const lateRead = await plantMessage(t, {
+      org_id: f.org.id,
+      recipient_id: late.id,
+      issue_id: uuid(),
+      read_at: at(1),
+    })
+    // a row due when its message is, which the full pass leaves alone
+    const patient = await agent('Patient', { message_retention_days: 30 })
+    const kept = await plantMessage(t, {
+      org_id: f.org.id,
+      recipient_id: patient.id,
+      issue_id: uuid(),
+      read_at: at(20),
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('message_sweeps', { profile_id: late.id, due_at: at(100) })
+      await ctx.db.insert('message_sweeps', { profile_id: patient.id, due_at: at(50) })
+    })
+
+    // the nights before the next full pass visit neither
+    for (const night of [9, 27]) {
+      expect(await sweepAt(t, at(night))).toEqual([])
+      expect(await messageIds(t)).toEqual(expect.arrayContaining([missed.id, lateRead.id]))
+    }
+    const counts = await sweepAt(t, at(28))
+
+    expect(counts.reduce((sum, c) => sum + c.deleted, 0)).toBe(2)
+    const ids = await messageIds(t)
+    expect(ids).not.toContain(missed.id)
+    expect(ids).not.toContain(lateRead.id)
+    expect(ids).toContain(kept.id)
+    expect(await sweepRows()).toEqual([[patient.id, at(50)]])
+    const seeds = await t.run((ctx) => ctx.db.query('message_sweep_seeds').collect())
+    expect(seeds.map((row) => row.seeded_at)).toEqual([at(28)])
   })
 })
 

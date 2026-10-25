@@ -623,6 +623,15 @@ removes the row about a day later. Releases from before demos were prepared
 in steps do not accept that field, so a rollback past it fails to deploy
 while such a row exists. Roll forward instead.
 
+The nightly read-message sweep visits only the profiles whose
+`message_sweeps` row is due, and every write that marks a message read keeps
+that row in step. Data restored from an older backup, or messages read while
+an older release ran, can lack the row. Every 28th night the sweep starts
+with a full pass that checks every profile and adds or lowers the rows that
+are missing or late, so such a message is removed at most 28 days after its
+retention period ends. Deleting the one `message_sweep_seeds` row makes the
+next night's run start with the full pass.
+
 A frontend rollback changes the served application build. It does not roll
 back Convex code, schema changes, stored files or customer writes. A database
 restore can discard newer customer changes and requires a separate reviewed

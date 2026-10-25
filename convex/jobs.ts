@@ -32,7 +32,13 @@
  *   dispatcher pages the rows that are due and schedules one chain per page
  *   of them, then one chain for the overdue snoozes, which one index range
  *   finds across every profile. A sweep leg deletes, or writes while waking
- *   items, at most SWEEP_LIMITS.rows messages.
+ *   items, at most SWEEP_LIMITS.rows messages. Every 28th night the run
+ *   starts with a full pass over every profile (SWEEP_FULL_AFTER_MS), which
+ *   adds or lowers a row that a backup restore, a rollback or a write
+ *   without noteSweepable left missing or late. It costs one step per
+ *   SWEEP_LIMITS.profiles profiles. A step reads those profiles, the oldest
+ *   read message of each with a retention period and, when there is one,
+ *   its sweep row, and writes only the rows it repairs.
  *
  * Convex retries a scheduled mutation after a transient error and drops the
  * calls a failed mutation scheduled. A leg that fails every time therefore
@@ -586,11 +592,10 @@ export const SWEEP_LIMITS = {
 const WAKE_ROWS = ITEM_UNREAD_CAP + 1
 
 const sweepRunArgs = {
-  // 'seed' gives every profile with a retention period a due
-  // message_sweeps row, 'due' pages the rows that are due. Absent on the
-  // cron's call, which starts a run, and on a step queued by the release
-  // before, whose cursor paged the profiles. Such a step starts the run
-  // again with its `now`.
+  // 'seed' is the full pass, which pages every profile, 'due' pages the
+  // message_sweeps rows that are due. Absent on the cron's call, which
+  // starts a run, and on a step queued by the release before, whose cursor
+  // paged the profiles. Such a step starts the run again with its `now`.
   phase: v.optional(v.union(v.literal('seed'), v.literal('due'))),
   cursor: v.optional(v.string()),
   now: v.optional(v.string()),
@@ -635,11 +640,31 @@ const overdueSnoozes = (ctx: QueryCtx, now: string) =>
     .query('messages')
     .withIndex('by_snoozed', (q) => q.gt('snoozed_until', undefined).lte('snoozed_until', now))
 
-/* Whether a run of the sweep has finished the seed phase
- * (message_sweep_seeds). Until one has, messages read before message_sweeps
- * existed may have no sweep row, so a run seeds first. */
-const sweepSeeded = async (ctx: QueryCtx): Promise<boolean> =>
-  (await ctx.db.query('message_sweep_seeds').first()) !== null
+/** How long after the run of the last full pass a run starts with the full
+ * pass again. Half a day short of four weeks, so a nightly cron that starts
+ * a little early still makes every 28th run full. */
+export const SWEEP_FULL_AFTER_MS = 27.5 * DAY
+
+/* Whether a run at `now` starts with the full pass: no run has finished one
+ * (message_sweep_seeds), so the messages read before message_sweeps existed
+ * may have no sweep row, or the last one ran SWEEP_FULL_AFTER_MS or more
+ * before. */
+async function fullPassDue(ctx: QueryCtx, now: string): Promise<boolean> {
+  const seed = await ctx.db.query('message_sweep_seeds').first()
+  return seed === null || Date.parse(now) - Date.parse(seed.seeded_at) >= SWEEP_FULL_AFTER_MS
+}
+
+/* When the oldest of `profileId`'s read, unsnoozed messages falls due under
+ * a retention period of `days`, or null when it has none. */
+async function oldestDue(ctx: QueryCtx, profileId: string, days: number): Promise<string | null> {
+  const oldest = await ctx.db
+    .query('messages')
+    .withIndex('by_recipient_read', (q) => q.eq('recipient_id', profileId).gt('read_at', undefined))
+    .filter((q) => q.eq(q.field('snoozed_until'), undefined))
+    .first()
+  if (oldest?.read_at === undefined) return null
+  return new Date(Date.parse(oldest.read_at) + days * DAY).toISOString()
+}
 
 /* One profile's share of a sweep leg, at most `budget` deletions. It deletes
  * READ rows read before the profile's retention period (model/people.ts
@@ -665,13 +690,6 @@ async function sweepProfile(
     .first()
   const p = await byId(ctx, 'profiles', profileId)
   const days = p === null ? null : messageRetentionDays(p)
-  const read = () =>
-    ctx.db
-      .query('messages')
-      .withIndex('by_recipient_read', (q) =>
-        q.eq('recipient_id', profileId).gt('read_at', undefined),
-      )
-      .filter((q) => q.eq(q.field('snoozed_until'), undefined))
   let deleted = 0
   let due: string | null = null
   if (days !== null) {
@@ -688,10 +706,7 @@ async function sweepProfile(
       deleted += 1
     }
     if (expired.length > budget) return { deleted, more: true }
-    const oldest = await read().first()
-    if (oldest?.read_at !== undefined) {
-      due = new Date(Date.parse(oldest.read_at) + days * DAY).toISOString()
-    }
+    due = await oldestDue(ctx, profileId, days)
   }
   if (due === null) {
     if (row !== null) await ctx.db.delete(row._id)
@@ -704,16 +719,20 @@ async function sweepProfile(
 }
 
 /** private.sweep_read_messages(null) (0110:88-102), one dispatcher step per
- * call. The cron starts a run with no arguments. Until a run has seeded
- * (sweepSeeded), the seed phase pages every profile, SWEEP_LIMITS.profiles
- * a step, and gives each with a retention period a message_sweeps row due
- * now, so the messages read before the table existed are swept that night.
- * Its last step records the seed (message_sweep_seeds). The due phase pages
- * the message_sweeps rows due by `now` and schedules one sweepDueProfiles
- * chain per page. The last step schedules one wakeSnoozes chain when a
- * snooze is overdue and writes the run's audit row with the number of
- * pages and whether it woke. `now` is the run's clock, shared by every
- * chain. The boot-time
+ * call. The cron starts a run with no arguments. When the full pass is due
+ * (fullPassDue), the seed phase pages every profile, SWEEP_LIMITS.profiles
+ * a step, and lowers the message_sweeps row of each with a retention period
+ * to when its oldest read, unsnoozed message falls due, adding the row when
+ * it has none. That restores model/messages.ts's sweep rule for a read
+ * message without a covering row: one read before the table existed,
+ * restored from an older backup or read while an older release ran, or one
+ * that a write without noteSweepable left. Such a message goes at most 28
+ * nights after it fell due. The pass's last step records it
+ * (message_sweep_seeds). The due phase pages the message_sweeps rows due by
+ * `now` and schedules one sweepDueProfiles chain per page. The last step
+ * schedules one wakeSnoozes chain when a snooze is overdue and writes the
+ * run's audit row with the number of pages and whether it woke. `now` is
+ * the run's clock, shared by every chain. The boot-time
  * sweep_my_read_messages twin is CUT; this nightly job is the one
  * implementation. A profile without a retention period keeps its read
  * messages when it is a person (Never) and keeps them for
@@ -723,7 +742,7 @@ export const sweepReadMessages = internalMutation({
   args: sweepRunArgs,
   handler: async (ctx, a): Promise<null> => {
     const now = a.now ?? new Date().toISOString()
-    const phase = a.phase ?? ((await sweepSeeded(ctx)) ? 'due' : 'seed')
+    const phase = a.phase ?? ((await fullPassDue(ctx, now)) ? 'seed' : 'due')
     const cursor = a.phase === undefined ? null : (a.cursor ?? null)
     if (phase === 'seed') {
       const profiles = await ctx.db
@@ -731,10 +750,14 @@ export const sweepReadMessages = internalMutation({
         .withIndex('by_uuid')
         .paginate({ cursor, numItems: SWEEP_LIMITS.profiles })
       for (const p of profiles.page) {
-        if (messageRetentionDays(p) !== null) await lowerSweepDue(ctx, p.id, now)
+        const days = messageRetentionDays(p)
+        const due = days === null ? null : await oldestDue(ctx, p.id, days)
+        if (due !== null) await lowerSweepDue(ctx, p.id, due)
       }
-      if (profiles.isDone && !(await sweepSeeded(ctx))) {
-        await ctx.db.insert('message_sweep_seeds', { seeded_at: now })
+      if (profiles.isDone) {
+        const seed = await ctx.db.query('message_sweep_seeds').first()
+        if (seed === null) await ctx.db.insert('message_sweep_seeds', { seeded_at: now })
+        else if (seed.seeded_at < now) await ctx.db.patch(seed._id, { seeded_at: now })
       }
       await ctx.scheduler.runAfter(0, sweepRunRef, {
         phase: profiles.isDone ? 'due' : 'seed',
@@ -855,8 +878,7 @@ export const wakeSnoozes = internalMutation({
 /** A leg the release before queued, one chain per id range of profiles. It
  * does nothing. A dispatcher step of that release starts the run again, and
  * the next night's run covers these profiles otherwise: until a run has
- * seeded, each run gives every profile with a retention period a due
- * message_sweeps row. */
+ * finished the full pass, each run starts with it. */
 export const sweepProfiles = internalMutation({
   args: sweepProfilesArgs,
   handler: async (): Promise<null> => null,

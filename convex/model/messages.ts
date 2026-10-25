@@ -155,7 +155,10 @@ export async function wakeSnoozedItem(
  * (profiles.ts setMessageRetention). The sweep moves the row to the next
  * due time it finds, or deletes it. Deletion is always decided from the
  * messages themselves, so a row due too early costs one visit and nothing
- * else. The row goes with its profile (deleteSweepRow). */
+ * else. A message the rule misses, for example one restored from an older
+ * backup or read by a write without noteSweepable, waits for the sweep's
+ * full pass, every 28th night (jobs.ts SWEEP_FULL_AFTER_MS). The row goes
+ * with its profile (deleteSweepRow). */
 
 /** Brings `profileId`'s message_sweeps row forward to `due`, adding the row
  * when it has none. A row already due by then stays as it is. The demo's

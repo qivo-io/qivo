@@ -68,8 +68,8 @@ const EXCLUDED_TABLES = [
   'marketing_demo',
   'issue_subscriptions',
   'messages',
-  // When the read-message sweep next visits a profile, and whether it has
-  // seeded: maintenance state, not workspace content.
+  // When the read-message sweep next visits a profile, and when it last
+  // checked every profile: maintenance state, not workspace content.
   'message_sweeps',
   'message_sweep_seeds',
   'user_prefs',
