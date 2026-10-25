@@ -1,5 +1,5 @@
 import type { UnsentScope } from './leaveGuard'
-import { goTo, refuseMove, returning, returnTo, voidReturn } from './pageHistory'
+import { goTo, joinReturn, refuseMove, returning, returnTo, voidReturn } from './pageHistory'
 
 /* A Back or Forward the app refuses because it would close a window that
    holds unsent text (components/DiscardPrompt).
@@ -10,9 +10,10 @@ import { goTo, refuseMove, returning, returnTo, voidReturn } from './pageHistory
    The refused popstate and the return reach no other popstate listener,
    such as the phone layers' (lib/pageHistory listenBackLayers). With the
    Navigation API the return goes by key and lands whatever the person did
-   meanwhile, and a move refused while it is on its way joins it: one
-   question, for the latest move. Without the API it goes by position, and
-   a move that lands first is the move from then on.
+   meanwhile. Without the API it steps back over the move, and over each
+   move refused while it is on its way, which add up to the entry left.
+   Either way a move refused meanwhile joins it: one question, for the
+   latest move.
 
    When the page cannot return, as for a move that left no entry to return
    to, App pushes the address it left back instead (App onPop). */
@@ -30,17 +31,16 @@ export function createPopRefusal(ask: Ask) {
         the address it left back itself. */
     refuse(event: PopStateEvent, scopes: UnsentScope[]): boolean {
       const { from, to } = refuseMove()
-      // a return by position that another move overtook asks nothing
+      // a return by position that another move's same step ended asks nothing
       if (held && !returning()) held = null
-      if (
-        !held &&
-        !returnTo(from, () => {
-          const refused = held
-          held = null
-          if (refused) ask(refused.scopes, () => goTo(refused.reached))
-        })
-      )
-        return false
+      const returns = held
+        ? joinReturn()
+        : returnTo(from, () => {
+            const refused = held
+            held = null
+            if (refused) ask(refused.scopes, () => goTo(refused.reached))
+          })
+      if (!returns) return false
       event.stopImmediatePropagation()
       held = { reached: to, scopes }
       return true

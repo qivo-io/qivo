@@ -13,10 +13,9 @@ import {
   whenQuiet,
 } from './pageHistory'
 
-/* The page's history on a double that moves as browsers do. The phone
-   layers open over a page share one marker; a layer that closes by itself
-   moves nothing, its marker is a spare once none is open, and one Back
-   still leaves the page. */
+/* The page's history on a double that moves as browsers do. Each open
+   phone layer has a marker of its own; a layer that closes by itself moves
+   nothing, its marker is a spare, and one Back still leaves the page. */
 
 let remove = () => {}
 afterEach(() => remove())
@@ -78,16 +77,33 @@ describe('a layer that closes by itself', () => {
     expect(browser.heard).toEqual(['/before'])
   })
 
-  it('goes on once from a spare, and a second Back during that step ends two pages back', async () => {
-    const browser = page(['/a', '/b', '/page'])
-    finishLayer(await layer())
-    // two Backs in a row, the second before the page's step has run
-    browser.person.back()
-    browser.person.back()
-    await settleMoves()
-    expect(browser.here()).toBe('/a')
-    expect(browser.heard).toEqual(['/b', '/a'])
-  })
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    'goes on once from a spare, and a second Back during that step ends two pages back, in %s',
+    async (engine) => {
+      const browser = page(['/a', '/b', '/page'], engine)
+      finishLayer(await layer())
+      // two Backs in a row, the second before the page's step has run
+      browser.person.back()
+      browser.person.back()
+      await settleMoves()
+      expect(browser.here()).toBe('/a')
+      expect(browser.heard).toEqual(['/b', '/a'])
+    },
+  )
+
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    "goes on in turn with another script's Back one task later, so two script Backs leave two pages, in %s",
+    async (engine) => {
+      const browser = page(['/a', '/b', '/page'], engine)
+      finishLayer(await layer())
+      // WebKit keeps one script traversal at a time
+      browser.history.back()
+      setTimeout(() => browser.history.back(), 0)
+      await settleMoves()
+      expect(browser.here()).toBe('/a')
+      expect(browser.heard).toEqual(['/b', '/a'])
+    },
+  )
 
   it('carries an address written in place over its marker down, and Forward shows it', async () => {
     const browser = page(['/before', '/page'])
@@ -150,7 +166,8 @@ describe('a layer that closes by itself', () => {
     const dialog = await layer(closed)
     // a menu in the dialog, picked
     finishLayer(await layer())
-    expect(browser.urls()).toEqual(['/before', '/page', '/page'])
+    expect(browser.urls()).toEqual(['/before', '/page', '/page', '/page'])
+    // the Back to the dialog's marker changes nothing on screen, so it goes on
     browser.person.back()
     await settleMoves()
     expect(closed).toHaveBeenCalledTimes(1)
@@ -162,23 +179,45 @@ describe('a layer that closes by itself', () => {
     expect(browser.here()).toBe('/before')
   })
 
-  it('closes the top one of two open layers on Back, and the marker goes on again for the other', async () => {
+  it('closes the top one of two open layers on Back, and the next Back the other', async () => {
     const browser = page(['/before', '/page'])
     const dialogClosed = vi.fn()
     const menuClosed = vi.fn()
     const dialog = await layer(dialogClosed)
     await layer(menuClosed)
+    expect(browser.urls()).toEqual(['/before', '/page', '/page', '/page'])
     browser.person.back()
     await settleMoves()
     expect(menuClosed).toHaveBeenCalledTimes(1)
     expect(dialogClosed).not.toHaveBeenCalled()
     expect(layerOf(browser.history.state)).toBe(dialog.marker)
-    expect(browser.urls()).toEqual(['/before', '/page', '/page'])
     browser.person.back()
     await settleMoves()
     expect(dialogClosed).toHaveBeenCalledTimes(1)
     expect(browser.here()).toBe('/page')
+    expect(browser.index()).toBe(1)
   })
+
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    'closes one of two open layers per Back when the browser queued both before the page ran, in %s',
+    async (engine) => {
+      const browser = page(['/before', '/page'], engine)
+      const dialogClosed = vi.fn()
+      const menuClosed = vi.fn()
+      await layer(dialogClosed)
+      await layer(menuClosed)
+      // Firefox counts the second Back from the first one's entry, so it
+      // reaches past a marker the page would add once the first has landed
+      browser.person.back()
+      browser.person.back()
+      await settleMoves()
+      expect(menuClosed).toHaveBeenCalledTimes(1)
+      expect(dialogClosed).toHaveBeenCalledTimes(1)
+      expect(browser.here()).toBe('/page')
+      expect(browser.index()).toBe(1)
+      expect(browser.heard).toEqual(['/page', '/page'])
+    },
+  )
 
   it('gives the marker back to the layer under one that App closed on the same Back', async () => {
     const browser = browserWindow('/before')
@@ -214,20 +253,38 @@ describe('a layer that closes by itself', () => {
     expect(browser.heard).toEqual(['/before'])
   })
 
-  it('leaves one spare for two nested layers that close by themselves, so two quick Backs leave two pages', async () => {
-    const browser = page(['/a', '/b', '/c', '/page'])
-    const dialog = await layer()
-    const menu = await layer()
-    finishLayer(menu)
-    finishLayer(dialog)
-    expect(browser.urls()).toEqual(['/a', '/b', '/c', '/page', '/page'])
-    // the second Back before the page's step has run
-    browser.person.back()
-    browser.person.back()
-    await settleMoves()
-    expect(browser.here()).toBe('/b')
-    expect(browser.heard).toEqual(['/c', '/b'])
-  })
+  it.each([undefined, 'firefox'] as const)(
+    'leaves a spare for each of two nested layers that close by themselves, and one Back leaves the page, in %s',
+    async (engine) => {
+      const browser = page(['/a', '/b', '/c', '/page'], engine)
+      const dialog = await layer()
+      const menu = await layer()
+      finishLayer(menu)
+      finishLayer(dialog)
+      expect(browser.urls()).toEqual(['/a', '/b', '/c', '/page', '/page', '/page'])
+      browser.person.back()
+      await settleMoves()
+      expect(browser.here()).toBe('/c')
+      expect(browser.heard).toEqual(['/c'])
+    },
+  )
+
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    'goes on one step per spare, so two quick Backs over two spares leave two pages, in %s',
+    async (engine) => {
+      const browser = page(['/a', '/b', '/c', '/page'], engine)
+      const dialog = await layer()
+      const menu = await layer()
+      finishLayer(menu)
+      finishLayer(dialog)
+      // the second Back before the page's step has run
+      browser.person.back()
+      browser.person.back()
+      await settleMoves()
+      expect(browser.here()).toBe('/b')
+      expect(browser.heard).toEqual(['/c', '/b'])
+    },
+  )
 
   it('keeps the Forward that follows a Back-menu pick of the first entry', async () => {
     const browser = page(['/older', '/middle', '/page'])
@@ -398,14 +455,16 @@ describe("a phone close's step past the page", () => {
     ['the page comes back from the back/forward cache', 'pageshow'],
   ])('steps again when %s', async (_, event) => {
     const browser = browserWindow('/page')
-    remove = installPageHistory(browser.window)
     const go = vi.spyOn(browser.history, 'go').mockImplementation(() => {})
+    remove = installPageHistory(browser.window)
     // the step leaves the document, so no popstate ends it here
     leavePage()
     leavePage()
+    await settleMoves()
     expect(go).toHaveBeenCalledTimes(1)
     browser.window.dispatchEvent(new Event(event))
     leavePage()
+    await settleMoves()
     expect(go).toHaveBeenCalledTimes(2)
   })
 })

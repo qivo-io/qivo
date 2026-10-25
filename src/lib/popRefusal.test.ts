@@ -289,4 +289,37 @@ describe('without the Navigation API', () => {
     expect(browser.urls()).toEqual(['/a', '/b', '/c', '/d'])
     expect(historyBusy()).toBe(false)
   })
+
+  it.each([
+    ['two Backs', ['back', 'back']],
+    ['three Backs', ['back', 'back', 'back']],
+  ] as const)(
+    'steps back over each of %s refused before the return ran, with entries on both sides, and asks once',
+    async (_, moves) => {
+      const browser = await refusing(['/a', '/b', '/task', '/d', '/e'], 2)
+      for (const move of moves) browser.person[move]()
+      await settleMoves()
+      expect(browser.here()).toBe('/task')
+      expect(browser.ask).toHaveBeenCalledTimes(1)
+      expect(browser.applied).toEqual([])
+      expect(browser.later).not.toHaveBeenCalled()
+      expect(historyBusy()).toBe(false)
+      expect(browser.urls()).toEqual(['/a', '/b', '/task', '/d', '/e'])
+    },
+  )
+
+  it('ends on the page shown after a Back and a Forward before the return ran', async () => {
+    const browser = await refusing(['/a', '/b', '/task', '/d', '/e'], 2)
+    browser.person.back()
+    browser.person.forward()
+    await settleMoves()
+    expect(browser.here()).toBe('/task')
+    expect(browser.applied).toEqual([])
+    expect(historyBusy()).toBe(false)
+    expect(browser.urls()).toEqual(['/a', '/b', '/task', '/d', '/e'])
+    // a known limit: the Forward goes by the return's own step, so it is
+    // taken for the return, and the return's step for a refused Forward,
+    // which asks once more
+    expect(browser.ask).toHaveBeenCalledTimes(2)
+  })
 })

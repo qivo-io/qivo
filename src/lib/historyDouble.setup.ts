@@ -11,9 +11,22 @@
 
    - chromium and webkit: per traversal its navigate event, then its commit
      (currententrychange, popstate); the next one's navigate event comes
-     after, with the new current entry.
+     after, with the new current entry. Chromium counts a relative
+     traversal from the entry the one queued before it goes to, and keeps
+     that entry, so a page's pushState meanwhile does not move it; WebKit
+     counts it from the entry it runs on.
    - firefox: the navigate events of every traversal queued by then first,
-     each counted from the one before it, then the commits.
+     each counted from the one before it, then the commits. A script's
+     relative traversal asked for while some of those have yet to land can
+     count from the entry the page is on then, and keep that entry: the
+     double always does so, Firefox in some runs only.
+
+   WebKit runs each traversal in a task of its own, queued when it was
+   asked for, and keeps one script traversal at a time: history.go and
+   traverseTo wait for a zero-delay timer, and one issued before that timer
+   fires replaces it (a replaced traverseTo rejects). The person's moves do
+   not wait. Without `navigation`, the double queues scripts as the spec
+   does.
 
    pushState and replaceState fire a push or replace navigate event. The
    browser's Reload fires beforeunload and no navigate event; a script's
@@ -142,6 +155,8 @@ export function browserWindow(url: string, navigation?: Engine) {
     } else job.done?.reject(new Error('AbortError'))
   }
   /** Firefox: the navigate events of the batch first, then its commits. */
+  // Firefox: the commits of the batch still to land (runBatch)
+  let landing = 0
   const runBatch = (batch: Job[]) => {
     let from = index
     const planned: { job: Job; to: number | null; go: boolean }[] = []
@@ -159,7 +174,9 @@ export function browserWindow(url: string, navigation?: Engine) {
       planned.push({ job, to, go })
       if (go) from = to
     }
+    landing = planned.length
     for (const { job, to, go } of planned) {
+      landing -= 1
       if (job.merged) rerun(job)
       else if (to !== null && go) commit(to)
       if (to === null || go) job.done?.resolve()
@@ -182,7 +199,46 @@ export function browserWindow(url: string, navigation?: Engine) {
       if (queue.length) pump()
     }, 0)
   }
+  // WebKit: the script traversal waiting for its timer (script)
+  let scheduled: { job: Job; timer: ReturnType<typeof setTimeout> } | null = null
+  /** Queues a script's traversal, in WebKit once its timer fires. */
+  const script = (job: Job) => {
+    if (!webkit) return traverse(job)
+    if (scheduled) {
+      clearTimeout(scheduled.timer)
+      scheduled.job.done?.reject(new Error('AbortError'))
+    }
+    const timer = setTimeout(() => {
+      scheduled = null
+      traverse(job)
+    }, 0)
+    scheduled = { job, timer }
+  }
+  // Chromium: the entry the traversals queued so far go to (traverse)
+  let planned: number | null = null
   const traverse = (job: Job) => {
+    // WebKit runs each traversal in a task of its own, queued as it was
+    // asked for, so a timer set later waits for it
+    if (webkit) {
+      queue.push(job)
+      setTimeout(() => {
+        const next = queue.shift()
+        if (next) run(next)
+      }, 0)
+      return
+    }
+    if (navigation === 'firefox' && landing && !job.person && job.key === undefined) {
+      const to = destination(job, index)
+      const key = to === null ? undefined : entries[to].key
+      job.target = () => (key === undefined ? null : entries.findIndex((e) => e.key === key))
+    }
+    if (navigation === 'chromium') {
+      const from = queue.length && planned !== null ? planned : index
+      const to = destination(job, from)
+      const key = job.key ?? (to === null ? undefined : entries[to].key)
+      planned = to ?? from
+      job.target = () => (key === undefined ? null : entries.findIndex((e) => e.key === key))
+    }
     queue.push(job)
     pump()
   }
@@ -210,7 +266,7 @@ export function browserWindow(url: string, navigation?: Engine) {
     }
     go(delta = 0) {
       if (!delta) return scriptReload()
-      traverse({ person: false, target: (from) => from + delta })
+      script({ person: false, target: (from) => from + delta })
     }
     back() {
       this.go(-1)
@@ -246,7 +302,7 @@ export function browserWindow(url: string, navigation?: Engine) {
         const committed = new Promise<void>((resolve, reject) => {
           done = { resolve, reject }
         })
-        traverse({
+        script({
           person: false,
           key,
           info: options?.info,

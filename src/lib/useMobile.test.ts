@@ -244,11 +244,12 @@ describe('useMobileBackLayer', () => {
     expect(location.pathname).toBe('/before')
   })
 
-  it('leaves one spare for two layers that close together, and one Back leaves the page', async () => {
+  it('leaves a spare for each of two layers that close together, and one Back leaves the page', async () => {
     const show = await layers({ a: true, b: false })
     const length = history.length
+    // each open layer has a marker of its own
     await show({ a: true, b: true })
-    expect(history.length).toBe(length)
+    expect(history.length).toBe(length + 1)
     await show({ a: false, b: false })
     await settle()
     expect(location.pathname).toBe('/page')
