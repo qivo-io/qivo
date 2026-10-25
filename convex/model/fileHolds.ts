@@ -40,13 +40,15 @@
  * import into another deployment. It also notices a restore (noteRestore).
  * Files that only rows written after the restored backup named, such as
  * attachments uploaded since, are then named by nothing and have no hold.
- * The orphan sweep then holds them for HOLD_MS instead of erasing them, so
- * a second restore, of a backup taken between the first backup and the
- * first restore, still finds them. A restore goes unnoticed only when no
- * eraser run fell between the backup and the restore, so within one
+ * Until HOLD_MS after a restore is noticed, the orphan sweep holds such
+ * files instead of erasing them (restoreHoldEnd), so a second restore, of a
+ * backup taken between the first backup and the first restore, still finds
+ * them. The first check on a deployment counts as a restore, so the files
+ * nothing named then are held for 7 days too. A restore goes unnoticed only
+ * when no eraser run fell between the backup and the restore, so within one
  * interval. Files let go in that time are still erased on time, and files
  * that only rows written in that time named go to the weekly sweep, which
- * erases them. */
+ * erases them at once. */
 
 import { type DocumentByName, makeFunctionReference, type SystemDataModel } from 'convex/server'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -195,20 +197,20 @@ export async function releaseFile(
 
 /**
  * Holds file `file`, which a restore left named by nothing and unheld, until
- * HOLD_MS after `now` (epoch milliseconds). The orphan sweep calls it after a
- * restore instead of erasing the file. It schedules no erase: the eraser
- * erases the file when the hold is due, and a restore that rewinds the hold
- * leaves it to the next sweep.
+ * `erase_at` (epoch milliseconds, restoreHoldEnd). The orphan sweep calls it
+ * after a restore instead of erasing the file. It schedules no erase: the
+ * eraser erases the file when the hold is due, and a restore that rewinds
+ * the hold leaves it to the next sweep.
  */
 export async function holdAfterRestore(
   ctx: MutationCtx,
   file: DocumentByName<SystemDataModel, '_storage'>,
-  now: number,
+  erase_at: number,
 ): Promise<void> {
   await ctx.db.insert('file_holds', {
     storage_id: file._id,
     size_bytes: file.size,
-    erase_at: now + HOLD_MS,
+    erase_at,
     after_restore: true,
   })
 }
@@ -299,14 +301,43 @@ export async function noteRestore(ctx: MutationCtx, now: number): Promise<boolea
   return rewound
 }
 
+/** What the orphan sweep knows of restores (restoreState). */
+export type RestoreState = { rewound: boolean; restored_at?: number }
+
 /**
- * Whether a restore happened that noteRestore has not noticed yet, or that
- * it noticed after `since` (epoch milliseconds). Reads only. The orphan
- * sweep asks it in every leg, so a run that began before a restore stops
- * erasing once the restore happens. Always false on the demo.
+ * Whether a restore happened that noteRestore has not noticed yet, and when
+ * it last noticed one. Reads only. The orphan sweep reads it in every leg,
+ * so a run that began before a restore stops erasing once the restore
+ * happens. On the demo, which keeps no backups, it knows of none.
  */
-export async function restoreSince(ctx: QueryCtx, since: number): Promise<boolean> {
-  if (isDemoDeployment()) return false
+export async function restoreState(ctx: QueryCtx): Promise<RestoreState> {
+  if (isDemoDeployment()) return { rewound: false }
   const { row, rewound } = await watch(ctx)
-  return rewound || (row?.restored_at ?? 0) > since
+  return { rewound, restored_at: row?.restored_at }
+}
+
+/**
+ * Until when the orphan sweep holds a file nothing names, created at
+ * `created` and older than the floor, or null when it erases the file. All
+ * times are epoch milliseconds, and `now` is the run's start. A restore not
+ * noticed yet holds every such file until HOLD_MS after `now`. Once it is
+ * noticed, the run noteRestore started (`restoredRun`) holds every such
+ * file, and any other run holds a file created by then, until HOLD_MS after
+ * the restore was noticed. A later run therefore holds an upload of the hour
+ * before the restore, which the floor kept from the first run, and so does a
+ * weekly run that starts while the first one is still going. Every backup
+ * that could name such a file has expired when its hold ends. Otherwise the
+ * sweep erases the file.
+ */
+export function restoreHoldEnd(
+  restore: RestoreState,
+  restoredRun: boolean,
+  created: number,
+  now: number,
+): number | null {
+  if (restore.rewound) return now + HOLD_MS
+  const at = restore.restored_at
+  if (at !== undefined && (restoredRun || (created <= at && now < at + HOLD_MS)))
+    return at + HOLD_MS
+  return restoredRun ? now + HOLD_MS : null
 }

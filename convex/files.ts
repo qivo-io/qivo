@@ -86,7 +86,8 @@ import {
   holdAfterRestore,
   noteRestore,
   releaseFile,
-  restoreSince,
+  restoreHoldEnd,
+  restoreState,
 } from './model/fileHolds'
 import { assertProfileExpected } from './model/people'
 
@@ -399,11 +400,14 @@ export const gatewayAvatar = internalQuery({
  * A restore rewinds every table but leaves the stored files, so files that
  * only rows written after the restored backup named are named by nothing
  * afterwards. A second restore, of a later backup, would bring their rows
- * back. So once a restore is noticed (model/fileHolds.ts noteRestore), a
- * run holds each such file for HOLD_MS instead of erasing it, and the eraser
- * erases it when the hold ends. eraseHeldFiles starts such a run when it
- * notices a restore, with `restored: true`. A run that began before a
- * restore holds instead of erasing from the first leg that follows it. A
+ * back. So a run holds each such file instead of erasing it, until HOLD_MS
+ * after the restore was noticed (model/fileHolds.ts noteRestore and
+ * restoreHoldEnd), and the eraser erases it when the hold ends.
+ * eraseHeldFiles starts such a run when it notices a restore, with
+ * `restored: true`. Until the hold would end, later runs hold the files
+ * that existed when the restore was noticed, such as an upload of the hour
+ * before, which the floor kept from the first run. A run that began before
+ * a restore holds instead of erasing from the first leg that follows it. A
  * file a release held is not among them: its hold, or after a restore its
  * scheduled erase, still erases it on time.
  *
@@ -486,7 +490,6 @@ export const reapOrphans = internalMutation({
       held: 0,
       ...(a.counts ?? { deleted: 0, kept: 0, tickets: 0, accounts: 0 }),
     }
-    let restored = a.restored === true
     let next: Pick<ReapLeg, 'phase' | 'cursor'> | null = null
     if ((a.phase ?? 'tickets') === 'tickets') {
       // Tickets own no bytes until the receiver commits the completed upload,
@@ -520,15 +523,18 @@ export const reapOrphans = internalMutation({
       next = page.isDone ? { phase: 'files' } : { phase: 'accounts', cursor: page.continueCursor }
     } else {
       const cutoff = now - REAP_FLOOR_MS
-      restored ||= await restoreSince(ctx, now)
+      const restore = await restoreState(ctx)
       const page = await ctx.db.system
         .query('_storage')
         .paginate({ cursor: a.cursor ?? null, numItems: REAP_PAGES.files })
       for (const file of page.page) {
         if (file._creationTime > cutoff || (await storageIdInUse(ctx, file._id))) {
           counts.kept += 1
-        } else if (restored) {
-          await holdAfterRestore(ctx, file, now)
+          continue
+        }
+        const erase_at = restoreHoldEnd(restore, a.restored === true, file._creationTime, now)
+        if (erase_at !== null) {
+          await holdAfterRestore(ctx, file, erase_at)
           counts.held += 1
         } else {
           await eraseFile(ctx, file._id)
@@ -542,7 +548,7 @@ export const reapOrphans = internalMutation({
         ...next,
         now,
         counts,
-        ...(restored ? { restored } : {}),
+        ...(a.restored ? { restored: true } : {}),
       })
       return null
     }

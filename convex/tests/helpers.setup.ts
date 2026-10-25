@@ -291,15 +291,26 @@ export const fileState = (t: T, id: Id<'_storage'>): Promise<'gone' | 'held' | '
     return hold === null ? 'kept' : 'held'
   })
 
-/** Starts the restore watch the eraser keeps (model/fileHolds.ts
- * noteRestore). A deployment without it counts as restored, and its orphan
- * sweep holds the files nothing names instead of erasing them. */
+/** One check of the restore watch the eraser keeps (model/fileHolds.ts
+ * noteRestore), answering whether it noticed a restore. A deployment without
+ * a watch counts as restored. */
 export const watchRestores = (t: T): Promise<boolean> =>
   t.run((ctx) => noteRestore(ctx, Date.now()))
 
+/** Starts the restore watch as on a deployment that noticed no restore in
+ * the last 7 days, so its orphan sweep erases the files nothing names
+ * instead of holding them. */
+export const quietWatch = (t: T): Promise<void> =>
+  t.run(async (ctx) => {
+    await noteRestore(ctx, Date.now())
+    const row = await ctx.db.query('restore_watch').first()
+    if (row !== null) await ctx.db.patch(row._id, { restored_at: undefined })
+  })
+
 /** Runs one orphan sweep (files.reapOrphans) through all of its legs and
  * returns the counts from the one reap_orphans audit row it wrote. It starts
- * the restore watch first, so the sweep erases as it does between restores.
+ * a quiet restore watch first, so the sweep erases as it does between
+ * restores.
  * Works with real timers, a faked Date alone, or fully faked timers. With
  * faked timers it fires only the timers already due, which the legs are, so
  * the clock stays put and later scheduled work waits. */
@@ -311,7 +322,7 @@ export async function reap(t: T): Promise<ReapCounts> {
       ),
     )
   const before = (await audits()).length
-  await watchRestores(t)
+  await quietWatch(t)
   await t.mutation(internal.files.reapOrphans, {})
   await t.finishAllScheduledFunctions(() => {
     if (vi.isFakeTimers()) vi.advanceTimersByTime(0)

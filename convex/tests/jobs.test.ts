@@ -39,10 +39,10 @@ import {
   plantMessage,
   plantProject,
   plantSeat,
+  quietWatch,
   reap,
   type T,
   uuid,
-  watchRestores,
   withOrg,
 } from './helpers.setup'
 
@@ -1585,7 +1585,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     const [first, second, late] = [await storeBlob(t), await storeBlob(t), await storeBlob(t)]
     vi.setSystemTime(Date.now() + HOUR + 60_000)
 
-    await watchRestores(t)
+    await quietWatch(t)
     await t.mutation(internal.files.reapOrphans, {})
     let leg = await pendingLeg(t)
     while (leg !== null && !(leg.phase === 'files' && leg.cursor !== undefined)) leg = await step(t)
@@ -1612,7 +1612,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     vi.setSystemTime(Date.now() + HOUR - 60_000)
     const start = Date.now()
 
-    await watchRestores(t)
+    await quietWatch(t)
     await t.mutation(internal.files.reapOrphans, {})
     let leg = await pendingLeg(t)
     while (leg !== null && leg.phase !== 'files') leg = await step(t)

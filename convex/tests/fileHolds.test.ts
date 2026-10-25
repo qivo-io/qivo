@@ -12,8 +12,10 @@
  *      names, keeps a file a restore brought back, and passes over a file
  *      already gone.
  *   4. A restore is noticed, and the orphan sweep then holds the files it
- *      left named by nothing, so a second restore finds them, also when the
- *      sweep was already running.
+ *      left named by nothing until HOLD_MS after that, so a second restore
+ *      finds them: in the run the eraser starts, in a run already going, in
+ *      a weekly run that overtakes it, and for a file the floor kept from
+ *      the first run.
  *   5. A held file is out of reach: the avatar gateway misses it, nothing can
  *      adopt it, and the storage totals leave it out.
  *
@@ -32,7 +34,8 @@ import {
   eraseDueFiles,
   HOLD_MS,
   releaseFile,
-  restoreSince,
+  restoreHoldEnd,
+  restoreState,
 } from '../model/fileHolds'
 import { deleteOrgStep } from '../model/orgDeletion'
 import {
@@ -43,6 +46,7 @@ import {
   NOW,
   newT,
   plantIssue,
+  quietWatch,
   type T,
   uuid,
   watchRestores,
@@ -386,20 +390,40 @@ describe('a restore', () => {
   it('is noticed once, when the watch goes back to an earlier witness', async () => {
     vi.useFakeTimers()
     const t = newT()
+    const state = () => t.run((ctx) => restoreState(ctx))
     // a deployment that never had a watch counts as restored
     expect(await watchRestores(t)).toBe(true)
     expect(await watchRestores(t)).toBe(false)
+    await quietWatch(t)
     const backup = await backupWatch(t)
     expect(await watchRestores(t)).toBe(false)
     // a witness that ran, after a day without the eraser, still counts
     await runUntil(t, Date.now() + DAY + 1)
     expect(await watchRestores(t)).toBe(false)
+    expect(await state()).toEqual({ rewound: false })
     await rewindWatch(t, backup)
-    expect(await t.run((ctx) => restoreSince(ctx, Date.now()))).toBe(true)
+    // a sweep holds before the eraser notices the restore
+    const before = Date.now()
+    expect(restoreHoldEnd(await state(), false, before - DAY, before)).toBe(before + HOLD_MS)
     expect(await watchRestores(t)).toBe(true)
-    expect(await t.run((ctx) => restoreSince(ctx, Date.now() - 1))).toBe(true)
-    expect(await t.run((ctx) => restoreSince(ctx, Date.now()))).toBe(false)
+    const noticed = Date.now()
+    expect(await state()).toEqual({ rewound: false, restored_at: noticed })
     expect(await watchRestores(t)).toBe(false)
+  })
+
+  it('holds what existed when it was noticed until HOLD_MS after that, and in its own run everything', async () => {
+    const noticed = Date.parse(NOW)
+    const restore = { rewound: false, restored_at: noticed }
+    const soon = noticed + HOUR
+    expect(restoreHoldEnd(restore, false, noticed - 1, soon)).toBe(noticed + HOLD_MS)
+    expect(restoreHoldEnd(restore, false, noticed, noticed + HOLD_MS - 1)).toBe(noticed + HOLD_MS)
+    // once the hold would have ended, and for files uploaded after it was noticed
+    expect(restoreHoldEnd(restore, false, noticed - 1, noticed + HOLD_MS)).toBeNull()
+    expect(restoreHoldEnd(restore, false, noticed + 1, soon)).toBeNull()
+    // the run noteRestore started holds every file
+    expect(restoreHoldEnd(restore, true, noticed + 1, soon)).toBe(noticed + HOLD_MS)
+    // no restore
+    expect(restoreHoldEnd({ rewound: false }, false, noticed, soon)).toBeNull()
   })
 
   it('makes the eraser start a sweep that holds what the restore left unnamed, so a second restore finds it', async () => {
@@ -426,10 +450,14 @@ describe('a restore', () => {
       for (const hold of await ctx.db.query('file_holds').collect()) await ctx.db.delete(hold._id)
     })
     await rewindWatch(t, backup)
-    await erase(t, Date.now())
+    const noticed = Date.now()
+    await erase(t, noticed)
     expect(await lastSweep(t)).toMatchObject({ deleted: 0, held: 4 })
     for (const file of [orphan, first.row.storage_id, second.row.storage_id])
-      expect(await holdFor(t, file)).toMatchObject({ after_restore: true })
+      expect(await holdFor(t, file)).toMatchObject({
+        after_restore: true,
+        erase_at: noticed + HOLD_MS,
+      })
     // the let-go file still has its scheduled erase from the release
     expect((await pendingErases(t)).map((job) => job.storage_id)).toEqual([released.row.storage_id])
 
@@ -439,8 +467,7 @@ describe('a restore', () => {
       const { _id, _creationTime, ...doc } = first.row
       await ctx.db.insert('issue_attachments', doc)
     })
-    const due = (await holdFor(t, second.row.storage_id))?.erase_at ?? 0
-    await erase(t, due)
+    await erase(t, noticed + HOLD_MS)
     expect(await fileState(t, first.row.storage_id)).toBe('kept')
     expect(await fileState(t, second.row.storage_id)).toBe('gone')
     expect(await fileState(t, orphan)).toBe('gone')
@@ -453,10 +480,11 @@ describe('a restore', () => {
     Object.assign(REAP_PAGES, { files: 1 })
     const orphan = await storeFile(t)
     const { row } = await attached(t, f)
-    await watchRestores(t)
+    await quietWatch(t)
     const backup = await backupWatch(t)
     await watchRestores(t)
     vi.setSystemTime(Date.now() + HOUR + 60_000)
+    const start = Date.now()
     await t.mutation(internal.files.reapOrphans, {})
     // run legs until the orphan, the first file, is erased
     for (let leg = 0; leg < 20 && (await fileState(t, orphan)) !== 'gone'; leg++) {
@@ -464,19 +492,77 @@ describe('a restore', () => {
       await t.finishInProgressScheduledFunctions()
     }
     expect(await fileState(t, orphan)).toBe('gone')
-    // the restore lands between two legs
+    // the restore lands between two legs, and nothing has noticed it yet
     await t.run((ctx) => ctx.db.delete(row._id))
     await rewindWatch(t, backup)
     await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0))
-    expect(await holdFor(t, row.storage_id)).toMatchObject({ after_restore: true })
+    expect(await holdFor(t, row.storage_id)).toMatchObject({
+      after_restore: true,
+      erase_at: start + HOLD_MS,
+    })
     expect(await lastSweep(t)).toMatchObject({ deleted: 1, held: 1 })
+  })
+
+  it('makes a weekly sweep that starts while the restored one is still going hold, until HOLD_MS after it was noticed', async () => {
+    vi.useFakeTimers()
+    const t = newT()
+    const f = await withOrg(t)
+    await quietWatch(t)
+    const backup = await backupWatch(t)
+    await watchRestores(t)
+    const { row } = await attached(t, f)
+    vi.setSystemTime(Date.now() + 2 * HOUR)
+    await t.run((ctx) => ctx.db.delete(row._id))
+    await rewindWatch(t, backup)
+    // the eraser notices the restore; the sweep it starts waits to run
+    await t.mutation(internal.files.eraseHeldFiles, {})
+    const noticed = Date.now()
+    vi.setSystemTime(noticed + 60_000)
+    // the weekly sweep reaches the file first
+    await t.mutation(internal.files.reapOrphans, { phase: 'files' })
+    expect(await lastSweep(t)).toMatchObject({ deleted: 0, held: 1 })
+    expect(await holdFor(t, row.storage_id)).toMatchObject({
+      after_restore: true,
+      erase_at: noticed + HOLD_MS,
+    })
+  })
+
+  it('makes later sweeps hold a file too young for the first, but not an upload after it was noticed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const t = newT()
+    const f = await withOrg(t)
+    await quietWatch(t)
+    const backup = await backupWatch(t)
+    await watchRestores(t)
+    // attached minutes before the restore
+    const young = await attached(t, f)
+    await t.run((ctx) => ctx.db.delete(young.row._id))
+    await rewindWatch(t, backup)
+    vi.setSystemTime(Date.now() + 60_000)
+    const noticed = Date.now()
+    await erase(t, noticed)
+    expect(await lastSweep(t)).toMatchObject({ held: 0, kept: 1 })
+    expect(await fileState(t, young.row.storage_id)).toBe('kept')
+    // an upload after the restore was noticed, never attached
+    vi.setSystemTime(noticed + 60_000)
+    const after = await storeFile(t)
+    // the weekly sweep, past the floor
+    vi.setSystemTime(noticed + 2 * HOUR)
+    await t.mutation(internal.files.reapOrphans, {})
+    await t.finishAllScheduledFunctions(() => {})
+    expect(await lastSweep(t)).toMatchObject({ deleted: 1, held: 1 })
+    expect(await holdFor(t, young.row.storage_id)).toMatchObject({
+      after_restore: true,
+      erase_at: noticed + HOLD_MS,
+    })
+    expect(await fileState(t, after)).toBe('gone')
   })
 
   it('is never noticed on the demo, which keeps no backups', async () => {
     const t = newT()
     vi.stubEnv('APP_MODE', 'demo')
     expect(await watchRestores(t)).toBe(false)
-    expect(await t.run((ctx) => restoreSince(ctx, 0))).toBe(false)
+    expect(await t.run((ctx) => restoreState(ctx))).toEqual({ rewound: false })
     expect(await t.run((ctx) => ctx.db.query('restore_watch').collect())).toEqual([])
   })
 })
