@@ -26,6 +26,9 @@ const hasHomeRole = (profile: Doc<'profiles'>): boolean =>
   profile.org_role === 'admin' || profile.org_role === 'user' || profile.org_role === 'viewer'
 
 /** Active is the administrator-controlled switch, not recent login activity.
+ * Organization deletion also clears it on a home profile whose guest
+ * organizations it marks over several steps (markHomeProfileRemoved), while
+ * the profile waits to be deleted.
  * Invitations count immediately. A guest is exempt only while the same email
  * has an active home membership; claim state and subscription payment state
  * do not change that rule. All profile write paths normalize stored emails.
@@ -126,7 +129,10 @@ export async function markBillingMembershipChanged(
  * which it read every one, after which the next step goes on. It never stops
  * inside a group of profiles that share a _creationTime, as an import can
  * leave, so a group larger than a step cannot hold the deletion in one
- * place. When it stops early it also ends the profile's exemption (active
+ * place. It reads such a group in one step, past the budget, so a group of a
+ * few thousand guest profiles of one email, which only a crafted import
+ * could make, would pass Convex's limits in every step and stall the
+ * deletion. When it stops early it also ends the profile's exemption (active
  * false) in the same transaction: a reconciliation between the steps would
  * otherwise still find the home profile, count the guests of the
  * organizations already marked as exempt and use up their marks, and the

@@ -571,6 +571,40 @@ describe('a restore', () => {
     })
   })
 
+  it('makes a sweep that a noticed restore overtook drop its cutoff before the restored sweep reads', async () => {
+    vi.useFakeTimers()
+    const t = newT()
+    const f = await withOrg(t)
+    Object.assign(REAP_PAGES, { files: 1 })
+    await quietWatch(t)
+    await t.mutation(internal.files.reapOrphans, {})
+    await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0))
+    const backup = await backupWatch(t)
+    await watchRestores(t)
+    const { row } = await attached(t, f)
+    await attached(t, f)
+    vi.setSystemTime(Date.now() + HOUR + 60_000)
+    await t.mutation(internal.files.reapOrphans, {})
+    for (let leg = 0; leg < 2; leg++) {
+      vi.advanceTimersByTime(0)
+      await t.finishInProgressScheduledFunctions()
+    }
+    await t.run((ctx) => ctx.db.delete(row._id))
+    await rewindWatch(t, backup)
+    // the eraser notices the restore before the sweep's last leg, so that
+    // leg finds the restore noticed after its run began, not rewound
+    vi.setSystemTime(Date.now() + 60_000)
+    await t.mutation(internal.files.eraseHeldFiles, {})
+    const noticed = Date.now()
+    await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0))
+    // Without the rule the last leg moved the cutoff past the attached file,
+    // and the restored sweep, which runs after it, never read the file.
+    expect(await holdFor(t, row.storage_id)).toMatchObject({
+      after_restore: true,
+      erase_at: noticed + HOLD_MS,
+    })
+  })
+
   it('makes a weekly sweep that starts while the restored one is still going hold, until HOLD_MS after it was noticed', async () => {
     vi.useFakeTimers()
     const t = newT()

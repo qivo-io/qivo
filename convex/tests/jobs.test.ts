@@ -2632,6 +2632,41 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     warn.mockRestore()
   })
 
+  it('clears every appearance row of a removed login, a duplicate included, and finishes the run', async () => {
+    const t = newT()
+    Object.assign(REAP_PAGES, { accounts: 4 })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const gone = await login(t, 'gone')
+    const removed = await customBackground(t, gone)
+    // a second row for the same login, as an import or a dashboard edit can leave
+    await t.run((ctx) =>
+      ctx.db.insert('account_appearance', {
+        auth_user_id: gone,
+        mode: 'dark',
+        image_source: 'none',
+        revision: uuid(),
+        updated_at: NOW,
+      }),
+    )
+    await t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'user', where: [{ field: '_id', value: gone }] },
+    })
+    vi.setSystemTime(Date.now() + HOUR + 60_000)
+
+    // Before, appearanceFor's unique() threw on the two rows, and every
+    // weekly run stopped in its accounts phase.
+    expect(await reap(t)).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 0,
+      tickets: 0,
+      accounts: 1,
+      skipped: 0,
+    })
+    for (const id of removed) expect(await fileState(t, id)).toBe('gone')
+    expect(await t.run((ctx) => ctx.db.query('account_appearance').collect())).toEqual([])
+  })
+
   it('a leg queued before incremental runs, with no lower bound, finishes a full run', async () => {
     const t = newT()
     const f = await withOrg(t)

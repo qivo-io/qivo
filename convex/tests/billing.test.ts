@@ -1931,12 +1931,52 @@ describe('when organizations are reconciled', () => {
     // convex-test gives an insert 0.001 ms after the one before, which
     // rounds away above 2^52 ms, so there the inserts share a time, as an
     // import can leave them
-    const { guestOrgs, step, left, marked, removal } = await guestInMany(300, 2 ** 52)
-    // A step reads the whole group, past its budget, rather than stop inside
-    // it. Before, every step went on from the group's time, read its first
-    // 128 profiles again and stopped there, and the deletion never ended.
-    for (let i = 0; i < 4 && (await left()).length > 0; i++) await step()
+    const TIED = 2 ** 52
+    const { t, f, email, guestOrgs, step, left, marked, removal } = await guestInMany(300, TIED)
+    // one more guest organization, its profile a millisecond after the group
+    const lastOrg = uuid()
+    vi.setSystemTime(TIED + 1)
+    await t.run(async (ctx) => {
+      await enrollOrganization(ctx, lastOrg)
+      await ctx.db.insert('profiles', {
+        id: uuid(),
+        org_id: lastOrg,
+        email,
+        name: 'Consultant',
+        initials: 'CO',
+        color: '#7a7ad0',
+        org_role: 'guest',
+        active: true,
+        kind: 'person',
+        created_at: NOW,
+      })
+    })
+    vi.setSystemTime(NOW)
+    await setDue(t, lastOrg, iso(SYNC_SAFETY_MS / 60_000), true)
+    const times = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('profiles')
+          .withIndex('by_email', (q) => q.eq('email', email))
+          .collect()
+      )
+        .filter((p) => guestOrgs.includes(p.org_id))
+        .map((p) => p._creationTime),
+    )
+    expect(new Set(times)).toEqual(new Set([TIED]))
+
+    // The first step reads the whole group, past its budget, rather than
+    // stop inside it, and stops before the later profile.
+    await step()
     expect(await marked()).toBe(guestOrgs.length)
+    expect(await dueAt(t, lastOrg)).not.toBe(NOW)
+    expect((await removal())?.guest_marking).toEqual({ profile_id: f.otherAdmin.id, through: TIED })
+    // The next goes on after the group. Before, every step went on from the
+    // group's time, read its first 128 profiles again and stopped there, and
+    // the deletion never ended.
+    await step()
+    expect(await dueAt(t, lastOrg)).toBe(NOW)
+    for (let i = 0; i < 3 && (await left()).length > 0; i++) await step()
     expect((await removal())?.guest_marking).toBeUndefined()
     expect(await left()).toEqual([])
   })

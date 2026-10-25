@@ -345,9 +345,9 @@ describe('the bulk acts leave a snoozed item alone', () => {
       return { marked: marked.map((m) => m.id), read }
     })
 
-    // the newest unread row for the cutoff, the plain row, and the prune's
-    // and the sweep row's reads; before, the batch also read the 100 snoozed
-    // rows created before it
+    // the newest unread row for the cutoff, the plain row, the plain row
+    // again as it is marked, and the prune's read; before, the batch also
+    // read the 100 snoozed rows created before it
     expect(done).toEqual({ marked: [plainUnread.id], read: 4 })
     const unread = (await messagesFor(t, f.guest.id)).filter((m) => m.read_at === undefined)
     expect(unread).toHaveLength(100)

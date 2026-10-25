@@ -115,6 +115,11 @@ export async function clearAccountAppearance(
     .withIndex('by_auth_user', (q) => q.eq('auth_user_id', authId))
     .collect())
     await ctx.db.delete(upload._id)
-  const settings = await appearanceFor(ctx, authId)
-  if (settings) await ctx.db.delete(settings._id)
+  // every row of the login, so a duplicate an import or a dashboard edit
+  // left cannot make appearanceFor's unique() stop the cleanup
+  for (const settings of await ctx.db
+    .query('account_appearance')
+    .withIndex('by_auth_user', (q) => q.eq('auth_user_id', authId))
+    .collect())
+    await ctx.db.delete(settings._id)
 }

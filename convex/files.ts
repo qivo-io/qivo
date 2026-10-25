@@ -408,7 +408,8 @@ export const gatewayAvatar = internalQuery({
  * `restored: true`. Until the hold would end, later runs hold the files
  * that existed when the restore was noticed, such as an upload of the hour
  * before, which the floor kept from the first run. A run that began before
- * a restore holds instead of erasing from the first leg that follows it. A
+ * a restore holds instead of erasing from the first files leg that follows
+ * it. A
  * file a release held is not among them: its hold, or after a restore its
  * scheduled erase, still erases it on time.
  *
@@ -431,10 +432,11 @@ export const gatewayAvatar = internalQuery({
  * run's one reap_orphans audit row and the orphan_reaps row.
  *
  * Most runs are incremental. Every path in the app that drops a file's last
- * reference lets go of the file through releaseFile (model/fileHolds.ts),
- * which holds it, or on the demo erases it at once, so the orphans a run
- * finds are new files: uploads never attached or confirmed, and cleanups
- * that failed. An incremental run reads only the files created after the
+ * reference holds or erases the file in the same transaction, through
+ * model/fileHolds.ts: releaseFile, eraseFile for the panorama library and
+ * the demo, and releaseFileNow in this sweep's accounts phase. So the
+ * orphans a run finds are new files: uploads never attached or confirmed,
+ * and cleanups that failed. An incremental run reads only the files created after the
  * last finished run's cutoff (orphan_reaps.files_through) and at or before
  * its own, the run's start less the floor. A younger file falls to the next
  * run. A run is full when no run has finished yet or the last finished full
@@ -466,7 +468,9 @@ export const gatewayAvatar = internalQuery({
  * REAP_FLOOR_MS: a restore the eraser cannot notice comes within
  * ERASE_EVERY_MS of its backup, so the cutoff of a run that spans it, its
  * start less the floor, is still before the backup and hides no file
- * uploaded after it.
+ * uploaded after it. A file uploaded up to an hour before such a backup and
+ * attached only after it can fall before that cutoff, and then waits for the
+ * next full run, which erases it, since no backup names it.
  *
  * The 60-minute floor (0033:34-38) keeps a sweep from racing an upload whose
  * attach is seconds away. It is measured from the run's start, which every
@@ -582,9 +586,11 @@ export const reapOrphans = internalMutation({
       })) as { live: string[]; invalid: string[] }
       const live = new Set(logins.live)
       const invalid = new Set(logins.invalid)
+      // a removed login's cleanup takes all its rows, duplicates included
+      const cleared = new Set<string>()
       for (const settings of page.page) {
         const id = settings.auth_user_id
-        if (live.has(id)) continue
+        if (live.has(id) || cleared.has(id)) continue
         if (invalid.has(id)) {
           console.warn('Orphan sweep kept an appearance row whose login id is no id', {
             row: settings._id,
@@ -593,6 +599,7 @@ export const reapOrphans = internalMutation({
           continue
         }
         await clearAccountAppearance(ctx, id, releaseFileNow)
+        cleared.add(id)
         counts.accounts += 1
       }
       next = page.isDone ? { phase: 'files' } : { phase: 'accounts', cursor: page.continueCursor }

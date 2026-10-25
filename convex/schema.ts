@@ -1101,7 +1101,8 @@ export default defineSchema({
     .index('by_expiry', ['expires_at']),
 
   // At most one row, written by the last leg of each finished files.ts
-  // reapOrphans run. No row makes the next run a full one.
+  // reapOrphans run, and deleted by one that spans a restore. No row makes
+  // the next run a full one.
   orphan_reaps: defineTable({
     // every stored file created at or before this has been checked
     files_through: v.number(), // epoch milliseconds
