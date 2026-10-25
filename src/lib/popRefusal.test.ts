@@ -294,7 +294,7 @@ describe('without the Navigation API', () => {
     ['two Backs', ['back', 'back']],
     ['three Backs', ['back', 'back', 'back']],
   ] as const)(
-    'steps back over each of %s refused before the return ran, with entries on both sides, and asks once',
+    'returns to the page shown after %s refused before the return ran, with entries on both sides, and asks once',
     async (_, moves) => {
       const browser = await refusing(['/a', '/b', '/task', '/d', '/e'], 2)
       for (const move of moves) browser.person[move]()
@@ -307,6 +307,19 @@ describe('without the Navigation API', () => {
       expect(browser.urls()).toEqual(['/a', '/b', '/task', '/d', '/e'])
     },
   )
+
+  it('ends on the page shown after a pick from the Back menu and a Forward before the return ran', async () => {
+    const browser = await refusing(['/a', '/b', '/task'], 2)
+    // the return of the pick would now land past the last entry
+    browser.person.pick(0)
+    browser.person.forward()
+    await settleMoves()
+    expect(browser.here()).toBe('/task')
+    expect(browser.ask).toHaveBeenCalledTimes(1)
+    expect(browser.applied).toEqual([])
+    expect(historyBusy()).toBe(false)
+    expect(browser.urls()).toEqual(['/a', '/b', '/task'])
+  })
 
   it('ends on the page shown after a Back and a Forward before the return ran', async () => {
     const browser = await refusing(['/a', '/b', '/task', '/d', '/e'], 2)

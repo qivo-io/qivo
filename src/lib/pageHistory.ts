@@ -40,8 +40,7 @@
 
    A Back or Forward the app refuses (lib/popRefusal) returns to the entry it
    left, hidden from every other listener: by key with the Navigation API,
-   which lands there whatever moved first, and by position without it, one
-   step back over each refused move, which add up to the entry left. */
+   which lands there whatever moved first, and by position without it. */
 
 /** A phone layer's place in the history (useMobileBackLayer). */
 export type BackLayer = {
@@ -66,9 +65,12 @@ let win: Window | null = null
 let push: History['pushState'] | null = null
 let replace: History['replaceState'] | null = null
 // the current position, and the highest one known to exist: Infinity after
-// booting on an entry that had a position, as entries may follow it
+// booting on an entry that had a position, as entries may follow it. The
+// lowest and highest positions this document has been on (known).
 let at = 0
 let top = 0
+let low = 0
+let high = 0
 // the entry the page is on, the one whose page the app shows, and the one
 // the app showed before the latest popstate, which a refused move returns to
 let last: Entry = { at: 0, state: null, url: '', key: null }
@@ -86,18 +88,22 @@ let settling = false
 let leaving = false
 // the refusal's return on its way (returnTo): with the Navigation API the
 // key it goes to, the token its navigate event carries and whether that
-// event fired; without it the position it returns to and its steps not yet
-// landed, the oldest first. What it runs once landed, and, by key, `voided`
-// once the app took another move meanwhile.
+// event fired; without it the position it returns to and its step. What it
+// runs once landed, and, by key, `voided` once the app took another move
+// meanwhile.
 let ret: {
   key: string | null
   at: number | null
-  steps: number[]
+  step: number
   token: string
   started: boolean
   voided: boolean
   landed: () => void
 } | null = null
+// without the Navigation API, the step of a return that another move
+// overtook: it still lands, as a move like any other, so a refusal waits for
+// it rather than step again (returnTo)
+let stray: number | null = null
 // returns whose navigate event fired since the page last pushed an entry:
 // WebKit runs a return that a person's move merged with once more, as a
 // reload of the entry it reached, which the page cancels (onNavigate)
@@ -146,6 +152,12 @@ const isSpare = (state: unknown) => {
 /** Whether an open layer's marker is above `from` and at most `to`. */
 const openWithin = (from: number, to: number) =>
   [...open].some((layer) => layer.at !== null && layer.at > from && layer.at <= to)
+/** Whether a step of `delta` from the current entry lands on an entry
+    this document knows. */
+const known = (delta: number) => {
+  const to = at + delta
+  return to >= low && to <= (top === Infinity ? high : top)
+}
 /** The window the page's history is installed on, or this one before then,
     as in a test that renders App alone. */
 const current = () => win ?? window
@@ -168,6 +180,8 @@ function firesBeforeUnload(w: Window) {
 /** Notes the entry the page is on now. */
 function note() {
   const w = current()
+  low = Math.min(low, at)
+  high = Math.max(high, at)
   last = {
     at,
     state: w.history.state,
@@ -271,22 +285,17 @@ function landReturn(event: PopStateEvent) {
     // with the Navigation API a move elsewhere first is a move like any
     // other, and the return lands later
     if (last.key !== done.key) return false
-  } else {
-    // by position: a step of another move is a move like any other, and the
-    // return's steps still land after it (joinReturn adds one back over it)
-    if (moved === null || moved !== done.steps[0]) return false
-    done.steps.shift()
-    if (done.steps.length) {
-      event.stopImmediatePropagation()
-      popped = []
-      return true
-    }
+  } else if (moved !== done.step || last.at !== done.at) {
+    // by position, another move overtook it, maybe by the same step: that
+    // move is a move like any other, and the return's step lands later as
+    // one more, when it still can (known)
+    ret = null
+    stray = known(done.step) ? done.step : null
+    settleSoon()
+    return false
   }
   ret = null
   settleSoon()
-  // a move of the person's by the same step, after which the return's own
-  // lands as a move like any other
-  if (done.key === null && last.at !== done.at) return false
   if (done.voided) return false
   event.stopImmediatePropagation()
   popped = []
@@ -308,6 +317,8 @@ function onPop(event: PopStateEvent) {
   shown = last
   leaving = false
   moved = here !== null && from.at !== null ? here - from.at : null
+  // the overtaken return's step landed, or can no longer land
+  if (stray !== null && (moved === stray || !known(stray))) stray = null
   // the open layers this move left, top first (an entry without a position
   // is below them all), for the layers' listener after App's
   popped = [...open]
@@ -415,6 +426,8 @@ export function installPageHistory(target: Window = window) {
   const booted = positionIn(h.state)
   at = booted ?? 0
   top = booted === null ? at : Infinity
+  low = at
+  high = at
   rawReplace(withPosition(h.state, at), '')
   note()
   shown = last
@@ -423,6 +436,7 @@ export function installPageHistory(target: Window = window) {
     if (stepped && import.meta.env.DEV) console.error('History written right after a page step')
     at += 1
     top = at
+    high = at
     push!(withPosition(state, at), unused, url)
     note()
     shown = last
@@ -499,6 +513,7 @@ export function installPageHistory(target: Window = window) {
     settling = false
     leaving = false
     ret = null
+    stray = null
     reruns = 0
     unloading = false
     waiting = []
@@ -597,19 +612,21 @@ export function refuseMove() {
     that reaches no other listener; then runs `landed`. With the Navigation
     API it goes by key and lands there whatever moved first; one that
     cannot start, as when the entry is gone, lands at once. Without the API
-    it steps back over the move (joinReturn adds one for each later refused
-    move). Answers false, moving nothing, when `to` has no key or position,
-    or is the entry the page is on. */
+    it goes by position, one step at a time: while the step of a return that
+    another move overtook is still to land, it moves nothing, and the move
+    that step reaches is refused in turn. Answers false, moving nothing,
+    when `to` has no key or position, or is the entry the page is on. */
 export function returnTo(to: Entry, landed: () => void) {
   const nav = navigationOf(current())
   const key = nav ? to.key : null
   const delta = to.at === null || last.at === null ? 0 : to.at - last.at
-  if (nav ? key === null || key === last.key : !delta || moved !== -delta) return false
+  if (nav ? key === null || key === last.key : !delta) return false
+  if (!nav && stray !== null) return true
   seq += 1
   const step = {
     key,
     at: to.at,
-    steps: nav ? [] : [delta],
+    step: delta,
     token: `${LOAD}:return:${seq}`,
     started: false,
     voided: false,
@@ -637,25 +654,14 @@ export function returnTo(to: Entry, landed: () => void) {
   return true
 }
 
-/** A move refused while the return is on its way joins it. With the
-    Navigation API the return lands on its entry whatever moved first; by
-    position it also steps back over this move, so its steps still add up
-    to the entry left. Answers false when this move's step is not known. */
-export function joinReturn() {
-  if (!ret) return false
-  if (ret.key !== null) return true
-  if (!moved) return false
-  ret.steps.push(-moved)
-  go(-moved)
-  return true
-}
-
 /** The app took another move while a return is on its way: by key the
-    return then lands heard, and by position its steps are moves like any
+    return then lands heard, and by position its step is a move like any
     other from then on. */
 export function voidReturn() {
-  if (ret?.key === null) ret = null
-  else if (ret) ret.voided = true
+  if (ret?.key === null) {
+    stray = known(ret.step) ? ret.step : null
+    ret = null
+  } else if (ret) ret.voided = true
 }
 
 /** Whether the refusal's return is on its way. */
