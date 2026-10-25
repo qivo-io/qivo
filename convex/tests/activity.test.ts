@@ -852,7 +852,9 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
       org_id: f.org.id,
       id: p2.id,
     })
-    expect(Object.keys(archivedP2)).toEqual(['issue'])
+    // the task and whether this call archived it
+    expect(Object.keys(archivedP2).sort()).toEqual(['archived', 'issue'])
+    expect(archivedP2.archived).toBe(true)
     events = await activityFor(t, f.org.id)
     expect(events[0].verb).toBe('archived')
     expect(events[0].detail).toBeUndefined()
