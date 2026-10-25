@@ -34,6 +34,7 @@ import {
   projectSightForProfiles,
 } from '../lib/access'
 import { byId } from '../lib/db'
+import { uncountedWriter } from '../lib/demo'
 import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
@@ -157,7 +158,10 @@ export async function wakeSnoozedItem(
  * else. */
 
 /** Brings `profileId`'s message_sweeps row forward to `due`, adding the row
- * when it has none. A row already due by then stays as it is. */
+ * when it has none. A row already due by then stays as it is. The demo's
+ * record limit does not count the row: there is at most one per person and
+ * it is maintenance state, so a demo at its limit can still mark messages
+ * read (lib/demo.ts uncountedWriter). */
 export async function lowerSweepDue(
   ctx: MutationCtx,
   profileId: string,
@@ -167,8 +171,11 @@ export async function lowerSweepDue(
     .query('message_sweeps')
     .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
     .first()
-  if (row === null) await ctx.db.insert('message_sweeps', { profile_id: profileId, due_at: due })
-  else if (row.due_at > due) await ctx.db.patch(row._id, { due_at: due })
+  if (row === null) {
+    await uncountedWriter(ctx.db).insert('message_sweeps', { profile_id: profileId, due_at: due })
+  } else if (row.due_at > due) {
+    await ctx.db.patch(row._id, { due_at: due })
+  }
 }
 
 /** Records that a message of `recipient`, read at `readAt`, is now read and
