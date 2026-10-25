@@ -321,6 +321,37 @@ describe('without the Navigation API', () => {
     expect(browser.urls()).toEqual(['/a', '/b', '/task'])
   })
 
+  it('ends quiet when a second Back reaches an entry without a position before the return ran', async () => {
+    // an entry from before the page's history was installed, without a position
+    const browser = browserWindow('/before')
+    browser.history.pushState(null, '', '/start')
+    const removeHistory = installPageHistory(browser.window)
+    pushPage({}, '/task')
+    const stopLayers = listenBackLayers(browser.window)
+    remove = () => {
+      stopLayers()
+      removeHistory()
+    }
+    const scope = createUnsentScope()
+    scope.hold('comment')
+    const ask = vi.fn()
+    const refusal = createPopRefusal(ask)
+    browser.window.addEventListener('popstate', (event) => {
+      if (!(event instanceof PopStateEvent) || !refusal.refuse(event, [scope])) {
+        // as App does when the page cannot return: the task's address again
+        event.stopImmediatePropagation()
+        browser.history.pushState({}, '', '/task')
+        ask()
+      }
+    })
+    browser.person.back()
+    browser.person.back()
+    await settleMoves()
+    expect(browser.here()).toBe('/task')
+    expect(historyBusy()).toBe(false)
+    expect(ask).toHaveBeenCalledTimes(1)
+  })
+
   it('ends on the page shown after a Back and a Forward before the return ran', async () => {
     const browser = await refusing(['/a', '/b', '/task', '/d', '/e'], 2)
     browser.person.back()

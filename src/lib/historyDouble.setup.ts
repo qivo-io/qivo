@@ -122,7 +122,8 @@ export function browserWindow(url: string, navigation?: Engine) {
   /** Merges a person's move to `to` with a keyed page step waiting for it. */
   const mergeInto = (job: Job, to: number) => {
     if (!job.person) return job.info
-    const waiting = queue.find(
+    // a page request still in the queue, or in WebKit still waiting for its timer
+    const waiting = [...queue, ...(scheduled ? [scheduled.job] : [])].find(
       (other) => !other.person && other.key === entries[to].key && !other.merged,
     )
     if (!waiting) return job.info

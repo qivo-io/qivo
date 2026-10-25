@@ -17,11 +17,11 @@
    never moves the history: its marker stays as a *spare*. The next page the
    app opens takes the place of the spare it is on (pushPage), the next layer
    takes it over, and a Back from a spare to an entry of its run that shows
-   the same, so changes nothing on screen, goes on one entry more in that
-   Back's own popstate. Each going-on is a single step that commutes with
-   the person's own Backs, also when they are queued (Chromium and Firefox
-   count a queued Back from the one before it), so a Back still leaves one
-   page per press. A spare a Back went on from stays as a Forward entry that
+   the same, so changes nothing on screen, closes the layer whose marker it
+   reached, or else goes on one entry more in that Back's own popstate.
+   Each going-on is a single step that commutes with the person's own Backs,
+   also when they are queued (Chromium and Firefox count a queued Back from
+   the one before it), so a Back still leaves one page per press. A spare a Back went on from stays as a Forward entry that
    shows the same page, so a Forward onto it changes nothing on screen: no
    step can remove it, since the History and Navigation APIs drop Forward
    entries only by adding one, and a spare that is the last entry has
@@ -66,7 +66,7 @@ let push: History['pushState'] | null = null
 let replace: History['replaceState'] | null = null
 // the current position, and the highest one known to exist: Infinity after
 // booting on an entry that had a position, as entries may follow it. The
-// lowest and highest positions this document has been on (known).
+// lowest and highest positions this document has been on (knownStep).
 let at = 0
 let top = 0
 let low = 0
@@ -101,8 +101,8 @@ let ret: {
   landed: () => void
 } | null = null
 // without the Navigation API, the step of a return that another move
-// overtook: it still lands, as a move like any other, so a refusal waits for
-// it rather than step again (returnTo)
+// overtook: it may land as the next popstate, as a move like any other, so
+// a refusal until then waits for it rather than step again (returnTo)
 let stray: number | null = null
 // returns whose navigate event fired since the page last pushed an entry:
 // WebKit runs a return that a person's move merged with once more, as a
@@ -152,11 +152,11 @@ const isSpare = (state: unknown) => {
 /** Whether an open layer's marker is above `from` and at most `to`. */
 const openWithin = (from: number, to: number) =>
   [...open].some((layer) => layer.at !== null && layer.at > from && layer.at <= to)
-/** Whether a step of `delta` from the current entry lands on an entry
-    this document knows. */
-const known = (delta: number) => {
+/** `delta` when a step of it from the current entry, which has a
+    position, lands on an entry this document knows, else null. */
+const knownStep = (delta: number) => {
   const to = at + delta
-  return to >= low && to <= (top === Infinity ? high : top)
+  return last.at !== null && to >= low && to <= (top === Infinity ? high : top) ? delta : null
 }
 /** The window the page's history is installed on, or this one before then,
     as in a test that renders App alone. */
@@ -209,12 +209,15 @@ function serially(traverse: () => void) {
     return
   }
   issuing = true
-  traverse()
-  setTimeout(() => {
-    issuing = false
-    const next = queued.shift()
-    if (next) serially(next)
-  }, 0)
+  try {
+    traverse()
+  } finally {
+    setTimeout(() => {
+      issuing = false
+      const next = queued.shift()
+      if (next) serially(next)
+    }, 0)
+  }
 }
 
 /** Moves `delta` entries as the page's own step, in turn (serially). */
@@ -288,9 +291,9 @@ function landReturn(event: PopStateEvent) {
   } else if (moved !== done.step || last.at !== done.at) {
     // by position, another move overtook it, maybe by the same step: that
     // move is a move like any other, and the return's step lands later as
-    // one more, when it still can (known)
+    // one more, when it still can (knownStep)
     ret = null
-    stray = known(done.step) ? done.step : null
+    stray = knownStep(done.step)
     settleSoon()
     return false
   }
@@ -317,8 +320,8 @@ function onPop(event: PopStateEvent) {
   shown = last
   leaving = false
   moved = here !== null && from.at !== null ? here - from.at : null
-  // the overtaken return's step landed, or can no longer land
-  if (stray !== null && (moved === stray || !known(stray))) stray = null
+  // the overtaken return's step landed, or another move came first
+  stray = null
   // the open layers this move left, top first (an entry without a position
   // is below them all), for the layers' listener after App's
   popped = [...open]
@@ -330,7 +333,9 @@ function onPop(event: PopStateEvent) {
   // a Back from a marker to an entry of its run, which shows the same page
   const inRun =
     moved !== null && moved < 0 && tokenIn(from.state) !== null && -moved <= depthIn(from.state)
-  if (inRun && last.url !== from.url) replace!(last.state, '', from.url)
+  // not while a step of the page's may still be on its way: Firefox can drop
+  // a step after which the page writes history
+  if (inRun && last.url !== from.url && !stepped) replace!(last.state, '', from.url)
   if (firstEntry) {
     // the person's Back came first and stopped on a spare over the first
     // entry: the step goes on from there, as only a Back can race it
@@ -340,10 +345,14 @@ function onPop(event: PopStateEvent) {
     }
     return settleSoon()
   }
-  // a Back from a spare that changed nothing on screen: one entry more
+  // a Back from a spare that changed nothing on screen: it closes the layer
+  // whose marker it reached, with no step, so one that stays open keeps the
+  // page whatever Backs follow; else it goes on one entry more
   if (inRun && isSpare(from.state) && !popped.length && !ret) {
     event.stopImmediatePropagation()
-    goOn()
+    const reached = [...open].find((layer) => layer.at === here)
+    if (reached) closeLayer(reached)
+    else goOn()
   }
 }
 
@@ -466,6 +475,9 @@ export function installPageHistory(target: Window = window) {
      its re-run is no reload. */
   const onNavigate = (event: NavigateEvent) => {
     if (event.navigationType === 'traverse') ahead = event.destination.index
+    // a push drops the entries after the current one, and with them the
+    // entry an earlier traversal went to
+    else if (event.navigationType === 'push') ahead = null
     if (event.navigationType === 'push') reruns = 0
     if (
       event.navigationType === 'reload' &&
@@ -659,7 +671,7 @@ export function returnTo(to: Entry, landed: () => void) {
     other from then on. */
 export function voidReturn() {
   if (ret?.key === null) {
-    stray = known(ret.step) ? ret.step : null
+    stray = knownStep(ret.step)
     ret = null
   } else if (ret) ret.voided = true
 }

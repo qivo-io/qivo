@@ -167,13 +167,14 @@ describe('a layer that closes by itself', () => {
     // a menu in the dialog, picked
     finishLayer(await layer())
     expect(browser.urls()).toEqual(['/before', '/page', '/page', '/page'])
-    // the Back to the dialog's marker changes nothing on screen, so it goes on
+    // the Back reaches the dialog's marker, which changes nothing on screen,
+    // so it closes the dialog there
     browser.person.back()
     await settleMoves()
     expect(closed).toHaveBeenCalledTimes(1)
     expect(dialog.state).toBe('closed')
     expect(browser.here()).toBe('/page')
-    expect(browser.index()).toBe(1)
+    expect(browser.index()).toBe(2)
     browser.person.back()
     await settleMoves()
     expect(browser.here()).toBe('/before')
@@ -318,6 +319,24 @@ describe('a layer that closes by itself', () => {
     expect(browser.here()).toBe('/page')
   })
 
+  it.each(['chromium', 'webkit', 'firefox'] as const)(
+    'keeps the page under a refusing layer when two quick Backs pass a spare over it, in %s',
+    async (engine) => {
+      const browser = page(['/before', '/page'], engine)
+      const asked = vi.fn(() => false)
+      const dialog = await layer(asked)
+      // a menu over the dialog, picked
+      finishLayer(await layer())
+      browser.person.back()
+      browser.person.back()
+      await settleMoves()
+      expect(asked).toHaveBeenCalled()
+      expect(dialog.state).toBe('open')
+      expect(browser.here()).toBe('/page')
+      expect(layerOf(browser.history.state)).toBe(dialog.marker)
+    },
+  )
+
   it("gives a refusing layer its marker back on the person's Back, and moves nothing else", async () => {
     const browser = page(['/before', '/page'])
     const asked = vi.fn(() => false)
@@ -436,6 +455,27 @@ describe('after a reload with entries after it', () => {
     remove = installPageHistory(browser.window)
     pushPage({ qivoPrevious: '/page' }, '/other')
     expect(browser.urls()).toEqual(['/before', '/page', '/page', '/other'])
+  })
+})
+
+describe("the page's steps in turn", () => {
+  it('lets later steps through after one that throws', async () => {
+    const browser = browserWindow('/page')
+    const go = vi
+      .spyOn(browser.history, 'go')
+      .mockImplementationOnce(() => {
+        throw new Error('blocked')
+      })
+      .mockImplementation(() => {})
+    remove = installPageHistory(browser.window)
+    expect(() => leavePage()).toThrow('blocked')
+    await settleMoves()
+    // shown again from the back/forward cache, so the next close steps again
+    browser.window.dispatchEvent(new Event('pageshow'))
+    leavePage()
+    browser.history.back()
+    await settleMoves()
+    expect(go.mock.calls).toEqual([[-1], [-1], [-1]])
   })
 })
 
