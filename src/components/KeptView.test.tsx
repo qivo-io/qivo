@@ -350,7 +350,10 @@ const wait = (ms: number) =>
   })
 
 describe('ViewKeeper', () => {
-  it('keeps the view of one id across hides, and lets the old one go after a paint when the id changes', async () => {
+  it('keeps the view of one id across hides, and lets the old one go after a paint, once idle, when the id changes', async () => {
+    const idle: IdleRequestCallback[] = []
+    vi.stubGlobal('requestIdleCallback', (step: IdleRequestCallback) => idle.push(step))
+    vi.stubGlobal('cancelIdleCallback', () => {})
     await keep('a', true)
     await keep('a', false)
     await keep('a', true)
@@ -365,9 +368,16 @@ describe('ViewKeeper', () => {
     expect(old.matches(OUT_OF_USE)).toBe(true)
     expect(old.dataset.workspaceView).toBeUndefined()
     expect(old.querySelectorAll('[data-part]')).toHaveLength(10)
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)))
+    const runIdle = () =>
+      act(async () => {
+        for (const step of idle.splice(0)) step({ didTimeout: false, timeRemaining: () => 50 })
+      })
+    await runIdle()
     expect(old.isConnected).toBe(true)
+    // the next view's first screen goes first: it waits for a paint, then idle
     await painted()
+    expect(old.isConnected).toBe(true)
+    await runIdle()
     expect(old.isConnected).toBe(false)
     expect(views()).toHaveLength(1)
   })

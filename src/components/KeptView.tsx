@@ -1,4 +1,5 @@
 import { Activity, memo, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { whenIdle } from '@/lib/idle'
 import { settleHiddenBlocks } from '@/lib/keptBlocks'
 import { postMessageTask } from '@/lib/postTask'
 import { useLatest } from '@/lib/useLatest'
@@ -39,9 +40,10 @@ import { createHiddenState, HiddenViewContext } from '@/lib/viewHidden'
 
    When it is no longer kept, as its scope went or the person left the app
    alone for a while, the page leaves (ViewKeeper): it stays hidden until
-   the next view has painted, then goes in one commit. At the sizes a page
-   holds (a few hundred tasks, 2,000 at most measured), taking it apart in
-   slices was no faster and held up the next switch. */
+   the next view has painted and the page is idle, so the next view's first
+   screen comes first, then goes in one commit. At the sizes a page holds
+   (a few hundred tasks, 2,000 at most measured), taking it apart in slices
+   was no faster and held up the next switch. */
 
 /** A hidden view takes no room and draws nothing. */
 const HIDDEN = '[content-visibility:hidden] !h-0 ![flex:none]'
@@ -49,12 +51,26 @@ const HIDDEN = '[content-visibility:hidden] !h-0 ![flex:none]'
 /** Runs `callback` in a task once the next frame has painted. */
 const afterPaint = (callback: () => void) => requestAnimationFrame(() => postMessageTask(callback))
 
+/** How long a leaving view waits for the page to be idle at most. */
+const LEAVE_WAIT_MS = 2000
+
 /* In a tab the person cannot see, frames wait until it shows again, and a
    view that leaves there, such as a kept page released after a while
    without input (lib/inputIdle.ts), would free nothing until then. Nothing
-   paints there, so it goes at once. */
-const beforeLeave = (callback: () => void) =>
-  document.hidden ? postMessageTask(callback) : afterPaint(callback)
+   paints there, so it goes at once. Answers a function that cancels it. */
+function beforeLeave(callback: () => void) {
+  let cancel = () => {}
+  let stopped = false
+  const idle = () => {
+    if (!stopped) cancel = whenIdle(callback, { timeout: LEAVE_WAIT_MS })
+  }
+  if (document.hidden) postMessageTask(callback)
+  else afterPaint(idle)
+  return () => {
+    stopped = true
+    cancel()
+  }
+}
 
 /** What `children` rendered last while `frozen` was false. */
 const Frozen = memo(
@@ -144,11 +160,12 @@ export function KeptView({
   useEffect(() => {
     if (!leaving || mode !== 'hidden') return
     let stopped = false
-    beforeLeave(() => {
+    const cancel = beforeLeave(() => {
       if (!stopped) gone()
     })
     return () => {
       stopped = true
+      cancel()
     }
   }, [leaving, mode, gone])
   return (
