@@ -86,6 +86,7 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'user_prefs', field: 'profile_id', target: 'profiles' },
   { table: 'sync_stamps', field: 'org_id', target: 'organizations' },
   { table: 'sync_stamps', field: 'profile_id', target: 'profiles' },
+  { table: 'message_sweeps', field: 'profile_id', target: 'profiles' },
   { table: 'account_appearance', field: 'custom_image_id', target: 'custom_backgrounds' },
   { table: 'agent_keys', field: 'profile_id', target: 'profiles' },
   { table: 'agent_keys', field: 'created_by', target: 'profiles' },
@@ -119,10 +120,6 @@ export const REF_EDGES: readonly RefEdge[] = [
 
 /* Ref-shaped fields that are deliberately NOT integrity edges. */
 export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
-  // When the read-message sweep next visits a profile. It outlives a removed
-  // profile until it falls due, at most the profile's retention period, and
-  // the sweep then finds the profile gone and deletes it (jobs.ts).
-  'message_sweeps.profile_id',
   // Polar resource IDs and webhook delivery IDs belong to the provider,
   // not to rows in this schema. Period subscription_id is also a Polar ID.
   'billing_plans.polar_product_id',

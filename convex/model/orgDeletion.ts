@@ -100,7 +100,9 @@ async function inOrder(steps: (() => Promise<boolean>)[]): Promise<boolean> {
 
 /** Profiles with everything that hangs off them, then their pictures,
  * then any Team sync stamp row left without its profile (a rollback or a
- * manual edit can leave one), which finish() refuses to leave behind. */
+ * manual edit can leave one), which finish() refuses to leave behind. A
+ * read-message sweep row names no organization, so one left without its
+ * profile stays until it falls due and the sweep deletes it (jobs.ts). */
 const profileRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   (await profilesWithRows(ctx, orgId, budget)) &&
   (await drain(
@@ -148,6 +150,14 @@ const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: Removal
             budget,
             ctx.db
               .query('sync_stamps')
+              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
+          ),
+        () =>
+          drain(
+            ctx,
+            budget,
+            ctx.db
+              .query('message_sweeps')
               .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
           ),
         () =>

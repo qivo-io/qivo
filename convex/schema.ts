@@ -1536,7 +1536,7 @@ export default defineSchema({
   // profile, and none for a profile with nothing the sweep could delete.
   // The writes that make a message read keep it in step
   // (model/messages.ts noteSweepable), and the sweep moves it to the next
-  // due time or deletes it.
+  // due time or deletes it. Deleted with its profile.
   message_sweeps: defineTable({
     profile_id: v.string(),
     due_at: v.string(), // ISO instant

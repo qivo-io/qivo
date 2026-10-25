@@ -6,6 +6,7 @@ import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, marketingId } from '../internal/marketingDemoData'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { demoMonday, PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from '../model/demoSeed'
+import { lowerSweepDue } from '../model/messages'
 import { countersRow, tallyRow } from '../model/orgs'
 import schema from '../schema'
 import {
@@ -156,6 +157,8 @@ const APP_OWNED: TableNames[] = [
   'agent_keys',
   'issue_subscriptions',
   'messages',
+  // when the read-message sweep next visits a profile, deleted with it
+  'message_sweeps',
   'user_prefs',
   'sync_stamps',
   'mcp_tokens',
@@ -190,10 +193,8 @@ const APP_SHARED = [
   // Keyed by an already removed profile; its own steps delete it, also after
   // the demo organization is gone (profileRemovals.ts).
   'profile_removals',
-  // When the read-message sweep next visits a profile. The sweep deletes the
-  // row once it falls due and finds the profile gone (jobs.ts). The seed
-  // marker is one deployment-wide row.
-  'message_sweeps',
+  // When the read-message sweep last checked every profile, one
+  // deployment-wide row (jobs.ts).
   'message_sweep_seeds',
   // Keyed by an already deleted label; its own steps delete it, also after
   // the demo organization is gone (labelRemovals.ts).
@@ -413,6 +414,8 @@ describe('public Northstar provisioning and bounded deletion', () => {
       void ignoredTime
       await ctx.db.insert('issues', record)
       await tallyRow(ctx, 'issues', null, record)
+      // the visitor's read-message sweep row
+      await lowerSweepDue(ctx, profile.id, new Date(NOW).toISOString())
       // a Team sync stamp row whose profile is already gone
       await ctx.db.insert('sync_stamps', {
         org_id: a.org_id!,

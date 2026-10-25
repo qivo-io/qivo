@@ -617,6 +617,9 @@ describe('deleting the organization', () => {
         inline: false,
         created_at: NOW,
       })
+      // read-message sweep rows, one of the other organization's
+      for (const profile_id of [f.admin.id, f.user.id, f.otherAdmin.id])
+        await ctx.db.insert('message_sweeps', { profile_id, due_at: NOW })
       return storage_id
     })
     await exportNow(t, f)
@@ -661,6 +664,8 @@ describe('deleting the organization', () => {
     ).toBeNull()
     expect(await fileState(t, storage)).toBe('held')
     expect(await orgRows(t, f.otherOrg.id)).toEqual(others)
+    const sweeps = await t.run((ctx) => ctx.db.query('message_sweeps').collect())
+    expect(sweeps.map((row) => row.profile_id)).toEqual([f.otherAdmin.id])
     await assertNoDanglingRefs(t, 'organization deletion')
   })
 

@@ -290,6 +290,15 @@ async function profileRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
     if (
       !(await drain(ctx, budget, (n) =>
         ctx.db
+          .query('message_sweeps')
+          .withIndex('by_profile', (q) => q.eq('profile_id', id))
+          .take(n),
+      ))
+    )
+      return false
+    if (
+      !(await drain(ctx, budget, (n) =>
+        ctx.db
           .query('messages')
           .withIndex('by_recipient', (q) => q.eq('recipient_id', id))
           .take(n),

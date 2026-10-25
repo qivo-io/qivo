@@ -58,6 +58,7 @@ const collect = <
     | 'project_access'
     | 'team_members'
     | 'user_prefs'
+    | 'message_sweeps'
     | 'mcp_tokens'
     | 'oauth_connections'
     | 'oauth_credential_uses'
@@ -361,6 +362,8 @@ describe('deleteOrgDeep', () => {
         label_id: label.id,
       })
       await ctx.db.insert('user_prefs', { profile_id: f.user.id, prefs: {}, updated_at: NOW })
+      for (const profile_id of [f.viewer.id, f.otherAdmin.id])
+        await ctx.db.insert('message_sweeps', { profile_id, due_at: NOW })
       await ctx.db.insert('mcp_tokens', {
         id: uuid(),
         profile_id: f.user.id,
@@ -441,6 +444,9 @@ describe('deleteOrgDeep', () => {
     }
     expect(await t.run(async (ctx) => await ctx.db.query('agent_keys').collect())).toEqual([])
     expect(await t.run(async (ctx) => await ctx.db.query('marketing_demo').collect())).toEqual([])
+    expect((await collect(t, 'message_sweeps')).map((row) => row.profile_id)).toEqual([
+      f.otherAdmin.id,
+    ])
     expect(await fileState(t, attachmentBytes)).toBe('held')
     expect(await fileState(t, avatarBytes)).toBe('held')
     // untouched: the foreign organization, its people, project, task and label
@@ -579,6 +585,8 @@ describe('removeProfile', () => {
         prefs: { keep: 1 },
         updated_at: NOW,
       })
+      for (const profile_id of [f.user.id, f.admin.id])
+        await ctx.db.insert('message_sweeps', { profile_id, due_at: NOW })
       await ctx.db.insert('mcp_tokens', {
         id: uuid(),
         profile_id: f.user.id,
@@ -668,6 +676,7 @@ describe('removeProfile', () => {
     expect((await collect(t, 'team_members')).some((m) => m.profile_id === f.user.id)).toBe(false)
     expect((await collect(t, 'project_access')).some((g) => g.profile_id === f.user.id)).toBe(false)
     expect((await collect(t, 'user_prefs')).map((p) => p.profile_id)).toEqual([f.admin.id])
+    expect((await collect(t, 'message_sweeps')).map((p) => p.profile_id)).toEqual([f.admin.id])
     expect((await collect(t, 'mcp_tokens')).map((p) => p.profile_id)).toEqual([f.admin.id])
     expect(await fileState(t, avatarId)).toBe('held') // avatar bytes held for a restore
     // the person's connection is revoked and hidden from their own list

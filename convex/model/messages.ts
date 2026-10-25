@@ -155,7 +155,7 @@ export async function wakeSnoozedItem(
  * (profiles.ts setMessageRetention). The sweep moves the row to the next
  * due time it finds, or deletes it. Deletion is always decided from the
  * messages themselves, so a row due too early costs one visit and nothing
- * else. */
+ * else. The row goes with its profile (deleteSweepRow). */
 
 /** Brings `profileId`'s message_sweeps row forward to `due`, adding the row
  * when it has none. A row already due by then stays as it is. The demo's
@@ -176,6 +176,17 @@ export async function lowerSweepDue(
   } else if (row.due_at > due) {
     await ctx.db.patch(row._id, { due_at: due })
   }
+}
+
+/** Deletes `profileId`'s message_sweeps row, if any, with the profile
+ * (model/cascade.ts removeProfile and deleteOrgDeep). noteSweepable adds
+ * none for a profile that is gone. */
+export async function deleteSweepRow(ctx: MutationCtx, profileId: string): Promise<void> {
+  for (const row of await ctx.db
+    .query('message_sweeps')
+    .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
+    .collect())
+    await ctx.db.delete(row._id)
 }
 
 /** Records that a message of `recipient`, read at `readAt`, is now read and
