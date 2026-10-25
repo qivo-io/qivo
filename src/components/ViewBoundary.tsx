@@ -1,6 +1,7 @@
 import { Component, type ReactNode, useSyncExternalStore } from 'react'
 import { CodeWaitsForConnection, codeWaits, watchCodeWaits } from '../lib/lazyModule'
 import { viewOfflineWords } from '../lib/noticeText'
+import { reloadPage } from '../lib/pageHistory'
 import { type SyncStatus, syncStatus } from '../lib/syncStatus'
 import { isUpdateBlocked, subscribeUpdateSafety } from '../lib/updateSafety'
 import { Button } from './ui/button'
@@ -21,7 +22,7 @@ function ViewRecovery({ onBack, describedBy }: { onBack: () => void; describedBy
         <Button
           disabled={blocked}
           onClick={() => {
-            if (!isUpdateBlocked()) window.location.reload()
+            if (!isUpdateBlocked()) reloadPage()
           }}
         >
           Reload

@@ -32,23 +32,25 @@ vi.mock('./lib/convex', async () => {
 })
 /* App refuses a Back or Forward only when it would close unsent text,
    which no window holds while these tasks load, so a test that needs a
-   refused one's step back on its way stands it in (`on`) until a popstate
-   lands it. Otherwise App's refusal is the real one. */
-const refusing = vi.hoisted(() => ({ on: false }))
-vi.mock('./lib/popRefusal', async (importOriginal) => {
-  const real = await importOriginal<typeof import('./lib/popRefusal')>()
+   refused one's return on its way stands it in (`on`), and lands it by
+   calling what waits for it (`landed`). Otherwise the page's history is the
+   real one. */
+const refusing = vi.hoisted(() => ({ on: false, settled: [] as (() => void)[] }))
+const landed = () => {
+  refusing.on = false
+  for (const listener of refusing.settled) listener()
+}
+vi.mock('./lib/pageHistory', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./lib/pageHistory')>()
   return {
-    createPopRefusal: (...args: Parameters<typeof real.createPopRefusal>) => {
-      const refusal = real.createPopRefusal(...args)
-      return {
-        ...refusal,
-        stepping: () => refusing.on || refusal.stepping(),
-        landed(event: PopStateEvent) {
-          if (!refusing.on) return refusal.landed(event)
-          refusing.on = false
-          event.stopImmediatePropagation()
-          return true
-        },
+    ...real,
+    historyBusy: () => refusing.on || real.historyBusy(),
+    onHistorySettled: (listener: () => void) => {
+      refusing.settled.push(listener)
+      const stop = real.onHistorySettled(listener)
+      return () => {
+        refusing.settled = refusing.settled.filter((other) => other !== listener)
+        stop()
       }
     },
   }
@@ -430,7 +432,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     await back(`/app/${org}/board/all`)
     await back(`/app/${org}/board/tasks/QN-2`)
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
-    // a refused Back steps back to this entry, and the task arrives meanwhile
+    // a refused Back returns to this entry, and the task arrives meanwhile
     refusing.on = true
     await arrive()
     await waitFor(
@@ -438,7 +440,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
       "the task's window",
     )
     expect(location.pathname).toBe(`/app/${org}/board/tasks/QN-2`)
-    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    await act(async () => landed())
     // the task's own address, in place
     expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-2`)
     const entries = history.length

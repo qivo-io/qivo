@@ -114,6 +114,7 @@ import { loadFailureText } from '../lib/loadFailure'
 import { watchLocalDay } from '../lib/localDay'
 import { pauseSentence } from '../lib/noticeText'
 import { desktopNotify } from '../lib/notify'
+import { reloadPage } from '../lib/pageHistory'
 import { matchesAllWords, taskSearchText } from '../lib/search'
 import { type OfflineWindow, type SavePause, syncStatus } from '../lib/syncStatus'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
@@ -8706,7 +8707,7 @@ export const PLANNER = {
       unconfirmedNote.forgetAll()
       clearAvatarSources()
       leaveDeliberately()
-      location.reload()
+      reloadPage()
     }
     return authSignOut()
       .then(leave, (failure: unknown) => {

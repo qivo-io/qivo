@@ -279,8 +279,8 @@ function Kbd({ children }: { children?: ReactNode }) {
    Portaling avoids transformed/scrolling ancestors; the backdrop stops wheel
    scrolling and resize closes the menu to preserve trigger alignment.
    wrapStyle controls the measured trigger box; flex rows may need display:flex
-   and flexShrink:0. With backLayer, close(then) waits for the phone Back entry
-   to close before a callback changes the page. */
+   and flexShrink:0. With backLayer the open menu holds a phone Back entry,
+   and close(then) closes it before a callback changes the page. */
 type PopoverProps = {
   button: (toggle: () => void, open: boolean) => ReactNode
   children: (close: (then?: () => void) => void) => ReactNode

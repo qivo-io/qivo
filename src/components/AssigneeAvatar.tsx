@@ -21,8 +21,7 @@ export type OwnerField = 'assignee' | 'reviewer'
  * writes the live task's owner field, re-read at the pick: a status move
  * while the list was open can hand the task between assignee and reviewer.
  * `onClose` runs on every accepted pick, changed or not, and is handed the
- * write as `then`, to run once the list has closed (after a phone Back
- * layer's own step, see useMenuBackLayer). */
+ * write as `then`, to run once the list has closed (see useMenuBackLayer). */
 export function OwnerPickList({
   issue,
   field,

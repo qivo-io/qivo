@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Input } from '../components/ui/input'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { pastCloseTicks } from '../lib/discardQuestion.setup'
@@ -153,6 +153,11 @@ describe('closing a dialog with typed text', { timeout: 20_000 }, () => {
       'matchMedia',
       vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
     )
+    // the page's history and the layers' listener, as main.tsx and App add them
+    const pageHistory = await import('../lib/pageHistory')
+    const removeHistory = pageHistory.installPageHistory()
+    onTestFinished(pageHistory.listenBackLayers())
+    onTestFinished(removeHistory)
     const onClose = vi.fn()
     await render(<dialogs.NewIssueModal init={{}} onClose={onClose} onCreate={vi.fn()} />)
     // the dialog's Back step is pushed after mounting

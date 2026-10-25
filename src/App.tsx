@@ -41,7 +41,7 @@ import { addressMoved, rememberAddress } from './lib/addressBook'
 import { closeOrAsk } from './lib/discardQuestion'
 import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
 import { parseSyncScope } from './lib/teamSync'
-import { historyStepping, onHistorySettled, useMobile, whenHistorySettled } from './lib/useMobile'
+import { useMobile } from './lib/useMobile'
 import './styles/mobile.css'
 import { announce } from './lib/announce'
 import { closedBy, dropRefusedTask } from './lib/closingMoves'
@@ -49,6 +49,14 @@ import { floatSlot } from './lib/floatStack'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/leaveGuard'
 import { afterProjectSaved } from './lib/newProjectAccess'
+import {
+  historyBusy,
+  listenBackLayers,
+  onHistorySettled,
+  pushPage,
+  stepsToPage,
+  whenQuiet,
+} from './lib/pageHistory'
 import { createPopRefusal } from './lib/popRefusal'
 import { type RevealRequest, withoutTaken } from './lib/reveal'
 import {
@@ -1001,10 +1009,12 @@ function App() {
   const settingsReturn = useRef(NO_RETURN)
   const syncReturn = useRef(NO_RETURN)
   const replaceNextHistory = useRef(false)
-  // bumped each time a step back that the url sync waited for ends, so it
-  // looks again. One steps over closed phone layers' markers (lib/useMobile),
-  // which no popstate listener hears, the other over a refused Back or
-  // Forward (onPop).
+  // a phone close's Back on its way (backOrSet), until the next popstate
+  const backOnItsWay = useRef(false)
+  // bumped each time a page move the url sync waited for has landed, so it
+  // looks again: the return from a refused Back or Forward (lib/popRefusal),
+  // which no other popstate listener hears, or the step off a phone layer's
+  // spare over the session's first entry (lib/pageHistory)
   const [settled, setSettled] = useState(0)
   useEffect(() => onHistorySettled(() => setSettled((n) => n + 1)), [])
   /* The address Back or Forward reached while tasks still load, when it
@@ -1104,10 +1114,10 @@ function App() {
   // that free. Synchronize during the commit: a passive effect can run after
   // native Back has changed the URL and push the previous page back into history.
   useLayoutEffect(() => {
-    // the address is not the page's while it steps back over a refused Back
-    // or Forward, or over closed phone layers' markers, and a write now
-    // would move the entry it steps back to (it looks again once landed)
-    if (refusal.stepping() || historyStepping()) return
+    // the address is not the page's while the page returns from a refused
+    // Back or Forward, or steps off a spare (lib/pageHistory), and a write
+    // now would move the entry it goes to (it looks again once landed)
+    if (historyBusy()) return
     // a task Back or Forward reached keeps its address until it arrives,
     // while the page and the address are still the ones it reached: its
     // held reference names no task an address can be built for. A page
@@ -1136,7 +1146,7 @@ function App() {
     // with the task open, as once the task arrives (lib/router)
     const inPlace = pathMatchesState(location.pathname, onHeld ? { ...state, openIssue } : state)
     if (replaceNextHistory.current || inPlace) history.replaceState(history.state, '', p)
-    else history.pushState({ qivoPrevious: location.pathname }, '', p)
+    else pushPage({ qivoPrevious: location.pathname }, p)
     replaceNextHistory.current = false
   }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev, settled])
   // the task a held Back or Forward named, once it arrived or every task did
@@ -1176,11 +1186,7 @@ function App() {
   }, [addrMoved, scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev])
   useEffect(() => {
     const onPop = (event: PopStateEvent) => {
-      // this popstate ends the step back over a refused Back or Forward,
-      // landed or overtaken, which the url sync waited for
-      if (refusal.stepping()) setSettled((n) => n + 1)
-      // the step back over a refused Back or Forward, which then asks
-      if (refusal.landed(event)) return
+      backOnItsWay.current = false
       // a Remaining number typed on Team sync and not yet committed: history
       // unmounts its box without a blur, so commit it before the page moves
       flushWalkInput('sync')
@@ -1232,10 +1238,10 @@ function App() {
         projectsOpen: !!r.projects,
         sync: r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null,
       }
-      /* Back or Forward that would close a window holding unsent text steps
-         back to the entry it left, so nothing moves, and asks there
-         (lib/popRefusal). An entry without a position gets the address it
-         left pushed on top instead. */
+      /* Back or Forward that would close a window holding unsent text
+         returns to the entry it left by key, so nothing moves, and asks there
+         (lib/popRefusal). Without the Navigation API the address it left is
+         pushed on top instead. */
       const closing = closedBy(was, next, unsent)
       if (closing.some((held) => held.held().length)) {
         if (!refusal.refuse(event, closing)) {
@@ -1245,6 +1251,7 @@ function App() {
         }
         return
       }
+      refusal.accepted()
       /* An address that is not the page's own, such as one to a task or
          project that is gone, gives way to the page's in place, as on a
          boot: the url-sync effect would leave it when the page stays the
@@ -1277,7 +1284,12 @@ function App() {
       setSync(next.sync)
     }
     window.addEventListener('popstate', onPop)
-    return () => window.removeEventListener('popstate', onPop)
+    // the phone layers hear a move after App, so never one App refuses
+    const stopLayers = listenBackLayers()
+    return () => {
+      window.removeEventListener('popstate', onPop)
+      stopLayers()
+    }
   }, [])
 
   // access guard — keep the scope within what the current user can see. Both
@@ -1471,13 +1483,14 @@ function App() {
     )
   }
 
-  // A phone's Back action consumes the page it opened. Direct links have no
-  // in-app predecessor; replace those with the parent instead of looping back
-  // into a task or setting the user just dismissed. Both read the entry the
-  // page is on, so they wait for a dialog that finished with this move to
-  // take its phone Back step out of the history (lib/useMobile).
+  // A phone's Back action consumes the page it opened, stepping past the
+  // markers of phone layers over its entry (lib/pageHistory). Direct links
+  // have no in-app predecessor; replace those with the parent instead of
+  // looping back into a task or setting the user just dismissed. Both read
+  // the entry the page is on, so they wait for a page move on its way. A
+  // second close before the first one's Back lands adds nothing.
   const backOrSet = (patch, apply: () => void) =>
-    whenHistorySettled(() => {
+    whenQuiet(() => {
       const phoneHistory = mobile || isLandscapeRoadmapOpen()
       const target = buildPath({
         scope,
@@ -1489,8 +1502,10 @@ function App() {
         sync,
         ...patch,
       })
-      if (phoneHistory && history.state?.qivoPrevious === target) history.back()
-      else {
+      if (phoneHistory && history.state?.qivoPrevious === target) {
+        if (!backOnItsWay.current) history.go(-(stepsToPage() + 1))
+        backOnItsWay.current = true
+      } else {
         replaceNextHistory.current = phoneHistory
         apply()
       }
@@ -1704,12 +1719,8 @@ function App() {
       window.showToast?.('That sub-project is gone, so the task was not created.', 'error')
       return false
     }
-    // Replace the phone create layer with the task's URL. Retiring its marker
-    // before unmount keeps the layer cleanup from restoring stale history.
-    if (history.state?.qivoLayer) {
-      history.replaceState({ qivoPrevious: location.pathname }, '', location.href)
-      replaceNextHistory.current = true
-    }
+    // The create dialog's phone marker, a spare once it closes in this
+    // commit, takes the task's address (lib/pageHistory pushPage).
     setModal(null)
     window.showToast?.(`Created ${P.issueById[key]?.key || key}`)
     const curProj = P.project(scope)
