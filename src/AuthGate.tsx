@@ -957,7 +957,7 @@ export function AuthGate() {
             className="[width:100%] [justify-content:center]"
             disabled={signOutPending}
             autoFocus
-            onClick={() => location.reload()}
+            onClick={() => reloadPage()}
           >
             Check again
           </Button>
