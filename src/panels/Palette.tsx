@@ -32,8 +32,9 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
     typeof document === 'undefined' ? null : (document.activeElement as HTMLElement | null),
   )
   const run = (action: () => void) => {
-    // Consume the phone search layer before opening a result, so Back from
-    // that result returns to the page where the search began.
+    // Close the phone search layer with the result, in one commit, so the
+    // result's page takes the layer's entry and Back from it returns to the
+    // page where the search began.
     pendingActionRef.current = action
     closeLayer()
   }

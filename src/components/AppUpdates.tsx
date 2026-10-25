@@ -8,6 +8,7 @@ import {
   UPDATE_WAKE_MS,
 } from '../lib/appUpdates'
 import { floatSlot } from '../lib/floatStack'
+import { reloadPage } from '../lib/pageHistory'
 import { isUpdateBlocked, subscribeUpdateSafety } from '../lib/updateSafety'
 import { Button } from './ui/button'
 
@@ -58,7 +59,7 @@ export function AppUpdates() {
       isBlocked: () => isUpdateBlocked() || pointerDown || composing || editableFocused(),
       isVisible: () =>
         document.visibilityState === 'visible' && document.hasFocus() && navigator.onLine,
-      reload: () => window.location.reload(),
+      reload: () => reloadPage(),
       onChange: setState,
       storage: {
         getItem: (key) => window.sessionStorage.getItem(key),

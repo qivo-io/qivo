@@ -288,6 +288,33 @@ describe('buildPath', () => {
     expect(buildPath({ settingsPage: 'desktop' })).toBe('/app/~/settings/desktop')
   })
 
+  it('keeps the address of a project settings page whose project left while it shows', () => {
+    const gone = new Set<string>()
+    const live = store.project
+    store.project = (id: string) => (gone.has(id) ? undefined : live(id))
+    expect(buildPath({ settingsPage: 'project:p-home-7' })).toBe('/app/home/settings/project/7')
+    // someone else archives or deletes it while its Archive or delete window is open
+    gone.add('p-home-7')
+    expect(buildPath({ settingsPage: 'project:p-home-7' })).toBe('/app/home/settings/project/7')
+    expect(
+      pathMatchesState('/app/home/settings/project/7', { settingsPage: 'project:p-home-7' }),
+    ).toBe(true)
+    // a project this page never named is still named by its id
+    expect(buildPath({ settingsPage: 'project:p-gone' })).toBe('/app/~/settings/project/p-gone')
+    // once the project's organization left too, by its id, never the
+    // number of a home project, and that address replaces the old one
+    expect(buildPath({ settingsPage: 'project:p-acme-1' })).toBe('/app/acme/settings/project/1')
+    gone.add('p-acme-1')
+    store.orgs = store.orgs.filter((o) => o.id !== ACME)
+    expect(buildPath({ settingsPage: 'project:p-acme-1' })).toBe('/app/~/settings/project/p-acme-1')
+    expect(
+      pathMatchesState('/app/acme/settings/project/1', { settingsPage: 'project:p-acme-1' }),
+    ).toBe(true)
+    expect(
+      pathMatchesState('/app/acme/settings/project/2', { settingsPage: 'project:p-acme-1' }),
+    ).toBe(false)
+  })
+
   it('the org settings pages ARE about an organization, so they name it', () => {
     expect(buildPath({ settingsPage: 'org-general' })).toBe('/app/home/settings/org-general')
     expect(buildPath({ settingsPage: 'org-users' })).toBe('/app/home/settings/org-users')
@@ -307,6 +334,80 @@ describe('buildPath', () => {
     expect(buildPath({ scope: 'mine', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
       '/app/acme/board/mine/tasks/qn-5',
     )
+  })
+
+  it('keeps naming a task that left the store, in its organization, while its window shows', () => {
+    expect(buildPath({ inboxOpen: true, openIssue: 'QN-9' })).toBe('/app/home/inbox/tasks/qn-9')
+    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+      '/app/acme/board/all/tasks/qn-5',
+    )
+    // someone else archives or deletes them while their windows are open
+    delete store.issueById['QN-9']
+    delete store.issueById['uuid-acme-5']
+    expect(buildPath({ inboxOpen: true, openIssue: 'QN-9' })).toBe('/app/home/inbox/tasks/qn-9')
+    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-acme-5' })).toBe(
+      '/app/acme/board/all/tasks/qn-5',
+    )
+    // so the address the window had stays, without a new entry
+    expect(
+      pathMatchesState('/app/home/inbox/tasks/qn-9', { inboxOpen: true, openIssue: 'QN-9' }),
+    ).toBe(true)
+    // a handle the address never named still names no organization
+    expect(buildPath({ inboxOpen: true, openIssue: 'QN-404' })).toBe('/app/~/inbox/tasks/qn-404')
+  })
+
+  it("names a task by its uuid once its organization left too, never the home organization's task of that number", () => {
+    const open = 'uuid-acme-5'
+    const sync = { scope: 'all', step: 'team' }
+    expect(buildPath({ inboxOpen: true, openIssue: open })).toBe('/app/acme/inbox/tasks/qn-5')
+    expect(buildPath({ sync, openIssue: open })).toBe('/app/home/sync/all/tasks/uuid-acme-5')
+    // the person loses their seat in Acme: its organization and tasks go
+    store.orgs = store.orgs.filter((o) => o.id !== ACME)
+    store.issues = store.issues.filter((i) => i.org !== ACME)
+    delete store.issueById[open]
+    const paths = [
+      buildPath({ inboxOpen: true, openIssue: open }),
+      buildPath({ scope: 'all', view: 'kanban', openIssue: open }),
+      buildPath({ view: 'kanban', openIssue: open }),
+      buildPath({ sync, openIssue: open }),
+    ]
+    expect(paths).toEqual([
+      '/app/~/inbox/tasks/uuid-acme-5',
+      '/app/~/board/all/tasks/uuid-acme-5',
+      '/app/~/board/tasks/uuid-acme-5',
+      '/app/home/sync/all/tasks/uuid-acme-5',
+    ])
+    // so a reload or a Back to them opens no task, not the home QN-5
+    for (const path of paths) expect(parsePath(path)?.issue).toBeUndefined()
+    // and each replaces the address that named the task before, in place
+    expect(
+      pathMatchesState('/app/acme/inbox/tasks/qn-5', { inboxOpen: true, openIssue: open }),
+    ).toBe(true)
+    expect(
+      pathMatchesState('/app/acme/board/all/tasks/qn-5', {
+        scope: 'all',
+        view: 'kanban',
+        openIssue: open,
+      }),
+    ).toBe(true)
+    // also when the organization's address changed after the task left
+    store.orgs = [...store.orgs, { id: ACME, slug: 'acme' } as (typeof store.orgs)[number]]
+    store.issueById[open] = { ...store.issues[0], id: open, uuid: open, key: 'QN-5', org: ACME }
+    expect(buildPath({ inboxOpen: true, openIssue: open })).toBe('/app/acme/inbox/tasks/qn-5')
+    delete store.issueById[open]
+    store.orgs = store.orgs.map((o) => (o.id === ACME ? { ...o, slug: 'acme2' } : o))
+    expect(buildPath({ inboxOpen: true, openIssue: open })).toBe('/app/acme2/inbox/tasks/qn-5')
+    store.orgs = store.orgs.filter((o) => o.id !== ACME)
+    expect(
+      pathMatchesState('/app/acme2/inbox/tasks/qn-5', { inboxOpen: true, openIssue: open }),
+    ).toBe(true)
+    // while another task's address, or another page's, is still a move
+    expect(
+      pathMatchesState('/app/acme/inbox/tasks/qn-6', { inboxOpen: true, openIssue: open }),
+    ).toBe(false)
+    expect(
+      pathMatchesState('/app/acme/board/all/tasks/qn-5', { inboxOpen: true, openIssue: open }),
+    ).toBe(false)
   })
 
   it('full-screen pages still outrank the scope', () => {

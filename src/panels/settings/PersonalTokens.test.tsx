@@ -434,7 +434,13 @@ describe('New token', () => {
         history.back()
         await new Promise((r) => setTimeout(r, 50))
       })
+    // the page's history and the layers' listener, as main.tsx and App add them
+    const pageHistory = await import('../../lib/pageHistory')
+    const removeHistory = pageHistory.installPageHistory()
+    onTestFinished(pageHistory.listenBackLayers())
+    onTestFinished(removeHistory)
     await render()
+    const page = location.href
     await openDialog()
     expect(history.state?.qivoLayer).toBeTruthy()
     await type('input[aria-label="Name"]', 'Raycast')
@@ -451,6 +457,8 @@ describe('New token', () => {
     // so the next Back closes the dialog rather than leaving the page
     await back()
     expect(dialog()).toBeUndefined()
+    expect(location.href).toBe(page)
+    expect(history.state?.qivoLayer).toBeUndefined()
   })
 
   it('stays on step one with the toast when the server refuses', async () => {

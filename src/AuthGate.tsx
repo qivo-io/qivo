@@ -47,6 +47,7 @@ import { lazyFromModule } from './lib/lazyModule'
 import { leaveDeliberately, useUnsaved } from './lib/leaveGuard'
 import { loadFailureText } from './lib/loadFailure'
 import { oauthConnectRequest, oauthNeedsLogin } from './lib/oauthConnection'
+import { reloadPage } from './lib/pageHistory'
 import { addressesTask } from './lib/router'
 import { unconfirmedNote } from './lib/unconfirmedNote'
 import { beginUpdateBlock, isUpdateBlocked, useUpdateBlocker } from './lib/updateSafety'
@@ -706,7 +707,7 @@ export function AuthGate() {
     loadAttempt.current++
     setAppearanceAccount(null)
     setPhase('loading')
-    location.reload()
+    reloadPage()
     return true
   }
 
@@ -761,7 +762,7 @@ export function AuthGate() {
             // Browsers can retain a failed module import for this document.
             // A fresh document can request the repaired workspace code again.
             if (reloadAfterCodeFailure.current) {
-              if (!isUpdateBlocked()) location.reload()
+              if (!isUpdateBlocked()) reloadPage()
               return
             }
             clearMessages()
@@ -867,7 +868,7 @@ export function AuthGate() {
             data-auth-recheck
             className={textLinkClass}
             disabled={signOutPending}
-            onClick={() => location.reload()}
+            onClick={() => reloadPage()}
             variant="unstyled"
           >
             Already confirmed? Reload
@@ -956,7 +957,7 @@ export function AuthGate() {
             className="[width:100%] [justify-content:center]"
             disabled={signOutPending}
             autoFocus
-            onClick={() => location.reload()}
+            onClick={() => reloadPage()}
           >
             Check again
           </Button>

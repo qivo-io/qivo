@@ -22,6 +22,7 @@ import {
   startDemo,
 } from './lib/demoSession'
 import { lazyFromModule } from './lib/lazyModule'
+import { reloadPage } from './lib/pageHistory'
 import { loadWorkspace, preloadWorkspacePage } from './lib/workspacePreload'
 import { disposeDemoStore, initStore } from './store/planner'
 
@@ -324,7 +325,7 @@ export function DemoGate() {
                 if (phase === 'error' && readDemoMarker(localStorage)) {
                   // Reload cancels pending transport/token work and releases
                   // any browser lock. Keep the receipt marker and credential.
-                  location.reload()
+                  reloadPage()
                   return
                 }
                 if (creationRequested.current) return

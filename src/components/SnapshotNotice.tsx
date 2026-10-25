@@ -2,6 +2,7 @@ import { useId, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { floatSlot } from '../lib/floatStack'
 import { asOfText, savePauseWords } from '../lib/noticeText'
+import { reloadPage } from '../lib/pageHistory'
 import { ORG_DELETING_TEXT, P, type SnapshotTrouble } from '../store/planner'
 import { usePlannerVersion } from '../store/usePlannerVersion'
 import { NoticeCard } from './NoticeCard'
@@ -97,7 +98,7 @@ export function SnapshotNotice() {
           }
           actions={
             reloadOnly ? (
-              <Button variant="outline" onClick={() => window.location.reload()}>
+              <Button variant="outline" onClick={() => reloadPage()}>
                 Reload
               </Button>
             ) : (

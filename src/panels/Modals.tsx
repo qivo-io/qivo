@@ -1041,7 +1041,8 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
     <ModalShell
       icon="warning"
       title={title}
-      onClose={saving ? () => {} : onClose}
+      onClose={onClose}
+      busy={saving}
       onSubmit={submit}
       canSubmit={!saving}
       submitLabel={

@@ -1,58 +1,62 @@
-import { afterTraversal, lastStep, position } from './historyIndex'
 import type { UnsentScope } from './leaveGuard'
+import { goTo, refuseMove, returning, returnStepLanded, returnTo, voidReturn } from './pageHistory'
 
 /* A Back or Forward the app refuses because it would close a window that
    holds unsent text (components/DiscardPrompt).
 
-   A popstate cannot be cancelled, so the page steps back over the same
-   distance with history.go, which keeps the entries on both sides, and asks
-   only once it is back where it was. Discard then takes the step again. The
-   refused popstate and the step back reach no other popstate listener, such
-   as a phone layer's (lib/useMobile), and nothing may write history while
-   the page steps back (`stepping`), or the step back would land elsewhere. */
+   A popstate cannot be cancelled, so the page returns to the entry the move
+   left (lib/pageHistory returnTo), which keeps the entries on both sides,
+   and asks only once it is back. Discard then takes the refused move again.
+   The refused popstate and the return reach no other popstate listener,
+   such as the phone layers' (lib/pageHistory listenBackLayers). With the
+   Navigation API the return goes by key and lands whatever the person did
+   meanwhile, and a move refused while it is on its way joins it: one
+   question, for the latest move. Without the API it goes by position, a
+   move that lands first is the move from then on, and the return's step
+   then lands as one more move, refused in turn, before the page steps
+   again.
+
+   When the page cannot return, as for a move that left no entry to return
+   to, App pushes the address it left back instead (App onPop). */
 
 type Ask = (scopes: UnsentScope[], go: () => void) => unknown
 
-/** The refusal for one popstate listener, the first after the history
-    index's own (lib/historyIndex). `ask` is closeOrAsk. */
-export function createPopRefusal(ask: Ask, h: History = history) {
-  // the entry the page steps back to, the entry the refused move reached,
-  // and the windows it would have closed
-  let back: { to: number; reached: number; scopes: UnsentScope[] } | null = null
+/** The refusal for App's popstate listener. `ask` is closeOrAsk. */
+export function createPopRefusal(ask: Ask) {
+  // while the return is on its way: the entry the latest refused move
+  // reached and the windows it would have closed
+  let held: { reached: ReturnType<typeof refuseMove>['to']; scopes: UnsentScope[] } | null = null
   return {
-    /** Whether the page is stepping back over a refused Back or Forward. */
-    stepping: () => back !== null,
-    /** Call first for each popstate. True for the step back's own
-        popstate, which this ends by asking; the caller then does nothing
-        else. */
-    landed(event: PopStateEvent): boolean {
-      if (!back) return false
-      if (position() !== back.to) {
-        // another Back or Forward overtook the step back: it is the move now
-        back = null
+    /** Refuses the current popstate, which would close the windows of
+        `scopes`. False when the page cannot return, and the caller then puts
+        the address it left back itself. */
+    refuse(event: PopStateEvent, scopes: UnsentScope[]): boolean {
+      const { from, to } = refuseMove()
+      // the step of a return by position that another move overtook: the
+      // page returns from where it landed, and the move still refused is the
+      // person's latest. A known limit: a move of the person's by the same
+      // step cannot be told from it, so Discard then takes the move before.
+      const stepped = !!held && returnStepLanded()
+      if (held && !returning() && !stepped) held = null
+      if (
+        (!held || stepped) &&
+        !returnTo(from, () => {
+          const refused = held
+          held = null
+          if (refused) ask(refused.scopes, () => goTo(refused.reached))
+        })
+      )
         return false
-      }
       event.stopImmediatePropagation()
-      const { reached, scopes } = back
-      back = null
-      ask(scopes, () => h.go(reached - position()))
+      if (!stepped) held = { reached: to, scopes }
       return true
     },
-    /** Refuses the current popstate, which would close the windows of
-        `scopes`. False when its entry has no position, and the caller has
-        to put the address it left back itself. */
-    refuse(event: PopStateEvent, scopes: UnsentScope[]): boolean {
-      const step = lastStep()
-      if (!step) return false
-      event.stopImmediatePropagation()
-      const refused = { to: position() - step, reached: position(), scopes }
-      back = refused
-      // after a step of the page's own that this move overtook, which lands
-      // past it and returns (lib/historyIndex), unless a move overtook this
-      afterTraversal(() => {
-        if (back === refused) h.go(-step)
-      })
-      return true
+    /** App took a Back or Forward that closes nothing held: a return still
+        on its way then lands heard, as the move it now is. */
+    accepted() {
+      if (!held) return
+      held = null
+      voidReturn()
     },
   }
 }

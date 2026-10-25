@@ -136,7 +136,7 @@ async function openArchive() {
   )
   history.pushState(null, '', '/before')
   history.pushState(null, '', '/app/testbed/board/p/1')
-  removeIndex = (await import('./lib/historyIndex')).installHistoryIndex()
+  removeIndex = (await import('./lib/pageHistory')).installPageHistory()
   const store = await import('./store/planner')
   await store.initStore()
   const { syncStatus } = await import('./lib/syncStatus')
