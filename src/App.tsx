@@ -41,7 +41,7 @@ import { addressMoved, rememberAddress } from './lib/addressBook'
 import { closeOrAsk } from './lib/discardQuestion'
 import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
 import { parseSyncScope } from './lib/teamSync'
-import { useMobile } from './lib/useMobile'
+import { historyStepping, onHistorySettled, useMobile, whenHistorySettled } from './lib/useMobile'
 import './styles/mobile.css'
 import { announce } from './lib/announce'
 import { closedBy, dropRefusedTask } from './lib/closingMoves'
@@ -997,6 +997,11 @@ function App() {
   const settingsReturn = useRef(NO_RETURN)
   const syncReturn = useRef(NO_RETURN)
   const replaceNextHistory = useRef(false)
+  // each time closed phone layers' markers are gone (lib/useMobile): the
+  // url sync waited, and no popstate listener hears the page's step back
+  // over them, so it looks again
+  const [settled, setSettled] = useState(0)
+  useEffect(() => onHistorySettled(() => setSettled((n) => n + 1)), [])
   /* The address Back or Forward reached while tasks still load, when it
      names a task still to arrive (lib/router taskSegmentOf). The window
      holds its reference apart from task handles (`ref`, lib/router
@@ -1094,8 +1099,9 @@ function App() {
   // native Back has changed the URL and push the previous page back into history.
   useLayoutEffect(() => {
     // the address is not the page's while it steps back over a refused Back
-    // or Forward, and a write now would move the entry it steps back to
-    if (refusal.stepping()) return
+    // or Forward, or over closed phone layers' markers, and a write now
+    // would move the entry it steps back to (it looks again once landed)
+    if (refusal.stepping() || historyStepping()) return
     // a task Back or Forward reached keeps its address until it arrives:
     // its held reference names no task an address can be built for
     if (heldRef(openIssue) !== undefined) return
@@ -1129,7 +1135,7 @@ function App() {
       history.replaceState(history.state, '', p)
     else history.pushState({ qivoPrevious: location.pathname }, '', p)
     replaceNextHistory.current = false
-  }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev])
+  }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev, settled])
   // the task a held Back or Forward named, once it arrived or every task did
   useEffect(() => {
     const pending = pendingTask.current
@@ -1460,25 +1466,28 @@ function App() {
 
   // A phone's Back action consumes the page it opened. Direct links have no
   // in-app predecessor; replace those with the parent instead of looping back
-  // into a task or setting the user just dismissed.
-  const backOrSet = (patch, apply: () => void) => {
-    const phoneHistory = mobile || isLandscapeRoadmapOpen()
-    const target = buildPath({
-      scope,
-      view,
-      openIssue,
-      settingsPage,
-      inboxOpen,
-      projectsOpen,
-      sync,
-      ...patch,
+  // into a task or setting the user just dismissed. Both read the entry the
+  // page is on, so they wait for a dialog that finished with this move to
+  // take its phone Back step out of the history (lib/useMobile).
+  const backOrSet = (patch, apply: () => void) =>
+    whenHistorySettled(() => {
+      const phoneHistory = mobile || isLandscapeRoadmapOpen()
+      const target = buildPath({
+        scope,
+        view,
+        openIssue,
+        settingsPage,
+        inboxOpen,
+        projectsOpen,
+        sync,
+        ...patch,
+      })
+      if (phoneHistory && history.state?.qivoPrevious === target) history.back()
+      else {
+        replaceNextHistory.current = phoneHistory
+        apply()
+      }
     })
-    if (phoneHistory && history.state?.qivoPrevious === target) history.back()
-    else {
-      replaceNextHistory.current = phoneHistory
-      apply()
-    }
-  }
   const closeIssue = () =>
     move({ openIssue: null }, () => backOrSet({ openIssue: null }, () => setOpenIssue(null)))
 

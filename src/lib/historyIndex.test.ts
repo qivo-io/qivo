@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest'
-import { installHistoryIndex, lastStep, position } from './historyIndex'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterTraversal, installHistoryIndex, lastStep, position, stepBack } from './historyIndex'
 
 /* Every entry knows its position, so a refused Back or Forward can step
    back by the same distance instead of adding an entry. */
@@ -41,5 +41,51 @@ describe('history positions', () => {
     remove = installHistoryIndex()
     await go(-1)
     expect(lastStep()).toBeNull()
+  })
+})
+
+/* The page's own steps are bookkeeping: the index records them, and no
+   other popstate listener hears one. Code that reads history.state to
+   decide a move waits for the page's moves to land. */
+describe("the page's own moves", () => {
+  it('records its own step, which no later listener hears', async () => {
+    remove = installHistoryIndex()
+    history.pushState(null, '', '/app/g')
+    history.pushState({ qivoLayer: 'x' }, '', '/app/g')
+    const start = position()
+    const later = vi.fn()
+    window.addEventListener('popstate', later)
+    try {
+      await stepBack(1)
+      expect(position()).toBe(start - 1)
+      expect(history.state?.qivoLayer).toBeUndefined()
+      expect(later).not.toHaveBeenCalled()
+      // the next move is the person's again
+      await go(-1)
+      expect(later).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('popstate', later)
+    }
+  })
+
+  it('runs what waits once a move the page started has landed', async () => {
+    remove = installHistoryIndex()
+    history.pushState(null, '', '/app/h')
+    history.pushState(null, '', '/app/i')
+    const read: string[] = []
+    history.back()
+    afterTraversal(() => read.push(location.pathname))
+    expect(read).toEqual([])
+    await vi.waitFor(() => expect(read).toEqual(['/app/h']))
+  })
+
+  it('stops waiting for a move that never lands', async () => {
+    remove = installHistoryIndex()
+    const ran = vi.fn()
+    // past the start of the history: no popstate comes
+    history.go(-1000)
+    afterTraversal(ran)
+    expect(ran).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(ran).toHaveBeenCalled(), { timeout: 2000 })
   })
 })

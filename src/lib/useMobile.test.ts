@@ -80,29 +80,69 @@ describe('useMobile', () => {
 })
 
 /* A phone layer that closes without its Back step, as a finished dialog
-   does, leaves no entry with the page's address behind it. */
+   does, leaves no entry with the page's address behind it. The page steps
+   back over its marker as its own move: no other popstate listener, such
+   as another layer's or App's, hears it. */
 describe('useMobileBackLayer', () => {
-  /** Renders layers `a` and `b` on a phone at /page, below an earlier
-      /before entry. Answers a function that sets which are open. */
-  async function layers() {
+  type Layers = Record<string, boolean | { open: boolean; onClose?: () => unknown }>
+  let removeIndex = () => {}
+  // what the page's own popstate listener (App's) heard, and whether it
+  // stops each popstate, as App does when it refuses one
+  let heard: string[] = []
+  let stopping = false
+  const page = (event: PopStateEvent) => {
+    heard.push(location.pathname)
+    if (stopping) event.stopImmediatePropagation()
+  }
+  // each rendered layer's close, by key
+  const closes: Record<string, () => void> = {}
+  beforeEach(async () => {
+    // as main.tsx does before anything adds an entry
+    removeIndex = (await import('./historyIndex')).installHistoryIndex()
+    heard = []
+    stopping = false
+    window.addEventListener('popstate', page)
+  })
+  afterEach(() => {
+    window.removeEventListener('popstate', page)
+    removeIndex()
+  })
+
+  /** Renders the phone layers `which` names at /page, below an earlier
+      /before entry: each key's layer, open or not, in that order. Answers
+      a function that renders them again. */
+  async function layers(which: Layers) {
     matches = true
     history.pushState(null, '', '/before')
     history.pushState(null, '', '/page')
     const { useMobileBackLayer } = await import('./useMobile')
-    const Layer = ({ open }: { open: boolean }) => {
-      useMobileBackLayer(open, () => {})
+    const Layer = ({
+      name,
+      open,
+      onClose,
+    }: {
+      name: string
+      open: boolean
+      onClose?: () => unknown
+    }) => {
+      closes[name] = useMobileBackLayer(open, onClose ?? (() => {}))
       return null
     }
-    const show = (a: boolean, b: boolean) =>
+    const show = (next: Layers) =>
       act(async () => {
-        root.render([
-          createElement(Layer, { key: 'a', open: a }),
-          createElement(Layer, { key: 'b', open: b }),
-        ])
+        root.render(
+          Object.entries(next).map(([name, layer]) =>
+            createElement(Layer, {
+              key: name,
+              name,
+              ...(typeof layer === 'boolean' ? { open: layer } : layer),
+            }),
+          ),
+        )
         // the markers are pushed after mounting
         await Promise.resolve()
       })
-    await show(false, false)
+    await show(which)
     return show
   }
   /** Goes Back and waits for its popstate. */
@@ -114,46 +154,101 @@ describe('useMobileBackLayer', () => {
       history.back()
       await popped
     })
-  /** Lets a closed layer's step back over its marker land. */
-  const settle = () =>
-    act(async () => {
-      await vi.waitFor(() => {
-        if (history.state?.qivoLayer) throw new Error('marker still on top')
-      })
-    })
+  /** Lets the page's own steps and the layers waiting for them land. */
+  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 30)))
 
   it('steps back over the marker, so the next Back leaves the page', async () => {
-    const show = await layers()
-    await show(true, false)
+    const show = await layers({ a: false })
+    await show({ a: true })
     expect(history.state?.qivoLayer).toBeTruthy()
-    await show(false, false)
+    await show({ a: false })
     await settle()
     expect(location.pathname).toBe('/page')
+    expect(history.state?.qivoLayer).toBeUndefined()
+    expect(heard).toEqual([])
     await back()
     expect(location.pathname).toBe('/before')
   })
 
-  it("keeps the entry as the page's own when its address changed in place", async () => {
-    const show = await layers()
-    await show(true, false)
+  it('keeps an address changed in place over the marker, so the next Back still leaves', async () => {
+    const show = await layers({ a: true })
+    // as App names a task that left the board while its dialog was open
     history.replaceState(history.state, '', '/page/renamed')
-    await show(false, false)
+    await show({ a: false })
     await settle()
-    // no step back to the address below, which the page no longer has
     expect(location.pathname).toBe('/page/renamed')
+    expect(history.state?.qivoLayer).toBeUndefined()
+    await back()
+    expect(location.pathname).toBe('/before')
   })
 
-  it('gives the entry to a layer that opens as the last one closes', async () => {
-    const show = await layers()
-    await show(true, false)
+  it('gives the page to a layer that opens as the last one closes', async () => {
+    const show = await layers({ a: true, b: false })
     const first = history.state?.qivoLayer
-    await show(false, true)
+    await show({ a: false, b: true })
+    await settle()
     expect(history.state?.qivoLayer).toBeTruthy()
     expect(history.state?.qivoLayer).not.toBe(first)
     // Back closes the second layer, and the next leaves the page
     await back()
     expect(location.pathname).toBe('/page')
     expect(history.state?.qivoLayer).toBeUndefined()
+    await back()
+    expect(location.pathname).toBe('/before')
+  })
+
+  it('keeps a layer under a newer page entry open when a layer over that entry finishes', async () => {
+    const landscape = vi.fn()
+    const show = await layers({ landscape: { open: true, onClose: landscape } })
+    // a task opens over it, with an entry of its own (App's url sync)
+    history.pushState({ qivoPrevious: '/page' }, '', '/page/task')
+    await show({ landscape: { open: true, onClose: landscape }, dialog: true })
+    expect(history.state?.qivoLayer).toBeTruthy()
+    await show({ landscape: { open: true, onClose: landscape }, dialog: false })
+    await settle()
+    expect(location.pathname).toBe('/page/task')
+    expect(history.state?.qivoLayer).toBeUndefined()
+    expect(landscape).not.toHaveBeenCalled()
+    expect(heard).toEqual([])
+    // Back closes the task, and the next one the layer under it
+    await back()
+    expect(location.pathname).toBe('/page')
+    expect(landscape).not.toHaveBeenCalled()
+    await back()
+    expect(landscape).toHaveBeenCalledTimes(1)
+  })
+
+  it('steps back over two layers that close together', async () => {
+    const show = await layers({ a: true, b: false })
+    await show({ a: true, b: true })
+    await show({ a: false, b: false })
+    await settle()
+    expect(location.pathname).toBe('/page')
+    expect(history.state?.qivoLayer).toBeUndefined()
+    await back()
+    expect(location.pathname).toBe('/before')
+  })
+
+  it('lets the next layer push its marker after the page stopped a popstate', async () => {
+    const show = await layers({ a: true, b: false })
+    stopping = true
+    await show({ a: false, b: false })
+    await settle()
+    await show({ a: false, b: true })
+    await settle()
+    expect(history.state?.qivoLayer).toBeTruthy()
+  })
+
+  it('takes no second step for a layer that unmounts while its Back step is on its way', async () => {
+    await layers({ a: true })
+    await act(async () => {
+      closes.a()
+      // the step has set out and not landed yet
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      root.render(null)
+    })
+    await settle()
+    expect(location.pathname).toBe('/page')
     await back()
     expect(location.pathname).toBe('/before')
   })
