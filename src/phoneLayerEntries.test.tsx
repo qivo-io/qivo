@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { TiptapEditorHTMLElement } from '@tiptap/core'
 import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -10,7 +11,7 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    store. A layer that closes with the move it started, as Create and a
    search result do, gives that move its entry, so Back returns to the page
    the layer opened on. A task that someone else removes keeps the address
-   its window shows. */
+   its window shows. A refused Back returns to the entry it left. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => {
@@ -99,9 +100,10 @@ async function type(input: HTMLInputElement, text: string) {
 }
 
 /** Boots App at `address`, after an earlier /before entry, on a phone or
-    not, with the page's history main.tsx installs and task QN-1. Answers a
-    function that publishes the workspace without the task. */
-async function boot(address: string, phone: boolean) {
+    not, with the page's history main.tsx installs and task QN-1, and QN-2
+    when `second`. Answers a function that publishes the workspace without
+    the tasks. */
+async function boot(address: string, phone: boolean, second = false) {
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({ matches: phone, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
@@ -130,6 +132,15 @@ async function boot(address: string, phone: boolean) {
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
+  if (second) {
+    snap.orgs[0].next_issue_num = 2
+    snap.issues.push({
+      ...snap.issues.at(-1)!,
+      id: crypto.randomUUID(),
+      num: 2,
+      title: 'Order the parts',
+    })
+  }
   let publish = (_: Snapshot) => {}
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
@@ -152,10 +163,13 @@ async function boot(address: string, phone: boolean) {
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
   const { default: App } = await import('./App')
+  // the question main.tsx mounts at the root
+  const { DiscardPrompt } = await import('./components/DiscardPrompt')
   await act(async () =>
     root.render(
       <TooltipProvider>
         <App />
+        <DiscardPrompt />
       </TooltipProvider>,
     ),
   )
@@ -245,6 +259,72 @@ describe('a task someone else removes while the Inbox shows it', { timeout: 30_0
     await waitFor(() => document.querySelector('[data-task-gone]'), 'the note')
     await settle()
     expect(location.pathname).toBe('/app/testbed/inbox/tasks/qn-1')
+    expect(history.length).toBe(entries)
+  })
+})
+
+describe('a Forward that would close a comment not yet sent', { timeout: 30_000 }, () => {
+  it('returns to the task by position without the Navigation API, keeps the entry after it, and Discard takes the Forward', async () => {
+    await boot('/app/testbed/board/p/1', true, true)
+    const row = await waitFor(
+      () =>
+        [...document.querySelectorAll<HTMLElement>('.mobile-task-row')].find((r) =>
+          r.textContent?.includes('Calibrate the sensor'),
+        ),
+      'the task row',
+    )
+    await act(async () => row.click())
+    await waitFor(() => document.querySelector('[data-task-chrome]'), 'the task window')
+    await settle()
+    // the other task from the search, then Back to the first
+    await press('Search tasks and projects')
+    await type(
+      await waitFor(
+        () => document.querySelector<HTMLInputElement>('[cmdk-root] input'),
+        'the search box',
+      ),
+      'Order the parts',
+    )
+    const result = await waitFor(
+      () =>
+        [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find((item) =>
+          item.textContent?.includes('Order the parts'),
+        ),
+      'the result',
+    )
+    await act(async () => result.click())
+    await settle()
+    expect(location.pathname).toBe('/app/testbed/board/tasks/qn-2')
+    await act(async () => history.back())
+    await settle()
+    const task = location.pathname
+    expect(task).toBe('/app/testbed/board/tasks/qn-1')
+    const entries = history.length
+    const composer = await waitFor(
+      () =>
+        document.querySelector<TiptapEditorHTMLElement>(
+          '[role="textbox"][aria-label="Leave a comment"]',
+        )?.editor,
+      'the comment editor',
+    )
+    await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    const question = () => document.querySelector('[data-discard-prompt] h2')?.textContent ?? null
+    await act(async () => history.forward())
+    await settle()
+    await waitFor(() => question(), 'the question')
+    // nothing moved: the task's entry and the one after it stay
+    expect(location.pathname).toBe(task)
+    expect(history.length).toBe(entries)
+    await press('Keep editing')
+    await settle()
+    expect(location.pathname).toBe(task)
+    expect(composer.getText()).toBe('Drift is under 2%')
+    await act(async () => history.forward())
+    await settle()
+    await waitFor(() => question(), 'the question again')
+    await press('Discard')
+    await settle()
+    expect(location.pathname).toBe('/app/testbed/board/tasks/qn-2')
     expect(history.length).toBe(entries)
   })
 })

@@ -51,10 +51,10 @@ import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/l
 import { afterProjectSaved } from './lib/newProjectAccess'
 import {
   historyBusy,
+  leavePage,
   listenBackLayers,
   onHistorySettled,
   pushPage,
-  stepsToPage,
   whenQuiet,
 } from './lib/pageHistory'
 import { createPopRefusal } from './lib/popRefusal'
@@ -1009,8 +1009,6 @@ function App() {
   const settingsReturn = useRef(NO_RETURN)
   const syncReturn = useRef(NO_RETURN)
   const replaceNextHistory = useRef(false)
-  // a phone close's Back on its way (backOrSet), until the next popstate
-  const backOnItsWay = useRef(false)
   // bumped each time a page move the url sync waited for has landed, so it
   // looks again: the return from a refused Back or Forward (lib/popRefusal),
   // which no other popstate listener hears, or the step off a phone layer's
@@ -1186,7 +1184,6 @@ function App() {
   }, [addrMoved, scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev])
   useEffect(() => {
     const onPop = (event: PopStateEvent) => {
-      backOnItsWay.current = false
       // a Remaining number typed on Team sync and not yet committed: history
       // unmounts its box without a blur, so commit it before the page moves
       flushWalkInput('sync')
@@ -1239,9 +1236,9 @@ function App() {
         sync: r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null,
       }
       /* Back or Forward that would close a window holding unsent text
-         returns to the entry it left by key, so nothing moves, and asks there
-         (lib/popRefusal). Without the Navigation API the address it left is
-         pushed on top instead. */
+         returns to the entry it left, so nothing moves, and asks there
+         (lib/popRefusal). When it has no entry to return to, the address it
+         left is pushed on top instead. */
       const closing = closedBy(was, next, unsent)
       if (closing.some((held) => held.held().length)) {
         if (!refusal.refuse(event, closing)) {
@@ -1484,11 +1481,11 @@ function App() {
   }
 
   // A phone's Back action consumes the page it opened, stepping past the
-  // markers of phone layers over its entry (lib/pageHistory). Direct links
-  // have no in-app predecessor; replace those with the parent instead of
-  // looping back into a task or setting the user just dismissed. Both read
-  // the entry the page is on, so they wait for a page move on its way. A
-  // second close before the first one's Back lands adds nothing.
+  // marker of phone layers over its entry (lib/pageHistory leavePage).
+  // Direct links have no in-app predecessor; replace those with the parent
+  // instead of looping back into a task or setting the user just dismissed.
+  // Both read the entry the page is on, so they wait for a page move on its
+  // way.
   const backOrSet = (patch, apply: () => void) =>
     whenQuiet(() => {
       const phoneHistory = mobile || isLandscapeRoadmapOpen()
@@ -1502,10 +1499,8 @@ function App() {
         sync,
         ...patch,
       })
-      if (phoneHistory && history.state?.qivoPrevious === target) {
-        if (!backOnItsWay.current) history.go(-(stepsToPage() + 1))
-        backOnItsWay.current = true
-      } else {
+      if (phoneHistory && history.state?.qivoPrevious === target) leavePage()
+      else {
         replaceNextHistory.current = phoneHistory
         apply()
       }

@@ -9,20 +9,27 @@ import {
   listenBackLayers,
   openLayer,
   pushPage,
+  reloadPage,
 } from './pageHistory'
 import { createPopRefusal } from './popRefusal'
 
-/* A refused Back or Forward returns to the entry it left by key, keeps the
-   entries on both sides, hides both popstates from later listeners, asks
-   only once it is back, and takes the move again after Discard. */
+/* A refused Back or Forward returns to the entry it left, by key with the
+   Navigation API and by position without it, keeps the entries on both
+   sides, hides both popstates from later listeners, asks only once it is
+   back, and takes the move again after Discard. */
 
 let remove = () => {}
 afterEach(() => remove())
 
-/** A window on `urls`, on the entry at `at`, in `engine`'s order, with an
-    App-like listener that refuses while its scope holds text, and a later
-    listener, as the phone layers' is. */
-async function refusing(urls: string[], at: number, engine: 'chromium' | 'firefox' | 'webkit') {
+/** A window on `urls`, on the entry at `at`, in `engine`'s order (none
+    without the Navigation API), with an App-like listener that refuses
+    while its scope holds text, and a later listener, as the phone layers'
+    is. */
+async function refusing(
+  urls: string[],
+  at: number,
+  engine?: 'chromium' | 'firefox' | 'webkit' | 'ios',
+) {
   const browser = browserWindow(urls[0], engine)
   const removeHistory = installPageHistory(browser.window)
   for (const url of urls.slice(1)) pushPage({}, url)
@@ -146,25 +153,140 @@ describe.each(['chromium', 'firefox', 'webkit'] as const)(
       await settleMoves()
       expect(browser.here()).toBe('/e4')
     })
+
+    it("lets the browser's Reload and a script's reload through after Keep editing", async () => {
+      const browser = await refusing(['/a', '/b', '/c'], 2, engine)
+      browser.person.back()
+      await settleMoves()
+      expect(browser.ask).toHaveBeenCalledTimes(1)
+      browser.window.location.reload()
+      expect(browser.reloads()).toBe(1)
+      await settleMoves()
+      browser.person.reload()
+      expect(browser.reloads()).toBe(2)
+    })
+
+    it('answers false for a popstate that moved nothing, so App puts the page back itself', async () => {
+      const browser = await refusing(['/a', '/b', '/c'], 1, engine)
+      const refusal = createPopRefusal(vi.fn())
+      const answers: boolean[] = []
+      browser.window.addEventListener('popstate', (event) => {
+        if (event instanceof PopStateEvent) answers.push(refusal.refuse(event, [browser.scope]))
+      })
+      // a popstate onto the entry the page was on, which no return can undo
+      browser.window.dispatchEvent(new PopStateEvent('popstate'))
+      await settleMoves()
+      expect(answers).toEqual([false])
+      expect(browser.here()).toBe('/b')
+      expect(historyBusy()).toBe(false)
+    })
+
+    it('lands the return heard when the app takes a move that came first', async () => {
+      const browser = browserWindow('/a', engine)
+      remove = installPageHistory(browser.window)
+      for (const url of ['/b', '/c']) pushPage({}, url)
+      const ask = vi.fn()
+      const refusal = createPopRefusal(ask)
+      const scope = createUnsentScope()
+      scope.hold('comment')
+      const applied: string[] = []
+      let refusals = 1
+      browser.window.addEventListener('popstate', (event) => {
+        if (refusals && event instanceof PopStateEvent && refusal.refuse(event, [scope])) {
+          refusals -= 1
+          return
+        }
+        refusal.accepted()
+        applied.push(browser.here())
+      })
+      // the first Back is refused, the second, before the return runs, taken
+      browser.person.back()
+      browser.person.back()
+      await settleMoves()
+      expect(ask).not.toHaveBeenCalled()
+      expect(applied.at(-1)).toBe('/c')
+      expect(browser.here()).toBe('/c')
+      expect(historyBusy()).toBe(false)
+    })
   },
 )
 
-describe('without the Navigation API', () => {
-  it('answers false, so App pushes the address back itself', async () => {
-    const browser = browserWindow('/a')
-    const removeHistory = installPageHistory(browser.window)
-    remove = removeHistory
-    pushPage({}, '/b')
-    const scope = createUnsentScope()
-    scope.hold('comment')
-    const refusal = createPopRefusal(vi.fn())
-    const answers: boolean[] = []
-    browser.window.addEventListener('popstate', (event) => {
-      if (event instanceof PopStateEvent) answers.push(refusal.refuse(event, [scope]))
-    })
+describe.each(['webkit', 'ios'] as const)('WebKit, %s', (engine) => {
+  it('cancels the reload of each of two merged returns', async () => {
+    const browser = await refusing(['/e1', '/e2', '/e3', '/e4', '/e5'], 3, engine)
+    // Back, Forward, Back, Forward, all before the first return runs
+    browser.person.back()
+    browser.person.forward()
+    browser.person.back()
+    browser.person.forward()
+    await settleMoves()
+    expect(browser.here()).toBe('/e4')
+    expect(browser.reloads()).toBe(0)
+    expect(browser.urls()).toEqual(['/e1', '/e2', '/e3', '/e4', '/e5'])
+  })
+
+  it("lets the app's own reload through while a merged return may still run once more", async () => {
+    const browser = await refusing(['/a', '/b', '/c'], 2, engine)
     browser.person.back()
     await settleMoves()
-    expect(answers).toEqual([false])
-    expect(refusal.stepping()).toBe(false)
+    reloadPage()
+    expect(browser.reloads()).toBe(1)
+  })
+})
+
+describe('WebKit on a phone, which fires no beforeunload', () => {
+  it("cancels a script's reload after a return until the page pushes an entry", async () => {
+    const browser = await refusing(['/a', '/b', '/c'], 2, 'ios')
+    browser.person.back()
+    await settleMoves()
+    // a known limit: it cannot be told from a merged return's reload
+    browser.window.location.reload()
+    expect(browser.reloads()).toBe(0)
+    pushPage({}, '/d')
+    browser.window.location.reload()
+    expect(browser.reloads()).toBe(1)
+  })
+})
+
+describe('without the Navigation API', () => {
+  it('returns to the page shown by position, unheard, asks there, and keeps the entries on both sides', async () => {
+    const browser = await refusing(['/a', '/b', '/c'], 1)
+    browser.person.back()
+    await settleMoves()
+    expect(browser.ask).toHaveBeenCalledTimes(1)
+    expect(browser.here()).toBe('/b')
+    expect(browser.applied).toEqual([])
+    expect(browser.later).not.toHaveBeenCalled()
+    expect(historyBusy()).toBe(false)
+    expect(browser.urls()).toEqual(['/a', '/b', '/c'])
+    // Keep editing: Forward still reaches the next page
+    browser.scope.discard()
+    browser.person.forward()
+    await settleMoves()
+    expect(browser.here()).toBe('/c')
+  })
+
+  it('keeps the forward history after a refused Forward, and Discard takes the Forward', async () => {
+    const browser = await refusing(['/a', '/b', '/c', '/d'], 1)
+    browser.person.forward()
+    await settleMoves()
+    expect(browser.here()).toBe('/b')
+    expect(browser.urls()).toEqual(['/a', '/b', '/c', '/d'])
+    browser.scope.discard()
+    browser.discard()
+    await settleMoves()
+    expect(browser.here()).toBe('/c')
+    expect(browser.applied).toEqual(['/c'])
+  })
+
+  it('takes a move that lands before the return as the move, and returns from it', async () => {
+    const browser = await refusing(['/a', '/b', '/c', '/d'], 3)
+    // a second Back before the return has run
+    browser.person.back()
+    browser.person.back()
+    await settleMoves()
+    expect(browser.here()).toBe('/d')
+    expect(browser.urls()).toEqual(['/a', '/b', '/c', '/d'])
+    expect(historyBusy()).toBe(false)
   })
 })

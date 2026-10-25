@@ -15,13 +15,25 @@
    - firefox: the navigate events of every traversal queued by then first,
      each counted from the one before it, then the commits.
 
+   pushState and replaceState fire a push or replace navigate event. The
+   browser's Reload fires beforeunload and no navigate event; a script's
+   location.reload() or go(0) fires a cancelable reload navigate event
+   first, then beforeunload. `ios` is WebKit on a phone, which never fires
+   beforeunload (webkit.org/b/219102).
+
    A person's move to the entry a page's keyed traverseTo still waits for
    is merged with it: its navigate event carries the page's info. The
    page's request then runs again later without its info. WebKit turns it
-   into a reload navigate when its entry is current (`reloads` counts one
-   that nothing cancels); the others do nothing then. */
+   into a reload when its entry is current, with beforeunload and then a
+   reload navigate event in one task (`reloads` counts one that nothing
+   cancels); the others do nothing then.
 
-type Engine = 'chromium' | 'webkit' | 'firefox'
+   A limit: the double dispatches each popstate from script, so no
+   microtask runs between its listeners, while a browser runs them after
+   each listener (React commits App's popstate there, before the layers'
+   listener). */
+
+type Engine = 'chromium' | 'webkit' | 'ios' | 'firefox'
 type Entry = { state: unknown; url: string; key: string }
 type Job = {
   person: boolean
@@ -54,6 +66,17 @@ export function browserWindow(url: string, navigation?: Engine) {
   let reloads = 0
 
   const navEntry = (n: number) => ({ key: entries[n].key, index: n, url: ORIGIN + entries[n].url })
+  const webkit = navigation === 'webkit' || navigation === 'ios'
+  /** Fires beforeunload, which WebKit on a phone never does. */
+  const unload = () => {
+    if (navigation !== 'ios') win.dispatchEvent(new Event('beforeunload'))
+  }
+  /** A reload the page or a script starts: its navigate event, then the reload unless canceled. */
+  const scriptReload = () => {
+    if (!navigate(index, index, undefined, 'reload')) return
+    unload()
+    reloads += 1
+  }
   /** Fires the navigate event of a move to `to` from `from`; true unless canceled. */
   const navigate = (to: number, from: number, info: unknown, type = 'traverse') => {
     if (!navigation) return true
@@ -97,7 +120,9 @@ export function browserWindow(url: string, navigation?: Engine) {
   const rerun = (job: Job) => {
     const to = entries.findIndex((e) => e.key === job.key)
     if (to === index) {
-      if (navigation === 'webkit' && navigate(index, index, undefined, 'reload')) reloads += 1
+      if (!webkit) return
+      unload()
+      if (navigate(index, index, undefined, 'reload')) reloads += 1
       return
     }
     if (to >= 0 && navigate(to, index, undefined)) commit(to)
@@ -171,6 +196,7 @@ export function browserWindow(url: string, navigation?: Engine) {
       return entries.length
     }
     pushState(state: unknown, _: string, next?: string | URL | null) {
+      navigate(index + 1, index, undefined, 'push')
       entries.splice(
         index + 1,
         entries.length,
@@ -179,13 +205,11 @@ export function browserWindow(url: string, navigation?: Engine) {
       index += 1
     }
     replaceState(state: unknown, _: string, next?: string | URL | null) {
+      navigate(index, index, undefined, 'replace')
       entries[index] = { ...entries[index], state, url: next ? pathOf(next) : entries[index].url }
     }
     go(delta = 0) {
-      if (!delta) {
-        reloads += 1
-        return
-      }
+      if (!delta) return scriptReload()
       traverse({ person: false, target: (from) => from + delta })
     }
     back() {
@@ -207,6 +231,11 @@ export function browserWindow(url: string, navigation?: Engine) {
       const at = entries[index].url.indexOf('#')
       return at < 0 ? '' : entries[index].url.slice(at)
     },
+    reload: scriptReload,
+  }
+  const navigator = {
+    platform: navigation === 'ios' ? 'iPhone' : 'Linux x86_64',
+    maxTouchPoints: 0,
   }
   if (navigation) Object.defineProperty(nav, 'currentEntry', { get: () => navEntry(index) })
   if (navigation)
@@ -227,7 +256,11 @@ export function browserWindow(url: string, navigation?: Engine) {
         return { committed, finished: committed }
       },
     })
-  const window = Object.assign(win, { history, location }, navigation ? { navigation: nav } : {})
+  const window = Object.assign(
+    win,
+    { history, location, navigator },
+    navigation ? { navigation: nav } : {},
+  )
   return {
     window: window as unknown as Window,
     history: history as unknown as History,
@@ -237,14 +270,19 @@ export function browserWindow(url: string, navigation?: Engine) {
     urls: () => entries.map((e) => e.url),
     /** The current entry's index. */
     index: () => index,
-    /** Reloads: go(0), or WebKit's turn of a merged request that nothing canceled. */
+    /** Reloads that nothing canceled: the person's, a script's, or WebKit's
+        turn of a merged request. */
     reloads: () => reloads,
-    /** The person's moves: the browser's Back and Forward, and a pick from
-        its Back or Forward menu of the entry at `to`. */
+    /** The person's moves: the browser's Back and Forward, a pick from its
+        Back or Forward menu of the entry at `to`, and its Reload. */
     person: {
       back: () => traverse({ person: true, target: (from) => from - 1 }),
       forward: () => traverse({ person: true, target: (from) => from + 1 }),
       pick: (to: number) => traverse({ person: true, target: () => to }),
+      reload: () => {
+        unload()
+        reloads += 1
+      },
     },
   }
 }

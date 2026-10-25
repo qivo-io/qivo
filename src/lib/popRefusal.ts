@@ -1,27 +1,21 @@
 import type { UnsentScope } from './leaveGuard'
-import {
-  canReturn,
-  currentKey,
-  goToKey,
-  lastFromKey,
-  returning,
-  returnTo,
-  voidReturn,
-} from './pageHistory'
+import { goTo, refuseMove, returning, returnTo, voidReturn } from './pageHistory'
 
 /* A Back or Forward the app refuses because it would close a window that
    holds unsent text (components/DiscardPrompt).
 
    A popstate cannot be cancelled, so the page returns to the entry the move
-   left by its key (lib/pageHistory returnTo), which keeps the entries on
-   both sides and lands there whatever the person did meanwhile, and asks
-   only once it is back. Discard then takes the refused move again. The
-   refused popstate and the return reach no other popstate listener, such as
-   the phone layers' (lib/pageHistory listenBackLayers). A move refused while
-   the return is on its way joins it: one question, for the latest move.
+   left (lib/pageHistory returnTo), which keeps the entries on both sides,
+   and asks only once it is back. Discard then takes the refused move again.
+   The refused popstate and the return reach no other popstate listener,
+   such as the phone layers' (lib/pageHistory listenBackLayers). With the
+   Navigation API the return goes by key and lands whatever the person did
+   meanwhile, and a move refused while it is on its way joins it: one
+   question, for the latest move. Without the API it goes by position, and
+   a move that lands first is the move from then on.
 
-   Without the Navigation API there is no key to return to, and the app
-   pushes the address it left back instead (App onPop). */
+   When the page cannot return, as for a move that left no entry to return
+   to, App pushes the address it left back instead (App onPop). */
 
 type Ask = (scopes: UnsentScope[], go: () => void) => unknown
 
@@ -29,26 +23,26 @@ type Ask = (scopes: UnsentScope[], go: () => void) => unknown
 export function createPopRefusal(ask: Ask) {
   // while the return is on its way: the entry the latest refused move
   // reached and the windows it would have closed
-  let held: { reached: string; scopes: UnsentScope[] } | null = null
+  let held: { reached: ReturnType<typeof refuseMove>['to']; scopes: UnsentScope[] } | null = null
   return {
-    /** Whether the page is returning from a refused Back or Forward. */
-    stepping: returning,
     /** Refuses the current popstate, which would close the windows of
-        `scopes`. False without the Navigation API, and the caller then puts
+        `scopes`. False when the page cannot return, and the caller then puts
         the address it left back itself. */
     refuse(event: PopStateEvent, scopes: UnsentScope[]): boolean {
-      const shown = lastFromKey()
-      const reached = currentKey()
-      if (!canReturn() || !shown || !reached) return false
-      event.stopImmediatePropagation()
-      const first = !held
-      held = { reached, scopes }
-      if (first)
-        returnTo(shown, () => {
+      const { from, to } = refuseMove()
+      // a return by position that another move overtook asks nothing
+      if (held && !returning()) held = null
+      if (
+        !held &&
+        !returnTo(from, () => {
           const refused = held
           held = null
-          if (refused) ask(refused.scopes, () => goToKey(refused.reached))
+          if (refused) ask(refused.scopes, () => goTo(refused.reached))
         })
+      )
+        return false
+      event.stopImmediatePropagation()
+      held = { reached: to, scopes }
       return true
     },
     /** App took a Back or Forward that closes nothing held: a return still

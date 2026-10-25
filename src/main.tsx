@@ -19,8 +19,10 @@ import { P } from './store/planner'
 // before anything adds a history entry (lib/pageHistory)
 const removePageHistory = installPageHistory()
 import.meta.hot?.dispose(removePageHistory)
-// a development server's full reload goes through
-import.meta.hot?.on('vite:beforeFullReload', disarmReloadGuard)
+// a development server's reloads go through (its full reload, the reload on
+// its first update after an error and its reload once it is back)
+for (const event of ['vite:beforeFullReload', 'vite:beforeUpdate', 'vite:ws:disconnect'] as const)
+  import.meta.hot?.on(event, disarmReloadGuard)
 const disposeFocusVisibility = installFocusVisibility()
 import.meta.hot?.dispose(disposeFocusVisibility)
 // before any dialog can open, so modal layers leave the regions exposed

@@ -34,10 +34,12 @@ export function useMobile() {
 }
 
 /** Give a phone overlay one Back step without changing its underlying URL
- * (lib/pageHistory). The system Back closes it. Its own close, and an
- * unmount, close it at once and take no history step: its marker stays as a
- * spare, which the next page or layer takes over, and a Back from it goes on.
- * An explicit enabled value keeps a phone layer through landscape rotation.
+ * (lib/pageHistory). The layers open over a page share one marker entry, and
+ * the system Back closes the top one. Its own close, and an unmount, close it
+ * at once and take no history step: once no layer over the page is open,
+ * their marker stays as a spare, which the next page or layer takes over, and
+ * a Back from it goes on. An explicit enabled value keeps a phone layer
+ * through landscape rotation.
  * A close repeated while one is deciding, or after the layer closed, is
  * dropped, so `onClose` runs once. `onClose` closes the layer or returns
  * false to stay open (a dialog busy with something that must finish, or one

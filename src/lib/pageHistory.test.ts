@@ -2,30 +2,30 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { browserWindow, settleMoves } from './historyDouble.setup'
 import {
-  currentKey,
   finishLayer,
   historyBusy,
   installPageHistory,
+  leavePage,
   listenBackLayers,
   openLayer,
   position,
   pushPage,
-  returnTo,
   whenQuiet,
 } from './pageHistory'
 
-/* The page's history on a double that moves as browsers do: a phone layer
-   that closes by itself leaves its marker as a spare and moves nothing, and
-   one Back still leaves the page. */
+/* The page's history on a double that moves as browsers do. The phone
+   layers open over a page share one marker; a layer that closes by itself
+   moves nothing, its marker is a spare once none is open, and one Back
+   still leaves the page. */
 
 let remove = () => {}
 afterEach(() => remove())
 
 /** A browser window on `urls`, on the last, with the page's history
     installed, an App-like listener that hears the moves, and the layers'
-    listener after it. */
-function page(urls: string[]) {
-  const browser = browserWindow(urls[0])
+    listener after it; with `engine`'s Navigation API when given. */
+function page(urls: string[], engine?: 'chromium' | 'webkit' | 'firefox') {
+  const browser = browserWindow(urls[0], engine)
   const removeHistory = installPageHistory(browser.window)
   for (const url of urls.slice(1)) pushPage({}, url)
   const heard: string[] = []
@@ -136,7 +136,7 @@ describe('a layer that closes by itself', () => {
     const closed = vi.fn()
     const next = await layer(closed)
     expect(browser.urls()).toEqual(['/before', '/page', '/page'])
-    expect(layerOf(browser.history.state)).toBe(next.token)
+    expect(layerOf(browser.history.state)).toBe(next.marker)
     browser.person.back()
     await settleMoves()
     expect(closed).toHaveBeenCalledTimes(1)
@@ -144,20 +144,89 @@ describe('a layer that closes by itself', () => {
     expect(browser.index()).toBe(1)
   })
 
-  it('closes an open layer under a spare in place on Back, and the next Back leaves', async () => {
+  it('keeps the marker for an open layer when one opened over it finishes, and Back closes that one and stays', async () => {
     const browser = page(['/before', '/page'])
     const closed = vi.fn()
     const dialog = await layer(closed)
+    // a menu in the dialog, picked
     finishLayer(await layer())
+    expect(browser.urls()).toEqual(['/before', '/page', '/page'])
     browser.person.back()
     await settleMoves()
     expect(closed).toHaveBeenCalledTimes(1)
     expect(dialog.state).toBe('closed')
-    expect(browser.index()).toBe(2)
-    expect(browser.heard).toEqual([])
+    expect(browser.here()).toBe('/page')
+    expect(browser.index()).toBe(1)
     browser.person.back()
     await settleMoves()
     expect(browser.here()).toBe('/before')
+  })
+
+  it('closes the top one of two open layers on Back, and the marker goes on again for the other', async () => {
+    const browser = page(['/before', '/page'])
+    const dialogClosed = vi.fn()
+    const menuClosed = vi.fn()
+    const dialog = await layer(dialogClosed)
+    await layer(menuClosed)
+    browser.person.back()
+    await settleMoves()
+    expect(menuClosed).toHaveBeenCalledTimes(1)
+    expect(dialogClosed).not.toHaveBeenCalled()
+    expect(layerOf(browser.history.state)).toBe(dialog.marker)
+    expect(browser.urls()).toEqual(['/before', '/page', '/page'])
+    browser.person.back()
+    await settleMoves()
+    expect(dialogClosed).toHaveBeenCalledTimes(1)
+    expect(browser.here()).toBe('/page')
+  })
+
+  it('gives the marker back to the layer under one that App closed on the same Back', async () => {
+    const browser = browserWindow('/before')
+    const removeHistory = installPageHistory(browser.window)
+    pushPage({}, '/page')
+    const dialogClosed = vi.fn()
+    const dialog = await layer(dialogClosed)
+    const menu = await layer()
+    // React's commit of App's popstate unmounts the menu before the layers'
+    // listener runs, as browsers run it between the two
+    browser.window.addEventListener('popstate', () => finishLayer(menu))
+    const stopLayers = listenBackLayers(browser.window)
+    remove = () => {
+      stopLayers()
+      removeHistory()
+    }
+    browser.person.back()
+    await settleMoves()
+    expect(dialogClosed).not.toHaveBeenCalled()
+    expect(dialog.state).toBe('open')
+    expect(layerOf(browser.history.state)).toBe(dialog.marker)
+    expect(browser.here()).toBe('/page')
+  })
+
+  it('closes every layer over a page that a Back-menu pick leaves', async () => {
+    const browser = page(['/before', '/page'])
+    const dialog = await layer()
+    const menu = await layer()
+    browser.person.pick(0)
+    await settleMoves()
+    expect([dialog.state, menu.state]).toEqual(['closed', 'closed'])
+    expect(browser.here()).toBe('/before')
+    expect(browser.heard).toEqual(['/before'])
+  })
+
+  it('leaves one spare for two nested layers that close by themselves, so two quick Backs leave two pages', async () => {
+    const browser = page(['/a', '/b', '/c', '/page'])
+    const dialog = await layer()
+    const menu = await layer()
+    finishLayer(menu)
+    finishLayer(dialog)
+    expect(browser.urls()).toEqual(['/a', '/b', '/c', '/page', '/page'])
+    // the second Back before the page's step has run
+    browser.person.back()
+    browser.person.back()
+    await settleMoves()
+    expect(browser.here()).toBe('/b')
+    expect(browser.heard).toEqual(['/c', '/b'])
   })
 
   it('keeps the Forward that follows a Back-menu pick of the first entry', async () => {
@@ -167,7 +236,7 @@ describe('a layer that closes by itself', () => {
     // right after is the person's
     browser.person.pick(0)
     browser.person.forward()
-    await new Promise((resolve) => setTimeout(resolve, 1500))
+    await settleMoves()
     expect(browser.heard).toEqual(['/older', '/middle'])
     expect(browser.here()).toBe('/middle')
   })
@@ -200,7 +269,7 @@ describe('a layer that closes by itself', () => {
     await settleMoves()
     expect(asked).toHaveBeenCalledTimes(1)
     expect(dialog.state).toBe('open')
-    expect(layerOf(browser.history.state)).toBe(dialog.token)
+    expect(layerOf(browser.history.state)).toBe(dialog.marker)
     expect(browser.urls()).toEqual(['/before', '/page', '/page'])
     expect(browser.heard).toEqual(['/page'])
   })
@@ -235,9 +304,41 @@ describe("a spare over the session's first entry", () => {
     expect(historyBusy()).toBe(true)
     const next = await layer()
     await settleMoves()
-    expect(layerOf(browser.history.state)).toBe(next.token)
+    expect(layerOf(browser.history.state)).toBe(next.marker)
     expect(browser.urls()).toEqual(['/page', '/page'])
   })
+
+  it('takes one step for two layers that close together, and a Back first leaves the page on that entry', async () => {
+    const browser = page(['/page'])
+    const dialog = await layer()
+    const menu = await layer()
+    finishLayer(menu)
+    finishLayer(dialog)
+    browser.person.back()
+    await settleMoves()
+    expect(browser.index()).toBe(0)
+    expect(layerOf(browser.history.state)).toBeUndefined()
+    expect(historyBusy()).toBe(false)
+  })
+
+  it.each(['chromium', 'webkit', 'firefox'] as const)(
+    "takes no step while an entry follows the spare, so a Forward right after the close is the person's, in %s",
+    async (engine) => {
+      const browser = page(['/roadmap'], engine)
+      const landscape = await layer()
+      // a task opened from the landscape roadmap, then Back to the roadmap
+      pushPage({ qivoPrevious: '/roadmap' }, '/task')
+      browser.person.back()
+      await settleMoves()
+      expect(landscape.state).toBe('open')
+      // the layer closes by itself, and the person presses Forward at once
+      finishLayer(landscape)
+      browser.person.forward()
+      await settleMoves()
+      expect(browser.here()).toBe('/task')
+      expect(browser.heard).toEqual(['/roadmap', '/task'])
+    },
+  )
 })
 
 describe('a reload on a marker', () => {
@@ -262,17 +363,49 @@ describe('a reload on a marker', () => {
   })
 })
 
-describe("the refusal's return", () => {
-  it('lands at once when it would go to the entry the page is on, so nothing waits for it', async () => {
-    // Firefox can report a refused move from an entry to that same entry
-    const browser = browserWindow('/a', 'firefox')
-    remove = installPageHistory(browser.window)
-    pushPage({}, '/b')
-    const landed = vi.fn()
-    returnTo(currentKey()!, landed)
-    expect(landed).toHaveBeenCalledTimes(1)
-    expect(historyBusy()).toBe(false)
+describe('after a reload with entries after it', () => {
+  it('pushes the next page over a spare that has Forward entries, without the Navigation API', async () => {
+    const browser = browserWindow('/before')
+    browser.history.pushState({ qivoAt: 1 }, '', '/page')
+    browser.history.pushState(
+      { qivoAt: 2, qivoLayer: 'gone:1', qivoPageUrl: 'https://qivo.test/page' },
+      '',
+      '/page',
+    )
+    browser.history.pushState({ qivoAt: 3 }, '', '/next')
+    // the person went Back to the spare, and the page reloaded there
+    browser.person.back()
     await settleMoves()
-    expect(browser.here()).toBe('/b')
+    remove = installPageHistory(browser.window)
+    pushPage({ qivoPrevious: '/page' }, '/other')
+    expect(browser.urls()).toEqual(['/before', '/page', '/page', '/other'])
+  })
+})
+
+describe("a phone close's step past the page", () => {
+  it('steps past the marker once for two closes before it lands', async () => {
+    const browser = page(['/before', '/page'])
+    await layer()
+    leavePage()
+    leavePage()
+    await settleMoves()
+    expect(browser.here()).toBe('/before')
+    expect(browser.heard).toEqual(['/before'])
+  })
+
+  it.each([
+    ['the person stays when the browser asks to leave', 'beforeunload'],
+    ['the page comes back from the back/forward cache', 'pageshow'],
+  ])('steps again when %s', async (_, event) => {
+    const browser = browserWindow('/page')
+    remove = installPageHistory(browser.window)
+    const go = vi.spyOn(browser.history, 'go').mockImplementation(() => {})
+    // the step leaves the document, so no popstate ends it here
+    leavePage()
+    leavePage()
+    expect(go).toHaveBeenCalledTimes(1)
+    browser.window.dispatchEvent(new Event(event))
+    leavePage()
+    expect(go).toHaveBeenCalledTimes(2)
   })
 })

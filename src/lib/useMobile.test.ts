@@ -79,9 +79,10 @@ describe('useMobile', () => {
   })
 })
 
-/* A phone layer that closes by itself, as a finished dialog does, moves
-   nothing: its marker stays as a spare, and one Back still leaves the page,
-   since the page goes on from a spare (lib/pageHistory). */
+/* The phone layers open over a page share one marker. A layer that closes
+   by itself, as a finished dialog does, moves nothing: the marker stays as a
+   spare once none is open, and one Back still leaves the page, since the
+   page goes on from a spare (lib/pageHistory). */
 describe('useMobileBackLayer', () => {
   type Layers = Record<string, boolean | { open: boolean; onClose?: () => unknown }>
   let removeHistory = () => {}
@@ -243,9 +244,11 @@ describe('useMobileBackLayer', () => {
     expect(location.pathname).toBe('/before')
   })
 
-  it('leaves two spares for two layers that close together, and one Back leaves the page', async () => {
+  it('leaves one spare for two layers that close together, and one Back leaves the page', async () => {
     const show = await layers({ a: true, b: false })
+    const length = history.length
     await show({ a: true, b: true })
+    expect(history.length).toBe(length)
     await show({ a: false, b: false })
     await settle()
     expect(location.pathname).toBe('/page')
@@ -253,16 +256,6 @@ describe('useMobileBackLayer', () => {
     await back()
     await settle()
     expect(location.pathname).toBe('/before')
-  })
-
-  it('lets the next layer push its marker after the page stopped a popstate', async () => {
-    const show = await layers({ a: true, b: false })
-    stopping = true
-    await show({ a: false, b: false })
-    await settle()
-    await show({ a: false, b: true })
-    await settle()
-    expect(marker()).toBeTruthy()
   })
 
   it('runs a repeated close once and takes no history step', async () => {
@@ -301,6 +294,8 @@ describe('useMobileBackLayer', () => {
     })
     await settle()
     expect(onClose).toHaveBeenCalledTimes(1)
+    // the Back left the spare a's close made, so it went on past the page
+    expect(location.pathname).toBe('/before')
   })
 
   it('asks for each refused close, keeps the marker, and takes no history step', async () => {
