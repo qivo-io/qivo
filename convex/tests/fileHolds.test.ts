@@ -162,6 +162,22 @@ const lastSweep = (t: T) =>
     return rows.at(-1)?.detail
   })
 
+describe('the one erase path', () => {
+  it('only model/fileHolds.ts and machine/records.ts delete stored bytes', () => {
+    // records.ts deletes, in an action, bytes it stored and could not
+    // attach, which no committed row ever named
+    const sources = import.meta.glob(
+      ['../**/*.ts', '!../_generated/**', '!../betterAuth/**', '!../tests/**'],
+      { eager: true, query: '?raw', import: 'default' },
+    ) as Record<string, string>
+    const deleting = Object.entries(sources)
+      .filter(([, src]) => /\bstorage\.delete\(/.test(src))
+      .map(([path]) => path.replace(/^\.\.\//, ''))
+      .sort()
+    expect(deleting).toEqual(['machine/records.ts', 'model/fileHolds.ts'])
+  })
+})
+
 describe('the hold', () => {
   it('erases every file an eraser interval before 7 days, and keeps it for a backup an hour older', () => {
     // a failed scheduled erase leaves the file to the next eraser run, which
@@ -513,6 +529,80 @@ describe('a restore', () => {
       erase_at: start + HOLD_MS,
     })
     expect(await lastSweep(t)).toMatchObject({ deleted: 1, held: 1 })
+  })
+
+  it('makes an incremental sweep that spans it drop its cutoff, so the restored sweep reads every file', async () => {
+    vi.useFakeTimers()
+    const t = newT()
+    const f = await withOrg(t)
+    Object.assign(REAP_PAGES, { files: 1 })
+    // a finished sweep, so the next one is incremental
+    await quietWatch(t)
+    await t.mutation(internal.files.reapOrphans, {})
+    await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0))
+    const reaped = () => t.run((ctx) => ctx.db.query('orphan_reaps').collect())
+    expect(await reaped()).toHaveLength(1)
+    const backup = await backupWatch(t)
+    await watchRestores(t)
+    // after the backup: a file attached, then one more for a later leg
+    const { row } = await attached(t, f)
+    await attached(t, f)
+    vi.setSystemTime(Date.now() + HOUR + 60_000)
+    await t.mutation(internal.files.reapOrphans, {})
+    // the accounts leg, then the files leg that checks the attached file
+    for (let leg = 0; leg < 2; leg++) {
+      vi.advanceTimersByTime(0)
+      await t.finishInProgressScheduledFunctions()
+    }
+    // the restore lands between two legs; its backup has the same
+    // orphan_reaps row, which the sweep has not moved yet
+    await t.run((ctx) => ctx.db.delete(row._id))
+    await rewindWatch(t, backup)
+    await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0))
+    // Before, the last leg moved the cutoff past the attached file, and the
+    // restored sweep never read it.
+    expect(await reaped()).toEqual([])
+    await t.mutation(internal.files.eraseHeldFiles, {})
+    const noticed = Date.now()
+    await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0))
+    expect(await holdFor(t, row.storage_id)).toMatchObject({
+      after_restore: true,
+      erase_at: noticed + HOLD_MS,
+    })
+  })
+
+  it('makes a sweep that a noticed restore overtook drop its cutoff before the restored sweep reads', async () => {
+    vi.useFakeTimers()
+    const t = newT()
+    const f = await withOrg(t)
+    Object.assign(REAP_PAGES, { files: 1 })
+    await quietWatch(t)
+    await t.mutation(internal.files.reapOrphans, {})
+    await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0))
+    const backup = await backupWatch(t)
+    await watchRestores(t)
+    const { row } = await attached(t, f)
+    await attached(t, f)
+    vi.setSystemTime(Date.now() + HOUR + 60_000)
+    await t.mutation(internal.files.reapOrphans, {})
+    for (let leg = 0; leg < 2; leg++) {
+      vi.advanceTimersByTime(0)
+      await t.finishInProgressScheduledFunctions()
+    }
+    await t.run((ctx) => ctx.db.delete(row._id))
+    await rewindWatch(t, backup)
+    // the eraser notices the restore before the sweep's last leg, so that
+    // leg finds the restore noticed after its run began, not rewound
+    vi.setSystemTime(Date.now() + 60_000)
+    await t.mutation(internal.files.eraseHeldFiles, {})
+    const noticed = Date.now()
+    await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0))
+    // Without the rule the last leg moved the cutoff past the attached file,
+    // and the restored sweep, which runs after it, never read the file.
+    expect(await holdFor(t, row.storage_id)).toMatchObject({
+      after_restore: true,
+      erase_at: noticed + HOLD_MS,
+    })
   })
 
   it('makes a weekly sweep that starts while the restored one is still going hold, until HOLD_MS after it was noticed', async () => {

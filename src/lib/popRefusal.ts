@@ -1,4 +1,4 @@
-import { lastStep, position } from './historyIndex'
+import { afterTraversal, lastStep, position } from './historyIndex'
 import type { UnsentScope } from './leaveGuard'
 
 /* A Back or Forward the app refuses because it would close a window that
@@ -45,8 +45,13 @@ export function createPopRefusal(ask: Ask, h: History = history) {
       const step = lastStep()
       if (!step) return false
       event.stopImmediatePropagation()
-      back = { to: position() - step, reached: position(), scopes }
-      h.go(-step)
+      const refused = { to: position() - step, reached: position(), scopes }
+      back = refused
+      // after a step of the page's own that this move overtook, which lands
+      // past it and returns (lib/historyIndex), unless a move overtook this
+      afterTraversal(() => {
+        if (back === refused) h.go(-step)
+      })
       return true
     },
   }

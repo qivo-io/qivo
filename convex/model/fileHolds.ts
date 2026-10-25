@@ -2,12 +2,14 @@
  * leave file contents out, and a restore from such a backup leaves the
  * deployment's stored files as they are. A record a restore brings back
  * therefore finds its file only if the file was not erased in the meantime.
- * So a file a committed row named is held for HOLD_MS before it is erased.
+ * So a file a committed row named is held for HOLD_MS before it is erased,
+ * with the exceptions eraseFile and releaseFileNow name below.
  *
- * releaseFile is the one way to let go of such a file: an attachment removed
- * or deleted for good, a replaced or removed picture, background or preview,
- * a removed person's picture, a removed login's backgrounds and an
- * organization's deletion all call it, after the row stops naming the file.
+ * releaseFile is the way the app lets go of such a file: an attachment
+ * removed or deleted for good, a replaced or removed picture, background or
+ * preview, a removed person's picture, the backgrounds of a login removed
+ * through the app and an organization's deletion all call it, after the row
+ * stops naming the file.
  * A file that another row still names stays as it is. Otherwise a file_holds
  * row records the file with the time it may be erased, and a scheduled
  * erase (files.ts eraseHeldFile) ends the hold at that time. eraseFile
@@ -15,7 +17,11 @@
  * such as an upload refused in the same transaction or bytes nobody
  * confirmed, for the public demo and for the operator's panorama library,
  * whose storage URLs are permanent and public (panoramaImages.ts remove, and
- * a replaced library preview in backgroundPreviews.ts attach).
+ * a replaced library preview in backgroundPreviews.ts attach). releaseFileNow
+ * lets go of a file at once, for the backgrounds and previews of a login that
+ * the orphan sweep finds removed outside the app (files.ts reapOrphans), so a
+ * restore of a backup from before that removal brings back the login's
+ * background rows without their files once a sweep has run.
  *
  * The public demo keeps no backups and promises deletion 24 hours after a
  * demo starts, so on the demo (lib/demo.ts isDemoDeployment) releaseFile
@@ -204,6 +210,21 @@ export async function releaseFile(
 }
 
 /**
+ * Lets go of file `storageId` as releaseFile does, but erases it at once
+ * instead of holding it. Only the orphan sweep's accounts phase uses it, for
+ * the backgrounds and previews of a login removed outside the app (files.ts
+ * reapOrphans): the login went up to a week before the sweep found it, and a
+ * hold would keep its files about 14 days.
+ */
+export async function releaseFileNow(
+  ctx: MutationCtx,
+  storageId: Id<'_storage'> | undefined,
+): Promise<void> {
+  if (storageId === undefined || (await storageIdReferenced(ctx, storageId))) return
+  await eraseFile(ctx, storageId)
+}
+
+/**
  * Holds file `file`, which a restore left named by nothing and unheld, until
  * `erase_at` (epoch milliseconds, restoreHoldEnd). The orphan sweep calls it
  * after a restore instead of erasing the file. It schedules no erase: the
@@ -317,9 +338,9 @@ export type RestoreState = { rewound: boolean; restored_at?: number }
 
 /**
  * Whether a restore happened that noteRestore has not noticed yet, and when
- * it last noticed one. Reads only. The orphan sweep reads it in every leg,
- * so a run that began before a restore stops erasing once the restore
- * happens. On the demo, which keeps no backups, it knows of none.
+ * it last noticed one. Reads only. The orphan sweep reads it in every files
+ * leg, so a run that began before a restore stops erasing files once the
+ * restore happens. On the demo, which keeps no backups, it knows of none.
  */
 export async function restoreState(ctx: QueryCtx): Promise<RestoreState> {
   if (isDemoDeployment()) return { rewound: false }

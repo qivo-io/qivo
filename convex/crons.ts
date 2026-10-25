@@ -22,7 +22,9 @@ crons.interval(
 )
 
 // was '30 2 * * *' (0070:265)
-// The empty arguments start a run, which schedules one chain per organization (jobs.ts).
+// The empty arguments start a run, which schedules one chain per organization
+// with flagged tasks and one per organization with a due Done task in a live
+// project (jobs.ts).
 crons.daily(
   'archive-done-issues',
   { hourUTC: 2, minuteUTC: 30 },
@@ -31,7 +33,8 @@ crons.daily(
 )
 
 // was '15 3 * * *' (0110:124) — just after the archive sweep
-// The empty arguments start a run, which schedules one chain per page of profiles (jobs.ts).
+// The empty arguments start a run, which schedules one chain per page of
+// profiles whose sweep is due and one for the overdue snoozes (jobs.ts).
 crons.daily(
   'sweep-read-messages',
   { hourUTC: 3, minuteUTC: 15 },

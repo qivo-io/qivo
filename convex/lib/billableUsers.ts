@@ -26,6 +26,9 @@ const hasHomeRole = (profile: Doc<'profiles'>): boolean =>
   profile.org_role === 'admin' || profile.org_role === 'user' || profile.org_role === 'viewer'
 
 /** Active is the administrator-controlled switch, not recent login activity.
+ * Organization deletion also clears it on a home profile whose guest
+ * organizations it marks over several steps (markHomeProfileRemoved), while
+ * the profile waits to be deleted.
  * Invitations count immediately. A guest is exempt only while the same email
  * has an active home membership; claim state and subscription payment state
  * do not change that rule. All profile write paths normalize stored emails.
@@ -117,26 +120,55 @@ export async function markBillingMembershipChanged(
  * (getBillableUsers), so this marks those organizations due before the
  * profile goes, once per organization in `asked`, and the next minute's
  * sweep reconciles them. It schedules nothing itself, so a step that
- * deletes many such profiles stays within Convex's limits. Answers the rows
- * it read, which the deletion step counts against its budget. */
+ * deletes many such profiles stays within Convex's limits.
+ *
+ * It reads the email's profiles in order, after the _creationTime `after`
+ * when given, and counts each profile it reads and each organization it
+ * marks as one row of `budget`, the deletion step's. It answers null once it
+ * has read them all, or, when the budget ran out, the _creationTime through
+ * which it read every one, after which the next step goes on. It never stops
+ * inside a group of profiles that share a _creationTime, as an import can
+ * leave, so a group larger than a step cannot hold the deletion in one
+ * place. It reads such a group in one step, past the budget, so a group of a
+ * few thousand guest profiles of one email, which only a crafted import
+ * could make, would pass Convex's limits in every step and stall the
+ * deletion. When it stops early it also ends the profile's exemption (active
+ * false) in the same transaction: a reconciliation between the steps would
+ * otherwise still find the home profile, count the guests of the
+ * organizations already marked as exempt and use up their marks, and the
+ * next renewal would bill too few seats. A step that goes on (`after` given)
+ * therefore reads a profile that is no longer active. */
 export async function markHomeProfileRemoved(
   ctx: MutationCtx,
   profile: Doc<'profiles'>,
   asked: Set<string>,
-): Promise<number> {
-  if (isDemoDeployment() || !process.env.POLAR_ACCESS_TOKEN) return 0
-  if (!profile.active || !hasHomeRole(profile) || profile.email === undefined) return 0
+  budget: { rows: number },
+  after?: number,
+): Promise<number | null> {
+  if (isDemoDeployment() || !process.env.POLAR_ACCESS_TOKEN) return null
+  if (!hasHomeRole(profile) || profile.email === undefined) return null
+  if (after === undefined && !profile.active) return null
   const email = profile.email.toLowerCase()
   const now = new Date().toISOString()
-  let read = 0
-  const matches = ctx.db.query('profiles').withIndex('by_email', (q) => q.eq('email', email))
+  const matches = ctx.db
+    .query('profiles')
+    .withIndex('by_email', (q) =>
+      after === undefined ? q.eq('email', email) : q.eq('email', email).gt('_creationTime', after),
+    )
+  // the _creationTime of the profile that used up the budget
+  let through: number | undefined
   for await (const match of matches) {
-    read += 1
-    if (match.org_id === profile.org_id || match.org_role !== 'guest' || asked.has(match.org_id))
-      continue
-    asked.add(match.org_id)
-    read += 1
-    await billingDueBy(ctx, match.org_id, now)
+    if (through !== undefined && match._creationTime !== through) {
+      if (profile.active) await ctx.db.patch(profile._id, { active: false })
+      return through
+    }
+    budget.rows -= 1
+    if (match.org_id !== profile.org_id && match.org_role === 'guest' && !asked.has(match.org_id)) {
+      asked.add(match.org_id)
+      budget.rows -= 1
+      await billingDueBy(ctx, match.org_id, now)
+    }
+    if (budget.rows <= 0) through ??= match._creationTime
   }
-  return read
+  return null
 }

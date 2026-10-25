@@ -128,6 +128,8 @@ const projectsTable = defineTable({
   .index('by_parent', ['parent_id'])
   .index('by_team', ['team_id'])
   .index('by_lead', ['lead_id']) // projects_lead_idx — removeProfile's SET NULL
+  // The nightly archive pages the live projects (archived_at absent).
+  .index('by_archived_org', ['archived_at', 'org_id'])
 
 const projectAccessTable = defineTable({
   project_id: v.string(), // explicit grants may target a project or sub-project
@@ -202,10 +204,12 @@ const issuesTable = defineTable({
   // the app's task and hidden load windows: a range of active tasks' window
   // keys (lib/workspaceParts.ts)
   .index('by_org_archived_window', ['org_id', 'archived_at', 'window_key'])
-  // The nightly archive reads only Done tasks past the shortest threshold.
-  .index('by_org_archived_status_done', ['org_id', 'archived_at', 'status', 'done_at'])
-  // The nightly repair finds active tasks still flagged relations_marked.
-  .index('by_org_archived_marked', ['org_id', 'archived_at', 'relations_marked'])
+  // The nightly archive reads only a live project's Done tasks past the
+  // threshold.
+  .index('by_project_archived_status_done', ['project_id', 'archived_at', 'status', 'done_at'])
+  // The nightly repair finds the organizations with active tasks still
+  // flagged relations_marked, and each one's flagged tasks.
+  .index('by_archived_marked_org', ['archived_at', 'relations_marked', 'org_id'])
   .index('by_org_num', ['org_id', 'num'])
   .index('by_project', ['project_id'])
   // An access removal reads only the open tasks of the projects it touches.
@@ -371,6 +375,8 @@ export default defineSchema({
     cleanup_progress_at: v.optional(v.number()),
     cleanup_scheduled_id: v.optional(v.id('_scheduled_functions')),
     cleanup_file_after: v.optional(v.number()),
+    // No longer written: the purge now waits for checkStoredFiles instead of
+    // paging every stored file. Remove once no receipt holds one.
     cleanup_file_cursor: v.optional(v.string()),
     cleanup_file_wait_until: v.optional(v.number()),
     // Counters a receipt kept before demo_write_counts. New writes count
@@ -431,6 +437,17 @@ export default defineSchema({
     .index('by_state_started', ['state', 'started_at'])
     .index('by_state_lease', ['state', 'lease_until'])
     .index('by_expiry', ['expires_at']),
+
+  // At most one row: how far the demo upload recovery and the demo purge have
+  // checked stored files (model/demoUploads.ts checkStoredFiles). No row
+  // makes the next check start at the oldest file.
+  demo_upload_sweeps: defineTable({
+    // the creation time of the newest file it checked, epoch milliseconds
+    checked_through: v.number(),
+    // After a full page, the files created at checked_through that it
+    // checked, as others created then may remain. Absent, it checked them all.
+    checked_at: v.optional(v.array(v.id('_storage'))),
+  }),
 
   // Anonymous admission counters contain no addresses or workspace data.
   // Global admission windows expire automatically; no client IP is stored.
@@ -618,11 +635,25 @@ export default defineSchema({
     // times existed, which the sweep treats as due after the other targeted
     // times.
     sync_due_at: v.optional(v.string()),
-    // True when sync_due_at is only the six-hour safety pass, which the
+    // True when sync_due_at is only the daily safety pass, which the
     // sweep starts after every other due organization.
     sync_safety: v.optional(v.boolean()),
     // Reconciliations that failed in a row, which set the retry's delay.
     sync_attempts: v.optional(v.number()),
+    // When the hourly organization sweep next reads this row
+    // (orgRemovals.ts): when its service may end or its checkout deadline
+    // pass (model/orgRetention.ts retentionDue), or, while the organization
+    // has a removal, the removal's date. Never later than the first time the
+    // sweep has work for it. Null when nothing can fall due without a write.
+    // Absent only on rows written before it existed, which the sweep reads
+    // and fills in.
+    retention_at: v.optional(v.union(v.string(), v.null())),
+    // The time of the free period's next reminder that has not gone out
+    // (model/billing.ts nextReminder), which the minute sweep reads until it
+    // has, so a reminder an outage held back goes out late. Null when none is
+    // left, as once Polar bills the organization. Absent only on rows written
+    // before it existed, which the sweep fills in.
+    remind_at: v.optional(v.union(v.string(), v.null())),
     updated_at: v.string(),
     created_at: v.string(),
   })
@@ -630,7 +661,8 @@ export default defineSchema({
     .index('by_org', ['org_id'])
     .index('by_provider', ['polar_subscription_id'])
     .index('by_sync_due', ['sync_safety', 'sync_due_at'])
-    .index('by_complimentary_until', ['complimentary_until']),
+    .index('by_retention', ['retention_at'])
+    .index('by_remind', ['remind_at']),
 
   billing_periods: defineTable({
     org_id: v.string(),
@@ -846,10 +878,17 @@ export default defineSchema({
     phase: v.optional(vOrgRemovalPhase),
     progress_at: v.optional(v.string()), // the last committed step
     scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
+    // While the profiles phase marks one deleted profile's guest
+    // organizations due over more than one step (model/orgDeletion.ts): that
+    // profile, and the _creationTime through which the marking read every
+    // profile with its email (lib/billableUsers.ts markHomeProfileRemoved).
+    guest_marking: v.optional(v.object({ profile_id: v.string(), through: v.number() })),
     created_at: v.string(),
   })
     .index('by_org', ['org_id'])
-    .index('by_progress', ['progress_at']),
+    // progress_at is absent until deletion begins, so the hourly sweep reads
+    // the removals still waiting whose date has passed in one range.
+    .index('by_progress', ['progress_at', 'delete_after']),
 
   // Per-organization number counters (model/orgs.ts). Task and project
   // creation write this row instead of the organization row, which every
@@ -1060,6 +1099,15 @@ export default defineSchema({
     .index('by_uuid', ['id'])
     .index('by_profile_expiry', ['profile_id', 'expires_at'])
     .index('by_expiry', ['expires_at']),
+
+  // At most one row, written by the last leg of each finished files.ts
+  // reapOrphans run, and deleted by one that spans a restore. No row makes
+  // the next run a full one.
+  orphan_reaps: defineTable({
+    // every stored file created at or before this has been checked
+    files_through: v.number(), // epoch milliseconds
+    full_at: v.number(), // the start of the last finished full run, epoch milliseconds
+  }),
 
   milestones: milestonesTable,
 
@@ -1443,7 +1491,10 @@ export default defineSchema({
     kind: vMessageKind,
     detail: v.string(),
     created_at: v.string(),
-    read_at: v.optional(v.string()), // client-writable (markRead/markUnread; snooze and wake clear it)
+    // client-writable (markRead/markUnread; snooze and wake clear it). A
+    // write that leaves a row read and not snoozed keeps message_sweeps in
+    // step (model/messages.ts noteSweepable).
+    read_at: v.optional(v.string()),
     // Snooze: the item is hidden on every client until this ISO instant, when
     // the scheduled messages.wake clears it (or an arrival does — news wakes
     // the row). Every row of one (recipient, issue) item carries the SAME
@@ -1462,6 +1513,12 @@ export default defineSchema({
     .index('by_uuid', ['id'])
     .index('by_recipient', ['recipient_id'])
     .index('by_recipient_read', ['recipient_id', 'read_at'])
+    // a recipient's unsnoozed rows, unread first and then oldest read
+    // first, which the nightly sweep (jobs.ts oldestDue and sweepProfile),
+    // Mark all as read and Remove all read (model/messages.ts
+    // markAllMessagesRead, removeReadMessages) read without passing over the
+    // snoozed ones
+    .index('by_recipient_snoozed_read', ['recipient_id', 'snoozed_until', 'read_at'])
     .index('by_recipient_issue', ['recipient_id', 'issue_id'])
     .index('by_recipient_issue_read_order', [
       'recipient_id',
@@ -1476,8 +1533,32 @@ export default defineSchema({
     // the snoozed ones, which an archive step also releases
     .index('by_issue_snoozed', ['issue_id', 'snoozed_until'])
     .index('by_actor', ['actor_id']) // messages_actor_idx — removeProfile's SET NULL
-    // the nightly sweep's fallback wake finds a recipient's overdue snoozes
-    .index('by_recipient_snoozed', ['recipient_id', 'snoozed_until']),
+    // the nightly sweep's fallback wake finds the overdue snoozes of every
+    // recipient in one range
+    .index('by_snoozed', ['snoozed_until']),
+
+  // When the nightly read-message sweep next visits a profile (jobs.ts
+  // sweepReadMessages): no later than the oldest of its read, unsnoozed
+  // messages falls due under its retention period. At most one row per
+  // profile, and none for a profile with nothing the sweep could delete.
+  // The writes that make a message read keep it in step
+  // (model/messages.ts noteSweepable), and the sweep moves it to the next
+  // due time or deletes it. Deleted with its profile.
+  message_sweeps: defineTable({
+    profile_id: v.string(),
+    due_at: v.string(), // ISO instant
+  })
+    .index('by_profile', ['profile_id'])
+    .index('by_due', ['due_at']),
+
+  // At most one row: the run of the read-message sweep's last finished full
+  // pass, which gave every profile with a read message under a retention
+  // period a message_sweeps row due no later than that message. A run
+  // starts with the full pass when this row is missing or older than
+  // jobs.ts SWEEP_FULL_AFTER_MS (sweepReadMessages).
+  message_sweep_seeds: defineTable({
+    seeded_at: v.string(), // ISO instant, the run's start
+  }),
 
   user_prefs: defineTable({
     profile_id: v.string(),

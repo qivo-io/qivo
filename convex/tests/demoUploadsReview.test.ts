@@ -3,6 +3,7 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
+import type { Id } from '../_generated/dataModel'
 import type { ActionCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import http from '../http'
@@ -266,6 +267,242 @@ describe('demo upload independent review regressions', () => {
     expect(await t.run((ctx) => ctx.db.system.get(file))).not.toBeNull()
   })
 
+  it('checks each stored file once and deletes a crashed receiver file after its lease', async () => {
+    const { t, fx, issue, authId } = await setup()
+    /** One sweep call, and the documents it read. */
+    const sweep = (args: { after?: number; cursor?: string } = {}) =>
+      t.run(async (ctx) => {
+        await ctx.runMutation(internal.demoUploads.sweep, args)
+        return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+      })
+    const legs = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+          (job) => job.name === 'demoUploads:sweep' && job.state.kind === 'pending',
+        ),
+      )
+    const attached = await t.run(async (ctx) => {
+      const ids = []
+      for (let i = 0; i < 100; i++) {
+        const storage_id = await ctx.storage.store(new Blob(['kept']) as never)
+        await ctx.db.insert('issue_attachments', {
+          org_id: issue.org_id,
+          id: uuid(),
+          issue_id: issue.id,
+          name: `${i}.txt`,
+          size_bytes: 4,
+          storage_id,
+          inline: false,
+          uploaded_by: fx.admin.id,
+          created_at: new Date(NOW).toISOString(),
+        })
+        ids.push(storage_id)
+      }
+      return ids
+    })
+    vi.setSystemTime(NOW + 121_000)
+    // The first pass checks 64 files and queues a leg for the rest. A cron
+    // run before that leg takes the rest over, and the leg then stops.
+    await sweep()
+    const [leg] = await legs()
+    await sweep()
+    expect(await legs()).toHaveLength(1)
+    expect(await sweep(leg.args[0] as { after: number })).toBe(1)
+    await t.run((ctx) => ctx.scheduler.cancel(leg._id))
+    // and so does a leg the previous release queued
+    expect(await sweep({ cursor: 'previous release' })).toBe(0)
+
+    // A receiver stores its bytes and crashes before it records them.
+    await t.run(async (ctx) => {
+      const reserved = await reserveDemoUpload(ctx, {
+        authId,
+        kind: 'attachment',
+        targetId: issue.id,
+        bytes: 100,
+      })
+      await beginDemoUpload(ctx, reserved.id, authId)
+    })
+    const crashed = await t.run((ctx) => ctx.storage.store(new Blob(['lost']) as never))
+    // While its lease runs, a minute's run reads the progress row and the
+    // receiving ticket, not the 100 files it checked before.
+    vi.setSystemTime(Date.now() + 60_000)
+    expect(await sweep()).toBe(2)
+    expect(await legs()).toEqual([])
+    expect(await t.run((ctx) => ctx.db.system.get(crashed))).not.toBeNull()
+
+    vi.setSystemTime(Date.now() + 121_000)
+    await sweep()
+    expect(await t.run((ctx) => ctx.db.system.get(crashed))).toBeNull()
+    expect(
+      (await t.run((ctx) => Promise.all(attached.map((id) => ctx.db.system.get(id))))).every(
+        (file) => file !== null,
+      ),
+    ).toBe(true)
+  })
+
+  it('deletes a file its live ticket held when it was checked, once the ticket expires', async () => {
+    const { t, issue, authId } = await setup()
+    // uploaded for an attachment the person never saved
+    const { ticket, file } = await t.run(async (ctx) => {
+      const reserved = await reserveDemoUpload(ctx, {
+        authId,
+        kind: 'attachment',
+        targetId: issue.id,
+        bytes: 100,
+      })
+      await beginDemoUpload(ctx, reserved.id, authId)
+      const file = await ctx.storage.store(new Blob(['never attached']) as never)
+      await retainDemoUpload(ctx, reserved.id, authId, file)
+      return { ticket: (await demoUploadFor(ctx, reserved.id))!, file }
+    })
+    vi.setSystemTime(NOW + 121_000)
+    await t.mutation(internal.demoUploads.sweep, {})
+    // checked and kept, as its ticket held it
+    const kept = await t.run((ctx) => ctx.db.system.get(file))
+    expect(kept).not.toBeNull()
+    const [progress] = await t.run((ctx) => ctx.db.query('demo_upload_sweeps').collect())
+    expect(progress.checked_through).toBeGreaterThanOrEqual(kept!._creationTime)
+
+    vi.setSystemTime(ticket.expires_at)
+    await t.mutation(internal.demoUploads.sweep, {})
+    expect(await t.run((ctx) => ctx.db.system.get(file))).toBeNull()
+    expect(await t.run((ctx) => ctx.db.get(ticket._id))).toBeNull()
+  })
+
+  /* Stores 63 files created at one time and 2 created a millisecond later,
+   * none of them recorded, so a page of 64 ends between the last two.
+   * convex-test gives an insert 0.001 ms after the one before, which rounds
+   * away above 2^52 ms, so there the inserts of one millisecond share a time,
+   * as Convex allows. */
+  const TIED = 2 ** 52
+  async function tiedFiles(t: T) {
+    const store = (n: number) =>
+      t.run(async (ctx) => {
+        const ids = []
+        for (let i = 0; i < n; i++) ids.push(await ctx.storage.store(new Blob(['lost']) as never))
+        return ids
+      })
+    vi.setSystemTime(TIED)
+    const files = await store(63)
+    vi.setSystemTime(TIED + 1)
+    files.push(...(await store(2)))
+    const times = await t.run((ctx) =>
+      Promise.all(files.map(async (id) => (await ctx.db.system.get(id))!._creationTime)),
+    )
+    expect(times.filter((time) => time === TIED + 1)).toHaveLength(2)
+    return files
+  }
+  /* Those of `files` still stored. */
+  const stored = (t: T, files: Id<'_storage'>[]) =>
+    t.run(async (ctx) =>
+      (await Promise.all(files.map((id) => ctx.db.system.get(id)))).filter(Boolean),
+    )
+
+  it('checks a file created at the same time as the last file of a full page', async () => {
+    const { t } = await setup()
+    const files = await tiedFiles(t)
+    vi.setSystemTime(TIED + 121_000)
+    await t.mutation(internal.demoUploads.sweep, {})
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    expect(await stored(t, files)).toEqual([])
+  })
+
+  it('purges a demo only after it checked the file tied with the last file of a page', async () => {
+    const { t, authId } = await setup()
+    const receipt = await t.run(async (ctx) => {
+      const receipt = (await ctx.db
+        .query('demo_sessions')
+        .withIndex('by_auth_user', (q) => q.eq('auth_user_id', authId))
+        .unique())!
+      await ctx.db.patch(receipt._id, { status: 'deleting' })
+      return receipt
+    })
+    const files = await tiedFiles(t)
+    const drain = () => t.run((ctx) => drainDemoUploads(ctx, receipt.id))
+    vi.setSystemTime(TIED + 2)
+    expect(await drain()).toBe(false)
+    const barrier = (await t.run((ctx) => ctx.db.get(receipt._id)))!.cleanup_file_after!
+    vi.setSystemTime(barrier + 1)
+    // a page of 64, then the 65th file, which shares the last one's time
+    expect(await drain()).toBe(false)
+    expect(await stored(t, files)).toHaveLength(1)
+    expect(await drain()).toBe(true)
+    expect(await stored(t, files)).toEqual([])
+  })
+
+  it('deletes a demo with its crashed receiver bytes without rereading checked files', async () => {
+    const { t, fx, issue, authId } = await setup()
+    // Another workspace's 200 attached files, which the minute's sweep checked.
+    const attached = await t.run(async (ctx) => {
+      const ids = []
+      for (let i = 0; i < 200; i++) {
+        const storage_id = await ctx.storage.store(new Blob(['kept']) as never)
+        await ctx.db.insert('issue_attachments', {
+          org_id: fx.otherOrg.id,
+          id: uuid(),
+          issue_id: uuid(),
+          name: `${i}.txt`,
+          size_bytes: 4,
+          storage_id,
+          inline: false,
+          uploaded_by: fx.otherAdmin.id,
+          created_at: new Date(NOW).toISOString(),
+        })
+        ids.push(storage_id)
+      }
+      return ids
+    })
+    vi.setSystemTime(NOW + 121_000)
+    await t.mutation(internal.demoUploads.sweep, {})
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    // The demo's receiver stores its bytes and crashes, and the demo expires.
+    const { receipt, crashed } = await t.run(async (ctx) => {
+      const reserved = await reserveDemoUpload(ctx, {
+        authId,
+        kind: 'attachment',
+        targetId: issue.id,
+        bytes: 100,
+      })
+      await beginDemoUpload(ctx, reserved.id, authId)
+      const crashed = await ctx.storage.store(new Blob(['lost']) as never)
+      const receipt = (await ctx.db
+        .query('demo_sessions')
+        .withIndex('by_auth_user', (q) => q.eq('auth_user_id', authId))
+        .unique())!
+      await ctx.db.patch(receipt._id, { status: 'deleting' })
+      return { receipt, crashed }
+    })
+    vi.setSystemTime(Date.now() + 121_000)
+    let read = 0
+    let batches = 0
+    for (let done = false; !done; batches++) {
+      if (batches === 10) throw new Error('the uploads phase did not finish')
+      done = await t.run(async (ctx) => {
+        const finished = await drainDemoUploads(ctx, receipt.id)
+        read += (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        return finished
+      })
+      const progress = (await t.run((ctx) => ctx.db.get(receipt._id)))!
+      vi.setSystemTime(
+        Math.max(
+          Date.now() + 5000,
+          progress.cleanup_file_after ?? 0,
+          progress.cleanup_file_wait_until ?? 0,
+        ),
+      )
+    }
+    expect(await t.run((ctx) => ctx.db.system.get(crashed))).toBeNull()
+    expect(
+      (await t.run((ctx) => Promise.all(attached.map((id) => ctx.db.system.get(id))))).every(
+        (file) => file !== null,
+      ),
+    ).toBe(true)
+    // the barrier and one check, reading the receipt, its ticket and the
+    // crashed file, not the 200 checked files and their attachments
+    expect(batches).toBe(2)
+    expect(read).toBeLessThan(15)
+  })
+
   it('makes expiry-sweep progress past retained attachments', async () => {
     const { t, fx, issue, authId } = await setup()
     const staleId = await t.run(async (ctx) => {
@@ -309,8 +546,12 @@ describe('demo upload independent review regressions', () => {
         state: 'pending',
       })
     })
+    // The first run extends the 100 retained tickets it reads, so the next
+    // minute's run reaches the stale one behind them.
     await t.mutation(internal.demoUploads.sweep, {})
-    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    expect(await t.run((ctx) => ctx.db.get(staleId))).not.toBeNull()
+    vi.setSystemTime(NOW + 60_000)
+    await t.mutation(internal.demoUploads.sweep, {})
     expect(await t.run((ctx) => ctx.db.get(staleId))).toBeNull()
     expect(await t.run((ctx) => ctx.db.query('issue_attachments').collect())).toHaveLength(100)
   })

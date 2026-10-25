@@ -75,16 +75,50 @@ async function readWorker(t: T, kind: 'expand' | 'dispatch') {
   )
 }
 
-async function reservedWorker(t: T, kind: 'expand' | 'dispatch') {
+/** One wake of `kind`, as the cron sends it, and the reservation it leaves. */
+async function wake(t: T, kind: 'expand' | 'dispatch') {
   await t.mutation(kind === 'expand' ? expandWebhookEventsRef : dispatchWebhooksRef, {})
-  const worker = await readWorker(t, kind)
+  return readWorker(t, kind)
+}
+
+async function reservedWorker(t: T, kind: 'expand' | 'dispatch') {
+  const worker = await wake(t, kind)
   if (!worker) throw new Error('Webhook worker was not reserved')
   return worker
 }
 
+/** Runs the current dispatch batch, after a wake when none is reserved. A
+ * wake that finds nothing due reserves nothing, and nothing runs. */
 async function dispatchQueue(t: T): Promise<void> {
-  const worker = (await readWorker(t, 'dispatch')) ?? (await reservedWorker(t, 'dispatch'))
-  await t.mutation(runWebhookWorkerRef, { kind: 'dispatch', generation: worker.generation })
+  const worker = (await readWorker(t, 'dispatch')) ?? (await wake(t, 'dispatch'))
+  if (worker)
+    await t.mutation(runWebhookWorkerRef, { kind: 'dispatch', generation: worker.generation })
+}
+
+/** One due item of `kind` whose batch schedules no other work: an event
+ * without recipients, or an old delivery the dispatcher retires unsent. */
+async function queueWork(t: T, orgId: string, kind: 'expand' | 'dispatch') {
+  await t.run(async (ctx) => {
+    const item = {
+      id: uuid(),
+      org_id: orgId,
+      project_id: uuid(),
+      task_id: uuid(),
+      name: 'task.updated' as const,
+      payload: '{}',
+      created_at: Date.now(),
+    }
+    if (kind === 'expand')
+      await ctx.db.insert('webhook_events', { ...item, subscription_rows: [], next_recipient: 0 })
+    else
+      await ctx.db.insert('webhook_deliveries', {
+        ...item,
+        subscription_id: uuid(),
+        status: 'pending',
+        attempts: 0,
+        scheduled_for: Date.now(),
+      })
+  })
 }
 
 /** Inspect the batch's new jobs without executing network delivery actions. */
@@ -94,8 +128,11 @@ async function recordJobs(
   run?: () => Promise<unknown>,
 ): Promise<void> {
   if (!run) {
-    const worker = (await readWorker(t, 'dispatch')) ?? (await reservedWorker(t, 'dispatch'))
-    run = () => t.mutation(runWebhookWorkerRef, { kind: 'dispatch', generation: worker.generation })
+    const worker = (await readWorker(t, 'dispatch')) ?? (await wake(t, 'dispatch'))
+    run = async () => {
+      if (worker)
+        await t.mutation(runWebhookWorkerRef, { kind: 'dispatch', generation: worker.generation })
+    }
   }
   const before = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
   const ids = new Set(before.map((job) => job._id))
@@ -111,6 +148,7 @@ describe('bounded durable webhook dispatch', () => {
     'coalesces %s wakes, recovers cancellation, and fences stale generations',
     async (kind) => {
       const f = await fixture()
+      await queueWork(f.t, f.fx.org.id, kind)
       const first = await reservedWorker(f.t, kind)
       const calls: { name: string; delay: number }[] = []
       for (let wake = 0; wake < 20; wake++)
@@ -137,6 +175,7 @@ describe('bounded durable webhook dispatch', () => {
     'guarantees one fresh %s pass after repeated wakes on a live reservation',
     async (kind) => {
       const f = await fixture()
+      await queueWork(f.t, f.fx.org.id, kind)
       const worker = await reservedWorker(f.t, kind)
       for (let wake = 0; wake < 20; wake++) await reservedWorker(f.t, kind)
       expect((await readWorker(f.t, kind))?.rerun).toBe(true)
@@ -154,6 +193,68 @@ describe('bounded durable webhook dispatch', () => {
       )
       expect(calls).toEqual([])
       expect(await readWorker(f.t, kind)).toBeNull()
+    },
+  )
+
+  it.each(['expand', 'dispatch'] as const)(
+    'an idle %s wake writes nothing, and a later one handles due work after a dead worker',
+    async (kind) => {
+      const f = await fixture()
+      const cron = kind === 'expand' ? expandWebhookEventsRef : dispatchWebhooksRef
+      /** One cron call, with what it read and wrote. */
+      const tick = () =>
+        f.t.run(async (ctx) => {
+          await ctx.runMutation(cron, {})
+          const used = await ctx.meta.getTransactionMetrics()
+          return { read: used.documentsRead.used, written: used.documentsWritten.used }
+        })
+      const jobs = () => f.t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+      // A retry waiting for its backoff is not due yet.
+      await f.t.run((ctx) =>
+        ctx.db.insert('webhook_deliveries', {
+          id: uuid(),
+          org_id: f.fx.org.id,
+          subscription_id: uuid(),
+          project_id: uuid(),
+          task_id: uuid(),
+          name: 'task.updated',
+          payload: '{}',
+          status: 'pending',
+          attempts: 1,
+          created_at: Date.now(),
+          scheduled_for: Date.now() + 10_000,
+        }),
+      )
+      expect(await tick()).toEqual({ read: 0, written: 0 })
+      expect(await readWorker(f.t, kind)).toBeNull()
+      expect(await jobs()).toEqual([])
+
+      // A worker died with its reservation in place; idle wakes leave it.
+      await queueWork(f.t, f.fx.org.id, kind)
+      const dead = await reservedWorker(f.t, kind)
+      await f.t.run((ctx) => ctx.scheduler.cancel(dead.scheduled_job))
+      await f.t.run(async (ctx) => {
+        const table = kind === 'expand' ? 'webhook_events' : 'webhook_deliveries'
+        const row = (await ctx.db.query(table).order('desc').first())!
+        await ctx.db.delete(row._id)
+      })
+      expect(await tick()).toMatchObject({ written: 0 })
+      expect((await readWorker(f.t, kind))?.generation).toBe(dead.generation)
+
+      await queueWork(f.t, f.fx.org.id, kind)
+      const replacement = await reservedWorker(f.t, kind)
+      expect(replacement.generation).not.toBe(dead.generation)
+      await f.t.mutation(runWebhookWorkerRef, { kind, generation: replacement.generation })
+      expect(await readWorker(f.t, kind)).toBeNull()
+      if (kind === 'expand')
+        expect(await f.t.run((ctx) => ctx.db.query('webhook_events').collect())).toEqual([])
+      else expect((await f.rows()).map((row) => row.status).sort()).toEqual(['failed', 'pending'])
+
+      // The retry is dispatched once its backoff ends.
+      if (kind === 'dispatch') {
+        vi.setSystemTime(Date.now() + 10_000)
+        expect(await reservedWorker(f.t, kind)).not.toBeNull()
+      }
     },
   )
 

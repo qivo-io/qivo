@@ -41,7 +41,7 @@ import { addressMoved, rememberAddress } from './lib/addressBook'
 import { closeOrAsk } from './lib/discardQuestion'
 import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
 import { parseSyncScope } from './lib/teamSync'
-import { useMobile } from './lib/useMobile'
+import { historyStepping, onHistorySettled, useMobile, whenHistorySettled } from './lib/useMobile'
 import './styles/mobile.css'
 import { announce } from './lib/announce'
 import { closedBy, dropRefusedTask } from './lib/closingMoves'
@@ -54,6 +54,8 @@ import { type RevealRequest, withoutTaken } from './lib/reveal'
 import {
   ARCHIVED_TASKS_PAGE,
   buildPath,
+  heldRef,
+  holdTask,
   ORG_NONE,
   orgSegmentOf,
   parseHash,
@@ -800,6 +802,18 @@ function App() {
   // into the first visible project instead
   const liveScope = (s) => !!s && (P.isWideScope(s) || !!P.project(s))
   const uiScope = liveScope(ui0.scope) ? ui0.scope : null
+  /* A task still to arrive that the boot address names. A task address
+     makes the first load wait for every task (AuthGate), but Back or
+     Forward during that load can reach one after the load began in stages.
+     The boot then holds it as onPop does (pendingTask), where it would
+     otherwise rewrite the address to the page's own. */
+  const [held0] = useState(() => {
+    const ref =
+      !r0?.issue && P.stillLoading() !== null
+        ? taskSegmentOf(location.pathname, location.hash)
+        : undefined
+    return ref === undefined ? undefined : holdTask(ref)
+  })
   // issue URLs carry no scope segment (the issue names its own project):
   // keep the saved scope when the issue lives inside it, else jump to the
   // issue's sub-project — link recipients land on a board that shows it.
@@ -824,13 +838,13 @@ function App() {
     // scope/settings routes without a view mean overview
     r0?.view
       ? r0.view
-      : r0?.issue || r0?.sync || (mobile && (r0?.settings || r0?.projects || r0?.inbox))
+      : r0?.issue || held0 || r0?.sync || (mobile && (r0?.settings || r0?.projects || r0?.inbox))
         ? uiView
         : r0
           ? 'overview'
           : uiView,
   )
-  const [openIssue, setOpenIssue] = useState(r0?.issue || null)
+  const [openIssue, setOpenIssue] = useState(r0?.issue || held0 || null)
   // A new task's handle is a preview that moves when another person's create
   // takes its number while the write waits. The open window follows its task,
   // with every move of one repaint applied at once.
@@ -983,13 +997,35 @@ function App() {
   const settingsReturn = useRef(NO_RETURN)
   const syncReturn = useRef(NO_RETURN)
   const replaceNextHistory = useRef(false)
+  // bumped each time a step back that the url sync waited for ends, so it
+  // looks again. One steps over closed phone layers' markers (lib/useMobile),
+  // which no popstate listener hears, the other over a refused Back or
+  // Forward (onPop).
+  const [settled, setSettled] = useState(0)
+  useEffect(() => onHistorySettled(() => setSettled((n) => n + 1)), [])
   /* The address Back or Forward reached while tasks still load, when it
      names a task still to arrive (lib/router taskSegmentOf). The window
-     holds its reference and says the task is loading, the address stays
-     while the page is the one Back or Forward set (`page`), and the task
-     opens once it arrives, in the scope Back or Forward would have chosen
-     for it (`scope`, `preferred`) unless the page moved meanwhile, or the
-     window closes once every task has loaded without it. */
+     holds its reference apart from task handles (`ref`, lib/router
+     holdTask) and says the task is loading. The address stays until the
+     task arrives; a page moved meanwhile (`page`) names itself without
+     the task until then. The task opens once the address's own
+     organization answers it, in the scope Back or Forward would have
+     chosen for it (`scope`, `preferred`) unless the page moved, or the
+     window closes once every task has loaded without it. The boot holds
+     its own address's task the same way (held0), with the boot's scope
+     rule. */
+  const [bootHold] = useState(() =>
+    held0
+      ? {
+          pathname: location.pathname,
+          hash: location.hash,
+          ref: held0,
+          page: pageKey({ scope, view, settingsPage, inboxOpen, projectsOpen, sync }),
+          scope: r0?.scope,
+          preferred: uiScope,
+        }
+      : null,
+  )
   const pendingTask = useRef<{
     pathname: string
     hash: string
@@ -997,7 +1033,7 @@ function App() {
     page: string
     scope?: string
     preferred: string | null
-  } | null>(null)
+  } | null>(bootHold)
   // the project an "Archived tasks" entry asked for; null = derive from the
   // current scope (Settings' own Archived tasks item, deep links)
   const [archiveProject, setArchiveProject] = useState<string | null>(null)
@@ -1065,47 +1101,40 @@ function App() {
   // native Back has changed the URL and push the previous page back into history.
   useLayoutEffect(() => {
     // the address is not the page's while it steps back over a refused Back
-    // or Forward, and a write now would move the entry it steps back to
-    if (refusal.stepping()) return
+    // or Forward, or over closed phone layers' markers, and a write now
+    // would move the entry it steps back to (it looks again once landed)
+    if (refusal.stepping() || historyStepping()) return
     // a task Back or Forward reached keeps its address until it arrives,
-    // while the page stays the one it set
-    if (
-      pendingTask.current?.ref === openIssue &&
-      pendingTask.current.page ===
-        pageKey({ scope, view, settingsPage, inboxOpen, projectsOpen, sync })
-    )
-      return
-    const p = buildPath({
+    // while the page and the address are still the ones it reached: its
+    // held reference names no task an address can be built for. A page
+    // moved meanwhile gets its own address, without the task (pendingTask)
+    const held = heldRef(openIssue) !== undefined
+    const pending = pendingTask.current
+    const state = {
       scope,
       view,
-      openIssue,
+      openIssue: held ? null : openIssue,
       settingsPage,
       inboxOpen,
       projectsOpen,
       sync,
-    })
+    }
+    const onHeld = held && location.pathname === pending?.pathname && location.hash === pending.hash
+    if (onHeld && pending.page === pageKey(state)) return
+    const p = buildPath(state)
     // the hash term is what finally clears a translated legacy link: the path
     // is already canonical by then, so nothing else would ever rewrite it
     if (location.pathname === p && !location.hash) {
       replaceNextHistory.current = false
       return
     }
-    if (
-      replaceNextHistory.current ||
-      pathMatchesState(location.pathname, {
-        scope,
-        view,
-        openIssue,
-        settingsPage,
-        inboxOpen,
-        projectsOpen,
-        sync,
-      })
-    )
-      history.replaceState(history.state, '', p)
+    // a move from the held task's address earns an entry where it would
+    // with the task open, as once the task arrives (lib/router)
+    const inPlace = pathMatchesState(location.pathname, onHeld ? { ...state, openIssue } : state)
+    if (replaceNextHistory.current || inPlace) history.replaceState(history.state, '', p)
     else history.pushState({ qivoPrevious: location.pathname }, '', p)
     replaceNextHistory.current = false
-  }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev])
+  }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev, settled])
   // the task a held Back or Forward named, once it arrived or every task did
   useEffect(() => {
     const pending = pendingTask.current
@@ -1119,8 +1148,9 @@ function App() {
     pendingTask.current = null
     const here = { scope, view, settingsPage, inboxOpen, projectsOpen, sync }
     const unmoved = pending.page === pageKey(here)
-    // the address named this task all along
-    if (unmoved) replaceNextHistory.current = true
+    // the entry names the held task, or the page's own address once the page
+    // moved meanwhile: either way the task takes it over in place
+    replaceNextHistory.current = true
     // the scope Back or Forward gives a task address (onPop)
     if (issue && unmoved && !sync) {
       const sc = liveScope(pending.scope) ? pending.scope : scopeForIssue(issue, pending.preferred)
@@ -1142,6 +1172,9 @@ function App() {
   }, [addrMoved, scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev])
   useEffect(() => {
     const onPop = (event: PopStateEvent) => {
+      // this popstate ends the step back over a refused Back or Forward,
+      // landed or overtaken, which the url sync waited for
+      if (refusal.stepping()) setSettled((n) => n + 1)
       // the step back over a refused Back or Forward, which then asks
       if (refusal.landed(event)) return
       // a Remaining number typed on Team sync and not yet committed: history
@@ -1166,10 +1199,11 @@ function App() {
          A Team sync address names its own scope, so the one underneath stays
          put, task or not. */
       // a task still to arrive while tasks load (pendingTask)
-      const held =
+      const ref =
         !r.issue && P.stillLoading() !== null
           ? taskSegmentOf(location.pathname, location.hash)
           : undefined
+      const held = ref === undefined ? undefined : holdTask(ref)
       const preferred = r.view && !r.scope && P.isWideScope(was.scope) ? null : was.scope
       const sc = r.sync
         ? undefined
@@ -1435,25 +1469,28 @@ function App() {
 
   // A phone's Back action consumes the page it opened. Direct links have no
   // in-app predecessor; replace those with the parent instead of looping back
-  // into a task or setting the user just dismissed.
-  const backOrSet = (patch, apply: () => void) => {
-    const phoneHistory = mobile || isLandscapeRoadmapOpen()
-    const target = buildPath({
-      scope,
-      view,
-      openIssue,
-      settingsPage,
-      inboxOpen,
-      projectsOpen,
-      sync,
-      ...patch,
+  // into a task or setting the user just dismissed. Both read the entry the
+  // page is on, so they wait for a dialog that finished with this move to
+  // take its phone Back step out of the history (lib/useMobile).
+  const backOrSet = (patch, apply: () => void) =>
+    whenHistorySettled(() => {
+      const phoneHistory = mobile || isLandscapeRoadmapOpen()
+      const target = buildPath({
+        scope,
+        view,
+        openIssue,
+        settingsPage,
+        inboxOpen,
+        projectsOpen,
+        sync,
+        ...patch,
+      })
+      if (phoneHistory && history.state?.qivoPrevious === target) history.back()
+      else {
+        replaceNextHistory.current = phoneHistory
+        apply()
+      }
     })
-    if (phoneHistory && history.state?.qivoPrevious === target) history.back()
-    else {
-      replaceNextHistory.current = phoneHistory
-      apply()
-    }
-  }
   const closeIssue = () =>
     move({ openIssue: null }, () => backOrSet({ openIssue: null }, () => setOpenIssue(null)))
 

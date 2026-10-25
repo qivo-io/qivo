@@ -64,6 +64,7 @@ import { LIMITS, overText } from './lib/limits'
 import { projectRightAfterUpdate } from './lib/projectCreators'
 import { logActivity } from './model/activity'
 import { pendingRemoval, removeProfile } from './model/cascade'
+import { lowerSweepDue } from './model/messages'
 import { assertNotLastAdmin, nameInitials, setPlannableHoursCore } from './model/orgs'
 import {
   assertNameShape,
@@ -546,7 +547,9 @@ export const setDisplayName = authedMutation({
  * set_message_retention (0110 as widened by 0112): retention follows the
  * person — every seat matched by login or claimed address, unclaimed invites
  * included. null = Never, stored as ABSENT (the field is removed); an agent
- * has no login, so this can never reach one. No narration. */
+ * has no login, so this can never reach one. No narration. Each changed
+ * seat's read-message sweep falls due now (model/messages.ts
+ * lowerSweepDue), so a shorter period takes effect the next night. */
 export const setMessageRetention = authedMutation({
   args: { days: v.union(v.number(), v.null()) },
   handler: async (ctx, { days }) => {
@@ -554,9 +557,11 @@ export const setMessageRetention = authedMutation({
     const matched = await myMatchedSeats(ctx)
     if (matched.length === 0) throw rule('no profile for this account')
     const value = days ?? undefined
+    const now = new Date().toISOString()
     for (const p of matched) {
       if (p.message_retention_days === value) continue
       await ctx.db.patch(p._id, { message_retention_days: value })
+      await lowerSweepDue(ctx, p.id, now)
     }
     return null
   },

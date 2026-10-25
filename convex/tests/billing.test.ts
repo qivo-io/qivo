@@ -14,14 +14,16 @@ import {
   STORAGE_ATTEMPTS,
   STORAGE_RETRY_MS,
   STORAGE_STALL_MS,
+  SWEEP_INTERVAL_MS,
   SYNC_PAGE,
   SYNC_SAFETY_MS,
 } from '../billingSync'
-import { markBillingMembershipChanged } from '../lib/billableUsers'
+import { billingDueBy, getBillableUsers, markBillingMembershipChanged } from '../lib/billableUsers'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
 import { LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
-import { enrollOrganization, STORAGE_PAGE, storageUsage } from '../model/billing'
+import { enrollOrganization, nextReminder, STORAGE_PAGE, storageUsage } from '../model/billing'
+import { REMOVAL_BUDGET } from '../model/cascade'
 import { deleteOrgStep } from '../model/orgDeletion'
 import {
   as,
@@ -87,9 +89,11 @@ const eventReady = makeFunctionReference<'mutation', { id: string }, boolean>(
 )
 const reconcile = makeFunctionReference<'action', { org_id: string }, null>('billingSync:reconcile')
 const sweep = makeFunctionReference<'mutation', Record<string, never>, null>('billingSync:sweep')
-const claim = makeFunctionReference<'mutation', { org_id: string }, { token: string } | null>(
-  'billingSync:claim',
-)
+const claim = makeFunctionReference<
+  'mutation',
+  { org_id: string },
+  { token: string; seats: number } | null
+>('billingSync:claim')
 const release = makeFunctionReference<
   'mutation',
   { org_id: string; token: string; seats?: number; error?: string },
@@ -97,7 +101,7 @@ const release = makeFunctionReference<
 >('billingSync:release')
 const reminders = makeFunctionReference<
   'mutation',
-  { now: number; threshold: number; cursor: string | null },
+  { now: number; lane?: 'due' | 'unset'; threshold?: number; cursor: string | null },
   null
 >('billingSync:reminders')
 const reserveCheckout = makeFunctionReference<'mutation', { org_id: string }, { token: string }>(
@@ -199,6 +203,10 @@ const storageEvents = (t: T) =>
 
 /* A provider modification time `n` minutes after NOW. */
 const iso = (n: number) => new Date(Date.parse(NOW) + n * 60_000).toISOString()
+
+/* The minutes after a reconciliation at which an interval of `ms` counted
+ * from it is stored: a minute short, for the sweep (billingSync.ts after). */
+const minutesAfter = (ms: number) => (ms - SWEEP_INTERVAL_MS) / 60_000
 
 const DEFAULT_STORAGE_PAGE = { ...STORAGE_PAGE }
 const DEFAULT_SYNC_PAGE = { ...SYNC_PAGE }
@@ -601,6 +609,30 @@ describe('provider state, retries and billing snapshots', () => {
     expect(rows.audits.filter((row) => row.action === 'billing.subscription')).toHaveLength(1)
   })
 
+  it('leaves the subscription row as it is when Polar reports nothing new', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    await sample(t)
+    const before = await stored(t, f.org.id)
+    vi.setSystemTime(Date.now() + 60 * 60_000)
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    expect(await stored(t, f.org.id)).toEqual(before)
+  })
+
+  it('writes the subscription row when Polar reports one field changed', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    await sample(t)
+    vi.setSystemTime(Date.now() + 60 * 60_000)
+    await t.mutation(apply, {
+      payload: remote(f.org.id, { cancel_at_period_end: true, modified_at: iso(60) }),
+    })
+    expect(await stored(t, f.org.id)).toMatchObject({
+      cancel_at_period_end: true,
+      updated_at: new Date().toISOString(),
+    })
+  })
+
   it('records the ceiling sentence and leaves Polar seats alone past the online billing ceiling', async () => {
     const { t, f } = await fixture()
     await t.mutation(apply, { payload: remote(f.org.id) })
@@ -713,7 +745,11 @@ describe('provider state, retries and billing snapshots', () => {
     expect(sent).toMatchObject({ attempts: 1, sent_at: NOW })
   })
 
-  it('reads and records the storage of an organization with 5,000 tasks within the transaction limits', async () => {
+  /* An organization with the 5,000 tasks below, on transaction limits as the
+   * backend sets them. convex-test reads every stored document for each
+   * index lookup, and counting the files looks up each task once, so each
+   * test below counts them once. */
+  async function fiveThousandTasks() {
     const { t, f } = await fixture({ transactionLimits: true })
     await t.mutation(apply, { payload: remote(f.org.id), event_id: 'first-period' })
     // 5,000 tasks, 4,500 of them with a 2 MB file, a third of those in PCB.
@@ -765,7 +801,11 @@ describe('provider state, retries and billing snapshots', () => {
         created_at: NOW,
       }),
     )
+    return { t, f }
+  }
 
+  it('reports the storage of an organization with 5,000 tasks within the transaction limits', async () => {
+    const { t, f } = await fiveThousandTasks()
     // the admin Billing page
     const report = await as(t, f.admin).action(usageReport, { org_id: f.org.id })
     expect(report.storage_bytes).toBe(9_000_000_000)
@@ -773,8 +813,11 @@ describe('provider state, retries and billing snapshots', () => {
       { project_id: f.sub.id, name: 'Firmware', storage_bytes: 6_000_000_000 },
       { project_id: f.sub2.id, name: 'Board rev', storage_bytes: 3_000_000_000 },
     ])
+  }, 120_000)
 
-    // the renewal into the next period samples the same figure
+  it('records the storage of an organization with 5,000 tasks at renewal within the transaction limits', async () => {
+    const { t, f } = await fiveThousandTasks()
+    // the renewal into the next period samples the figure the Billing page shows
     const next = { start: END, end: '2026-11-01T12:00:00.000Z' }
     await t.mutation(apply, {
       payload: remote(f.org.id, {
@@ -1338,11 +1381,17 @@ describe('when organizations are reconciled', () => {
     t.run(async (ctx) =>
       (await ctx.db.query('billing_notices').collect()).map((n) => [n.profile_id, n.kind]),
     )
-  /* Gives the organization a free period until `until`, enrolling it first. */
+  /* Gives the organization a free period until `until`, enrolling it first,
+   * with its next reminder as if the sweep had sent every reminder up to an
+   * hour ago. */
   const grantUntil = (t: T, orgId: string, until: string, updated = NOW) =>
     t.run(async (ctx) => {
       const sub = await enrollOrganization(ctx, orgId)
-      await ctx.db.patch(sub!._id, { complimentary_until: until, updated_at: updated })
+      await ctx.db.patch(sub!._id, {
+        complimentary_until: until,
+        updated_at: updated,
+        remind_at: nextReminder(until, Date.now() - 60 * 60_000),
+      })
     })
   /* Takes the lock and frees it again, as a reconciliation that finds
    * nothing to change does, and answers the due time it leaves. */
@@ -1367,27 +1416,30 @@ describe('when organizations are reconciled', () => {
     expect(await stored(t, f.org.id)).toEqual(before)
   })
 
-  it('starts due organizations a page at a time, targeted times first, then those without one, then the safety pass', async () => {
+  it('starts due organizations a page at a time, the safety pass its share, then targeted times, then those without one', async () => {
     const { t, f } = await fixture()
-    SYNC_PAGE.size = 2
-    const [late, early, safe] = [uuid(), uuid(), uuid()]
+    SYNC_PAGE.size = 3
+    SYNC_PAGE.safety = 1
+    const [late, early, safe, safer] = [uuid(), uuid(), uuid(), uuid()]
     await t.run(async (ctx) => {
-      for (const id of [late, early, safe]) await enrollOrganization(ctx, id)
+      for (const id of [late, early, safe, safer]) await enrollOrganization(ctx, id)
     })
     // f.org has no due time, as for an organization enrolled before due times
     await setDue(t, f.org.id, undefined)
     await setDue(t, late, iso(-1))
     await setDue(t, early, iso(-2))
     await setDue(t, safe, iso(-30), true)
+    await setDue(t, safer, iso(-40), true)
     await t.mutation(sweep, {})
     const first = await queued(t, 'billingSync:reconcile')
-    expect(first.map((job) => job.args[0].org_id)).toEqual([early, late])
+    expect(first.map((job) => job.args[0].org_id)).toEqual([early, late, safer])
     expect(first[1].scheduledTime - first[0].scheduledTime).toBe(SYNC_PAGE.spacing)
     await t.mutation(sweep, {})
     const second = await queued(t, 'billingSync:reconcile')
-    expect(second.slice(2).map((job) => job.args[0].org_id)).toEqual([f.org.id, safe])
+    // what the targeted times leave goes to the safety pass too
+    expect(second.slice(3).map((job) => job.args[0].org_id)).toEqual([f.org.id, safe])
     await t.mutation(sweep, {})
-    expect(await queued(t, 'billingSync:reconcile')).toHaveLength(4)
+    expect(await queued(t, 'billingSync:reconcile')).toHaveLength(5)
   })
 
   it('starts usage delivery once a usage event is due', async () => {
@@ -1417,8 +1469,10 @@ describe('when organizations are reconciled', () => {
     await t.mutation(apply, { payload: remote(f.org.id) })
     // the renewal started a storage sample, which apply starts again if it stalls
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(STORAGE_STALL_MS / 60_000 + 1))
+    // it finished, so that check is dropped and no reconciliation comes of it
     await sample(t)
-    expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(SYNC_SAFETY_MS / 60_000))
+    expect(await dueAt(t, f.org.id)).toBe(iso(minutesAfter(SYNC_SAFETY_MS)))
+    expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(minutesAfter(SYNC_SAFETY_MS)))
     const end = Date.parse(END)
     vi.setSystemTime(end - 60 * 60_000)
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
@@ -1433,13 +1487,47 @@ describe('when organizations are reconciled', () => {
     // in the waived pending bucket. The old poll every 30 minutes could.
     vi.setSystemTime(end + 10 * 60_000)
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
-      new Date(end + 10 * 60_000 + RENEWAL_POLL_MS).toISOString(),
+      new Date(end + 10 * 60_000 + RENEWAL_POLL_MS - SWEEP_INTERVAL_MS).toISOString(),
     )
     expect(RENEWAL_POLL_MS).toBeLessThan((5 * 25_000 * 60_000) / 6_000)
     vi.setSystemTime(end + 25 * 60 * 60_000)
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
-      new Date(end + 25 * 60 * 60_000 + SYNC_SAFETY_MS).toISOString(),
+      new Date(end + 25 * 60 * 60_000 + SYNC_SAFETY_MS - SWEEP_INTERVAL_MS).toISOString(),
     )
+  })
+
+  it('keeps a sooner time asked for while a storage sample ran', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(STORAGE_STALL_MS / 60_000 + 1))
+    // a membership change while the sample runs
+    await t.run((ctx) => billingDueBy(ctx, f.org.id, NOW))
+    await sample(t)
+    expect(await dueAt(t, f.org.id)).toBe(NOW)
+  })
+
+  it('reconciles an organization polled every PAYMENT_POLL_MS at that pace under the minute sweep', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id, { status: 'past_due' }) })
+    await sample(t)
+    // The sweep runs every minute from NOW, and each reconciliation it
+    // starts ends half a second later. Stored from that end, the old due
+    // time was half a second after the sweep two minutes on, so the poll
+    // landed every three minutes.
+    const started: number[] = []
+    for (let minute = 0; minute <= 6; minute++) {
+      vi.setSystemTime(Date.parse(iso(minute)))
+      await t.mutation(sweep, {})
+      for (const job of await queued(t, 'billingSync:reconcile')) {
+        await t.run((ctx) => ctx.scheduler.cancel(job._id))
+        if (job.args[0].org_id !== f.org.id) continue
+        started.push(minute)
+        vi.setSystemTime(Date.parse(iso(minute)) + 500)
+        await settle(t, f.org.id, { seats: 5 })
+      }
+    }
+    expect(PAYMENT_POLL_MS).toBe(2 * SWEEP_INTERVAL_MS)
+    expect(started).toEqual([0, 2, 4, 6])
   })
 
   it('polls a pending checkout and leaves an unconnected plan for the safety pass', async () => {
@@ -1464,11 +1552,13 @@ describe('when organizations are reconciled', () => {
         .unique()
       await ctx.db.patch(sub!._id, { checkout_id: uuid(), checkout_expires_at: expires })
     })
-    expect(await settle(t, f.org.id)).toBe(iso(PAYMENT_POLL_MS / 60_000))
+    expect(await settle(t, f.org.id)).toBe(iso(minutesAfter(PAYMENT_POLL_MS)))
     // a checkout Polar never ends stops being polled an hour after its expiry
     const late = Date.parse(expires) + CHECKOUT_POLL_GRACE_MS
     vi.setSystemTime(late)
-    expect(await settle(t, f.org.id)).toBe(new Date(late + SYNC_SAFETY_MS).toISOString())
+    expect(await settle(t, f.org.id)).toBe(
+      new Date(late + SYNC_SAFETY_MS - SWEEP_INTERVAL_MS).toISOString(),
+    )
     vi.setSystemTime(NOW)
     await t.run(async (ctx) => {
       const plan = await ctx.db
@@ -1482,7 +1572,7 @@ describe('when organizations are reconciled', () => {
     await t.mutation(sweep, {})
     expect(await t.mutation(claim, { org_id: f.org.id })).toBeNull()
     expect(await stored(t, f.org.id)).toMatchObject({
-      sync_due_at: iso(SYNC_SAFETY_MS / 60_000),
+      sync_due_at: iso(minutesAfter(SYNC_SAFETY_MS)),
       sync_safety: true,
     })
   })
@@ -1512,7 +1602,7 @@ describe('when organizations are reconciled', () => {
       await t.action(reconcile, { org_id: f.org.id })
       expect(await stored(t, f.org.id)).toMatchObject({
         sync_error: expect.stringMatching(/Automatic retries/),
-        sync_due_at: iso(minutes),
+        sync_due_at: iso(minutesAfter(minutes * 60_000)),
       })
     }
     vi.stubGlobal(
@@ -1524,7 +1614,7 @@ describe('when organizations are reconciled', () => {
     expect([sub?.sync_error, sub?.sync_attempts, sub?.sync_due_at]).toEqual([
       undefined,
       undefined,
-      iso(SYNC_SAFETY_MS / 60_000),
+      iso(minutesAfter(SYNC_SAFETY_MS)),
     ])
   })
 
@@ -1547,7 +1637,7 @@ describe('when organizations are reconciled', () => {
       vi.fn(async () => new Response('unavailable', { status: 503 })),
     )
     await t.action(reconcile, { org_id: f.org.id })
-    // the 32-minute backoff alone would retry 12 minutes after the renewal
+    // the 32-minute backoff alone would retry 11 minutes after the renewal
     expect(await stored(t, f.org.id)).toMatchObject({
       sync_attempts: 6,
       sync_due_at: new Date(end - PRE_RENEWAL_MS).toISOString(),
@@ -1570,11 +1660,14 @@ describe('when organizations are reconciled', () => {
       'fetch',
       vi.fn(async () => new Response('unavailable', { status: 503 })),
     )
-    // the 60-minute backoff and the check after the end would both miss it
+    // the 60-minute backoff and the check after the end would both miss it;
+    // the next sweep, a minute after the one that started it, retries
     for (const before of [PRE_RENEWAL_MS, PRE_RENEWAL_MS - 60_000, 60_000]) {
       vi.setSystemTime(end - before)
       await t.action(reconcile, { org_id: f.org.id })
-      expect(await dueAt(t, f.org.id)).toBe(new Date(end - before + 60_000).toISOString())
+      expect(await dueAt(t, f.org.id)).toBe(
+        new Date(end - before + 60_000 - SWEEP_INTERVAL_MS).toISOString(),
+      )
     }
     vi.setSystemTime(end + 60_000)
     await t.action(reconcile, { org_id: f.org.id })
@@ -1621,7 +1714,7 @@ describe('when organizations are reconciled', () => {
     await t.action(reconcile, { org_id: f.org.id })
     expect(await stored(t, f.org.id)).toMatchObject({
       checkout_id: checkoutId,
-      sync_due_at: iso(PAYMENT_POLL_MS / 60_000),
+      sync_due_at: iso(minutesAfter(PAYMENT_POLL_MS)),
     })
     checkoutStatus = 'expired'
     vi.setSystemTime(Date.parse(iso(PAYMENT_POLL_MS / 60_000)))
@@ -1689,14 +1782,22 @@ describe('when organizations are reconciled', () => {
     ])
   })
 
-  it('counts the guest organizations a deleted profile marks due against the deletion step', async () => {
+  /* otherAdmin, a home profile of otherOrg under deletion, with an email
+   * that holds a guest profile in each of `count` other organizations, each
+   * of them due only for the safety pass, and a second home profile deleted
+   * after it. The guest profiles are inserted with the clock at `at` when
+   * given. */
+  async function guestInMany(count: number, at?: number) {
     const { t, f } = await fixture()
     const email = 'consultant@testbed.test'
-    const guestOrgs = Array.from({ length: 300 }, () => uuid())
+    const guestOrgs = Array.from({ length: count }, () => uuid())
     await t.run(async (ctx) => {
       await ctx.db.patch(f.otherAdmin._id, { email })
-      for (const org_id of guestOrgs) {
-        await enrollOrganization(ctx, org_id)
+      for (const org_id of guestOrgs) await enrollOrganization(ctx, org_id)
+    })
+    if (at !== undefined) vi.setSystemTime(at)
+    await t.run(async (ctx) => {
+      for (const org_id of guestOrgs)
         await ctx.db.insert('profiles', {
           id: uuid(),
           org_id,
@@ -1709,8 +1810,9 @@ describe('when organizations are reconciled', () => {
           kind: 'person',
           created_at: NOW,
         })
-      }
-      // a second home profile, deleted after the first
+    })
+    vi.setSystemTime(NOW)
+    await t.run(async (ctx) => {
       await ctx.db.insert('profiles', {
         id: uuid(),
         org_id: f.otherOrg.id,
@@ -1733,23 +1835,150 @@ describe('when organizations are reconciled', () => {
       })
     })
     for (const org_id of guestOrgs) await setDue(t, org_id, iso(SYNC_SAFETY_MS / 60_000), true)
-    await t.run(async (ctx) => {
-      const removal = await ctx.db
-        .query('org_removals')
-        .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
-        .unique()
-      await deleteOrgStep(ctx, removal!)
-    })
+    const removal = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('org_removals')
+          .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
+          .unique(),
+      )
+    const step = () =>
+      t.run(async (ctx) => {
+        const row = await ctx.db
+          .query('org_removals')
+          .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
+          .unique()
+        if (row) await deleteOrgStep(ctx, row)
+      })
+    const left = async () =>
+      (
+        await t.run((ctx) =>
+          ctx.db
+            .query('profiles')
+            .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
+            .collect(),
+        )
+      ).map((p) => p.email)
+    const marked = async () =>
+      (await Promise.all(guestOrgs.map((id) => dueAt(t, id)))).filter((due) => due === NOW).length
+    // the billable guests of each guest organization, as a reconciliation counts them
+    const guests = () =>
+      t.run((ctx) =>
+        Promise.all(guestOrgs.map(async (id) => (await getBillableUsers(ctx, id)).guests)),
+      )
+    return { t, f, email, guestOrgs, removal, step, left, marked, guests }
+  }
+
+  it('marks the guest organizations of a deleted profile due over several steps, each within its budget', async () => {
+    const { t, f, email, guestOrgs, removal, step, left, marked, guests } = await guestInMany(300)
+    // Each step reads a profile with the email and marks its organization
+    // due as two of its rows. Before, the first step read 601 profiles and
+    // marked all 300, more than twice its budget.
+    const perStep: number[] = []
+    while ((await marked()) < guestOrgs.length && perStep.length < 10) {
+      const before = await marked()
+      await step()
+      perStep.push((await marked()) - before)
+      // the profile stays, with where its marking stopped, until its last
+      // guest organization is marked, but no longer exempts the guest: a
+      // reconciliation between the steps counts it in every organization
+      if ((await marked()) < guestOrgs.length) {
+        expect(await left()).toContain(email)
+        expect((await removal())?.guest_marking?.profile_id).toBe(f.otherAdmin.id)
+        expect(await guests()).toEqual(guestOrgs.map(() => 1))
+      }
+    }
+    expect(perStep.length).toBeGreaterThan(1)
+    for (const count of perStep) expect(count).toBeLessThanOrEqual(REMOVAL_BUDGET.rows / 2)
     expect(await queued(t, 'billingSync:reconcile')).toEqual([])
-    expect(new Set(await Promise.all(guestOrgs.map((id) => dueAt(t, id))))).toEqual(new Set([NOW]))
-    // the 600 rows it read used up the step, so the other profile waits
-    const left = await t.run((ctx) =>
-      ctx.db
-        .query('profiles')
-        .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
-        .collect(),
+    expect((await removal())?.guest_marking).toBeUndefined()
+    await step()
+    expect(await left()).toEqual([])
+    expect(await guests()).toEqual(guestOrgs.map(() => 1))
+  })
+
+  it('bills the guest seat of a deleted person when a reconciliation runs between the deletion steps', async () => {
+    const { t, email, guestOrgs, step, left } = await guestInMany(300)
+    // The first guest organization has five people of its own, the plan's
+    // minimum, so the deleted person's guest seat makes it six.
+    const [first] = guestOrgs
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 5; i++)
+        await ctx.db.insert('profiles', {
+          id: uuid(),
+          org_id: first,
+          email: `member${i}@testbed.test`,
+          name: `Member ${i}`,
+          initials: 'ME',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+    })
+    await step()
+    expect(await dueAt(t, first)).toBe(NOW)
+    expect(await left()).toContain(email)
+    // The sweep reconciles it before the next step and uses up its mark.
+    // Before, the home profile was still active, so this sent five seats and
+    // the later steps never marked the organization again.
+    const work = await t.mutation(claim, { org_id: first })
+    expect(work?.seats).toBe(6)
+  })
+
+  it('finishes marking guest organizations whose profiles share one creation time', async () => {
+    // convex-test gives an insert 0.001 ms after the one before, which
+    // rounds away above 2^52 ms, so there the inserts share a time, as an
+    // import can leave them
+    const TIED = 2 ** 52
+    const { t, f, email, guestOrgs, step, left, marked, removal } = await guestInMany(300, TIED)
+    // one more guest organization, its profile a millisecond after the group
+    const lastOrg = uuid()
+    vi.setSystemTime(TIED + 1)
+    await t.run(async (ctx) => {
+      await enrollOrganization(ctx, lastOrg)
+      await ctx.db.insert('profiles', {
+        id: uuid(),
+        org_id: lastOrg,
+        email,
+        name: 'Consultant',
+        initials: 'CO',
+        color: '#7a7ad0',
+        org_role: 'guest',
+        active: true,
+        kind: 'person',
+        created_at: NOW,
+      })
+    })
+    vi.setSystemTime(NOW)
+    await setDue(t, lastOrg, iso(SYNC_SAFETY_MS / 60_000), true)
+    const times = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('profiles')
+          .withIndex('by_email', (q) => q.eq('email', email))
+          .collect()
+      )
+        .filter((p) => guestOrgs.includes(p.org_id))
+        .map((p) => p._creationTime),
     )
-    expect(left.map((p) => p.email)).toEqual(['colleague@testbed.test'])
+    expect(new Set(times)).toEqual(new Set([TIED]))
+
+    // The first step reads the whole group, past its budget, rather than
+    // stop inside it, and stops before the later profile.
+    await step()
+    expect(await marked()).toBe(guestOrgs.length)
+    expect(await dueAt(t, lastOrg)).not.toBe(NOW)
+    expect((await removal())?.guest_marking).toEqual({ profile_id: f.otherAdmin.id, through: TIED })
+    // The next goes on after the group. Before, every step went on from the
+    // group's time, read its first 128 profiles again and stopped there, and
+    // the deletion never ended.
+    await step()
+    expect(await dueAt(t, lastOrg)).toBe(NOW)
+    for (let i = 0; i < 3 && (await left()).length > 0; i++) await step()
+    expect((await removal())?.guest_marking).toBeUndefined()
+    expect(await left()).toEqual([])
   })
 
   it('polls a subscription that is past due, unpaid or incomplete, often in its first day', async () => {
@@ -1757,12 +1986,12 @@ describe('when organizations are reconciled', () => {
     for (const status of ['past_due', 'unpaid']) {
       await t.mutation(apply, { payload: remote(f.org.id, { status, modified_at: iso(1) }) })
       vi.setSystemTime(Date.parse(iso(1)))
-      expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(1 + PAYMENT_POLL_MS / 60_000))
+      expect(await settle(t, f.org.id, { seats: 5 })).toBe(iso(1 + minutesAfter(PAYMENT_POLL_MS)))
       // unpaid has no end of its own, so after the first day every half hour
       const later = Date.parse(iso(1)) + PAYMENT_POLL_WINDOW_MS
       vi.setSystemTime(later)
       expect(await settle(t, f.org.id, { seats: 5 })).toBe(
-        new Date(later + DUNNING_POLL_MS).toISOString(),
+        new Date(later + DUNNING_POLL_MS - SWEEP_INTERVAL_MS).toISOString(),
       )
       vi.setSystemTime(NOW)
     }
@@ -1773,10 +2002,12 @@ describe('when organizations are reconciled', () => {
     })
     expect(await stored(t, f.org.id)).toMatchObject({ status: 'pending' })
     vi.setSystemTime(Date.parse(iso(2)))
-    expect(await settle(t, f.org.id)).toBe(iso(2 + PAYMENT_POLL_MS / 60_000))
+    expect(await settle(t, f.org.id)).toBe(iso(2 + minutesAfter(PAYMENT_POLL_MS)))
     const later = Date.parse(iso(2)) + PAYMENT_POLL_WINDOW_MS
     vi.setSystemTime(later)
-    expect(await settle(t, f.org.id)).toBe(new Date(later + SYNC_SAFETY_MS).toISOString())
+    expect(await settle(t, f.org.id)).toBe(
+      new Date(later + SYNC_SAFETY_MS - SWEEP_INTERVAL_MS).toISOString(),
+    )
   })
 
   it('follows a renewal that Polar moved', async () => {
@@ -1785,13 +2016,13 @@ describe('when organizations are reconciled', () => {
     await sample(t)
     const end = Date.parse(END)
     vi.setSystemTime(end - PRE_RENEWAL_MS)
-    // the check before the old end reads the end Polar moved a day later
-    const moved = new Date(end + 24 * 60 * 60_000).toISOString()
+    // the check before the old end reads the end Polar moved two days later
+    const moved = new Date(end + 2 * 24 * 60 * 60_000).toISOString()
     await t.mutation(apply, {
       payload: remote(f.org.id, { current_period_end: moved, modified_at: iso(60) }),
     })
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
-      new Date(end - PRE_RENEWAL_MS + SYNC_SAFETY_MS).toISOString(),
+      new Date(end - PRE_RENEWAL_MS + SYNC_SAFETY_MS - SWEEP_INTERVAL_MS).toISOString(),
     )
     vi.setSystemTime(Date.parse(moved) - 60 * 60_000)
     expect(await settle(t, f.org.id, { seats: 5 })).toBe(
@@ -1823,61 +2054,207 @@ describe('when organizations are reconciled', () => {
     expect(await stored(t, f.org.id)).toMatchObject({ sync_due_at: NOW })
   })
 
-  it('starts targeted times before the safety pass when the page is full', async () => {
-    const { t, f } = await fixture()
-    SYNC_PAGE.size = 1
-    const renewing = uuid()
-    await t.run((ctx) => enrollOrganization(ctx, renewing))
+  it('keeps the safety pass on time while unpaid organizations fill every page', async () => {
+    const { t } = await fixture()
+    // 120 organizations in their first unpaid day are polled every
+    // PAYMENT_POLL_MS: 60 due each minute, a full page, which before left
+    // the safety pass nothing at all
+    const unpaid = Array.from({ length: 120 }, () => uuid())
+    const safety = Array.from({ length: 40 }, () => uuid())
     await t.run(async (ctx) => {
-      const sub = await ctx.db
-        .query('billing_subscriptions')
-        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
-        .unique()
-      // the older safety pass waits for the renewal check behind it
-      await ctx.db.patch(sub!._id, { sync_due_at: iso(-30), sync_safety: true })
+      for (const id of [...unpaid, ...safety]) await enrollOrganization(ctx, id)
     })
-    await setDue(t, renewing, iso(-1))
+    for (const id of unpaid) await setDue(t, id, iso(-1))
+    for (const id of safety) await setDue(t, id, iso(-5), true)
+    const started = async () =>
+      new Set((await queued(t, 'billingSync:reconcile')).map((job) => job.args[0].org_id))
     await t.mutation(sweep, {})
-    expect((await queued(t, 'billingSync:reconcile')).map((job) => job.args[0].org_id)).toEqual([
-      renewing,
-    ])
+    const first = await started()
+    expect(first.size).toBe(SYNC_PAGE.size)
+    expect(safety.filter((id) => first.has(id))).toHaveLength(SYNC_PAGE.safety)
+    expect(unpaid.filter((id) => first.has(id))).toHaveLength(SYNC_PAGE.size - SYNC_PAGE.safety)
+    // the next minute starts the other 10, a minute late at most
+    vi.setSystemTime(Date.parse(NOW) + 60_000)
+    await t.mutation(sweep, {})
+    const second = await started()
+    expect(safety.filter((id) => second.has(id))).toHaveLength(40)
+    expect(second.size).toBe(2 * SYNC_PAGE.size)
   })
 
-  it('reminds the admins of free periods within an hour of each reminder time, a page at a time', async () => {
+  /* Runs the sweep at `at` and every reminders and remindAdmins step it
+   * queues, and answers the errors of the steps that failed. */
+  const remindAt = async (t: T, at: string) => {
+    vi.setSystemTime(Date.parse(at))
+    await t.mutation(sweep, {})
+    const failed: string[] = []
+    for (;;) {
+      const [job] = [
+        ...(await queued(t, 'billingSync:reminders')),
+        ...(await queued(t, 'billingSync:remindAdmins')),
+      ]
+      if (!job) return failed
+      await t.run((ctx) => ctx.scheduler.cancel(job._id))
+      const step = makeFunctionReference<'mutation', Record<string, unknown>, null>(job.name)
+      await t.mutation(step, job.args[0]).catch((error: Error) => failed.push(error.message))
+    }
+  }
+
+  it('reminds the admins of free periods at each reminder time, a page at a time', async () => {
     const { t, f } = await fixture()
     REMINDER_PAGE.size = 1
     await grantUntil(t, f.org.id, iso(7 * 24 * 60 - 30))
     // ended half an hour ago, and its members' pages have not refreshed since
     await grantUntil(t, f.otherOrg.id, iso(-30), iso(-60))
-    await grantUntil(t, uuid(), iso(-10))
     // between its reminder times; the old code reminded it every minute
-    await grantUntil(t, uuid(), iso(3 * 24 * 60))
+    const quiet = uuid()
+    await grantUntil(t, quiet, iso(3 * 24 * 60))
     await t.mutation(sweep, {})
     // the reminders run apart from the sweep, so their failure cannot undo
     // the reconciliations the sweep started
     expect(await notices(t)).toEqual([])
     expect((await queued(t, 'billingSync:reconcile')).length).toBeGreaterThan(0)
-    const jobs = await queued(t, 'billingSync:reminders')
-    expect(jobs.map((job) => job.args[0])).toEqual([
-      { now: Date.parse(NOW), threshold: 7 * 86_400_000, cursor: null },
-      { now: Date.parse(NOW), threshold: 0, cursor: null },
-    ])
-    for (const job of jobs) await t.mutation(reminders, job.args[0])
+    const [job] = await queued(t, 'billingSync:reminders')
+    expect(job.args[0]).toEqual({ now: Date.parse(NOW), lane: 'due', cursor: null })
+    await remindAt(t, NOW)
     expect(await notices(t)).toEqual([
       [f.admin.id, 'seven_days'],
       [f.otherAdmin.id, 'expired'],
     ])
     // the end touches the row once, so members' pages read the expiry
     expect((await stored(t, f.otherOrg.id))?.updated_at).toBe(NOW)
-    const next = (await queued(t, 'billingSync:reminders')).find(
-      (job) => job.args[0].cursor && job.args[0].threshold === 0,
-    )
-    await t.mutation(reminders, next!.args[0])
+    expect((await stored(t, f.otherOrg.id))?.remind_at).toBeNull()
+    expect((await stored(t, f.org.id))?.remind_at).toBe(iso(6 * 24 * 60 - 30))
+    expect((await stored(t, quiet))?.remind_at).toBe(iso(2 * 24 * 60))
+    // nothing more is due, and nothing goes out twice
+    await remindAt(t, iso(1))
     expect(await notices(t)).toHaveLength(2)
-    // an hour after their reminder times, the free periods are out of range
-    vi.setSystemTime(Date.parse(iso(51)))
-    const before = (await queued(t, 'billingSync:reminders')).length
-    await t.mutation(sweep, {})
-    expect(await queued(t, 'billingSync:reminders')).toHaveLength(before)
+  })
+
+  it.each([
+    ['two hours', iso(6 * 24 * 60 - 60), iso(6 * 24 * 60 + 60), ['one_day']],
+    ['two days', iso(-60), iso(2 * 24 * 60 - 60), ['seven_days']],
+    // only the latest reminder that came due goes out
+    ['two days, past the end', iso(6 * 24 * 60 - 60), iso(8 * 24 * 60 - 60), ['expired']],
+  ])('sends a reminder late after a sweep outage of %s, and once', async (_, stop, back, kinds) => {
+    const { t, f } = await fixture()
+    await grantUntil(t, f.org.id, iso(7 * 24 * 60))
+    await remindAt(t, stop)
+    const before = (await notices(t)).length
+    await remindAt(t, back)
+    expect((await notices(t)).slice(before)).toEqual(kinds.map((kind) => [f.admin.id, kind]))
+    await remindAt(t, new Date(Date.parse(back) + 60_000).toISOString())
+    expect(await notices(t)).toHaveLength(before + kinds.length)
+  })
+
+  it('fills in the next reminder of a free period granted before reminder times were stored, a page at a time', async () => {
+    const { t, f } = await fixture()
+    REMINDER_PAGE.size = 1
+    // an end that came half an hour ago still sends, as the release before did
+    await grantUntil(t, f.org.id, iso(-30))
+    await grantUntil(t, f.otherOrg.id, iso(3 * 24 * 60))
+    const paid = uuid()
+    await t.run((ctx) => enrollOrganization(ctx, paid))
+    await t.run(async (ctx) => {
+      for (const sub of await ctx.db.query('billing_subscriptions').collect())
+        await ctx.db.patch(sub._id, { remind_at: undefined })
+    })
+    await remindAt(t, NOW)
+    expect((await stored(t, f.org.id))?.remind_at).toBe(iso(-30))
+    expect((await stored(t, f.otherOrg.id))?.remind_at).toBe(iso(2 * 24 * 60))
+    expect((await stored(t, paid))?.remind_at).toBeNull()
+    await remindAt(t, iso(1))
+    expect(await notices(t)).toEqual([[f.admin.id, 'expired']])
+  })
+
+  it('sends the other reminders when the notices of one organization fail', async () => {
+    const { t, f } = await fixture({ transactionLimits: true })
+    // 1,001 more admins, whose notices pass the 1,000 calls one transaction
+    // may schedule; before, the page that held them failed every minute
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1001; i += 1)
+        await ctx.db.insert('profiles', {
+          id: uuid(),
+          org_id: f.otherOrg.id,
+          email: `admin-${i}@testbed.test`,
+          name: `Admin ${i}`,
+          initials: 'AD',
+          color: '#7a7ad0',
+          org_role: 'admin',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+    })
+    await grantUntil(t, f.otherOrg.id, iso(7 * 24 * 60 - 30))
+    await grantUntil(t, f.org.id, iso(7 * 24 * 60 - 30))
+    // a row written before reminder times were stored
+    const legacy = uuid()
+    await grantUntil(t, legacy, iso(3 * 24 * 60))
+    await t.run(async (ctx) => {
+      const sub = await ctx.db
+        .query('billing_subscriptions')
+        .withIndex('by_org', (q) => q.eq('org_id', legacy))
+        .unique()
+      await ctx.db.patch(sub!._id, { remind_at: undefined })
+    })
+    const failed = await remindAt(t, NOW)
+    expect(failed).toEqual([expect.stringMatching(/Scheduled too many functions/)])
+    // the failing organization loses only this reminder
+    expect(await notices(t)).toEqual([[f.admin.id, 'seven_days']])
+    expect((await stored(t, f.otherOrg.id))?.remind_at).toBe(iso(6 * 24 * 60 - 30))
+    expect((await stored(t, legacy))?.remind_at).toBe(iso(2 * 24 * 60))
+  })
+
+  it('stores the next reminder when an operator grants or extends a free period', async () => {
+    const { t, f, operator } = await fixture()
+    const week = 7 * 24 * 60 * 60_000
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    const first = addCalendarMonths(NOW, 1)
+    expect((await stored(t, f.org.id))?.remind_at).toBe(
+      new Date(Date.parse(first) - week).toISOString(),
+    )
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    const extended = addCalendarMonths(first, 1)
+    const reminder = new Date(Date.parse(extended) - week).toISOString()
+    expect((await stored(t, f.org.id))?.remind_at).toBe(reminder)
+    // the first period's reminder time passes without a reminder
+    await remindAt(t, new Date(Date.parse(first) - week).toISOString())
+    expect(await notices(t)).toEqual([])
+    await remindAt(t, reminder)
+    expect(await notices(t)).toEqual([[f.admin.id, 'seven_days']])
+  })
+
+  it('sends no reminder once Polar bills an organization during its free period', async () => {
+    const { t, f, operator } = await fixture()
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    expect((await stored(t, f.org.id))?.remind_at).toBeNull()
+    const until = Date.parse(addCalendarMonths(NOW, 1))
+    for (const at of [until - 7 * 24 * 60 * 60_000, until - 24 * 60 * 60_000, until])
+      await remindAt(t, new Date(at).toISOString())
+    expect(await notices(t)).toEqual([])
+  })
+
+  it('leaves a free period extended without moving its reminder time to that time', async () => {
+    const { t, f } = await fixture()
+    await grantUntil(t, f.org.id, iso(10 * 24 * 60))
+    // remind_at still holds an earlier end's reminder, which has come
+    await t.run(async (ctx) => {
+      const sub = await ctx.db
+        .query('billing_subscriptions')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .unique()
+      await ctx.db.patch(sub!._id, { remind_at: iso(-1) })
+    })
+    await remindAt(t, NOW)
+    expect(await notices(t)).toEqual([])
+    expect((await stored(t, f.org.id))?.remind_at).toBe(iso(3 * 24 * 60))
+  })
+
+  it('stops a reminders step that an earlier release queued', async () => {
+    const { t, f } = await fixture()
+    await grantUntil(t, f.org.id, iso(-30))
+    await t.mutation(reminders, { now: Date.parse(NOW), threshold: 0, cursor: null })
+    expect(await notices(t)).toEqual([])
   })
 })

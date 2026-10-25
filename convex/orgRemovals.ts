@@ -1,18 +1,25 @@
 /* Organization retention and deletion jobs (rules in model/orgRetention.ts,
  * deletion steps in model/orgDeletion.ts).
  *
- * `sweep` runs every hour (crons.ts), one page per transaction. It starts
- * the read-only period for organizations whose billing ended, stops it when
- * access returns or billing is switched off, hands organizations that never
- * completed checkout to `verifyNoCheckout`, and hands removals whose date has
- * passed to `begin`. Both ask Polar first, so neither a lost webhook nor a
- * checkout still open can let Qivo delete an organization that pays. The
- * mutation that starts a deletion refuses any checkout saved meanwhile. It
- * sets the first phase, which ends all access (lib/functions.ts and
- * lib/billingAccess.ts), and `step` deletes in bounded transactions until
- * nothing is left. Convex drops the calls a failed mutation scheduled, so
- * `recover` (every ten minutes) restarts a deletion whose step stalled, as
- * labelRemovals.ts does.
+ * `sweep` runs every hour (crons.ts), one page per transaction, and reads
+ * only the removals and subscriptions that are due. It starts the read-only
+ * period for organizations whose billing ended, stops it when billing is
+ * switched off, hands organizations that never completed checkout to
+ * `verifyNoCheckout`, and hands removals whose date has passed to `begin`.
+ * Both ask Polar first, so neither a lost webhook nor a checkout still open
+ * can let Qivo delete an organization that pays. The mutation that starts a
+ * deletion refuses any checkout saved meanwhile. It sets the first phase,
+ * which ends all access (lib/functions.ts and lib/billingAccess.ts), and
+ * `step` deletes in bounded transactions until nothing is left. Convex drops
+ * the calls a failed mutation scheduled, so `recover` (every ten minutes)
+ * restarts a deletion whose step stalled, as labelRemovals.ts does.
+ *
+ * While billing is on, the sweep reads a removal only once its date has
+ * passed. So every write that returns paid or complimentary access must call
+ * syncOrgRemoval (model/orgRetention.ts), which stops the period at once, as
+ * billingSync.apply and grantComplimentaryMonths do. A write that skips it
+ * leaves the organization read-only until the date, when the sweep and
+ * `begin` stop the removal instead of deleting.
  *
  * Admins act through `request` (delete the organization, ending any paid
  * subscription at once without a refund), `keep` (stop a deletion they asked
@@ -22,12 +29,14 @@
 
 import { makeFunctionReference } from 'convex/server'
 import { type ObjectType, v } from 'convex/values'
+import type { Doc } from './_generated/dataModel'
 import {
   type ActionCtx,
   internalAction,
   internalMutation,
   internalQuery,
   type MutationCtx,
+  type QueryCtx,
 } from './_generated/server'
 import { NOTICE_RETRIES } from './billingMail'
 import { subscriptionPayload } from './billingSync'
@@ -67,7 +76,9 @@ import {
   accessReturned,
   DELETION_NOTICE,
   deletionNoticeKey,
+  dropRemoval,
   noCheckoutDue,
+  retentionDue,
   scheduleRemoval,
   serviceEndedAt,
   syncOrgRemoval,
@@ -79,14 +90,14 @@ export const STALLED_MS = 5 * 60_000
 const RECOVER_BATCH = 32
 const RECOVER_SCAN = 512
 
-/** The most rows one sweep leg reads in each phase. A removal costs at most
- * one subscription lookup. A subscription costs one removal lookup and, when
- * its service ended, the reads and emails scheduleRemoval queues. Tests lower
- * these. */
+/** The most rows one sweep leg reads. A removal costs at most one
+ * subscription lookup. A subscription costs one removal lookup and, when
+ * its service ended, the reads and emails scheduleRemoval queues. Tests
+ * lower these. */
 export const SWEEP_PAGES = { removals: 128, subscriptions: 64 }
 
 /** The current time as an ISO string, as the tables store it. */
-const isoNow = () => new Date().toISOString()
+const isoNow = (ms = Date.now()) => new Date(ms).toISOString()
 
 const orgArg = { org_id: v.string() }
 type OrgArg = { org_id: string }
@@ -187,55 +198,126 @@ async function beginDeletion(ctx: MutationCtx, orgId: string): Promise<void> {
 }
 
 const sweepArgs = {
-  phase: v.optional(v.union(v.literal('removals'), v.literal('subscriptions'))),
-  cursor: v.optional(v.string()), // the phase's page cursor
+  lane: v.optional(v.union(v.literal('removals'), v.literal('due'), v.literal('unset'))),
+  cursor: v.optional(v.string()), // the lane's page cursor
   now: v.optional(v.number()), // the run's start, epoch milliseconds
+  // A leg an earlier release queued, which paged whole tables. It stops, and
+  // the next hourly run reads what is due.
+  phase: v.optional(v.string()),
 }
 type SweepLeg = ObjectType<typeof sweepArgs>
+type Lane = NonNullable<SweepLeg['lane']>
+const SWEEP_LANES: Lane[] = ['removals', 'due', 'unset']
 const sweepRef = makeFunctionReference<'mutation', SweepLeg, null>('orgRemovals:sweep')
 
+/* The removals a sweep reads: those still waiting whose date has passed,
+ * and while billing is off every one still waiting, so the billing-driven
+ * ones stop. */
+const waitingRemovals = (ctx: QueryCtx, now: number) =>
+  ctx.db
+    .query('org_removals')
+    .withIndex('by_progress', (q) =>
+      billingEnabled()
+        ? q.eq('progress_at', undefined).lte('delete_after', isoNow(now))
+        : q.eq('progress_at', undefined),
+    )
+
+/* The subscriptions a sweep reads: those whose retention_at has passed
+ * (every string sorts after null and an absent value), and those written
+ * before retention_at existed. */
+const sweptSubscriptions = (ctx: QueryCtx, lane: Exclude<Lane, 'removals'>, now: number) =>
+  ctx.db
+    .query('billing_subscriptions')
+    .withIndex('by_retention', (q) =>
+      lane === 'due'
+        ? q.gte('retention_at', '').lte('retention_at', isoNow(now))
+        : q.eq('retention_at', undefined),
+    )
+
+/* Whether a sweep reads the lane, and whether it holds a row. Due
+ * subscriptions wait while billing is off, as their service cannot end. */
+async function laneHasRows(ctx: QueryCtx, lane: Lane, now: number): Promise<boolean> {
+  if (lane === 'removals') return (await waitingRemovals(ctx, now).first()) !== null
+  if (lane === 'due' && !billingEnabled()) return false
+  return (await sweptSubscriptions(ctx, lane, now).first()) !== null
+}
+
+/* Stops a billing-driven removal whose access returned, or hands one whose
+ * date has passed to `begin`. */
+async function sweepRemoval(ctx: MutationCtx, removal: Doc<'org_removals'>, now: number) {
+  if (removal.phase !== undefined) return
+  if (
+    removal.reason === 'service_ended' &&
+    accessReturned(removal, await subscriptionFor(ctx, removal.org_id), now)
+  )
+    await dropRemoval(ctx, removal)
+  else if (Date.parse(removal.delete_after) <= now)
+    await ctx.scheduler.runAfter(0, beginRef, { org_id: removal.org_id })
+}
+
+/* Starts the read-only period of an organization whose service ended, or
+ * hands one past its checkout deadline to `verifyNoCheckout`, and stores
+ * when the sweep next reads the subscription. While the organization has a
+ * removal, that is the removal's date; dropRemoval sets it again if the
+ * removal stops sooner. One past its checkout deadline stays due, so a
+ * check that waits for Polar runs again an hour later. */
+async function sweepSubscription(ctx: MutationCtx, sub: Doc<'billing_subscriptions'>, now: number) {
+  const removal = await orgRemovalFor(ctx, sub.org_id)
+  let next = removal ? removal.delete_after : retentionDue(sub)
+  if (!removal && next !== null && Date.parse(next) <= now) {
+    const endedAt = serviceEndedAt(sub, now)
+    if (endedAt)
+      next = (await scheduleRemoval(ctx, { orgId: sub.org_id, reason: 'service_ended', endedAt }))
+        .delete_after
+    else if (polarConfigured() && noCheckoutDue(sub, now))
+      await ctx.scheduler.runAfter(0, verifyNoCheckoutRef, { org_id: sub.org_id })
+  }
+  if (next !== sub.retention_at) await ctx.db.patch(sub._id, { retention_at: next })
+}
+
 /** One leg of the hourly sweep. Empty arguments start a run, and each leg
- * reads one page and schedules the next, as files.reapOrphans does. The
- * removals phase stops billing-driven periods whose access returned and
- * hands removals whose date has passed to `begin`. The subscriptions phase
- * runs while billing is on. It starts the period for organizations whose
- * service ended and hands those past their checkout deadline to
- * `verifyNoCheckout`. Billing webhooks make the same changes at once
- * (billingSync.ts); the sweep catches what they miss. */
+ * reads one page of one lane and schedules the next, as files.reapOrphans
+ * does. A run reads only what is due, so an hour with nothing due costs one
+ * call and at most three empty index ranges. The removals lane reads the
+ * waiting removals whose date has passed, and while billing is off every
+ * waiting one. It stops a billing-driven one whose access returned, as every
+ * one has while billing is off, and hands the others whose date has passed to
+ * `begin`. It does not see access that returns before the date, which the
+ * returning write stops itself (header above). The due lane, while billing
+ * is on, reads the subscriptions whose retention_at has passed: it starts the
+ * period for organizations whose service ended and hands those past their
+ * checkout deadline to `verifyNoCheckout`. The unset lane does the same for
+ * rows written before retention_at existed and fills it in, so the first run
+ * after the release that added it reads every subscription once. Billing
+ * webhooks start and stop the period at once (billingSync.ts), and the sweep
+ * starts one whose service ended without a webhook. */
 export const sweep = internalMutation({
   args: sweepArgs,
   handler: async (ctx, a): Promise<null> => {
+    if (a.phase !== undefined) return null
     const now = a.now ?? Date.now()
-    let next: Pick<SweepLeg, 'phase' | 'cursor'> | null = null
-    if ((a.phase ?? 'removals') === 'removals') {
-      const page = await ctx.db
-        .query('org_removals')
-        .paginate({ cursor: a.cursor ?? null, numItems: SWEEP_PAGES.removals })
-      for (const removal of page.page) {
-        if (removal.phase !== undefined) continue
-        if (
-          removal.reason === 'service_ended' &&
-          accessReturned(removal, await subscriptionFor(ctx, removal.org_id), now)
-        )
-          await ctx.db.delete(removal._id)
-        else if (Date.parse(removal.delete_after) <= now)
-          await ctx.scheduler.runAfter(0, beginRef, { org_id: removal.org_id })
-      }
-      if (!page.isDone) next = { phase: 'removals', cursor: page.continueCursor }
-      else if (billingEnabled()) next = { phase: 'subscriptions' }
+    const lane = a.lane ?? 'removals'
+    const cursor = a.cursor ?? null
+    let more: string | null
+    if (lane === 'removals') {
+      const page = await waitingRemovals(ctx, now).paginate({
+        cursor,
+        numItems: SWEEP_PAGES.removals,
+      })
+      for (const removal of page.page) await sweepRemoval(ctx, removal, now)
+      more = page.isDone ? null : page.continueCursor
     } else {
-      const page = await ctx.db
-        .query('billing_subscriptions')
-        .paginate({ cursor: a.cursor ?? null, numItems: SWEEP_PAGES.subscriptions })
-      for (const sub of page.page) {
-        if (await orgRemovalFor(ctx, sub.org_id)) continue
-        const endedAt = serviceEndedAt(sub, now)
-        if (endedAt)
-          await scheduleRemoval(ctx, { orgId: sub.org_id, reason: 'service_ended', endedAt })
-        else if (polarConfigured() && noCheckoutDue(sub, now))
-          await ctx.scheduler.runAfter(0, verifyNoCheckoutRef, { org_id: sub.org_id })
-      }
-      if (!page.isDone) next = { phase: 'subscriptions', cursor: page.continueCursor }
+      const page = await sweptSubscriptions(ctx, lane, now).paginate({
+        cursor,
+        numItems: SWEEP_PAGES.subscriptions,
+      })
+      for (const sub of page.page) await sweepSubscription(ctx, sub, now)
+      more = page.isDone ? null : page.continueCursor
+    }
+    let next: Pick<SweepLeg, 'lane' | 'cursor'> | null = more ? { lane, cursor: more } : null
+    for (const later of SWEEP_LANES.slice(SWEEP_LANES.indexOf(lane) + 1)) {
+      if (next) break
+      if (await laneHasRows(ctx, later, now)) next = { lane: later }
     }
     if (next) await ctx.scheduler.runAfter(0, sweepRef, { ...next, now })
     return null
@@ -350,7 +432,7 @@ export const abort = internalMutation({
   handler: async (ctx, { org_id }): Promise<null> => {
     const removal = await orgRemovalFor(ctx, org_id)
     if (!removal || removal.phase !== undefined || removal.reason === 'requested') return null
-    await ctx.db.delete(removal._id)
+    await dropRemoval(ctx, removal)
     console.warn('Organization deletion stopped because a subscription is live', {
       org_id,
       reason: removal.reason,
@@ -494,7 +576,7 @@ export const keep = authedMutation({
     require(subscriptionWritable(await subscriptionFor(ctx, org_id)), rule(
       'Subscribe again in Billing before keeping this organization.',
     ))
-    await ctx.db.delete(removal._id)
+    await dropRemoval(ctx, removal)
     await audit(ctx, {
       actor_email: me.email ?? '',
       actor_auth_id: ctx.authUserId,

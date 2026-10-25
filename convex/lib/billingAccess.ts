@@ -1,3 +1,4 @@
+import type { WithoutSystemFields } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -14,7 +15,20 @@ export async function subscriptionFor(ctx: QueryCtx, orgId: string) {
 
 export function subscriptionWritable(sub: Doc<'billing_subscriptions'> | null, now = Date.now()) {
   if (!billingEnabled()) return true
-  if (!sub) return false
+  return !!sub && accessAt(sub, now)
+}
+
+/** How long paid access lasts after its period ends, so a delayed renewal
+ * webhook does not interrupt a paying team. */
+export const RENEWAL_GRACE_MS = 24 * 60 * 60_000
+
+/** How long a subscription stays writable after Polar reports it past due. */
+export const PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60_000
+
+/** Whether the subscription gives paid or complimentary access at `now`, as
+ * if billing were on. Access only ends as time passes; only a write can
+ * return it. */
+export function accessAt(sub: WithoutSystemFields<Doc<'billing_subscriptions'>>, now: number) {
   if (sub.complimentary_until && Date.parse(sub.complimentary_until) > now) return true
   if (sub.ended_at && Date.parse(sub.ended_at) <= now) return false
   if (sub.cancel_at_period_end)
@@ -23,12 +37,11 @@ export function subscriptionWritable(sub: Doc<'billing_subscriptions'> | null, n
       Date.parse(sub.current_period_end) > now &&
       ['active', 'trialing', 'canceled'].includes(sub.status)
     )
-  // Paid access is bounded by the verified provider period. A short delivery
-  // grace keeps a delayed renewal webhook from interrupting a paying team.
+  // Paid access is bounded by the verified provider period.
   if (sub.status === 'active' || sub.status === 'trialing')
-    return !!sub.current_period_end && Date.parse(sub.current_period_end) + 24 * 60 * 60_000 > now
+    return !!sub.current_period_end && Date.parse(sub.current_period_end) + RENEWAL_GRACE_MS > now
   if (sub.status === 'past_due')
-    return !!sub.past_due_at && Date.parse(sub.past_due_at) + 7 * 24 * 60 * 60_000 > now
+    return !!sub.past_due_at && Date.parse(sub.past_due_at) + PAST_DUE_GRACE_MS > now
   return false
 }
 

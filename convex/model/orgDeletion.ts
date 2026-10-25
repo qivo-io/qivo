@@ -6,7 +6,9 @@
  * reads every range again from its start, each in one pass
  * (model/cascade.ts sweep), so no cursor is kept and a repeated step cannot
  * skip a row. The removal row records the phase that
- * was running when the budget ran out.
+ * was running when the budget ran out, and where a deleted profile's
+ * guest-organization marking stopped (guestMarking), the one place a step
+ * goes on from a stored position.
  *
  * Profiles go first. Once the removal has a phase, lib/billingAccess.ts
  * assertOrgAvailable refuses every app and machine call into the
@@ -37,6 +39,7 @@
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { markHomeProfileRemoved } from '../lib/billableUsers'
+import { orgRemovalFor } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import { ORG_REMOVAL_PHASES, type OrgRemovalPhase } from '../lib/enums'
 import { require, rule } from '../lib/functions'
@@ -97,7 +100,9 @@ async function inOrder(steps: (() => Promise<boolean>)[]): Promise<boolean> {
 
 /** Profiles with everything that hangs off them, then their pictures,
  * then any Team sync stamp row left without its profile (a rollback or a
- * manual edit can leave one), which finish() refuses to leave behind. */
+ * manual edit can leave one), which finish() refuses to leave behind. A
+ * read-message sweep row names no organization, so one left without its
+ * profile stays until it falls due and the sweep deletes it (jobs.ts). */
 const profileRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   (await profilesWithRows(ctx, orgId, budget)) &&
   (await drain(
@@ -106,10 +111,9 @@ const profileRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudge
     ctx.db.query('sync_stamps').withIndex('by_org', (q) => q.eq('org_id', orgId)),
   ))
 
-const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) => {
-  // guest organizations already marked due in this step
-  const asked = new Set<string>()
-  return parents(
+const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudget) => {
+  const markGuests = await guestMarking(ctx, orgId)
+  return await parents(
     ctx,
     budget,
     ctx.db.query('profiles').withIndex('by_org', (q) => q.eq('org_id', orgId)),
@@ -146,6 +150,14 @@ const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget
             budget,
             ctx.db
               .query('sync_stamps')
+              .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
+          ),
+        () =>
+          drain(
+            ctx,
+            budget,
+            ctx.db
+              .query('message_sweeps')
               .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
           ),
         () =>
@@ -212,11 +224,9 @@ const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget
               .query('machine_rate_limits')
               .withIndex('by_key', (q) => q.eq('key', `profile:${profile.id}`)),
           ),
+        () => markGuests(profile, budget),
       ]),
     {
-      before: async (profile) => {
-        budget.rows -= await markHomeProfileRemoved(ctx, profile, asked)
-      },
       after: async (profile) => {
         if (profile.avatar_storage_id === undefined) return
         // Letting go of a picture reads about as many index ranges as the
@@ -228,6 +238,31 @@ const profilesWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget
       },
     },
   )
+}
+
+/** The step's marker of deleted profiles' guest organizations, which marks
+ * them due before the profile goes (lib/billableUsers.ts
+ * markHomeProfileRemoved) within the step's budget. When the budget runs
+ * out first, it records on the removal row where it stopped and answers
+ * false, so the profile stays, no longer active, and the next step goes on
+ * from there: a person who is a guest in many organizations takes several
+ * steps instead of passing one step's budget. */
+async function guestMarking(ctx: MutationCtx, orgId: string) {
+  const removal = await orgRemovalFor(ctx, orgId)
+  require(removal, rule('Organization deletion has not begun'))
+  // guest organizations already marked due in this step
+  const asked = new Set<string>()
+  let progress = removal.guest_marking
+  return async (profile: Doc<'profiles'>, budget: RemovalBudget): Promise<boolean> => {
+    const after = progress?.profile_id === profile.id ? progress.through : undefined
+    const through = await markHomeProfileRemoved(ctx, profile, asked, budget, after)
+    const next = through === null ? undefined : { profile_id: profile.id, through }
+    if (next !== undefined || progress !== undefined) {
+      progress = next
+      await ctx.db.patch(removal._id, { guest_marking: next })
+    }
+    return next === undefined
+  }
 }
 
 /** Everything in Deleted items, from one budget: clearOrgTrash counts its

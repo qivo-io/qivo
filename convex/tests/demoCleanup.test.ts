@@ -6,9 +6,18 @@ import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, marketingId } from '../internal/marketingDemoData'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { demoMonday, PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from '../model/demoSeed'
+import { lowerSweepDue } from '../model/messages'
 import { countersRow, tallyRow } from '../model/orgs'
 import schema from '../schema'
-import { countersFor, expectLiveCounts, expectRefusal, newT, type T, uuid } from './helpers.setup'
+import {
+  chargeFilteredReads,
+  countersFor,
+  expectLiveCounts,
+  expectRefusal,
+  newT,
+  type T,
+  uuid,
+} from './helpers.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
@@ -148,6 +157,8 @@ const APP_OWNED: TableNames[] = [
   'agent_keys',
   'issue_subscriptions',
   'messages',
+  // when the read-message sweep next visits a profile, deleted with it
+  'message_sweeps',
   'user_prefs',
   'sync_stamps',
   'mcp_tokens',
@@ -172,6 +183,8 @@ const APP_SHARED = [
   // the demo keeps no backups, so it watches for no restore (model/fileHolds.ts)
   'restore_watch',
   'demo_admission', // expiring deployment admission windows, no owner/workspace data
+  'demo_upload_sweeps', // deployment-wide file check progress, no owner/workspace data
+  'orphan_reaps', // deployment-wide orphan file check progress, no owner/workspace data
   'demo_metrics', // durable anonymous totals, independent of demo lifetime
   'demo_metrics_daily', // aggregate UTC history survives workspace deletion
   'demo_metrics_scans', // deployment sampler progress has no tenant ownership
@@ -180,6 +193,9 @@ const APP_SHARED = [
   // Keyed by an already removed profile; its own steps delete it, also after
   // the demo organization is gone (profileRemovals.ts).
   'profile_removals',
+  // When the read-message sweep last checked every profile, one
+  // deployment-wide row (jobs.ts).
+  'message_sweep_seeds',
   // Keyed by an already deleted label; its own steps delete it, also after
   // the demo organization is gone (labelRemovals.ts).
   'label_removals',
@@ -398,6 +414,8 @@ describe('public Northstar provisioning and bounded deletion', () => {
       void ignoredTime
       await ctx.db.insert('issues', record)
       await tallyRow(ctx, 'issues', null, record)
+      // the visitor's read-message sweep row
+      await lowerSweepDue(ctx, profile.id, new Date(NOW).toISOString())
       // a Team sync stamp row whose profile is already gone
       await ctx.db.insert('sync_stamps', {
         org_id: a.org_id!,
@@ -787,114 +805,56 @@ describe('public Northstar provisioning and bounded deletion', () => {
     expect(await t.run((ctx) => ctx.db.get(live._id))).not.toBeNull()
   })
 
-  it('retires version 1 and 2 copies through owned cleanup while retaining newer and unprovisioned demos', async () => {
+  it('reads only due receipts in a recovery run, however many current visitors are live', async () => {
     const t = testBackend()
-    const current = await makeDemo(t)
-    const future = await makeDemo(t)
-    const unprovisioned = await makeDemo(t, false)
-    const unknown = await makeDemo(t)
-    await t.run(async (ctx) => {
-      await ctx.db.patch(current._id, { seed_version: 3 })
-      await ctx.db.patch(future._id, { seed_version: 4 })
-      await ctx.db.patch(unknown._id, { seed_version: undefined })
-    })
-    const preserved = await ownedSnapshot(t)
-    const previous = [await makeDemo(t), await makeDemo(t)]
-    const files = await t.run(async (ctx) => {
-      const ids = []
-      for (const [index, receipt] of previous.entries()) {
-        await ctx.db.patch(receipt._id, { seed_version: index + 1 })
-        const profile = (await ctx.db
-          .query('profiles')
-          .withIndex('by_auth', (q) => q.eq('auth_user_id', receipt.auth_user_id))
-          .unique())!
-        const file = await ctx.storage.store(new Blob(['previous demo avatar']) as never)
-        await ctx.db.patch(profile._id, { avatar_storage_id: file })
-        ids.push(file)
-        await ctx.runMutation(components.betterAuth.adapter.create, {
-          input: {
-            model: 'session',
-            data: {
-              userId: receipt.auth_user_id,
-              token: uuid(),
-              createdAt: NOW,
-              updatedAt: NOW,
-              expiresAt: NOW + 86_400_000,
-            },
-          },
-        })
-      }
-      return ids
-    })
-    await t.mutation(recover, {})
-    for (const receipt of previous) {
-      expect(await t.run((ctx) => ctx.db.get(receipt._id))).toMatchObject({
-        expires_at: NOW,
-      })
-    }
-    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
-    expect(await ownedSnapshot(t)).toEqual(preserved)
-    for (const receipt of previous) {
-      for (const model of ['user', 'session'] as const) {
-        expect(
-          await t.run((ctx) =>
-            ctx.runQuery(components.betterAuth.adapter.findOne, {
-              model,
-              where: [{ field: model === 'user' ? '_id' : 'userId', value: receipt.auth_user_id }],
-            }),
-          ),
-        ).toBeNull()
-      }
-    }
-    expect(
-      await t.run(async (ctx) => Promise.all(files.map((id) => ctx.db.system.get(id)))),
-    ).toEqual([null, null])
-    for (const receipt of [current, future, unprovisioned, unknown]) {
-      expect(await t.run((ctx) => ctx.db.get(receipt._id))).toMatchObject({
-        expires_at: NOW + 86_400_000,
-      })
-    }
-  }, 60_000)
-
-  it('bounds the refresh batch without hiding older versions behind current visitors', async () => {
-    const t = testBackend()
-    const previous = await t.run(async (ctx) => {
-      const ids = []
-      // Lifecycle-only fixtures isolate the selector and scheduling budget.
-      // Current receipts deliberately sort before all the older copies.
-      for (let index = 0; index < 70; index++) {
-        const id = await ctx.db.insert('demo_sessions', {
+    // The backend counts the rows a filter passes over; convex-test does not.
+    chargeFilteredReads()
+    const due = await t.run(async (ctx) => {
+      const receipt = (fields: Partial<Doc<'demo_sessions'>>) =>
+        ctx.db.insert('demo_sessions', {
           id: uuid(),
           auth_user_id: uuid(),
           status: 'ready',
-          seed_version: index < 35 ? 3 : 2,
+          seed_version: 8,
           created_at: NOW,
-          expires_at: NOW + 1000 + index,
+          expires_at: NOW + 3_600_000,
+          ...fields,
         })
-        if (index >= 35) ids.push(id)
+      for (let index = 0; index < 200; index++) await receipt({ expires_at: NOW + 1000 + index })
+      return {
+        expired: await receipt({ expires_at: NOW - 1 }),
+        // a copy of an earlier seed keeps its own deadline
+        previous: await receipt({ seed_version: 2 }),
+        stalled: await receipt({ status: 'deleting', cleanup_progress_at: NOW - 120_000 }),
       }
-      return ids
     })
-    await t.mutation(recover, {})
-    const first = await t.run(async (ctx) => Promise.all(previous.map((id) => ctx.db.get(id))))
-    expect(first.filter((receipt) => receipt?.expires_at === NOW)).toHaveLength(32)
-    await t.mutation(recover, {})
-    const second = await t.run(async (ctx) => Promise.all(previous.map((id) => ctx.db.get(id))))
-    expect(second.every((receipt) => receipt?.expires_at === NOW)).toBe(true)
-    expect(
-      await t.run((ctx) =>
-        ctx.db
-          .query('demo_sessions')
-          .filter((q) => q.and(q.eq(q.field('seed_version'), 3), q.eq(q.field('expires_at'), NOW)))
-          .collect(),
-      ),
-    ).toEqual([])
+    const read = await t.run(async (ctx) => {
+      await ctx.runMutation(recover, {})
+      return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+    })
+    // the two due receipts, and again the one it patches, whatever the 201
+    // live ones
+    expect(read).toBe(3)
+    const jobs = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+    expect(jobs.map((job) => job.name).sort()).toEqual([
+      'demo:expire',
+      'internal/demoCleanup:purge',
+    ])
+    expect(await t.run((ctx) => ctx.db.get(due.previous))).toMatchObject({
+      expires_at: NOW + 3_600_000,
+    })
+    expect(await t.run((ctx) => ctx.db.get(due.stalled))).toMatchObject({
+      cleanup_progress_at: NOW,
+    })
   })
 
   it('keeps normal deployments untouched and refuses a demo deployment on the main origin', async () => {
     const t = testBackend()
-    const old = await makeDemo(t)
-    await t.run((ctx) => ctx.db.patch(old._id, { seed_version: 2 }))
+    // a stalled deletion, which recovery on a demo deployment would restart
+    const stalled = await makeDemo(t)
+    await t.run((ctx) =>
+      ctx.db.patch(stalled._id, { status: 'deleting', cleanup_progress_at: NOW - 120_000 }),
+    )
     const before = await ownedSnapshot(t)
     vi.stubEnv('APP_MODE', 'normal')
     await t.mutation(recover, {})

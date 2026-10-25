@@ -86,6 +86,7 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'user_prefs', field: 'profile_id', target: 'profiles' },
   { table: 'sync_stamps', field: 'org_id', target: 'organizations' },
   { table: 'sync_stamps', field: 'profile_id', target: 'profiles' },
+  { table: 'message_sweeps', field: 'profile_id', target: 'profiles' },
   { table: 'account_appearance', field: 'custom_image_id', target: 'custom_backgrounds' },
   { table: 'agent_keys', field: 'profile_id', target: 'profiles' },
   { table: 'agent_keys', field: 'created_by', target: 'profiles' },

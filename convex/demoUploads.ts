@@ -10,7 +10,13 @@ import {
   requireDemoDeployment,
 } from './lib/demo'
 import { forbidden } from './lib/functions'
-import { beginDemoUpload, demoCanRead, demoUploadFor, retainDemoUpload } from './model/demoUploads'
+import {
+  beginDemoUpload,
+  checkStoredFiles,
+  demoCanRead,
+  demoUploadFor,
+  retainDemoUpload,
+} from './model/demoUploads'
 import { eraseFile } from './model/fileHolds'
 
 /** Only the HTTP auth handler calls this; callers cannot select a window or
@@ -88,10 +94,17 @@ export const abandon = internalMutation({
   },
 })
 
+/** The cron's call has no arguments. A leg it schedules passes `after`, the
+ * progress it was scheduled for, and does nothing once a later run moved
+ * that progress, so one chain continues at most. `cursor` is the argument of
+ * a leg the previous release queued, from a scan of all files; the next cron
+ * run covers its files, so that leg does nothing. */
 export const sweep = internalMutation({
-  args: { cursor: v.optional(v.string()) },
-  handler: async (ctx, { cursor }): Promise<null> => {
-    if (!isDemoDeployment()) return null
+  args: { cursor: v.optional(v.string()), after: v.optional(v.number()) },
+  handler: async (ctx, { cursor, after }): Promise<null> => {
+    if (!isDemoDeployment() || cursor !== undefined) return null
+    const progress = await ctx.db.query('demo_upload_sweeps').first()
+    if (after !== undefined && progress?.checked_through !== after) return null
     const now = Date.now()
     for (const row of await ctx.db
       .query('demo_admission')
@@ -117,30 +130,11 @@ export const sweep = internalMutation({
       await ctx.db.delete(ticket._id)
     }
     // Storage writes and metadata commits cross an action boundary. A crash
-    // there leaves no id in the ledger, so enumerate bounded storage pages.
-    const workers = await ctx.db
-      .query('demo_uploads')
-      .withIndex('by_state_lease', (q) => q.eq('state', 'receiving').gt('lease_until', now))
-      .take(1001)
-    const safeBefore =
-      workers.length === 1001
-        ? 0
-        : Math.min(now - 120_000, ...workers.map((worker) => worker.started_at ?? 0))
-    const page = await ctx.db.system
-      .query('_storage')
-      .paginate({ cursor: cursor ?? null, numItems: 64 })
-    for (const file of page.page) {
-      if (file._creationTime >= safeBefore || (await storageIdInUse(ctx, file._id))) continue
-      const ticket = await ctx.db
-        .query('demo_uploads')
-        .withIndex('by_storage', (q) => q.eq('storage_id', file._id))
-        .unique()
-      if (ticket && ticket.expires_at > now) continue
-      await eraseFile(ctx, file._id)
-    }
-    if (!page.isDone)
+    // there leaves no id in the ledger (model/demoUploads.ts checkStoredFiles).
+    const { checked, full } = await checkStoredFiles(ctx, progress)
+    if (full)
       await ctx.scheduler.runAfter(1000, internal.demoUploads.sweep, {
-        cursor: page.continueCursor,
+        after: checked.checked_through,
       })
     return null
   },

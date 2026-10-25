@@ -1,5 +1,5 @@
 import { makeFunctionReference } from 'convex/server'
-import { type ObjectType, v } from 'convex/values'
+import { type Infer, type ObjectType, v } from 'convex/values'
 import type { Doc, Id } from './_generated/dataModel'
 import {
   internalAction,
@@ -25,8 +25,8 @@ import {
   validatePolarProduct,
 } from './lib/polar'
 import { audit } from './model/admin'
-import { GB, isoNow, storagePage } from './model/billing'
-import { DAY_MS, syncOrgRemoval } from './model/orgRetention'
+import { GB, isoNow, nextReminder, storagePage } from './model/billing'
+import { DAY_MS, retentionDue, syncOrgRemoval } from './model/orgRetention'
 import { newUuid } from './model/orgs'
 
 type SyncWork = {
@@ -64,9 +64,15 @@ const eventResultRef = makeFunctionReference<'mutation', { id: string; success: 
 )
 const noticesRef = makeFunctionReference<
   'mutation',
-  { now: number; threshold: number; cursor: string | null },
+  { now: number; lane: 'due' | 'unset'; cursor: string | null },
   null
 >('billingSync:reminders')
+const reminderKind = v.union(v.literal('seven_days'), v.literal('one_day'), v.literal('expired'))
+const remindAdminsRef = makeFunctionReference<
+  'mutation',
+  { subscription: Id<'billing_subscriptions'>; until: string; kind: Infer<typeof reminderKind> },
+  null
+>('billingSync:remindAdmins')
 const pumpRef = makeFunctionReference<'action', Record<string, never>, null>('billingSync:pump')
 
 const storageStepArgs = {
@@ -128,11 +134,14 @@ export function subscriptionPayload(s: PolarSubscription): string {
  * asks for one sooner. Membership changes and webhooks reconcile at once, a
  * pending checkout, an unpaid subscription, a period's end and a storage
  * sample have their own times (nextSyncDue), and a failure retries sooner.
- * This pass catches what those miss: a webhook Polar gave up on after its 10
- * retries, or a change made in Polar without one, such as a revocation.
- * Four reads a day per organization keep Polar calls far below its 500 a
- * minute. */
-export const SYNC_SAFETY_MS = 6 * 60 * 60_000
+ * This pass catches a Polar change whose webhook never arrived, because
+ * Polar gave up after its 10 retries or disabled the endpoint after 10
+ * failed deliveries in a row, such as a portal cancellation or a dashboard
+ * revocation. Charges and access do not wait for it. Once a day costs each
+ * organization about 4 function calls and 1 to 3 Polar requests, about
+ * 1,700 calls an hour and 7 to 21 of Polar's 500 requests a minute at
+ * 10,000 organizations. */
+export const SYNC_SAFETY_MS = 24 * 60 * 60_000
 
 /** How many reconciliations one sweep starts, SYNC_PAGE.spacing apart, so
  * they reach Polar at about one a second: 86,400 a day. A reconciliation
@@ -142,10 +151,13 @@ export const SYNC_SAFETY_MS = 6 * 60 * 60_000
  * changes seats also checks the product and its meters, six or seven
  * requests, so a page of only seat changes, as after a Polar outage, can
  * reach about 420; requests Polar then refuses fail into the retry delay.
- * The safety pass gets what the targeted times leave, so it holds its six
- * hours up to about 21,600 organizations and stretches past that. Tests
- * lower `size`. */
-export const SYNC_PAGE = { size: 60, spacing: 1_000 }
+ * The safety pass keeps `safety` of each page whenever that many are due,
+ * so it holds its day up to 43,200 organizations however many targeted
+ * times are due, and up to 86,400 when they leave it room. Past
+ * that it stretches. Targeted times always keep the other 30: 60
+ * organizations polled every PAYMENT_POLL_MS, or 900 every DUNNING_POLL_MS,
+ * before their polls stretch. Tests lower `size` and `safety`. */
+export const SYNC_PAGE = { size: 60, spacing: 1_000, safety: 30 }
 
 /** How often a pending checkout is reconciled, and a subscription in its
  * first PAYMENT_POLL_WINDOW_MS past due, unpaid or incomplete, so a payment
@@ -172,8 +184,8 @@ export const CHECKOUT_POLL_GRACE_MS = 60 * 60_000
 
 /** A reconciliation runs this long before a period ends, so the renewal
  * uses the current seats. A retry after a lost run (SWEEP_FENCE_MS) still
- * lands before the end, and a failure from here to the end retries a
- * minute later (release), which the sweep meets within two. */
+ * lands before the end, and a failure from here to the end retries at the
+ * next sweep (release). */
 export const PRE_RENEWAL_MS = 15 * 60_000
 
 /** A reconciliation runs this long after a period ends, so a lost renewal
@@ -197,6 +209,20 @@ const SWEEP_FENCE_MS = 5 * 60_000
 /** How long a reconciliation holds its lock. */
 const SYNC_LEASE_MS = 120_000
 
+/** How often the sweep runs (crons.ts). */
+export const SWEEP_INTERVAL_MS = 60_000
+
+/** The due time `ms` after a reconciliation that ends at `now`, for the
+ * times counted from it: its polls, its retries and the safety pass. The
+ * sweep meets a due time at its first run at or after it, and a
+ * reconciliation it started ends within the minute after that run, so the
+ * time is stored one SWEEP_INTERVAL_MS sooner. The run `ms` after the one
+ * that started the reconciliation then meets it, rather than the run after
+ * that, which made a 2-minute poll land every 3 minutes. After a
+ * reconciliation that a request started between two runs, the time comes
+ * up to a minute before `ms` has passed. */
+const after = (now: number, ms: number) => now + ms - SWEEP_INTERVAL_MS
+
 /** The sentence a failed reconciliation leaves in Billing. Only this error
  * retries early: the seat ceiling's sentence waits for a membership change. */
 const SYNC_RETRY_ERROR = 'Billing synchronization needs attention. Automatic retries are scheduled.'
@@ -213,34 +239,38 @@ const checkoutPolled = (sub: Doc<'billing_subscriptions'>, now: number) =>
 /** When the organization next needs a reconciliation, and whether that is
  * only the safety pass: SYNC_SAFETY_MS from now, or sooner for a pending
  * checkout, a payment Polar waits for, a period's end or a storage sample that
- * apply must start again if it stalls or stopped. Times already past are
- * left out, because the reconciliation that reads them has just run. Every
+ * apply must start again if it stalls or stopped. Intervals count from
+ * `now` (after); times already past are left out, because the
+ * reconciliation that reads them has just run. Every
  * reconciliation applies the period Polar reports, so when Polar moves a
  * renewal the next times follow the new end; one it moves without a
  * webhook after the check before the old end is read at the check after
- * it, and then every RENEWAL_POLL_MS until the renewal is known. */
+ * it, and then every RENEWAL_POLL_MS until the renewal is known. A sample
+ * that finishes computes the time again without its stall check
+ * (dropStallCheck). */
 async function nextSyncDue(
   ctx: QueryCtx,
   sub: Doc<'billing_subscriptions'>,
   now: number,
 ): Promise<{ due: string; safety: boolean }> {
-  let due = now + SYNC_SAFETY_MS
+  const safetyDue = after(now, SYNC_SAFETY_MS)
+  let due = safetyDue
   const by = (at: number) => {
     if (at > now) due = Math.min(due, at)
   }
-  if (checkoutPolled(sub, now)) by(now + PAYMENT_POLL_MS)
+  if (checkoutPolled(sub, now)) by(after(now, PAYMENT_POLL_MS))
   // past due, unpaid, or incomplete (stored as pending with its subscription)
   const dunning = sub.status === 'past_due' || sub.status === 'unpaid'
   if (dunning || (sub.status === 'pending' && sub.polar_subscription_id)) {
     const since = Date.parse(sub.past_due_at ?? sub.provider_modified_at ?? '')
-    if (now - since < PAYMENT_POLL_WINDOW_MS) by(now + PAYMENT_POLL_MS)
-    else if (dunning) by(now + DUNNING_POLL_MS)
+    if (now - since < PAYMENT_POLL_WINDOW_MS) by(after(now, PAYMENT_POLL_MS))
+    else if (dunning) by(after(now, DUNNING_POLL_MS))
   }
   if (sub.current_period_end && !sub.ended_at) {
     const end = Date.parse(sub.current_period_end)
     if (now < end - PRE_RENEWAL_MS) by(end - PRE_RENEWAL_MS)
     else if (now < end + POST_RENEWAL_MS) by(end + POST_RENEWAL_MS)
-    else if (now < end + 24 * 60 * 60_000) by(now + RENEWAL_POLL_MS)
+    else if (now < end + 24 * 60 * 60_000) by(after(now, RENEWAL_POLL_MS))
   }
   const subscriptionId = sub.polar_subscription_id
   const start = sub.current_period_start
@@ -257,7 +287,7 @@ async function nextSyncDue(
         by(Date.parse(period.storage_failed_at) + STORAGE_RETRY_MS + 60_000)
     }
   }
-  return { due: iso(due), safety: due === now + SYNC_SAFETY_MS }
+  return { due: iso(due), safety: due === safetyDue }
 }
 
 /** Takes the organization's reconciliation lock and returns what the
@@ -277,7 +307,10 @@ export const claim = internalMutation({
       // Nothing to reconcile until the plan connects, so it waits for the
       // safety pass, also after the sweep's fence or a request set a sooner time.
       if (!sub.sync_safety || sub.sync_due_at === undefined || sub.sync_due_at <= iso(now))
-        await ctx.db.patch(sub._id, { sync_due_at: iso(now + SYNC_SAFETY_MS), sync_safety: true })
+        await ctx.db.patch(sub._id, {
+          sync_due_at: iso(after(now, SYNC_SAFETY_MS)),
+          sync_safety: true,
+        })
       return null
     }
     if (sub.sync_lock_until && sub.sync_lock_until > iso(now)) {
@@ -302,12 +335,12 @@ export const claim = internalMutation({
 
 /** Ends a reconciliation: frees its lock, records the seats it sent or its
  * error, and sets when the organization is next due. A failure retries
- * after 1, 2, 4 and up to 60 minutes, or at its next time (nextSyncDue)
- * when that is sooner, so failures cannot push a check past a renewal, and
- * a minute after each failure in the PRE_RENEWAL_MS before a period ends
- * (the sweep meets these times up to a minute late), so the renewal
- * still gets the seats once Polar answers again. A due time set while the
- * lock was held (claim) is kept when it is sooner. */
+ * after 1, 2, 4 and up to 60 minutes (after), or at its next time
+ * (nextSyncDue) when that is sooner, so failures cannot push a check past a
+ * renewal, and a minute after each failure in the PRE_RENEWAL_MS before a
+ * period ends, so the renewal still gets the seats once Polar answers
+ * again. A due time set while the lock was held (claim) is kept when it is
+ * sooner. */
 export const release = internalMutation({
   args: {
     org_id: v.string(),
@@ -325,9 +358,9 @@ export const release = internalMutation({
       if (at < due) [due, safety] = [at, false]
     }
     if (attempts) {
-      sooner(iso(now + Math.min(60, 2 ** (attempts - 1)) * 60_000))
+      sooner(iso(after(now, Math.min(60, 2 ** (attempts - 1)) * 60_000)))
       const end = sub.current_period_end && !sub.ended_at ? Date.parse(sub.current_period_end) : 0
-      if (now >= end - PRE_RENEWAL_MS && now < end) sooner(iso(now + 60_000))
+      if (now >= end - PRE_RENEWAL_MS && now < end) sooner(iso(after(now, 60_000)))
     }
     if (sub.sync_due_at !== undefined && sub.sync_due_at !== sub.sync_lock_until)
       sooner(sub.sync_due_at)
@@ -414,7 +447,6 @@ export const apply = internalMutation({
         : remote.status
     const start = new Date(remote.currentPeriodStart).toISOString()
     const end = new Date(remote.currentPeriodEnd).toISOString()
-    const counts = await getBillableUsers(ctx, sub.org_id)
     // The canceled subscription a checkout replaces cannot be that
     // checkout's outcome (reserveCheckout opens one only after the end), so
     // reading it again keeps the checkout while it is polled (nextSyncDue).
@@ -424,7 +456,7 @@ export const apply = internalMutation({
       sub.status === 'canceled' &&
       status === 'canceled' &&
       checkoutPolled(sub, Date.now())
-    await ctx.db.patch(sub._id, {
+    const fields = {
       polar_subscription_id: incomingId,
       polar_customer_id: remote.customerId,
       provider_modified_at: modified,
@@ -438,8 +470,18 @@ export const apply = internalMutation({
       ...(predecessor
         ? {}
         : { checkout_id: undefined, checkout_url: undefined, checkout_expires_at: undefined }),
-      updated_at: now,
-    })
+      // a free period that Polar now bills gets no more reminders (reminders)
+      remind_at: null,
+    } satisfies Partial<Doc<'billing_subscriptions'>>
+    /* A reconciliation that finds nothing new leaves the row as it is, so
+       the queries that read it do not run again and updated_at keeps the
+       time of the last change, which a canceled subscription's service end
+       counts from (model/orgRetention.ts). An absent field equals one set
+       to undefined. */
+    if (Object.entries(fields).some(([key, value]) => sub[key as keyof typeof fields] !== value)) {
+      const next = { ...fields, updated_at: now }
+      await ctx.db.patch(sub._id, { ...next, retention_at: retentionDue({ ...sub, ...next }) })
+    }
     const period = await ctx.db
       .query('billing_periods')
       .withIndex('by_subscription_period', (q) =>
@@ -447,6 +489,7 @@ export const apply = internalMutation({
       )
       .unique()
     if (!period && (status === 'active' || status === 'past_due')) {
+      const counts = await getBillableUsers(ctx, sub.org_id)
       const periodId = await ctx.db.insert('billing_periods', {
         org_id: sub.org_id,
         subscription_id: incomingId,
@@ -639,8 +682,34 @@ export const storageStep = internalMutation({
   },
 })
 
+/* After a storage sample finishes, computes the organization's next
+ * reconciliation again (nextSyncDue), now without the sample's stall check.
+ * The release of the reconciliation whose apply started the sample usually
+ * runs before the sample ends and sets that check, so without this a sample
+ * that finished on time still cost a reconciliation STORAGE_STALL_MS later.
+ * Only a time that nextSyncDue alone sets moves, and only later: one
+ * further out than the sweep's fence and not the safety pass, while no
+ * retry is pending and no reconciliation holds the lock. A request, a
+ * retry, and a reconciliation the sweep has started or that runs keep
+ * their time; the release of one that runs computes it again itself. */
+async function dropStallCheck(ctx: MutationCtx, sub: Doc<'billing_subscriptions'>) {
+  const now = Date.now()
+  if (
+    sub.sync_due_at === undefined ||
+    sub.sync_due_at <= iso(now + SWEEP_FENCE_MS) ||
+    sub.sync_safety ||
+    sub.sync_attempts ||
+    (sub.sync_lock_until !== undefined && sub.sync_lock_until > iso(now))
+  )
+    return
+  const { due, safety } = await nextSyncDue(ctx, sub, now)
+  if (due > sub.sync_due_at)
+    await ctx.db.patch(sub._id, { sync_due_at: due, sync_safety: safety || undefined })
+}
+
 /* A storage sample's last step. It records the bytes and the blocks over
- * the allowance, and adds the period's storage charge when one is due. */
+ * the allowance, adds the period's storage charge when one is due and
+ * drops the organization's stall check (dropStallCheck). */
 async function finishStorageSample(
   ctx: MutationCtx,
   period: Doc<'billing_periods'>,
@@ -681,6 +750,7 @@ async function finishStorageSample(
       created_at: now,
     })
   }
+  if (sub !== null) await dropStallCheck(ctx, sub)
   return null
 }
 
@@ -894,23 +964,29 @@ export const pump = internalAction({
 
 /** The billing job, every minute (crons.ts). It starts the reconciliations
  * that are due, SYNC_PAGE at a time and oldest first, delivers usage events
- * that are due (pump) and sends the free-period reminders whose time came
- * within the last REMINDER_WINDOW_MS (reminders). Targeted times go first,
- * then organizations enrolled before due times existed, which have none,
- * then the safety pass. A due time waits for the first sweep at or after
- * it, so a reconciliation that sets one a minute out runs again about two
- * minutes later, and every time here is met up to a minute late. A minute
- * with nothing due reads seven index ranges
+ * that are due (pump) and sends the free-period reminders that are due
+ * (reminders). The safety pass keeps up to SYNC_PAGE.safety of each page,
+ * targeted times take the rest, organizations enrolled before due times
+ * existed count as targeted, and the safety pass also gets what they leave.
+ * A due time waits for the first sweep at or after it, so a time here is
+ * met up to a minute late, except an interval a reconciliation counts from
+ * its own end (after), which the sweep that many minutes after the one
+ * that started it meets. A minute with nothing due reads six index ranges
  * and writes nothing. Pump and the reminders run in their own
  * transactions, so a failure in either cannot undo the reconciliations
- * this one starts. */
+ * this one starts. The reminders that are due and the rows without a
+ * reminder time each start their own chain of steps, so neither waits for
+ * the other. */
 export const sweep = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
     if (!billingEnabled() || !polarConfigured()) return null
     const now = Date.now()
     const subs = () => ctx.db.query('billing_subscriptions')
-    const lanes = [
+    const safety = await subs()
+      .withIndex('by_sync_due', (q) => q.eq('sync_safety', true).lte('sync_due_at', iso(now)))
+      .take(SYNC_PAGE.size)
+    const targeted = [
       // every string sorts after an absent due time
       () =>
         subs().withIndex('by_sync_due', (q) =>
@@ -920,16 +996,14 @@ export const sweep = internalMutation({
         subs().withIndex('by_sync_due', (q) =>
           q.eq('sync_safety', undefined).eq('sync_due_at', undefined),
         ),
-      () =>
-        subs().withIndex('by_sync_due', (q) =>
-          q.eq('sync_safety', true).lte('sync_due_at', iso(now)),
-        ),
     ]
+    const room = SYNC_PAGE.size - Math.min(safety.length, SYNC_PAGE.safety)
     const due: Doc<'billing_subscriptions'>[] = []
-    for (const lane of lanes) {
-      if (due.length === SYNC_PAGE.size) break
-      due.push(...(await lane().take(SYNC_PAGE.size - due.length)))
+    for (const lane of targeted) {
+      if (due.length === room) break
+      due.push(...(await lane().take(room - due.length)))
     }
+    due.push(...safety.slice(0, SYNC_PAGE.size - due.length))
     for (const [i, sub] of due.entries()) {
       await ctx.db.patch(sub._id, {
         sync_due_at: iso(now + SWEEP_FENCE_MS),
@@ -944,111 +1018,134 @@ export const sweep = internalMutation({
       )
       .first()
     if (event) await ctx.scheduler.runAfter(0, pumpRef, {})
-    for (const threshold of REMINDER_THRESHOLDS)
-      if (await remindRange(ctx, now, threshold).first())
-        await ctx.scheduler.runAfter(0, noticesRef, { now, threshold, cursor: null })
+    for (const lane of ['due', 'unset'] as const)
+      if (await reminded(ctx, lane, now).first())
+        await ctx.scheduler.runAfter(0, noticesRef, { now, lane, cursor: null })
     return null
   },
 })
 
-/** How long before a free period ends its two reminders go out, and its end,
- * when the expired notice goes out and the members' pages refresh. */
-const REMINDER_THRESHOLDS = [7 * DAY_MS, DAY_MS, 0]
-
-/** How long after a reminder's time it still goes out. Each minute's sweep
- * reads only the free periods whose reminder time came this recently, so a
- * free period costs about 60 reminder runs a threshold instead of one every
- * minute of its last week and first month after the end. A sweep that
- * stops for longer misses the reminders whose time came meanwhile. It must
- * stay below the day between the last two thresholds. */
-export const REMINDER_WINDOW_MS = 60 * 60_000
-
-/** Free periods one reminders step reads. Each reads its organization's
- * profiles, so a step of 16 stays far from Convex's 32,000 documents a
- * transaction unless the organizations average 2,000 profiles. Tests lower
- * it. */
+/** Free periods one reminders step reads, moves and schedules a
+ * remindAdmins step for. A step reads only these rows, so it cannot fail on
+ * what an organization holds. Tests lower it. */
 export const REMINDER_PAGE = { size: 16 }
 
-/** The subscriptions whose free period's reminder at `threshold` before its
- * end came within the last REMINDER_WINDOW_MS, in the order of their end. */
-const remindRange = (ctx: QueryCtx, now: number, threshold: number) =>
+/* The subscriptions the reminders read: those whose remind_at has passed
+ * (every string sorts after null and an absent value), and those written
+ * before remind_at existed. */
+const reminded = (ctx: QueryCtx, lane: 'due' | 'unset', now: number) =>
   ctx.db
     .query('billing_subscriptions')
-    .withIndex('by_complimentary_until', (q) =>
-      q
-        .gt('complimentary_until', iso(now + threshold - REMINDER_WINDOW_MS))
-        .lte('complimentary_until', iso(now + threshold)),
+    .withIndex('by_remind', (q) =>
+      lane === 'due'
+        ? q.gte('remind_at', '').lte('remind_at', iso(now))
+        : q.eq('remind_at', undefined),
     )
 
-/** One page of the free-period reminders at one threshold (remindRange), at
- * the sweep's time. Each later page runs as its own step. Notices are keyed
- * by grant end + recipient + threshold, so a retry cannot send a fresh copy
- * every sweep. Actual delivery records success separately. */
+/** One page of the free-period reminders that are due, at the sweep's time.
+ * Each later page runs as its own step. A reminder goes out at its time
+ * (model/billing.ts REMINDER_THRESHOLDS) or, after a sweep outage, late, and
+ * only the latest one that came due: a period with a day left gets the
+ * one-day reminder, not the seven-day one as well. The step moves remind_at
+ * to the next reminder's time, or null after the end, and schedules one
+ * remindAdmins step for each reminder, so an organization whose notices
+ * fail loses only its own reminder of this time and holds back no other.
+ * The unset lane fills in remind_at on rows written before it existed. */
 export const reminders = internalMutation({
-  args: { now: v.number(), threshold: v.number(), cursor: v.union(v.string(), v.null()) },
-  handler: async (ctx, { now, threshold, cursor }) => {
-    if (!billingEnabled()) return null
-    const page = await remindRange(ctx, now, threshold).paginate({
-      cursor,
-      numItems: REMINDER_PAGE.size,
-    })
+  args: {
+    now: v.number(),
+    lane: v.optional(v.union(v.literal('due'), v.literal('unset'))),
+    cursor: v.union(v.string(), v.null()),
+    // A step an earlier release queued for one reminder time. It stops, and
+    // the next sweep reads what is due.
+    threshold: v.optional(v.number()),
+  },
+  handler: async (ctx, { now, lane = 'due', cursor, threshold }) => {
+    if (!billingEnabled() || threshold !== undefined) return null
+    const page = await reminded(ctx, lane, now).paginate({ cursor, numItems: REMINDER_PAGE.size })
     for (const sub of page.page) {
-      if (!sub.complimentary_until || sub.polar_subscription_id) continue
-      const remaining = Date.parse(sub.complimentary_until) - now
+      const until = sub.polar_subscription_id ? undefined : sub.complimentary_until
+      if (lane === 'unset') {
+        // a reminder whose time came within the last hour, which the release
+        // before remind_at would still send, is still sent
+        await ctx.db.patch(sub._id, {
+          remind_at: until ? nextReminder(until, now - REMINDER_WINDOW_MS) : null,
+        })
+        continue
+      }
+      await ctx.db.patch(sub._id, { remind_at: until ? nextReminder(until, now) : null })
+      if (!until) continue
+      const remaining = Date.parse(until) - now
+      // a period extended without moving remind_at waits for its own time
+      if (remaining > 7 * DAY_MS) continue
       // Convex subscriptions invalidate on data changes, not the wall clock.
       // Touch once at expiry to refresh both summary and member entitlement UI.
-      if (remaining <= 0 && sub.updated_at < sub.complimentary_until)
+      if (remaining <= 0 && sub.updated_at < until)
         await ctx.db.patch(sub._id, { updated_at: isoNow() })
-      const kind =
-        remaining <= 0
-          ? 'expired'
-          : remaining <= 86_400_000
-            ? 'one_day'
-            : remaining <= 7 * 86_400_000
-              ? 'seven_days'
-              : null
-      if (!kind) continue
-      const org = await byId(ctx, 'organizations', sub.org_id)
-      if (!org) continue
-      const profiles = await ctx.db
-        .query('profiles')
-        .withIndex('by_org', (q) => q.eq('org_id', sub.org_id))
-        .collect()
-      for (const profile of profiles) {
-        if (!profile.active || profile.org_role !== 'admin' || !profile.email) continue
-        const key = `${sub.id}:${sub.complimentary_until}:${profile.id}:${kind}`
-        if (
-          await ctx.db
-            .query('billing_notices')
-            .withIndex('by_key', (q) => q.eq('key', key))
-            .unique()
-        )
-          continue
-        await ctx.db.insert('billing_notices', {
-          key,
-          org_id: sub.org_id,
-          profile_id: profile.id,
-          kind,
-          created_at: isoNow(),
-        })
-        await ctx.scheduler.runAfter(
-          0,
-          makeFunctionReference<
-            'action',
-            { to: string; url: string; until: string; notice_key: string },
-            null
-          >('billingMail:send'),
-          {
-            to: profile.email,
-            url: `${process.env.SITE_URL}/app/${encodeURIComponent(org.slug)}/settings/org-billing`,
-            until: sub.complimentary_until,
-            notice_key: key,
-          },
-        )
-      }
+      const kind = remaining <= 0 ? 'expired' : remaining <= DAY_MS ? 'one_day' : 'seven_days'
+      await ctx.scheduler.runAfter(0, remindAdminsRef, { subscription: sub._id, until, kind })
     }
     if (!page.isDone)
-      await ctx.scheduler.runAfter(0, noticesRef, { now, threshold, cursor: page.continueCursor })
+      await ctx.scheduler.runAfter(0, noticesRef, { now, lane, cursor: page.continueCursor })
     return null
   },
 })
+
+/** Sends one free period's reminder to its organization's active admins
+ * with an email, as a reminders step asked. Notices are keyed by grant end
+ * + recipient + reminder, so a retry cannot send one twice. Actual delivery
+ * records success separately. A period that changed since, extended or
+ * billed in Polar, gets nothing: the write that changed it stored its next
+ * reminder time. */
+export const remindAdmins = internalMutation({
+  args: { subscription: v.id('billing_subscriptions'), until: v.string(), kind: reminderKind },
+  handler: async (ctx, { subscription, until, kind }) => {
+    if (!billingEnabled()) return null
+    const sub = await ctx.db.get(subscription)
+    if (!sub || sub.polar_subscription_id || sub.complimentary_until !== until) return null
+    const org = await byId(ctx, 'organizations', sub.org_id)
+    if (!org) return null
+    const profiles = await ctx.db
+      .query('profiles')
+      .withIndex('by_org', (q) => q.eq('org_id', sub.org_id))
+      .collect()
+    for (const profile of profiles) {
+      if (!profile.active || profile.org_role !== 'admin' || !profile.email) continue
+      const key = `${sub.id}:${until}:${profile.id}:${kind}`
+      if (
+        await ctx.db
+          .query('billing_notices')
+          .withIndex('by_key', (q) => q.eq('key', key))
+          .unique()
+      )
+        continue
+      await ctx.db.insert('billing_notices', {
+        key,
+        org_id: sub.org_id,
+        profile_id: profile.id,
+        kind,
+        created_at: isoNow(),
+      })
+      await ctx.scheduler.runAfter(
+        0,
+        makeFunctionReference<
+          'action',
+          { to: string; url: string; until: string; notice_key: string },
+          null
+        >('billingMail:send'),
+        {
+          to: profile.email,
+          url: `${process.env.SITE_URL}/app/${encodeURIComponent(org.slug)}/settings/org-billing`,
+          until,
+          notice_key: key,
+        },
+      )
+    }
+    return null
+  },
+})
+
+/** How long after a reminder's time a row written before remind_at existed
+ * still gets it, once the unset lane fills it in: the release before read
+ * each reminder time for an hour. */
+const REMINDER_WINDOW_MS = 60 * 60_000

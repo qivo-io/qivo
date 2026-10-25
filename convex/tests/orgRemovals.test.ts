@@ -5,7 +5,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { BillingPlan } from '../lib/billingTypes'
 import { enrollOrganization } from '../model/billing'
 import { REMOVAL_BUDGET } from '../model/cascade'
-import { noCheckoutDue, serviceEndedAt } from '../model/orgRetention'
+import { noCheckoutDue, retentionDue, serviceEndedAt } from '../model/orgRetention'
 import { STALLED_MS, SWEEP_PAGES } from '../orgRemovals'
 import {
   as,
@@ -505,6 +505,23 @@ describe('cancelling a subscription', () => {
     )
     expect(await removalOf(t, f.org.id)).toBeNull()
   })
+
+  it('stops the deletion when complimentary access is granted again', async () => {
+    const { t, f, operator } = await billed()
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    const until = (await as(t, f.admin).query(api.billing.summary, { org_id: f.org.id }))
+      .complimentary_until!
+    vi.setSystemTime(Date.parse(until) + 60_000)
+    await exportNow(t, f)
+    await t.mutation(internal.orgRemovals.sweep, {})
+    await runSteps(t)
+    expect(await removalOf(t, f.org.id)).toMatchObject({ reason: 'service_ended', ended_at: until })
+    await expectRefusal(createTask(t, f.admin, f.org.id, f.sub.id), 'forbidden')
+
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    expect(await removalOf(t, f.org.id)).toBeNull()
+    await createTask(t, f.admin, f.org.id, f.sub.id)
+  })
 })
 
 describe('an admin deleting the organization', () => {
@@ -600,6 +617,9 @@ describe('deleting the organization', () => {
         inline: false,
         created_at: NOW,
       })
+      // read-message sweep rows, one of the other organization's
+      for (const profile_id of [f.admin.id, f.user.id, f.otherAdmin.id])
+        await ctx.db.insert('message_sweeps', { profile_id, due_at: NOW })
       return storage_id
     })
     await exportNow(t, f)
@@ -644,6 +664,8 @@ describe('deleting the organization', () => {
     ).toBeNull()
     expect(await fileState(t, storage)).toBe('held')
     expect(await orgRows(t, f.otherOrg.id)).toEqual(others)
+    const sweeps = await t.run((ctx) => ctx.db.query('message_sweeps').collect())
+    expect(sweeps.map((row) => row.profile_id)).toEqual([f.otherAdmin.id])
     await assertNoDanglingRefs(t, 'organization deletion')
   })
 
@@ -671,17 +693,21 @@ describe('deleting the organization', () => {
     expect((await orgRows(t, f.org.id)).issues).toBe(0)
   })
 
+  const hourlySweep = (t: T) => t.mutation(internal.orgRemovals.sweep, {})
   it.each([
-    ['the hourly sweep', (t: T) => t.mutation(internal.orgRemovals.sweep, {})],
+    // the sweep reads every waiting removal while billing is off
+    ['the hourly sweep before the date', 1, hourlySweep],
+    ['the hourly sweep after the date', 30, hourlySweep],
     [
       'the start of deletion',
+      30,
       (t: T, orgId: string) => t.action(internal.orgRemovals.begin, { org_id: orgId }),
     ],
-  ])('stops a billing deletion when billing is switched off, seen by %s', async (_, run) => {
+  ])('stops a billing deletion when billing is switched off, seen by %s', async (_, day, run) => {
     const { t, f } = await billed()
     await applied(t, remote(f.org.id, { status: 'canceled', ended_at: NOW }))
     expect(await removalOf(t, f.org.id)).toMatchObject({ reason: 'service_ended' })
-    vi.setSystemTime(Date.parse(at(30)) + 60_000)
+    vi.setSystemTime(Date.parse(at(day)) + 60_000)
     vi.stubEnv('BILLING_ENABLED', 'false')
     await run(t, f.org.id)
     expect(await removalOf(t, f.org.id)).toBeNull()
@@ -820,36 +846,222 @@ describe('deleting the organization', () => {
   })
 })
 
+describe('when the hourly sweep next reads a subscription', () => {
+  /* A small fixed-seed generator, so a failure names the same case again. */
+  const rng = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let x = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x
+    return ((x ^ (x >>> 14)) >>> 0) / 4_294_967_296
+  }
+
+  it('falls due exactly when the service ends or the checkout deadline passes', () => {
+    const next = rng(7)
+    const pick = <V>(values: readonly V[]): V => values[Math.floor(next() * values.length)]
+    const times = [undefined, at(-40), at(-8), at(-1), at(0), at(0.5), at(1), at(6), at(30)]
+    const statuses = ['pending', 'active', 'trialing', 'past_due', 'canceled', 'unpaid'] as const
+    for (let i = 0; i < 2_000; i++) {
+      const sub = subscription({
+        status: pick(statuses),
+        ended_at: pick(times),
+        current_period_end: pick(times),
+        cancel_at_period_end: next() < 0.3,
+        past_due_at: pick(times),
+        complimentary_until: pick(times),
+        checkout_due_at: pick(times),
+        polar_subscription_id: next() < 0.3 ? providerId : undefined,
+        updated_at: at(-2),
+        created_at: at(-50),
+      })
+      const due = retentionDue(sub)
+      const probes = [at(-60), at(60), ...times.filter((time) => time !== undefined)].flatMap(
+        (time) => [-1, 0, 1].map((ms) => Date.parse(time) + ms),
+      )
+      // a row has no due time before it was written
+      const after = probes.filter((now) => now >= Date.parse(sub.created_at))
+      for (const now of [...after, ...[DAY, 7 * DAY].map((ms) => Date.parse(at(30)) + ms)])
+        expect(
+          serviceEndedAt(sub, now) !== null || noCheckoutDue(sub, now),
+          JSON.stringify({ sub, now: new Date(now).toISOString(), due }),
+        ).toBe(due !== null && now >= Date.parse(due))
+    }
+  })
+
+  it('is never later than a checkout deadline that waits for a checkout being prepared', () => {
+    const sub = subscription({ checkout_due_at: at(-1), checkout_lock_until: at(0.001) })
+    expect(noCheckoutDue(sub)).toBe(false)
+    expect(retentionDue(sub)).toBe(at(-1))
+  })
+
+  it('is stored by every write that can end a service or a checkout deadline', async () => {
+    const { t, f, operator } = await billed()
+    await t.run((ctx) => enrollOrganization(ctx, f.otherOrg.id))
+    const inStep = async (orgId: string) => {
+      const sub = await t.run((ctx) =>
+        ctx.db
+          .query('billing_subscriptions')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .unique(),
+      )
+      expect(sub?.retention_at).toBe(retentionDue(sub!))
+      return sub?.retention_at
+    }
+    expect(await inStep(f.org.id)).toBe(at(3))
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    expect(await inStep(f.org.id)).toBe(at(30))
+
+    const other = f.otherOrg.id
+    expect(await inStep(other)).toBe(at(3))
+    // a paid period that lapses waits for Polar to say the subscription ended
+    await applied(t, remote(other))
+    expect(await inStep(other)).toBeNull()
+    const cancelled = { status: 'canceled', cancel_at_period_end: true }
+    await applied(t, remote(other, { ...cancelled, modified_at: at(1) }))
+    expect(await inStep(other)).toBe(END)
+    await applied(t, remote(other, { ...cancelled, ended_at: at(2), modified_at: at(2) }))
+    expect(await inStep(other)).toBe(at(2))
+  })
+})
+
 describe('the hourly sweep', () => {
-  it('reaches every organization one page at a time', async () => {
-    const { t, f } = await billed()
+  /* How many sweep legs have run so far: the one a test starts and those
+   * each leg scheduled. With SWEEP_PAGES at 1 a leg reads at most one row of
+   * its lane. */
+  const legs = async (t: T, run: () => Promise<unknown>) => {
+    const scheduled = () =>
+      t.run(
+        async (ctx) =>
+          (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+            (job) => job.name === 'orgRemovals:sweep',
+          ).length,
+      )
+    const before = await scheduled()
+    await run()
+    await runSteps(t)
+    return 1 + (await scheduled()) - before
+  }
+  const sweepRun = (t: T) => () => t.mutation(internal.orgRemovals.sweep, {})
+
+  it('reads only the organizations that are due, one page at a time', async () => {
+    const { t, f, operator } = await billed()
+    // complimentary access that runs out, and a cancellation at the period
+    // end, both without any webhook
+    await operator.mutation(grant, { org_id: f.org.id, months: 1 })
+    await t.run((ctx) => enrollOrganization(ctx, f.otherOrg.id))
+    await applied(
+      t,
+      remote(f.otherOrg.id, {
+        status: 'canceled',
+        cancel_at_period_end: true,
+        current_period_end: at(20),
+      }),
+    )
+    // 30 organizations with nothing due, enrolled before billing started
+    vi.stubEnv('BILLING_ENABLED', 'false')
     await t.run(async (ctx) => {
-      await enrollOrganization(ctx, f.otherOrg.id)
-      // complimentary access that ran out without any webhook, and recent
-      // exports, so no deletion email is queued
-      for (const sub of await ctx.db.query('billing_subscriptions').collect())
-        await ctx.db.patch(sub._id, { complimentary_until: at(-1) })
+      for (let i = 0; i < 30; i++) {
+        const org_id = uuid()
+        await ctx.db.insert('organizations', {
+          ...f.org,
+          _id: undefined,
+          _creationTime: undefined,
+          id: org_id,
+          slug: `quiet-${i}`,
+        } as never)
+        await enrollOrganization(ctx, org_id)
+      }
+    })
+    vi.stubEnv('BILLING_ENABLED', 'true')
+    await t.run(async (ctx) => {
       for (const org of await ctx.db.query('organizations').collect())
         await ctx.db.patch(org._id, { last_export_at: NOW })
     })
     SWEEP_PAGES.removals = 1
     SWEEP_PAGES.subscriptions = 1
-    await t.mutation(internal.orgRemovals.sweep, {})
-    await runSteps(t)
-    for (const org of [f.org, f.otherOrg])
-      expect(await removalOf(t, org.id)).toMatchObject({
-        reason: 'service_ended',
-        delete_after: at(30),
-      })
+
+    vi.setSystemTime(Date.parse(at(20)) - 60_000)
+    expect(await legs(t, sweepRun(t))).toBe(1)
+    expect(await removalOf(t, f.otherOrg.id)).toBeNull()
+
+    vi.setSystemTime(Date.parse(at(30)) + 59 * 60_000)
+    // the empty removals lane, then one leg for each due subscription
+    expect(await legs(t, sweepRun(t))).toBe(3)
+    expect(await removalOf(t, f.org.id)).toMatchObject({
+      reason: 'service_ended',
+      ended_at: at(30),
+    })
+    expect(await removalOf(t, f.otherOrg.id)).toMatchObject({ reason: 'service_ended' })
+    // an hour with nothing due is one call
+    expect(await legs(t, sweepRun(t))).toBe(1)
 
     polar({ list: () => [] })
-    vi.setSystemTime(Date.parse(at(30)) + 60_000)
-    await t.mutation(internal.orgRemovals.sweep, {})
-    await runSteps(t)
+    const date = (await removalOf(t, f.otherOrg.id))!.delete_after
+    vi.setSystemTime(Date.parse(date) + 60 * 60_000)
+    await legs(t, sweepRun(t))
     for (const org of [f.org, f.otherOrg]) {
       expect(await removalOf(t, org.id)).toBeNull()
       expect((await orgRows(t, org.id)).profiles).toBe(0)
     }
+    expect(await t.run((ctx) => ctx.db.query('billing_subscriptions').collect())).toHaveLength(30)
+  })
+
+  it('reads and fills in the rows written before the due time existed', async () => {
+    const { t, f } = await billed()
+    await t.run(async (ctx) => {
+      await enrollOrganization(ctx, f.otherOrg.id)
+      for (const sub of await ctx.db.query('billing_subscriptions').collect())
+        await ctx.db.patch(sub._id, {
+          retention_at: undefined,
+          ...(sub.org_id === f.org.id ? { complimentary_until: at(-1) } : {}),
+        })
+      for (const org of await ctx.db.query('organizations').collect())
+        await ctx.db.patch(org._id, { last_export_at: NOW })
+    })
+    SWEEP_PAGES.subscriptions = 1
+    expect(await legs(t, sweepRun(t))).toBeGreaterThanOrEqual(3)
+    expect(await removalOf(t, f.org.id)).toMatchObject({
+      reason: 'service_ended',
+      ended_at: at(-1),
+    })
+    expect(await removalOf(t, f.otherOrg.id)).toBeNull()
+    const rows = await t.run((ctx) => ctx.db.query('billing_subscriptions').collect())
+    expect(Object.fromEntries(rows.map((sub) => [sub.org_id, sub.retention_at]))).toEqual({
+      [f.org.id]: at(30),
+      [f.otherOrg.id]: at(3),
+    })
+    expect(await legs(t, sweepRun(t))).toBe(1)
+  })
+
+  it('reads a subscription again once its removal stops', async () => {
+    const { t, f } = await billed()
+    await exportNow(t, f)
+    await applied(t, remote(f.org.id, { status: 'canceled', ended_at: NOW }))
+    await legs(t, sweepRun(t))
+    const sub = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('billing_subscriptions')
+          .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+          .unique(),
+      )
+    expect((await sub())?.retention_at).toBe(at(30))
+    // Polar shows a live subscription on the date that Qivo has not applied
+    vi.setSystemTime(Date.parse(at(30)) + 60_000)
+    polar({ list: () => [remote(f.org.id, { id: replacementId, current_period_end: at(59) })] })
+    await t.action(internal.orgRemovals.begin, { org_id: f.org.id })
+    expect(await removalOf(t, f.org.id)).toBeNull()
+    expect((await sub())?.retention_at).toBe(NOW)
+    // while Polar cannot answer the reconciliation, the next run starts the
+    // period again, as before due times existed
+    polar({})
+    await legs(t, sweepRun(t))
+    expect(await removalOf(t, f.org.id)).toMatchObject({ reason: 'service_ended' })
+  })
+
+  it('stops a leg that an earlier release queued', async () => {
+    const { t } = await billed()
+    await t.mutation(internal.orgRemovals.sweep, { phase: 'subscriptions', cursor: 'old' })
+    expect(await legs(t, async () => {})).toBe(1)
   })
 })
 

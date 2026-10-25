@@ -80,27 +80,46 @@ export async function appearanceSettings(
   }
 }
 
+/** How a removal lets go of a file a row named (model/fileHolds.ts). */
+type LetGo = typeof releaseFile
+
 /** Deletes custom background `image` and lets go of its file and preview,
- * which are held for a restore before they are erased (model/fileHolds.ts). */
-export async function removeCustomBackground(ctx: MutationCtx, image: Doc<'custom_backgrounds'>) {
+ * which are held for a restore before they are erased (model/fileHolds.ts),
+ * unless `letGo` says otherwise. */
+export async function removeCustomBackground(
+  ctx: MutationCtx,
+  image: Doc<'custom_backgrounds'>,
+  letGo: LetGo = releaseFile,
+) {
   // storageIdInUse prevents another attachment/avatar/background adopting
   // these ids for their entire lifetime, the hold included.
   await ctx.db.delete(image._id)
-  await releaseFile(ctx, image.storage_id)
-  await releaseFile(ctx, image.preview_storage_id)
+  await letGo(ctx, image.storage_id)
+  await letGo(ctx, image.preview_storage_id)
 }
 
-export async function clearAccountAppearance(ctx: MutationCtx, authId: string) {
+/** Deletes login `authId`'s appearance, backgrounds and background upload
+ * tickets, letting go of the files through `letGo` (removeCustomBackground). */
+export async function clearAccountAppearance(
+  ctx: MutationCtx,
+  authId: string,
+  letGo: LetGo = releaseFile,
+) {
   for (const image of await ctx.db
     .query('custom_backgrounds')
     .withIndex('by_auth_user', (q) => q.eq('auth_user_id', authId))
     .collect())
-    await removeCustomBackground(ctx, image)
+    await removeCustomBackground(ctx, image, letGo)
   for (const upload of await ctx.db
     .query('background_uploads')
     .withIndex('by_auth_user', (q) => q.eq('auth_user_id', authId))
     .collect())
     await ctx.db.delete(upload._id)
-  const settings = await appearanceFor(ctx, authId)
-  if (settings) await ctx.db.delete(settings._id)
+  // every row of the login, so a duplicate an import or a dashboard edit
+  // left cannot make appearanceFor's unique() stop the cleanup
+  for (const settings of await ctx.db
+    .query('account_appearance')
+    .withIndex('by_auth_user', (q) => q.eq('auth_user_id', authId))
+    .collect())
+    await ctx.db.delete(settings._id)
 }

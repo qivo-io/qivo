@@ -44,6 +44,9 @@ const EXCLUDED_TABLES = [
   'demo_write_counts',
   'demo_uploads',
   'demo_admission',
+  'demo_upload_sweeps',
+  // How far the weekly orphan file check got: deployment-wide progress.
+  'orphan_reaps',
   // Deployment-wide anonymous statistics and sampler progress have no org owner.
   'demo_metrics',
   'demo_metrics_daily',
@@ -65,6 +68,10 @@ const EXCLUDED_TABLES = [
   'marketing_demo',
   'issue_subscriptions',
   'messages',
+  // When the read-message sweep next visits a profile, and when it last
+  // checked every profile: maintenance state, not workspace content.
+  'message_sweeps',
+  'message_sweep_seeds',
   'user_prefs',
   'mcp_tokens',
   // Cleanup progress of a profile that is already removed.

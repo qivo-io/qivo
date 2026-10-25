@@ -27,9 +27,6 @@ import { marketingId } from './marketingDemoData'
 
 const BATCH = 64
 const STALLED_MS = 60_000
-// The explicitly requested Northstar refresh retires only the original seed.
-// Keep this cutoff fixed: future dataset releases must not reset live visitors.
-const NORTHSTAR_RESET_VERSION = 3
 const purgeRef = makeFunctionReference<'mutation', { demo_id: string }, null>(
   'internal/demoCleanup:purge',
 )
@@ -285,6 +282,15 @@ async function profileRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
       !(await drain(ctx, budget, (n) =>
         ctx.db
           .query('sync_stamps')
+          .withIndex('by_profile', (q) => q.eq('profile_id', id))
+          .take(n),
+      ))
+    )
+      return false
+    if (
+      !(await drain(ctx, budget, (n) =>
+        ctx.db
+          .query('message_sweeps')
           .withIndex('by_profile', (q) => q.eq('profile_id', id))
           .take(n),
       ))
@@ -644,23 +650,6 @@ export const recover = internalMutation({
         .withIndex('by_status_expiry', (q) => q.eq('status', status).lte('expires_at', now))
         .take(32)
       for (const receipt of expired) await ctx.scheduler.runAfter(0, expireRef, { id: receipt.id })
-    }
-    // Admission caps the entire receipt table at 500. Filter the indexed ready
-    // prefix before taking a batch so current visitors cannot hide old copies.
-    // Unprovisioned receipts and unknown versions retain their normal deadline.
-    const previousNorthstar = await ctx.db
-      .query('demo_sessions')
-      .withIndex('by_status_expiry', (q) => q.eq('status', 'ready').gt('expires_at', now))
-      .filter((q) =>
-        q.and(
-          q.gte(q.field('seed_version'), 1),
-          q.lt(q.field('seed_version'), NORTHSTAR_RESET_VERSION),
-        ),
-      )
-      .take(32)
-    for (const receipt of previousNorthstar) {
-      const expiry_scheduled_id = await ctx.scheduler.runAfter(0, expireRef, { id: receipt.id })
-      await ctx.db.patch(receipt._id, { expires_at: now, expiry_scheduled_id })
     }
     const stalled = await ctx.db
       .query('demo_sessions')

@@ -24,6 +24,13 @@ import type { FunctionReference } from "convex/server";
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
     accounts: {
+      liveLogins: FunctionReference<
+        "query",
+        "internal",
+        { ids: Array<string> },
+        any,
+        Name
+      >;
       microsoftAccountKeys: FunctionReference<
         "query",
         "internal",

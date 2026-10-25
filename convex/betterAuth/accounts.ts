@@ -76,3 +76,22 @@ export const microsoftAccountKeys = query({
     }
   },
 })
+
+/** Which of `ids` name a login that exists (`live`), and which are no login
+ * id at all (`invalid`), such as a string a write outside the app left. The
+ * orphan sweep (files.ts reapOrphans) clears the appearance of the others,
+ * whose login was removed, and keeps the invalid ones. Reads one login per
+ * valid id. */
+export const liveLogins = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, { ids }) => {
+    const live: string[] = []
+    const invalid: string[] = []
+    for (const id of ids) {
+      const userId = ctx.db.normalizeId('user', id)
+      if (userId === null) invalid.push(id)
+      else if (await ctx.db.get(userId)) live.push(id)
+    }
+    return { live, invalid }
+  },
+})

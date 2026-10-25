@@ -16,7 +16,13 @@ import { grouped, LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
 import { polarConfigured } from '../lib/polar'
 import { allowanceSeats, includedApiCalls, usagePeriod } from './billingUsage'
 import { estimateDocumentBytes } from './demoMetrics'
-import { CHECKOUT_DAYS, checkoutDeadline, DAY_MS, syncOrgRemoval } from './orgRetention'
+import {
+  CHECKOUT_DAYS,
+  checkoutDeadline,
+  DAY_MS,
+  retentionDue,
+  syncOrgRemoval,
+} from './orgRetention'
 import { newUuid } from './orgs'
 
 export const GB = 1_000_000_000
@@ -55,7 +61,7 @@ export async function enrollOrganization(ctx: MutationCtx, orgId: string, planId
   if (!plan) return null
   const count = await getBillableUsers(ctx, orgId)
   const now = isoNow()
-  const id = await ctx.db.insert('billing_subscriptions', {
+  const row = {
     id: newUuid(),
     org_id: orgId,
     plan_id: plan.id,
@@ -71,8 +77,28 @@ export async function enrollOrganization(ctx: MutationCtx, orgId: string, planId
       : {}),
     created_at: now,
     updated_at: now,
+  } as const
+  const id = await ctx.db.insert('billing_subscriptions', {
+    ...row,
+    retention_at: retentionDue(row),
+    remind_at: null,
   })
   return await ctx.db.get(id)
+}
+
+/** How long before a free period ends its two reminders go out, and its end,
+ * when the expired notice goes out and the members' pages refresh
+ * (billingSync.ts reminders). */
+export const REMINDER_THRESHOLDS = [7 * DAY_MS, DAY_MS, 0]
+
+/** The time of the first reminder of a free period ending at `until` that
+ * comes after `after`, or null when none is left. Stored as remind_at. */
+export function nextReminder(until: string, after: number): string | null {
+  for (const threshold of REMINDER_THRESHOLDS) {
+    const at = Date.parse(until) - threshold
+    if (at > after) return new Date(at).toISOString()
+  }
+  return null
 }
 
 /** Complimentary access for `months` calendar months, without a card. Enrolls
@@ -102,6 +128,8 @@ export async function grantComplimentaryMonths(
   await ctx.db.patch(sub._id, {
     complimentary_start: sub.complimentary_start ?? now,
     complimentary_until: until,
+    retention_at: retentionDue({ ...sub, complimentary_until: until }),
+    remind_at: nextReminder(until, Date.parse(now)),
     updated_at: now,
     checkout_id: undefined,
     checkout_url: undefined,

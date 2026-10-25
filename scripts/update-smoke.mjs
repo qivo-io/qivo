@@ -1,6 +1,9 @@
 /* Production-bundle loading and update drive against the localhost dev origin.
  * Usage: npm run build && node scripts/update-smoke.mjs [baseURL]
- * The dev server and Northstar Nora credentials must already exist. Browser
+ * The dev server and Northstar Nora credentials must already exist. For a
+ * disposable local backend seeded with marketing-demo.mjs --local, set
+ * QIVO_FIXTURE_LOCAL=true, QIVO_LOCAL_ADMIN_KEY and QIVO_LOCAL_DEPLOYMENT
+ * (browser-demo.mjs). Browser
  * routes serve dist/app.html + dist/assets and simulate version.json releases;
  * nothing is deployed and every editor draft is discarded without saving. */
 import assert from 'node:assert/strict'
@@ -83,6 +86,11 @@ function assertChunkRequested(name, expected) {
 
 const browser = await chromium.launch({ headless: true })
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
+// The routes below serve the app document from this process, so Chromium's
+// local network access checks no longer count it as a localhost page and
+// block its calls to a backend on a loopback address. Allow them for the
+// drive's own origin.
+await context.grantPermissions(['local-network-access'], { origin: demo.base })
 const page = await context.newPage()
 // The page's clock runs at real speed, so publishVersion can move it past
 // the monitor's two-minute wake gap (src/lib/appUpdates.ts UPDATE_WAKE_MS).

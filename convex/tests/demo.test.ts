@@ -523,6 +523,62 @@ describe('demo lifetime and capabilities', () => {
     )
   })
 
+  it('marks messages read and sets the retention at the record limit without spending a record', async () => {
+    const a = await readyDemo()
+    const orgId = a.demo.orgId!
+    // two unread items, one for markRead and one for markAllRead
+    const planted = await t.run(async (ctx) => {
+      const issues = await ctx.db
+        .query('issues')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .take(2)
+      const ids: string[] = []
+      for (const [n, issue] of issues.entries()) {
+        const id = uuid()
+        await ctx.db.insert('messages', {
+          id,
+          org_id: orgId,
+          recipient_id: a.profile.id,
+          issue_id: issue.id,
+          issue_title: issue.title,
+          kind: 'comment',
+          detail: `Comment ${n}`,
+          // newer than any seeded message, so each stays its item's newest
+          created_at: new Date(Date.now() + 60_000).toISOString(),
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+    expect(planted).toHaveLength(2)
+    // each write below adds the visitor's read-message sweep row (model/
+    // messages.ts lowerSweepDue), which the record limit does not count
+    const sweepRows = () =>
+      t.run(async (ctx) => {
+        const rows = await ctx.db
+          .query('message_sweeps')
+          .withIndex('by_profile', (q) => q.eq('profile_id', a.profile.id))
+          .collect()
+        for (const row of rows) await ctx.db.delete(row._id)
+        return rows.length
+      })
+    await sweepRows()
+    await setCounts(a.receipt, { insert_count: DEMO_INSERTS_TOTAL })
+    await a.as.mutation(api.messages.markRead, { org_id: orgId, ids: [planted[0]] })
+    expect(await sweepRows()).toBe(1)
+    await a.as.mutation(api.messages.markAllRead, { org_id: orgId })
+    expect(await sweepRows()).toBe(1)
+    await a.as.mutation(api.profiles.setMessageRetention, { days: 30 })
+    expect(await sweepRows()).toBe(1)
+    expect(await countsOf(a.receipt)).toMatchObject({ insert_count: DEMO_INSERTS_TOTAL })
+    const read = await t.run(async (ctx) => {
+      const out: (string | undefined)[] = []
+      for (const id of planted) out.push((await byId(ctx, 'messages', id))?.read_at)
+      return out
+    })
+    expect(read.every((at) => at !== undefined)).toBe(true)
+  })
+
   it('counts writes beside the receipt, which a write leaves as it was', async () => {
     const a = await readyDemo()
     const receipt = await t.run((ctx) => ctx.db.get(a.receipt._id))

@@ -11,9 +11,15 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    task window waits for a task still to arrive, the address keeps naming
    it, and the task opens once it arrives, in its own scope. The waiting
    window closes, and a task that never arrives closes it once every task
-   has loaded. Settings opens meanwhile, but its pages that read every task
-   wait. Back to a task or project that is gone, once every task has
-   loaded, names the page it shows in place. */
+   has loaded. A task address Back reaches during the first load, before
+   App shows, is held the same way. A project in scope deleted meanwhile
+   goes with the task's arrival, and the task opens in the one left. A page
+   moved meanwhile names itself, and earns an entry where it would with the
+   task open. A task that arrives while a refused Back steps back is named
+   once that step lands. A held address of another organization never
+   shows a home task with the same number. Settings opens meanwhile, but
+   its pages that read every task wait. Back to a task or project that is
+   gone, once every task has loaded, names the page it shows in place. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -23,6 +29,29 @@ vi.mock('./lib/convex', async () => {
   const { liveOver } = await import('./store/guard/liveDouble.setup')
   double.live = liveOver(network)
   return { convex: network, live: double.live }
+})
+/* App refuses a Back or Forward only when it would close unsent text,
+   which no window holds while these tasks load, so a test that needs a
+   refused one's step back on its way stands it in (`on`) until a popstate
+   lands it. Otherwise App's refusal is the real one. */
+const refusing = vi.hoisted(() => ({ on: false }))
+vi.mock('./lib/popRefusal', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./lib/popRefusal')>()
+  return {
+    createPopRefusal: (...args: Parameters<typeof real.createPopRefusal>) => {
+      const refusal = real.createPopRefusal(...args)
+      return {
+        ...refusal,
+        stepping: () => refusing.on || refusal.stepping(),
+        landed(event: PopStateEvent) {
+          if (!refusing.on) return refusal.landed(event)
+          refusing.on = false
+          event.stopImmediatePropagation()
+          return true
+        },
+      }
+    },
+  }
 })
 vi.mock('./lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -66,6 +95,7 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  refusing.on = false
   await act(async () => root.unmount())
   double.live?.holdWindow(null)
   container.remove()
@@ -88,32 +118,64 @@ function waitFor<T>(find: () => T | null | undefined, what: string) {
   )
 }
 
+type Task = Snapshot['issues'][number]
+/** Task number `num` with id `id` in project `project` of organization `org`. */
+const task = (id: string, org: string, project: string, num: number, title: string): Task => ({
+  id,
+  org_id: org,
+  project_id: project,
+  num,
+  title,
+  description: '',
+  status: 'progress',
+  priority: 'medium',
+  paused: false,
+  created_at: AT,
+  updated_at: AT,
+  has_hidden_subtasks: false,
+  has_hidden_parent: false,
+})
+
+/** Gives the login a guest seat in a large organization, Partner Co at
+    /app/partner, whose task QN-2 is in the last task window, and moves the
+    home organization's QN-2 into the first one, which arrives first. */
+function partner(snap: Snapshot) {
+  const org = crypto.randomUUID()
+  const seat = crypto.randomUUID()
+  const project = crypto.randomUUID()
+  snap.orgs.push({ ...snap.orgs[0], id: org, name: 'Partner Co', slug: 'partner' })
+  snap.profiles.push({ ...snap.profiles[0], id: seat, org_id: org, org_role: 'guest' })
+  snap.myProfileIds.push(seat)
+  snap.projects.push({ ...snap.projects[0], id: project, org_id: org, key: 'PART' })
+  snap.access.push({ project_id: project, profile_id: seat, level: 'user' })
+  snap.issues[0] = { ...snap.issues[0], id: '10000000-b', title: 'Home task two' }
+  snap.issues.push(task('fd000000-p', org, project, 2, 'Partner task two'))
+}
+
 /** Boots App on a large workspace whose last task window, holding task
     QN-2, is still to arrive, or with every task loaded when not `held`.
-    Answers the store and the organization's slug. */
-async function bootLoading(held = true) {
+    With `reached`, Back or Forward reaches the address it builds from the
+    organization's slug after the load began and before App's first render.
+    `shape` changes the workspace first. Answers the store, the
+    organization's slug and a function that publishes the workspace again
+    with a change. */
+async function bootLoading(
+  held = true,
+  reached?: (org: string) => string,
+  shape?: (snap: Snapshot) => void,
+) {
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
   snap.orgs[0].next_issue_num = 64 * 200
-  snap.issues.push({
-    id: 'fd000000-b',
-    org_id: snap.orgs[0].id,
-    project_id: snap.projects[0].id,
-    num: 2,
-    title: 'Run the soak test',
-    description: '',
-    status: 'progress',
-    priority: 'medium',
-    paused: false,
-    created_at: AT,
-    updated_at: AT,
-    has_hidden_subtasks: false,
-    has_hidden_parent: false,
-  })
+  snap.issues.push(task('fd000000-b', snap.orgs[0].id, snap.projects[0].id, 2, 'Run the soak test'))
+  shape?.(snap)
+  let publish = (_: Snapshot) => {}
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole') next(structuredClone(snap))
-    else if (name === 'snapshot:commentThread') next({ comments: [], earlier: false, events: [] })
+    if (name === 'workspace:whole') {
+      publish = (value) => next(structuredClone(value))
+      publish(snap)
+    } else if (name === 'snapshot:commentThread') next({ comments: [], earlier: false, events: [] })
     return () => {}
   })
   network.query.mockResolvedValue(null)
@@ -122,6 +184,7 @@ async function bootLoading(held = true) {
   if (held) double.live?.holdWindow(LAST_WINDOW)
   await store.initStore()
   expect(store.P.stillLoading() !== null).toBe(held)
+  if (reached) history.pushState(null, '', reached(store.P.org.slug))
   // App's views load their code only while the socket counts as connected
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
@@ -133,7 +196,30 @@ async function bootLoading(held = true) {
       </TooltipProvider>,
     ),
   )
-  return { store, org: location.pathname.split('/')[2] }
+  const change = (edit: (snap: Snapshot) => void) =>
+    act(async () => {
+      const next = structuredClone(snap)
+      edit(next)
+      next.delivered_at = '2026-09-15T09:00:00.000Z'
+      publish(next)
+    })
+  return { store, org: location.pathname.split('/')[2], change }
+}
+
+/** Makes the project at board/p/1 top-level, so the sidebar lists it, adds
+    another, Second project at board/p/2, and moves task QN-2 into it. */
+function secondProject(snap: Snapshot) {
+  snap.projects[0].type = 'meta'
+  const project = {
+    ...snap.projects[0],
+    id: crypto.randomUUID(),
+    key: 'TWO',
+    num: 2,
+    name: 'Second project',
+  }
+  snap.projects.push(project)
+  const soak = snap.issues.find((issue) => issue.id === 'fd000000-b')
+  if (soak) soak.project_id = project.id
 }
 
 /** Goes to `address` as Back or Forward would, to an entry from earlier in
@@ -149,6 +235,32 @@ const close = () =>
   act(async () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   })
+
+/** Switches the page to the view `label` with the top bar's switch. The
+    waiting window makes the page behind it inert, so a person cannot. The
+    click stands in for a move of the page while the task loads. */
+const switchView = async (label: string) => {
+  const button = await waitFor(
+    () =>
+      [...document.querySelectorAll<HTMLElement>('[data-view-switch] button')].find(
+        (b) => b.textContent?.trim() === label,
+      ),
+    label,
+  )
+  await act(async () => button.click())
+}
+
+/** Presses the sidebar's scope `label`, a stand-in click as switchView's. */
+const pressScope = async (label: string) => {
+  const button = await waitFor(
+    () =>
+      [...document.querySelectorAll<HTMLElement>('aside button')].find(
+        (b) => b.textContent?.trim() === label,
+      ),
+    label,
+  )
+  await act(async () => button.click())
+}
 
 /** Lets the last task window answer. */
 const arrive = () =>
@@ -220,6 +332,121 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     expect(location.pathname).toBe(ALL_BOARD)
   })
 
+  it('names a page moved to while it waits, then that page with the task once it arrives', async () => {
+    const { org } = await bootLoading()
+    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/tasks/qn-2`)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    const entries = history.length
+    // the page moves under the waiting window, which stays
+    await switchView('Overview')
+    expect(document.querySelector('[data-task-loading]')).not.toBeNull()
+    expect(location.pathname).toBe('/app/~/overview/all')
+    expect(history.length).toBe(entries + 1)
+
+    await arrive()
+    await waitFor(
+      () => document.body.textContent?.includes('Run the soak test'),
+      "the task's window",
+    )
+    expect(location.pathname).toBe(`/app/${org}/overview/all/tasks/qn-2`)
+    // the task joined the moved page's entry, as it would have opened there
+    expect(history.length).toBe(entries + 1)
+  })
+
+  it('names the page it moved back to while it waits, then opens the task there', async () => {
+    const { org } = await bootLoading()
+    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/tasks/qn-2`)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    await switchView('Overview')
+    await switchView('Board')
+    expect(location.pathname).toBe(ALL_BOARD)
+
+    await arrive()
+    await waitFor(
+      () => document.body.textContent?.includes('Run the soak test'),
+      "the task's window",
+    )
+    // the page Back reached: the task opens in its own scope
+    expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-2`)
+  })
+
+  it('keeps its address while the project in scope goes, then opens the task in the one left', async () => {
+    const { org, change } = await bootLoading(true, undefined, secondProject)
+    await back(`/app/${org}/board/p/1`)
+    const address = `/app/${org}/board/tasks/qn-2`
+    await back(address)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    const entries = history.length
+    // deleted meanwhile, which the staged load shows only with the last tasks
+    await change((snap) => {
+      snap.projects = snap.projects.filter((project) => project.num !== 1)
+    })
+    expect(location.pathname).toBe(address)
+
+    await arrive()
+    await waitFor(
+      () => document.body.textContent?.includes('Run the soak test'),
+      "the task's window",
+    )
+    expect(location.pathname).toBe(address)
+    expect(history.length).toBe(entries)
+    // the page moved to the project left
+    await close()
+    expect(location.pathname).toBe(`/app/${org}/board/p/2`)
+  })
+
+  it.each([
+    // the task's address names no project, so the move takes its entry
+    ['Second project', (org: string) => `/app/${org}/board/p/2`, 'board/tasks/qn-2', 0],
+    // under All projects the task's address names the scope, so a new entry
+    ['All projects', () => ALL_BOARD, 'board/all/tasks/qn-2', 1],
+  ])(
+    'names %s moved to while it waits as it would with the task open',
+    async (label, page, withTask, more) => {
+      const { org } = await bootLoading(true, undefined, secondProject)
+      await back(`/app/${org}/board/p/1`)
+      await back(`/app/${org}/board/tasks/qn-2`)
+      await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+      const entries = history.length
+      // a stand-in click (pressScope)
+      await pressScope(label)
+      expect(location.pathname).toBe(page(org))
+      expect(history.length).toBe(entries + more)
+
+      await arrive()
+      await waitFor(
+        () => document.body.textContent?.includes('Run the soak test'),
+        "the task's window",
+      )
+      expect(location.pathname).toBe(`/app/${org}/${withTask}`)
+      expect(history.length).toBe(entries + more)
+    },
+  )
+
+  it('names the task that arrived while a refused Back stepped back, once it landed', async () => {
+    const { org } = await bootLoading()
+    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/tasks/QN-2`)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    // a refused Back steps back to this entry, and the task arrives meanwhile
+    refusing.on = true
+    await arrive()
+    await waitFor(
+      () => document.body.textContent?.includes('Run the soak test'),
+      "the task's window",
+    )
+    expect(location.pathname).toBe(`/app/${org}/board/tasks/QN-2`)
+    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    // the task's own address, in place
+    expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-2`)
+    const entries = history.length
+    // and the next move earns its entry
+    await switchView('Overview')
+    expect(history.length).toBe(entries + 1)
+  })
+
   it('says in the Inbox that the task still loads, then opens it there', async () => {
     const { org } = await bootLoading()
     await back(`/app/${org}/inbox/tasks/qn-2`)
@@ -228,6 +455,77 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     await arrive()
     await waitFor(() => document.body.textContent?.includes('Run the soak test'), "the task's pane")
     expect(document.querySelector('[data-task-loading]')).toBeNull()
+  })
+})
+
+describe("Back to another organization's task still to arrive", { timeout: 30_000 }, () => {
+  it.each([
+    ['Back', 'QN-2'],
+    ['Back', 'qn-2'],
+    ['the first load', 'QN-2'],
+  ])('never shows the home task with its number when %s reaches %s', async (when, ref) => {
+    const address = `/app/partner/board/tasks/${ref}`
+    const first = when === 'Back' ? undefined : () => address
+    const { org } = await bootLoading(true, first, partner)
+    if (when === 'Back') {
+      await back(`/app/${org}/board/all`)
+      await back(address)
+    }
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    expect(document.body.textContent).not.toContain('Home task two')
+    expect(location.pathname).toBe(address)
+    await arrive()
+    await waitFor(
+      () => document.body.textContent?.includes('Partner task two'),
+      "the partner's task",
+    )
+    expect(document.body.textContent).not.toContain('Home task two')
+  })
+})
+
+describe('Back to a task during the first load', { timeout: 30_000 }, () => {
+  it('holds its address when the load began in stages, then opens the task', async () => {
+    const { store } = await bootLoading(true, (slug) => `/app/${slug}/inbox/tasks/qn-2`)
+    const address = `/app/${store.P.org.slug}/inbox/tasks/qn-2`
+    expect(location.pathname).toBe(address)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the loading note')
+    await arrive()
+    await waitFor(() => document.body.textContent?.includes('Run the soak test'), "the task's pane")
+    expect(location.pathname).toBe(address)
+  })
+
+  it('opens the task in its own project when it is not in the saved scope', async () => {
+    const { store } = await bootLoading(
+      true,
+      (slug) => `/app/${slug}/board/tasks/qn-2`,
+      // My view, saved, holds only my tasks, and nobody has QN-2
+      (snap) =>
+        localStorage.setItem(
+          `planner.ui.v1:${snap.profiles[0].id}`,
+          JSON.stringify({ scope: 'mine', view: 'kanban' }),
+        ),
+    )
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    await arrive()
+    await waitFor(
+      () => document.body.textContent?.includes('Run the soak test'),
+      "the task's window",
+    )
+    // closing it shows its project's Board, not My view
+    await close()
+    expect(location.pathname).toBe(`/app/${store.P.org.slug}/board/p/1`)
+  })
+
+  it('closes the window in place once every task has loaded without the task', async () => {
+    const { store } = await bootLoading(true, (slug) => `/app/${slug}/board/tasks/qn-3`)
+    expect(location.pathname).toBe(`/app/${store.P.org.slug}/board/tasks/qn-3`)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    const entries = history.length
+    await arrive()
+    await waitFor(() => !document.querySelector('[data-task-loading]'), 'the closed window')
+    // the page it shows, named in place as Back to a gone task names it
+    expect(location.pathname).toBe(`/app/${store.P.org.slug}`)
+    expect(history.length).toBe(entries)
   })
 })
 
