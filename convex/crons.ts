@@ -22,8 +22,9 @@ crons.interval(
 )
 
 // was '30 2 * * *' (0070:265)
-// The empty arguments start a run, which schedules one chain per live project
-// with a due Done task and one per organization with flagged tasks (jobs.ts).
+// The empty arguments start a run, which schedules one chain per organization
+// with flagged tasks and one per organization with a due Done task in a live
+// project (jobs.ts).
 crons.daily(
   'archive-done-issues',
   { hourUTC: 2, minuteUTC: 30 },

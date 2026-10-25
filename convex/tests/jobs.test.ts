@@ -7,6 +7,8 @@
  * and bounded legs, plus the platform_audit_log row each run's dispatcher
  * writes and the counts each chain logs. Both runs schedule chains only for
  * what is due, however many idle organizations and profiles there are.
+ * The archive gives each organization one chain, which archives its due
+ * projects in turn.
  * The weekly reap-orphan-files cron targets files.reapOrphans (crons.ts),
  * which runs in bounded legs and audits itself; its sweep is tested here
  * with the others.
@@ -17,7 +19,7 @@
  * night, a behavior change.
  *
  * The isolation tests pin the reason for the chains. A leg that fails every
- * time stops only its own project or page of profiles. */
+ * time stops only its own organization or page of profiles. */
 /// <reference types="vite/client" />
 
 import type { FunctionArgs, WithoutSystemFields } from 'convex/server'
@@ -106,6 +108,7 @@ async function runLogged<Counts>(
 
 type ArchiveCounts = {
   org_id: string
+  project_id?: string
   archived: number
   flagged: number
   now: string
@@ -113,7 +116,8 @@ type ArchiveCounts = {
 
 /* Runs one nightly archive, the cron's first step and everything it
  * schedules. `now` pins the run's clock, and without it the first step reads
- * the current time. Returns the counts each organization's chain logged. */
+ * the current time. Returns the counts the chains logged, one per project
+ * that archived something and one per repair chain. */
 const runLegs = (t: T, now?: string): Promise<ArchiveCounts[]> =>
   runLogged(
     t,
@@ -372,7 +376,9 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     expect(await runLegs(t)).toEqual([])
 
     const rows = await auditRows(t, 'archive_done_issues')
-    expect(first).toEqual([{ org_id: f.org.id, archived: 1, flagged: 0, now: rows[0].ts }])
+    expect(first).toEqual([
+      { org_id: f.org.id, project_id: f.sub.id, archived: 1, flagged: 0, now: rows[0].ts },
+    ])
     // one project had a due task, and none the next night
     expect(rows.map((r) => r.detail)).toEqual([
       { projects: 1, repairs: 0 },
@@ -385,7 +391,7 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     }
   })
 
-  it('schedules one chain per live project with a due task, ARCHIVE_LIMITS.projects projects per step', async () => {
+  it('schedules one chain per organization with a due task, ARCHIVE_LIMITS.projects projects per step', async () => {
     ARCHIVE_LIMITS.projects = 2
     const t = newT()
     const due = new Map<string, string>()
@@ -405,8 +411,8 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
 
     expect(chains.map((c) => c.org_id).sort()).toEqual([...due.keys()].sort())
     for (const id of due.values()) expect((await issueRow(t, id))?.archived_at).toBeDefined()
-    // three pages of projects, and the last step also finds no flagged task
-    expect(await scheduled(t, 'archiveDoneIssues')).toHaveLength(2)
+    // the flagged step the cron's call ran, then three pages of projects
+    expect(await scheduled(t, 'archiveDoneIssues')).toHaveLength(3)
     expect(await scheduled(t, 'archiveProject')).toHaveLength(5)
     expect(await scheduled(t, 'repairOrg')).toEqual([])
     expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
@@ -729,14 +735,15 @@ describe('archiveDoneIssues budgets the events of a leg', () => {
     ARCHIVE_LIMITS.room = 0
     const legs = await archiveByHand(t, f.org.id)
     expect(legs).toHaveLength(6)
-    // each leg after a stop reads the same page again, without the task it archived
-    expect(legs.map((leg) => [leg.cursor, leg.archived])).toEqual([
-      [undefined, 0],
-      [undefined, 0],
-      [undefined, 1],
-      [undefined, 1],
-      [undefined, 2],
-      [undefined, 2],
+    // each leg after a stop reads the same page again, without the task it
+    // archived, and the chain takes Board rev once Firmware is done
+    expect(legs.map((leg) => [leg.project_id, leg.cursor, leg.archived])).toEqual([
+      [f.sub.id, undefined, 0],
+      [f.sub.id, undefined, 1],
+      [f.sub.id, undefined, 2],
+      [f.sub2.id, undefined, 0],
+      [f.sub2.id, undefined, 1],
+      [f.sub2.id, undefined, 2],
     ])
     expect(await archived(t, tasks)).toEqual(tasks.map(() => true))
     expect(await updatedTasks(t)).toEqual(tasks)
@@ -799,6 +806,7 @@ describe('archiveDoneIssues and organization deletion', () => {
       })
       expect(info).toHaveBeenCalledWith('Auto-archive finished', {
         org_id: f.org.id,
+        project_id: f.sub.id,
         archived: 4,
         flagged: 0,
         now,
@@ -809,8 +817,52 @@ describe('archiveDoneIssues and organization deletion', () => {
   })
 })
 
-describe('archiveDoneIssues runs one chain per project', () => {
-  it('a leg that fails every time stops only its own project', async () => {
+describe('archiveDoneIssues runs one chain per organization', () => {
+  it("hands an organization's due projects to one chain, which archives them one after another", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const third = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    const tasks: string[] = []
+    for (const project of [f.sub, f.sub2, third]) {
+      const done = { status: 'done' as const, done_at: ago(40) }
+      tasks.push((await plantIssue(t, { org_id: f.org.id, project_id: project.id, ...done })).id)
+    }
+
+    const legs = await archiveByHand(t, f.org.id)
+
+    // each project's leg is scheduled by the leg before, never two at once
+    expect(legs.map((leg) => [leg.project_id, leg.next])).toEqual([
+      [f.sub.id, [f.sub2.id, third.id]],
+      [f.sub2.id, [third.id]],
+      [third.id, []],
+    ])
+    for (const id of tasks) expect((await issueRow(t, id))?.archived_at).toBeDefined()
+  })
+
+  it('gives an organization one chain per ARCHIVE_LIMITS.projects due projects', async () => {
+    ARCHIVE_LIMITS.projects = 2
+    const t = newT()
+    const f = await withOrg(t)
+    const third = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    const tasks: string[] = []
+    for (const project of [f.sub, f.sub2, third]) {
+      const done = { status: 'done' as const, done_at: ago(40) }
+      tasks.push((await plantIssue(t, { org_id: f.org.id, project_id: project.id, ...done })).id)
+    }
+
+    expect(await runArchive(t)).toBe(3)
+    const legs = (await scheduled(t, 'archiveProject')).map((job) => job.args[0])
+    expect(legs.map((leg) => [leg.project_id, leg.next]).sort()).toEqual(
+      [
+        [f.sub.id, [f.sub2.id]],
+        [f.sub2.id, []],
+        [third.id, []],
+      ].sort(),
+    )
+    for (const id of tasks) expect((await issueRow(t, id))?.archived_at).toBeDefined()
+  })
+
+  it('a leg that fails every time stops only its own organization', async () => {
     // The middle organization's candidates exceed this read budget on every
     // attempt; the other two fit.
     const t = limitedT({ documentsRead: 200 })
@@ -842,6 +894,74 @@ describe('archiveDoneIssues runs one chain per project', () => {
     expect(chains.map((c) => c.org_id).sort()).toEqual([first, last])
     expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
       { projects: 3, repairs: 0 },
+    ])
+  })
+})
+
+describe('archiveDoneIssues bounds each dispatcher step', () => {
+  it('stops a step once the due tasks it read pass ARCHIVE_LIMITS.bytes, and the next checks the rest of its page', async () => {
+    ARCHIVE_LIMITS.bytes = 150_000
+    // Each due task holds a description of 20,000 CJK characters, about
+    // 60 KB. The 12 together are about 720 KB, more than one step may read.
+    const t = limitedT({ bytesRead: 400_000 })
+    const description = '漢'.repeat(20_000)
+    for (let n = 0; n < 3; n++) {
+      const org_id = uuid()
+      const first = await plantOrg(t, org_id)
+      for (let p = 0; p < 4; p++) {
+        const project = p === 0 ? first : await plantProject(t, { org_id })
+        const done = { status: 'done' as const, done_at: ago(40), description }
+        await plantIssue(t, { org_id, project_id: project.id, ...done })
+      }
+    }
+
+    expect(await runArchive(t)).toBe(12)
+    const steps = await scheduled(t, 'archiveDoneIssues')
+    expect(steps.some((job) => job.args[0].left !== undefined)).toBe(true)
+    // one chain per organization, handed its four projects across steps
+    const legs = await scheduled(t, 'archiveProject')
+    expect(legs.filter((job) => job.args[0].next?.length === 3)).toHaveLength(3)
+    expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
+      { projects: 12, repairs: 0 },
+    ])
+  })
+
+  it('runs the flagged phase first, so a projects step that fails every time drops no repair', async () => {
+    // The projects step reads 31 live projects, more than this allows.
+    const t = limitedT({ documentsRead: 25 })
+    for (let n = 0; n < 30; n++) await plantOrg(t, uuid())
+    const markedOrg = uuid()
+    const markedProject = await plantOrg(t, markedOrg)
+    const flagged = await plantIssue(t, {
+      org_id: markedOrg,
+      project_id: markedProject.id,
+      relations_marked: true,
+    })
+
+    expect(await failsOnReads(() => runLegs(t))).toBe(true)
+    expect((await issueRow(t, flagged.id))?.relations_marked).toBeUndefined()
+    expect(await auditRows(t, 'archive_done_issues')).toEqual([])
+  })
+
+  it('stops a flagged step once the tasks it read pass ARCHIVE_LIMITS.bytes', async () => {
+    ARCHIVE_LIMITS.bytes = 150_000
+    // Ten flagged tasks of about 60 KB each, more than one step may read.
+    const t = limitedT({ bytesRead: 400_000 })
+    const description = '漢'.repeat(20_000)
+    const flagged: string[] = []
+    for (let n = 0; n < 10; n++) {
+      const org_id = uuid()
+      const project = await plantOrg(t, org_id)
+      const task = { org_id, project_id: project.id, relations_marked: true as const, description }
+      flagged.push((await plantIssue(t, task)).id)
+    }
+
+    expect(await runArchive(t)).toBe(0)
+    for (const id of flagged) expect((await issueRow(t, id))?.relations_marked).toBeUndefined()
+    const steps = await scheduled(t, 'archiveDoneIssues')
+    expect(steps.filter((job) => job.args[0].phase === 'flagged').length).toBeGreaterThan(1)
+    expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
+      { projects: 0, repairs: 10 },
     ])
   })
 })
@@ -892,11 +1012,12 @@ describe('archiveDoneIssues reads only what is due', () => {
 
     expect(chains.sort((a, b) => a.archived - b.archived)).toEqual([
       { org_id: markedOrg, archived: 0, flagged: 1, now },
-      { org_id: dueOrg, archived: 1, flagged: 0, now },
+      { org_id: dueOrg, project_id: second.id, archived: 1, flagged: 0, now },
     ])
-    // the 33 live projects in four steps, one chain for the due project and
-    // one for the flagged organization
+    // the flagged step, the 33 live projects in four steps, one chain for the
+    // due project and one for the flagged organization
     expect((await jobCalls(t)).sort()).toEqual([
+      'jobs:archiveDoneIssues',
       'jobs:archiveDoneIssues',
       'jobs:archiveDoneIssues',
       'jobs:archiveDoneIssues',
@@ -938,7 +1059,9 @@ describe('archiveDoneIssues reads only what is due', () => {
       () => t.mutation(internal.jobs.archiveDoneIssues, { cursor, now, organizations: 1 }),
       'Auto-archive finished',
     )
-    expect(chains).toEqual([{ org_id: f.org.id, archived: 1, flagged: 0, now }])
+    expect(chains).toEqual([
+      { org_id: f.org.id, project_id: f.sub.id, archived: 1, flagged: 0, now },
+    ])
     expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
       { projects: 1, repairs: 0 },
     ])
