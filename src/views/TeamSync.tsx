@@ -492,9 +492,9 @@ export function TeamSync({
   useEffect(() => {
     P.watchTeamSync(P.homeOrg || null, ownerKey ? ownerKey.split(',') : [])
   }, [P.homeOrg, ownerKey])
-  // gone or hidden (a kept page, components/KeptView), it asks about no
-  // one, which keeps the marks it had for its return
-  useEffect(() => () => P.watchTeamSync(P.homeOrg || null), [])
+  // gone or hidden (a kept page, components/KeptView), it empties the
+  // marks, so none shows on its return until an answer covers it
+  useEffect(() => () => P.watchTeamSync(null), [])
 
   useEffect(() => {
     shown.current = { step, idx, scope: scopeKey }

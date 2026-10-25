@@ -452,6 +452,17 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // A move with no task here ends it too, such as leaving the Inbox, which
   // stays loaded (components/KeptView): the next task opens in the pane.
   if (poppedOut && !openIssue) setPoppedOut(false)
+  // Leaving ends the row picked without a task and the unread part frozen
+  // for the pane, as the Inbox's unmount did: it shows again with an empty
+  // pane.
+  useEffect(
+    () => () => {
+      arriving.current = null
+      setDeadItem(null)
+      setFrozen(null)
+    },
+    [],
+  )
   // the text typed in the pane and its pop-out, and in the pop-out alone,
   // so closing either asks first (DiscardPrompt)
   const taskScope = useContext(UnsentScopeContext)

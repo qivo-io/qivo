@@ -55,6 +55,18 @@ function Pane() {
   )
 }
 
+/* The pane, or an empty state in its place, as the Overview draws one
+   when its scope has nothing to show. */
+function PaneOrEmpty({ empty }: { empty: boolean }) {
+  const { paneRef } = useOverviewPanelClipping(true)
+  if (empty) return createElement('p', { 'data-empty': '' })
+  return createElement(
+    'div',
+    { ref: paneRef, 'data-pane': '' },
+    createElement('section', { className: 'overview-section' }),
+  )
+}
+
 /** Lets the mutation observer's callback run. */
 const observed = () => act(async () => await new Promise((resolve) => setTimeout(resolve, 0)))
 
@@ -96,5 +108,14 @@ describe('the Overview section clipping', () => {
     expect(renders).toBe(2)
     // and the clipping is back on the pane shown again
     expect(section.style.getPropertyValue('clip-path')).not.toBe('')
+  })
+
+  it('lets go of a pane that an empty state replaced', async () => {
+    const removed = vi.spyOn(window, 'removeEventListener')
+    await act(async () => root.render(createElement(PaneOrEmpty, { empty: false })))
+    expect(container.querySelector('[data-pane]')).not.toBeNull()
+    await act(async () => root.render(createElement(PaneOrEmpty, { empty: true })))
+    // the window's resize listener of the detached pane goes
+    expect(removed).toHaveBeenCalledWith('resize', expect.any(Function))
   })
 })

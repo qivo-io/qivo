@@ -71,6 +71,8 @@ status and owners, check delays, and see what each person finished since their
 last sync. Changes save on the tasks. Use task comments for meeting notes.
 
 Open **Team sync** in the sidebar or **Sync** in the phone's bottom navigation.
+If you left a meeting without the last **Done**, for example through a row's
+Board link, these open it again on the step you left.
 The page belongs to your current organization. Its scope and each step have
 shareable addresses. Browser Back leaves the page; it does not step through
 the meeting. Escape does not close the page. Task windows open over it.
@@ -208,7 +210,10 @@ menu or picker before leaving Team sync.
 reviewed rows across people and agents, excluding Done since and Waiting on
 review. A portrait gets a checkmark when all its rows are reviewed. Use
 **Previous**, **Next** or the people list to navigate. The last **Done** button
-returns to where you opened Team sync. Review ticks last only while it is open.
+returns to where you opened Team sync. Review ticks, open **Later** lists and
+expanded agents last until that **Done**, also while you visit other pages.
+The next Team sync starts without them, as it does after 30 minutes without
+using Qivo ([Pages stay as you left them](./finding-your-way-around.md#pages-stay-as-you-left-them)).
 
 **Agents** share a final page. Each summary shows this week's scheduled hours,
 current and next tasks, and delay counts. Expand an agent for the same task

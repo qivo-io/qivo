@@ -9,10 +9,14 @@ type ClipUpdate = { element: HTMLElement; property: PaintProperty; value: string
 export function useOverviewPanelClipping(enabled: boolean) {
   const [pane, setPane] = useState<HTMLDivElement | null>(null)
   /* A kept page (components/KeptView) detaches its refs as it hides and
-     attaches them again as it shows. The pane stays meanwhile, so the page
-     around it does not render again, hidden or before it paints. */
+     attaches them again as it shows. The pane stays meanwhile, still in the
+     document, so the page around it does not render again, hidden or
+     before it paints. A pane that left the document, such as for the
+     Overview's empty state, goes once the commit that removed it is done,
+     and its observers and listeners with it. */
   const paneRef = useCallback((element: HTMLDivElement | null) => {
     if (element) setPane(element)
+    else queueMicrotask(() => setPane((before) => (before?.isConnected ? before : null)))
   }, [])
 
   useLayoutEffect(() => {

@@ -14,6 +14,7 @@ import {
   NO_PAGES,
   releasePages,
   showsScope,
+  withoutPage,
 } from '@/lib/keptPages'
 import { cn } from '@/lib/utils'
 import { BillingNotice } from './components/BillingNotice'
@@ -917,7 +918,18 @@ function App() {
      (lib/keptPages.ts, components/KeptView.tsx), until the person leaves
      the app alone for KEEP_IDLE_MS. */
   const [kept, setKept] = useState(NO_PAGES)
-  const keep = keptPages({ kept, scope, scopeLive: !!scopeInfo, shown: shownPage })
+  /* Done on Team sync's last step ends the sitting (closeSync): the page
+     goes once it no longer shows, so the next sitting opens anew, with no
+     review ticks. */
+  const [syncEnded, setSyncEnded] = useState(false)
+  const syncGoes = syncEnded && shownPage !== 'sync'
+  if (syncGoes) setSyncEnded(false)
+  const keep = keptPages({
+    kept: syncGoes ? withoutPage(kept, 'sync') : kept,
+    scope,
+    scopeLive: !!scopeInfo,
+    shown: shownPage,
+  })
   if (keep !== kept) setKept(keep)
   useInputIdle(KEEP_IDLE_MS, () => setKept(releasePages(keep, shownPage)))
   /** The id a page's ViewKeeper keeps it under: its scope for a page that
@@ -1467,6 +1479,7 @@ function App() {
     const to = { sync: null, inboxOpen: back.inbox, projectsOpen: back.projects }
     move(to, () => {
       syncReturn.current = NO_RETURN
+      setSyncEnded(true)
       backOrSet(to, () => {
         setSync(null)
         setInboxOpen(back.inbox)
@@ -1590,12 +1603,14 @@ function App() {
           setProjectsOpen(true)
         },
       ),
-    // Team sync (the sidebar row, the phone's Sync tab): opens on the saved
-    // scope, remembering the Inbox or Projects page for Done; pressed while
-    // open, it stays where the walk is
+    // Team sync (the sidebar row, the phone's Sync tab): opens where the
+    // sitting left it while the page is kept, else on the saved scope,
+    // remembering the Inbox or Projects page for Done; pressed while open,
+    // it stays where the walk is
     openSync: () => {
       if (!P.homeOrg) return
-      const opening = sync || syncPlaceFor({}, mobile)
+      const opening =
+        sync || (keep.pages.includes('sync') && lastSync.current) || syncPlaceFor({}, mobile)
       move({ ...leftInbox(), sync: opening, settingsPage: null }, () => {
         if (!sync) {
           syncReturn.current = { inbox: inboxOpen, projects: projectsOpen, sync: null }
@@ -2006,12 +2021,15 @@ function App() {
         )
     }
   }
-  /** What a kept page holds besides data: the layout, and the place it
-      shows where that is the page's own (the Inbox's task, Team sync's
-      step). A page shown again for another one renders it at once, and the
-      Inbox drops its task pane as it hides. */
+  /** What a kept page holds besides data: the layout, the loading notice
+      in place of the page, and the place it shows where that is the page's
+      own (the Inbox's task, Team sync's step). A page shown again for
+      another one renders it at once, and the Inbox drops its task pane as
+      it hides. */
   const pageVariant = (page: MainPage) => {
-    const layout = mobile ? 'phone' : 'desktop'
+    // the pages that wait for every task show a notice until then
+    const waits = tasksLoading && (page === 'sync' || page === 'overview' || page === 'roadmap')
+    const layout = `${mobile ? 'phone' : 'desktop'}${waits ? ':loading' : ''}`
     if (page === 'inbox') return `${layout}:${inboxTask ?? ''}`
     if (page === 'sync')
       return `${layout}:${syncPlace ? `${syncPlace.scope}:${syncPlace.step}` : ''}`

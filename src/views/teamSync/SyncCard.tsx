@@ -302,10 +302,12 @@ export function MentionCtl({
   // kept note holds back an app update even while the window is closed.
   const [kept, setKept] = useState(false)
   useUpdateBlocker((open || kept) && text.trim() !== '')
-  // a Discard throws the note away even while its card stays on the page
+  // a Discard throws the note away and closes the window, even while its
+  // card stays on the page, hidden in a kept Team sync (components/KeptView)
   useUnsaved((open || kept) && text.trim() !== '', 'note', undefined, () => {
     setKept(false)
     setText('')
+    setOpen(false)
   })
   // A note neither sent nor kept is gone once the window closes, so a close
   // asks first (DiscardPrompt), except the one Cancel or a saved note makes.

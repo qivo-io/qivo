@@ -8,7 +8,8 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 
 /* A kept Roadmap (components/KeptView) shown again runs its effects again
    with the props it held: a request to plan or show a task that it took
-   before it hid must not start again, nor take a newer request with it. */
+   before it hid must not start again, nor take a newer request with it.
+   And it does not hold the phone's layers for its return. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -80,7 +81,68 @@ const FILTERS = {
   search: '',
 }
 
+/** A phone breakpoint that matches while `phone.on`, and tells its
+    listeners when `phone.set` changes it. */
+function phoneScreen() {
+  const listeners = new Set<() => void>()
+  const phone = {
+    on: true,
+    set: (on: boolean) => {
+      phone.on = on
+      for (const listener of listeners) listener()
+    },
+  }
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => ({
+      get matches() {
+        return phone.on
+      },
+      addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+    })),
+  )
+  return phone
+}
+
 describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
+  it.each([
+    ['on the phone, on its agenda', true],
+    ['on a desktop-wide screen, as the desktop timeline', false],
+  ])('shows itself %s after it hid with the landscape timeline open', async (_, phoneAgain) => {
+    const phone = phoneScreen()
+    const board = await loadBoard(network, (snap) => {
+      snap.issues.push(taskRow(snap, 't1', 'todo', 1))
+    })
+    const { Roadmap } = await import('./Roadmap')
+    const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
+      typeof Roadmap
+    >[0]['actions']
+    const render = (shown: boolean) =>
+      board.renderView(root, (info) => (
+        <KeptView view="roadmap" shown={shown} className="view">
+          <Roadmap
+            info={info}
+            filters={FILTERS}
+            actions={actions}
+            filterControls={() => null}
+            focusPlan={null}
+          />
+        </KeptView>
+      ))
+    const agenda = () => document.querySelector('.mobile-roadmap-open-timeline button')
+    const landscape = () => document.querySelector('[data-landscape-back]')
+    await render(true)
+    await act(async () => agenda()?.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(landscape()).not.toBeNull()
+    await render(false)
+    await act(async () => phone.set(phoneAgain))
+    await render(true)
+    while (tasks.length) await act(async () => tasks.shift()?.())
+    expect(landscape()).toBeNull()
+    expect(agenda() !== null).toBe(phoneAgain)
+  })
+
   it('does not plan again a task it took to plan before it hid', async () => {
     const board = await loadBoard(network, (snap) => {
       snap.issues.push({ ...taskRow(snap, 't1', 'todo', 1), assignee_id: null })

@@ -14,9 +14,13 @@ import { taskRow } from './views/boardFixture.setup'
    minutes, every kept page but the one shown goes. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+const double = vi.hoisted(() => ({
+  live: null as null | { holdWindow(from: string | null): void },
+}))
 vi.mock('./lib/convex', async () => {
   const { liveOver } = await import('./store/guard/liveDouble.setup')
-  return { convex: network, live: liveOver(network) }
+  double.live = liveOver(network)
+  return { convex: network, live: double.live }
 })
 vi.mock('./lib/auth', () => ({
   armConvexAuth: async () => true,
@@ -42,6 +46,11 @@ beforeEach(() => {
   })
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
+  Element.prototype.getAnimations = () => []
+  // jsdom does not scroll: a scroll to a place sets the element's offset
+  Element.prototype.scrollTo = function (this: Element, options?: ScrollToOptions | number) {
+    if (typeof options === 'object') this.scrollTop = options.top ?? 0
+  }
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal(
     'matchMedia',
@@ -84,16 +93,23 @@ async function waitFor<T>(find: () => T | null | undefined | false, what: string
   }
 }
 
-/** Boots App on the fixture workspace. Answers the organization's slug. */
-async function boot() {
+type Snapshot = ReturnType<typeof plannerFixture>
+
+/** Boots App on the fixture workspace, with what `prepare` adds, and the
+    task window from `held` on still to load. Answers the organization's
+    slug. */
+async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string | null = null) {
   vi.resetModules()
   const snap = plannerFixture()
   for (let n = 1; n <= 3; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n))
   snap.issues[0].title = 'Write the release notes'
+  prepare(snap)
   threads.length = 0
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
+    else if (name === 'teamSync:lastComments')
+      next({ rows: [{ issue_id: 't1', at: '2026-09-10T08:00:00.000Z' }], complete: true })
     else if (name === 'snapshot:commentThread') {
       next({ comments: [], earlier: false, events: [] })
       const thread = { stopped: false }
@@ -107,6 +123,7 @@ async function boot() {
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
   const store = await import('./store/planner')
+  double.live?.holdWindow(held)
   await store.initStore()
   const { syncStatus } = await import('./lib/syncStatus')
   syncStatus.setSocket({ connected: true, everConnected: true })
@@ -187,6 +204,142 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     const again = await shownPage('overview')
     expect(again).not.toBe(overview)
     expect(hiddenPages()).toEqual(['kanban'])
+  })
+
+  it('keeps Team sync through its sitting, where it was, and opens it anew after Done', async () => {
+    const org = await boot()
+    const { P } = await import('./store/planner')
+    const me = P.CURRENT_USER
+    await go(`/app/${org}/sync/p/1/people/${me}`)
+    const sync = await shownPage('sync')
+    const page = await waitFor(
+      () => sync.querySelector<HTMLElement>('[data-sync-page]'),
+      'the Team sync page',
+    )
+    // the tasks wait under Later, which opens for this sitting
+    const later = await waitFor(
+      () => sync.querySelector<HTMLElement>(`[data-sync-later="${me}"]`),
+      'Later',
+    )
+    await act(async () => later.click())
+    const tick = await waitFor(
+      () => sync.querySelector<HTMLElement>('[data-sync-tick="QN-1"]'),
+      "a task's review tick",
+    )
+    await act(async () => tick.click())
+    expect(tick.dataset.syncReviewed).toBe('1')
+    page.scrollTop = 120
+    await waitFor(() => P.lastComments.size > 0, 'the comment marks')
+
+    // a jump to the Board keeps the page; its marks wait for a new answer
+    await go(`/app/${org}/board/all`)
+    await shownPage('kanban')
+    expect(sync.dataset.hiddenView).toBe('sync')
+    expect(P.lastComments.size).toBe(0)
+    // the sidebar's Team sync goes back to the same page, where it was
+    const nav = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-sync-nav]'),
+      "the sidebar's Team sync",
+    )
+    await act(async () => nav.click())
+    expect(await shownPage('sync')).toBe(sync)
+    expect(location.pathname).toContain(`/people/${me}`)
+    expect(page.scrollTop).toBe(120)
+    expect(tick.dataset.syncReviewed).toBe('1')
+
+    // Done on the last step ends the sitting
+    for (;;) {
+      const next = await waitFor(
+        () => sync.querySelector<HTMLElement>('[data-sync-next]'),
+        'Next or Done',
+      )
+      const done = next.textContent?.includes('Done')
+      await act(async () => next.click())
+      if (done) break
+    }
+    await waitFor(() => !sync.isConnected, 'the ended sitting gone')
+    await act(async () => nav.click())
+    const again = await shownPage('sync')
+    expect(again).not.toBe(sync)
+    expect(location.pathname).not.toContain('/people/')
+    await go(`/app/${org}/sync/p/1/people/${me}`)
+    await waitFor(() => again.querySelector(`[data-sync-later="${me}"]`), 'Later again')
+    expect(again.querySelector('[data-sync-tick]')).toBeNull()
+    await act(async () => again.querySelector<HTMLElement>(`[data-sync-later="${me}"]`)?.click())
+    const fresh = await waitFor(
+      () => again.querySelector<HTMLElement>('[data-sync-tick="QN-1"]'),
+      "the new sitting's review tick",
+    )
+    expect(fresh.dataset.syncReviewed).toBe('0')
+  })
+
+  it('shows the Inbox again with an empty pane, holding nothing of the item picked before', async () => {
+    const org = await boot((snap) => {
+      const message = (id: string, issue: string, title: string) => ({
+        id,
+        org_id: snap.orgs[0].id,
+        recipient_id: snap.profiles[0].id,
+        issue_id: issue,
+        issue_title: title,
+        kind: 'comment' as const,
+        detail: 'New comment',
+        created_at: '2026-09-14T08:30:00.000Z',
+      })
+      snap.messages.push(message('m1', 't1', 'Write the release notes'))
+      // an item whose task this person cannot open
+      snap.messages.push(message('m2', 'gone', 'Plan the offsite'))
+    })
+    await go(`/app/${org}/inbox`)
+    const inbox = await shownPage('inbox')
+    const pick = async (id: string) => {
+      const row = await waitFor(
+        () => inbox.querySelector<HTMLElement>(`[data-message="${id}"] button`),
+        `the item ${id}`,
+      )
+      await act(async () => row.click())
+    }
+    await pick('gone')
+    expect(inbox.textContent).toContain('archived or unavailable')
+    await go(`/app/${org}/board/all`)
+    await shownPage('kanban')
+    await go(`/app/${org}/inbox`)
+    expect(await shownPage('inbox')).toBe(inbox)
+    expect(inbox.textContent).not.toContain('archived or unavailable')
+
+    // the item read as it opened is not new when its task opens again
+    await pick('t1')
+    await waitFor(() => inbox.querySelector('[data-unread-divider]'), "the item's new part")
+    await go(`/app/${org}/board/tasks/qn-1`)
+    await shownPage('kanban')
+    await go(`/app/${org}/inbox/tasks/qn-1`)
+    await shownPage('inbox')
+    await waitFor(() => inbox.textContent?.includes('Write the release notes'), 'the task pane')
+    expect(inbox.querySelector('[data-unread-divider]')).toBeNull()
+  })
+
+  it('shows a page kept while the tasks loaded as itself once they have', async () => {
+    // 12,800 task numbers make 64 task windows; the last starts at fc000000
+    const org = await boot((snap) => {
+      snap.orgs[0].next_issue_num = 64 * 200
+    }, 'fc000000')
+    await go(`/app/${org}/overview/all`)
+    const overview = await shownPage('overview')
+    expect(overview.textContent).toContain('opens once every task has loaded')
+    await go(`/app/${org}/inbox`)
+    await shownPage('inbox')
+    await act(async () => {
+      double.live?.holdWindow(null)
+      await new Promise((resolve) => realTimeout(resolve, 0))
+    })
+    const { P } = await import('./store/planner')
+    expect(P.stillLoading()).toBeNull()
+    // the Overview's code, which the app loads in the background
+    await (await import('./lib/workspaceChunks')).loadOverview()
+    // the commit that shows it holds no notice, before any frame paints
+    vi.stubGlobal('requestAnimationFrame', () => 0)
+    await go(`/app/${org}/overview/all`)
+    expect(await shownPage('overview')).toBe(overview)
+    expect(overview.textContent).not.toContain('opens once every task has loaded')
   })
 
   it('mounts the pages of a new scope anew, and keeps the Inbox', async () => {

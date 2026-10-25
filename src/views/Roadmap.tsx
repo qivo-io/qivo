@@ -154,9 +154,12 @@ function Roadmap({
   const phone = useMobile()
   useUpdateBlocker(P.roadmapUndo.count > 0)
   // Keep the phone layer after physical rotation crosses the desktop width.
-  // A fresh desktop visit still gets the ordinary workspace timeline.
+  // A fresh desktop visit still gets the ordinary workspace timeline, and so
+  // does a kept Roadmap shown again (components/KeptView): leaving it drops
+  // the layer, which closes the landscape timeline as its unmount did.
   const [mobileLayout, setMobileLayout] = useStateR<'agenda' | 'timeline' | null>(null)
   const mobile = phone || mobileLayout !== null
+  useEffectR(() => () => setMobileLayout(null), [])
   const filters = mobile ? { ...rawFilters, search: '' } : rawFilters
   const filterControls = renderFilterControls(mobile)
   const canvasPadX = mobile ? 12 : CANVAS_PAD_X

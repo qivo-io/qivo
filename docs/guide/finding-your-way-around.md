@@ -89,6 +89,14 @@ follow right after. The Overview, the Board and the Roadmap belong to the
 sidebar choice, such as a project or All projects. Choosing another one loads
 them again for it. Settings loads each time you open it.
 
+Some parts of a page close when you leave it:
+
+- The Inbox closes the task in its pane and comes back to its list.
+- Team sync's last **Done** ends the meeting, so the next one starts on its
+  first step ([Team sync](./planning-against-real-capacity.md#team-sync)).
+- The phone's landscape Roadmap timeline closes, and the Roadmap comes back
+  on its agenda.
+
 After 30 minutes without using Qivo (no pointer, key, touch or scroll wheel
 input in it), only the page on screen stays loaded. The others load again
 when you open them.

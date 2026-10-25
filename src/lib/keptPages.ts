@@ -3,7 +3,8 @@
    to one shows it as it was. The Overview, the Board and the Roadmap show
    one scope, and a new scope, or a scope that is gone, ends them. The
    Inbox, Team sync and Projects show the same whatever the scope, so they
-   stay. Settings is not one of them: it goes when the person leaves it,
+   stay. Team sync's Done ends its sitting, and with it the kept page
+   (App closeSync). Settings is not one of them: it goes when the person leaves it,
    and the main pages stay loaded while it shows. */
 
 /** How long the person may leave the app alone before every kept page
@@ -45,6 +46,13 @@ export function keptPages({
   // a page of a scope that is gone shows nothing, so it is not kept
   if (shown && !pages.includes(shown) && (live || !showsScope(shown))) pages.push(shown)
   return live === kept.scope && pages.length === kept.pages.length ? kept : { scope: live, pages }
+}
+
+/** `kept` without `page`, which opens anew next time. */
+export function withoutPage(kept: KeptPages, page: MainPage): KeptPages {
+  return kept.pages.includes(page)
+    ? { ...kept, pages: kept.pages.filter((other) => other !== page) }
+    : kept
 }
 
 /** What stays once the person has been away from the app for a while:
