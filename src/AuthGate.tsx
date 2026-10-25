@@ -14,7 +14,10 @@ import { Button } from '@/components/ui/button'
    Sign-up is self-serve: the marketing site's account button and this form's
    mode switch both lead to /app#signup. Signing up grants nothing by itself — a
    login with no profile lands on "Create your organization", and a login that
-   was invited to a project first simply finds that project waiting.
+   was invited to a project first simply finds that project waiting. A login
+   whose only seats it cannot open, because an organization deactivated it or
+   is being deleted, hears why instead, and gets the form only while the
+   server would create the organization.
 
    A seatless login whose address is UNCONFIRMED stops one screen earlier, on
    "Confirm your email address": both doors out of the seatless state are shut
@@ -31,7 +34,7 @@ import { Label } from '@/components/ui/label'
 import { api } from '../convex/_generated/api'
 import { asciiEmail } from '../convex/lib/email'
 import { LIMITS } from '../convex/lib/limits'
-import type { SeatsDeleting } from '../convex/lib/workspaceJoin'
+import type { Seatless } from '../convex/lib/workspaceJoin'
 import { AppearanceProvider } from './AppearanceProvider'
 import { LimitedInput } from './components/LimitedField'
 import { OAuthConnect } from './components/OAuthConnect'
@@ -76,8 +79,8 @@ type Phase = 'loading' | 'signedOut' | 'unverified' | 'noProfile' | 'loadFailed'
 
 /** What the seatless screen says to a login whose seats an organization
     deletion holds, by when the server lets it create an organization
-    (convex/lib/billingAccess.ts SeatlessCreate). */
-const SEATS_DELETING_TEXT: Record<SeatsDeleting['create'], string> = {
+    (convex/lib/billingAccess.ts OrgCreate). */
+const SEATS_DELETING_TEXT: Record<Seatless['create'], string> = {
   now: 'You no longer have access to it. You can create a new organization.',
   after_deletion:
     'You no longer have access to it. You can create a new organization once the deletion has removed you from it.',
@@ -868,27 +871,37 @@ export function AuthGate() {
     )
   }
 
-  // a login with no profile anywhere: it belongs to nobody yet, so the only
-  // thing to do is start an organization (an invitation would have given it a
-  // guest seat, and claimMySeats picks those up at boot). A login whose
-  // seats an organization deletion holds hears that first, and gets the
-  // form only while the server would create the organization.
+  // a login with no seat it can open. One with no seat at all belongs to
+  // nobody yet, so the only thing to do is start an organization (an
+  // invitation would have given it a seat, and claimMySeats picks those up
+  // at boot). One whose seats an organization deletion holds hears that
+  // first, and one that an organization deactivated hears that, and each
+  // gets the form only while the server would create the organization.
   if (phase === 'noProfile') {
-    const deleting = P.seatsDeleting()
+    const seatless = P.seatless()
     // an answer without `create`, from an older backend, keeps the form
-    const create = deleting?.create ?? 'now'
+    const create = seatless?.create ?? 'now'
+    const deleting = seatless?.deleting === true
+    const deactivated = seatless?.deleting === false
     return shell(
       <form onSubmit={createOrg}>
         <div
           className="[font-size:var(--fs-md)] [font-weight:600] [margin-bottom:8px]"
           data-seats-deleting={deleting ? create : undefined}
+          data-seatless={deactivated ? 'deactivated' : undefined}
         >
-          {deleting ? 'This organization is being deleted' : 'Create your organization'}
+          {deleting
+            ? 'This organization is being deleted'
+            : deactivated
+              ? 'You no longer have access'
+              : 'Create your organization'}
         </div>
         <div className="[color:var(--text-2)] [font-size:var(--fs-base)] [line-height:1.5] [margin-bottom:24px]">
           {deleting
             ? SEATS_DELETING_TEXT[create]
-            : 'If you expected an invitation, check which email address it was sent to.'}
+            : deactivated
+              ? 'An admin of your organization has deactivated your account. They can reactivate it, or remove you so you can create your own organization.'
+              : 'If you expected an invitation, check which email address it was sent to.'}
         </div>
         {create === 'now' && (
           <div className="[margin-bottom:24px]">

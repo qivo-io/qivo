@@ -25,7 +25,12 @@ import { ConvexError } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
-import { BILLING_READ_ONLY, deletionReadOnly, ORG_DELETING } from '../../convex/lib/billingAccess'
+import {
+  BILLING_READ_ONLY,
+  deletionReadOnly,
+  ORG_DELETING,
+  type OrgCreate,
+} from '../../convex/lib/billingAccess'
 import { asciiEmail, cleanEmail, emailRefusal as storedEmailRefusal } from '../../convex/lib/email'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
@@ -135,7 +140,7 @@ import { createTaskIndex, type TaskChanges, type TaskSources } from './taskIndex
 
 export type { UIPrefs } from './preferences'
 
-import type { SeatsDeleting, Workspace } from '../../convex/lib/workspaceJoin'
+import type { Seatless, Workspace } from '../../convex/lib/workspaceJoin'
 import type { Row } from './rows'
 import { createPlannerUpdates, type StoreVersion } from './updates'
 import {
@@ -1040,6 +1045,7 @@ function shownWorkspace() {
       P.users,
       P.org,
       P.homeOrg,
+      P.orgCreate,
       P.orgs,
       P.myProfileIds,
       P.teams,
@@ -3200,6 +3206,8 @@ function rebuild(now = new Date(), full = false) {
   // settings fall back to a visible org's — see shapeOrg
   P.org = keep(P.org, shapeOrg(home, displayOrg, rows.billing))
   P.homeOrg = HOME_ORG
+  // an answer without it, from an older backend, keeps the create entry
+  P.orgCreate = base.scalars()?.create ?? 'now'
   P.orgs = keepItems(
     P.orgs,
     [...rows.orgs.values()]
@@ -4386,6 +4394,10 @@ export const PLANNER = {
   CURRENT_USER: '',
   org: {} as OrgVM, // populated by the first rebuild, before `loaded` flips
   homeOrg: '',
+  /* whether the login may create an organization now, as the server's
+     createOrganization decides (convex/lib/billingAccess.ts OrgCreate): the
+     sidebar and the phone list offer it only for 'now' */
+  orgCreate: 'now' as OrgCreate,
   orgs: [] as OrgRefVM[],
   myProfileIds: [] as string[],
   teams: [] as TeamVM[],
@@ -5192,12 +5204,12 @@ export const PLANNER = {
     const uuid = (keyByOrg.get(orgId) || new Map()).get(String(key || '').toUpperCase())
     return uuid ? uuidToKey.get(uuid) || null : null
   },
-  /* Claim a home organization (0081) — the one-time door for a login that has
-     only guest seats, or none at all. The mutation creates the org, its first
-     team, an admin profile for the caller and its billing, and refuses when a
-     home organization already exists; a full re-init then swaps the blend
-     over to it (HOME_ORG, the roster, the handle scheme). Resolves false on
-     refusal. */
+  /* Claim a home organization (0081) — the one-time door for a login with no
+     home seat, active or not, which the app offers while P.orgCreate is
+     'now'. The mutation creates the org, its first team, an admin profile
+     for the caller and its billing, and refuses while the login holds a
+     home seat; a full re-init then swaps the blend over to it (HOME_ORG, the
+     roster, the handle scheme). Resolves false on refusal. */
   createOrg: async (name: string): Promise<boolean> => {
     try {
       await sendAwaited(api.identity.createOrganization, { name: name.trim() }, 'none')
@@ -5460,10 +5472,10 @@ export const PLANNER = {
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
-  /** The root part's answer when the last boot found no seat because the
-      login's organization is being deleted, with when the login may create
-      an organization, otherwise null. */
-  seatsDeleting: (): SeatsDeleting | null => bootSeatsDeleting,
+  /** The root part's answer when the last boot found no seat it can open,
+      because the login's organization is being deleted or deactivated it,
+      with when the login may create an organization, otherwise null. */
+  seatless: (): Seatless | null => bootSeatless,
   /** While a large workspace loads in stages, the share of its tasks that
       arrived, from 0 to 1; null once every task did. Counts, totals and
       verdicts over many tasks wait for null (store/liveParts.ts). */
@@ -6122,7 +6134,8 @@ export const PLANNER = {
     return sendAwaited(api.issues.deleteDeep, args, 'none', { keep: () => view }).then(
       () => true,
       (error) => {
-        if (epoch === storeEpoch) toastWriteError(error)
+        // it painted nothing, so a refusal has nothing to revert
+        if (epoch === storeEpoch) toastWriteError(error, false)
         return false
       },
     )
@@ -6134,8 +6147,9 @@ export const PLANNER = {
      holds. The Archive or delete window waits for the server, so nothing
      changes here until it accepts and a refusal leaves the task and the
      window in place (toasted). Resolves whether the server archived it, or
-     'already' when someone else had archived it first, so this call
-     changed nothing and posted no reason.
+     'already' when it was archived before this call, by another person,
+     another tab, the person's own REST or MCP token or auto-archive, so
+     this call changed nothing, posted no reason and paints nothing.
      `reason` travels as an argument, and the server posts it as a comment in
      the same transaction. With `keepSubtasks` the server detaches the task's
      active direct children first and archives the task alone, so only the
@@ -6162,13 +6176,20 @@ export const PLANNER = {
       },
       'none',
       // The delivery that drops the task usually lands first, and then
-      // nothing paints. When it has not, the archive paints until one does.
-      { keep: () => ({ workspace: archivePaint(uuid, keepSubtasks, at) }) },
+      // nothing paints. When it has not, an archive this call made paints
+      // until one does. An 'already' answer changed nothing, and the earlier
+      // archive may have kept or taken the subtasks, so nothing paints and
+      // the board shows the task until a delivery holds that archive.
+      {
+        keep: (out) =>
+          out?.archived === false ? null : { workspace: archivePaint(uuid, keepSubtasks, at) },
+      },
     ).then(
       // an answer without `archived`, as one from before it, archived the task
       (out) => (out?.archived === false ? 'already' : true),
       (error) => {
-        if (epoch === storeEpoch) toastWriteError(error)
+        // it painted nothing, so a refusal has nothing to revert
+        if (epoch === storeEpoch) toastWriteError(error, false)
         return false
       },
     )
@@ -7676,7 +7697,8 @@ export const PLANNER = {
       () => true,
       (error) => {
         console.error('[qivo] project delete failed:', error)
-        if (epoch === storeEpoch) toastWriteError(error)
+        // it painted nothing, so a refusal has nothing to revert
+        if (epoch === storeEpoch) toastWriteError(error, false)
         return false
       },
     )
@@ -8716,11 +8738,11 @@ export const PLANNER = {
    they run ahead of the rows on screen until then. The parts' answers are
    not kept beside it: the base keeps each unchanged row's earlier object. */
 let hasSnapshot = false
-/* The root part's answer when the boot found no seat because a running
-   organization deletion holds the login's seats (convex/lib/workspaceParts.ts
-   readRoot), so AuthGate says so and offers a new organization only when the
-   server allows one. */
-let bootSeatsDeleting: SeatsDeleting | null = null
+/* The root part's answer when the boot found no seat it can open, because a
+   running organization deletion holds the login's seats or an organization
+   deactivated it (convex/lib/workspaceParts.ts readRoot), so AuthGate says
+   so and offers a new organization only when the server allows one. */
+let bootSeatless: Seatless | null = null
 /* While a large workspace loads in stages (store/liveParts.ts), the share of
    its task windows that arrived, from 0 to 1; null once it is complete. A
    partial delivery holds no write for certain, since the window a write
@@ -8870,7 +8892,7 @@ function startParts(
         }
         const snap = ws.value && anchor(ws.value)
         hasSnapshot = snap !== null
-        bootSeatsDeleting = (ws.state === 'complete' && ws.deleting) || null
+        bootSeatless = (ws.state === 'complete' && ws.seatless) || null
         // the boot paints this delivery before anything rebuilds
         stillLoading = snap && ws.state === 'partial' ? ws.loaded : null
         loadEnds = false
@@ -8941,7 +8963,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
     if (DEMO_MODE) {
       recoveryHeld = false
       notifyDemoEnded()
-    } else beginTrouble('no_access', '', ws.deleting ? ORG_DELETING_TEXT : undefined)
+    } else beginTrouble('no_access', '', ws.seatless?.deleting ? ORG_DELETING_TEXT : undefined)
     return
   }
   hasSnapshot = true
@@ -9183,7 +9205,7 @@ export async function initStore(
   stopDayWatch = null
   clearAvatarSources()
   demoDisposed = false
-  bootSeatsDeleting = null
+  bootSeatless = null
   const epoch = storeEpoch
   const stillCurrent = () => epoch === storeEpoch && !demoDisposed
   // AuthGate already had to establish this session before it could render

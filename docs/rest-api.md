@@ -2882,9 +2882,9 @@ of a disabled subscription clears the streak and re-enables delivery, while
 retaining previous success, failure and HTTP-status history. Quiet callbacks
 are not probed. Finite subscriptions must be renewed before expiry to remain
 active through the health window. Registration removes expired registrations
-and reclaims quota held by revoked, expired or deleted credentials and removed
-accounts. A personal token's subscriptions stop delivering when the token
-expires.
+and reclaims quota held by revoked, expired or deleted credentials, removed
+accounts and connected apps that no longer exist in Qivo. A personal token's
+subscriptions stop delivering when the token expires.
 Deleting then registering again cannot revive the deleted registration's
 queued events. Registering after expiry also starts fresh.
 DELETE is idempotent for absent subscriptions. Another credential's existing
@@ -2906,7 +2906,13 @@ and a read-only OAuth connection gets
 read-only credential. These
 routes let administrators inspect and remove subscriptions that consume shared
 quota, including callbacks owned by inactive users. They do not expose signing
-keys or transfer subscription ownership.
+keys or transfer subscription ownership. Each listed subscription also has
+`owner` with `profile_id`, `credential_type` and `credential_id`. The list
+shows `status: "unauthorized"` for a subscription whose owner can no longer
+authorize it, because its credential was revoked, expired or deleted, its
+account was removed, or its connected app no longer exists in Qivo. Such a
+subscription receives no events and holds no quota, and the next registration
+in the organization removes it.
 
 Event names are `task.created`, `task.updated`, `task.deleted`,
 `task.restored` and `comment.created`. `task.deleted` means the task moved to

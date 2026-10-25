@@ -1154,6 +1154,26 @@ describe('calls through access a running deletion has deleted', () => {
     expect(await root()).toBeNull()
   })
 
+  it('tell a guest elsewhere whose home seat the deletion holds when a new organization may follow', async () => {
+    const { t, f, step, profileGone } = await deleting()
+    const { _id, _creationTime, ...home } = f.user
+    await t.run((ctx) =>
+      ctx.db.insert('profiles', { ...home, id: uuid(), org_id: f.otherOrg.id, org_role: 'guest' }),
+    )
+    const root = () => as(t, f.user).query(api.workspace.root, {})
+    // the guest seat still opens, so the answer has seats, and the app's
+    // create entry waits for the deletion's first phase
+    expect(await root()).toMatchObject({
+      orgs: [expect.objectContaining({ id: f.otherOrg.id })],
+      create: 'after_deletion',
+    })
+    await expectRefusal(createOrg(t, f.user), 'rule', /^you already belong to an organization$/)
+    REMOVAL_BUDGET.rows = 4
+    for (let i = 0; i < 100 && !(await profileGone(f.user)); i++) await step()
+    expect(await root()).toMatchObject({ create: 'now' })
+    expect(typeof (await createOrg(t, f.user))).toBe('string')
+  })
+
   /* The other organization's admin, deactivated there, holds a seat in the
    * organization being deleted: a guest's, or a home seat of its own that
    * an admin's promotion of the guest made, newer than the first. */

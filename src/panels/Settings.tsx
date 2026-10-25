@@ -1,5 +1,5 @@
 /* Settings navigation, access redirects and page composition. */
-import { useEffect as useEffectS, useRef as useRefS } from 'react'
+import { useEffect as useEffectS, useRef as useRefS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Icon } from '../components/qivo'
 import { TasksLoadingView } from '../components/TasksLoading'
@@ -101,13 +101,16 @@ function SettingsScreen({
     restoreFocus(contentRef.current?.querySelector<HTMLElement>('h1'))
   }, [page])
 
-  /* A project page whose own delete waits for the server. The delivery that
-     drops the project usually lands first, and the page then moves on by
-     itself to where the delete leads; until it does, the check below must not
-     send it to another page first. Cleared with every page change. */
-  const leavingProject = useRefS<string | null>(null)
+  /* A project page whose Archive or delete window is open. Its project may
+     leave the board meanwhile: the delivery of its own delete usually lands
+     before the answer, and the page then moves on by itself to where the
+     delete leads, or a refused delete or someone else's change took it. The
+     check below keeps the page while the window is open, so the window keeps
+     what was typed in it, and runs again once it closes. Cleared with every
+     page change. */
+  const [holdingProject, setHoldingProject] = useStateS<string | null>(null)
   useEffectS(() => {
-    leavingProject.current = null
+    setHoldingProject(null)
   }, [page])
 
   // keep the page valid for the current user
@@ -118,7 +121,7 @@ function SettingsScreen({
       const pid = page.slice(8)
       const pr = P.project(pid)
       const meta = pr ? (pr.type === 'meta' ? pr : P.project(pr.parent)) : null
-      if (!(meta && P.canSee(meta.id)) && leavingProject.current !== pid) resetPage('account')
+      if (!(meta && P.canSee(meta.id)) && holdingProject !== pid) resetPage('account')
     } else if (page.indexOf('team:') === 0) {
       if (!P.isTeamLeader(page.slice(5))) resetPage('account')
     } else if (page.startsWith('user:')) {
@@ -216,9 +219,7 @@ function SettingsScreen({
         setPage={setPage}
         onBackPage={onBackPage}
         onProjectGone={onProjectGone}
-        onLeaving={(id) => {
-          leavingProject.current = id
-        }}
+        onHolding={setHoldingProject}
       />
     )
   if (P.stillLoading() !== null && readsEveryTask(page))

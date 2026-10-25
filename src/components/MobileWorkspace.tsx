@@ -376,7 +376,8 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
           {query ? 'No projects match your search.' : 'Projects you join will appear here.'}
         </p>
       )}
-      {!P.homeOrg && (
+      {/* while the server would create one (P.orgCreate) */}
+      {!P.homeOrg && P.orgCreate === 'now' && (
         <Button onClick={actions.createOrg}>
           <Icon name="plus" size={16} /> Create your organization
         </Button>

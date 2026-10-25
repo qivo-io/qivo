@@ -91,7 +91,10 @@ export const deleteUnusedClients = mutation({
 /** Deletes up to `numItems` of the clients with the given `clientId`, or
  * registered by the given `userId`, with their resource links. `isDone` says
  * whether none is left. For the app's own deletes, which Better Auth's
- * delete path does not run. */
+ * delete path does not run, and neither does the app's trigger that revokes
+ * a deleted client's grants (authTriggers.ts): a caller deletes or revokes
+ * the client's oauth_connections rows first, as oauthSmoke.ts and the demo
+ * purge (internal/demoCleanup.ts) do. */
 export const deleteClients = mutation({
   args: {
     field: v.union(v.literal('clientId'), v.literal('userId')),

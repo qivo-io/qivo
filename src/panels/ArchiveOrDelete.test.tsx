@@ -812,12 +812,12 @@ describe('the Archive or delete section of project settings', () => {
      app's shell does. */
   async function openSettings(projectId: string) {
     const setPage = vi.fn()
-    const onLeaving = vi.fn()
+    const onHolding = vi.fn()
     const settings = await import('./settings/ProjectSettings')
     const version = await import('../store/usePlannerVersion')
     function Live() {
       version.usePlannerVersion()
-      return <settings.ProjectPage projectId={projectId} setPage={setPage} onLeaving={onLeaving} />
+      return <settings.ProjectPage projectId={projectId} setPage={setPage} onHolding={onHolding} />
     }
     await act(async () =>
       root.render(
@@ -827,7 +827,7 @@ describe('the Archive or delete section of project settings', () => {
       ),
     )
     await settle()
-    return { setPage, onLeaving }
+    return { setPage, onHolding }
   }
   const section = () => find('[data-project-removal]')
   const open = () => find<HTMLButtonElement>('[data-remove-project]')
@@ -835,7 +835,7 @@ describe('the Archive or delete section of project settings', () => {
   it("opens the window for the project's lead, and leaves the page once the delete is done", async () => {
     summaries.push(() => Promise.resolve(summary()))
     answers['projects:deleteDeep'] = () => Promise.resolve(null)
-    const { setPage, onLeaving } = await openSettings('plan')
+    const { setPage, onHolding } = await openSettings('plan')
     expect(section().querySelector('legend')?.textContent).toBe('Archive or delete')
     expect(section().textContent).toContain(
       'Archive hides it and its 1 sub-project. Delete moves them and their tasks to Deleted items.',
@@ -849,7 +849,8 @@ describe('the Archive or delete section of project settings', () => {
     await choose('delete')
     await click(button('Delete project and 48 tasks'))
     await settle()
-    expect(onLeaving).toHaveBeenCalledWith('plan')
+    // the page held its project while the window was open
+    expect(onHolding.mock.calls).toEqual([['plan'], [null]])
     expect(setPage).toHaveBeenLastCalledWith('projects')
     expect(window.showToast).toHaveBeenCalledWith('Deleted “Plan”')
     expect(has('[data-modal-shell]')).toBe(false)
@@ -923,6 +924,11 @@ describe('Settings while a project page deletes its project', () => {
       react.useEffect(() => {
         shown.push(current)
       }, [current])
+      // App's toast host, whose render renders the page too
+      const [, setToasts] = react.useState(0)
+      react.useEffect(() => {
+        window.showToast = vi.fn(() => setToasts((n) => n + 1))
+      }, [])
       return (
         <SettingsScreen
           page={current}
@@ -971,5 +977,57 @@ describe('Settings while a project page deletes its project', () => {
     await act(async () => dropPlan())
     await settle()
     expect(shown).toEqual(['project:plan', 'account'])
+  })
+
+  /* The project leaves the board while its Archive or delete window holds a
+     typed reason: the page and the window stay, the window says the project
+     is gone and sends nothing, and the page leaves once it closes. */
+  const GONE =
+    'Plan is no longer here. It was archived or deleted, or you can no longer open it. The reason you typed for it was not used. Copy it to keep it.'
+
+  it('keeps the page and the reason when a refused delete finds the project gone', async () => {
+    summaries.push(() => Promise.resolve(summary()))
+    answers['projects:deleteDeep'] = () => {
+      dropPlan()
+      return Promise.reject(new Error('project not found'))
+    }
+    const shown = await openSettings('project:plan')
+    await click(find<HTMLButtonElement>('[data-remove-project]'))
+    await settle()
+    await choose('delete')
+    await type('Trial cancelled')
+    await click(button('Delete project and 48 tasks'))
+    await settle()
+    expect(window.showToast).toHaveBeenCalledWith("Couldn't save.", 'error')
+    expect(shown).toEqual(['project:plan'])
+    expect(text('[data-fate-gone]')).toBe(GONE)
+    expect(find<HTMLTextAreaElement>('[data-fate-reason]').value).toBe('Trial cancelled')
+    expect(button('Delete project and 48 tasks').disabled).toBe(true)
+    await click(button('Cancel'))
+    await settle()
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(shown).toEqual(['project:plan', 'account'])
+  })
+
+  it('keeps the window and the reason when someone else deletes the project while it is open', async () => {
+    summaries.push(() => Promise.resolve(summary()))
+    const shown = await openSettings('project:plan')
+    await click(find<HTMLButtonElement>('[data-remove-project]'))
+    await settle()
+    await choose('delete')
+    await type('Trial cancelled')
+    await act(async () => dropPlan())
+    await settle()
+    expect(shown).toEqual(['project:plan'])
+    expect(text('[data-fate-gone]')).toBe(GONE)
+    expect(find<HTMLTextAreaElement>('[data-fate-reason]').value).toBe('Trial cancelled')
+    expect(button('Delete project and 48 tasks').disabled).toBe(true)
+    // nor does it archive what is gone
+    await choose('archive')
+    expect(button('Archive').disabled).toBe(true)
+    await click(button('Cancel'))
+    await settle()
+    expect(shown).toEqual(['project:plan', 'account'])
+    expect(writes()).toEqual([])
   })
 })

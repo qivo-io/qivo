@@ -30,7 +30,7 @@ import {
   removeWebhookSubscription,
   writeWebhookHealth,
 } from './model/webhookHealth'
-import { pruneRemovedWebhookOwners } from './model/webhookOwners'
+import { ownersRemoved, pruneRemovedWebhookOwners } from './model/webhookOwners'
 import { dispatchWebhooksRef, requestWebhookDispatch } from './model/webhookQueue'
 
 const internalSweepRef = makeFunctionReference<'mutation', Record<string, never>, null>(
@@ -241,14 +241,21 @@ function assertAdministrator(profile: Doc<'profiles'>): void {
     throw forbidden('Organization administrator access is required')
 }
 
+/** Every unexpired subscription of the administrator's organization. One
+ * whose owner can never authorize it again is `unauthorized`: it receives
+ * nothing, holds no quota, and the next registration in the organization
+ * removes it (model/webhookOwners.ts). */
 export const listOrganization = internalQuery({
   args: { owner: vEventOwner },
   handler: async (ctx, { owner }) => {
     const { profile } = await requireOwner(ctx, owner)
     assertAdministrator(profile)
+    const rows = await liveSubscriptions(ctx, profile.org_id)
+    const removed = await ownersRemoved(ctx, rows)
     return Promise.all(
-      (await liveSubscriptions(ctx, profile.org_id)).map(async (row) => ({
+      rows.map(async (row, at) => ({
         ...(await subscriptionStatus(ctx, row)),
+        ...(removed[at] ? { status: 'unauthorized' as const } : {}),
         owner: {
           profile_id: row.owner.profile_id,
           credential_type: row.owner.credential_table,

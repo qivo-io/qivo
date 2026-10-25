@@ -1279,6 +1279,17 @@ export async function findAuthUser(ctx: QueryCtx, authUserId: string): Promise<L
 }
 
 /**
+ * Better Auth's row for OAuth client `clientId`, or null once it no longer
+ * has it. One indexed read of the Better Auth component.
+ */
+export async function findOAuthClient(ctx: QueryCtx, clientId: string) {
+  return (await ctx.runQuery(components.betterAuth.adapter.findOne, {
+    model: 'oauthClient',
+    where: [{ field: 'clientId', value: clientId }],
+  })) as { disabled?: boolean | null } | null
+}
+
+/**
  * Whether an OAuth client may still act for its grants on `resource`: Better
  * Auth still has the client, it is not disabled and it keeps its link to the
  * resource. Better Auth checks the link only when it issues a token, so every
@@ -1292,10 +1303,7 @@ export async function oauthClientLive(
   clientId: string,
   resource: string,
 ): Promise<boolean> {
-  const client = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
-    model: 'oauthClient',
-    where: [{ field: 'clientId', value: clientId }],
-  })) as { disabled?: boolean } | null
+  const client = await findOAuthClient(ctx, clientId)
   if (!client || client.disabled) return false
   const link = await ctx.runQuery(components.betterAuth.adapter.findOne, {
     model: 'oauthClientResource',

@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, internal } from '../_generated/api'
+import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { createAuth } from '../auth'
 import { byId } from '../lib/db'
 import { LIMITS } from '../lib/limits'
+import { mcpResource } from '../lib/oauth'
 import type { EventOwner } from '../lib/taskEvents'
 import { removeProfile } from '../model/cascade'
-import { as, expectRefusal, newT, uuid, withOrg } from './helpers.setup'
+import { as, expectRefusal, newT, runInAuth, uuid, withOrg } from './helpers.setup'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -24,8 +26,24 @@ async function fixture() {
     profile: Doc<'profiles'> = table === 'agent_keys' ? fx.agent : fx.user,
     id = uuid(),
     expires_at?: string,
-  ): Promise<EventOwner> =>
-    t.run(async (ctx) => {
+  ): Promise<EventOwner> => {
+    // each grant's own client, which Better Auth has, linked to the resource
+    const client_id = `client-${id}`
+    if (table === 'oauth_connections') {
+      await t.mutation(components.betterAuth.adapter.create, {
+        input: {
+          model: 'oauthClient',
+          data: { clientId: client_id, redirectUris: ['https://receiver.example/callback'] },
+        },
+      })
+      await t.mutation(components.betterAuth.adapter.create, {
+        input: {
+          model: 'oauthClientResource',
+          data: { clientId: client_id, resourceId: mcpResource() },
+        },
+      })
+    }
+    return t.run(async (ctx) => {
       const common = { id, profile_id: profile.id, created_at: new Date().toISOString() }
       const row =
         table === 'agent_keys'
@@ -49,9 +67,9 @@ async function fixture() {
                 org_id: profile.org_id,
                 auth_user_id: profile.auth_user_id!,
                 authorization_hash: id,
-                client_id: 'webhook-test-client',
+                client_id,
                 client_name: 'Webhook test client',
-                resource: 'https://qivo.example/mcp',
+                resource: mcpResource(),
                 requested_scopes: ['qivo:read'],
                 scopes: ['qivo:read'],
                 approved_at: new Date().toISOString(),
@@ -64,6 +82,7 @@ async function fixture() {
         credential_row_id: row,
       }
     })
+  }
   const seed = (owner: EventOwner, count: number, disabled = false) =>
     t.run(async (ctx) => {
       for (let n = 0; n < count; n++) {
@@ -131,6 +150,92 @@ describe('webhook owner quota cleanup', () => {
     expect(retained).toMatchObject([{ id: saved.id, owner: fresh }])
     for (const health of await f.t.run((ctx) => ctx.db.query('webhook_health').collect()))
       expect(health.subscription_row_id).toBe(retained[0]._id)
+  })
+
+  /* A grant whose client Better Auth no longer has can never authorize
+     again, so it gives back its quota, and so does a person whose login is
+     gone. A disabled client, a client without its resource link and a
+     banned login can be undone, and keep theirs. */
+  it('reclaims a full organization held by a deleted OAuth client and a deleted login, and keeps what can be undone', async () => {
+    const f = await fixture()
+    const clientGone = await f.credential('oauth_connections')
+    const clientDisabled = await f.credential('oauth_connections')
+    const unlinked = await f.credential('oauth_connections')
+    const live = await f.credential('oauth_connections')
+    const loginGone = await f.credential('mcp_tokens', f.fx.viewer)
+    for (const owner of [clientGone, clientDisabled, unlinked, live, loginGone])
+      await f.seed(owner, 20)
+    const clientOf = (owner: EventOwner) => `client-${owner.credential_id}`
+    // the component's own delete, which runs no trigger, so the grant stays
+    await f.t.mutation(components.betterAuth.oauth.deleteClients, {
+      field: 'clientId',
+      value: clientOf(clientGone),
+      numItems: 10,
+    })
+    await runInAuth(f.t, async (ctx) => {
+      const client = await ctx.db
+        .query('oauthClient')
+        .withIndex('clientId', (q) => q.eq('clientId', clientOf(clientDisabled)))
+        .unique()
+      if (client) await ctx.db.patch(client._id, { disabled: true })
+      for (const link of await ctx.db
+        .query('oauthClientResource')
+        .withIndex('clientId_resourceId', (q) => q.eq('clientId', clientOf(unlinked)))
+        .collect())
+        await ctx.db.delete(link._id)
+    })
+    await f.t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'user', where: [{ field: '_id', value: f.fx.viewer.auth_user_id! }] },
+    })
+    // the organization's list says which ones no longer count
+    const listed = await f.t.query(internal.webhooks.listOrganization, {
+      owner: await f.credential('mcp_tokens', f.fx.admin),
+    })
+    const statusOf = (owner: EventOwner) =>
+      new Set(
+        listed
+          .filter((row) => row.owner.credential_id === owner.credential_id)
+          .map((row) => row.status),
+      )
+    expect(statusOf(clientGone)).toEqual(new Set(['unauthorized']))
+    expect(statusOf(loginGone)).toEqual(new Set(['unauthorized']))
+    for (const owner of [clientDisabled, unlinked, live])
+      expect(statusOf(owner)).toEqual(new Set(['active']))
+
+    await f.save(await f.credential())
+    const rows = await f.rows()
+    expect(rows).toHaveLength(61)
+    const count = (owner: EventOwner) =>
+      rows.filter((row) => row.owner.credential_id === owner.credential_id).length
+    expect([clientGone, loginGone].map(count)).toEqual([0, 0])
+    expect([clientDisabled, unlinked, live].map(count)).toEqual([20, 20, 20])
+    expect(await f.t.run((ctx) => ctx.db.query('webhook_health').collect())).toHaveLength(60)
+  })
+
+  it('revokes the grants of a client Better Auth deletes, which then give back their quota', async () => {
+    const f = await fixture()
+    const grant = await f.credential('oauth_connections')
+    const other = await f.credential('oauth_connections')
+    await f.seed(grant, 1)
+    // as Better Auth's own delete of a client runs, such as /oauth2/delete-client
+    await f.t.run(async (ctx) =>
+      (await createAuth(ctx).$context).adapter.delete({
+        model: 'oauthClient',
+        where: [{ field: 'clientId', value: `client-${grant.credential_id}` }],
+      }),
+    )
+    const connections = await f.t.run((ctx) => ctx.db.query('oauth_connections').collect())
+    const row = (owner: EventOwner) =>
+      connections.find((connection) => connection._id === owner.credential_row_id)
+    expect(row(grant)).toMatchObject({
+      revoked_at: expect.any(String),
+      revocation_reason: 'client_deleted',
+    })
+    expect(row(other)?.revoked_at).toBeUndefined()
+    await f.save(await f.credential())
+    expect(
+      (await f.rows()).filter((sub) => sub.owner.credential_id === grant.credential_id),
+    ).toEqual([])
   })
 
   it('preserves disabled subscriptions and inactive owners when enforcing the organization limit', async () => {

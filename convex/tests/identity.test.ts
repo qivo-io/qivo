@@ -251,6 +251,26 @@ describe('claimSeatsForLogin — the claim loop', () => {
     expect((await reload(t, reinvited)).auth_user_id).toBeUndefined()
   })
 
+  it('leaves a deactivated invitation waiting, and adopts it once reactivated, as a guest beside a home', async () => {
+    const seat = await plantSeat(t, { org_id: f.org.id, email: EMAIL, active: false })
+    expect(await claim(t)).toBe(0)
+    expect((await reload(t, seat)).auth_user_id).toBeUndefined()
+    expect((await reload(t, seat)).accepted_at).toBeUndefined()
+    // meanwhile the login made a home of its own
+    await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      email: EMAIL,
+      auth_user_id: LOGIN,
+      accepted_at: NOW,
+      org_role: 'admin',
+    })
+    await t.run((ctx) => ctx.db.patch(seat._id, { active: true }))
+    expect(await claim(t)).toBe(1)
+    const adopted = await reload(t, seat)
+    expect(adopted.auth_user_id).toBe(LOGIN)
+    expect(adopted.org_role).toBe('guest')
+  })
+
   it('a login with no waiting seat claims nothing and creates nothing', async () => {
     const before = await t.run((ctx) => ctx.db.query('profiles').collect())
     expect(await claim(t, { email: 'stranger@example.test' })).toBe(0)
@@ -453,6 +473,55 @@ describe('createOrganization guards (0118)', () => {
     })
     const orgId = await login.as.mutation(api.identity.createOrganization, { name: 'Nimbus' })
     expect(typeof orgId).toBe('string')
+  })
+})
+
+/* The app offers a new organization only while the root part's create
+ * state is 'now' (lib/workspaceParts.ts readRoot), so it must agree with
+ * createOrganization for every set of seats a login can hold. A login with
+ * no seat it can open gets the seatless answer, or null when nothing holds
+ * it. */
+describe("the root part's create state", () => {
+  type Seat = { org: 'home' | 'other'; role: 'user' | 'guest'; active: boolean }
+  const cases: [string, Seat[], unknown, boolean][] = [
+    ['no seat', [], null, true],
+    ['an active guest seat', [{ org: 'other', role: 'guest', active: true }], 'now', true],
+    [
+      'an active guest seat and a deactivated home seat',
+      [
+        { org: 'other', role: 'guest', active: true },
+        { org: 'home', role: 'user', active: false },
+      ],
+      'blocked',
+      false,
+    ],
+    [
+      'a deactivated home seat alone',
+      [{ org: 'home', role: 'user', active: false }],
+      { deleting: false, create: 'blocked' },
+      false,
+    ],
+    ['a deactivated guest seat alone', [{ org: 'home', role: 'guest', active: false }], null, true],
+    ['an active home seat', [{ org: 'home', role: 'user', active: true }], 'blocked', false],
+  ]
+  it.each(cases)('%s', async (_name, seats, root, creates) => {
+    const email = 'judged@example.test'
+    const login = await withLogin(t, email)
+    for (const seat of seats)
+      await plantSeat(t, {
+        org_id: seat.org === 'home' ? f.org.id : f.otherOrg.id,
+        email,
+        auth_user_id: login.userId,
+        accepted_at: NOW,
+        org_role: seat.role,
+        active: seat.active,
+      })
+    const answer = await login.as.query(api.workspace.root, {})
+    if (typeof root === 'string') expect(answer).toMatchObject({ create: root })
+    else expect(answer).toEqual(root)
+    const created = login.as.mutation(api.identity.createOrganization, { name: 'Nimbus' })
+    if (creates) expect(typeof (await created)).toBe('string')
+    else await expectRefusal(created, 'rule', /^you already belong to an organization$/)
   })
 })
 

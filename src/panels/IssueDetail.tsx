@@ -1423,6 +1423,17 @@ function IssueDetail({
     if (issueId) lastShown.current = issueId
     if (leaving.current !== issueId) leaving.current = null
   }, [issueId])
+  // a render once this window's own archive or delete of the task ends
+  // without closing it: `leaving` is a ref, and the task may have left the
+  // board meanwhile, which then shows TaskGone
+  const [, setLeaveEnded] = useStateID(0)
+  /** Ends this window's own archive or delete of `opened`, which left the
+      window open, unless the window moved to another task meanwhile. */
+  const stopLeaving = (opened: string | null) => {
+    if (leaving.current !== opened) return
+    leaving.current = null
+    setLeaveEnded((n) => n + 1)
+  }
   const [actFilter, setActFilter] = useStateID('comments') // comments ⇄ all
   // the description discloses only in the embedded pane; the floating window
   // pins it open, which is what discussion-first means there
@@ -1581,7 +1592,8 @@ function IssueDetail({
   // to arrive: the window opens and says so (App pendingTask)
   const waiting = !it && !!issueId && P.stillLoading() !== null
   // the task left the board while the window showed it, other than by this
-  // window's own archive or delete: the window says so (TaskGone)
+  // window's own archive or delete while that is on its way: the window
+  // says so (TaskGone), also once its own call was refused (stopLeaving)
   const gone =
     !it && !waiting && issueId && leaving.current !== issueId ? shownTask.current?.task : null
   /** Says that text typed for the task went with it, as its editors do,
@@ -3739,7 +3751,9 @@ function IssueDetail({
       {/* stacked like the Move dialog. While its own archive or delete is on
           its way, it stays mounted when the task is off the board for a
           moment (it shows nothing then), so it comes back still busy and
-          with the choices the person made. */}
+          with the choices the person made. A refusal renders the window
+          again (stopLeaving), which shows TaskGone if the task is still
+          gone. */}
       {issueId && fateOpen && (it || leaving.current === issueId) && (
         <ArchiveOrDeleteTaskModal
           issueId={issueId}
@@ -3763,7 +3777,7 @@ function IssueDetail({
             // the window waits for the server, so a refusal leaves it open
             const archived = await P.archiveIssue(it.id, reason, keepSubtasks)
             if (!archived) {
-              if (leaving.current === opened) leaving.current = null
+              stopLeaving(opened)
               return false
             }
             if (archived === 'already') {
@@ -3771,15 +3785,17 @@ function IssueDetail({
               // The toast says so whatever the deliveries show next, such as
               // a restore that brings the task back at once. It names no
               // one: another person, another tab and auto-archive look alike.
-              if (leaving.current === opened) leaving.current = null
+              stopLeaving(opened)
               const shownNow = shownIssue.current === opened
               if (shownNow || reason)
                 window.showToast?.(
                   `${shown} was already archived.${reason ? ' The reason you typed was not used.' : ''}`,
                 )
               if (!shownNow) return true
-              // and restored since: the window stays open with the reason,
-              // to archive the task again
+              // still on the board, because it was restored since or no
+              // delivery holds the earlier archive yet: the window stays open
+              // with the reason, and if the task then leaves the board, the
+              // task window keeps it (TaskGone)
               if (P.issueById[it.id]) return false
               // the task window shows the note and keeps the reason to copy
               // (TaskGone), and a restore then keeps it for the next window
@@ -3804,7 +3820,7 @@ function IssueDetail({
             leaving.current = opened
             const deleted = await P.deleteIssue(it.id, subtasks, true, reason)
             if (!deleted) {
-              if (leaving.current === opened) leaving.current = null
+              stopLeaving(opened)
               return false
             }
             if (shownIssue.current === opened) {

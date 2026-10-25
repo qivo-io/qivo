@@ -34,11 +34,12 @@ type Ok<F extends (...args: never[]) => Promise<unknown>> = Omit<
 >
 
 export type RootAnswer = Read<typeof readRoot>
-/** The root part's answer for a login whose only seats a running
- * organization deletion holds. */
-export type SeatsDeleting = Extract<RootAnswer, { deleting: true }>
+/** The root part's answer for a login with no seat it can open, because a
+ * running organization deletion holds its seats (`deleting`) or an
+ * organization deactivated it, with when it may create an organization. */
+export type Seatless = Extract<RootAnswer, { deleting: boolean }>
 /** The root part's answer for a caller with a seat. */
-export type RootSeats = Exclude<RootAnswer, null | SeatsDeleting>
+export type RootSeats = Exclude<RootAnswer, null | Seatless>
 
 /** The organizations of the root part's answer, none without a seat. */
 export const rootOrgs = (root: RootAnswer): RootSeats['orgs'] =>
@@ -77,6 +78,7 @@ export function partRows<A extends { state: 'ok'; more?: Record<string, unknown[
 /** The workspace of `root`'s seats from their organizations' parts, each
  * `orgs` entry for root.orgs at the same place. `deliveredAt` is when the
  * server held this state, the time of the transition that carried it.
+ * `create` is the root's, absent from an older backend's answer.
  *
  * Memberships go out only for teams and people the organization's parts
  * hold, and grants only for people it holds: a removed person's memberships
@@ -150,6 +152,7 @@ export function joinParts(root: RootSeats, orgs: readonly OrgParts[], deliveredA
     unreadTruncated: inbox.unreadTruncated,
     readTruncated: inbox.readTruncated,
     ...(inbox.messagesCut ? { messagesCut: true as const } : {}),
+    ...(root.create === undefined ? {} : { create: root.create }),
     delivered_at: deliveredAt,
   }
 }

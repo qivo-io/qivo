@@ -1700,10 +1700,14 @@ function ArchiveOrDeleteTaskModal({
    included, because the store holds no archived tasks; until they arrive
    both actions wait, and a failed count offers to try again. Archive acts at
    once (the caller closes the window). Delete waits for the server, the
-   window refuses to close meanwhile, and a refusal leaves it open. */
+   window refuses to close meanwhile, and a refusal leaves it open. A project
+   that left the board while the window was open (`gone`) is said to be gone
+   once no delete of its own is on its way, and the window sends nothing
+   more, but keeps the reason typed in it to copy. */
 function ArchiveOrDeleteProjectModal({
   project,
   deleteOnly = false,
+  gone = false,
   onClose,
   onArchive,
   onDelete,
@@ -1711,6 +1715,8 @@ function ArchiveOrDeleteProjectModal({
 }: {
   project: Pick<ProjectVM, 'id' | 'name' | 'type'>
   deleteOnly?: boolean
+  /** whether the project left the board while the window was open */
+  gone?: boolean
   onClose: () => void
   onArchive?: () => void
   /** resolves whether the server deleted it; the caller closes the window */
@@ -1753,8 +1759,10 @@ function ArchiveOrDeleteProjectModal({
         ? `Moves the ${noun} and ${summary.tasks === 1 && !summary.more ? 'its task' : summary.more ? 'its tasks' : `all ${tasks}`} to Deleted items. You can restore them from there.`
         : `Moves the ${noun} to Deleted items. You can restore it from there.`
   const listed = archiving ? subs.filter((s) => !s.archived) : subs
+  // the project went while nothing of this window's own was on its way
+  const left = gone && !saving
   const submit = () => {
-    if (!summary || saving || (!archiving && reasonTooLong(false, reason))) return
+    if (!summary || saving || left || (!archiving && reasonTooLong(false, reason))) return
     if (archiving) {
       onArchive?.()
       return
@@ -1772,7 +1780,7 @@ function ArchiveOrDeleteProjectModal({
       busy={saving}
       unsent={[!saving && !!reason.trim() && 'reason']}
       onSubmit={submit}
-      canSubmit={!!summary && !saving && (archiving || !reasonTooLong(false, reason))}
+      canSubmit={!!summary && !saving && !left && (archiving || !reasonTooLong(false, reason))}
       dangerSubmit={!archiving}
       focusAfterClose={focusAfterClose}
       submitLabel={
@@ -1787,7 +1795,13 @@ function ArchiveOrDeleteProjectModal({
       width={540}
     >
       <div data-project-fate>
-        {summary === undefined ? (
+        {left ? (
+          <FateLead role="status" data-fate-gone>
+            <b className="text-text-1">{P.projectLabel(project)}</b> is no longer here. It was
+            archived or deleted, or you can no longer open it.
+            {reason.trim() ? ' The reason you typed for it was not used. Copy it to keep it.' : ''}
+          </FateLead>
+        ) : summary === undefined ? (
           <FateLead role="status">Counting tasks…</FateLead>
         ) : summary === null ? (
           <div role="alert" className="mb-3 flex items-center gap-3">

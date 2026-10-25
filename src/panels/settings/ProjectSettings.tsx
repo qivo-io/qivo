@@ -425,24 +425,31 @@ export function ProjectPage({
   setPage,
   onBackPage = setPage,
   onProjectGone,
-  onLeaving,
+  onHolding,
 }: {
   projectId: string
   setPage: (page: string) => void
   onBackPage?: (page: string) => void
   onProjectGone?: (parent: string | null) => void
-  /** told the project's id while its delete waits for the server, and null
-      when the server refused it. The delivery that drops the project usually
-      lands before the answer, and this page leaves on its own after it. */
-  onLeaving?: (projectId: string | null) => void
+  /** told the project's id while its Archive or delete window is open, and
+      null once it closes. The page stays while the window is open, also
+      once the project left the board, so the window keeps what was typed
+      in it. The delivery that drops the project usually lands before its
+      own delete's answer, and this page leaves on its own after it. */
+  onHolding?: (projectId: string | null) => void
 }) {
   const proj = P.project(projectId)
   /* The Archive or delete window, from the section at the end of the page.
      It holds the project as it was when the window opened, so it stays up
-     when a delete it sent drops the project before the server's answer. It
-     is the page's last child with or without the project, so React keeps
-     the same window, still deleting, until that answer closes it. */
-  const [removing, setRemoving] = useStateS<ProjectVM | null>(null)
+     when the project leaves the board, whether by a delete it sent before
+     the server's answer, a refused one or someone else's change. It is the
+     page's last child with or without the project, so React keeps the same
+     window, still deleting, until that answer closes it. */
+  const [removing, setRemovingState] = useStateS<ProjectVM | null>(null)
+  const setRemoving = (shown: ProjectVM | null) => {
+    setRemovingState(shown)
+    onHolding?.(shown ? shown.id : null)
+  }
   const removeButton = React.useRef<HTMLButtonElement>(null)
   const removalWindow = (shown: ProjectVM) => {
     // Archiving lands on the Archived projects page rather than back on the
@@ -460,11 +467,7 @@ export function ProjectPage({
     // the window waits for the server, so a refusal leaves it open
     const del = async (reason: string) => {
       const parent = shown.parent || null
-      onLeaving?.(shown.id)
-      if (!(await P.removeProject(shown.id, reason))) {
-        onLeaving?.(null)
-        return false
-      }
+      if (!(await P.removeProject(shown.id, reason))) return false
       setRemoving(null)
       window.showToast?.(`Deleted “${shown.name}”`)
       onProjectGone?.(parent)
@@ -477,6 +480,7 @@ export function ProjectPage({
     return (
       <ArchiveOrDeleteProjectModal
         project={shown}
+        gone={!proj}
         onClose={() => setRemoving(null)}
         onArchive={archive}
         onDelete={del}

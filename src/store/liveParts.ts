@@ -87,7 +87,7 @@ import {
   partRows,
   type RootAnswer,
   rootOrgs,
-  type SeatsDeleting,
+  type Seatless,
   type TasksPart,
   type Workspace,
 } from '../../convex/lib/workspaceJoin'
@@ -111,12 +111,12 @@ export type PartsReport = {
   workspace:
     | {
         state: 'complete'
-        /** null when the caller holds no seat */
+        /** null when the caller holds no seat it can open */
         value: Workspace | null
-        /** with no seat, the root part's answer when a running
-            organization deletion holds the caller's seats
-            (convex/lib/workspaceParts.ts readRoot) */
-        deleting?: SeatsDeleting
+        /** with no such seat, the root part's answer when an organization
+            deletion holds the caller's seats or an organization
+            deactivated it (convex/lib/workspaceParts.ts readRoot) */
+        seatless?: Seatless
         /** whether any part changed since the last complete report */
         changed: boolean
       }
@@ -396,12 +396,12 @@ export function createLiveParts(
       one is. */
   function join(
     partial: boolean,
-  ): { value: Workspace | null; loaded: number; deleting?: SeatsDeleting } | null {
+  ): { value: Workspace | null; loaded: number; seatless?: Seatless } | null {
     if (!root?.fresh || root.error !== undefined) return null
     const answer = root.value as RootAnswer | undefined
     if (answer === undefined) return null
     if (answer === null) return partial ? null : { value: null, loaded: 1 }
-    if ('deleting' in answer) return partial ? null : { value: null, loaded: 1, deleting: answer }
+    if ('deleting' in answer) return partial ? null : { value: null, loaded: 1, seatless: answer }
     const parts: OrgParts[] = []
     let loaded = 0
     const weight = (row: (typeof answer.orgs)[number]) => Math.max(1, tasksIn(row))
@@ -459,7 +459,7 @@ export function createLiveParts(
           state: 'complete',
           value: done.value,
           changed: dirty,
-          ...(done.deleting ? { deleting: done.deleting } : {}),
+          ...(done.seatless ? { seatless: done.seatless } : {}),
         }
         dirty = false
         completed = true

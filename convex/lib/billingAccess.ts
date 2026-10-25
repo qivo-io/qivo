@@ -141,28 +141,26 @@ export async function removedWithOrg(
 /** Whether `profile` is a home seat of its login: accepted, and not a
  * guest's. Joining demotes a second one to a guest (identity.ts), though an
  * admin who promotes a guest can give a login two. While a login holds any,
- * it cannot create an organization (identity.ts createOrganization). */
+ * active or not, it cannot create an organization (identity.ts
+ * createOrganization), which OrgCreate tells the app. */
 export const isHomeSeat = (profile: Pick<Doc<'profiles'>, 'org_role' | 'accepted_at'>) =>
   profile.org_role !== 'guest' && profile.accepted_at !== undefined
 
-/** When a login whose seats a running organization deletion holds may
- * create an organization: `now` with no home seat, `after_deletion` while
- * deletions have not deleted its home seats yet, which their first phase
- * does, and `blocked` while an organization that is not being deleted
- * holds one, as a deactivated member's. */
-export type SeatlessCreate = 'now' | 'after_deletion' | 'blocked'
+/** When a login may create an organization, as createOrganization decides
+ * it: `now` with no home seat, `after_deletion` while running organization
+ * deletions hold its only home seats, which their first phase deletes, and
+ * `blocked` while an organization that is not being deleted holds one,
+ * active or not, as a deactivated member's, or on the demo, which creates
+ * none. createOrganization refuses exactly while it is not `now`. */
+export type OrgCreate = 'now' | 'after_deletion' | 'blocked'
 
-/** Whether a running organization deletion holds a seat of the login
- * `authUserId`, and if so when it may create an organization
- * (SeatlessCreate), or null. A held seat is a profile the deletion has not
- * deleted yet, active or not, or one it has (removed_access). The app's
- * root part asks this only for a login with no seat left elsewhere
- * (lib/workspaceParts.ts readRoot), so it can say why and what the login
- * can do. */
-export async function seatHeldByDeletion(
+/** The login's profiles judged for a new organization: when it may create
+ * one (OrgCreate), and whether a running organization deletion holds one of
+ * its profiles. */
+async function seatsOfLogin(
   ctx: QueryCtx,
   authUserId: string,
-): Promise<SeatlessCreate | null> {
+): Promise<{ create: OrgCreate; held: boolean }> {
   let held = false
   // whether a home seat is in an organization that is not being deleted
   let kept = false
@@ -177,18 +175,45 @@ export async function seatHeldByDeletion(
     homes += 1
     kept ||= !deleting
   }
-  if (!held) {
+  // createOrganization refuses the demo before it looks at any seat
+  const create =
+    process.env.APP_MODE === 'demo' || kept ? 'blocked' : homes === 0 ? 'now' : 'after_deletion'
+  return { create, held }
+}
+
+/** When the login `authUserId` may create an organization (OrgCreate). The
+ * app's root part tells it to a login with a seat (lib/workspaceParts.ts
+ * readRoot), and the app offers creation only for `now`. It reads the
+ * ranges the login's memberships already read (lib/functions.ts). */
+export async function orgCreateFor(ctx: QueryCtx, authUserId: string): Promise<OrgCreate> {
+  return (await seatsOfLogin(ctx, authUserId)).create
+}
+
+/** What the root part tells the login `authUserId` when it has no seat it
+ * can open (lib/workspaceParts.ts readRoot): whether a running organization
+ * deletion holds one of its seats, and when it may create an organization
+ * (OrgCreate). A held seat is a profile the deletion has not deleted yet,
+ * active or not, or one it has (removed_access). Null for a login that may
+ * create an organization and that no deletion holds, as a new one. Without a
+ * deletion the answer is `blocked`, from a seat the login cannot open, as a
+ * deactivated member's. */
+export async function seatlessState(
+  ctx: QueryCtx,
+  authUserId: string,
+): Promise<{ deleting: boolean; create: OrgCreate } | null> {
+  const { create, held } = await seatsOfLogin(ctx, authUserId)
+  let deleting = held
+  if (!deleting) {
     const removed = ctx.db
       .query('removed_access')
       .withIndex('by_key', (q) => q.eq('kind', 'login').eq('key', authUserId))
     for await (const row of removed) {
-      held = await deletionRunning(ctx, row.org_id)
-      if (held) break
+      deleting = await deletionRunning(ctx, row.org_id)
+      if (deleting) break
     }
   }
-  if (!held) return null
-  if (homes === 0) return 'now'
-  return kept ? 'blocked' : 'after_deletion'
+  if (!deleting && create === 'now') return null
+  return { deleting, create }
 }
 
 export function addCalendarMonths(iso: string, months: number): string {
