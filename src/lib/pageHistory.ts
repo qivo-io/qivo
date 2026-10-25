@@ -744,7 +744,10 @@ export function goTo(to: Entry) {
     return into a reload. Every reload the app starts goes through this. */
 export function reloadPage() {
   reruns = 0
-  current().location.reload()
+  // this document's location until the page's history is installed, as in
+  // a test that stubs window
+  const reloading = win ? win.location : location
+  reloading.reload()
 }
 
 /** Lets the next reload through, as a development server's. */
