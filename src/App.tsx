@@ -1005,13 +1005,14 @@ function App() {
   /* The address Back or Forward reached while tasks still load, when it
      names a task still to arrive (lib/router taskSegmentOf). The window
      holds its reference apart from task handles (`ref`, lib/router
-     holdTask) and says the task is loading, the address stays until the
-     task arrives, and the task opens once the address's own organization
-     answers it, in the scope Back or Forward would have chosen for it
-     (`scope`, `preferred`) unless the page moved meanwhile (`page`), or
-     the window closes once every task has loaded without it. The boot
-     holds its own address's task the same way (held0), with the boot's
-     scope rule. */
+     holdTask) and says the task is loading. The address stays until the
+     task arrives; a page moved meanwhile (`page`) names itself without
+     the task until then. The task opens once the address's own
+     organization answers it, in the scope Back or Forward would have
+     chosen for it (`scope`, `preferred`) unless the page moved, or the
+     window closes once every task has loaded without it. The boot holds
+     its own address's task the same way (held0), with the boot's scope
+     rule. */
   const [bootHold] = useState(() =>
     held0
       ? {
@@ -1102,36 +1103,36 @@ function App() {
     // or Forward, or over closed phone layers' markers, and a write now
     // would move the entry it steps back to (it looks again once landed)
     if (refusal.stepping() || historyStepping()) return
-    // a task Back or Forward reached keeps its address until it arrives:
-    // its held reference names no task an address can be built for
-    if (heldRef(openIssue) !== undefined) return
-    const p = buildPath({
+    // a task Back or Forward reached keeps its address until it arrives,
+    // while the page and the address are still the ones it reached: its
+    // held reference names no task an address can be built for. A page
+    // moved meanwhile gets its own address, without the task (pendingTask)
+    const held = heldRef(openIssue) !== undefined
+    const pending = pendingTask.current
+    const state = {
       scope,
       view,
-      openIssue,
+      openIssue: held ? null : openIssue,
       settingsPage,
       inboxOpen,
       projectsOpen,
       sync,
-    })
+    }
+    if (
+      held &&
+      pending?.page === pageKey(state) &&
+      location.pathname === pending.pathname &&
+      location.hash === pending.hash
+    )
+      return
+    const p = buildPath(state)
     // the hash term is what finally clears a translated legacy link: the path
     // is already canonical by then, so nothing else would ever rewrite it
     if (location.pathname === p && !location.hash) {
       replaceNextHistory.current = false
       return
     }
-    if (
-      replaceNextHistory.current ||
-      pathMatchesState(location.pathname, {
-        scope,
-        view,
-        openIssue,
-        settingsPage,
-        inboxOpen,
-        projectsOpen,
-        sync,
-      })
-    )
+    if (replaceNextHistory.current || pathMatchesState(location.pathname, state))
       history.replaceState(history.state, '', p)
     else history.pushState({ qivoPrevious: location.pathname }, '', p)
     replaceNextHistory.current = false
@@ -1149,8 +1150,9 @@ function App() {
     pendingTask.current = null
     const here = { scope, view, settingsPage, inboxOpen, projectsOpen, sync }
     const unmoved = pending.page === pageKey(here)
-    // the address named this task all along
-    if (unmoved) replaceNextHistory.current = true
+    // the entry names the held task, or the page's own address once the page
+    // moved meanwhile: either way the task takes it over in place
+    replaceNextHistory.current = true
     // the scope Back or Forward gives a task address (onPop)
     if (issue && unmoved && !sync) {
       const sc = liveScope(pending.scope) ? pending.scope : scopeForIssue(issue, pending.preferred)

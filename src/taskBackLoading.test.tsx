@@ -182,6 +182,18 @@ const close = () =>
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   })
 
+/** Switches the page to the view `label` with the top bar's switch. */
+const switchView = async (label: string) => {
+  const button = await waitFor(
+    () =>
+      [...document.querySelectorAll<HTMLElement>('[data-view-switch] button')].find(
+        (b) => b.textContent?.trim() === label,
+      ),
+    label,
+  )
+  await act(async () => button.click())
+}
+
 /** Lets the last task window answer. */
 const arrive = () =>
   act(async () => {
@@ -250,6 +262,46 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     expect(store.P.stillLoading()).toBeNull()
     await waitFor(() => !document.querySelector('[data-task-loading]'), 'the closed window')
     expect(location.pathname).toBe(ALL_BOARD)
+  })
+
+  it('names a page moved to while it waits, then that page with the task once it arrives', async () => {
+    const { org } = await bootLoading()
+    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/tasks/qn-2`)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    const entries = history.length
+    // the page moves under the waiting window, which stays
+    await switchView('Overview')
+    expect(document.querySelector('[data-task-loading]')).not.toBeNull()
+    expect(location.pathname).toBe('/app/~/overview/all')
+    expect(history.length).toBe(entries + 1)
+
+    await arrive()
+    await waitFor(
+      () => document.body.textContent?.includes('Run the soak test'),
+      "the task's window",
+    )
+    expect(location.pathname).toBe(`/app/${org}/overview/all/tasks/qn-2`)
+    // the task joined the moved page's entry, as it would have opened there
+    expect(history.length).toBe(entries + 1)
+  })
+
+  it('names the page it moved back to while it waits, then opens the task there', async () => {
+    const { org } = await bootLoading()
+    await back(`/app/${org}/board/all`)
+    await back(`/app/${org}/board/tasks/qn-2`)
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
+    await switchView('Overview')
+    await switchView('Board')
+    expect(location.pathname).toBe(ALL_BOARD)
+
+    await arrive()
+    await waitFor(
+      () => document.body.textContent?.includes('Run the soak test'),
+      "the task's window",
+    )
+    // the page Back reached: the task opens in its own scope
+    expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-2`)
   })
 
   it('says in the Inbox that the task still loads, then opens it there', async () => {
