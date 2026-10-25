@@ -14,7 +14,7 @@ import {
   DEMO_WRITES_PER_MINUTE,
   DEMO_WRITES_TOTAL,
 } from '../lib/demo'
-import { PUBLIC_DEMO_STEPS } from '../model/demoSeed'
+import { NORTHSTAR_STEPS, PUBLIC_DEMO_CALLS, PUBLIC_DEMO_STEPS } from '../model/demoSeed'
 import { expectRefusal, newT, type T, uuid, workspaceOf } from './helpers.setup'
 
 const componentModules = import.meta.glob('../betterAuth/**/*.ts')
@@ -203,6 +203,54 @@ describe('public demo ownership and authentication', () => {
       'forbidden',
       /temporary demo login/,
     )
+  })
+
+  it("provisions only in the token's live session of an existing anonymous login", async () => {
+    const login = await anonymousLogin()
+    const other = await anonymousLogin()
+    const userId = login.user._id as string
+    const sessionId = login.session._id as string
+    const refused = (as: typeof login.as) =>
+      expectRefusal(as.mutation(api.demo.ensureMine, {}), 'forbidden', /temporary demo login/)
+    const step = async () =>
+      (
+        await t.run((ctx) =>
+          ctx.db
+            .query('demo_sessions')
+            .withIndex('by_auth_user', (q) => q.eq('auth_user_id', userId))
+            .unique(),
+        )
+      )?.provision?.step
+    expect(await login.as.mutation(api.demo.ensureMine, {})).toMatchObject({
+      status: 'unprovisioned',
+      progress: { step: 1 },
+    })
+    // A token without a session, or with another login's live session.
+    await refused(t.withIdentity({ subject: userId }))
+    await refused(t.withIdentity({ subject: userId, sessionId: other.session._id as string }))
+    await refused(t.withIdentity({ subject: userId, sessionId: 'not-a-session-id' }))
+    // The session at its expiry, then gone.
+    const setSession = (update: { expiresAt: number }) =>
+      t.mutation(components.betterAuth.adapter.updateOne, {
+        input: { model: 'session', where: [{ field: '_id', value: sessionId }], update },
+      })
+    await setSession({ expiresAt: Date.now() })
+    await refused(login.as)
+    await setSession({ expiresAt: Date.now() + 1 })
+    expect(await login.as.mutation(api.demo.ensureMine, {})).toMatchObject({
+      progress: { step: 2 },
+    })
+    await t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'session', where: [{ field: '_id', value: sessionId }] },
+    })
+    await refused(login.as)
+    // A live session whose login is gone. No trigger runs on this raw
+    // delete, so the receipt is still active.
+    await t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'user', where: [{ field: '_id', value: other.user._id as string }] },
+    })
+    await refused(other.as)
+    expect(await step()).toBe(2)
   })
 
   it('disables anonymous auth on normal deployments and preserves stable plugin schema', async () => {
@@ -688,13 +736,23 @@ describe('demo lifetime and capabilities', () => {
 describe('public demo provisioning steps', () => {
   // The whole Northstar work in one transaction read 1,612 index ranges
   // and 1,668 documents and wrote about 1,400 documents, which could pass
-  // Convex's 1 s mutation limit on a slow backend. Each call now runs one
-  // bounded step, held to the marketing seed's per-call budget.
-  it('provisions a demo in calls of at most 300 index ranges, 350 documents read and 150 written', async () => {
+  // Convex's 1 s mutation limit on a slow backend. Each call runs a few of
+  // its steps (PUBLIC_DEMO_CALLS), held to a third of each of Convex's
+  // limits for one mutation.
+  it('provisions a demo in calls within a third of Convex limits, every step once', async () => {
+    const third = (limit: number) => Math.floor(limit / 3)
     const limited = newT({
-      transactionLimits: { databaseQueries: 300, documentsRead: 350, documentsWritten: 150 },
+      transactionLimits: {
+        databaseQueries: third(4096),
+        documentsRead: third(32_000),
+        documentsWritten: third(16_000),
+        bytesRead: third(16 * 1024 * 1024),
+        bytesWritten: third(16 * 1024 * 1024),
+      },
     })
     limited.registerComponent('betterAuth', authSchema, componentModules)
+    expect(PUBLIC_DEMO_CALLS.flat()).toEqual(NORTHSTAR_STEPS)
+    expect(PUBLIC_DEMO_STEPS).toBe(PUBLIC_DEMO_CALLS.length)
     const login = await anonymousLogin(limited)
     expect((await login.as.query(api.demo.current, {})).progress).toEqual({
       step: 0,
@@ -738,7 +796,14 @@ describe('public demo provisioning steps', () => {
     await login.as.mutation(api.demo.ensureMine, {})
     await t.run(async (ctx) => {
       const receipt = (await ctx.db.query('demo_sessions').unique())!
-      await ctx.db.patch(receipt._id, { provision: { ...receipt.provision!, layout: '26:0' } })
+      // 26 of the 27 calls of the layout before the steps were grouped
+      await ctx.db.patch(receipt._id, {
+        provision: { ...receipt.provision!, step: 26, layout: '27:0' },
+      })
+    })
+    expect((await login.as.query(api.demo.current, {})).progress).toEqual({
+      step: PUBLIC_DEMO_STEPS,
+      steps: PUBLIC_DEMO_STEPS,
     })
     const refusal = await expectRefusal(
       login.as.mutation(api.demo.ensureMine, {}),

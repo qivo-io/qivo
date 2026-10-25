@@ -384,10 +384,10 @@ v0.1.38 or earlier tells a new Microsoft login that its confirmation email
 was sent, but later backends leave that first email to the app, so the person
 must press **Resend confirmation email**. An app from before demos were
 prepared in steps expects one `demo.ensureMine` call to prepare a whole demo,
-but later backends prepare one step a call, so after such a rollback a new
-demo visitor sees "Your demo is still being prepared" and must press
-**Retry** once for each step after the first, 26 times with the current
-demo data.
+but later backends prepare a part of it a call, so after such a rollback a
+new demo visitor sees "Your demo is still being prepared" and must press
+**Retry** once for each call after the first, 4 times with the current demo
+data.
 
 The app before v0.1.18 reads an activity list that the snapshot no longer
 sends, so it cannot load at all. Never return the app or the demo to a

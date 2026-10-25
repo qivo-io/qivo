@@ -12,6 +12,7 @@ import {
   marketingWeek,
   northstarTaskTimes,
 } from '../internal/marketingDemoData'
+import { projectSightForProfiles } from '../lib/access'
 import { byId, newWindowKey } from '../lib/db'
 import { demoRefusal } from '../lib/demo'
 import { require, rule } from '../lib/functions'
@@ -25,6 +26,7 @@ import {
   notifyCommentInsert,
   notifyIssueInsert,
   profileCacheOf,
+  type RecipientSight,
 } from './messages'
 import { cleanMilestoneName } from './milestones'
 import {
@@ -34,7 +36,7 @@ import {
   newOrgDefaults,
   newTeamDefaults,
   setCounters,
-  tallyRow,
+  tallyRows,
 } from './orgs'
 import { cleanProjectName, projectDescription } from './projects'
 import { deleteStamp, writeStamp } from './syncStamps'
@@ -164,12 +166,20 @@ export type NorthstarRun = {
   /* The seeded tasks by fixture key, as inserted or read. Nothing in the
    * seed patches a task before the archive marks. */
   tasks: Map<string, Doc<'issues'>>
+  /* Whether the notify preload reads who sees each sub-project up front
+   * (notifyContext): set for a run of many steps, whose notices ask about
+   * most of them. A run of one step asks about few, one at a time. */
+  sightUpFront?: true
 }
 
 /** An empty NorthstarRun for the uuids of `namespace`. */
-export async function newNorthstarRun(namespace: string): Promise<NorthstarRun> {
+export async function newNorthstarRun(
+  namespace: string,
+  options: Pick<NorthstarRun, 'sightUpFront'> = {},
+): Promise<NorthstarRun> {
   const data = MARKETING_DEMO
   return {
+    ...options,
     ids: {
       person: await uuids(namespace, 'person', data.people),
       project: await uuids(namespace, 'project', data.projects),
@@ -181,23 +191,37 @@ export async function newNorthstarRun(namespace: string): Promise<NorthstarRun> 
   }
 }
 
-/* The run's notify context, read on first use. */
+/* The run's notify context, read on first use. With sightUpFront, who sees
+ * each sub-project, where every task lives, is read for everyone at once,
+ * all projects together (lib/access.ts projectSightForProfiles), not person
+ * by person as each notice asks, one read after another. */
 async function notifyContext(ctx: MutationCtx, org: Doc<'organizations'>, run: NorthstarRun) {
   if (run.notify) return run.notify
-  const orgProfiles = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', org.id))
-    .collect()
-  const projects = await ctx.db
-    .query('projects')
-    .withIndex('by_org', (q) => q.eq('org_id', org.id))
-    .collect()
+  const [orgProfiles, projects] = await Promise.all([
+    ctx.db
+      .query('profiles')
+      .withIndex('by_org', (q) => q.eq('org_id', org.id))
+      .collect(),
+    ctx.db
+      .query('projects')
+      .withIndex('by_org', (q) => q.eq('org_id', org.id))
+      .collect(),
+  ])
+  const upFront = run.sightUpFront ? projects.filter((p) => p.parent_id !== undefined) : []
+  const visibility: RecipientSight = new Map(
+    await Promise.all(
+      upFront.map(async (project) => {
+        const all = Promise.resolve(await projectSightForProfiles(ctx, project))
+        return [project.id, { alone: new Map<string, boolean>(), all }] as const
+      }),
+    ),
+  )
   run.notify = {
     orgProfiles,
     preload: {
       profiles: profileCacheOf(orgProfiles),
       projects: new Map(projects.map((project) => [project.id, project])),
-      visibility: new Map(),
+      visibility,
     },
   }
   return run.notify
@@ -205,7 +229,8 @@ async function notifyContext(ctx: MutationCtx, org: Doc<'organizations'>, run: N
 
 /** Writes the whole Northstar work in this transaction, every step in
  * order, sharing one NorthstarRun. Only tests write it this way; the
- * marketing and public demos run one step a call (writeNorthstarStep). */
+ * marketing demo runs one step a call and the public demo a few
+ * (writeNorthstarStep, PUBLIC_DEMO_CALLS). */
 export async function writeNorthstarWork(ctx: MutationCtx, target: NorthstarTarget): Promise<void> {
   const run = await newNorthstarRun(target.namespace)
   for (const step of NORTHSTAR_STEPS) await writeNorthstarStep(ctx, target, step, run)
@@ -241,6 +266,11 @@ export async function writeNorthstarStep(
     require(issue !== null, rule(SEED_ROW_MISSING.task))
     shared.tasks.set(key, issue)
     return issue
+  }
+  // Reads the tasks of `keys` the run has not read yet, all at once rather
+  // than one after another, as the step's loop would.
+  const readTasks = async (keys: readonly string[]) => {
+    await Promise.all([...new Set(keys)].filter((key) => !shared.tasks.has(key)).map(task))
   }
   if (step.kind === 'setup') {
     const orgDefaults = newOrgDefaults(org.created_at)
@@ -307,7 +337,6 @@ export async function writeNorthstarStep(
         track_delay: teamDefaults.track_delay_default,
         created_at: now,
       })
-      await tallyRow(ctx, 'projects', null, { org_id: org.id, num: index + 1 })
       if (!p.parent)
         for (const team of data.teams)
           await ctx.db.insert('project_team_access', {
@@ -316,6 +345,12 @@ export async function writeNorthstarStep(
             level: team.key === p.team ? 'user' : 'viewer',
           })
     }
+    // one read of the counters for every project, not one per project
+    await tallyRows(
+      ctx,
+      'projects',
+      data.projects.map((_, index) => [null, { org_id: org.id, num: index + 1 }] as const),
+    )
     for (const l of data.labels)
       await ctx.db.insert('labels', {
         id: labelIds[l.key],
@@ -342,6 +377,7 @@ export async function writeNorthstarStep(
       ).map((label) => label.id),
     )
     const labels = shared.labels
+    const inserted: Doc<'issues'>[] = []
     for (let index = step.from; index < step.to; index++) {
       const i = data.issues[index]
       // a project, label or parent task the app removed since it was
@@ -424,14 +460,24 @@ export async function writeNorthstarStep(
       )
       const issue = await ctx.db.get(issueDocId)
       require(issue !== null, rule(SEED_ROW_MISSING.task))
-      await tallyRow(ctx, 'issues', null, issue)
+      inserted.push(issue)
       shared.tasks.set(i.key, issue)
       await notifyIssueInsert(ctx, { issue, actor: atlas, now, preload, skipTaskEvent: true })
     }
+    // one read of the counters for the step's tasks, not one per task
+    await tallyRows(
+      ctx,
+      'issues',
+      inserted.map((issue) => [null, issue] as const),
+    )
     return
   }
   if (step.kind === 'history') {
     const changedAt = (c: { day: number; time: string }) => marketingInstant(anchor, c.day, c.time)
+    await readTasks([
+      ...data.links.flatMap((l) => [l.source, l.target]),
+      ...data.history.flatMap((c) => (c.kind === 'link' ? [c.issue, c.target] : [c.issue])),
+    ])
     for (const l of data.links) {
       // both ends must still be live, as a link to a removed task is no link
       const ends = [await task(l.source), await task(l.target)]
@@ -494,10 +540,16 @@ export async function writeNorthstarStep(
         { id: await id(`activity:change:${c.key}`) },
       )
     }
-    const projects = shared.notify?.preload.projects
-    for (const m of data.milestones) {
-      const project =
-        projects?.get(projectIds[m.project]) ?? (await byId(ctx, 'projects', projectIds[m.project]))
+    // the milestones' projects, as the run read them or else all at once
+    const known = shared.notify?.preload.projects
+    const projects = await Promise.all(
+      data.milestones.map(
+        async (m) =>
+          known?.get(projectIds[m.project]) ?? (await byId(ctx, 'projects', projectIds[m.project])),
+      ),
+    )
+    for (const [index, m] of data.milestones.entries()) {
+      const project = projects[index]
       require(project !== null && project !== undefined, rule(SEED_ROW_MISSING.project))
       await ctx.db.insert('milestones', {
         id: await id(`milestone:${m.key}`),
@@ -511,7 +563,9 @@ export async function writeNorthstarStep(
   }
   if (step.kind === 'comments') {
     const { orgProfiles, preload } = await notifyContext(ctx, org, shared)
-    for (const c of NORTHSTAR_COMMENTS.slice(step.from, step.to)) {
+    const comments = NORTHSTAR_COMMENTS.slice(step.from, step.to)
+    await readTasks(comments.map((c) => c.issue))
+    for (const c of comments) {
       const createdAt = new Date(
         Date.parse(`${marketingDate(anchor, c.day)}T14:00:00.000Z`) + c.minute * 60_000,
       ).toISOString()
@@ -538,16 +592,35 @@ export async function writeNorthstarStep(
   }
   // The archived tasks' labels, links and follows carry the mark the archive
   // steps leave (model/archiveMarks.ts), as in an organization in use.
+  await readTasks(data.issues.map((i) => i.key))
   for (const i of data.issues) {
     await markArchivedTask(ctx, await task(i.key), Number.POSITIVE_INFINITY)
   }
 }
 
-/** The calls that build a public demo, one transaction each: the
- * organization and its people, then each of NORTHSTAR_STEPS. Each call
- * stays far inside Convex's 1 s mutation limit, which the whole work in
- * one transaction could pass on a slow backend. */
-export const PUBLIC_DEMO_STEPS = 1 + NORTHSTAR_STEPS.length
+/** How many of NORTHSTAR_STEPS each call of a public demo runs, in order,
+ * in one transaction that shares one NorthstarRun, so a call reads a row
+ * that an earlier step of it read or wrote only once. The first call also
+ * creates the organization and its people. Every call is a round trip, and
+ * 27 calls of one step each took most of a start. Measured on a local
+ * backend, a call read at most 724 documents in about 510 index ranges,
+ * wrote at most 424 documents (550 KB) and ran 80 to 160 ms of
+ * JavaScript, up to about 260 ms on a loaded machine, each under a third
+ * of Convex's limits for one mutation (1,365 ranges, 10,666 documents
+ * read, 5,333 written, 5.3 MiB, 333 ms). convex/tests/demo.test.ts holds
+ * every call to that third, the time aside. */
+export const PUBLIC_DEMO_CALL_SIZES: readonly number[] = [5, 6, 6, 5, 4]
+
+/** The work of each call of a public demo (PUBLIC_DEMO_CALL_SIZES). */
+export const PUBLIC_DEMO_CALLS: readonly (readonly NorthstarStep[])[] = PUBLIC_DEMO_CALL_SIZES.map(
+  (size, call) => {
+    const from = PUBLIC_DEMO_CALL_SIZES.slice(0, call).reduce((n, s) => n + s, 0)
+    return NORTHSTAR_STEPS.slice(from, from + size)
+  },
+)
+
+/** The calls that build a public demo, one transaction each. */
+export const PUBLIC_DEMO_STEPS = PUBLIC_DEMO_CALLS.length
 
 /** A 32-bit FNV-1a hash of `text` in hex: a label for a step layout, not a
  * secret. */
@@ -557,27 +630,102 @@ export function layoutHash(text: string): string {
   return (hash >>> 0).toString(16)
 }
 
-/** A fingerprint of the public demo's steps and its whole dataset. A
+/** A fingerprint of the public demo's calls and its whole dataset. A
  * receipt stores it when provisioning starts, and a later call refuses when
- * it differs: a step number from another layout would write rows twice or
- * skip them, and a later step from an edited dataset would miss a renamed
+ * it differs: a call number from another layout would write rows twice or
+ * skip them, and a later call from an edited dataset would miss a renamed
  * key or mix two revisions of the data. */
 export const PUBLIC_DEMO_LAYOUT = `${PUBLIC_DEMO_STEPS}:${layoutHash(
-  JSON.stringify({ version: MARKETING_DEMO_VERSION, steps: NORTHSTAR_STEPS, data: MARKETING_DEMO }),
+  JSON.stringify({
+    version: MARKETING_DEMO_VERSION,
+    calls: PUBLIC_DEMO_CALLS,
+    data: MARKETING_DEMO,
+  }),
 )}`
 
 /** How far a public demo's provisioning got: the next of PUBLIC_DEMO_STEPS
  * to run, or `done` once the receipt is ready. */
 export type PublicDemoProgress = { done: false; step: number; steps: number } | { done: true }
 
-/** Runs the receipt's next provisioning step (PUBLIC_DEMO_STEPS) and
- * records it on the receipt; the last step marks the receipt ready. Called
- * only by the authenticated demo provisioner, once per call. The first step
- * creates the organization and its people, notes the organization on the
- * receipt so cleanup can remove a demo that stops halfway, and fixes the
- * anchor and the write time every later step uses. A call that does not
- * commit leaves the step for the next call, and two calls at once conflict
- * on the receipt, so each step runs once. Nothing else writes the
+/* Creates the public demo's organization, its people and the visitor's
+ * appearance, and notes the organization, the anchor and the write time on
+ * the receipt, for the first call of provisionPublicDemoStep. Answers what
+ * the call's steps write for. */
+async function createPublicDemoOrg(
+  ctx: MutationCtx,
+  receipt: Doc<'demo_sessions'>,
+  authUser: { _id: string; email: string },
+  namespace: string,
+): Promise<NorthstarTarget> {
+  require(receipt.org_id === undefined, rule('This demo cannot be provisioned'))
+  const id = (key: string) => marketingId(namespace, key)
+  const orgId = await id('org')
+  const slug = `northstar-${receipt.id.replace(/-/g, '').slice(0, 24)}`
+  const now = new Date().toISOString()
+  const anchor = demoMonday(Date.now())
+  const [, existing] = await Promise.all([
+    assertSlugAvailable(ctx, slug),
+    byId(ctx, 'organizations', orgId),
+  ])
+  require(existing === null, rule('Demo organization already exists'))
+  const docId = await insertOrgRows(ctx, {
+    id: orgId,
+    name: cleanOrgName(MARKETING_DEMO.organization.name),
+    slug,
+    ...newOrgDefaults(now),
+    max_attachment_mb: 5,
+  })
+  const org = await ctx.db.get(docId)
+  require(org !== null, rule('Demo organization could not be created'))
+  for (const person of MARKETING_DEMO.people)
+    await ctx.db.insert('profiles', {
+      id: await id(`person:${person.key}`),
+      org_id: orgId,
+      name: person.name,
+      initials: person.initials,
+      color: person.color,
+      org_role: person.role,
+      kind: person.kind,
+      active: true,
+      created_at: now,
+      sample_avatar: person.key as SampleAvatar,
+      ...(person.kind === 'person'
+        ? {
+            email:
+              person.key === 'nora' ? authUser.email : `${person.key}.${receipt.id}@demo.invalid`,
+            ...(person.key === 'nora' ? { auth_user_id: authUser._id, accepted_at: now } : {}),
+            plannable_hours: org.default_plannable_hours,
+            message_retention_days: DEFAULT_MESSAGE_RETENTION_DAYS,
+          }
+        : {}),
+    })
+  const profiles = await ctx.db
+    .query('profiles')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .collect()
+  await ctx.db.insert('account_appearance', {
+    auth_user_id: authUser._id,
+    mode: 'dark',
+    image_source: 'daily',
+    revision: receipt.id,
+    updated_at: now,
+  })
+  await ctx.db.patch(receipt._id, {
+    org_id: orgId,
+    anchor,
+    provision: { step: 0, now, layout: PUBLIC_DEMO_LAYOUT },
+  })
+  return { org, profiles, namespace, anchor, now }
+}
+
+/** Runs the receipt's next provisioning call (PUBLIC_DEMO_CALLS) and
+ * records it on the receipt; the last call marks the receipt ready. Called
+ * only by the authenticated demo provisioner, once per call. The first call
+ * also creates the organization and its people, notes the organization on
+ * the receipt so cleanup can remove a demo that stops halfway, and fixes
+ * the anchor and the write time every later call uses. A call that does
+ * not commit leaves its steps for the next call, and two calls at once
+ * conflict on the receipt, so each step runs once. Nothing else writes the
  * organization meanwhile: every app function refuses a receipt that is not
  * ready. Nora alone receives the visitor login; every other human is a
  * fictional seat. The receipt id namespaces every UUID, including
@@ -592,86 +740,49 @@ export async function provisionPublicDemoStep(
     receipt.status === 'unprovisioned' &&
     receipt.expires_at > Date.now(), rule('This demo cannot be provisioned'))
   const namespace = `public-demo:${receipt.id}`
-  const id = (key: string) => marketingId(namespace, key)
-  const orgId = await id('org')
+  let step = 0
+  let target: NorthstarTarget
   if (receipt.provision === undefined) {
-    require(receipt.org_id === undefined, rule('This demo cannot be provisioned'))
-    const slug = `northstar-${receipt.id.replace(/-/g, '').slice(0, 24)}`
-    const now = new Date().toISOString()
-    const anchor = demoMonday(Date.now())
-    await assertSlugAvailable(ctx, slug)
-    require((await byId(ctx, 'organizations', orgId)) === null, rule(
-      'Demo organization already exists',
-    ))
-    const docId = await insertOrgRows(ctx, {
-      id: orgId,
-      name: cleanOrgName(MARKETING_DEMO.organization.name),
-      slug,
-      ...newOrgDefaults(now),
-      max_attachment_mb: 5,
-    })
-    const org = await ctx.db.get(docId)
-    require(org !== null, rule('Demo organization could not be created'))
-    for (const person of MARKETING_DEMO.people)
-      await ctx.db.insert('profiles', {
-        id: await id(`person:${person.key}`),
-        org_id: orgId,
-        name: person.name,
-        initials: person.initials,
-        color: person.color,
-        org_role: person.role,
-        kind: person.kind,
-        active: true,
-        created_at: now,
-        sample_avatar: person.key as SampleAvatar,
-        ...(person.kind === 'person'
-          ? {
-              email:
-                person.key === 'nora' ? authUser.email : `${person.key}.${receipt.id}@demo.invalid`,
-              ...(person.key === 'nora' ? { auth_user_id: authUser._id, accepted_at: now } : {}),
-              plannable_hours: org.default_plannable_hours,
-              message_retention_days: DEFAULT_MESSAGE_RETENTION_DAYS,
-            }
-          : {}),
-      })
-    await ctx.db.insert('account_appearance', {
-      auth_user_id: authUser._id,
-      mode: 'dark',
-      image_source: 'daily',
-      revision: receipt.id,
-      updated_at: now,
-    })
-    await ctx.db.patch(receipt._id, {
-      org_id: orgId,
-      anchor,
-      provision: { step: 1, now, layout: PUBLIC_DEMO_LAYOUT },
-    })
-    return { done: false, step: 1, steps: PUBLIC_DEMO_STEPS }
-  }
-  const { step, now, layout } = receipt.provision
-  const work = NORTHSTAR_STEPS[step - 1]
-  const anchor = receipt.anchor
-  // A deploy between two calls can change the steps. The visitor starts a
-  // new demo, and cleanup removes this one at its deadline.
-  if (layout !== PUBLIC_DEMO_LAYOUT || work === undefined || anchor === undefined)
-    throw demoRefusal(
-      'Qivo was updated while your demo was being prepared. Start a new demo.',
-      'demo_unavailable',
+    target = await createPublicDemoOrg(ctx, receipt, authUser, namespace)
+  } else {
+    const { now, layout } = receipt.provision
+    step = receipt.provision.step
+    const anchor = receipt.anchor
+    // A deploy between two calls can change the calls. The visitor starts a
+    // new demo, and cleanup removes this one at its deadline.
+    if (
+      layout !== PUBLIC_DEMO_LAYOUT ||
+      PUBLIC_DEMO_CALLS[step] === undefined ||
+      anchor === undefined
     )
-  require(receipt.org_id === orgId, rule('This demo cannot be provisioned'))
-  const org = await byId(ctx, 'organizations', orgId)
-  require(org !== null, rule('This demo cannot be provisioned'))
-  const profiles = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
-  await writeNorthstarStep(ctx, { org, profiles, namespace, anchor, now }, work)
-  // The setup step writes the shared marketing defaults. Public uploads keep
-  // the tighter cap, which their tracked receiver also enforces.
-  if (work.kind === 'setup') await ctx.db.patch(org._id, { max_attachment_mb: 5 })
+      throw demoRefusal(
+        'Qivo was updated while your demo was being prepared. Start a new demo.',
+        'demo_unavailable',
+      )
+    const orgId = await marketingId(namespace, 'org')
+    require(receipt.org_id === orgId, rule('This demo cannot be provisioned'))
+    const [org, profiles] = await Promise.all([
+      byId(ctx, 'organizations', orgId),
+      ctx.db
+        .query('profiles')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect(),
+    ])
+    require(org !== null, rule('This demo cannot be provisioned'))
+    target = { org, profiles, namespace, anchor, now }
+  }
+  const run = await newNorthstarRun(namespace, { sightUpFront: true })
+  for (const work of PUBLIC_DEMO_CALLS[step]) {
+    await writeNorthstarStep(ctx, target, work, run)
+    // The setup step writes the shared marketing defaults. Public uploads
+    // keep the tighter cap, which their tracked receiver also enforces.
+    if (work.kind === 'setup') await ctx.db.patch(target.org._id, { max_attachment_mb: 5 })
+  }
   const next = step + 1
   if (next < PUBLIC_DEMO_STEPS) {
-    await ctx.db.patch(receipt._id, { provision: { step: next, now, layout } })
+    await ctx.db.patch(receipt._id, {
+      provision: { step: next, now: target.now, layout: PUBLIC_DEMO_LAYOUT },
+    })
     return { done: false, step: next, steps: PUBLIC_DEMO_STEPS }
   }
   await ctx.db.patch(receipt._id, {

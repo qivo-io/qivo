@@ -12,6 +12,7 @@ import type * as accounts from "../accounts.js";
 import type * as adapter from "../adapter.js";
 import type * as auth from "../auth.js";
 import type * as oauth from "../oauth.js";
+import type * as sessions from "../sessions.js";
 
 import type {
   ApiFromModules,
@@ -25,6 +26,7 @@ const fullApi: ApiFromModules<{
   adapter: typeof adapter;
   auth: typeof auth;
   oauth: typeof oauth;
+  sessions: typeof sessions;
 }> = anyApi as any;
 
 /**
