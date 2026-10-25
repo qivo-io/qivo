@@ -3,7 +3,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { BILLING_READ_ONLY } from '../../convex/lib/billingAccess'
 import { TooltipProvider } from '../components/ui/tooltip'
 import type { AccessRemoval } from '../store/planner'
@@ -266,6 +266,55 @@ describe('the removal window when the organization turns read-only', () => {
     expect(onClose).not.toHaveBeenCalled()
     expect(writes()).toEqual([['projects:removeAccess', 'keep_as_viewer']])
     expect(document.querySelector('[data-access-removal]')?.textContent).toContain('Ship it')
+  })
+})
+
+describe('the removal window on a phone', () => {
+  it('keeps its Back step through a Cancel pressed while it saves, and Back closes it after a refused save', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    )
+    // the page's history and the layers' listener, as main.tsx and App add them
+    const pageHistory = await import('../lib/pageHistory')
+    const removeHistory = pageHistory.installPageHistory()
+    onTestFinished(pageHistory.listenBackLayers())
+    onTestFinished(removeHistory)
+    history.pushState(null, '', '/before')
+    history.pushState(null, '', '/settings')
+    let refuse = (_: unknown) => {}
+    network.mutation.mockImplementation((_ref, args) =>
+      args.on_held_tasks === undefined
+        ? Promise.resolve(null)
+        : new Promise((_, reject) => {
+            refuse = reject
+          }),
+    )
+    const onClose = await open()
+    expect(history.state?.qivoLayer).toBeTruthy()
+    await submit()
+    // Cancel while the removal saves is refused, and the Back step stays
+    const cancel = [
+      ...document.querySelectorAll<HTMLButtonElement>('[data-modal-shell] button'),
+    ].find((b) => b.textContent === 'Cancel')
+    await act(async () => cancel?.click())
+    await settle()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(history.state?.qivoLayer).toBeTruthy()
+    // the server refuses for another reason, so the window stays open
+    await act(async () =>
+      refuse(new ConvexError({ code: 'rule', message: 'refused', reason: 'held_tasks' })),
+    )
+    await settle()
+    expect(document.querySelector('[data-access-removal]')).toBeTruthy()
+    // and Back closes the window, not the page
+    await act(async () => {
+      history.back()
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    await settle()
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(location.pathname).toBe('/settings')
   })
 })
 
