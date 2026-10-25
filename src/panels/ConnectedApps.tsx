@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import type { api } from '../../convex/_generated/api'
 import { Icon } from '../components/qivo'
 import { SettingsGroup } from '../components/settingsPage'
+import { useClosingWords } from '../lib/closingWords'
 import { connectionScopeLabel } from '../lib/oauthConnection'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { P } from '../store/planner'
@@ -22,10 +23,15 @@ type Connection = FunctionReturnType<typeof api.oauthConnections.list>[number]
 
 export function ConnectedApps() {
   const [connections, setConnections] = useState<Connection[] | null>(null)
+  // the list's load failure, shown on the page
   const [error, setError] = useState('')
   const [selected, setSelected] = useState<Connection | null>(null)
+  // a refused delete, shown in the dialog only and cleared when it opens
+  const [deleteError, setDeleteError] = useState('')
   const [busy, setBusy] = useState(false)
   useUpdateBlocker(busy)
+  // a close clears the selection, so the closing dialog keeps its words
+  const shown = useClosingWords(!!selected, { name: selected?.clientName, busy })
   const reload = async () => {
     const result = await P.listOAuthConnections()
     if (result === null) setError('Could not load connected apps. Try again.')
@@ -40,14 +46,14 @@ export function ConnectedApps() {
   const remove = async () => {
     if (!selected || busy) return
     setBusy(true)
-    setError('')
+    setDeleteError('')
     if (await P.revokeOAuthConnection(selected.id)) {
       setConnections(
         (current) => current?.filter((connection) => connection.id !== selected.id) ?? null,
       )
       setSelected(null)
       await reload()
-    } else setError('Could not delete this connection. Try again.')
+    } else setDeleteError('Could not delete this connection. Try again.')
     setBusy(false)
   }
   return (
@@ -61,7 +67,7 @@ export function ConnectedApps() {
           Loading…
         </p>
       )}
-      {error && !selected && (
+      {error && (
         <div className="mb-3">
           <p role="alert" className="text-sm text-danger">
             {error}
@@ -93,7 +99,7 @@ export function ConnectedApps() {
                 className="text-danger"
                 disabled={busy}
                 onClick={() => {
-                  setError('')
+                  setDeleteError('')
                   setSelected(connection)
                 }}
               >
@@ -135,28 +141,28 @@ export function ConnectedApps() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {selected?.clientName} connection?</AlertDialogTitle>
+            <AlertDialogTitle>Delete {shown.name} connection?</AlertDialogTitle>
             <AlertDialogDescription>
               This removes the connection and stops the app’s access to Qivo, including automatic
               renewal. You can connect it again from the app.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {error && (
+          {deleteError && (
             <p role="alert" className="text-sm text-danger">
-              {error}
+              {deleteError}
             </p>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={shown.busy}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              disabled={busy}
+              disabled={shown.busy}
               onClick={(event) => {
                 event.preventDefault()
                 void remove()
               }}
             >
-              {busy ? 'Deleting…' : 'Delete connection'}
+              {shown.busy ? 'Deleting…' : 'Delete connection'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

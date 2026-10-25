@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { billingDate, billingMoney } from '@/lib/billingDisplay'
+import { useClosingWords } from '@/lib/closingWords'
 import { limitSentence } from '@/lib/fieldLimits'
 import type { BillingSummary } from '../../convex/lib/billingTypes'
 import { LIMITS } from '../../convex/lib/limits'
@@ -278,6 +279,9 @@ function CancelSubscription({
 }) {
   const [open, setOpen] = useState(false)
   const [error, setError] = useState('')
+  // Keep subscription clears the refusal, and a finished cancellation clears
+  // busy, as the dialog closes. It shows them until it has faded.
+  const shown = useClosingWords(open, { error, busy })
   return (
     <AlertDialog
       open={open}
@@ -311,29 +315,31 @@ function CancelSubscription({
               : 'No export has been made yet.'}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {error && (
+        {shown.error && (
           <p role="alert" className="text-sm text-danger">
-            {error}
+            {shown.error}
           </p>
         )}
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={busy}>Keep subscription</AlertDialogCancel>
-          <Button type="button" variant="outline" disabled={busy} onClick={onExport}>
+          <AlertDialogCancel disabled={shown.busy}>Keep subscription</AlertDialogCancel>
+          <Button type="button" variant="outline" disabled={shown.busy} onClick={onExport}>
             Export data first
           </Button>
           <AlertDialogAction
             variant="destructive"
             data-billing-cancel-confirm
-            disabled={busy}
+            disabled={shown.busy}
             onClick={(event) => {
               event.preventDefault()
+              // a press while the dialog fades out
+              if (!open) return
               setError('')
               void onCancel().then((refusal) =>
                 refusal === null ? setOpen(false) : setError(refusal),
               )
             }}
           >
-            {busy ? 'Cancelling…' : 'Cancel subscription'}
+            {shown.busy ? 'Cancelling…' : 'Cancel subscription'}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

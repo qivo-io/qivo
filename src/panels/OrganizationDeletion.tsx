@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { billingDate } from '@/lib/billingDisplay'
+import { useClosingWords } from '@/lib/closingWords'
 import { convex } from '@/lib/convex'
 import { holdUnsaved } from '@/lib/leaveGuard'
 import { useOrgRemovalState } from '@/lib/orgRemovalState'
@@ -37,6 +38,9 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   useUpdateBlocker(busy)
+  // Cancel clears the confirmation and the refusal, and a finished deletion
+  // clears busy, as the dialog closes. It shows them until it has faded.
+  const shown = useClosingWords(open, { confirm, error, busy })
   if (!state) return null
 
   /** Runs one admin action, closing the dialog on success and showing the
@@ -65,7 +69,7 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
   }
 
   const deletion = state.deletion
-  const matches = confirm.trim().toLowerCase() === state.slug
+  const matches = shown.confirm.trim().toLowerCase() === state.slug
   return (
     <SettingsSection
       title="Delete organization"
@@ -136,26 +140,28 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
               <Label htmlFor="org-delete-confirm">Type {state.slug} to confirm</Label>
               <Input
                 id="org-delete-confirm"
-                value={confirm}
+                value={shown.confirm}
                 autoComplete="off"
                 spellCheck={false}
                 data-org-delete-confirm-input
                 onChange={(event) => setConfirm(event.target.value)}
               />
             </div>
-            {error && (
+            {shown.error && (
               <p role="alert" className="text-sm text-danger">
-                {error}
+                {shown.error}
               </p>
             )}
             <AlertDialogFooter>
-              <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
+              <AlertDialogCancel disabled={shown.busy}>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 variant="destructive"
-                disabled={busy || !matches}
+                disabled={shown.busy || !matches}
                 data-org-delete-confirm
                 onClick={(event) => {
                   event.preventDefault()
+                  // a press while the dialog fades out
+                  if (!open) return
                   void run(
                     () =>
                       convex.action(api.orgRemovals.request, { org_id: orgId, confirm: confirm }),
@@ -163,7 +169,7 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
                   )
                 }}
               >
-                {busy ? 'Deleting…' : 'Delete organization'}
+                {shown.busy ? 'Deleting…' : 'Delete organization'}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

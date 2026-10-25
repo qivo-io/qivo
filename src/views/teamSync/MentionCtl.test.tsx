@@ -5,6 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
+import { endClosing, playClosingAnimations } from '../../lib/closingAnimation.setup'
 import { pastCloseTicks } from '../../lib/discardQuestion.setup'
 import type { UnsentScope } from '../../lib/leaveGuard'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
@@ -269,6 +270,48 @@ describe('the Team sync @ window', () => {
     await act(async () => button('Cancel').click())
     expect(question()).toBeNull()
     expect(windowOpen()).toBe(false)
+  })
+
+  it('stays locked while it closes after the save, so a press then sends nothing', async () => {
+    playClosingAnimations()
+    const onSent = vi.fn()
+    await write('Can you check the soak report?', onSent)
+    await act(async () => send()?.click())
+    await act(async () => writes[0].resolve(null))
+    const closing = document.querySelector('[data-sync-mention-window]')
+    expect(closing?.getAttribute('data-state')).toBe('closed')
+    expect(send()?.disabled).toBe(true)
+    expect(note()?.readOnly).toBe(true)
+    expect(aisha()?.disabled).toBe(true)
+    expect(button('Cancel').disabled).toBe(true)
+    await act(async () => send()?.click())
+    expect(writes).toHaveLength(1)
+    await endClosing()
+    expect(windowOpen()).toBe(false)
+    expect(onSent).toHaveBeenCalledTimes(1)
+    // the next note starts unlocked
+    await toggle()
+    expect(note()?.value).toBe('')
+    expect(note()?.readOnly).toBe(false)
+  })
+
+  it('stays locked on a phone until the Back step its save asked for lands', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    )
+    await write('Can you check the soak report?', vi.fn())
+    // the window's Back step is pushed after it opened
+    await act(async () => await Promise.resolve())
+    expect(history.state?.qivoLayer).toBeTruthy()
+    await act(async () => send()?.click())
+    await act(async () => writes[0].resolve(null))
+    // the close goes back through that step, which lands in a later task
+    expect(windowOpen()).toBe(true)
+    expect(send()?.disabled).toBe(true)
+    expect(note()?.readOnly).toBe(true)
+    await act(() => vi.waitFor(() => expect(windowOpen()).toBe(false)))
+    expect(writes).toHaveLength(1)
   })
 
   it('closes once the server saves the comment', async () => {

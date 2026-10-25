@@ -70,7 +70,9 @@ export function ProjectAccessSelect({
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
-        if (!next) setSearch('')
+        // a close leaves the search as it was, which the list shows until
+        // it has faded
+        if (next) setSearch('')
       }}
     >
       <PopoverTrigger asChild>
@@ -107,7 +109,6 @@ export function ProjectAccessSelect({
           event.preventDefault()
           event.stopPropagation()
           setOpen(false)
-          setSearch('')
         }}
       >
         <div className="shrink-0 border-b border-border p-2">

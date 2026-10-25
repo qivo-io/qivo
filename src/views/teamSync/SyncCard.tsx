@@ -23,6 +23,7 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import { RemainingInput, ReviewTick } from '@/components/walk'
 import { planHint, type Reviewed } from '@/components/walkRows'
 import { clampedTitleTip } from '@/lib/clampedTitle'
+import { useClosingWords } from '@/lib/closingWords'
 import { closeOrAsk, questionOpen } from '@/lib/discardQuestion'
 import { overLimit } from '@/lib/fieldLimits'
 import { type UnsentScope, UnsentScopeContext, useUnsaved, useUnsentScope } from '@/lib/leaveGuard'
@@ -296,7 +297,8 @@ export function MentionCtl({
   const [open, setOpen] = useState(false)
   const [who, setWho] = useState<string | null>(null)
   const [text, setText] = useState('')
-  // a note on its way to the server. The window locks it until the answer.
+  // a note on its way to the server. The window locks it until the answer,
+  // and after a save until the window has closed.
   const [sending, setSending] = useState(false)
   // The note stays when the window closes while it is sent, or after a
   // refusal, so reopening shows it again. A save or Cancel lets it go. A
@@ -326,7 +328,12 @@ export function MentionCtl({
       return false
     }
     setOpen(false)
+    // a save lets the note go, which unlocks the window once it has closed.
+    // A close while the note is sent keeps the lock.
+    if (meant) setSending(false)
   })
+  // the lock the window last showed, which it keeps while it fades out
+  const locked = useClosingWords(open, sending)
   const canWrite = P.canWrite(it.project)
   // the people who can see the task (a mention of anyone else notifies no
   // one), humans only, never the writer
@@ -335,7 +342,7 @@ export function MentionCtl({
   )
   const person = people.find((u) => u.id === who) || null
   // the note is saved as a comment, so a comment's cap holds it
-  const ready = !!person && text.trim() !== '' && !overLimit(LIMITS.comment, text) && !sending
+  const ready = !!person && text.trim() !== '' && !overLimit(LIMITS.comment, text) && !locked
   const send = () => {
     if (!ready) return
     // The window closes once the server saves the note. A refused one (the
@@ -344,8 +351,7 @@ export function MentionCtl({
     setKept(true)
     setSending(true)
     void P.addComment(it.uuid, mentionBody(person, text)).then((saved) => {
-      setSending(false)
-      if (!saved) return
+      if (!saved) return setSending(false)
       setKept(false)
       letGo.current = true
       close()
@@ -407,7 +413,7 @@ export function MentionCtl({
               type="button"
               variant="unstyled"
               data-sync-mention-person={u.id}
-              disabled={sending}
+              disabled={locked}
               onClick={() => setWho(u.id)}
               aria-label={u.name}
               aria-pressed={who === u.id}
@@ -422,7 +428,7 @@ export function MentionCtl({
           rows={2}
           aria-label="Note"
           placeholder="A short note…"
-          readOnly={sending}
+          readOnly={locked}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -446,7 +452,7 @@ export function MentionCtl({
               'Pick who gets it'
             )}
           </span>
-          <Button type="button" variant="ghost" size="sm" disabled={sending} onClick={cancel}>
+          <Button type="button" variant="ghost" size="sm" disabled={locked} onClick={cancel}>
             Cancel
           </Button>
           <Button

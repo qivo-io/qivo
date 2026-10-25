@@ -36,15 +36,15 @@ export function IssueSubscribers({ issue }: { issue: IssueVM }) {
     if (adding) searchRef.current?.focus()
   }, [adding])
 
+  // An opening starts over. A close leaves the search as it was, which the
+  // popover shows until it has faded.
   const changeOpen = (next: boolean) => {
     setOpen(next)
-    if (next) {
-      setRoster(null)
-      setFailed(false)
-    } else {
-      setAdding(false)
-      setSearch('')
-    }
+    if (!next) return
+    setRoster(null)
+    setFailed(false)
+    setAdding(false)
+    setSearch('')
   }
   // A task takes no new follower by hand past LIMITS.followers.max; leaving it and
   // removing others still work. A new assignee or reviewer still follows.

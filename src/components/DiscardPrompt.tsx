@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -9,6 +9,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { useClosingWords } from '@/lib/closingWords'
 import {
   closeQuestion,
   currentQuestion,
@@ -28,8 +29,7 @@ import { OUT_OF_USE } from '@/lib/viewHidden'
 export function DiscardPrompt() {
   const ask = useSyncExternalStore(subscribe, currentQuestion)
   // the last question's words, for its last render as it closes
-  const shown = useRef(ask)
-  if (ask) shown.current = ask
+  const shown = useClosingWords(!!ask, ask)
   useEffect(() => {
     const record = (event: FocusEvent) => noteFocus(event.target)
     document.addEventListener('focusin', record)
@@ -56,9 +56,7 @@ export function DiscardPrompt() {
         }}
       >
         <AlertDialogHeader>
-          <AlertDialogTitle>
-            Discard your unsent {unsentList(shown.current?.what ?? [])}?
-          </AlertDialogTitle>
+          <AlertDialogTitle>Discard your unsent {unsentList(shown?.what ?? [])}?</AlertDialogTitle>
           <AlertDialogDescription>It was not sent, and Qivo keeps no copy.</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
