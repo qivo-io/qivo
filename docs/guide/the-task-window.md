@@ -265,7 +265,9 @@ says so. A reason you typed in **Archive or delete…** stays in the window,
 which says it was not used, and **Copy reason** copies it. Once the task is
 back, the next **Archive or delete…** starts with that reason. If the task
 was already archived when you chose **Archive**, Qivo says that your reason
-was not used, and a window that still shows the task keeps it the same way.
+was not used. While the board still shows the task, **Archive or delete…**
+stays open with your reason, and once the task leaves the board, the window
+keeps the reason the same way.
 
 ## Deleting
 

@@ -100,7 +100,8 @@ no longer have access and offers **Reload**. Your view stays as it was, but
 comments and images that were not already on screen no longer load, and
 attached files no longer download. Nothing in the workspace saves, read marks
 and preferences included. You can still change your appearance and delete
-connected apps.
+connected apps. After a reload, someone deactivated in their home
+organization is told so instead of being offered a new organization.
 
 If you lose your internet connection, or saving takes much longer than usual, a
 notice says so and editing pauses, read marks included. A change you try says why

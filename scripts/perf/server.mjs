@@ -542,6 +542,9 @@ function readPart(name, args) {
       auth_user_id: snapshot.auth_user_id,
       myProfileIds: snapshot.myProfileIds,
       orgs: snapshot.orgs,
+      // when the login may create an organization, which the app reads as
+      // 'now' when absent (convex/lib/workspaceParts.ts readRoot)
+      ...(snapshot.create === undefined ? {} : { create: snapshot.create }),
     }
   if (name === 'workspace:catalog') return { state: 'ok', ...chunkLists(part.catalog) }
   if (name === 'workspace:inbox') return { state: 'ok', ...part.inbox }

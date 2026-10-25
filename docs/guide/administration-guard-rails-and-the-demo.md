@@ -18,7 +18,9 @@ Open **Settings → Organization → Users** to manage account status:
 - **Inactive** has no access and does not count toward the next renewal.
   Existing assignments, reviewer roles, comments and history remain. New work
   cannot be assigned until the account is reactivated. Removing an account
-  instead clears its assignee and reviewer roles.
+  instead clears its assignee and reviewer roles. A pending invitation that
+  is **Inactive** waits: signing in with its address does not take it up
+  until an admin reactivates it.
 
 Removing a user takes effect at once. The account loses all access, its
 API keys and MCP tokens stop working, and it leaves the Users list, its teams,
@@ -93,7 +95,8 @@ calls against the plan's included calls. Choose an earlier period to see its
 calls. An earlier paid period shows the allowance of the seats it was billed
 for, and other earlier periods show only their calls. Credentials and calls
 of people who left the organization stay listed as **Removed user**, and
-deleted credentials as **deleted**.
+deleted credentials as **deleted**. So does a connection to an app that no
+longer exists in Qivo, which can never act again.
 
 Filter by kind, by **Active** or **All**, by person, or by name, prefix or
 person. Revoked and expired credentials stay listed because their calls in
@@ -140,7 +143,11 @@ in on your other devices and browsers, and your connected apps, personal
 tokens and agent keys keep working. Google sign-in supplies a verified email address; Microsoft
 sign-in still requires confirmation. A confirmed address claims its pending
 invitations. Without an invitation, Qivo offers to create an organization with
-you as its first admin. When billing is enabled, a new unpaid organization
+you as its first admin. Someone whose only organization deactivated them is
+told so instead, because they cannot create another while they are still a
+member there. An admin can reactivate them, or remove them so they can create
+their own organization, and **Check again** on that screen then opens the
+workspace or the form. When billing is enabled, a new unpaid organization
 opens Billing.
 
 If Microsoft blocks sign-in until an administrator approves Qivo, follow

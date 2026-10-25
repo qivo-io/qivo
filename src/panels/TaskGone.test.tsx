@@ -191,6 +191,26 @@ const button = (name: string) =>
   )
 const asked = (name: string) =>
   network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === name).map(([, args]) => args)
+/* Holds the window's own `mutation` until the test answers it with the
+   function this returns, or refuses it with its `refuse`. Other writes
+   answer at once. */
+function holdWrite(mutation: string) {
+  const held = { answer: (_value: unknown) => {}, refuse: (_error: Error) => {} }
+  network.mutation.mockImplementation((ref) =>
+    getFunctionName(ref) === mutation
+      ? new Promise((resolve, reject) => {
+          held.answer = resolve
+          held.refuse = reject
+        })
+      : Promise.resolve(null),
+  )
+  return held
+}
+/* holdWrite for the archive, answering it with the function this returns. */
+const holdArchive = () => {
+  const held = holdWrite('issues:archive')
+  return (value: unknown) => held.answer(value)
+}
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -437,12 +457,12 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     if (!field) throw new Error('the Archive or delete window did not open')
     await type(field, 'Moved to the next release')
     // the other archive reached the server first, so this one changed
-    // nothing and posted no reason
-    archive = [{ ...snap.issues[0], archived_at: '2026-09-14T09:00:00.000Z' }]
-    network.mutation.mockImplementation(async (ref) =>
-      getFunctionName(ref) === 'issues:archive' ? { issue: null, archived: false } : null,
-    )
+    // nothing and posted no reason. Convex delivers that archive before it
+    // answers this one.
+    const answer = holdArchive()
     await click(modalButton('Archive'))
+    await leave({ archived: true })
+    await act(async () => answer({ issue: null, archived: false }))
     await act(async () => {
       await vi.waitFor(() => {
         if (!note()?.textContent?.includes('was archived')) throw new Error('no note yet')
@@ -459,9 +479,45 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     expect(window.showToast).toHaveBeenCalledWith(
       `${task.key} was already archived. The reason you typed was not used.`,
     )
-    // the delivery that drops the task leaves the note as it is
-    snap.issues.splice(0, 1)
+    // a later delivery leaves the note as it is
     await act(async () => deliver(snap))
+    expect(document.querySelector('[data-task-gone-reason] p')?.textContent).toBe(
+      'Moved to the next release',
+    )
+  })
+
+  it('keeps the window and the reason while the board still shows an already archived task', async () => {
+    const task = await open()
+    await openFate()
+    const field = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+    if (!field) throw new Error('the Archive or delete window did not open')
+    await type(field, 'Moved to the next release')
+    // the answer comes before any delivery holds the earlier archive, as
+    // while a part of the workspace still loads: nothing paints
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'issues:archive' ? { issue: null, archived: false } : null,
+    )
+    await click(modalButton('Archive'))
+    await act(async () => {
+      await vi.waitFor(() => {
+        if (!modalButton('Archive')) throw new Error('the window is still busy')
+      })
+    })
+    expect(window.showToast).toHaveBeenCalledWith(
+      `${task.key} was already archived. The reason you typed was not used.`,
+    )
+    expect(document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')?.value).toBe(
+      'Moved to the next release',
+    )
+    expect(document.querySelector('[data-task-gone]')).toBeNull()
+    expect(dialog()?.textContent).toContain('Run the soak test')
+    expect(onClose).not.toHaveBeenCalled()
+    // the delivery that holds the earlier archive takes the task, and the
+    // window keeps the reason
+    await dropTask({ archived: true })
+    expect(note()?.textContent).toBe(
+      `${task.key} was archived. Restore it to bring it back to the board. ${UNUSED}`,
+    )
     expect(document.querySelector('[data-task-gone-reason] p')?.textContent).toBe(
       'Moved to the next release',
     )
@@ -529,12 +585,12 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     const next = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
     if (!next) throw new Error('the Archive or delete window did not open again')
     await type(next, 'Moved to the next release')
-    // it was archived again before this window's Archive
-    archive = [{ ...snap.issues[0], archived_at: '2026-09-14T09:10:00.000Z' }]
-    network.mutation.mockImplementation(async (ref) =>
-      getFunctionName(ref) === 'issues:archive' ? { issue: null, archived: false } : null,
-    )
+    // it was archived again before this window's Archive, which Convex
+    // delivers before it answers this one
+    const answer = holdArchive()
     await click(modalButton('Archive'))
+    await leave({ archived: true })
+    await act(async () => answer({ issue: null, archived: false }))
     await act(async () => {
       await vi.waitFor(() => {
         if (!document.querySelector('[data-task-gone-reason]')) throw new Error('no note yet')
@@ -585,6 +641,44 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
         `${task.key} was already archived. The reason you typed was not used.`,
       )
       expect(document.querySelector('[data-task-gone]')).toBeNull()
+      expect(onClose).not.toHaveBeenCalled()
+    })
+  }
+
+  /* This window's own archive or delete is refused after the task left the
+     board, as when someone deleted it meanwhile. The window renders again
+     by itself and says so, with the reason, also with no toast host that
+     renders the page around it. */
+  for (const fate of ['archive', 'delete'] as const) {
+    it(`shows the note with the reason when its own ${fate} is refused after the task left`, async () => {
+      const task = await open()
+      await openFate()
+      if (fate === 'delete')
+        await click(
+          document.querySelector<HTMLElement>('[data-fate-card="delete"] input[type="radio"]'),
+        )
+      const field = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+      if (!field) throw new Error('the Archive or delete window did not open')
+      await type(field, 'Moved to the next release')
+      const held = holdWrite(fate === 'archive' ? 'issues:archive' : 'issues:deleteDeep')
+      await click(modalButton(fate === 'archive' ? 'Archive' : `Delete ${task.key}`))
+      await leave({ archived: false })
+      // while its own call is on its way, the window shows nothing
+      expect(dialog()?.getAttribute('aria-hidden')).toBe('true')
+      expect(document.querySelector('[data-task-gone]')).toBeNull()
+      await act(async () => held.refuse(new Error('task not found')))
+      await act(async () => {
+        await vi.waitFor(() => {
+          if (!note()) throw new Error('no note yet')
+        })
+      })
+      expect(note()?.textContent).toBe(
+        `${task.key} is no longer here. It was deleted, or you can no longer open it. ${UNUSED}`,
+      )
+      expect(document.querySelector('[data-task-gone-reason] p')?.textContent).toBe(
+        'Moved to the next release',
+      )
+      expect(window.showToast).toHaveBeenCalledWith("Couldn't save.", 'error')
       expect(onClose).not.toHaveBeenCalled()
     })
   }

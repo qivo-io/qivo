@@ -92,6 +92,7 @@ export type Scalars = Pick<
   | 'unreadTruncated'
   | 'readTruncated'
   | 'messagesCut'
+  | 'create'
   | 'delivered_at'
 >
 
@@ -271,6 +272,7 @@ export function createWorkspaceBase() {
         unreadTruncated: snap.unreadTruncated,
         readTruncated: snap.readTruncated,
         messagesCut: snap.messagesCut,
+        create: snap.create,
         delivered_at: snap.delivered_at,
       }
       return new Set(added)

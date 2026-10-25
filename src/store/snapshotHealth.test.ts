@@ -2,7 +2,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Id } from '../../convex/_generated/dataModel'
-import type { SeatsDeleting } from '../../convex/lib/workspaceJoin'
+import type { Seatless } from '../../convex/lib/workspaceJoin'
 import { SEATS_DELETING } from './guard/liveDouble.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
@@ -30,7 +30,7 @@ vi.mock('../lib/auth', () => ({
 }))
 
 type Subscription = {
-  deliver: (snap: Snapshot | SeatsDeleting | null) => void
+  deliver: (snap: Snapshot | Seatless | null) => void
   fail: (error: Error) => void
   unsubscribe: ReturnType<typeof vi.fn>
 }
@@ -38,6 +38,9 @@ type Sent = { name: string; resolve: (value: unknown) => void; reject: (error: E
 
 const QUERY_FAILURE =
   '[CONVEX Q(workspace:whole)] [Request ID: 3f9c2a71] Server Error\n  Called by client'
+/* The root part's answer for a member whose only organization deactivated
+   them (convex/lib/workspaceParts.ts readRoot). */
+const DEACTIVATED: Seatless = { deleting: false, create: 'blocked' }
 
 describe('snapshot trouble', () => {
   let store: typeof import('./planner')
@@ -46,7 +49,7 @@ describe('snapshot trouble', () => {
   let threads: { deliver: (page: unknown) => void; unsubscribe: ReturnType<typeof vi.fn> }[]
   let sent: Sent[]
   let showToast: ReturnType<typeof vi.fn>
-  let firstDelivery: 'deliver' | 'fail' | 'deleting'
+  let firstDelivery: 'deliver' | 'fail' | 'deleting' | 'deactivated'
 
   const live = () => subscriptions[subscriptions.length - 1]
   const settle = async () => {
@@ -108,6 +111,7 @@ describe('snapshot trouble', () => {
         if (subscriptions.length === 1) {
           if (firstDelivery === 'deliver') deliver(structuredClone(snapshot))
           else if (firstDelivery === 'deleting') deliver(SEATS_DELETING)
+          else if (firstDelivery === 'deactivated') deliver(DEACTIVATED)
           else fail(new Error(QUERY_FAILURE))
         }
       } else if (getFunctionName(ref) === 'snapshot:commentThread')
@@ -640,8 +644,24 @@ describe('snapshot trouble', () => {
     firstDelivery = 'deleting'
     store = await import('./planner')
     await expect(store.initStore()).resolves.toBeNull()
-    expect(store.P.seatsDeleting()).toEqual({ deleting: true, create: 'after_deletion' })
+    expect(store.P.seatless()).toEqual({ deleting: true, create: 'after_deletion' })
     expect(store.P.issues).toEqual([])
+  })
+
+  it('boots with no seat and says why for a member their organization deactivated', async () => {
+    firstDelivery = 'deactivated'
+    store = await import('./planner')
+    await expect(store.initStore()).resolves.toBeNull()
+    expect(store.P.seatless()).toEqual(DEACTIVATED)
+  })
+
+  it('says access ended, not a deletion, when the last seat is deactivated mid-session', async () => {
+    await boot()
+    const { P } = store
+    live().deliver(DEACTIVATED)
+    expect(P.snapshotTrouble()?.kind).toBe('no_access')
+    expect(P.snapshotTrouble()?.reason).toBeUndefined()
+    expect(P.issues).toHaveLength(1)
   })
 
   it("names the organization's deletion for its write while another organization remains", async () => {

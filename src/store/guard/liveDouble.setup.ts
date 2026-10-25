@@ -1,17 +1,14 @@
 import { type FunctionReference, getFunctionName, makeFunctionReference } from 'convex/server'
 import type { Value } from 'convex/values'
-import {
-  type SeatsDeleting,
-  splitWorkspace,
-  type Workspace,
-} from '../../../convex/lib/workspaceJoin'
+import { type Seatless, splitWorkspace, type Workspace } from '../../../convex/lib/workspaceJoin'
 import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
 
 /* The live transport (lib/liveQueries.ts) for store tests, over a Convex
    client double with onUpdate. A test publishes the whole workspace as one
    value of the stand-in query WHOLE, in the shape the store keeps it (or
-   null for no seat, or SEATS_DELETING when an organization deletion holds
-   the seats, or fails it), and the double answers every workspace
+   null for no seat, or a seatless answer such as SEATS_DELETING when an
+   organization deletion holds the seats, or fails it), and the double
+   answers every workspace
    part from it, each window with the rows whose ids fall in it, and tells
    the store of the parts whose answer changed in one transition, as Convex
    would. A test can hold back one task window (holdWindow). Any other
@@ -38,12 +35,12 @@ type Client = {
 type Whole = Omit<Workspace, 'messagesCut'> & { messagesCut?: boolean }
 
 /** What a test publishes for a login whose seats a running organization
-    deletion holds. The root part answers it (convex/lib/workspaceParts.ts
-    readRoot), and every other part that it has no seat. */
-export const SEATS_DELETING: SeatsDeleting = { deleting: true, create: 'after_deletion' }
-type Published = Whole | SeatsDeleting | null
-const seatsDeleting = (value: Published): value is SeatsDeleting =>
-  value !== null && 'deleting' in value
+    deletion holds. The root part answers it, as it answers any seatless
+    state (convex/lib/workspaceParts.ts readRoot), and every other part that
+    it has no seat. */
+export const SEATS_DELETING: Seatless = { deleting: true, create: 'after_deletion' }
+type Published = Whole | Seatless | null
+const seatless = (value: Published): value is Seatless => value !== null && 'deleting' in value
 
 const KINDS = ['tasks', 'people', 'projects'] as const
 const PARTS: Record<string, string> = {
@@ -57,11 +54,16 @@ const PARTS: Record<string, string> = {
 /** What the workspace part `name` with `args` answers while the server
     holds `whole`. */
 function answerOf(whole: Published, name: string, args: Record<string, unknown>): unknown {
-  if (seatsDeleting(whole)) return name === 'workspace:root' ? whole : { state: 'gone' }
+  if (seatless(whole)) return name === 'workspace:root' ? whole : { state: 'gone' }
   if (name === 'workspace:root')
     return whole === null
       ? null
-      : { auth_user_id: whole.auth_user_id, myProfileIds: whole.myProfileIds, orgs: whole.orgs }
+      : {
+          auth_user_id: whole.auth_user_id,
+          myProfileIds: whole.myProfileIds,
+          orgs: whole.orgs,
+          ...(whole.create === undefined ? {} : { create: whole.create }),
+        }
   // the window asked for; the catalog and the inbox name none
   const window = {
     from: typeof args.from === 'string' ? args.from : '',
@@ -156,7 +158,7 @@ export function liveOver(client: Client): LiveQueries & {
   const receiveWhole = (value: Published) => {
     whole = { value }
     const changed = refresh()
-    fire(changed, value === null || seatsDeleting(value) ? undefined : value.delivered_at)
+    fire(changed, value === null || seatless(value) ? undefined : value.delivered_at)
   }
   const failWhole = (error: unknown) => {
     whole = { error }

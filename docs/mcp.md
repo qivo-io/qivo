@@ -1004,7 +1004,8 @@ or OAuth connection at most 20. Delete an unused subscription first.` REST
 answers it as HTTP `409`.
 Delete unwanted subscriptions to release that capacity. Registration automatically
 removes expired registrations and reclaims capacity held by subscriptions whose
-credential was revoked, expired or deleted, or whose account was removed. Temporary
+credential was revoked, expired or deleted, whose account was removed, or whose
+connected app no longer exists in Qivo. Temporary
 deactivation and lost project access do not remove subscriptions. A personal
 token's subscriptions stop delivering when the token expires, and the next
 registration in the organization removes them.
@@ -1140,6 +1141,11 @@ owning grant with REST `GET /v1/webhooks` to inspect health. MCP `events/list`
 lists event definitions, not subscriptions. Organization administrators can use
 REST `GET /v1/webhooks/organization` and `DELETE /v1/webhooks/organization/{id}`
 to inspect and reclaim shared quota with a personal token or OAuth connection.
+That list shows `status: "unauthorized"` for a subscription whose owner can no
+longer authorize it, which holds no quota and goes at the next registration.
+It shows `status: "suspended"` for an active subscription whose owner Qivo
+refuses for now, such as an inactive user. That subscription receives nothing
+but keeps its quota until its owner is allowed again.
 Deleting another owner's subscription needs a credential that can make
 changes: a personal token with change access, or an OAuth connection with
 `qivo:write`. A read-only personal token gets HTTP 403 with

@@ -604,7 +604,7 @@ workspace:catalog query public {"type":"object","value":{"org_id":{"fieldType":{
 workspace:inbox query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 workspace:people query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 workspace:projects query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-workspace:root query public {"type":"object","value":{}}
+workspace:root query public {"type":"object","value":{"seatless":{"fieldType":{"type":"literal","value":"all"},"optional":true}}}
 workspace:tasks query public {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 `
   .trim()

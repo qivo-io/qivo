@@ -102,10 +102,17 @@ export function ConnectedApps() {
               </Button>
             </div>
             <div className="mt-2 space-y-1 text-xs text-text-2">
-              {connection.revokedAt && (
+              {connection.revokedAt ? (
                 <div data-oauth-connection-revoked="" className="text-danger">
                   {connection.revokedByAdmin ? 'Revoked by an admin' : 'Access revoked'}
                 </div>
+              ) : (
+                // its app is no longer in Qivo, so it can never act again
+                connection.appGone && (
+                  <div data-oauth-connection-revoked="app-gone" className="text-danger">
+                    App no longer available
+                  </div>
+                )
               )}
               {connection.scopes.map((scope) => (
                 <div key={scope}>{connectionScopeLabel(scope)}</div>

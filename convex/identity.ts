@@ -75,8 +75,12 @@ async function replaceLostAdmin(ctx: MutationCtx, orgId: string): Promise<void> 
 }
 
 /* The ONE claim implementation — replaces the two GoTrue
- * triggers and the boot RPC. Adopts every unclaimed seat carrying the login's
- * verified address, across all orgs, in creation order. Never creates one. */
+ * triggers and the boot RPC. Adopts every active unclaimed seat carrying the
+ * login's verified address, across all orgs, in creation order. Never
+ * creates one. A deactivated invitation is no invitation (invites.ts): it
+ * waits, and a reactivation lets the next boot adopt it, as a guest seat
+ * once the login has a home. Adopting it would give the login a home seat
+ * it cannot open, which bars it from creating an organization. */
 export async function claimSeatsForLogin(
   ctx: MutationCtx,
   { userId, email, emailVerified }: { userId: string; email: string; emailVerified: boolean },
@@ -95,7 +99,7 @@ export async function claimSeatsForLogin(
       .withIndex('by_email', (q) => q.eq('email', em))
       .collect()
   )
-    .filter((p) => p.auth_user_id === undefined)
+    .filter((p) => p.auth_user_id === undefined && p.active)
     // order by created_at, id (0085) — first seat in wins the home role
     .sort(byClaimOrder)
   let adopted = 0

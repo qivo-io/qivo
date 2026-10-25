@@ -166,7 +166,11 @@ in Deleted items. **Delete** on the Archived projects page opens the same
 window without the Archive choice. Deleting a project removes the inbox
 messages about its tasks. A project with more than 200 sub-projects, archived
 ones included, cannot be deleted at once. Delete some of its sub-projects
-first, then the project.
+first, then the project. If the project leaves while the window on its
+settings page is open, because someone else archived or deleted it or you can
+no longer open it, the window says so and sends nothing more. It shows the
+reason you typed with **Copy reason**, and until you copy it, closing the
+window asks first. Closing the window then leaves the page.
 
 ## Deleted items
 

@@ -3,7 +3,7 @@ import type { Value } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { idWindows } from '../../convex/lib/idWindows'
 import type { LiveQueries, LiveTransition } from '../lib/liveQueries'
-import { createLiveParts, type PartsReport, STAGES, STALL } from './liveParts'
+import { createLiveParts, type PartsReport, ROOT_ARGS, STAGES, STALL } from './liveParts'
 
 /* The registry over a scripted transport: the test plays the server, sets
    what each part answers and sends transitions naming the parts that
@@ -112,7 +112,7 @@ function scripted() {
 /* A server holding tasks a and b in the first task window and c in the
    second. */
 function serve(s: ReturnType<typeof scripted>) {
-  s.set('workspace:root', {}, { value: ROOT })
+  s.set('workspace:root', ROOT_ARGS, { value: ROOT })
   for (const [name, value] of Object.entries(EMPTY)) {
     const args = name === 'workspace:catalog' || name === 'workspace:inbox' ? { org_id: ORG } : null
     if (args) s.set(name, args, { value })
@@ -243,7 +243,7 @@ describe('the live parts registry', () => {
   it('after a reconnect, holds the workspace until every part arrived again', async () => {
     const { s, last } = await started()
     s.reconnect()
-    s.send([s.keyOf('workspace:root', {})])
+    s.send([s.keyOf('workspace:root', ROOT_ARGS)])
     expect(last()?.state).toBe('held')
     s.send()
     expect(last()?.state).toBe('complete')
@@ -313,12 +313,12 @@ describe('the live parts registry', () => {
 
   it('reports no seat, and drops a seat that goes without holding the workspace', async () => {
     const { s, last, ids } = await started()
-    s.set('workspace:root', {}, { value: { ...ROOT, orgs: [] } })
-    s.send([s.keyOf('workspace:root', {})])
+    s.set('workspace:root', ROOT_ARGS, { value: { ...ROOT, orgs: [] } })
+    s.send([s.keyOf('workspace:root', ROOT_ARGS)])
     expect(ids()).toEqual([])
     expect([...s.watched.keys()].every((key) => !key.includes(ORG))).toBe(true)
-    s.set('workspace:root', {}, { value: null })
-    s.send([s.keyOf('workspace:root', {})])
+    s.set('workspace:root', ROOT_ARGS, { value: null })
+    s.send([s.keyOf('workspace:root', ROOT_ARGS)])
     expect(last()).toMatchObject({ state: 'complete', value: null })
   })
 
@@ -411,7 +411,7 @@ const WINDOWS = idWindows(64)
 
 function serveBig(s: ReturnType<typeof scripted>) {
   serve(s)
-  s.set('workspace:root', {}, { value: BIG })
+  s.set('workspace:root', ROOT_ARGS, { value: BIG })
   for (const [i, w] of WINDOWS.entries())
     s.set('workspace:tasks', { org_id: ORG, ...w }, { value: tasksPart([`t${i}`]) })
 }
@@ -477,7 +477,7 @@ describe('a staged load', () => {
     const s = scripted()
     serve(s)
     const aged = { ...BIG.orgs[0], next_project_num: 4001, active_tasks: 300, live_projects: 10 }
-    s.set('workspace:root', {}, { value: { ...BIG, orgs: [aged] } })
+    s.set('workspace:root', ROOT_ARGS, { value: { ...BIG, orgs: [aged] } })
     const reports: PartsReport[] = []
     createLiveParts(
       s.live,
@@ -556,16 +556,18 @@ describe('a staged load', () => {
     s.send()
     expect(reports.at(-1)?.workspace.state).toBe('complete')
     s.reconnect()
-    s.send([s.keyOf('workspace:root', {})])
+    s.send([s.keyOf('workspace:root', ROOT_ARGS)])
     expect(reports.at(-1)?.workspace.state).toBe('held')
     s.send()
     expect(reports.at(-1)?.workspace.state).toBe('complete')
     // a large organization joins: every window of it is watched at once,
     // and the workspace holds until all of them answered
     serveOrg(s, 'org-2', 64)
-    s.set('workspace:root', {}, { value: { ...BIG, orgs: [...BIG.orgs, orgRow('org-2', 64)] } })
+    s.set('workspace:root', ROOT_ARGS, {
+      value: { ...BIG, orgs: [...BIG.orgs, orgRow('org-2', 64)] },
+    })
     const before = reports.length
-    s.send([s.keyOf('workspace:root', {})])
+    s.send([s.keyOf('workspace:root', ROOT_ARGS)])
     expect(watchedWindows(s, 'org-2')).toHaveLength(64)
     s.send([...s.watched.keys()].filter((t) => !t.includes('"org_id":"org-2"')))
     expect(reports.at(-1)?.workspace.state).toBe('held')
@@ -604,13 +606,9 @@ describe('a staged load', () => {
     serveBig(s)
     serveOrg(s, 'org-2', 64)
     serveOrg(s, 'org-3', 64)
-    s.set(
-      'workspace:root',
-      {},
-      {
-        value: { ...BIG, orgs: [...BIG.orgs, orgRow('org-2', 64), orgRow('org-3', 64)] },
-      },
-    )
+    s.set('workspace:root', ROOT_ARGS, {
+      value: { ...BIG, orgs: [...BIG.orgs, orgRow('org-2', 64), orgRow('org-3', 64)] },
+    })
     const reports: PartsReport[] = []
     createLiveParts(
       s.live,
@@ -629,7 +627,9 @@ describe('a staged load', () => {
     const s = scripted()
     serveBig(s)
     serveOrg(s, 'org-2', 1)
-    s.set('workspace:root', {}, { value: { ...BIG, orgs: [...BIG.orgs, orgRow('org-2', 1)] } })
+    s.set('workspace:root', ROOT_ARGS, {
+      value: { ...BIG, orgs: [...BIG.orgs, orgRow('org-2', 1)] },
+    })
     const reports: PartsReport[] = []
     createLiveParts(
       s.live,

@@ -812,12 +812,12 @@ describe('the Archive or delete section of project settings', () => {
      app's shell does. */
   async function openSettings(projectId: string) {
     const setPage = vi.fn()
-    const onLeaving = vi.fn()
+    const onHolding = vi.fn()
     const settings = await import('./settings/ProjectSettings')
     const version = await import('../store/usePlannerVersion')
     function Live() {
       version.usePlannerVersion()
-      return <settings.ProjectPage projectId={projectId} setPage={setPage} onLeaving={onLeaving} />
+      return <settings.ProjectPage projectId={projectId} setPage={setPage} onHolding={onHolding} />
     }
     await act(async () =>
       root.render(
@@ -827,7 +827,7 @@ describe('the Archive or delete section of project settings', () => {
       ),
     )
     await settle()
-    return { setPage, onLeaving }
+    return { setPage, onHolding }
   }
   const section = () => find('[data-project-removal]')
   const open = () => find<HTMLButtonElement>('[data-remove-project]')
@@ -835,7 +835,7 @@ describe('the Archive or delete section of project settings', () => {
   it("opens the window for the project's lead, and leaves the page once the delete is done", async () => {
     summaries.push(() => Promise.resolve(summary()))
     answers['projects:deleteDeep'] = () => Promise.resolve(null)
-    const { setPage, onLeaving } = await openSettings('plan')
+    const { setPage, onHolding } = await openSettings('plan')
     expect(section().querySelector('legend')?.textContent).toBe('Archive or delete')
     expect(section().textContent).toContain(
       'Archive hides it and its 1 sub-project. Delete moves them and their tasks to Deleted items.',
@@ -849,7 +849,9 @@ describe('the Archive or delete section of project settings', () => {
     await choose('delete')
     await click(button('Delete project and 48 tasks'))
     await settle()
-    expect(onLeaving).toHaveBeenCalledWith('plan')
+    // the page held its project while the window was open, and holds it
+    // until it moves on (Settings clears it with the page change)
+    expect(onHolding.mock.calls).toEqual([['plan']])
     expect(setPage).toHaveBeenLastCalledWith('projects')
     expect(window.showToast).toHaveBeenCalledWith('Deleted “Plan”')
     expect(has('[data-modal-shell]')).toBe(false)
@@ -911,38 +913,61 @@ describe('the Archive or delete section of project settings', () => {
 })
 
 describe('Settings while a project page deletes its project', () => {
-  /* Settings as the app holds it: the page in state, every page committed. */
+  /* Settings as the app holds it: the page in state, every page committed,
+     in the page's window for unsent text, with the question. A page change
+     waits while the page holds unsent text, as App's moves do, and the
+     check that keeps the page valid sets the page at once. */
   async function openSettings(page: string) {
     const shown: string[] = []
     const { SettingsScreen } = await import('./Settings')
     const version = await import('../store/usePlannerVersion')
     const react = await import('react')
+    const { UnsentScopeContext, createUnsentScope } = await import('../lib/leaveGuard')
+    const { closeOrAsk } = await import('../lib/discardQuestion')
+    const { DiscardPrompt } = await import('../components/DiscardPrompt')
+    const scope = createUnsentScope()
     function Live() {
       version.usePlannerVersion()
       const [current, setCurrent] = react.useState(page)
       react.useEffect(() => {
         shown.push(current)
       }, [current])
+      // App's toast host, whose render renders the page too
+      const [, setToasts] = react.useState(0)
+      react.useEffect(() => {
+        window.showToast = vi.fn(() => setToasts((n) => n + 1))
+      }, [])
       return (
-        <SettingsScreen
-          page={current}
-          setPage={setCurrent}
-          onExit={vi.fn()}
-          onNewProject={vi.fn()}
-          onNewSubProject={vi.fn()}
-          onOpenArchivedTasks={vi.fn()}
-        />
+        <UnsentScopeContext.Provider value={scope}>
+          <SettingsScreen
+            page={current}
+            setPage={(next) => closeOrAsk([scope], () => setCurrent(next))}
+            resetPage={setCurrent}
+            onExit={vi.fn()}
+            onNewProject={vi.fn()}
+            onNewSubProject={vi.fn()}
+            onOpenArchivedTasks={vi.fn()}
+          />
+        </UnsentScopeContext.Provider>
       )
     }
     await act(async () =>
       root.render(
         <TooltipProvider>
           <Live />
+          <DiscardPrompt />
         </TooltipProvider>,
       ),
     )
     await settle()
     return shown
+  }
+  const question = () => document.querySelector('[data-discard-prompt] h2')?.textContent ?? null
+  const press = async (name: string) => {
+    const found = [...document.querySelectorAll('button')].find((b) => b.textContent === name)
+    if (!found) throw new Error(`missing ${name}`)
+    await click(found)
+    await settle()
   }
   // the delivery without Plan, as the server sends it before it answers
   const dropPlan = () => {
@@ -971,5 +996,107 @@ describe('Settings while a project page deletes its project', () => {
     await act(async () => dropPlan())
     await settle()
     expect(shown).toEqual(['project:plan', 'account'])
+  })
+
+  /* The project leaves the board while its Archive or delete window holds a
+     typed reason: the page and the window stay, the window says the project
+     is gone, sends nothing, shows the reason to copy and asks before it
+     closes until the reason is copied, and the page leaves once it closes. */
+  const GONE =
+    'Plan is no longer here. It was archived or deleted, or you can no longer open it. The reason you typed for it was not used. Copy it to keep it.'
+
+  it('keeps the page and the reason when a refused delete finds the project gone', async () => {
+    summaries.push(() => Promise.resolve(summary()))
+    answers['projects:deleteDeep'] = () => {
+      dropPlan()
+      return Promise.reject(new Error('project not found'))
+    }
+    const shown = await openSettings('project:plan')
+    await click(find<HTMLButtonElement>('[data-remove-project]'))
+    await settle()
+    await choose('delete')
+    await type('Trial cancelled')
+    await click(button('Delete project and 48 tasks'))
+    await settle()
+    expect(window.showToast).toHaveBeenCalledWith("Couldn't save.", 'error')
+    expect(shown).toEqual(['project:plan'])
+    expect(text('[data-fate-gone]')).toBe(GONE)
+    expect(text('[data-fate-gone-reason] p')).toBe('Trial cancelled')
+    // nothing in it can be sent: no plan, no choice, no field, and Close
+    // rather than Cancel and a submit
+    expect(has('[data-fate-subprojects]')).toBe(false)
+    expect(has('[data-fate-card]')).toBe(false)
+    expect(has('[data-fate-reason]')).toBe(false)
+    expect(labels()).toEqual(['', 'Copy reason', 'Close'])
+    // until the reason is copied, Close asks first
+    await press('Close')
+    expect(question()).toBe('Discard your unsent reason?')
+    await press('Keep editing')
+    expect(has('[data-modal-shell]')).toBe(true)
+    const writeText = vi.fn(async (_text: string) => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await click(button('Copy reason'))
+    expect(writeText).toHaveBeenCalledWith('Trial cancelled')
+    expect(window.showToast).toHaveBeenCalledWith('Copied the reason')
+    await press('Close')
+    expect(question()).toBeNull()
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(shown).toEqual(['project:plan', 'account'])
+  })
+
+  it('keeps the reason when someone else deletes the project while it is open', async () => {
+    summaries.push(() => Promise.resolve(summary()))
+    const shown = await openSettings('project:plan')
+    await click(find<HTMLButtonElement>('[data-remove-project]'))
+    await settle()
+    await choose('delete')
+    await type('Trial cancelled')
+    // a reason typed for Delete stays while Archive is chosen
+    await choose('archive')
+    await act(async () => dropPlan())
+    await settle()
+    expect(shown).toEqual(['project:plan'])
+    expect(text('[data-fate-gone]')).toBe(GONE)
+    expect(text('[data-fate-gone-reason] p')).toBe('Trial cancelled')
+    expect(has('[data-fate-card]')).toBe(false)
+    expect(labels()).not.toContain('Archive')
+    // the field that had focus went with the cards
+    expect(document.activeElement?.contains(find('[data-fate-gone]'))).toBe(true)
+    // a refused copy leaves the reason selected
+    const writeText = vi.fn(async (_text: string) => {
+      throw new Error('denied')
+    })
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await click(button('Copy reason'))
+    expect(window.getSelection()?.toString()).toBe('Trial cancelled')
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      "Couldn't copy. Copy the selected text instead.",
+      'error',
+    )
+    await press('Close')
+    expect(question()).toBe('Discard your unsent reason?')
+    await press('Discard')
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(shown).toEqual(['project:plan', 'account'])
+    expect(writes()).toEqual([])
+  })
+
+  /* Archiving lets the window's typed reason go a moment after the window
+     closes, and the page's move waits for that. Meanwhile the archived
+     project is gone, and the page must not fall back to another page. */
+  it('goes from the page to Archived projects after an archive, never to another page first', async () => {
+    summaries.push(() => Promise.resolve(summary()))
+    const shown = await openSettings('project:plan')
+    await click(find<HTMLButtonElement>('[data-remove-project]'))
+    await settle()
+    await choose('delete')
+    await type('Trial cancelled')
+    await choose('archive')
+    await click(button('Archive'))
+    await settle()
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(question()).toBeNull()
+    expect(shown).toEqual(['project:plan', 'projects-archived'])
+    expect(window.showToast).toHaveBeenCalledWith('Archived “Plan”')
   })
 })

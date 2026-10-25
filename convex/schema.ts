@@ -1677,8 +1677,9 @@ export default defineSchema({
     last_used_at: v.optional(v.string()),
     revoked_at: v.optional(v.string()),
     // 'deleted' by the owner or a profile removal (hidden from the owner's
-    // list), 'admin' from API access (apiAccess.ts), 'credential_replay' or
-    // 'fixture_retirement'.
+    // list), 'admin' from API access (apiAccess.ts), 'credential_replay',
+    // 'fixture_retirement' or 'client_deleted' when Better Auth deletes its
+    // client (authTriggers.ts).
     revocation_reason: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])

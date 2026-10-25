@@ -3,7 +3,9 @@
 The sidebar shows your organization, **Search**, **My view**, **All
 projects**, **Team sync**, the **Projects** tree and **Settings**. The
 organization name is not a switcher. If you only have a guest identity,
-**Create your organization…** opens the organization-creation dialog.
+**Create your organization…** opens the organization-creation dialog. It does
+not show while an organization that deactivated you, or one being deleted,
+still holds your member seat.
 
 Select a project to reveal its sub-projects. One project stays expanded at a
 time. Projects shared by another organization appear in the same tree under

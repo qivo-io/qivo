@@ -152,7 +152,9 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
         <div className="planner-brand [padding:20px_20px_0]">
           <span className="wordmark [font-size:27px] [line-height:1]">Qivo</span>
         </div>
-        {/* Home organization identity; guest-only accounts can create their own. */}
+        {/* Home organization identity. A login without one can create its own
+            while the server would (P.orgCreate), not while an organization
+            that deactivated it, or one being deleted, holds its home seat. */}
         <div className="planner-org [padding:16px_12px_8px]">
           {P.homeOrg ? (
             <div
@@ -164,23 +166,25 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
               </div>
             </div>
           ) : (
-            <div
-              data-org-well
-              data-org-create
-              onClick={() => actions.createOrg()}
-              className="[display:flex] [align-items:center] [gap:8px] [padding:0_8px] [min-height:32px] [border-radius:var(--r-md)] [cursor:pointer] [color:var(--text-3)] [transition:background-color_var(--dur-fast)_var(--ease-out)]"
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'var(--hover)'
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'transparent'
-              }}
-            >
-              <Icon name="plus" size={16} />
-              <div className="[font-weight:600] [font-size:var(--fs-base)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                Create your organization…
+            P.orgCreate === 'now' && (
+              <div
+                data-org-well
+                data-org-create
+                onClick={() => actions.createOrg()}
+                className="[display:flex] [align-items:center] [gap:8px] [padding:0_8px] [min-height:32px] [border-radius:var(--r-md)] [cursor:pointer] [color:var(--text-3)] [transition:background-color_var(--dur-fast)_var(--ease-out)]"
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'var(--hover)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent'
+                }}
+              >
+                <Icon name="plus" size={16} />
+                <div className="[font-weight:600] [font-size:var(--fs-base)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
+                  Create your organization…
+                </div>
               </div>
-            </div>
+            )
           )}
         </div>
 

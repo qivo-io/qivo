@@ -199,7 +199,8 @@ describe('moving a task that has subtasks to Deleted items', () => {
     answers['issues:deleteDeep'] = () => Promise.reject(new Error('the subtasks changed'))
     expect(await P.deleteIssue(handle('b'), [], true)).toBe(false)
     expect(vm('b')).toBeDefined()
-    expect(window.showToast).toHaveBeenCalled()
+    // nothing painted, so the toast says nothing was reverted
+    expect(vi.mocked(window.showToast).mock.calls.at(-1)?.[0]).toBe("Couldn't save.")
   })
 
   it('shows a restored task again under its key, while the subtasks it left stay top-level', async () => {

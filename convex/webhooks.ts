@@ -30,7 +30,11 @@ import {
   removeWebhookSubscription,
   writeWebhookHealth,
 } from './model/webhookHealth'
-import { pruneRemovedWebhookOwners } from './model/webhookOwners'
+import {
+  type OwnerStanding,
+  ownerStandings,
+  pruneRemovedWebhookOwners,
+} from './model/webhookOwners'
 import { dispatchWebhooksRef, requestWebhookDispatch } from './model/webhookQueue'
 
 const internalSweepRef = makeFunctionReference<'mutation', Record<string, never>, null>(
@@ -241,14 +245,31 @@ function assertAdministrator(profile: Doc<'profiles'>): void {
     throw forbidden('Organization administrator access is required')
 }
 
+/** The organization list's status for subscription `row`, whose owner
+ * stands as `standing` (model/webhookOwners.ts OwnerStanding). A removed
+ * owner's is `unauthorized`, even when delivery failures disabled it,
+ * because it goes at the next registration. A suspended owner's is
+ * `suspended`, unless it is `disabled`, which it stays because it would not
+ * deliver again without a renewal. */
+function organizationStatus(row: Doc<'webhook_subscriptions'>, standing: OwnerStanding) {
+  if (standing === 'removed') return 'unauthorized'
+  if (row.disabled_at !== undefined) return 'disabled'
+  return standing === 'suspended' ? 'suspended' : 'active'
+}
+
+/** Every unexpired subscription of the administrator's organization, with
+ * its status for the organization (organizationStatus). */
 export const listOrganization = internalQuery({
   args: { owner: vEventOwner },
   handler: async (ctx, { owner }) => {
     const { profile } = await requireOwner(ctx, owner)
     assertAdministrator(profile)
+    const rows = await liveSubscriptions(ctx, profile.org_id)
+    const standings = await ownerStandings(ctx, rows)
     return Promise.all(
-      (await liveSubscriptions(ctx, profile.org_id)).map(async (row) => ({
+      rows.map(async (row, at) => ({
         ...(await subscriptionStatus(ctx, row)),
+        status: organizationStatus(row, standings[at]),
         owner: {
           profile_id: row.owner.profile_id,
           credential_type: row.owner.credential_table,

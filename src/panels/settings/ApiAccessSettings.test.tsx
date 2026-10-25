@@ -410,7 +410,7 @@ describe('the API access page', () => {
 })
 
 describe('what the owner sees after an admin revoked their credential', () => {
-  it('tags the token "revoked by an admin" and the connection "Revoked by an admin"', async () => {
+  it('tags the token "revoked by an admin", the connection "Revoked by an admin", and one whose app is gone', async () => {
     network.query.mockImplementation((ref) => {
       const name = getFunctionName(ref)
       const token = {
@@ -440,8 +440,25 @@ describe('what the owner sees after an admin revoked their credential', () => {
         ])
       if (name === 'oauthConnections:list')
         return Promise.resolve([
-          { ...app, id: 'by-admin', clientName: 'ChatGPT', revokedByAdmin: true },
-          { ...app, id: 'replayed', clientName: 'Claude', revokedByAdmin: false },
+          { ...app, id: 'by-admin', clientName: 'ChatGPT', revokedByAdmin: true, appGone: false },
+          { ...app, id: 'replayed', clientName: 'Claude', revokedByAdmin: false, appGone: false },
+          // an app no longer in Qivo, which nothing revoked, and a live one
+          {
+            ...app,
+            id: 'app-gone',
+            clientName: 'Raycast',
+            revokedAt: null,
+            revokedByAdmin: false,
+            appGone: true,
+          },
+          {
+            ...app,
+            id: 'live',
+            clientName: 'Zed',
+            revokedAt: null,
+            revokedByAdmin: false,
+            appGone: false,
+          },
         ])
       return Promise.resolve(null)
     })
@@ -459,5 +476,11 @@ describe('what the owner sees after an admin revoked their credential', () => {
     expect(
       find('[data-oauth-connection="replayed"] [data-oauth-connection-revoked]').textContent,
     ).toBe('Access revoked')
+    expect(
+      find('[data-oauth-connection="app-gone"] [data-oauth-connection-revoked]').textContent,
+    ).toBe('App no longer available')
+    expect(
+      document.querySelector('[data-oauth-connection="live"] [data-oauth-connection-revoked]'),
+    ).toBeNull()
   })
 })

@@ -4,11 +4,13 @@
  * re-sends only the parts it changed. Readers and budgets are in
  * lib/workspaceParts.ts.
  *
- * - root: the caller's seats and organizations, or null with no seat. It
- *   reads the caller's profiles, each organization and its counters, so it
- *   reruns on seat changes, organization settings and every task or project
- *   created, archived, restored or deleted (the numbers and live counts in
- *   org_counters).
+ * - root: the caller's seats and organizations, and whether the login may
+ *   create an organization. With no seat it can open, null, or why not
+ *   (an organization deletion, a deactivation the caller asks to hear of)
+ *   and when it may create one (lib/workspaceParts.ts readRoot). It reads the caller's profiles, each
+ *   organization and its counters, so it reruns on seat changes,
+ *   organization settings and every task or project created, archived,
+ *   restored or deleted (the numbers and live counts in org_counters).
  * - catalog (per organization): teams and labels. One range each.
  * - people (per window of the organization's profile ids,
  *   lib/idWindows.ts): profiles with their Team sync stamps and team
@@ -75,9 +77,13 @@ function gridWindow(w: IdWindow): IdWindow {
   return w
 }
 
+/* `seatless: 'all'` asks for the answer to a login that an organization
+ * deactivated too. Without it that login gets null, as before the answer
+ * existed, because app versions from then read every seatless answer as an
+ * organization deletion. */
 export const root = authedQuery({
-  args: {},
-  handler: async (ctx) => await readRoot(ctx),
+  args: { seatless: v.optional(v.literal('all')) },
+  handler: async (ctx, args) => await readRoot(ctx, args.seatless === 'all'),
 })
 
 export const catalog = seatQuery({

@@ -19,7 +19,7 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
-import { credentialAccess, tokenExpired } from './lib/access'
+import { credentialAccess, findOAuthClient, tokenExpired } from './lib/access'
 import { billingEnabled, subscriptionFor } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
@@ -53,7 +53,8 @@ export type ApiUsagePeriod = {
 /** How a credential stands. `inactive` means its owner's seat is inactive,
  * so it is refused until the seat is active again; `deleted` is a credential
  * whose row is gone (or an owner-deleted connected app) that still had calls
- * in the period. */
+ * in the period, or a connected app whose OAuth client Qivo no longer has,
+ * which can never act again (lib/access.ts oauthClientLive). */
 export type ApiCredentialState = 'active' | 'revoked' | 'expired' | 'inactive' | 'deleted'
 
 /** One row of the page. `prefix` is the token prefix, the agent key's
@@ -233,6 +234,16 @@ export const list = orgQuery({
       person: profile.name,
       agent: profile.kind === 'agent',
     })
+    // whether Better Auth still has each OAuth client, read once per client
+    const clients = new Map<string, Promise<boolean>>()
+    const clientExists = (clientId: string) => {
+      let known = clients.get(clientId)
+      if (!known) {
+        known = findOAuthClient(ctx, clientId).then((client) => client !== null)
+        clients.set(clientId, known)
+      }
+      return known
+    }
     for (const profile of profiles) {
       if (profile.kind === 'agent') {
         const keys = await ctx.db
@@ -295,9 +306,14 @@ export const list = orgQuery({
       for (const connection of connections) {
         if (!connection.approved_at) continue
         // A connection its owner deleted shows only through its calls.
-        const deleted = connection.revocation_reason === 'deleted'
+        const ownerDeleted = connection.revocation_reason === 'deleted'
         const calls = callsOf('oauth_connections', connection.id)
-        if (deleted && calls === 0) continue
+        if (ownerDeleted && calls === 0) continue
+        // one whose client is gone has ended too, although nothing revoked
+        // it, as when an operator deletes the client's rows by hand
+        const deleted =
+          ownerDeleted ||
+          (connection.revoked_at === undefined && !(await clientExists(connection.client_id)))
         add(
           {
             table: 'oauth_connections',

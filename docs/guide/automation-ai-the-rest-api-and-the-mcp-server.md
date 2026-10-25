@@ -232,4 +232,5 @@ with their calls, and revoke any of them on
 [API access](./administration-guard-rails-and-the-demo.md#api-access). A token
 an admin revoked reads **revoked by an admin** in your list, and such a
 connection reads **Revoked by an admin**. Create a new token or connect the
-app again if you still need it.
+app again if you still need it. A connection to an app that no longer exists
+in Qivo reads **App no longer available** and can never act again.

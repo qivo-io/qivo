@@ -551,9 +551,9 @@ success, failure and HTTP-status history. Pending retries survive a verified
 refresh before expiry. Registering after expiry or deletion starts fresh and
 cannot revive old queued events. There is no replay of failed events or changes
 missed while disabled. Registration reclaims quota held
-by expired registrations, by revoked, expired or deleted credentials and by
-removed accounts. A personal token's subscriptions stop delivering when it
-expires.
+by expired registrations, by revoked, expired or deleted credentials, by
+removed accounts and by connected apps that no longer exist in Qivo. A
+personal token's subscriptions stop delivering when it expires.
 OAuth subscriptions belong to the connection grant. Access-token expiry,
 rotation or revocation of an individual access token does not cancel them.
 Disconnect the connected app or unsubscribe to stop them. Unsubscribe through REST
@@ -567,7 +567,12 @@ owners with `GET /v1/webhooks/organization` and remove one with
 connection. Removing another owner's subscription needs a credential that can
 make changes: a personal token with change access, or an OAuth connection with
 `qivo:write`. Use these routes to reclaim shared quota when the original owner
-cannot remove a callback.
+cannot remove a callback. The list shows `status: "unauthorized"` for a
+subscription whose owner can no longer authorize it. It receives nothing,
+holds no quota, and the next registration in the organization removes it. The
+list shows `status: "suspended"` for an active subscription whose owner Qivo
+refuses for now, such as an inactive user. It receives nothing but keeps its
+quota, and it resumes delivery once its owner is allowed again.
 
 ## Stays in the app
 

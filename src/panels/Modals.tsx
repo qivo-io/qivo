@@ -21,6 +21,7 @@ import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKey
 import { LimitedInput, LimitedTextarea } from '../components/LimitedField'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
 import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
+import { copyText } from '../lib/clipboard'
 import { relativeWeek, weekToISO } from '../lib/dates'
 import { closeOrAsk } from '../lib/discardQuestion'
 import { limitSentence, overLimit } from '../lib/fieldLimits'
@@ -1700,10 +1701,17 @@ function ArchiveOrDeleteTaskModal({
    included, because the store holds no archived tasks; until they arrive
    both actions wait, and a failed count offers to try again. Archive acts at
    once (the caller closes the window). Delete waits for the server, the
-   window refuses to close meanwhile, and a refusal leaves it open. */
+   window refuses to close meanwhile, and a refusal leaves it open. A project
+   that left the board while the window was open (`gone`) is said to be gone
+   once no delete of its own is on its way. The window then only says so and
+   shows the reason typed in it with Copy reason, as a task window whose
+   task left does (IssueDetail.tsx TaskGone). Nothing in it can be sent any
+   more, so it has Close rather than Cancel, and every close asks first
+   until the reason is copied. */
 function ArchiveOrDeleteProjectModal({
   project,
   deleteOnly = false,
+  gone = false,
   onClose,
   onArchive,
   onDelete,
@@ -1711,6 +1719,8 @@ function ArchiveOrDeleteProjectModal({
 }: {
   project: Pick<ProjectVM, 'id' | 'name' | 'type'>
   deleteOnly?: boolean
+  /** whether the project left the board while the window was open */
+  gone?: boolean
   onClose: () => void
   onArchive?: () => void
   /** resolves whether the server deleted it; the caller closes the window */
@@ -1753,8 +1763,20 @@ function ArchiveOrDeleteProjectModal({
         ? `Moves the ${noun} and ${summary.tasks === 1 && !summary.more ? 'its task' : summary.more ? 'its tasks' : `all ${tasks}`} to Deleted items. You can restore them from there.`
         : `Moves the ${noun} to Deleted items. You can restore it from there.`
   const listed = archiving ? subs.filter((s) => !s.archived) : subs
+  // the project went while nothing of this window's own was on its way
+  const left = gone && !saving
+  const reasonId = useIdM()
+  // the text Copy reason put on the clipboard once the project left
+  const [copied, setCopied] = useStateM<string | null>(null)
+  // the field that had focus goes with the cards, so the notice takes it
+  const goneRef = useRefM<HTMLDivElement>(null)
+  useEffectM(() => {
+    if (!left) return
+    const active = document.activeElement
+    if (!active || active === document.body) goneRef.current?.focus()
+  }, [left])
   const submit = () => {
-    if (!summary || saving || (!archiving && reasonTooLong(false, reason))) return
+    if (!summary || saving || left || (!archiving && reasonTooLong(false, reason))) return
     if (archiving) {
       onArchive?.()
       return
@@ -1770,11 +1792,23 @@ function ArchiveOrDeleteProjectModal({
       title={deleteOnly ? `Delete “${P.projectLabel(project)}”?` : `Archive or delete ${noun}`}
       onClose={onClose}
       busy={saving}
-      unsent={[!saving && !!reason.trim() && 'reason']}
+      unsent={[!saving && !!reason.trim() && !(left && copied === reason) && 'reason']}
       onSubmit={submit}
-      canSubmit={!!summary && !saving && (archiving || !reasonTooLong(false, reason))}
+      canSubmit={!!summary && !saving && !left && (archiving || !reasonTooLong(false, reason))}
       dangerSubmit={!archiving}
       focusAfterClose={focusAfterClose}
+      footer={
+        left
+          ? (close) => (
+              <>
+                <div className="flex-1" />
+                <Button type="button" onClick={close} className="font-semibold">
+                  Close
+                </Button>
+              </>
+            )
+          : undefined
+      }
       submitLabel={
         archiving
           ? 'Archive'
@@ -1787,7 +1821,22 @@ function ArchiveOrDeleteProjectModal({
       width={540}
     >
       <div data-project-fate>
-        {summary === undefined ? (
+        {left ? (
+          <div ref={goneRef} tabIndex={-1} className="outline-none">
+            <FateLead
+              role="status"
+              data-fate-gone
+              aria-describedby={reason.trim() ? reasonId : undefined}
+            >
+              <b className="text-text-1">{P.projectLabel(project)}</b> is no longer here. It was
+              archived or deleted, or you can no longer open it.
+              {reason.trim()
+                ? ' The reason you typed for it was not used. Copy it to keep it.'
+                : ''}
+            </FateLead>
+            {reason.trim() && <UnusedReason id={reasonId} reason={reason} onCopied={setCopied} />}
+          </div>
+        ) : summary === undefined ? (
           <FateLead role="status">Counting tasks…</FateLead>
         ) : summary === null ? (
           <div role="alert" className="mb-3 flex items-center gap-3">
@@ -1807,7 +1856,7 @@ function ArchiveOrDeleteProjectModal({
             .
           </FateLead>
         )}
-        {listed.length > 0 && (
+        {!left && listed.length > 0 && (
           <FateList
             data-fate-subprojects
             heading={`Also ${archiving ? 'archives' : 'deletes'} ${plural(listed.length, 'sub-project')}:`}
@@ -1830,7 +1879,7 @@ function ArchiveOrDeleteProjectModal({
             ))}
           </FateList>
         )}
-        {deleteOnly ? (
+        {left ? null : deleteOnly ? (
           <p className="mt-2 mb-6 text-base leading-normal text-text-2">{deleteText}</p>
         ) : (
           <div
@@ -1859,9 +1908,53 @@ function ArchiveOrDeleteProjectModal({
             </FateCard>
           </div>
         )}
-        {!archiving && <FateReason archiving={false} value={reason} onChange={setReason} />}
+        {!left && !archiving && (
+          <FateReason archiving={false} value={reason} onChange={setReason} />
+        )}
       </div>
     </ModalShell>
+  )
+}
+
+/** A reason that went unused because its project left, to copy. `onCopied`
+    hears the text a copy put on the clipboard. A refused copy leaves it
+    selected, to copy by hand. */
+function UnusedReason({
+  id,
+  reason,
+  onCopied,
+}: {
+  id: string
+  reason: string
+  onCopied: (reason: string) => void
+}) {
+  const box = useRefM<HTMLParagraphElement>(null)
+  const copy = () => {
+    void copyText(reason).then((ok) => {
+      if (ok) {
+        onCopied(reason)
+        window.showToast?.('Copied the reason')
+        return
+      }
+      if (box.current) window.getSelection()?.selectAllChildren(box.current)
+      window.showToast?.("Couldn't copy. Copy the selected text instead.", 'error')
+    })
+  }
+  return (
+    <div data-fate-gone-reason className="flex flex-col items-start gap-2">
+      {/* a long reason scrolls, so Copy reason stays in reach */}
+      <p
+        ref={box}
+        id={id}
+        className="max-h-[min(12rem,30dvh)] w-full overflow-y-auto rounded-md border border-border bg-surface-1 px-2.5 py-2 whitespace-pre-wrap break-words text-text-1 select-text"
+      >
+        {reason}
+      </p>
+      <Button type="button" variant="ghost" onClick={copy}>
+        <Icon name="copy" size={16} />
+        Copy reason
+      </Button>
+    </div>
   )
 }
 

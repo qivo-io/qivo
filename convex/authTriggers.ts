@@ -14,10 +14,27 @@
 import { v } from 'convex/values'
 import type { Triggers } from '../vendor/convex-better-auth/src/client'
 import type { DataModel } from './_generated/dataModel'
+import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
 import type authSchema from './betterAuth/schema'
 import { clampDemoSession, expireDeletedDemoUser, registerDemoUser } from './lib/demo'
 import { endSession } from './lib/sessionEnd'
+
+/** Revokes every grant of OAuth client `clientId`, which Better Auth is
+ * deleting. Nothing in Qivo restores a client, so they can never act again:
+ * API access and Connected apps list them as revoked, and their webhook
+ * subscriptions give back their quota at the organization's next
+ * registration (model/webhookOwners.ts). */
+async function revokeClientGrants(ctx: MutationCtx, clientId: string): Promise<void> {
+  const now = new Date().toISOString()
+  const grants = await ctx.db
+    .query('oauth_connections')
+    .withIndex('by_client', (q) => q.eq('client_id', clientId))
+    .collect()
+  for (const grant of grants)
+    if (grant.revoked_at === undefined)
+      await ctx.db.patch(grant._id, { revoked_at: now, revocation_reason: 'client_deleted' })
+}
 
 export const authTriggers: Triggers<DataModel, typeof authSchema> = {
   user: {
@@ -29,6 +46,13 @@ export const authTriggers: Triggers<DataModel, typeof authSchema> = {
     // A sign-out, a ban or any other delete ends the session now, also one
     // that expired before, so it ends every access token issued in it.
     onDelete: async (ctx, session) => endSession(ctx, session, Date.now()),
+  },
+  // Every delete of a client through Better Auth, such as its
+  // /oauth2/delete-client route if Qivo ever serves it, ends the client's
+  // grants. The component's own deletes (betterAuth/oauth.ts deleteClients)
+  // run no trigger, so their callers end the grants first.
+  oauthClient: {
+    onDelete: async (ctx, client) => revokeClientGrants(ctx, client.clientId),
   },
 }
 
