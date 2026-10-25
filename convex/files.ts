@@ -86,6 +86,7 @@ import {
   holdAfterRestore,
   noteRestore,
   releaseFile,
+  releaseFileNow,
   restoreHoldEnd,
   restoreState,
 } from './model/fileHolds'
@@ -429,21 +430,43 @@ export const gatewayAvatar = internalQuery({
  * next leg with the running counts. The leg with nothing left writes the
  * run's one reap_orphans audit row and the orphan_reaps row.
  *
- * Most runs are incremental. Every path that drops a file's last reference
- * deletes its bytes in the same transaction, so the orphans a run finds are
- * new files: uploads never attached or confirmed, and cleanups that failed.
- * An incremental run reads only the files created after the last finished
- * run's cutoff (orphan_reaps.files_through) and at or before its own, the
- * run's start less the floor. A younger file falls to the next run. A run is
- * full when no run has finished yet or the last finished full run started
- * REAP_FULL_AFTER_MS or more ago, so every fourth weekly run is full. A full
- * run reads every stored file, so it catches a file that lost its last
- * reference without its bytes after a run checked it. Every run, full or
- * incremental, checks every appearance row, so a login removed outside the
- * auth API loses its appearance and backgrounds at the next run. Only a
- * run's last leg moves the cutoff, so after a run fails or stops the next
- * run reads the same files again. Deleting the orphan_reaps row makes the
- * next run full.
+ * Most runs are incremental. Every path in the app that drops a file's last
+ * reference lets go of the file through releaseFile (model/fileHolds.ts),
+ * which holds it, or on the demo erases it at once, so the orphans a run
+ * finds are new files: uploads never attached or confirmed, and cleanups
+ * that failed. An incremental run reads only the files created after the
+ * last finished run's cutoff (orphan_reaps.files_through) and at or before
+ * its own, the run's start less the floor. A younger file falls to the next
+ * run. A run is full when no run has finished yet or the last finished full
+ * run started REAP_FULL_AFTER_MS or more ago, so every fourth weekly run is
+ * full. A full run reads every stored file, so it catches a file whose row
+ * was deleted without releaseFile, an edit outside the app, up to 4 weeks
+ * later, and erases it at once unless a restore makes it hold the file.
+ * Only a run's last leg moves the cutoff, so after a run fails or stops the
+ * next run reads the same files again. Deleting the orphan_reaps row makes
+ * the next run full.
+ *
+ * Every run, full or incremental, checks every appearance row, so a login
+ * removed without the auth API's hook or Admin's removal (removeAuthUserRows)
+ * is found within a week.
+ * Its appearance goes, and its backgrounds and previews are erased at once
+ * with no hold (model/fileHolds.ts releaseFileNow): the login went up to a
+ * week before the run found it, and a hold would keep its files about 14
+ * days. A row whose login id is no id at all, such as a string a write
+ * outside the app left, is kept, counted as skipped and logged, so it can
+ * neither clear an account nor stop the run.
+ *
+ * A restore rewinds orphan_reaps with every other table, so the next run
+ * reads every file uploaded after the restored backup. Reaper legs survive
+ * a restore, though, and a run that spans one checked files uploaded after
+ * the backup while rows still named them. So a run whose last leg finds a
+ * restore it has not noticed yet (restoreState rewound), or one noticed
+ * after the run began, deletes orphan_reaps instead of moving the cutoff,
+ * and the next run is full. Keep ERASE_EVERY_MS (model/fileHolds.ts) below
+ * REAP_FLOOR_MS: a restore the eraser cannot notice comes within
+ * ERASE_EVERY_MS of its backup, so the cutoff of a run that spans it, its
+ * start less the floor, is still before the backup and hides no file
+ * uploaded after it.
  *
  * The 60-minute floor (0033:34-38) keeps a sweep from racing an upload whose
  * attach is seconds away. It is measured from the run's start, which every
@@ -463,8 +486,9 @@ export const gatewayAvatar = internalQuery({
  * leg reads about 2,310 of Convex's 4,096 with the page and the restore
  * check, and has room for more references. A tickets leg reads two ranges
  * and deletes at most two pages. An accounts leg looks up its page's logins
- * in one Better Auth call, which reads each login, and clears each removed
- * login's appearance and backgrounds. Tests lower these. */
+ * in one Better Auth component call (betterAuth/accounts.ts liveLogins),
+ * which reads each login, and clears each removed login's appearance and
+ * backgrounds. Tests lower these. */
 export const REAP_PAGES = { tickets: 1000, accounts: 64, files: 256 }
 
 /* A sweep never deletes a file younger than this when its run starts.
@@ -487,6 +511,9 @@ const vReapCounts = v.object({
   kept: v.number(), // files read and kept, in use or younger than the floor
   tickets: v.number(), // expired upload tickets deleted
   accounts: v.number(), // removed logins whose appearance and backgrounds were cleared
+  // appearance rows kept because their login id is no id; optional for legs
+  // scheduled before the count existed
+  skipped: v.optional(v.number()),
 })
 
 /** The counts a reapOrphans run records in its reap_orphans audit row. */
@@ -521,8 +548,11 @@ export const reapOrphans = internalMutation({
     const now = a.now ?? Date.now()
     const counts: ReapCounts = {
       held: 0,
+      skipped: 0,
       ...(a.counts ?? { deleted: 0, kept: 0, tickets: 0, accounts: 0 }),
     }
+    // whether a restore came after the run began (header above)
+    let spansRestore = false
     // the first leg chooses the run's kind and every later leg carries it
     const since = a.now === undefined ? await reapSince(ctx, now) : a.since
     let next: Pick<ReapLeg, 'phase' | 'cursor'> | null = null
@@ -546,27 +576,30 @@ export const reapOrphans = internalMutation({
       const page = await ctx.db
         .query('account_appearance')
         .paginate({ cursor: a.cursor ?? null, numItems: REAP_PAGES.accounts })
-      const ids = page.page.map((settings) => settings.auth_user_id)
-      // One lookup for the page. The vendored adapter's paginate answers
-      // `_id in` with one get per id and the whole answer at once. A failed
-      // lookup throws, so the leg clears nothing.
-      const users = (await ctx.runQuery(components.betterAuth.adapter.findMany, {
-        model: 'user',
-        where: [{ field: '_id', operator: 'in', value: ids }],
-        paginationOpts: { numItems: ids.length, cursor: null },
-      })) as { page: Array<{ _id: string }>; isDone: boolean }
-      // a partial answer would make the logins it left out look removed
-      if (!users.isDone) throw new Error('the login lookup answered only part of the page')
-      const live = new Set(users.page.map((user) => user._id))
-      for (const id of ids) {
+      // one lookup for the page; a failed one throws, so the leg clears nothing
+      const logins = (await ctx.runQuery(components.betterAuth.accounts.liveLogins, {
+        ids: page.page.map((settings) => settings.auth_user_id),
+      })) as { live: string[]; invalid: string[] }
+      const live = new Set(logins.live)
+      const invalid = new Set(logins.invalid)
+      for (const settings of page.page) {
+        const id = settings.auth_user_id
         if (live.has(id)) continue
-        await clearAccountAppearance(ctx, id)
+        if (invalid.has(id)) {
+          console.warn('Orphan sweep kept an appearance row whose login id is no id', {
+            row: settings._id,
+          })
+          counts.skipped += 1
+          continue
+        }
+        await clearAccountAppearance(ctx, id, releaseFileNow)
         counts.accounts += 1
       }
       next = page.isDone ? { phase: 'files' } : { phase: 'accounts', cursor: page.continueCursor }
     } else {
       const cutoff = now - REAP_FLOOR_MS
       const restore = await restoreState(ctx)
+      spansRestore = restore.rewound || (restore.restored_at ?? 0) > now
       const stored = ctx.db.system.query('_storage')
       const page = await (since === undefined
         ? stored
@@ -606,8 +639,13 @@ export const reapOrphans = internalMutation({
       action: 'reap_orphans',
       detail: counts,
     })
-    // every file created up to the cutoff has now been checked by a finished run
     const state = await ctx.db.query('orphan_reaps').first()
+    if (spansRestore) {
+      // the files it checked may be named by nothing now (header above)
+      if (state !== null) await ctx.db.delete(state._id)
+      return null
+    }
+    // every file created up to the cutoff has now been checked by a finished run
     const done = {
       files_through: now - REAP_FLOOR_MS,
       // an incremental run keeps the last full run's start, and 0 makes the next run full

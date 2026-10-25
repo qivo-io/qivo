@@ -206,10 +206,11 @@ function checkedAfter(
  * once, oldest first: those no check has read yet (demo_upload_sweeps) and
  * created before every receiver that could still claim one started, with
  * 120 seconds for commits to settle. A file that nothing uses and no live
- * ticket holds is deleted. One in use or held then is deleted by whatever
- * releases it: its ticket's expiry (demoUploads.ts sweep), its demo's purge
- * (drainDemoUploads), or files.ts reapOrphans. Returns the progress after
- * the page and whether the page was full. */
+ * ticket keeps is erased (model/fileHolds.ts eraseFile, at once, as on
+ * every demo path). One in use or kept by a live ticket then is erased by
+ * whatever lets go of it: its ticket's expiry (demoUploads.ts sweep), its
+ * demo's purge (drainDemoUploads), or files.ts reapOrphans. Returns the
+ * progress after the page and whether the page was full. */
 export async function checkStoredFiles(
   ctx: MutationCtx,
   progress: Doc<'demo_upload_sweeps'> | null,
@@ -233,7 +234,7 @@ export async function checkStoredFiles(
       .withIndex('by_storage', (q) => q.eq('storage_id', file._id))
       .unique()
     if (ticket && ticket.expires_at > now) continue
-    await ctx.storage.delete(file._id)
+    await eraseFile(ctx, file._id)
   }
   const full = files.length === CHECK_FILES
   const next = checkedAfter(checked, files, full)

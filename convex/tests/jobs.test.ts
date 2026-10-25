@@ -2278,11 +2278,18 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     vi.setSystemTime(Date.now() + HOUR + 60_000)
     const fresh = await storeBlob(t)
 
-    // the removed login's backgrounds are held, so the files phase keeps them
-    expect(await reap(t)).toEqual({ deleted: 5, held: 0, kept: 9, tickets: 6, accounts: 1 })
+    // the removed login's backgrounds are erased at once, before the files phase
+    expect(await reap(t)).toEqual({
+      deleted: 5,
+      held: 0,
+      kept: 7,
+      tickets: 6,
+      accounts: 1,
+      skipped: 0,
+    })
 
     for (const id of orphans) expect(await blobExists(t, id)).toBe(false)
-    for (const id of removed) expect(await fileState(t, id)).toBe('held')
+    for (const id of removed) expect(await fileState(t, id)).toBe('gone')
     for (const id of [attached, avatar, ...library, ...custom, fresh])
       expect(await blobExists(t, id)).toBe(true)
     expect(await ticketCount(t)).toEqual({ background: 1, attachment: 1 })
@@ -2294,9 +2301,9 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     expect(rows[0].actor_email).toBe('system')
     expect(rows[0].actor_auth_id).toBeUndefined()
     // tickets: 3 expired of each kind in pages of 2. accounts: 2 rows in
-    // pages of 1. files: 14 in pages of 2. The first leg is the call.
+    // pages of 1. files: 12 in pages of 2. The first leg is the call.
     const legs = await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
-    expect(legs.filter((job) => job.name.includes('reapOrphans'))).toHaveLength(2 + 2 + 7 - 1)
+    expect(legs.filter((job) => job.name.includes('reapOrphans'))).toHaveLength(2 + 2 + 6 - 1)
   })
 
   it('keeps a file attached between legs', async () => {
@@ -2325,6 +2332,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
       kept: 1,
       tickets: 0,
       accounts: 0,
+      skipped: 0,
     })
   })
 
@@ -2345,14 +2353,28 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
 
     expect(await blobExists(t, young)).toBe(true)
     const [row] = await auditRows(t, 'reap_orphans')
-    expect(row.detail).toEqual({ deleted: 0, held: 0, kept: 1, tickets: 0, accounts: 0 })
+    expect(row.detail).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 1,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
     expect(row.ts).toBe(new Date(start).toISOString())
   })
 
   it('a zero-file run still writes its counts-only audit row', async () => {
     const t = newT()
 
-    expect(await reap(t)).toEqual({ deleted: 0, held: 0, kept: 0, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 0,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
 
     const rows = await auditRows(t, 'reap_orphans')
     expect(rows).toHaveLength(1)
@@ -2364,7 +2386,14 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     const a = await storeBlob(t)
     const b = await storeBlob(t)
 
-    expect(await reap(t)).toEqual({ deleted: 0, held: 0, kept: 2, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 2,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
     expect(await blobExists(t, a)).toBe(true)
     expect(await blobExists(t, b)).toBe(true)
   })
@@ -2387,7 +2416,14 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     for (let n = 0; n < 20; n++) kept.push(...(await libraryImage(t)))
     vi.setSystemTime(Date.now() + HOUR + 60_000)
 
-    expect(await reap(t)).toEqual({ deleted: 800, held: 0, kept: 140, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({
+      deleted: 800,
+      held: 0,
+      kept: 140,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
     expect(await storedCount(t)).toBe(140)
     for (const id of kept) expect(await blobExists(t, id)).toBe(true)
   })
@@ -2417,7 +2453,14 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     vi.setSystemTime(Date.now() + HOUR + 60_000)
     // too young for the first run, which reads every file
     const young = await storeBlob(t)
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 21, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 21,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
 
     const later = [await storeBlob(t), await storeBlob(t)]
     const attached = await storeBlob(t)
@@ -2425,7 +2468,14 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     vi.setSystemTime(Date.now() + WEEK)
     const before = await reapLegs(t)
 
-    expect(await reap(t)).toEqual({ deleted: 3, kept: 1, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({
+      deleted: 3,
+      held: 0,
+      kept: 1,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
     for (const id of [young, ...later]) expect(await blobExists(t, id)).toBe(false)
     expect(await blobExists(t, attached)).toBe(true)
     // the call is the tickets leg; 1 leg reads the empty appearance table
@@ -2441,7 +2491,14 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     const file = await storeBlob(t)
     await attach(t, issue, file)
     vi.setSystemTime(Date.now() + HOUR + 60_000)
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 1, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 1,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
 
     // a write outside the app drops the reference and keeps the bytes
     await t.run(async (ctx) => {
@@ -2450,12 +2507,26 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     })
     for (let week = 1; week < 4; week++) {
       vi.setSystemTime(Date.now() + WEEK)
-      expect(await reap(t)).toEqual({ deleted: 0, kept: 0, tickets: 0, accounts: 0 })
+      expect(await reap(t)).toEqual({
+        deleted: 0,
+        held: 0,
+        kept: 0,
+        tickets: 0,
+        accounts: 0,
+        skipped: 0,
+      })
     }
     expect(await blobExists(t, file)).toBe(true)
 
     vi.setSystemTime(Date.now() + WEEK)
-    expect(await reap(t)).toEqual({ deleted: 1, kept: 0, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({
+      deleted: 1,
+      held: 0,
+      kept: 0,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
     expect(await blobExists(t, file)).toBe(false)
   })
 
@@ -2465,7 +2536,14 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     const gone = await login(t, 'gone')
     const background = await customBackground(t, gone)
     vi.setSystemTime(Date.now() + HOUR + 60_000)
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 2, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 2,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
 
     // a component write outside the auth API drops the login and keeps its rows
     await t.mutation(components.betterAuth.adapter.deleteOne, {
@@ -2473,8 +2551,18 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     })
     vi.setSystemTime(Date.now() + WEEK)
     // an incremental run, which reads no stored file
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 0, tickets: 0, accounts: 1 })
-    for (const id of background) expect(await blobExists(t, id)).toBe(false)
+    expect(await reap(t)).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 0,
+      tickets: 0,
+      accounts: 1,
+      skipped: 0,
+    })
+    // erased at once, with no hold: the login went up to a week before this
+    // run found it, and a hold would keep its files about 14 days
+    for (const id of background) expect(await fileState(t, id)).toBe('gone')
+    expect(await t.run((ctx) => ctx.db.query('file_holds').collect())).toEqual([])
     expect(await t.run((ctx) => ctx.db.query('account_appearance').collect())).toEqual([])
   })
 
@@ -2491,7 +2579,14 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     })
     vi.setSystemTime(Date.now() + HOUR + 60_000)
 
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 2, tickets: 0, accounts: 1 })
+    expect(await reap(t)).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 2,
+      tickets: 0,
+      accounts: 1,
+      skipped: 0,
+    })
     for (const id of removed) expect(await blobExists(t, id)).toBe(false)
     for (const id of custom) expect(await blobExists(t, id)).toBe(true)
     const appearance = await t.run((ctx) => ctx.db.query('account_appearance').collect())
@@ -2499,6 +2594,42 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     // the call is the tickets leg; both rows sit on the one accounts leg's
     // page, and 1 leg reads the files
     expect(await reapLegs(t)).toBe(2)
+  })
+
+  it('keeps and counts an appearance row whose login id is no id, and finishes the run', async () => {
+    const t = newT()
+    Object.assign(REAP_PAGES, { accounts: 4 })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const gone = await login(t, 'gone')
+    const removed = await customBackground(t, gone)
+    await t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'user', where: [{ field: '_id', value: gone }] },
+    })
+    // a row written outside the app, with a login id Better Auth cannot read
+    const unreadable = await customBackground(t, 'not-a-login-id')
+    vi.setSystemTime(Date.now() + HOUR + 60_000)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    // Before, a get of that id threw on Convex and stopped the run in its
+    // accounts phase every week, so that week's files went unchecked; in
+    // convex-test it found no login and cleared the row.
+    expect(await reap(t)).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 2,
+      tickets: 0,
+      accounts: 1,
+      skipped: 1,
+    })
+    for (const id of removed) expect(await fileState(t, id)).toBe('gone')
+    for (const id of unreadable) expect(await fileState(t, id)).toBe('kept')
+    const appearance = await t.run((ctx) => ctx.db.query('account_appearance').collect())
+    expect(appearance.map((row) => row.auth_user_id)).toEqual(['not-a-login-id'])
+    expect(warn).toHaveBeenCalledWith(
+      'Orphan sweep kept an appearance row whose login id is no id',
+      expect.objectContaining({ row: appearance[0]._id }),
+    )
+    warn.mockRestore()
   })
 
   it('a leg queued before incremental runs, with no lower bound, finishes a full run', async () => {
@@ -2509,7 +2640,14 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     const file = await storeBlob(t)
     await attach(t, issue, file)
     vi.setSystemTime(Date.now() + HOUR + 60_000)
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 1, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 1,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
     await t.run(async (ctx) => {
       for (const row of await ctx.db.query('issue_attachments').collect())
         await ctx.db.delete(row._id)
@@ -2517,6 +2655,8 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     // a week later, when a new run would read only the files stored since
     vi.setSystemTime(Date.now() + WEEK)
     const now = Date.now()
+    // a deployment without a restore watch counts as restored
+    await quietWatch(t)
     await t.mutation(internal.files.reapOrphans, {
       phase: 'files',
       now,
@@ -2525,9 +2665,11 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     await t.finishAllScheduledFunctions(() => {})
     expect((await auditRows(t, 'reap_orphans')).at(-1)?.detail).toEqual({
       deleted: 1,
+      held: 0,
       kept: 0,
       tickets: 0,
       accounts: 0,
+      skipped: 0,
     })
     expect(await reapState(t)).toMatchObject([{ full_at: now, files_through: now - HOUR }])
   })
@@ -2540,7 +2682,14 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     const old = await storeBlob(t)
     await attach(t, issue, old)
     vi.setSystemTime(Date.now() + HOUR + 60_000)
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 1, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({
+      deleted: 0,
+      held: 0,
+      kept: 1,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
     const state = await reapState(t)
 
     await t.run(async (ctx) => {
@@ -2548,6 +2697,7 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
     })
     vi.setSystemTime(Date.now() + WEEK)
     Object.assign(REAP_PAGES, { files: 2 })
+    await quietWatch(t)
     await t.mutation(internal.files.reapOrphans, {})
     let leg = await pendingLeg(t)
     while (leg !== null && !(leg.phase === 'files' && leg.cursor !== undefined)) leg = await step(t)
@@ -2567,7 +2717,14 @@ describe('reapOrphans — orphaned bytes die after the floor', () => {
 
     Object.assign(REAP_PAGES, DEFAULT_PAGES)
     vi.setSystemTime(Date.now() + WEEK)
-    expect(await reap(t)).toEqual({ deleted: 700, kept: 0, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({
+      deleted: 700,
+      held: 0,
+      kept: 0,
+      tickets: 0,
+      accounts: 0,
+      skipped: 0,
+    })
     expect(await blobExists(t, old)).toBe(true)
   })
 })

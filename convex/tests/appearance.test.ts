@@ -937,8 +937,10 @@ describe('private custom background gateway', () => {
         })
       expect((await getRequest(t, urls!.preview_url!)).status).toBe(404)
       if (operation === 'delete') await reap(t)
-      expect(await fileState(t, files.preview)).toBe(operation === 'ban' ? 'kept' : 'held')
-      expect(await fileState(t, files.original)).toBe(operation === 'ban' ? 'kept' : 'held')
+      // the sweep erases the files of a login removed outside the app at once
+      const state = operation === 'ban' ? 'kept' : operation === 'delete' ? 'gone' : 'held'
+      expect(await fileState(t, files.preview)).toBe(state)
+      expect(await fileState(t, files.original)).toBe(state)
     },
   )
 
@@ -1030,7 +1032,8 @@ describe('private custom background gateway', () => {
     expect(await t.run((ctx) => ctx.db.query('account_appearance').collect())).toHaveLength(1)
     expect(await t.run((ctx) => ctx.db.query('background_uploads').collect())).toEqual([])
     expect(await customRows(t)).toHaveLength(1)
-    expect((await fileStates(t)).sort()).toEqual(['held', 'kept'])
+    // the deleted login's background is erased at once, with no hold
+    expect(await fileStates(t)).toEqual(['kept'])
     expect(await settings(other.caller)).toMatchObject({ custom_image: otherImage.image })
     await noLibraryChanges(t)
   })

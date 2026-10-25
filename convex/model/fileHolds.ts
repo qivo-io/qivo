@@ -15,7 +15,9 @@
  * such as an upload refused in the same transaction or bytes nobody
  * confirmed, for the public demo and for the operator's panorama library,
  * whose storage URLs are permanent and public (panoramaImages.ts remove, and
- * a replaced library preview in backgroundPreviews.ts attach).
+ * a replaced library preview in backgroundPreviews.ts attach). releaseFileNow
+ * lets go of a file at once, for the backgrounds of a login that the orphan
+ * sweep finds removed outside the app (files.ts reapOrphans).
  *
  * The public demo keeps no backups and promises deletion 24 hours after a
  * demo starts, so on the demo (lib/demo.ts isDemoDeployment) releaseFile
@@ -201,6 +203,21 @@ export async function releaseFile(
   else return
   if (ERASE_TIMERS.on)
     await ctx.scheduler.runAt(erase_at, eraseHeldFileRef, { storage_id: storageId })
+}
+
+/**
+ * Lets go of file `storageId` as releaseFile does, but erases it at once
+ * instead of holding it. Only the orphan sweep's accounts phase uses it, for
+ * the backgrounds and previews of a login removed outside the app (files.ts
+ * reapOrphans): the login went up to a week before the sweep found it, and a
+ * hold would keep its files about 14 days.
+ */
+export async function releaseFileNow(
+  ctx: MutationCtx,
+  storageId: Id<'_storage'> | undefined,
+): Promise<void> {
+  if (storageId === undefined || (await storageIdReferenced(ctx, storageId))) return
+  await eraseFile(ctx, storageId)
 }
 
 /**
