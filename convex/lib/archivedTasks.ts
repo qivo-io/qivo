@@ -9,7 +9,8 @@
  * id, which sorts like its text. A cursor names a position in that order, so
  * a page reads only what follows it, whatever the size of the archive.
  * Callers get the position sealed (archiveCursorText), since it can be a task
- * of a project they cannot see.
+ * of a project they cannot see. The task window looks up its own task in the
+ * archive by id instead (issues.archivedTask, archivedTaskCore below).
  *
  * Both surfaces page through archivedTasksPage, under one read budget, and
  * search with archivedTaskMatcher, the task search rule (lib/search.ts
@@ -23,6 +24,7 @@ import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { canSeeProject } from './access'
 import { openCursorText, sealCursorText } from './archiveCursorSeal'
+import { byId } from './db'
 import { allWordsMatcher, searchPieces, type TaskSearchFields, taskSearchText } from './search'
 import { issueKey, STATUS_NAMES } from './taskRefs'
 
@@ -669,17 +671,45 @@ export async function archivedPageCore(
     : null
   return await archivedTasksPage(ctx, { orgId: me.org_id, projectIds }, o.cursor, o.limit, {
     keeps: async (task, facts) => matches === null || (await matches(task, facts)),
-    row: async (task, facts) => {
-      const {
-        _id,
-        _creationTime,
-        description: _description,
-        parent_id: _parent,
-        relations_marked: _marks,
-        window_key: _window,
-        ...row
-      } = task
-      return { ...row, is_group: await facts.isGroup() }
-    },
+    row: (task, facts) => pageRow(task, facts),
   })
+}
+
+/* `task` as the Archived tasks page shows it (ArchivedPageRow). */
+async function pageRow(task: ArchivedTask, facts: TaskFacts): Promise<ArchivedPageRow> {
+  const {
+    _id,
+    _creationTime,
+    description: _description,
+    parent_id: _parent,
+    relations_marked: _marks,
+    window_key: _window,
+    ...row
+  } = task
+  return { ...row, is_group: await facts.isGroup() }
+}
+
+/**
+ * The archived task `id` as the app's Archived tasks page shows it to the
+ * caller, whose active profiles are `myProfiles` keyed by organization, or
+ * null when that page lists it for none of the caller's projects. It applies
+ * the page's rule for a row: the task is archived, and the caller's seat in
+ * the organization of the task's project sees that project (canSeeProject).
+ * The page of that project lists such a task (archivedPageCore), so the
+ * answer tells nothing the page does not. An active, deleted or unknown task
+ * and one in a project the caller cannot see all answer null.
+ */
+export async function archivedTaskCore(
+  ctx: QueryCtx,
+  myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
+  id: string,
+): Promise<ArchivedPageRow | null> {
+  const task = await byId(ctx, 'issues', id)
+  if (task === null || !isArchived(task)) return null
+  const project = await byId(ctx, 'projects', task.project_id)
+  // the page reads only its own organization's tasks
+  if (project === null || project.org_id !== task.org_id) return null
+  const me = myProfiles.get(project.org_id)
+  if (me === undefined || !(await canSeeProject(ctx, me, project))) return null
+  return await pageRow(task, taskFacts(ctx, task))
 }

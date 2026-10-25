@@ -17,6 +17,9 @@ import {
   SWEEP_INTERVAL_MS,
   SYNC_PAGE,
   SYNC_SAFETY_MS,
+  WEBHOOK_ATTEMPTS,
+  WEBHOOK_LEASE_MS,
+  WEBHOOK_PAGE,
 } from '../billingSync'
 import { billingDueBy, getBillableUsers, markBillingMembershipChanged } from '../lib/billableUsers'
 import { addCalendarMonths } from '../lib/billingAccess'
@@ -112,11 +115,24 @@ const finishCheckout = makeFunctionReference<
   { org_id: string; token: string; checkout_id?: string; url?: string; expires_at?: string },
   null
 >('billingActions:finishCheckout')
-const webhook = makeFunctionReference<
-  'action',
+const receiveWebhook = makeFunctionReference<
+  'mutation',
   { event_id: string; subscription_id: string },
   null
->('billingSync:webhook')
+>('billingSync:receiveWebhook')
+const processWebhook = makeFunctionReference<'action', { event_id: string }, null>(
+  'billingSync:processWebhook',
+)
+const claimWebhook = makeFunctionReference<
+  'mutation',
+  { event_id: string },
+  { subscription_id: string; claim: string } | null
+>('billingSync:claimWebhook')
+const webhookFailed = makeFunctionReference<
+  'mutation',
+  { event_id: string; claim: string; error: string; refused?: boolean },
+  null
+>('billingSync:webhookFailed')
 const restartStorage = makeFunctionReference<
   'mutation',
   { period: Id<'billing_periods'> },
@@ -211,6 +227,25 @@ const minutesAfter = (ms: number) => (ms - SWEEP_INTERVAL_MS) / 60_000
 const DEFAULT_STORAGE_PAGE = { ...STORAGE_PAGE }
 const DEFAULT_SYNC_PAGE = { ...SYNC_PAGE }
 const DEFAULT_REMINDER_PAGE = { ...REMINDER_PAGE }
+
+/* The calls waiting in the scheduler, by function name. */
+const queued = (t: T, name: string) =>
+  t.run(async (ctx) =>
+    (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+      (job) => job.name === name && job.state.kind === 'pending',
+    ),
+  )
+
+/* Sets when the organization is next reconciled, and whether that is only
+ * the safety pass. */
+const setDue = (t: T, orgId: string, due: string | undefined, safety?: true) =>
+  t.run(async (ctx) => {
+    const sub = await ctx.db
+      .query('billing_subscriptions')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .unique()
+    await ctx.db.patch(sub!._id, { sync_due_at: due, sync_safety: safety })
+  })
 
 async function stored(t: T, orgId: string) {
   return await t.run((ctx) =>
@@ -1361,22 +1396,7 @@ describe('provider state, retries and billing snapshots', () => {
 })
 
 describe('when organizations are reconciled', () => {
-  /* The calls waiting in the scheduler, by function name. */
-  const queued = (t: T, name: string) =>
-    t.run(async (ctx) =>
-      (await ctx.db.system.query('_scheduled_functions').collect()).filter(
-        (job) => job.name === name && job.state.kind === 'pending',
-      ),
-    )
   const dueAt = async (t: T, orgId: string) => (await stored(t, orgId))?.sync_due_at
-  const setDue = (t: T, orgId: string, due: string | undefined, safety?: true) =>
-    t.run(async (ctx) => {
-      const sub = await ctx.db
-        .query('billing_subscriptions')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
-        .unique()
-      await ctx.db.patch(sub!._id, { sync_due_at: due, sync_safety: safety })
-    })
   const notices = (t: T) =>
     t.run(async (ctx) =>
       (await ctx.db.query('billing_notices').collect()).map((n) => [n.profile_id, n.kind]),
@@ -2050,7 +2070,8 @@ describe('when organizations are reconciled', () => {
       'fetch',
       vi.fn(async () => new Response(remote(f.org.id))),
     )
-    await t.action(webhook, { event_id: 'renewal-1', subscription_id: providerId })
+    await t.mutation(receiveWebhook, { event_id: 'renewal-1', subscription_id: providerId })
+    await t.action(processWebhook, { event_id: 'renewal-1' })
     expect(await stored(t, f.org.id)).toMatchObject({ sync_due_at: NOW })
   })
 
@@ -2256,5 +2277,406 @@ describe('when organizations are reconciled', () => {
     await grantUntil(t, f.org.id, iso(-30))
     await t.mutation(reminders, { now: Date.parse(NOW), threshold: 0, cursor: null })
     expect(await notices(t)).toEqual([])
+  })
+})
+
+describe('Polar webhook deliveries', () => {
+  // a Standard Webhooks secret of 32 bytes, as Polar issues one
+  const SECRET = `whsec_${btoa('qivo-hermetic-webhook-key-000032')}`
+  const site = (t: T) =>
+    t as unknown as { fetch(path: string, init: RequestInit): Promise<Response> }
+  /* Delivers Polar's subscription event `id`, signed as Polar signs it
+   * unless `signature` replaces it, and answers the route's answer. */
+  async function deliver(t: T, id: string, signature?: string) {
+    const body = JSON.stringify({ type: 'subscription.updated', data: { id: providerId } })
+    const timestamp = String(Math.floor(Date.now() / 1000))
+    const key = await crypto.subtle.importKey(
+      'raw',
+      Uint8Array.from(atob(SECRET.slice(6)), (c) => c.charCodeAt(0)),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    )
+    const mac = new Uint8Array(
+      await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${id}.${timestamp}.${body}`)),
+    )
+    return await site(t).fetch('/billing/polar/webhook', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'webhook-id': id,
+        'webhook-timestamp': timestamp,
+        'webhook-signature': `v1,${signature ?? btoa(String.fromCharCode(...mac))}`,
+      },
+      body,
+    })
+  }
+  const receipts = (t: T) => t.run((ctx) => ctx.db.query('billing_webhooks').collect())
+  /* The deliveries whose processing attempt waits in the scheduler. */
+  const attemptsFor = async (t: T) =>
+    (await queued(t, 'billingSync:processWebhook')).map((job) => job.args[0].event_id)
+  const attemptsQueued = async (t: T) => (await attemptsFor(t)).length
+  const failedRows = (t: T) =>
+    t.run(async (ctx) =>
+      (await ctx.db.query('platform_audit_log').collect()).filter(
+        (row) => row.action === 'billing.webhook_failed',
+      ),
+    )
+  const failures = async (t: T) => (await failedRows(t)).map((row) => row.detail)
+  /* A Polar API that answers nothing until the request gives up. */
+  const stalled = (_url: string, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) =>
+      init?.signal?.addEventListener('abort', () =>
+        reject(new DOMException('The request was aborted', 'AbortError')),
+      ),
+    )
+  /* Starts the attempt the sweep finds due at the receipt's next time, and
+   * runs it. */
+  async function nextAttempt(t: T) {
+    const [receipt] = await receipts(t)
+    vi.setSystemTime(Date.parse(receipt.next_attempt_at as string))
+    await t.mutation(sweep, {})
+    await sample(t)
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('POLAR_WEBHOOK_SECRET', SECRET)
+    vi.stubEnv('SITE_URL', 'http://localhost:5199')
+    vi.stubEnv('BETTER_AUTH_SECRET', 'billing-webhook-hermetic-secret')
+  })
+
+  it('answers at once while Polar does not answer, and applies the delivery once it does', async () => {
+    const { t, f } = await fixture()
+    const polar = vi.fn(stalled)
+    vi.stubGlobal('fetch', polar)
+    expect((await deliver(t, 'evt_slow')).status).toBe(202)
+    // the answer did not wait for Polar
+    expect(polar).not.toHaveBeenCalled()
+    expect(await receipts(t)).toMatchObject([
+      { event_id: 'evt_slow', subscription_id: providerId, pending: true, attempts: 0 },
+    ])
+    expect(await attemptsQueued(t)).toBe(1)
+    // the scheduled attempt gives Polar the adapter's 15 seconds
+    await sample(t)
+    expect(polar).toHaveBeenCalledOnce()
+    const [failed] = await receipts(t)
+    expect(failed).toMatchObject({ pending: true, attempts: 1 })
+    expect(Date.parse(failed.next_attempt_at as string) - Date.now()).toBe(30_000)
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(remote(f.org.id))),
+    )
+    await nextAttempt(t)
+    const [done] = await receipts(t)
+    expect(done).toMatchObject({ attempts: 2, processed_at: expect.any(String) })
+    expect(done.pending).toBeUndefined()
+    expect(await stored(t, f.org.id)).toMatchObject({
+      status: 'active',
+      polar_subscription_id: providerId,
+    })
+  })
+
+  it('tries a failing Polar again with growing waits, then gives the delivery up', async () => {
+    const { t, f } = await fixture()
+    const polar = vi.fn(async (_url: string) => new Response(null, { status: 503 }))
+    vi.stubGlobal('fetch', polar)
+    expect((await deliver(t, 'evt_down')).status).toBe(202)
+    await sample(t)
+    const waits: number[] = []
+    for (let attempt = 1; attempt < WEBHOOK_ATTEMPTS; attempt += 1) {
+      const [receipt] = await receipts(t)
+      expect(receipt).toMatchObject({ pending: true, attempts: attempt })
+      waits.push((Date.parse(receipt.next_attempt_at as string) - Date.now()) / 1000)
+      await nextAttempt(t)
+    }
+    expect(waits).toEqual([30, 60, 120, 240, 480, 960, 1920, 3600, 3600])
+    // one read of the subscription an attempt; the sweep's reconciliations
+    // list the organization's subscriptions instead
+    const reads = polar.mock.calls.filter(([url]) =>
+      String(url).endsWith(`/subscriptions/${providerId}`),
+    )
+    expect(reads).toHaveLength(WEBHOOK_ATTEMPTS)
+    const [given] = await receipts(t)
+    expect(given).toMatchObject({ attempts: WEBHOOK_ATTEMPTS, failed_at: expect.any(String) })
+    expect(given.pending).toBeUndefined()
+    expect(await failures(t)).toEqual([
+      {
+        event_id: 'evt_down',
+        subscription_id: providerId,
+        attempts: WEBHOOK_ATTEMPTS,
+        error: 'polar unavailable 503',
+      },
+    ])
+    // the sweep starts nothing more, and the subscription waits for the
+    // reconciliation
+    vi.setSystemTime(Date.now() + 24 * 60 * 60_000)
+    await t.mutation(sweep, {})
+    expect(await attemptsQueued(t)).toBe(0)
+    expect(await stored(t, f.org.id)).toMatchObject({ status: 'pending' })
+  })
+
+  it('gives a delivery up at once when applying refuses it, and reconciles its organization', async () => {
+    const { t, f } = await fixture()
+    await t.mutation(apply, { payload: remote(f.org.id) })
+    await setDue(t, f.org.id, iso(60))
+    // Polar now reports fewer seats than the plan's minimum, which every
+    // attempt would refuse again
+    const polar = vi.fn(
+      async () => new Response(remote(f.org.id, { seats: 3, modified_at: iso(1) })),
+    )
+    vi.stubGlobal('fetch', polar)
+    expect((await deliver(t, 'evt_refused')).status).toBe(202)
+    await t.action(processWebhook, { event_id: 'evt_refused' })
+    expect(polar).toHaveBeenCalledOnce()
+    const [given] = await receipts(t)
+    expect(given).toMatchObject({ attempts: 1, failed_at: expect.any(String) })
+    expect(given.pending).toBeUndefined()
+    expect(await failedRows(t)).toMatchObject([
+      {
+        target_org_id: f.org.id,
+        detail: {
+          event_id: 'evt_refused',
+          subscription_id: providerId,
+          attempts: 1,
+          error: 'Subscription quantity is invalid.',
+        },
+      },
+    ])
+    // the organization keeps its state, and its reconciliation is asked for
+    expect(await stored(t, f.org.id)).toMatchObject({ billed_seats: 5, sync_due_at: NOW })
+    expect((await queued(t, 'billingSync:reconcile')).map((job) => job.args[0])).toEqual([
+      { org_id: f.org.id },
+    ])
+  })
+
+  it('gives up a delivery whose attempts all started without ending', async () => {
+    const { t } = await fixture()
+    vi.stubGlobal('fetch', vi.fn(stalled))
+    expect((await deliver(t, 'evt_lost')).status).toBe(202)
+    // every attempt so far died before it could record its end
+    await t.run(async (ctx) => {
+      const [receipt] = await ctx.db.query('billing_webhooks').collect()
+      await ctx.db.patch(receipt._id, {
+        attempts: WEBHOOK_ATTEMPTS,
+        next_attempt_at: new Date(Date.now() - 1).toISOString(),
+      })
+    })
+    await t.action(processWebhook, { event_id: 'evt_lost' })
+    expect((await receipts(t))[0].pending).toBeUndefined()
+    expect(await failures(t)).toMatchObject([{ error: 'the last attempt did not finish' }])
+  })
+
+  it('ignores a failure from an attempt that outlived its lease once the next one started', async () => {
+    const { t, f } = await fixture()
+    vi.stubGlobal('fetch', vi.fn(stalled))
+    expect((await deliver(t, 'evt_late')).status).toBe(202)
+    // the second to last attempt starts, and its lease passes while it waits
+    await t.run(async (ctx) => {
+      const [receipt] = await ctx.db.query('billing_webhooks').collect()
+      await ctx.db.patch(receipt._id, {
+        attempts: WEBHOOK_ATTEMPTS - 2,
+        next_attempt_at: new Date(Date.now() - 1).toISOString(),
+      })
+    })
+    const late = await t.mutation(claimWebhook, { event_id: 'evt_late' })
+    expect(late).not.toBeNull()
+    vi.setSystemTime(Date.now() + WEBHOOK_LEASE_MS)
+    const last = await t.mutation(claimWebhook, { event_id: 'evt_late' })
+    expect(last).toEqual({ subscription_id: providerId, claim: expect.any(String) })
+    expect(last?.claim).not.toBe(late?.claim)
+    const held = await receipts(t)
+    expect(held).toMatchObject([{ pending: true, attempts: WEBHOOK_ATTEMPTS }])
+    await t.mutation(webhookFailed, {
+      event_id: 'evt_late',
+      claim: late?.claim ?? '',
+      error: 'polar unavailable',
+    })
+    expect(await receipts(t)).toEqual(held)
+    expect(await failures(t)).toEqual([])
+    // so the last attempt still applies what it read
+    await t.mutation(apply, { payload: remote(f.org.id), event_id: 'evt_late' })
+    expect(await receipts(t)).toMatchObject([{ processed_at: expect.any(String) }])
+    expect(await stored(t, f.org.id)).toMatchObject({ status: 'active' })
+  })
+
+  it('starts no second attempt while one holds the delivery', async () => {
+    const { t } = await fixture()
+    const polar = vi.fn(stalled)
+    vi.stubGlobal('fetch', polar)
+    expect((await deliver(t, 'evt_held')).status).toBe(202)
+    expect(await t.mutation(claimWebhook, { event_id: 'evt_held' })).not.toBeNull()
+    vi.setSystemTime(Date.now() + WEBHOOK_LEASE_MS - 1)
+    await t.action(processWebhook, { event_id: 'evt_held' })
+    expect(polar).not.toHaveBeenCalled()
+    expect(await receipts(t)).toMatchObject([{ pending: true, attempts: 1 }])
+  })
+
+  it('uses no attempt while billing is off or Polar is not configured', async () => {
+    const { t, f } = await fixture()
+    const polar = vi.fn(async () => new Response(remote(f.org.id)))
+    vi.stubGlobal('fetch', polar)
+    expect((await deliver(t, 'evt_off')).status).toBe(202)
+    vi.stubEnv('BILLING_ENABLED', 'false')
+    await t.action(processWebhook, { event_id: 'evt_off' })
+    vi.stubEnv('BILLING_ENABLED', 'true')
+    vi.stubEnv('POLAR_ACCESS_TOKEN', '')
+    await t.action(processWebhook, { event_id: 'evt_off' })
+    expect(polar).not.toHaveBeenCalled()
+    expect(await receipts(t)).toMatchObject([{ pending: true, attempts: 0 }])
+    // once both are back, it gets all its attempts
+    vi.stubEnv('POLAR_ACCESS_TOKEN', 'polar_oat_hermetic_billing_tests')
+    await t.action(processWebhook, { event_id: 'evt_off' })
+    expect(await receipts(t)).toMatchObject([{ attempts: 1, processed_at: expect.any(String) }])
+  })
+
+  it('stores a repeated delivery once and reads Polar for it once', async () => {
+    const { t, f } = await fixture()
+    const polar = vi.fn(async () => new Response(remote(f.org.id)))
+    vi.stubGlobal('fetch', polar)
+    // Polar sends an event again when it did not get the answer
+    expect((await deliver(t, 'evt_twice')).status).toBe(202)
+    expect((await deliver(t, 'evt_twice')).status).toBe(202)
+    expect(await receipts(t)).toHaveLength(1)
+    expect(await attemptsQueued(t)).toBe(1)
+    await t.action(processWebhook, { event_id: 'evt_twice' })
+    expect(polar).toHaveBeenCalledOnce()
+    // and again after it was processed
+    expect((await deliver(t, 'evt_twice')).status).toBe(202)
+    await t.action(processWebhook, { event_id: 'evt_twice' })
+    expect(polar).toHaveBeenCalledOnce()
+    expect(await receipts(t)).toMatchObject([{ attempts: 1, processed_at: expect.any(String) }])
+    expect(await stored(t, f.org.id)).toMatchObject({ status: 'active' })
+  })
+
+  it('starts a delivery given up again when Polar sends it again', async () => {
+    const { t, f } = await fixture()
+    // as an operator redelivers it from Polar's dashboard, with its event id
+    await t.run((ctx) =>
+      ctx.db.insert('billing_webhooks', {
+        event_id: 'evt_again',
+        subscription_id: providerId,
+        received_at: iso(-60),
+        attempts: 1,
+        failed_at: iso(-60),
+      }),
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(remote(f.org.id))),
+    )
+    expect((await deliver(t, 'evt_again')).status).toBe(202)
+    const [again] = await receipts(t)
+    expect(again).toMatchObject({ pending: true, attempts: 0, received_at: NOW })
+    expect(again.failed_at).toBeUndefined()
+    expect(await attemptsFor(t)).toEqual(['evt_again'])
+    await t.action(processWebhook, { event_id: 'evt_again' })
+    expect(await receipts(t)).toMatchObject([{ attempts: 1, processed_at: expect.any(String) }])
+    expect(await stored(t, f.org.id)).toMatchObject({ status: 'active' })
+  })
+
+  it('ignores a refusal from an attempt from before a redelivery started the delivery again', async () => {
+    const { t, f } = await fixture()
+    vi.stubGlobal('fetch', vi.fn(stalled))
+    const refusal = { error: 'Subscription has no assigned organization plan.', refused: true }
+    expect((await deliver(t, 'evt_restarted')).status).toBe(202)
+    // the first attempt outlives its lease, and the second is refused
+    const first = await t.mutation(claimWebhook, { event_id: 'evt_restarted' })
+    vi.setSystemTime(Date.now() + WEBHOOK_LEASE_MS)
+    const second = await t.mutation(claimWebhook, { event_id: 'evt_restarted' })
+    await t.mutation(webhookFailed, {
+      event_id: 'evt_restarted',
+      claim: second?.claim ?? '',
+      ...refusal,
+    })
+    expect(await receipts(t)).toMatchObject([{ failed_at: expect.any(String) }])
+    // the cause is fixed and the event redelivered, which starts it again
+    expect((await deliver(t, 'evt_restarted')).status).toBe(202)
+    expect(await t.mutation(claimWebhook, { event_id: 'evt_restarted' })).not.toBeNull()
+    const restarted = await receipts(t)
+    expect(restarted).toMatchObject([{ pending: true, attempts: 1 }])
+    // the first attempt's refusal comes in late
+    await t.mutation(webhookFailed, {
+      event_id: 'evt_restarted',
+      claim: first?.claim ?? '',
+      ...refusal,
+    })
+    expect(await receipts(t)).toEqual(restarted)
+    expect(await failedRows(t)).toHaveLength(1)
+    // so the restarted attempt applies what it reads
+    await t.mutation(apply, { payload: remote(f.org.id), event_id: 'evt_restarted' })
+    expect(await receipts(t)).toMatchObject([{ processed_at: expect.any(String) }])
+    expect(await stored(t, f.org.id)).toMatchObject({ status: 'active' })
+  })
+
+  it('answers 503 when the delivery cannot be stored, for Polar to send it again', async () => {
+    const { t } = await fixture()
+    vi.stubGlobal('fetch', vi.fn(stalled))
+    // two receipts of one event make reading its receipt throw
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 2; i += 1)
+        await ctx.db.insert('billing_webhooks', {
+          event_id: 'evt_unstored',
+          subscription_id: providerId,
+          received_at: NOW,
+          processed_at: NOW,
+        })
+    })
+    expect((await deliver(t, 'evt_unstored')).status).toBe(503)
+    expect(await attemptsQueued(t)).toBe(0)
+  })
+
+  it('refuses a delivery whose signature does not match, and stores nothing', async () => {
+    const { t } = await fixture()
+    vi.stubGlobal('fetch', vi.fn(stalled))
+    const forged = btoa(String.fromCharCode(...new Uint8Array(32)))
+    expect((await deliver(t, 'evt_forged', forged)).status).toBe(400)
+    expect(await receipts(t)).toEqual([])
+    expect(await attemptsQueued(t)).toBe(0)
+  })
+
+  it('deletes receipts past their retention as new ones arrive', async () => {
+    const { t } = await fixture()
+    vi.stubGlobal('fetch', vi.fn(stalled))
+    const at = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString()
+    await t.run(async (ctx) => {
+      for (const [event_id, days] of [
+        ['evt_old_1', 40],
+        ['evt_old_2', 31],
+        ['evt_old_3', 30.5],
+        ['evt_kept', 29],
+      ] as const)
+        await ctx.db.insert('billing_webhooks', {
+          event_id,
+          subscription_id: providerId,
+          received_at: at(days),
+          processed_at: at(days),
+        })
+    })
+    expect((await deliver(t, 'evt_new')).status).toBe(202)
+    // two at a time, the oldest first
+    expect((await receipts(t)).map((row) => row.event_id).sort()).toEqual(
+      ['evt_kept', 'evt_new', 'evt_old_3'].sort(),
+    )
+  })
+
+  it('starts at most WEBHOOK_PAGE due deliveries a minute, those due longest first', async () => {
+    const { t } = await fixture()
+    const late = `evt_due_${WEBHOOK_PAGE.size}`
+    await t.run(async (ctx) => {
+      for (let i = 0; i <= WEBHOOK_PAGE.size; i += 1)
+        await ctx.db.insert('billing_webhooks', {
+          event_id: `evt_due_${i}`,
+          subscription_id: providerId,
+          received_at: NOW,
+          pending: true,
+          attempts: 1,
+          next_attempt_at: new Date(Date.now() - (WEBHOOK_PAGE.size + 1 - i) * 1000).toISOString(),
+        })
+    })
+    await t.mutation(sweep, {})
+    const started = await attemptsFor(t)
+    expect(started).toHaveLength(WEBHOOK_PAGE.size)
+    expect(started).not.toContain(late)
   })
 })

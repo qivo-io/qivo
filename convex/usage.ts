@@ -49,6 +49,7 @@ import { allOrgs, inParallel } from './adminStats'
 import { deletionBegun } from './lib/billingAccess'
 import { isDemoDeployment } from './lib/demo'
 import { badRequest, platformAction, require } from './lib/functions'
+import { keepSignIns } from './lib/signIns'
 import {
   HELD_FILES,
   monthOf,
@@ -73,7 +74,6 @@ import {
   filesPage,
   forgetSignIns,
   heldFilesPage,
-  keepSignIns,
   type MonthStatus,
   monthSpan,
   monthStatus,
@@ -204,10 +204,15 @@ export const countPersonMail = internalMutation({
   },
 })
 
-/** Keeps the months of a sign-in session that ended (auth.ts keepSignIn),
- * so they still count. A login already deleted keeps nothing: its deletion
- * forgot its months (adminAuth.ts removeAuthUserRows), and reading the user
- * here orders the two transactions. */
+/** Keeps the months of a sign-in session that ended, and when it signed in,
+ * so they still count (lib/signIns.ts keepSignIns). The session's delete
+ * trigger schedules it for every session Better Auth ends, one at a time or
+ * many in one call: sign-out, revoked sessions, a password reset, a ban and
+ * the nightly cleanup of expired sessions (lib/sessionEnd.ts endSession).
+ * The trigger already kept the current month and the one before. A login
+ * already deleted keeps nothing: its deletion forgot its months (adminAuth.ts
+ * removeAuthUserRows), and this forgets the ones the trigger kept after that.
+ * Reading the user here orders the two transactions. */
 export const keepSignIn = internalMutation({
   args: { auth_user_id: v.string(), created_at: v.number(), updated_at: v.number() },
   handler: async (ctx, a): Promise<null> => {
@@ -216,7 +221,10 @@ export const keepSignIn = internalMutation({
       model: 'user',
       where: [{ field: '_id', value: a.auth_user_id }],
     })
-    if (user === null) return null
+    if (user === null) {
+      await forgetSignIns(ctx, a.auth_user_id)
+      return null
+    }
     await keepSignIns(
       ctx,
       a.auth_user_id,

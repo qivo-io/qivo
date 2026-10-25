@@ -253,6 +253,16 @@ Parents restored this way send no **Restored** update. Restoring a Done task
 restarts its auto-archive clock. Archived tasks do not appear in other views,
 and shared task links work again only after restoration.
 
+When someone else archives a task you have open, its window stays and says
+the task was archived. If you can edit its project, **Restore** in the
+window brings the task back into it. Otherwise the window says that someone
+who can edit the project can restore it from Archived tasks. A task that is
+deleted while you have it open, or that you can no longer open, says it is
+no longer here. If Qivo cannot check the archive, the window says so, and
+**Retry** checks again. Text you typed in the window and did not send, such
+as a comment, a new title or remaining hours, is discarded then, and Qivo
+says so.
+
 ## Deleting
 
 Choose **Archive or delete…** in the task's **…** menu, then **Delete**. It

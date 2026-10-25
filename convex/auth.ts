@@ -2,7 +2,7 @@ import { getCurrentAuthContext } from '@better-auth/core/context'
 import { type BetterAuthOptions, betterAuth } from 'better-auth/minimal'
 import { admin } from 'better-auth/plugins'
 import { anonymous } from 'better-auth/plugins/anonymous'
-import { type GenericMutationCtx, makeFunctionReference } from 'convex/server'
+import { makeFunctionReference } from 'convex/server'
 import {
   type AuthFunctions,
   createClient,
@@ -13,6 +13,7 @@ import { isRunMutationCtx, requireRunMutationCtx } from '../vendor/convex-better
 import { components, internal } from './_generated/api'
 import type { DataModel } from './_generated/dataModel'
 import authConfig from './auth.config'
+import { authTriggers } from './authTriggers'
 import authSchema from './betterAuth/schema'
 import {
   fieldsSetTo,
@@ -24,15 +25,7 @@ import {
 import { type AuthMailState, authMailPlugin, RESEND, recordAuthMail } from './lib/authMail'
 import { servedAuthRoutes, serveOnly } from './lib/authRoutes'
 import { stopValidationEarly } from './lib/authValidation'
-import {
-  clampDemoSession,
-  DEMO_TTL_MS,
-  demoRefusal,
-  expireDeletedDemoUser,
-  isDemoDeployment,
-  registerDemoUser,
-  requireDemoDeployment,
-} from './lib/demo'
+import { DEMO_TTL_MS, demoRefusal, isDemoDeployment, requireDemoDeployment } from './lib/demo'
 import { deploymentEnvironment } from './lib/deployment'
 import {
   type MicrosoftSignIn,
@@ -40,12 +33,7 @@ import {
   rekeyMicrosoftAccount,
 } from './lib/microsoftAccounts'
 import { oauthAdapter } from './lib/oauthAdapter'
-import {
-  endSessionAccess,
-  oauthHooks,
-  qivoOAuthProvider,
-  registerOAuthCode,
-} from './lib/oauthProvider'
+import { oauthHooks, qivoOAuthProvider, registerOAuthCode } from './lib/oauthProvider'
 import type { PersonMailMetric } from './lib/usage'
 import { type AuthLetterIntent, sendAuthLetter } from './mail'
 
@@ -151,28 +139,6 @@ async function countAuthMail(ctx: GenericCtx<DataModel>, intent: AuthLetterInten
   }
 }
 
-/** Keeps the months a sign-in session was used in as the session ends, for
- * the usage figures. It runs in the session's delete trigger after
- * endSessionAccess, so it runs for every session Better Auth ends, one at a
- * time or many in one call: sign-out, revoked sessions, a password change or
- * reset, a ban, a deleted login and an expired session's cleanup. Its
- * writes are a nested transaction, so a failure rolls back only them, is
- * logged and never stops the session from ending. */
-async function keepSignIn(
-  ctx: GenericMutationCtx<DataModel>,
-  session: { userId: string; createdAt: number; updatedAt: number },
-) {
-  try {
-    await ctx.runMutation(internal.usage.keepSignIn, {
-      auth_user_id: session.userId,
-      created_at: session.createdAt,
-      updated_at: session.updatedAt,
-    })
-  } catch (e) {
-    console.error('[usage] sign-in not kept', { name: (e as Error)?.name ?? 'error' })
-  }
-}
-
 /* Every token gets its own `jti`. Two tokens minted for one session in the
    same second are otherwise the same bytes, and the Convex client, which
    then sees no new sign-in, never schedules the next refresh. The app asks
@@ -203,27 +169,16 @@ export const tokenPayload =
     }
   }
 
+// The triggers live in authTriggers.ts, which loads none of Better Auth.
 const authFunctions = {
-  onCreate: makeFunctionReference('demo:onCreate'),
-  onDelete: makeFunctionReference('demo:onDelete'),
+  onCreate: makeFunctionReference('authTriggers:onCreate'),
+  onDelete: makeFunctionReference('authTriggers:onDelete'),
 } as unknown as AuthFunctions
 
 export const authComponent = createClient<DataModel, typeof authSchema>(components.betterAuth, {
   local: { schema: authSchema },
   authFunctions,
-  triggers: {
-    user: {
-      onCreate: registerDemoUser,
-      onDelete: async (ctx, user) => expireDeletedDemoUser(ctx, user._id),
-    },
-    session: {
-      onCreate: clampDemoSession,
-      onDelete: async (ctx, session) => {
-        await endSessionAccess(ctx, session)
-        await keepSignIn(ctx, session)
-      },
-    },
-  },
+  triggers: authTriggers,
 })
 
 /* Split from createAuth so betterAuth/adapter.ts (createApi) and the schema
@@ -322,6 +277,11 @@ export const createAuthOptions = (
     emailAndPassword: {
       enabled: !demo,
       requireEmailVerification: true,
+      /* A reset, also from the operator's recovery link, ends every session
+       * of the login. Better Auth deletes them through the component, so the
+       * session delete trigger ends the access tokens issued in each and
+       * keeps its months (authTriggers.ts). */
+      revokeSessionsOnPasswordReset: true,
       sendResetPassword: async ({ user, url }) => {
         // The operator's recovery link is returned, never mailed.
         if (recovery) recovery.url = url

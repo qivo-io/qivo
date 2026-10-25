@@ -3,11 +3,11 @@ import { billingEnabled } from './lib/billingAccess'
 import { POLAR_MAX_BODY_BYTES, verifyPolarWebhook } from './lib/polar'
 import { answerAfterBody, readLimitedBody } from './lib/requestBody'
 
-const webhookRef = makeFunctionReference<
-  'action',
+const receiveRef = makeFunctionReference<
+  'mutation',
   { event_id: string; subscription_id: string },
   null
->('billingSync:webhook')
+>('billingSync:receiveWebhook')
 const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }
 
 export function registerBilling(http: HttpRouter) {
@@ -31,12 +31,16 @@ export function registerBilling(http: HttpRouter) {
       const id = event.data.id
       if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/i.test(id))
         return new Response(null, { status: 400, headers })
+      // Stored and answered at once, and read from Polar afterwards
+      // (billingSync.ts processWebhook): Polar fails a delivery that takes
+      // over 10 seconds and disables the endpoint after enough of them.
+      // Only a failure to store it answers 503, for Polar to send it again.
       try {
-        await ctx.runAction(webhookRef, { event_id: event.id, subscription_id: id })
+        await ctx.runMutation(receiveRef, { event_id: event.id, subscription_id: id })
       } catch {
         return new Response(null, { status: 503, headers })
       }
-      return new Response(null, { status: 204, headers })
+      return new Response(null, { status: 202, headers })
     }),
   })
 }

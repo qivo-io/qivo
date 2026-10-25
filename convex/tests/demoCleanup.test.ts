@@ -227,7 +227,7 @@ const APP_SHARED = [
   'billing_notices',
   'machine_rate_limits',
   // The demo runs no OAuth provider, so it records no ended session
-  // (lib/oauthProvider.ts endSessionAccess).
+  // (lib/sessionEnd.ts endSessionAccess).
   'oauth_ended_sessions',
   // Usage is neither counted nor stored in APP_MODE=demo (model/usage.ts).
   'usage_months',

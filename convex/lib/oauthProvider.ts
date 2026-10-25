@@ -1,17 +1,17 @@
 import { getCurrentAuthContext } from '@better-auth/core/context'
 import { getOAuthProviderState, oauthProvider } from '@better-auth/oauth-provider'
 import { APIError, createAuthMiddleware, isAPIError } from 'better-auth/api'
-import { type FunctionArgs, type GenericMutationCtx, makeFunctionReference } from 'convex/server'
+import { type FunctionArgs, makeFunctionReference } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import type { GenericCtx } from '../../vendor/convex-better-auth/src/client'
 import { requireRunMutationCtx } from '../../vendor/convex-better-auth/src/utils'
-import type { DataModel, Id } from '../_generated/dataModel'
+import type { DataModel } from '../_generated/dataModel'
 import { sha256hex } from '../machine/auth'
-import { isDemoDeployment } from './demo'
 import {
   clientDisplayName,
   mcpResource,
   OAUTH_ACCESS_TOKEN_TTL_SECONDS,
+  OAUTH_REFRESH_TOKEN_TTL_SECONDS,
   OAUTH_SCOPES,
   validateOAuthQuery,
 } from './oauth'
@@ -97,39 +97,6 @@ export async function registerOAuthCode(
   if (!ok) throw invalid()
 }
 
-const forgetEndedSessionRef = makeFunctionReference<
-  'mutation',
-  { id: Id<'oauth_ended_sessions'> },
-  null
->('oauthConnections:forgetEndedSession')
-
-/** Ends the access tokens issued in a browser session that ends, such as at
- * sign-out, a ban or an expired session's cleanup. It is the session's delete
- * trigger (auth.ts), which runs in the transaction that deletes the session
- * row, so the two succeed or fail together, also when one call deletes many
- * sessions. It writes one record for the session, however many tokens the
- * session holds, and /mcp refuses every token issued before it
- * (oauthConnections.ts lookupAccess). The record goes once those tokens have
- * expired. The session's refresh tokens, which `offline_access` keeps, stay,
- * and an access token they issue later works. */
-export async function endSessionAccess(
-  ctx: GenericMutationCtx<DataModel>,
-  session: { _id: string },
-) {
-  // The demo has no OAuth provider, so no session holds an access token.
-  if (isDemoDeployment()) return
-  const endedAt = Date.now()
-  const id = await ctx.db.insert('oauth_ended_sessions', {
-    session_id: session._id,
-    ended_at: endedAt,
-  })
-  await ctx.scheduler.runAt(
-    endedAt + (OAUTH_ACCESS_TOKEN_TTL_SECONDS + 60) * 1_000,
-    forgetEndedSessionRef,
-    { id },
-  )
-}
-
 const invalid = (description = 'This connection is invalid or has been disconnected.') =>
   new APIError('BAD_REQUEST', { error: 'invalid_grant', error_description: description })
 
@@ -163,6 +130,7 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
     scopes: OAUTH_SCOPES,
     grantTypes: ['authorization_code', 'refresh_token'],
     accessTokenExpiresIn: OAUTH_ACCESS_TOKEN_TTL_SECONDS,
+    refreshTokenExpiresIn: OAUTH_REFRESH_TOKEN_TTL_SECONDS,
     /* Qivo serves one protected resource, the MCP endpoint. Every client is
      * linked to it at registration, Better Auth 1.7 refuses a client that asks
      * for a resource it is not linked to (invalid_target), and binds each
@@ -528,7 +496,7 @@ export function oauthHooks(ctx: GenericCtx<DataModel>) {
       if (endpoint.path === '/sign-out') {
         /* Better Auth answers a sign-out whose session delete failed as a
          * success and clears the cookie, so the session and its access tokens
-         * (endSessionAccess) would outlive a sign-out the person saw succeed.
+         * (lib/sessionEnd.ts) would outlive a sign-out the person saw succeed.
          * A session still stored is deleted once more here; if it stays, the
          * answer is an error that keeps the cookie, so the app keeps the
          * person signed in and says so (lib/authSession.ts signOut). A

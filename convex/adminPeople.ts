@@ -19,10 +19,13 @@
  * teams in one action result.
  *
  * Two auth.users columns the SQL joined have no Better Auth twin:
- * - last_sign_in_at is the createdAt of the login's newest session, the one
- *   the component stored last, so one session is read per login. Expired
- *   sessions vanish from the component, so a long-absent member reads "—".
- *   That is a stated approximation, not a bug.
+ * - last_sign_in_at is when the login last signed in: the createdAt of its
+ *   newest session, the one the component stored last, or, when later, the
+ *   sign-in kept as an ended session was deleted at sign-out, a ban or the
+ *   nightly cleanup of expired sessions (model/usage.ts keptSignInAt). One
+ *   session and the login's kept months are read per login. A login whose
+ *   last sign-in is older than usage retention, or ended before Qivo kept
+ *   sign-ins, reads "—".
  * - banned_until keeps its wire name (isBanned() and both views read it) but
  *   is mapped from Better Auth's { banned, banExpires }. Not banned is null,
  *   banned with banExpires is its ISO time, and banned forever is a
@@ -43,6 +46,7 @@ import { byId } from './lib/db'
 import type { OrgRole, ProfileKind } from './lib/enums'
 import { badRequest, notFound, platformAction, require } from './lib/functions'
 import { allWordsMatcher } from './lib/search'
+import { keptSignInAt } from './model/usage'
 
 /** Rows per internal page, and the bytes one page's range may read. Tests
  * lower them. */
@@ -107,10 +111,13 @@ export async function authColumnsFor(ctx: QueryCtx, authUserId: string): Promise
       sortBy: { field: 'createdAt', direction: 'desc' },
       paginationOpts: { numItems: 1, cursor: null },
     })) as { page: Array<{ createdAt?: number }> }
-    const signedIn = newest.page[0]?.createdAt
+    const live = newest.page[0]?.createdAt
+    const signedIn = Math.max(
+      typeof live === 'number' && live > 0 ? live : 0,
+      (await keptSignInAt(ctx, authUserId)) ?? 0,
+    )
     return {
-      last_sign_in_at:
-        typeof signedIn === 'number' && signedIn > 0 ? new Date(signedIn).toISOString() : null,
+      last_sign_in_at: signedIn > 0 ? new Date(signedIn).toISOString() : null,
       banned_until:
         user.banned !== true
           ? null

@@ -20,8 +20,6 @@ import { demoBootstrapMutation, demoConfigurationQuery, demoLifecycleQuery } fro
 import { recordDemoCreated } from './model/demoMetrics'
 import { PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from './model/demoSeed'
 
-export const { onCreate, onDelete } = authComponent.triggersApi()
-
 export type DemoCurrent = {
   mode: 'demo'
   status: 'unprovisioned' | 'ready' | 'deleting' | 'expired' | 'missing'

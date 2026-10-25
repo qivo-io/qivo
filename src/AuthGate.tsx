@@ -173,6 +173,9 @@ export function AuthGate() {
   const signingOut = useRef(false)
   // a sign-out under way, which disables the screen's other controls
   const [signOutPending, setSignOutPending] = useState(false)
+  // why the last sign-out did not end the session, shown beside the screen's
+  // own message rather than over it
+  const [signOutError, setSignOutError] = useState('')
   /* Which failure reached the loadFailed screen. The two are not the same
      story: a snapshot that failed to load leaves the account untouched and is
      worth saying so, while a session fetch that never completed cannot claim
@@ -252,6 +255,7 @@ export function AuthGate() {
     setError('')
     setErrorDetail('')
     setNote('')
+    setSignOutError('')
   }
 
   /* initStore returns null only when this login genuinely holds no seat, and
@@ -664,13 +668,14 @@ export function AuthGate() {
   const signOutAndReload = async (): Promise<boolean> => {
     signingOut.current = true
     setSignOutPending(true)
+    setSignOutError('')
     try {
       await authSignOut()
     } catch (failure) {
       if (failure instanceof SignOutFailed) {
         signingOut.current = false
         setSignOutPending(false)
-        showError(failure.message, 'form')
+        setSignOutError(failure.message)
         return false
       }
     }
@@ -702,6 +707,14 @@ export function AuthGate() {
     )
 
   const shell = (inner: React.ReactNode) => <AuthShell>{inner}</AuthShell>
+  const signOutRefusal = signOutError && (
+    <div
+      role="alert"
+      className="[color:var(--danger)] [font-size:var(--fs-sm)] [margin-bottom:24px]"
+    >
+      {signOutError}
+    </div>
+  )
 
   if (phase === 'loading' || phase === 'ready') return <LoadingScreen />
 
@@ -718,6 +731,7 @@ export function AuthGate() {
             {error}
           </div>
         )}
+        {signOutRefusal}
         <Button
           type="button"
           variant="primary"
@@ -802,6 +816,7 @@ export function AuthGate() {
           The link expires in one hour.
         </div>
         {error && errorLine()}
+        {signOutRefusal}
         {note && (
           <div className="[color:var(--text-2)] [font-size:var(--fs-sm)] [margin-bottom:24px]">
             {note}
@@ -831,6 +846,7 @@ export function AuthGate() {
             type="button"
             data-auth-recheck
             className={textLinkClass}
+            disabled={signOutPending}
             onClick={() => location.reload()}
             variant="unstyled"
           >
@@ -874,6 +890,7 @@ export function AuthGate() {
             {error}
           </div>
         )}
+        {signOutRefusal}
         <Button
           variant="primary"
           className="[width:100%] [justify-content:center]"

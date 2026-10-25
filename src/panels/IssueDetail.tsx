@@ -82,6 +82,7 @@ import { loadDescEditor } from '../lib/workspaceChunks'
 import '../styles/mobile-issue.css'
 import {
   type ActivityVM,
+  type ArchivedIssueVM,
   type AttachmentVM,
   type CommentsEarlier,
   type CommentsFailure,
@@ -1021,6 +1022,99 @@ function ThreadFailure({
   )
 }
 
+/** What the window keeps of the task it shows, for once the task is gone. */
+type ShownTask = Pick<IssueVM, 'uuid' | 'key' | 'title' | 'project'>
+
+/* The window's content once its task left the board while the window was
+   open, because someone archived or deleted it, or it moved where this
+   person cannot open it. It looks the task up in the archive
+   (P.fetchArchivedTask), and then says it was archived, with Restore for
+   someone who can edit its project, or that it is no longer here, or that
+   the archive could not be checked, with Retry. A restored task comes back
+   into the window. Focus goes to the note when it was in the task's
+   content, which went with the task, and never to a button, which the next
+   key typed for that content would press. On a phone the note takes the
+   width of the screen and the buttons go below it. */
+function TaskGone({
+  task,
+  onClose,
+  mobile,
+}: {
+  task: ShownTask
+  onClose: () => void
+  mobile: boolean
+}) {
+  // the archive's answer: the task's row there, or null when it is not
+  // there; 'failed' when the archive could not be read, undefined while asking
+  const [found, setFound] = useStateID<ArchivedIssueVM | null | 'failed' | undefined>(undefined)
+  const [attempt, setAttempt] = useStateID(0)
+  const [restoring, setRestoring] = useStateID(false)
+  const noteRef = useRefID<HTMLSpanElement>(null)
+  useEffectID(() => {
+    let live = true
+    setFound(undefined)
+    void P.fetchArchivedTask(task.uuid).then((answer) => {
+      if (live) setFound(answer === null ? 'failed' : answer.row)
+    })
+    return () => {
+      live = false
+    }
+  }, [task.uuid, attempt])
+  useEffectID(() => {
+    const active = document.activeElement
+    if (!active || active === document.body) noteRef.current?.focus()
+  }, [])
+  const row = found === 'failed' ? undefined : found
+  // the project the task is archived in, which may not be the one the window
+  // last showed
+  const canRestore = !!row && ['lead', 'user'].includes(P.levelOn(row.project) || '')
+  const restore = () => {
+    if (!row) return
+    setRestoring(true)
+    void P.unarchiveIssue(row.uuid, row.title, row.project).then((ok) => {
+      // a restored task comes back into this window, which leaves this note
+      if (ok) window.showToast?.(`Restored ${task.key}`)
+      else setRestoring(false) // unarchiveIssue toasted why
+    })
+  }
+  // Retry leaves with the failed answer, so focus stays on the note
+  const retry = () => {
+    noteRef.current?.focus()
+    setAttempt((n) => n + 1)
+  }
+  const text =
+    found === undefined
+      ? `${task.key} is no longer on the board.`
+      : found === 'failed'
+        ? `${task.key} is no longer on the board. Couldn't check the archive.`
+        : found
+          ? canRestore
+            ? `${task.key} was archived. Restore it to bring it back to the board.`
+            : `${task.key} was archived. Someone who can edit its project can restore it from Archived tasks.`
+          : `${task.key} is no longer here. It was deleted, or you can no longer open it.`
+  return (
+    <div data-task-gone className="flex flex-wrap items-center gap-3 p-6 text-sm text-text-2">
+      <span ref={noteRef} role="status" tabIndex={-1} className={mobile ? 'basis-full' : 'flex-1'}>
+        {text}
+      </span>
+      {found === 'failed' && (
+        <Button type="button" variant="ghost" onClick={retry}>
+          <Icon name="rotateCcw" size={16} />
+          Retry
+        </Button>
+      )}
+      {canRestore && (
+        <Button type="button" variant="primary" disabled={restoring} onClick={restore}>
+          {restoring ? 'Restoring…' : 'Restore'}
+        </Button>
+      )}
+      <Button type="button" variant="ghost" onClick={onClose}>
+        Close
+      </Button>
+    </div>
+  )
+}
+
 /* The first row of the thread in `feed`, focusable until it loses focus, so
    it can take keyboard focus once without staying focusable to a click. */
 function firstRowForFocus(feed: Element): HTMLElement | null {
@@ -1262,9 +1356,12 @@ function IssueDetail({
   const shownIssue = useRefID(issueId)
   // the last task it showed, which closing (issueId null) keeps, for focus
   const lastShown = useRefID(issueId)
+  // the task this window archives or deletes itself, which closes it
+  const leaving = useRefID<string | null>(null)
   useLayoutEffectID(() => {
     shownIssue.current = issueId
     if (issueId) lastShown.current = issueId
+    if (leaving.current !== issueId) leaving.current = null
   }, [issueId])
   const [actFilter, setActFilter] = useStateID('comments') // comments ⇄ all
   // the description discloses only in the embedded pane; the floating window
@@ -1332,7 +1429,11 @@ function IssueDetail({
       requestAnimationFrame(() => openPickerUnder(labelSecRef, setLabelAnchor, 300))
     } else openPickerUnder(labelSecRef, setLabelAnchor, 300)
   }
-  useEffectID(() => {
+  /* Puts the window's own state back as it is when a task opens in it: no
+     title in editing, no picker, Move or Archive or delete window open, and
+     the columns at their start. It runs when another task opens and when
+     the task leaves the board, so a restore brings the task back afresh. */
+  const resetWindow = () => {
     setEditTitle(false)
     setLabelAnchor(null)
     setSubAnchor(null)
@@ -1353,7 +1454,8 @@ function IssueDetail({
     if (bodyRef.current) bodyRef.current.scrollTop = 0
     if (contentRef.current) contentRef.current.scrollTop = 0
     if (descWrapRef.current) descWrapRef.current.scrollTop = 0
-  }, [issueId])
+  }
+  useEffectID(resetWindow, [issueId])
   useEffectID(() => {
     const h = (e) => {
       if (e.key !== 'Escape') return
@@ -1406,8 +1508,34 @@ function IssueDetail({
   }, [issueId])
 
   const it = issueId ? P.issueById[issueId] : null
+  // what the window last showed of this task, kept for once it is gone
+  const shownTask = useRefID<{ at: string; task: ShownTask } | null>(null)
+  if (it && issueId) {
+    const { uuid, key, title, project } = it
+    shownTask.current = { at: issueId, task: { uuid, key, title, project } }
+  } else if (shownTask.current?.at !== issueId) shownTask.current = null
+  // a task opened by its address while tasks still load may be one still
+  // to arrive: the window opens and says so (App pendingTask)
+  const waiting = !it && !!issueId && P.stillLoading() !== null
+  // the task left the board while the window showed it, other than by this
+  // window's own archive or delete: the window says so (TaskGone)
+  const gone =
+    !it && !waiting && issueId && leaving.current !== issueId ? shownTask.current?.task : null
+  /** Says that text typed for the task went with it, as its editors do,
+      unless the person chose Discard for it. */
+  const sayDiscarded = (what: string) => {
+    if (!windowScope?.chosen()) window.showToast?.(`Unsaved ${what} discarded`)
+  }
   useUpdateBlocker(editTitle && !!it && titleDraft !== it.title)
   useUnsaved(editTitle && !!it && titleDraft !== it.title, 'title')
+  // the task left the board: its window's own state goes too, and the title
+  // typed for it is discarded
+  const goneUuid = gone ? gone.uuid : null
+  useEffectID(() => {
+    if (!gone) return
+    if (editTitle && titleDraft !== gone.title) sayDiscarded('title')
+    resetWindow()
+  }, [goneUuid])
   // a kept title draft: the rename that refused its save becomes the title
   // the next save sends as seen, once the screen shows it
   const shownTitle = it?.title
@@ -1421,6 +1549,10 @@ function IssueDetail({
     P.editsPaused,
     `${it?.id}:${it?.remaining ?? ''}`,
     'remaining hours',
+    () => {
+      // the hours go with a task that left the board, not with a save
+      if (gone) sayDiscarded('remaining hours')
+    },
   )
   // point the store's one-thread comment cache at this issue; release it when
   // the modal closes (uuid null) or the component unmounts
@@ -1517,10 +1649,7 @@ function IssueDetail({
   const upd = (patch) => {
     P.updateIssue(it.id, patch)
   }
-  // a task opened by its address while tasks still load may be one still
-  // to arrive: the window opens and says so (App pendingTask)
-  const waiting = !it && !!issueId && P.stillLoading() !== null
-  const open = !!it || waiting
+  const open = !!it || waiting || !!gone
   // Move and Archive open from the Task actions menu, which is gone when they
   // close, so they return focus to the button that opened that menu.
   const taskActionsButton = () =>
@@ -2541,6 +2670,7 @@ function IssueDetail({
                 }
           }
         >
+          {gone && <TaskGone key={gone.uuid} task={gone} onClose={onClose} mobile={mobile} />}
           {waiting && (
             <div data-task-loading className="flex items-center gap-3 p-6 text-sm text-text-2">
               <span role="status" className="flex-1">
@@ -3529,9 +3659,13 @@ function IssueDetail({
           onArchive={async (reason, keepSubtasks) => {
             const shown = it.key
             const opened = issueId
+            leaving.current = opened
             // the window waits for the server, so a refusal leaves it open
             const archived = await P.archiveIssue(it.id, reason, keepSubtasks)
-            if (!archived) return false
+            if (!archived) {
+              if (leaving.current === opened) leaving.current = null
+              return false
+            }
             // the person may have gone to another task meanwhile: leave that one open
             if (shownIssue.current === opened) {
               setFateOpen(false)
@@ -3545,8 +3679,12 @@ function IssueDetail({
           onDelete={async (subtasks, reason) => {
             const shown = it.key
             const opened = issueId
+            leaving.current = opened
             const deleted = await P.deleteIssue(it.id, subtasks, true, reason)
-            if (!deleted) return false
+            if (!deleted) {
+              if (leaving.current === opened) leaving.current = null
+              return false
+            }
             if (shownIssue.current === opened) {
               setFateOpen(false)
               closeGone()

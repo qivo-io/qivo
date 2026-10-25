@@ -179,6 +179,10 @@ async function fixture() {
         data: { clientId, redirectUris: ['https://receiver.example/callback'], scopes },
       },
     })
+    // the link registration gives a client (oauthConnections.ts lookupAccess)
+    await t.mutation(components.betterAuth.adapter.create, {
+      input: { model: 'oauthClientResource', data: { clientId, resourceId: mcpResource() } },
+    })
     const connectionId = uuid()
     const connectionRowId = await t.run(async (ctx) => {
       await ctx.db.patch(fx.user._id, { auth_user_id: user._id as string })

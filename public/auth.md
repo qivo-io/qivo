@@ -233,8 +233,11 @@ apps**. Deleting removes the connection from the list and prevents subsequent
 access and refresh requests. Previously revoked connections can also be
 deleted. Connecting again requires fresh approval in the assistant. OAuth
 access tokens expire; clients can renew them with a rotating refresh token
-when offline access was approved. Reusing a consumed authorization code or
-refresh token revokes that connection, so clients must serialize refreshes.
+when offline access was approved. Reusing a consumed authorization code, or
+a consumed refresh token for at least 31 days after its use, revokes that
+connection, so clients must serialize refreshes. Once the nightly cleanup
+has removed a consumed refresh token's record, reusing it is refused without
+revoking the connection.
 
 Personal tokens are revoked on **MCP access**; admins revoke agent keys from
 the agent's **Users** row. Organization admins can also revoke any member's

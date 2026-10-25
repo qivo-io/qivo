@@ -820,7 +820,10 @@ describe('sign-ins', () => {
     })
     expect(signOut.status).toBe(200)
     expect(await runInAuth(t, (ctx) => ctx.db.query('session').collect())).toEqual([])
-    expect(await kept(t)).toEqual([{ auth_user_id: userId, month: MARCH }])
+    // the session's end keeps March at once
+    await vi.waitFor(async () =>
+      expect(await kept(t)).toEqual([{ auth_user_id: userId, month: MARCH }]),
+    )
     vi.setSystemTime(RUN)
     await t.action(internal.usage.closeOrgMonth, { org_id: f.org.id, month: MARCH })
     expect((await storedRows(t))[0].counts.active_people).toBe(1)
@@ -882,14 +885,56 @@ describe('sign-ins', () => {
     await session(t, f.user, '2026-01-05', '2026-01-06')
     await internalAdapter(t).deleteUserSessions(f.user.auth_user_id as string)
     expect(await sessions(t)).toEqual([])
+    await runSteps(t)
     expect((await kept(t)).map((row) => row.month).sort()).toEqual(['2026-01', '2026-02'])
+  })
+
+  it('counts a session that ends as the month closes, before its older months are kept', async () => {
+    authEnv()
+    const t = newT()
+    const f = await withOrg(t)
+    const userId = f.viewer.auth_user_id as string
+    // used from January into March, and ended on April 1st as the run reads
+    await session(t, f.viewer, '2026-01-12', '2026-03-20')
+    await internalAdapter(t).deleteUserSessions(userId)
+    expect(await sessions(t)).toEqual([])
+    // the delete kept the month the run closes; the call that keeps the
+    // older ones has not run yet
+    expect(await kept(t)).toEqual([{ auth_user_id: userId, month: MARCH }])
+    await t.action(internal.usage.closeOrgMonth, { org_id: f.org.id, month: MARCH })
+    expect((await storedRows(t))[0].counts.active_people).toBe(1)
+    await runSteps(t)
+    expect((await kept(t)).map((row) => row.month).sort()).toEqual(['2026-01', '2026-02', MARCH])
+  })
+
+  it('forgets the months a session of a deleted login kept as it ended', async () => {
+    authEnv()
+    const t = newT()
+    const userId = await login(t, 'purged@test.local')
+    await runInAuth(t, async (ctx) => {
+      await ctx.db.insert('session', {
+        token: uuid(),
+        userId,
+        createdAt: Date.parse('2026-03-02'),
+        updatedAt: Date.parse('2026-03-03'),
+        expiresAt: RUN + 86_400_000,
+      })
+    })
+    // The login is gone with its months, and its purge has not reached this
+    // session yet, which then ends and keeps March.
+    await t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'user', where: [{ field: '_id', value: userId }] },
+    })
+    await internalAdapter(t).deleteUserSessions(userId)
+    expect(await kept(t)).toEqual([{ auth_user_id: userId, month: MARCH }])
+    await runSteps(t)
+    expect(await kept(t)).toEqual([])
   })
 
   it('ends a session whose months cannot be kept', async () => {
     authEnv()
     const t = newT()
     const f = await withOrg(t)
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const token = uuid()
     // A creation time that is not a time makes keeping its months throw.
     await runInAuth(t, async (ctx) => {
@@ -903,8 +948,9 @@ describe('sign-ins', () => {
     })
     await internalAdapter(t).deleteSession(token)
     expect(await sessions(t)).toEqual([])
+    // the call that keeps them fails on its own, after the session ended
+    await runSteps(t)
     expect(await kept(t)).toEqual([])
-    expect(error).toHaveBeenCalledWith('[usage] sign-in not kept', expect.anything())
   })
 
   it('forgets the months of a login Better Auth deletes', async () => {
@@ -923,9 +969,11 @@ describe('sign-ins', () => {
         expiresAt: RUN + 86_400_000,
       })
     })
-    // Its session ends first and keeps March, then the login goes with both.
+    // Its session ends first and asks to keep March, then the login goes
+    // with its months, and the call that keeps March finds no login.
     await internalAdapter(t).deleteUser(userId)
     expect(await sessions(t)).toEqual([])
+    await runSteps(t)
     expect(await kept(t)).toEqual([])
   })
 

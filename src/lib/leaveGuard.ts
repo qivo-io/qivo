@@ -160,14 +160,15 @@ export function installLeaveGuard(unsaved: () => boolean, win: Window = window) 
 
 /** Holds a lease from the person's first keystroke in a form until `reset`,
     for fields that keep typed text without a draft state of their own. Put
-    `typed` on the form's `onInputCapture`. The text also holds back a
-    version reload, which would otherwise stop at the close warning. `what`
-    is as for useUnsaved, and so is `onDiscard`. */
+    `typed` on the form's `onInputCapture`. `held` says whether the lease is
+    held. The text also holds back a version reload, which would otherwise
+    stop at the close warning. `what` is as for useUnsaved, and so is
+    `onDiscard`. */
 export function useTypedUnsaved(what: string | null = 'text', onDiscard?: () => void) {
   const [typed, setTyped] = useState(false)
   useUnsaved(typed, what, undefined, onDiscard)
   useUpdateBlocker(typed)
-  return { typed: () => setTyped(true), reset: () => setTyped(false) }
+  return { typed: () => setTyped(true), reset: () => setTyped(false), held: typed }
 }
 
 /** Props for an uncontrolled field that saves on blur and is keyed by its
@@ -182,11 +183,19 @@ export function useTypedUnsaved(what: string | null = 'text', onDiscard?: () => 
     can stay in the page, hidden, after the close (components/KeptView).
     `what` names the field in a window's question. The lease ends in the
     same task as the blur's check, so a close that left the field
-    (DiscardPrompt) already finds it gone. */
-export function useFieldUnsaved(paused: () => boolean, saved: string, what = 'text') {
+    (DiscardPrompt) already finds it gone. `onReplaced` runs as a new saved
+    value ends a draft, before the lease ends. The field's own save on blur
+    gives a new saved value too, so the caller tells the cases apart, for
+    example to say that the field's task went with the text. */
+export function useFieldUnsaved(
+  paused: () => boolean,
+  saved: string,
+  what = 'text',
+  onReplaced?: () => void,
+) {
   // the field typed in, for a Discard
   const typedIn = useRef<HTMLInputElement | null>(null)
-  const { typed, reset } = useTypedUnsaved(what, () => {
+  const { typed, reset, held } = useTypedUnsaved(what, () => {
     if (typedIn.current) typedIn.current.value = typedIn.current.defaultValue
     reset()
   })
@@ -196,6 +205,7 @@ export function useFieldUnsaved(paused: () => boolean, saved: string, what = 'te
   useLayoutEffect(() => {
     if (savedFor.current === saved) return
     savedFor.current = saved
+    if (held) onReplaced?.()
     reset()
   }, [saved])
   return {

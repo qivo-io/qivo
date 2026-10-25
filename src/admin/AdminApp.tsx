@@ -215,7 +215,7 @@ function AdminAccount({
           type="button"
           variant="outline"
           size="sm"
-          aria-label="Sign out"
+          aria-label={signingOut ? 'Signing out…' : 'Sign out'}
           className="shrink-0 gap-2 px-2"
           disabled={signingOut}
           onClick={onSignOut}

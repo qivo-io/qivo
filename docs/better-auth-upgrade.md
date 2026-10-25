@@ -74,7 +74,10 @@ out. `@convex-dev/better-auth` is no longer installed.
   the authorize hook and `validateOAuthQuery` in `convex/lib/oauth.ts`, the
   token endpoint's `onRequest` and before hook, the issuance check in
   `customTokenResponseFields`, and the grant's stored resource, which
-  `oauthConnections.lookupAccess` compares on every MCP request.
+  `oauthConnections.lookupAccess` compares on every MCP request. Better
+  Auth checks the link only when it issues a token, so `lookupAccess` also
+  reads the client's link on every request and refuses a token whose client
+  lost it.
   `convex/tests/oauth.test.ts` shows that a client without the link is
   refused, and that a linked client is refused every other resource at
   authorize, code exchange and refresh, even when Better Auth knows a second
@@ -122,14 +125,17 @@ out. `@convex-dev/better-auth` is no longer installed.
   issue, and would answer HTTP `401`. 1.7 also checks redirect URIs by
   application type; `docs/mcp.md` lists the rules.
 - **Sign-out.** Ending a browser session ends the OAuth access tokens
-  issued in it, whether the session ends at sign-out, at a ban, when Better
-  Auth deletes it after it expired or in any call that ends many sessions at
-  once. Better Auth 1.7 revokes only the oldest 100 tokens of a session, and
+  issued in it, whether the session ends at sign-out, at a password reset,
+  at a ban, when Better Auth deletes it after it expired or in any call that
+  ends many sessions at once. A password reset ends every session of the
+  login (`emailAndPassword.revokeSessionsOnPasswordReset` in
+  `convex/auth.ts`), through Better Auth's `deleteUserSessions` and so the
+  same trigger; an upgrade that changes that call needs it rechecked. Better Auth 1.7 revokes only the oldest 100 tokens of a session, and
   each refresh adds one. It runs the session delete hooks of a bulk delete
   for the oldest 100 sessions only, and only after the session row is gone,
   so a failed revocation used to leave the tokens valid until they expired.
-  Qivo's session delete trigger (`endSessionAccess` in
-  `convex/lib/oauthProvider.ts`, set in `convex/auth.ts`) runs in the
+  Qivo's session delete trigger (`endSession` in `convex/lib/sessionEnd.ts`,
+  run by `convex/authTriggers.ts`, which `convex/auth.ts` names) runs in the
   transaction that deletes each session row and stores one
   `oauth_ended_sessions` row with the time the session ended, so the delete
   and the record succeed or fail together, and the work stays one write
@@ -137,9 +143,38 @@ out. `@convex-dev/better-auth` is no longer installed.
   refuses every access token of the session created before that time, and a
   scheduled cleanup deletes the record once those tokens have expired
   (`OAUTH_ACCESS_TOKEN_TTL_SECONDS` in `convex/lib/oauth.ts`, plus a minute).
+  The trigger runs once for each session in one transaction, so its module
+  loads none of Better Auth (`convex/tests/authTriggers.test.ts`): with it, a
+  ban of 200 sessions failed on Convex's time limit on a local backend.
+  Better Auth deletes an expired session only when its cookie comes back,
+  so a nightly job (`convex/authRetention.ts`) deletes the others with a
+  trigger of its own that ends the session at its expiry: a code exchange
+  needs a live session, so only a refresh issues a token in it after then,
+  and that refresh token could issue it again. For a session that expired
+  more than an access token's lifetime before, it writes no record. Every
+  other delete, a ban too, ends the session now.
   A refresh token with `offline_access`, which Qivo's clients request, stays
   valid, and the access tokens it issues later work, so a connected client
-  renews its access without a new approval.
+  renews its access without a new approval. A ban also revokes every valid
+  access token of the login (`convex/adminAuth.ts`), so a token a refresh
+  issued after its session had ended works no more after an unban.
+- **Spent OAuth tokens.** Every refresh adds an access token and a refresh
+  token and revokes the refresh token it used. A nightly job
+  (`convex/authRetention.ts`, `deleteSpentTokens` in
+  `convex/betterAuth/oauth.ts`) deletes expired access and refresh tokens
+  and refresh tokens revoked over an hour before, by the component indexes
+  in `convex/betterAuth/schema.ts`. Better Auth checks a refresh token's
+  expiry before its revocation, and Qivo's adapter hides a revoked refresh
+  token from Better Auth (`convex/lib/oauthAdapter.ts`), so neither kind is
+  read by its replay detection. Qivo detects a replay by the hash it keeps
+  of every used refresh token (`oauth_credential_uses`). The same job
+  deletes a hash at its first run 31 days after its use
+  (`REPLAY_HASH_KEEP_MS`), once the token's 30-day lifetime
+  (`OAUTH_REFRESH_TOKEN_TTL_SECONDS` in `convex/lib/oauth.ts`, which
+  `convex/lib/oauthProvider.ts` hands Better Auth) and a day have passed,
+  so a later replay is refused without ending the grant. An upgrade that shows Better Auth revoked refresh tokens again,
+  or accepts a refresh token past that lifetime, needs that cleanup
+  rechecked.
 - **A failed sign-out says so.** Better Auth answers a sign-out whose
   session delete failed with HTTP `200` and clears the cookie. Qivo's after
   hook on `/sign-out` (`oauthHooks`) deletes a session that is still stored
@@ -282,7 +317,7 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
 - Discovery, registration, S256 PKCE, exact client and redirect binding,
   signed consent and scope limits work (`convex/tests/oauth.test.ts`).
 - A client without a resource link is refused, also when it leaves the
-  resource out. Foreign and repeated resource parameters fail for a linked
+  resource out, and so is an access token issued before the link went. Foreign and repeated resource parameters fail for a linked
   one. An omitted resource keeps the canonical default, and refresh cannot
   widen its grant.
 - The metadata on every path lists `none` as the only client
@@ -297,7 +332,14 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
   twice, or that Better Auth skipped, answers HTTP `503` and keeps the
   session and its cookie, and the browser client keeps the session to try
   again (`src/lib/authSession.test.ts`). A sign-out with an expired signed
-  authorization request ends the session.
+  authorization request ends the session. The nightly cleanup deletes
+  expired sessions through its delete trigger and ends their tokens at the
+  expiry, and deletes spent OAuth tokens (`convex/tests/authRetention.test.ts`).
+  A ban of an expired session ends a token a refresh issued after the
+  expiry, a replay of a deleted refresh token still ends the grant while
+  its hash is kept and is only refused once the job deleted the hash, and a
+  password reset ends every session and the access tokens issued in them
+  (`convex/tests/oauth.test.ts`).
 - Expiry, disconnect, reconnect, replay detection, concurrent code exchange
   and concurrent refresh keep access control and independent grants.
 - App and admin sessions stay separate. Browser login can continue to
