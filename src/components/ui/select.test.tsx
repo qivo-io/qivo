@@ -11,6 +11,18 @@ import { TooltipProvider } from './tooltip'
    does not wait for the select's closed list, and its trigger names the
    choice meanwhile. */
 
+// FieldSelect's module reaches the store, which needs a connection
+const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+vi.mock('@/lib/convex', async () => ({
+  convex: network,
+  live: (await import('@/store/guard/liveDouble.setup')).liveOver(network),
+}))
+vi.mock('@/lib/auth', () => ({
+  armConvexAuth: async () => true,
+  authClient: { getSession: async () => ({ data: null }) },
+  signOut: vi.fn(),
+}))
+
 let container: HTMLDivElement
 let root: Root
 // the choices whose item is in the closed list now
