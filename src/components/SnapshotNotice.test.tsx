@@ -4,6 +4,7 @@ import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SeatsDeleting } from '../../convex/lib/workspaceJoin'
 import { asOfText } from '../lib/noticeText'
 import { SEATS_DELETING } from '../store/guard/liveDouble.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
@@ -52,7 +53,7 @@ vi.mock('../lib/auth', () => ({
 let notice: typeof import('./SnapshotNotice')
 let store: typeof import('../store/planner')
 let fail: (error: Error) => void
-let deliverLater: (snap: Snapshot | typeof SEATS_DELETING | null) => void
+let deliverLater: (snap: Snapshot | SeatsDeleting | null) => void
 let subscribed: number
 let firstSnapshot: Snapshot
 let container: HTMLDivElement

@@ -276,21 +276,24 @@ async function mapInBatches<R, T>(
 
 // --- root -------------------------------------------------------------------
 
-/** The root part's answer for a login whose only seats a running
- * organization deletion holds (lib/billingAccess.ts seatHeldByDeletion). It
- * names no organization and no rows, only the reason. */
-const SEATS_DELETING = { deleting: true as const }
-
 /** The caller's seats and organizations, or null with no seat, or
- * SEATS_DELETING when an organization deletion holds the only ones. */
+ * `deleting` when a running organization deletion holds the only ones
+ * (lib/billingAccess.ts seatHeldByDeletion). That answer names no
+ * organization and no rows, only the reason and when the login may create
+ * an organization. */
 export async function readRoot(
   ctx: QueryCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> },
 ) {
   /* Signed in but seatless is the app's "create your organization" signal,
    * unless the seats are in an organization that is being deleted. A failed
    * read throws instead, so it never looks like no seat. */
-  if (ctx.myProfiles.size === 0)
-    return (await seatHeldByDeletion(ctx, ctx.authUserId)) ? SEATS_DELETING : null
+  if (ctx.myProfiles.size === 0) {
+    const create = await seatHeldByDeletion(ctx, ctx.authUserId)
+    if (create === null) return null
+    // bound first, so the answer's type stays apart from the seats' one
+    const deleting = { deleting: true as const, create }
+    return deleting
+  }
   const orgs: OrgRow[] = []
   for (const me of ctx.myProfiles.values()) {
     const org = await byId(ctx, 'organizations', me.org_id)

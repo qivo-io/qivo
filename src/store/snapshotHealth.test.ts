@@ -2,6 +2,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Id } from '../../convex/_generated/dataModel'
+import type { SeatsDeleting } from '../../convex/lib/workspaceJoin'
 import { SEATS_DELETING } from './guard/liveDouble.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
@@ -29,7 +30,7 @@ vi.mock('../lib/auth', () => ({
 }))
 
 type Subscription = {
-  deliver: (snap: Snapshot | typeof SEATS_DELETING | null) => void
+  deliver: (snap: Snapshot | SeatsDeleting | null) => void
   fail: (error: Error) => void
   unsubscribe: ReturnType<typeof vi.fn>
 }
@@ -639,7 +640,7 @@ describe('snapshot trouble', () => {
     firstDelivery = 'deleting'
     store = await import('./planner')
     await expect(store.initStore()).resolves.toBeNull()
-    expect(store.P.seatsDeleting()).toBe(true)
+    expect(store.P.seatsDeleting()).toEqual({ deleting: true, create: 'after_deletion' })
     expect(store.P.issues).toEqual([])
   })
 

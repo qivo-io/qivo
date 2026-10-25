@@ -135,7 +135,7 @@ import { createTaskIndex, type TaskChanges, type TaskSources } from './taskIndex
 
 export type { UIPrefs } from './preferences'
 
-import type { Workspace } from '../../convex/lib/workspaceJoin'
+import type { SeatsDeleting, Workspace } from '../../convex/lib/workspaceJoin'
 import type { Row } from './rows'
 import { createPlannerUpdates, type StoreVersion } from './updates'
 import {
@@ -5460,9 +5460,10 @@ export const PLANNER = {
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
-  /** Whether the last boot found no seat because the login's organization
-      is being deleted. */
-  seatsDeleting: (): boolean => bootSeatsDeleting,
+  /** The root part's answer when the last boot found no seat because the
+      login's organization is being deleted, with when the login may create
+      an organization, otherwise null. */
+  seatsDeleting: (): SeatsDeleting | null => bootSeatsDeleting,
   /** While a large workspace loads in stages, the share of its tasks that
       arrived, from 0 to 1; null once every task did. Counts, totals and
       verdicts over many tasks wait for null (store/liveParts.ts). */
@@ -8715,10 +8716,11 @@ export const PLANNER = {
    they run ahead of the rows on screen until then. The parts' answers are
    not kept beside it: the base keeps each unchanged row's earlier object. */
 let hasSnapshot = false
-/* Whether the boot found no seat because a running organization deletion
-   holds the login's seats (convex/lib/workspaceParts.ts readRoot), so
-   AuthGate says so instead of offering a new organization only. */
-let bootSeatsDeleting = false
+/* The root part's answer when the boot found no seat because a running
+   organization deletion holds the login's seats (convex/lib/workspaceParts.ts
+   readRoot), so AuthGate says so and offers a new organization only when the
+   server allows one. */
+let bootSeatsDeleting: SeatsDeleting | null = null
 /* While a large workspace loads in stages (store/liveParts.ts), the share of
    its task windows that arrived, from 0 to 1; null once it is complete. A
    partial delivery holds no write for certain, since the window a write
@@ -8868,7 +8870,7 @@ function startParts(
         }
         const snap = ws.value && anchor(ws.value)
         hasSnapshot = snap !== null
-        bootSeatsDeleting = ws.state === 'complete' && ws.deleting === true
+        bootSeatsDeleting = (ws.state === 'complete' && ws.deleting) || null
         // the boot paints this delivery before anything rebuilds
         stillLoading = snap && ws.state === 'partial' ? ws.loaded : null
         loadEnds = false
@@ -9181,7 +9183,7 @@ export async function initStore(
   stopDayWatch = null
   clearAvatarSources()
   demoDisposed = false
-  bootSeatsDeleting = false
+  bootSeatsDeleting = null
   const epoch = storeEpoch
   const stillCurrent = () => epoch === storeEpoch && !demoDisposed
   // AuthGate already had to establish this session before it could render

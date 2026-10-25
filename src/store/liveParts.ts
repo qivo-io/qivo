@@ -87,6 +87,7 @@ import {
   partRows,
   type RootAnswer,
   rootOrgs,
+  type SeatsDeleting,
   type TasksPart,
   type Workspace,
 } from '../../convex/lib/workspaceJoin'
@@ -112,9 +113,10 @@ export type PartsReport = {
         state: 'complete'
         /** null when the caller holds no seat */
         value: Workspace | null
-        /** true with no seat when a running organization deletion holds
-            the caller's seats (convex/lib/workspaceParts.ts readRoot) */
-        deleting?: true
+        /** with no seat, the root part's answer when a running
+            organization deletion holds the caller's seats
+            (convex/lib/workspaceParts.ts readRoot) */
+        deleting?: SeatsDeleting
         /** whether any part changed since the last complete report */
         changed: boolean
       }
@@ -394,12 +396,12 @@ export function createLiveParts(
       one is. */
   function join(
     partial: boolean,
-  ): { value: Workspace | null; loaded: number; deleting?: true } | null {
+  ): { value: Workspace | null; loaded: number; deleting?: SeatsDeleting } | null {
     if (!root?.fresh || root.error !== undefined) return null
     const answer = root.value as RootAnswer | undefined
     if (answer === undefined) return null
     if (answer === null) return partial ? null : { value: null, loaded: 1 }
-    if ('deleting' in answer) return partial ? null : { value: null, loaded: 1, deleting: true }
+    if ('deleting' in answer) return partial ? null : { value: null, loaded: 1, deleting: answer }
     const parts: OrgParts[] = []
     let loaded = 0
     const weight = (row: (typeof answer.orgs)[number]) => Math.max(1, tasksIn(row))
@@ -457,7 +459,7 @@ export function createLiveParts(
           state: 'complete',
           value: done.value,
           changed: dirty,
-          ...(done.deleting ? { deleting: true } : {}),
+          ...(done.deleting ? { deleting: done.deleting } : {}),
         }
         dirty = false
         completed = true

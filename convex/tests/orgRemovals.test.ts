@@ -867,6 +867,28 @@ describe('calls through access a running deletion has deleted', () => {
   const toolsList = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })
   const DELETING = { error: 'this organization is being deleted' }
 
+  /* Creates an organization as `profile`'s login, through a session of its
+   * own, which createOrganization reads (authComponent.getAuthUser). */
+  async function createOrg(t: T, profile: Doc<'profiles'>) {
+    const subject = profile.auth_user_id as string
+    const now = Date.now()
+    const session = await t.mutation(components.betterAuth.adapter.create, {
+      input: {
+        model: 'session',
+        data: {
+          token: uuid(),
+          userId: subject,
+          expiresAt: now + 3_600_000,
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    })
+    return t
+      .withIdentity({ subject, sessionId: session._id as string })
+      .mutation(api.identity.createOrganization, { name: 'Next' })
+  }
+
   /* An organization whose deletion has begun, with a working personal token
    * of `user`, a revoked one, and a working key of its agent. */
   async function deleting() {
@@ -1113,12 +1135,15 @@ describe('calls through access a running deletion has deleted', () => {
   it("tell the app's root part why a login has no seat while the deletion holds it", async () => {
     const { t, f, step, profileGone } = await deleting()
     const root = () => as(t, f.user).query(api.workspace.root, {})
-    // the profile still stands, then the deletion's record of it
-    expect(await root()).toEqual({ deleting: true })
+    const create = () => createOrg(t, f.user)
+    // the home seat still stands, so no new organization yet
+    expect(await root()).toEqual({ deleting: true, create: 'after_deletion' })
+    await expectRefusal(create(), 'rule', /^you already belong to an organization$/)
     REMOVAL_BUDGET.rows = 4
     for (let i = 0; i < 100 && !(await profileGone(f.user)); i++) await step()
     expect(await removalOf(t, f.org.id)).not.toBeNull()
-    expect(await root()).toEqual({ deleting: true })
+    // then the deletion's record of it, and a new organization may follow
+    expect(await root()).toEqual({ deleting: true, create: 'now' })
     // a member of another organization still gets that one
     expect(await as(t, f.otherAdmin).query(api.workspace.root, {})).toMatchObject({
       orgs: [expect.objectContaining({ id: expect.not.stringMatching(f.org.id) })],
@@ -1127,6 +1152,32 @@ describe('calls through access a running deletion has deleted', () => {
     await runSteps(t)
     expect(await removalOf(t, f.org.id)).toBeNull()
     expect(await root()).toBeNull()
+  })
+
+  it('offer no new organization to a guest whose home seat another organization holds', async () => {
+    const { t, f } = await deleting()
+    // the other organization's admin, deactivated there, is a guest in the
+    // organization being deleted
+    const { _id, _creationTime, ...home } = f.otherAdmin
+    await t.run(async (ctx) => {
+      await ctx.db.patch(_id, { active: false })
+      await ctx.db.insert('profiles', {
+        ...home,
+        id: uuid(),
+        org_id: f.org.id,
+        org_role: 'guest',
+        active: true,
+      })
+    })
+    expect(await as(t, f.otherAdmin).query(api.workspace.root, {})).toEqual({
+      deleting: true,
+      create: 'blocked',
+    })
+    await expectRefusal(
+      createOrg(t, f.otherAdmin),
+      'rule',
+      /^you already belong to an organization$/,
+    )
   })
 
   it('tell a deactivated member and their token the same before the deletion reaches them', async () => {

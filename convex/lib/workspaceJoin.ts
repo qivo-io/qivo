@@ -34,8 +34,11 @@ type Ok<F extends (...args: never[]) => Promise<unknown>> = Omit<
 >
 
 export type RootAnswer = Read<typeof readRoot>
+/** The root part's answer for a login whose only seats a running
+ * organization deletion holds. */
+export type SeatsDeleting = Extract<RootAnswer, { deleting: true }>
 /** The root part's answer for a caller with a seat. */
-export type RootSeats = Exclude<RootAnswer, null | { deleting: true }>
+export type RootSeats = Exclude<RootAnswer, null | SeatsDeleting>
 
 /** The organizations of the root part's answer, none without a seat. */
 export const rootOrgs = (root: RootAnswer): RootSeats['orgs'] =>

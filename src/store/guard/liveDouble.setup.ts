@@ -1,6 +1,10 @@
 import { type FunctionReference, getFunctionName, makeFunctionReference } from 'convex/server'
 import type { Value } from 'convex/values'
-import { splitWorkspace, type Workspace } from '../../../convex/lib/workspaceJoin'
+import {
+  type SeatsDeleting,
+  splitWorkspace,
+  type Workspace,
+} from '../../../convex/lib/workspaceJoin'
 import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
 
 /* The live transport (lib/liveQueries.ts) for store tests, over a Convex
@@ -36,9 +40,9 @@ type Whole = Omit<Workspace, 'messagesCut'> & { messagesCut?: boolean }
 /** What a test publishes for a login whose seats a running organization
     deletion holds. The root part answers it (convex/lib/workspaceParts.ts
     readRoot), and every other part that it has no seat. */
-export const SEATS_DELETING = { deleting: true as const }
-type Published = Whole | typeof SEATS_DELETING | null
-const seatsDeleting = (value: Published): value is typeof SEATS_DELETING =>
+export const SEATS_DELETING: SeatsDeleting = { deleting: true, create: 'after_deletion' }
+type Published = Whole | SeatsDeleting | null
+const seatsDeleting = (value: Published): value is SeatsDeleting =>
   value !== null && 'deleting' in value
 
 const KINDS = ['tasks', 'people', 'projects'] as const
