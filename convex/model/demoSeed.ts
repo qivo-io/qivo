@@ -167,8 +167,10 @@ export type NorthstarRun = {
    * seed patches a task before the archive marks. */
   tasks: Map<string, Doc<'issues'>>
   /* Whether the notify preload reads who sees each sub-project up front
-   * (notifyContext): set for a run of many steps, whose notices ask about
-   * most of them. A run of one step asks about few, one at a time. */
+   * (notifyContext). Only the public demo's calls set it: each runs a few
+   * steps whose notices ask about most sub-projects. Every other seed asks
+   * person by person as each notice asks, which keeps a marketing step of
+   * one call inside its read budget. */
   sightUpFront?: true
 }
 
@@ -607,17 +609,35 @@ export async function writeNorthstarStep(
  * wrote at most 424 documents (550 KB) and ran 80 to 160 ms of
  * JavaScript, up to about 260 ms on a loaded machine, each under a third
  * of Convex's limits for one mutation (1,365 ranges, 10,666 documents
- * read, 5,333 written, 5.3 MiB, 333 ms). convex/tests/demo.test.ts holds
- * every call to that third, the time aside. */
+ * read, 5,333 written, 5.3 MiB, 333 ms). The time limit counts only the
+ * function's own code, not its database operations. The hosted demo's
+ * steps at v0.1.86 put each call at about 170 to 260 ms of it, as its
+ * JavaScript grows with the documents a call reads. So
+ * convex/tests/demo.test.ts holds every call to about 1.5 times what the
+ * heaviest uses (1,000 documents read, 750 ranges, 650 written), which
+ * keeps the time inside the third too. */
 export const PUBLIC_DEMO_CALL_SIZES: readonly number[] = [5, 6, 6, 5, 4]
 
+/** `steps` in calls of `sizes` steps each, in order, then each step past
+ * them in a call of its own: a dataset that grows adds bounded calls
+ * rather than steps no call runs. Sizes past the last step add nothing. */
+export function stepCalls<Step>(
+  steps: readonly Step[],
+  sizes: readonly number[],
+): readonly (readonly Step[])[] {
+  const calls: Step[][] = []
+  let from = 0
+  for (const size of sizes) {
+    if (from >= steps.length) break
+    calls.push(steps.slice(from, from + size))
+    from += size
+  }
+  for (const step of steps.slice(from)) calls.push([step])
+  return calls
+}
+
 /** The work of each call of a public demo (PUBLIC_DEMO_CALL_SIZES). */
-export const PUBLIC_DEMO_CALLS: readonly (readonly NorthstarStep[])[] = PUBLIC_DEMO_CALL_SIZES.map(
-  (size, call) => {
-    const from = PUBLIC_DEMO_CALL_SIZES.slice(0, call).reduce((n, s) => n + s, 0)
-    return NORTHSTAR_STEPS.slice(from, from + size)
-  },
-)
+export const PUBLIC_DEMO_CALLS = stepCalls(NORTHSTAR_STEPS, PUBLIC_DEMO_CALL_SIZES)
 
 /** The calls that build a public demo, one transaction each. */
 export const PUBLIC_DEMO_STEPS = PUBLIC_DEMO_CALLS.length

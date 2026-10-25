@@ -109,6 +109,7 @@ async function withLogin(on: T, email: string, emailVerified = true) {
   })
   return {
     userId: user._id as string,
+    sessionId: session._id as string,
     as: on.withIdentity({ subject: user._id as string, sessionId: session._id as string }),
   }
 }
@@ -431,6 +432,53 @@ describe('claimMySeats — through the real component', () => {
     expect(await login.as.mutation(api.identity.claimMySeats, {})).toBe(0)
     expect((await reload(t, seat)).auth_user_id).toBeUndefined()
   })
+})
+
+describe('claimMySeats and createOrganization — only a live login', () => {
+  const calls = {
+    claimMySeats: (as: Pick<T, 'mutation'>) => as.mutation(api.identity.claimMySeats, {}),
+    createOrganization: (as: Pick<T, 'mutation'>) =>
+      as.mutation(api.identity.createOrganization, { name: 'Nimbus' }),
+  }
+
+  it.each(Object.entries(calls))('%s answers the live session of the token', async (_, call) => {
+    const login = await withLogin(t, 'live@example.test')
+    await expect(call(login.as)).resolves.toBeDefined()
+  })
+
+  it.each(Object.entries(calls))(
+    '%s refuses a token whose session or login is not live',
+    async (_, call) => {
+      const login = await withLogin(t, 'ended@example.test')
+      const other = await withLogin(t, 'other@example.test')
+      const unauthenticated = (as: Pick<T, 'mutation'>) =>
+        expect(call(as)).rejects.toThrow('Unauthenticated')
+      await expectRefusal(call(t), 'forbidden', /not signed in/)
+      // no session in the token, another login's live session, no session id
+      await unauthenticated(t.withIdentity({ subject: login.userId }))
+      await unauthenticated(t.withIdentity({ subject: login.userId, sessionId: other.sessionId }))
+      await unauthenticated(t.withIdentity({ subject: login.userId, sessionId: 'not-a-session' }))
+      // the session at its expiry, with an expiry that is no number, then gone
+      const setSession = (update: { expiresAt: number }) =>
+        t.mutation(components.betterAuth.adapter.updateOne, {
+          input: { model: 'session', where: [{ field: '_id', value: login.sessionId }], update },
+        })
+      await setSession({ expiresAt: Date.now() })
+      await unauthenticated(login.as)
+      await setSession({ expiresAt: Number.NaN })
+      await unauthenticated(login.as)
+      await t.mutation(components.betterAuth.adapter.deleteOne, {
+        input: { model: 'session', where: [{ field: '_id', value: login.sessionId }] },
+      })
+      await unauthenticated(login.as)
+      // a live session whose login is gone
+      await t.mutation(components.betterAuth.adapter.deleteOne, {
+        input: { model: 'user', where: [{ field: '_id', value: other.userId }] },
+      })
+      await unauthenticated(other.as)
+      expect(await t.run((ctx) => ctx.db.query('organizations').collect())).toHaveLength(2)
+    },
+  )
 })
 
 describe('createOrganization guards (0118)', () => {

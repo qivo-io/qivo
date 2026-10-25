@@ -1,10 +1,10 @@
 /* Northstar Labs inside convex-test — the whole dataset in one transaction
- * through writeNorthstarWork (the public demo and the importer,
- * internal/marketingDemo, run the same steps one call at a time through
- * writeNorthstarStep), without the auth component, the ownership receipt or
- * scrypt. The organization and its eight profiles are planted raw, each
- * person carrying
- * the fake login `auth_<key>` so `t.withIdentity({ subject: 'auth_nora' })`
+ * through writeNorthstarWork (the importer, internal/marketingDemo, runs the
+ * same steps one a call, and the public demo a few a call with the sight
+ * read up front, both through writeNorthstarStep), without the auth
+ * component, the ownership receipt or scrypt. The organization and its
+ * eight profiles are planted raw, each person carrying the fake login
+ * `auth_<key>` so `t.withIdentity({ subject: 'auth_nora' })`
  * walks through the public doors as Nora. About a second per call — plant
  * once per test, never in a loop; the generic suites keep the tiny
  * helpers.setup fixture.
@@ -29,6 +29,7 @@ export const northstarId = (key: string): Promise<string> => marketingId(NORTHST
 export async function plantNorthstar(
   t: T,
   anchor = NORTHSTAR_ANCHOR,
+  now = NOW,
 ): Promise<{ org: Doc<'organizations'>; profiles: Doc<'profiles'>[] }> {
   return await t.run(async (ctx) => {
     const orgId = await northstarId('org')
@@ -63,7 +64,7 @@ export async function plantNorthstar(
       })
       profiles.push((await ctx.db.get(_id)) as Doc<'profiles'>)
     }
-    await writeNorthstarWork(ctx, { org, profiles, namespace: NORTHSTAR, anchor, now: NOW })
+    await writeNorthstarWork(ctx, { org, profiles, namespace: NORTHSTAR, anchor, now })
     return { org, profiles }
   })
 }

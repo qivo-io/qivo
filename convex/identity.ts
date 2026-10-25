@@ -18,7 +18,7 @@ import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { internalMutation } from './_generated/server'
-import { authComponent } from './auth'
+import { requireLiveAuthUser } from './lib/authUser'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { isHomeSeat } from './lib/billingAccess'
 import { byId } from './lib/db'
@@ -151,11 +151,13 @@ export const claimSeatsInternal = internalMutation({
 })
 
 /* Called first thing at every boot (initStore). Email and emailVerified come
- * from the component's user row — authoritative state, not JWT claims. */
+ * from the component's user row — authoritative state, not JWT claims. The
+ * login is read without loading Better Auth (lib/authUser.ts), and a caller
+ * without a live session is refused. */
 export const claimMySeats = authedMutation({
   args: {},
   handler: async (ctx) => {
-    const user = await authComponent.getAuthUser(ctx)
+    const user = await requireLiveAuthUser(ctx)
     return await claimSeatsForLogin(ctx, {
       userId: user._id,
       email: user.email,
@@ -188,7 +190,7 @@ export const createOrganization = authedMutation({
   args: { name: v.string() },
   handler: async (ctx, { name }): Promise<string> => {
     refuseDemoFeature()
-    const user = await authComponent.getAuthUser(ctx)
+    const user = await requireLiveAuthUser(ctx)
     // 0118: "the gate every other reader of this address already had"
     require(user.emailVerified, rule('confirm your email address before creating an organization'))
     const mine = await seatsOf(ctx, ctx.authUserId)

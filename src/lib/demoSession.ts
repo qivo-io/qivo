@@ -165,9 +165,9 @@ export async function startDemo(
   const current = await demoStartupStep(deps.current, signal)
   if (['expired', 'deleting'].includes(current.status)) throw new DemoSessionEnded('expired')
   if (current.status === 'missing') throw new DemoSessionEnded('lost')
-  // The server builds a demo one bounded step a call, each answer a step
-  // further until it is ready. An answer that is not refuses, so a stuck
-  // demo never loops.
+  // The server builds a demo one bounded call at a time, each a few seed
+  // steps and each answer a step of progress further until it is ready. An
+  // answer that is not refuses, so a stuck demo never loops.
   let ready = current
   while (ready.status === 'unprovisioned') {
     const done = ready.progress?.step ?? 0

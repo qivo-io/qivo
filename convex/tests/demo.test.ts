@@ -14,8 +14,16 @@ import {
   DEMO_WRITES_PER_MINUTE,
   DEMO_WRITES_TOTAL,
 } from '../lib/demo'
-import { NORTHSTAR_STEPS, PUBLIC_DEMO_CALLS, PUBLIC_DEMO_STEPS } from '../model/demoSeed'
+import {
+  NORTHSTAR_STEPS,
+  newNorthstarRun,
+  PUBLIC_DEMO_CALL_SIZES,
+  PUBLIC_DEMO_CALLS,
+  PUBLIC_DEMO_STEPS,
+  stepCalls,
+} from '../model/demoSeed'
 import { expectRefusal, newT, type T, uuid, workspaceOf } from './helpers.setup'
+import { NORTHSTAR, plantNorthstar } from './northstar.setup'
 
 const componentModules = import.meta.glob('../betterAuth/**/*.ts')
 let t: T
@@ -235,6 +243,8 @@ describe('public demo ownership and authentication', () => {
         input: { model: 'session', where: [{ field: '_id', value: sessionId }], update },
       })
     await setSession({ expiresAt: Date.now() })
+    await refused(login.as)
+    await setSession({ expiresAt: Number.NaN })
     await refused(login.as)
     await setSession({ expiresAt: Date.now() + 1 })
     expect(await login.as.mutation(api.demo.ensureMine, {})).toMatchObject({
@@ -734,25 +744,34 @@ describe('demo lifetime and capabilities', () => {
 })
 
 describe('public demo provisioning steps', () => {
+  it('runs every step once, and a step past the call sizes in a call of its own', () => {
+    expect(stepCalls([1, 2, 3, 4, 5], [2, 2])).toEqual([[1, 2], [3, 4], [5]])
+    expect(stepCalls([1, 2, 3], [2, 2, 2])).toEqual([[1, 2], [3]])
+    expect(PUBLIC_DEMO_CALLS.flat()).toEqual(NORTHSTAR_STEPS)
+    expect(PUBLIC_DEMO_STEPS).toBe(PUBLIC_DEMO_CALLS.length)
+    // The sizes fit today's data. Retune them when this fails.
+    expect(PUBLIC_DEMO_CALL_SIZES.reduce((n, size) => n + size, 0)).toBe(NORTHSTAR_STEPS.length)
+  })
+
   // The whole Northstar work in one transaction read 1,612 index ranges
   // and 1,668 documents and wrote about 1,400 documents, which could pass
   // Convex's 1 s mutation limit on a slow backend. Each call runs a few of
-  // its steps (PUBLIC_DEMO_CALLS), held to a third of each of Convex's
-  // limits for one mutation.
-  it('provisions a demo in calls within a third of Convex limits, every step once', async () => {
-    const third = (limit: number) => Math.floor(limit / 3)
+  // its steps (PUBLIC_DEMO_CALLS), held to about 1.5 times what the
+  // heaviest call uses, well inside a third of each of Convex's limits for
+  // one mutation. The JavaScript time Convex limits follows the documents
+  // read (model/demoSeed.ts PUBLIC_DEMO_CALL_SIZES), so the read budget
+  // also stands in for the time limit, which convex-test does not keep.
+  it('provisions a demo in calls inside a budget near their use, every step once', async () => {
     const limited = newT({
       transactionLimits: {
-        databaseQueries: third(4096),
-        documentsRead: third(32_000),
-        documentsWritten: third(16_000),
-        bytesRead: third(16 * 1024 * 1024),
-        bytesWritten: third(16 * 1024 * 1024),
+        databaseQueries: 750,
+        documentsRead: 1_000,
+        documentsWritten: 650,
+        bytesRead: Math.floor((16 * 1024 * 1024) / 3),
+        bytesWritten: Math.floor((16 * 1024 * 1024) / 3),
       },
     })
     limited.registerComponent('betterAuth', authSchema, componentModules)
-    expect(PUBLIC_DEMO_CALLS.flat()).toEqual(NORTHSTAR_STEPS)
-    expect(PUBLIC_DEMO_STEPS).toBe(PUBLIC_DEMO_CALLS.length)
     const login = await anonymousLogin(limited)
     expect((await login.as.query(api.demo.current, {})).progress).toEqual({
       step: 0,
@@ -771,6 +790,42 @@ describe('public demo provisioning steps', () => {
     expect(org).toMatchObject({ id: answers.at(-1)?.orgId, max_attachment_mb: 5 })
     const tasks = await limited.run((ctx) => ctx.db.query('issues').collect())
     expect(tasks).toHaveLength(MARKETING_DEMO.issues.length)
+  })
+
+  it('gives the public demo the notices and follows of a seed that asks person by person', async () => {
+    const login = await anonymousLogin()
+    await provision(login.as)
+    const receipt = (await t.run((ctx) => ctx.db.query('demo_sessions').unique()))!
+    // the same data through writeNorthstarWork, which reads no sight up
+    // front, at the same anchor and write time (the frozen clock)
+    const stepped = await plantNorthstar(t, receipt.anchor, new Date().toISOString())
+    const byKey = async (namespace: string, orgId: string) => {
+      const { ids } = await newNorthstarRun(namespace)
+      const person = new Map(Object.entries(ids.person).map(([key, id]) => [id, key]))
+      const issue = new Map(Object.entries(ids.issue).map(([key, id]) => [id, key]))
+      return t.run(async (ctx) => ({
+        notices: (await ctx.db.query('messages').collect())
+          .filter((m) => m.org_id === orgId)
+          .map((m) =>
+            [
+              person.get(m.recipient_id),
+              m.actor_id && person.get(m.actor_id),
+              issue.get(m.issue_id),
+              m.kind,
+              m.detail,
+            ].join(' '),
+          )
+          .sort(),
+        follows: (await ctx.db.query('issue_subscriptions').collect())
+          .filter((follow) => issue.has(follow.issue_id))
+          .map((follow) => `${issue.get(follow.issue_id)} ${person.get(follow.profile_id)}`)
+          .sort(),
+      }))
+    }
+    const demo = await byKey(`public-demo:${receipt.id}`, receipt.org_id!)
+    expect(demo.notices.length).toBeGreaterThan(100)
+    expect(demo.follows.length).toBeGreaterThan(100)
+    expect(demo).toEqual(await byKey(NORTHSTAR, stepped.org.id))
   })
 
   it('refuses the workspace until the last step, and resumes at the step a stopped visitor left', async () => {
@@ -801,8 +856,9 @@ describe('public demo provisioning steps', () => {
         provision: { ...receipt.provision!, step: 26, layout: '27:0' },
       })
     })
+    // a demo that cannot finish shows none of its steps done
     expect((await login.as.query(api.demo.current, {})).progress).toEqual({
-      step: PUBLIC_DEMO_STEPS,
+      step: 0,
       steps: PUBLIC_DEMO_STEPS,
     })
     const refusal = await expectRefusal(

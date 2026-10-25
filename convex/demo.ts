@@ -18,7 +18,7 @@ import {
 } from './lib/demo'
 import { demoBootstrapMutation, demoConfigurationQuery, demoLifecycleQuery } from './lib/functions'
 import { recordDemoCreated } from './model/demoMetrics'
-import { PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from './model/demoSeed'
+import { PUBLIC_DEMO_LAYOUT, PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from './model/demoSeed'
 
 export type DemoCurrent = {
   mode: 'demo'
@@ -46,12 +46,13 @@ async function publicReceipt(
     expiresAt: receipt?.expires_at ?? null,
     orgId: org?.id ?? null,
     orgSlug: org?.slug ?? null,
-    // A demo begun before a deploy that changed the calls may have done more
-    // than there are now; its next call refuses it (provisionPublicDemoStep).
+    // A demo begun before a deploy that changed the calls cannot finish, as
+    // its next call refuses it (provisionPublicDemoStep), so it shows none
+    // of its steps done, never a bar that looks finished.
     progress:
       status === 'unprovisioned'
         ? {
-            step: Math.min(receipt?.provision?.step ?? 0, PUBLIC_DEMO_STEPS),
+            step: receipt?.provision?.layout === PUBLIC_DEMO_LAYOUT ? receipt.provision.step : 0,
             steps: PUBLIC_DEMO_STEPS,
           }
         : null,

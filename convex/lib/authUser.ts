@@ -1,19 +1,23 @@
 /* The caller's login, read without loading Better Auth. authComponent's
- * safeGetAuthUser (auth.ts) needs that module and its whole Better Auth
- * closure, and two nested calls into the component's adapter, which loads
- * it again in the component. A function that runs many times, such as each
- * call of a demo start (demo.ts ensureMine), reads the login here instead.
- * This module imports none of auth.ts, Better Auth or the adapter's client
+ * safeGetAuthUser and getAuthUser (auth.ts) need that module and its whole
+ * Better Auth closure, and two nested calls into the component's adapter,
+ * which loads it again in the component. Functions that run often, such as
+ * each call of a demo start (demo.ts ensureMine) and every app boot
+ * (identity.ts claimMySeats), read the login here instead. This module
+ * imports none of auth.ts, Better Auth or the adapter's client
  * (tests/authTriggers.test.ts holds it to that). */
 
+import { ConvexError } from 'convex/values'
 import { components } from '../_generated/api'
 import type { QueryCtx } from '../_generated/server'
 
 /** The caller's login while the session in its token is live: the session
  * exists, has not expired and belongs to the token's subject, and that
- * login exists. Null otherwise, also for a caller without a sign-in. The
- * same check as safeGetAuthUser, in one nested call (betterAuth/sessions.ts
- * liveSessionUser). MutationCtx satisfies this too. */
+ * login exists. Null otherwise, also for a caller without a sign-in or a
+ * session in its token. safeGetAuthUser's check, plus that the session is
+ * the subject's, in one nested call (betterAuth/sessions.ts
+ * liveSessionUser). Answers only the login's id, name, email and whether
+ * it is verified and anonymous. MutationCtx satisfies this too. */
 export async function liveAuthUser(ctx: QueryCtx) {
   const identity = await ctx.auth.getUserIdentity()
   if (!identity || typeof identity.sessionId !== 'string') return null
@@ -21,4 +25,12 @@ export async function liveAuthUser(ctx: QueryCtx) {
     sessionId: identity.sessionId,
     userId: identity.subject,
   })
+}
+
+/** liveAuthUser, or getAuthUser's 'Unauthenticated' error when the caller
+ * holds no live login. */
+export async function requireLiveAuthUser(ctx: QueryCtx) {
+  const user = await liveAuthUser(ctx)
+  if (user === null) throw new ConvexError('Unauthenticated')
+  return user
 }
