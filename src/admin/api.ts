@@ -1,6 +1,6 @@
 // Data layer for the platform-operator admin area: thin wrappers over the
 // operator-gated Convex functions (admin.ts platform* queries/mutations, the
-// adminStats.ts and adminPeople.ts paged actions and the adminAuth.ts
+// adminStats.ts, adminPeople.ts and usage.ts paged actions and the adminAuth.ts
 // session-bound actions).
 // Every call throws on error; views catch and surface the message. Changes
 // go through ./convex.ts, which refuses them while Qivo cannot save.
@@ -38,6 +38,13 @@ export type InviteRole = PersonInput['role']
 export type InviteResult = FunctionReturnType<typeof api.adminOrgs.resendInvite>
 export type PeopleCheck = FunctionReturnType<typeof api.adminOrgs.checkPeople>[number]
 export type BillingPlans = FunctionReturnType<typeof api.adminBilling.listPlans>
+
+/* Monthly usage per organization (convex/usage.ts). */
+export type UsageMonth = FunctionReturnType<typeof api.usage.monthTable>
+export type UsageRow = UsageMonth['rows'][number]
+export type OrgUsageMonths = FunctionReturnType<typeof api.usage.orgMonths>
+export type OrgUsageMonth = OrgUsageMonths['months'][number]
+export type UsagePeople = FunctionReturnType<typeof api.usage.orgPeople>
 
 /* ConvexError.data = { code, message, reason? } (convex/lib/functions.ts) —
    surface the server's sentence; anything else rethrows untouched. */
@@ -84,6 +91,13 @@ export const orgDetail = (orgId: string): Promise<OrgDetail> =>
   runAction(api.adminPeople.orgDetail, { org_id: orgId }).catch(mapError)
 export const platformStats = (): Promise<PlatformStats> =>
   runAction(api.adminStats.platformStats, {}).catch(mapError)
+/* A closed month's stored rows, or the current month computed now. */
+export const usageMonth = (month: string): Promise<UsageMonth> =>
+  runAction(api.usage.monthTable, { month }).catch(mapError)
+export const orgUsageMonths = (orgId: string): Promise<OrgUsageMonths> =>
+  runAction(api.usage.orgMonths, { org_id: orgId }).catch(mapError)
+export const orgUsagePeople = (orgId: string, month: string): Promise<UsagePeople> =>
+  runAction(api.usage.orgPeople, { org_id: orgId, month }).catch(mapError)
 export const demoMetrics = (): Promise<DemoMetricsResult> =>
   convex.query(api.adminDemo.metrics, {}).catch(mapError)
 export const promoteOrgAdmin = (profileId: string): Promise<null> =>

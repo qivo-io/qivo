@@ -29,6 +29,9 @@ const READ_ACTIONS = new Set([
   'adminStats:platformStats',
   'adminPeople:userPage',
   'adminPeople:orgDetail',
+  'usage:monthTable',
+  'usage:orgMonths',
+  'usage:orgPeople',
 ])
 
 /** What Convex rejects an action with when the socket dropped before its

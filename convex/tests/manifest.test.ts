@@ -538,6 +538,37 @@ tokens:listAgentKeys query public {"type":"object","value":{}}
 tokens:listMcpTokens query public {"type":"object","value":{}}
 tokens:revokeAgentKey mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 tokens:revokeMcpToken mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
+usage:activity query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+usage:api query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"key":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+usage:backgrounds query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+usage:claimStep mutation internal {"type":"object","value":{"month":{"fieldType":{"type":"string"},"optional":false},"run":{"fieldType":{"type":"string"},"optional":true},"fresh":{"fieldType":{"type":"boolean"},"optional":false},"now":{"fieldType":{"type":"number"},"optional":false}}}
+usage:closeMonth action internal {"type":"object","value":{"month":{"fieldType":{"type":"string"},"optional":true},"run":{"fieldType":{"type":"string"},"optional":true}}}
+usage:closeOrgMonth action internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false}}}
+usage:comments query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+usage:countPersonMail mutation internal {"type":"object","value":{"metric":{"fieldType":{"type":"union","value":[{"type":"literal","value":"mail_verification"},{"type":"literal","value":"mail_password_reset"},{"type":"literal","value":"mail_account_notes"}]},"optional":false}}}
+usage:deleted query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+usage:endStep mutation internal {"type":"object","value":{"month":{"fieldType":{"type":"string"},"optional":false},"run":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"saved":{"fieldType":{"type":"number"},"optional":false},"failed":{"fieldType":{"type":"number"},"optional":false},"background_bytes":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true}}}
+usage:expire mutation internal {"type":"object","value":{}}
+usage:files query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+usage:forgetLogin mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
+usage:head query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false},"now":{"fieldType":{"type":"number"},"optional":false}}}
+usage:keepSignIn mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"created_at":{"fieldType":{"type":"number"},"optional":false},"updated_at":{"fieldType":{"type":"number"},"optional":false}}}
+usage:monthRows query internal {"type":"object","value":{"month":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+usage:monthTable action public {"type":"object","value":{"month":{"fieldType":{"type":"string"},"optional":false}}}
+usage:orgMonths action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+usage:orgPage query internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false}}}
+usage:orgPeople action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false}}}
+usage:orgRows query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+usage:profileNames query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
+usage:profiles query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+usage:retained query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false}}}
+usage:saveMonth mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false},"counts":{"fieldType":{"type":"object","value":{"billable":{"fieldType":{"type":"number"},"optional":false},"guests":{"fieldType":{"type":"number"},"optional":false},"agents":{"fieldType":{"type":"number"},"optional":false},"active_people":{"fieldType":{"type":"number"},"optional":false},"active_tasks":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":false},"live_projects":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":false},"changes":{"fieldType":{"type":"number"},"optional":false},"comments":{"fieldType":{"type":"number"},"optional":false},"api_calls":{"fieldType":{"type":"number"},"optional":false},"file_bytes":{"fieldType":{"type":"number"},"optional":false},"image_bytes":{"fieldType":{"type":"number"},"optional":false},"deleted_file_bytes":{"fieldType":{"type":"number"},"optional":false},"avatar_bytes":{"fieldType":{"type":"number"},"optional":false},"webhook_deliveries":{"fieldType":{"type":"number"},"optional":false},"webhook_attempts":{"fieldType":{"type":"number"},"optional":false},"mail_invitations":{"fieldType":{"type":"number"},"optional":false},"mail_billing_reminders":{"fieldType":{"type":"number"},"optional":false},"mail_deletion_notices":{"fieldType":{"type":"number"},"optional":false}}},"optional":false},"api_estimated":{"fieldType":{"type":"boolean"},"optional":false},"run":{"fieldType":{"type":"string"},"optional":true}}}
+usage:sessions query internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+usage:status query internal {"type":"object","value":{"month":{"fieldType":{"type":"string"},"optional":false}}}
+usage:statuses query internal {"type":"object","value":{}}
+usage:taskComments query internal {"type":"object","value":{"task_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+usage:unattributed query internal {"type":"object","value":{"month":{"fieldType":{"type":"string"},"optional":false}}}
+usage:webhooks query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 webhookActions:deliver action internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 webhookActions:manage action internal {"type":"object","value":{"owner":{"fieldType":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"credential_table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"credential_id":{"fieldType":{"type":"string"},"optional":false},"credential_row_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"method":{"fieldType":{"type":"string"},"optional":false},"params_json":{"fieldType":{"type":"string"},"optional":false}}}
 webhookQueue:dispatch mutation internal {"type":"object","value":{}}
@@ -680,6 +711,13 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   adminPeople: {
     userPage: 'platformAction',
     orgDetail: 'platformAction',
+  },
+  // The Usage page reads stored months and computes the current one and a
+  // month's people the same way (usage.ts).
+  usage: {
+    monthTable: 'platformAction',
+    orgMonths: 'platformAction',
+    orgPeople: 'platformAction',
   },
   adminAuth: {
     recoveryLink: 'platformAction',
@@ -904,7 +942,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 174
+const PUBLIC_COUNT = 177
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

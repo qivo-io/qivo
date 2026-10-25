@@ -290,6 +290,42 @@ invitation email is older than that then shows only **Invited**, without
 whether or when it was sent and without **Copy sign-up link**. **Resend
 invite** emails them again.
 
+## Organization usage. Platform operators
+
+**Qivo Admin → Usage** shows what each organization used in one month, so
+limits and add-on prices can follow real use. Pick a month. Early on the 1st,
+Qivo stores the month that just ended for every organization that existed
+then; the current month is counted when you open the page. If the job stops
+partway, it continues within a day, and the page says how many
+organizations it has stored so far. Each column sorts, and the first rows
+give the median, the 90th and 99th percentile and the maximum across
+organizations. **Download CSV** saves the month.
+
+The columns are billable seats, guests, agents, people active in the month
+(signed in, made a change, commented or called the API), active tasks,
+projects, changes, comments, REST and MCP calls, stored bytes (attachments,
+description images, files in Deleted items and profile pictures), webhook
+deliveries and the requests they took, and invitation, billing and deletion
+emails. Seats, guests, agents, tasks, projects and bytes are counted when
+the month is stored. Calls from a paid billing period that crosses the
+month's start or end are split by time and marked ≈. Verification, password
+reset and other account emails and account backgrounds belong to a login,
+not to one organization, so the page and the CSV show them as separate
+totals that no organization's row includes.
+
+A sign-in belongs to a login, so a person counts as signed in in every
+organization where they hold an active seat. A person who signed in and
+later signed out still counts as active in the months they were signed in.
+Qivo counts emails, finished webhook deliveries and signed-out sessions
+from the day this page was added, so the page marks the month it was added
+in, and any earlier month, as partial.
+
+Open an organization to see its months side by side. **Show people** counts
+each person's changes, comments and calls per key for one month, from the
+records Qivo already keeps. Organization admins never see this page. Qivo
+deletes a stored month after 800 days, and deleting an organization deletes
+its usage.
+
 ## Demo usage. Platform operators
 
 Open **Qivo Admin → Demos** on the regular site. The deployment manager must

@@ -388,7 +388,8 @@ const webhookRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     ),
   )
 
-/** Usage, billing events, periods, notices and the subscription row. */
+/** Usage, billing events, periods, notices and the subscription row, then
+ * the monthly usage rows and counts of Qivo Admin's Usage page. */
 const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
     ...(['billing_usage', 'billing_usage_totals', 'billing_events'] as const).map(
@@ -407,6 +408,18 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
           ctx.db.query(table).withIndex('by_org', (q) => q.eq('org_id', orgId)),
         ),
     ),
+    () =>
+      drain(
+        ctx,
+        budget,
+        ctx.db.query('usage_months').withIndex('by_org_month', (q) => q.eq('org_id', orgId)),
+      ),
+    () =>
+      drain(
+        ctx,
+        budget,
+        ctx.db.query('usage_counts').withIndex('by_org_month_metric', (q) => q.eq('org_id', orgId)),
+      ),
   ])
 
 /** The last step checks that every parent range is empty, Deleted items

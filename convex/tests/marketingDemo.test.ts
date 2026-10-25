@@ -32,6 +32,7 @@ import {
   plantIssue,
   plantProject,
   plantSeat,
+  settleScheduled,
   type T,
   uuid,
   withOrg,
@@ -121,10 +122,15 @@ const wipe = async (t: T, anchor = ANCHOR) => {
   throw new Error('the wipe did not finish in 100 calls')
 }
 // The CLI's seed: one step a call, until the backend says it is done.
+// The last step schedules the closed months' usage rows (usage.ts
+// closeOrgMonth). They are settled here, so no snapshot sees them move.
 const seed = async (t: T, anchor = ANCHOR) => {
   for (let step = 0; step < 200; step++) {
     const result = await apply(t, 'seed', anchor)
-    if (result.seed_done !== false) return result
+    if (result.seed_done !== false) {
+      await settleScheduled(t)
+      return result
+    }
   }
   throw new Error('the seed did not finish in 200 calls')
 }
@@ -1564,7 +1570,8 @@ describe('marketing demo seed steps', () => {
     while (answers.at(-1)?.seed_done === false && answers.length < 200)
       answers.push(await apply(t, 'seed'))
     const steps = answers[0].seed_steps ?? 0
-    expect(steps).toBe(RESERVED_PARTS + NORTHSTAR_STEPS.length)
+    // the check parts, the work and the usage history
+    expect(steps).toBe(RESERVED_PARTS + NORTHSTAR_STEPS.length + 1)
     expect(answers.slice(0, -1).map((a) => [a.state, a.seed_step])).toEqual(
       Array.from({ length: steps }, (_, step) => ['seeding', step]),
     )

@@ -438,6 +438,16 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
     .filter((q) => q.eq(q.field('org_id'), org.id))
     .collect())
     await ctx.db.delete(row._id)
+  for (const row of await ctx.db
+    .query('usage_months')
+    .withIndex('by_org_month', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(row._id)
+  for (const row of await ctx.db
+    .query('usage_counts')
+    .withIndex('by_org_month_metric', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(row._id)
 
   for (const a of await ctx.db
     .query('activity_events')

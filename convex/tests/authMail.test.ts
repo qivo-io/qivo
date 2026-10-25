@@ -142,6 +142,30 @@ it('mails an existing sign-up address a note instead of a link, and an unknown r
   expect(letters()[1].text).toContain(`${APP}/app#signup`)
 })
 
+it('counts each letter the provider accepted for usage under no organization, and no other', async () => {
+  const { t, provider, post, signUp, confirmed } = backend()
+  const counts = async () =>
+    Object.fromEntries(
+      (await t.run((ctx) => ctx.db.query('usage_counts').collect()))
+        .filter((row) => row.org_id === undefined)
+        .map((row) => [row.metric, row.count]),
+    )
+  await confirmed('counted@example.test')
+  expect(await counts()).toEqual({ mail_verification: 1 })
+  expect((await post('request-password-reset', { email: 'counted@example.test' })).status).toBe(200)
+  expect((await post('request-password-reset', { email: 'nobody@example.test' })).status).toBe(200)
+  expect((await signUp('counted@example.test')).status).toBe(200)
+  // a letter the provider refused went nowhere
+  provider.mockImplementation(async () => refused())
+  await post('request-password-reset', { email: 'counted@example.test' })
+  await signUp('refused@example.test')
+  expect(await counts()).toEqual({
+    mail_verification: 1,
+    mail_password_reset: 1,
+    mail_account_notes: 2,
+  })
+})
+
 it('refuses an address the sender would never mail before creating anything', async () => {
   const { post, signUp, provider } = backend()
   // Better Auth takes a domain label that ends in a hyphen; the sender does not

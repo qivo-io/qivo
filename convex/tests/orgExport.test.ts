@@ -101,6 +101,11 @@ const EXCLUDED_TABLES = [
   'billing_webhooks',
   'billing_notices',
   'machine_rate_limits',
+  // Qivo Admin's usage figures are the operator's, not the organization's work.
+  'usage_months',
+  'usage_counts',
+  'usage_runs',
+  'usage_sign_ins',
   // Internal counters, exported on the organization row (next_issue_num).
   'org_counters',
   // Team sync stamps, exported on the profile row (sync_at, sync_since).

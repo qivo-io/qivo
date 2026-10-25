@@ -57,6 +57,7 @@ import {
 } from './lib/enums'
 import { vPanoramaStatus } from './lib/panorama'
 import { vEventFilters, vEventName, vEventOwner } from './lib/taskEvents'
+import { vUsageCounts, vUsageMetric } from './lib/usage'
 
 /* `task_archived` on a task's relation rows (links, label assignments, follows
  * and attachments) marks a row that the label search of REST and MCP
@@ -727,6 +728,68 @@ export default defineSchema({
     window_start: v.number(),
     count: v.number(),
   }).index('by_key', ['key']),
+
+  // One organization's usage in one closed UTC month, for Qivo Admin's Usage
+  // page (usage.ts). The monthly job writes it early on the 1st and a rerun
+  // replaces it. Deleted after USAGE_RETENTION_DAYS and with the organization.
+  usage_months: defineTable({
+    org_id: v.string(),
+    month: v.string(), // YYYY-MM
+    counts: vUsageCounts,
+    // Part of api_calls was split by time from a paid billing period that
+    // crosses the month's start or end (usage.ts apiBuckets).
+    api_estimated: v.boolean(),
+    computed_at: v.string(),
+  })
+    .index('by_org_month', ['org_id', 'month'])
+    .index('by_month', ['month']),
+
+  // Counts nothing else keeps: mail the provider accepted, by organization
+  // and kind, with person mail (verification, password reset) under no
+  // organization, and the webhook deliveries the retention sweep deleted, by
+  // the month they finished. One row per organization, month and metric
+  // (usage.ts countUsage). The bytes of account backgrounds when a month
+  // was stored are one more row under no organization (setPersonFiles).
+  usage_counts: defineTable({
+    org_id: v.optional(v.string()),
+    month: v.string(), // YYYY-MM
+    metric: vUsageMetric,
+    count: v.number(),
+  })
+    .index('by_org_month_metric', ['org_id', 'month', 'metric'])
+    .index('by_month', ['month']),
+
+  // A month a login's sign-in session was used in, kept when Better Auth
+  // deletes the session at sign-out or once it expired, so the month still
+  // counts the person as active (model/usage.ts keepSignIns). Deleted after
+  // USAGE_RETENTION_DAYS and with the login.
+  usage_sign_ins: defineTable({
+    auth_user_id: v.string(),
+    month: v.string(), // YYYY-MM
+  })
+    .index('by_user_month', ['auth_user_id', 'month'])
+    .index('by_month', ['month']),
+
+  // One UTC month of the usage job (usage.ts). The daily job first writes
+  // it during the month, when it saw the month begin (`seen_at`); counting
+  // mail, deleted webhook deliveries and ended sign-in sessions began about
+  // then, so a month first seen after its first day is partial. Once the
+  // month has ended, the run that stores its usage_months rows keeps its
+  // progress here, so a run that stopped resumes from its next page. Deleted
+  // after USAGE_RETENTION_DAYS.
+  usage_runs: defineTable({
+    month: v.string(), // YYYY-MM
+    seen_at: v.number(),
+    // The run under way or done: its id, which its steps carry, the next
+    // page of organizations, the organizations saved and failed so far, when
+    // its last step began and when it finished.
+    run: v.optional(v.string()),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    saved: v.optional(v.number()),
+    failed: v.optional(v.number()),
+    step_at: v.optional(v.number()),
+    finished_at: v.optional(v.number()),
+  }).index('by_month', ['month']),
 
   organizations: defineTable({
     id: v.string(),

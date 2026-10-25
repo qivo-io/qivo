@@ -37,6 +37,7 @@ import { sendInviteEmail } from './mail'
 import { audit } from './model/admin'
 import { newUuid } from './model/orgs'
 import { homeElsewhere } from './model/people'
+import { countUsage } from './model/usage'
 
 export type InviteResult = { profile_id: string; email: string; sent: boolean }
 
@@ -249,12 +250,15 @@ export const reserve = internalMutation({
 
 /* Records how a reserved send ended. A send that was refused or never reached
  * the provider stops counting toward the cap, and an uncertain one keeps
- * counting. */
+ * counting. A delivered one counts once in the organization's mail usage. */
 export const settle = internalMutation({
   args: { row: v.id('platform_audit_log'), sent: v.boolean(), uncertain: v.boolean() },
   handler: async (ctx, { row, sent, uncertain }) => {
     const entry = await ctx.db.get(row)
     if (entry === null) return
+    const before = entry.detail as { sent?: boolean; settled?: boolean }
+    if (sent && !(before.settled && before.sent) && entry.target_org_id !== undefined)
+      await countUsage(ctx, { org_id: entry.target_org_id, metric: 'mail_invitations' })
     await ctx.db.patch(row, {
       detail: {
         ...(entry.detail as object),

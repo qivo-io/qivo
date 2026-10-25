@@ -35,6 +35,8 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'billing_usage_totals', field: 'org_id', target: 'organizations' },
   { table: 'billing_events', field: 'org_id', target: 'organizations' },
   { table: 'billing_notices', field: 'org_id', target: 'organizations' },
+  { table: 'usage_months', field: 'org_id', target: 'organizations' },
+  { table: 'usage_counts', field: 'org_id', target: 'organizations' },
   { table: 'org_removals', field: 'org_id', target: 'organizations' },
   { table: 'marketing_demo', field: 'org_id', target: 'organizations' },
   { table: 'org_counters', field: 'org_id', target: 'organizations' },
@@ -196,6 +198,8 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // Better Auth login ids — not rows in this schema
   'profiles.auth_user_id',
   'roadmap_history.auth_user_id',
+  // the months a deleted sign-in session was used in (model/usage.ts)
+  'usage_sign_ins.auth_user_id',
   // OAuth identities and clients live inside the Better Auth component.
   'oauth_connections.auth_user_id',
   'oauth_connections.client_id',

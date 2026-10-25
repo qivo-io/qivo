@@ -135,6 +135,17 @@ crons.interval(
 // (auditRetention.ts).
 crons.daily('expire-audit-log', { hourUTC: 4, minuteUTC: 45 }, internal.auditRetention.expire, {})
 
+// Stores each organization's usage for the month that just ended, after the
+// nightly jobs. On the 1st the empty arguments start the run; each step
+// schedules the next and the last writes a usage_month row. On the other
+// days it resumes a run whose step stopped, and otherwise reads one row
+// (usage.ts closeMonth).
+crons.daily('usage-month', { hourUTC: 5, minuteUTC: 15 }, internal.usage.closeMonth, {})
+
+// Deletes usage rows older than 800 days. Each step schedules the next while
+// it found a full page (usage.ts).
+crons.monthly('expire-usage', { day: 1, hourUTC: 5, minuteUTC: 0 }, internal.usage.expire, {})
+
 /* Convex reads this module, with the deployment's environment variables, when
  * functions are pushed, and only then. The preview builds set
  * QIVO_ENVIRONMENT=preview before their first push (scripts/vercel-build.mjs,
