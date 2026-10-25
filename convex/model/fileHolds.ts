@@ -65,7 +65,11 @@ export const ERASE_EVERY_MS = 30 * 60 * 1000
  * eraser intervals (1 hour) therefore erases every file at least one
  * interval before 7 days after its release, which leaves room for a late
  * run. It keeps the file for a restore of every backup taken more than an
- * hour before the release. */
+ * hour before the release. Convex retries a scheduled mutation after its own
+ * errors, so an erase fails only through a bug or a removed function. If
+ * one fails after a restore took the file's hold row away, only the hold
+ * the orphan sweep makes after the restore erases the file, up to 7 days
+ * after the restore. */
 export const HOLD_MS = 7 * 24 * 60 * 60 * 1000 - 2 * ERASE_EVERY_MS
 
 /** The most holds one eraser leg handles. Each costs the seven index ranges

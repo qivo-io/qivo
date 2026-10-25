@@ -604,7 +604,10 @@ export const eraseHeldFiles = internalMutation({
 
 /* A held file's scheduled erase, at the end of the hold that releaseFile
  * made (model/fileHolds.ts eraseOnTime). It is a scheduled function, so a
- * restore that rewinds the hold leaves it in place. */
+ * restore that rewinds the hold leaves it in place. Keep its name and
+ * argument: erases scheduled up to 7 days before a deploy still call it,
+ * and one whose function is gone fails, which after a restore leaves the
+ * file to the slower hold in HOLD_MS. */
 export const eraseHeldFile = internalMutation({
   args: { storage_id: v.id('_storage') },
   handler: async (ctx, { storage_id }): Promise<null> => {
