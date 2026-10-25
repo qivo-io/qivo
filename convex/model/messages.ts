@@ -1031,9 +1031,8 @@ async function pruneStampedItem(
  * later than `before`. The first call passes no `before`: the cutoff is then
  * the newest stored unread row, not a client clock, and the caller passes
  * the returned `before` to later batches so later arrivals stay unread.
- * Snoozed rows are hidden, so a bulk act never reaches them; they are
- * filtered inside the scan, so a page of snoozed rows cannot stall the
- * batches. The prune reads at most the newly stamped rows plus one retained
+ * Snoozed rows are hidden, so a bulk act never reaches them; the index
+ * range leaves them out, so they cost a batch nothing. The prune reads at most the newly stamped rows plus one retained
  * read row per affected task and seeks each task's newest unread directly
  * in the index. Returns the rows it marked, as they were before.
  */
@@ -1056,10 +1055,13 @@ export async function markAllMessagesRead(
   const cutoff = before ?? latest?._creationTime ?? 0
   const rows = await ctx.db
     .query('messages')
-    .withIndex('by_recipient_read', (q) =>
-      q.eq('recipient_id', me.id).eq('read_at', undefined).lte('_creationTime', cutoff),
+    .withIndex('by_recipient_snoozed_read', (q) =>
+      q
+        .eq('recipient_id', me.id)
+        .eq('snoozed_until', undefined)
+        .eq('read_at', undefined)
+        .lte('_creationTime', cutoff),
     )
-    .filter((q) => q.eq(q.field('snoozed_until'), undefined))
     .take(INBOX_BATCH + 1)
   const batch = rows.slice(0, INBOX_BATCH)
   for (const row of batch) await ctx.db.patch(row._id, { read_at: now })

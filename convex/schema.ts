@@ -1512,9 +1512,10 @@ export default defineSchema({
     .index('by_uuid', ['id'])
     .index('by_recipient', ['recipient_id'])
     .index('by_recipient_read', ['recipient_id', 'read_at'])
-    // a recipient's read, unsnoozed rows, oldest read first, which the
-    // nightly sweep (jobs.ts oldestDue and sweepProfile) and Remove all read
-    // (model/messages.ts removeReadMessages) read without passing over the
+    // a recipient's unsnoozed rows, unread first and then oldest read
+    // first, which the nightly sweep (jobs.ts oldestDue and sweepProfile),
+    // Mark all as read and Remove all read (model/messages.ts
+    // markAllMessagesRead, removeReadMessages) read without passing over the
     // snoozed ones
     .index('by_recipient_snoozed_read', ['recipient_id', 'snoozed_until', 'read_at'])
     .index('by_recipient_issue', ['recipient_id', 'issue_id'])
