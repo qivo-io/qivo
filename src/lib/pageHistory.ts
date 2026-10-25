@@ -467,6 +467,8 @@ export function installPageHistory(target: Window = window) {
   const rawReplace = h.replaceState.bind(h)
   replace = (state, unused, url) => {
     if (stepped && import.meta.env.DEV) console.error('History written right after a page step')
+    // a page, as one taking a spare's place, is no marker
+    if (tokenIn(state) === null) marked.delete(at)
     rawReplace(withPosition(state, at), unused, url)
     note()
     shown = last

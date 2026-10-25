@@ -432,6 +432,23 @@ describe("a spare over the session's first entry", () => {
     },
   )
 
+  it('takes no step while a page that took a spare follows, so Forward still reaches it', async () => {
+    const browser = page(['/roadmap'])
+    const landscape = await layer()
+    // a menu over the landscape roadmap, picked, then a task opened from it
+    finishLayer(await layer())
+    pushPage({ qivoPrevious: '/roadmap' }, '/task')
+    expect(browser.urls()).toEqual(['/roadmap', '/roadmap', '/task'])
+    browser.person.back()
+    await settleMoves()
+    finishLayer(landscape)
+    await settleMoves()
+    expect(browser.index()).toBe(1)
+    browser.person.forward()
+    await settleMoves()
+    expect(browser.here()).toBe('/task')
+  })
+
   it('takes one step for two layers that close together, and a Back first leaves the page on that entry', async () => {
     const browser = page(['/page'])
     const dialog = await layer()
