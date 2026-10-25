@@ -924,7 +924,10 @@ export default defineSchema({
   // rather than that it has no seat or an unknown credential. `key` is, by
   // `kind`, a login's Better Auth user id, a profile's uuid, a personal
   // token's or agent key's hash, or an OAuth connection's uuid. Only access
-  // that still worked is recorded. The deletion's last step deletes the rows.
+  // that still worked is recorded: an unrevoked agent key, an unrevoked and
+  // unexpired personal token of a login that is not banned, an approved and
+  // unrevoked connection. The deletion's last steps delete the rows after
+  // the organization.
   removed_access: defineTable({
     org_id: v.string(),
     kind: vRemovedAccessKind,

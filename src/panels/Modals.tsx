@@ -1423,10 +1423,13 @@ function ArchiveOrDeleteTaskModal({
   onArchive,
   onDelete,
   onReasonChange,
+  initialReason = '',
   focusAfterClose,
 }: {
   issueId: string
   onClose: () => void
+  /** the reason the field starts with, such as one the task window kept */
+  initialReason?: string
   /** hears each change of the reason, so the task window can keep it when
       the task leaves the board under the open window */
   onReasonChange?: (reason: string) => void
@@ -1439,7 +1442,7 @@ function ArchiveOrDeleteTaskModal({
 }) {
   const [plans, setPlans] = useStateM(() => readPlans(issueId))
   const [fate, setFate] = useStateM<Fate>('archive')
-  const [reason, setTypedReason] = useStateM('')
+  const [reason, setTypedReason] = useStateM(initialReason)
   const setReason = (value: string) => {
     setTypedReason(value)
     onReasonChange?.(value)

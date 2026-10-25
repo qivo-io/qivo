@@ -89,7 +89,11 @@ day ends in the creator's time zone.
 `GET /v1/me` reports which credential a request used and what it may do.
 
 `401` means the credential is missing, unknown, revoked, expired or belongs to
-a deactivated user. The sentence depends on the credential:
+a deactivated user. Once an organization's deletion begins, a key or token of
+that organization that would otherwise work, also one the deletion has
+already removed or one of a user deactivated there, gets `403` with
+`this organization is being deleted` instead. The sentence of a `401` depends
+on the credential:
 
 | Failure | Agent key | Personal access token |
 |---|---|---|
@@ -2591,7 +2595,8 @@ row to learn who you are — so credential lookup is its own internal query
 (`convex/machine/auth.ts`), run before dispatch; the endpoint function then
 re-asserts the profile it was handed, so a user deleted or deactivated
 between lookup and dispatch still answers `401`, in that credential's own
-sentence. The old `api_keys` and
+sentence, or `403` with `this organization is being deleted` when the
+organization's deletion removed or stopped it. The old `api_keys` and
 `api_key_project_access` tables — the `qv_` keys and their separate
 per-project grant list — were dropped by migration 0100.
 

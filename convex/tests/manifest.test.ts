@@ -445,7 +445,7 @@ oauthConnections:getContext mutation public {"type":"object","value":{"oauth_que
 oauthConnections:hasHome query internal {"type":"object","value":{"authUserId":{"fieldType":{"type":"string"},"optional":false}}}
 oauthConnections:list query public {"type":"object","value":{}}
 oauthConnections:lookupAccess query internal {"type":"object","value":{"tokenHash":{"fieldType":{"type":"string"},"optional":false},"resource":{"fieldType":{"type":"string"},"optional":false}}}
-oauthConnections:refusedForDeletion query internal {"type":"object","value":{"tokenHash":{"fieldType":{"type":"string"},"optional":false}}}
+oauthConnections:refusedForDeletion query internal {"type":"object","value":{"tokenHash":{"fieldType":{"type":"string"},"optional":false},"resource":{"fieldType":{"type":"string"},"optional":false}}}
 oauthConnections:registerCode mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"credentialHash":{"fieldType":{"type":"string"},"optional":false}}}
 oauthConnections:revoke mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 oauthConnections:revokeReplay mutation internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"authorization_code"},{"type":"literal","value":"refresh_token"}]},"optional":false},"credentialHash":{"fieldType":{"type":"string"},"optional":false},"clientId":{"fieldType":{"type":"string"},"optional":false}}}

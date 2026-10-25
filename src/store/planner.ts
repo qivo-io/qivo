@@ -1996,10 +1996,12 @@ export const OFFLINE_TEXT = pauseSentence('offline')
 export const SLOW_TEXT = pauseSentence('slow')
 
 /** Why the live snapshot is not current, while it is not. `no_access` means
-    a delivery found no seat left. `asOf` is the last good delivery's server
-    time, null before any. `detail` is the error text for support, empty for
-    `no_access`. `retrying` holds for one RETRY_GAP_MS window after Try again,
-    or until a delivery ends the trouble. */
+    a delivery found no seat left, with ORG_DELETING_TEXT as its `reason`
+    when the seats went because their organization is being deleted. `asOf`
+    is the last good delivery's server time, null before any. `detail` is
+    the error text for support, empty for `no_access`. `retrying` holds for
+    one RETRY_GAP_MS window after Try again, or until a delivery ends the
+    trouble. */
 export type SnapshotTrouble = {
   kind: 'failed' | 'signed_out' | 'no_access'
   since: number
@@ -2008,7 +2010,7 @@ export type SnapshotTrouble = {
   detail: string
   /** the server's sentence when a part refused to load (a 'rule' error),
       such as a part too large to load or one that did not arrive in time,
-      which retrying alone may not end */
+      which retrying alone may not end, or why the seats went */
   reason?: string
 }
 let snapshotTrouble: SnapshotTrouble | null = null
@@ -2086,7 +2088,7 @@ function pausedText(name?: string) {
   const pause = savePause()
   if (!trouble && pause) return pause.kind === 'slow' ? SLOW_TEXT : OFFLINE_TEXT
   return trouble?.kind === 'no_access'
-    ? NO_ACCESS_TEXT
+    ? (trouble.reason ?? NO_ACCESS_TEXT)
     : trouble?.kind === 'signed_out'
       ? SIGNED_OUT_TEXT
       : PAUSED_TEXT
@@ -5458,6 +5460,9 @@ export const PLANNER = {
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
+  /** Whether the last boot found no seat because the login's organization
+      is being deleted. */
+  seatsDeleting: (): boolean => bootSeatsDeleting,
   /** While a large workspace loads in stages, the share of its tasks that
       arrived, from 0 to 1; null once every task did. Counts, totals and
       verdicts over many tasks wait for null (store/liveParts.ts). */
@@ -6127,13 +6132,19 @@ export const PLANNER = {
      means dropping rows from the row cache, exactly what the next delivery
      holds. The Archive or delete window waits for the server, so nothing
      changes here until it accepts and a refusal leaves the task and the
-     window in place (toasted). Resolves whether the server archived it.
+     window in place (toasted). Resolves whether the server archived it, or
+     'already' when someone else had archived it first, so this call
+     changed nothing and posted no reason.
      `reason` travels as an argument, and the server posts it as a comment in
      the same transaction. With `keepSubtasks` the server detaches the task's
      active direct children first and archives the task alone, so only the
      task leaves the board and its subtasks become top-level tasks;
      otherwise the whole subtree goes with it. */
-  archiveIssue: (id: string, reason?: string, keepSubtasks = false): Promise<boolean> => {
+  archiveIssue: (
+    id: string,
+    reason?: string,
+    keepSubtasks = false,
+  ): Promise<boolean | 'already'> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
     if (!row || !uuid || refusePausedEdit()) return Promise.resolve(false)
@@ -6153,7 +6164,8 @@ export const PLANNER = {
       // nothing paints. When it has not, the archive paints until one does.
       { keep: () => ({ workspace: archivePaint(uuid, keepSubtasks, at) }) },
     ).then(
-      () => true,
+      // an answer without `archived`, as one from before it, archived the task
+      (out) => (out?.archived === false ? 'already' : true),
       (error) => {
         if (epoch === storeEpoch) toastWriteError(error)
         return false
@@ -8703,6 +8715,10 @@ export const PLANNER = {
    they run ahead of the rows on screen until then. The parts' answers are
    not kept beside it: the base keeps each unchanged row's earlier object. */
 let hasSnapshot = false
+/* Whether the boot found no seat because a running organization deletion
+   holds the login's seats (convex/lib/workspaceParts.ts readRoot), so
+   AuthGate says so instead of offering a new organization only. */
+let bootSeatsDeleting = false
 /* While a large workspace loads in stages (store/liveParts.ts), the share of
    its task windows that arrived, from 0 to 1; null once it is complete. A
    partial delivery holds no write for certain, since the window a write
@@ -8852,6 +8868,7 @@ function startParts(
         }
         const snap = ws.value && anchor(ws.value)
         hasSnapshot = snap !== null
+        bootSeatsDeleting = ws.state === 'complete' && ws.deleting === true
         // the boot paints this delivery before anything rebuilds
         stillLoading = snap && ws.state === 'partial' ? ws.loaded : null
         loadEnds = false
@@ -8922,7 +8939,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
     if (DEMO_MODE) {
       recoveryHeld = false
       notifyDemoEnded()
-    } else beginTrouble('no_access', '')
+    } else beginTrouble('no_access', '', ws.deleting ? ORG_DELETING_TEXT : undefined)
     return
   }
   hasSnapshot = true
@@ -9164,6 +9181,7 @@ export async function initStore(
   stopDayWatch = null
   clearAvatarSources()
   demoDisposed = false
+  bootSeatsDeleting = false
   const epoch = storeEpoch
   const stillCurrent = () => epoch === storeEpoch && !demoDisposed
   // AuthGate already had to establish this session before it could render

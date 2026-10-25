@@ -208,7 +208,7 @@ async function openTask(uuid: string) {
           key={uuid}
           issueId={handle(uuid)}
           onClose={onClose}
-          onArchive={(reason, keep) => P.archiveIssue(handle(uuid), reason, keep)}
+          onArchive={async (reason, keep) => !!(await P.archiveIssue(handle(uuid), reason, keep))}
           onDelete={(subs, reason) => P.deleteIssue(handle(uuid), subs, true, reason)}
         />
       </TooltipProvider>,

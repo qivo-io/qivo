@@ -102,12 +102,25 @@ export async function assertOrgAvailable(ctx: QueryCtx, orgId: string): Promise<
     throw new ConvexError({ code: 'forbidden', message: ORG_DELETING })
 }
 
+/** Whether the deletion of `orgId` has begun and the organization is still
+ * there. Its last steps delete what the deletion recorded (removed_access)
+ * after the organization, so from then on every call gets the answer it
+ * gets once the deletion is over. */
+async function deletionRunning(ctx: QueryCtx, orgId: string): Promise<boolean> {
+  if (!(await deletionBegun(ctx, orgId))) return false
+  const org = await ctx.db
+    .query('organizations')
+    .withIndex('by_uuid', (q) => q.eq('id', orgId))
+    .unique()
+  return org !== null
+}
+
 /** Whether the running deletion of an organization deleted the access `key`
  * names (removed_access): a login's seat in `orgId`, or a profile or
  * credential of any organization. A call through such access is refused
  * like every other call into that organization, with ORG_DELETING, rather
- * than as a stranger's or an unknown credential's. False once the deletion
- * has finished. */
+ * than as a stranger's or an unknown credential's. False once the
+ * organization is gone. */
 export async function removedWithOrg(
   ctx: QueryCtx,
   kind: RemovedAccessKind,
@@ -122,7 +135,24 @@ export async function removedWithOrg(
         : q.eq('kind', kind).eq('key', key).eq('org_id', orgId),
     )
     .first()
-  return removed !== null && (await deletionBegun(ctx, removed.org_id))
+  return removed !== null && (await deletionRunning(ctx, removed.org_id))
+}
+
+/** Whether a running organization deletion holds a seat of the login
+ * `authUserId`: a profile it has not deleted yet, active or not, or one it
+ * has (removed_access). The app's root part asks this only for a login
+ * with no seat left elsewhere (lib/workspaceParts.ts readRoot), so it can
+ * say why. */
+export async function seatHeldByDeletion(ctx: QueryCtx, authUserId: string): Promise<boolean> {
+  const profiles = ctx.db
+    .query('profiles')
+    .withIndex('by_auth', (q) => q.eq('auth_user_id', authUserId))
+  for await (const profile of profiles) if (await deletionBegun(ctx, profile.org_id)) return true
+  const removed = ctx.db
+    .query('removed_access')
+    .withIndex('by_key', (q) => q.eq('kind', 'login').eq('key', authUserId))
+  for await (const row of removed) if (await deletionRunning(ctx, row.org_id)) return true
+  return false
 }
 
 export function addCalendarMonths(iso: string, months: number): string {

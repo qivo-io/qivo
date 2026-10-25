@@ -1807,6 +1807,31 @@ describe('when organizations are reconciled', () => {
    * of them due only for the safety pass, and a second home profile deleted
    * after it. The guest profiles are inserted with the clock at `at` when
    * given. */
+  /* One more guest organization of `email`, its profile created at `at`,
+   * due later, as guestInMany's are. */
+  async function guestAt(t: T, email: string, at: number) {
+    const orgId = uuid()
+    vi.setSystemTime(at)
+    await t.run(async (ctx) => {
+      await enrollOrganization(ctx, orgId)
+      await ctx.db.insert('profiles', {
+        id: uuid(),
+        org_id: orgId,
+        email,
+        name: 'Consultant',
+        initials: 'CO',
+        color: '#7a7ad0',
+        org_role: 'guest',
+        active: true,
+        kind: 'person',
+        created_at: NOW,
+      })
+    })
+    vi.setSystemTime(NOW)
+    await setDue(t, orgId, iso(SYNC_SAFETY_MS / 60_000), true)
+    return orgId
+  }
+
   async function guestInMany(count: number, at?: number) {
     const { t, f } = await fixture()
     const email = 'consultant@testbed.test'
@@ -1954,25 +1979,7 @@ describe('when organizations are reconciled', () => {
     const TIED = 2 ** 52
     const { t, f, email, guestOrgs, step, left, marked, removal } = await guestInMany(300, TIED)
     // one more guest organization, its profile a millisecond after the group
-    const lastOrg = uuid()
-    vi.setSystemTime(TIED + 1)
-    await t.run(async (ctx) => {
-      await enrollOrganization(ctx, lastOrg)
-      await ctx.db.insert('profiles', {
-        id: uuid(),
-        org_id: lastOrg,
-        email,
-        name: 'Consultant',
-        initials: 'CO',
-        color: '#7a7ad0',
-        org_role: 'guest',
-        active: true,
-        kind: 'person',
-        created_at: NOW,
-      })
-    })
-    vi.setSystemTime(NOW)
-    await setDue(t, lastOrg, iso(SYNC_SAFETY_MS / 60_000), true)
+    const lastOrg = await guestAt(t, email, TIED + 1)
     const group = await t.run(async (ctx) =>
       (
         await ctx.db
@@ -2009,7 +2016,9 @@ describe('when organizations are reconciled', () => {
 
   it('goes on after the whole creation time a marking stored before it kept the _id', async () => {
     const TIED = 2 ** 52
-    const { t, f, step, marked, removal } = await guestInMany(3, TIED)
+    const { t, f, email, step, marked, removal } = await guestInMany(3, TIED)
+    // a guest organization after the group, which the marking still owes
+    const lastOrg = await guestAt(t, email, TIED + 1)
     // a position the earlier code stored after reading the group in full
     await t.run(async (ctx) => {
       const row = await ctx.db
@@ -2022,8 +2031,10 @@ describe('when organizations are reconciled', () => {
       await ctx.db.patch(f.otherAdmin._id, { active: false })
     })
     await step()
-    // nothing after the group: the group is not read again, and the marking ends
+    // the group is not read again, the organization after it is marked, and
+    // the marking ends
     expect(await marked()).toBe(0)
+    expect(await dueAt(t, lastOrg)).toBe(NOW)
     expect((await removal())?.guest_marking).toBeUndefined()
   })
 

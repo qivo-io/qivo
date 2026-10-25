@@ -128,7 +128,8 @@ then on, and Qivo erases their contents within 7 days
 sign-in and their other organizations remain. While Qivo deletes it, the
 app, the REST API and MCP refuse every call into the organization and say
 that it is being deleted, also to people, keys and connections it has
-already removed.
+already removed. Someone with no other organization sees that in the app,
+also after a reload, and can create a new organization.
 
 Until that date, subscribing again keeps an organization whose subscription
 ended. An admin can stop a deletion an admin asked for with **Keep

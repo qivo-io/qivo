@@ -149,7 +149,7 @@ import {
 import { newUuid, PLANNABLE_HOURS_RIGHTS, setPlannableHoursCore } from '../model/orgs'
 import { PLANNABLE_FIELDS } from '../model/people'
 import { assertRemainingShape, cleanTaskDate } from '../model/taskValues'
-import { authenticateSecret, restAuth401, sha256hex } from './auth'
+import { authenticateSecret, goneWithDeletion, restAuth401, sha256hex } from './auth'
 import { DISCUSSION_ROUTES } from './discussion'
 import { PROJECT_ROUTES, projectDetailJson } from './projects'
 import { RECORD_ROUTES } from './records'
@@ -1511,20 +1511,23 @@ async function webhookResponse(
   let owner: EventOwner
   if (secret.startsWith('qvo_')) {
     const tokenHash = await sha256hex(secret.slice(4))
+    const resource = mcpResource()
     const credential = await ctx.runQuery(internal.oauthConnections.lookupAccess, {
       tokenHash,
-      resource: mcpResource(),
+      resource,
     })
-    if (
-      !credential &&
-      (await ctx.runQuery(internal.oauthConnections.refusedForDeletion, { tokenHash }))
-    )
-      return err(ORG_DELETING, 403)
     if (
       !credential ||
       !(await runMutation(internal.oauthConnections.touch, { id: credential.connectionId }))
     )
-      return err('OAuth connection is invalid, expired or disconnected', 401)
+      // a grant its organization's deletion stopped, also between the lookup
+      // and the stamp, says so
+      return (await ctx.runQuery(internal.oauthConnections.refusedForDeletion, {
+        tokenHash,
+        resource,
+      }))
+        ? err(ORG_DELETING, 403)
+        : err('OAuth connection is invalid, expired or disconnected', 401)
     if (
       !credential.scopes.includes('qivo:read') ||
       (seg[2] === 'organization' &&
@@ -1559,7 +1562,10 @@ async function webhookResponse(
       profileId: credential.profileId,
       now: new Date().toISOString(),
     })
-    if (allowed === null) return err('Webhook credential is no longer valid', 401)
+    if (allowed === null)
+      return (await goneWithDeletion(ctx, secret))
+        ? err(ORG_DELETING, 403)
+        : err('Webhook credential is no longer valid', 401)
     if (!allowed) return rateLimited()
     owner = {
       profile_id: credential.profileId,
@@ -1668,7 +1674,10 @@ const restHandler = answerAfterBody(async (ctx, req) => {
       profileId: res.cred.profileId,
       now: new Date().toISOString(),
     })
-    if (allowed === null) return err(CALLER[kind].gone, 401)
+    if (allowed === null)
+      return (await goneWithDeletion(ctx, secret))
+        ? err(ORG_DELETING, 403)
+        : err(CALLER[kind].gone, 401)
     if (!allowed) return rateLimited()
     const callerId = res.cred.profileId
     const access = res.cred.access

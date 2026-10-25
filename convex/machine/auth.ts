@@ -185,6 +185,18 @@ export async function authenticateSecret(
   })
 }
 
+/* Whether a personal token or agent key that lookupCredential let through,
+ * and touchCredential then found gone, went with its organization's
+ * deletion, whose step can delete it in between. The surfaces then answer
+ * as lookupCredential would now (org_deleting). */
+export async function goneWithDeletion(
+  ctx: Pick<ActionCtx, 'runQuery'>,
+  secret: string,
+): Promise<boolean> {
+  const again = await authenticateSecret(ctx, secret)
+  return again.ok === false && again.why === 'org_deleting'
+}
+
 /* PER-CALL stamp and usage accounting. A query cannot write, hence the
  * separate internalMutation. False means the profile's request rate is full;
  * the HTTP action returns 429 without dispatching or charging that request.

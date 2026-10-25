@@ -135,8 +135,9 @@ cannot send a confirmation or reset email, the page says so and what to do
 instead of saying a link is on its way. Signing up with an address that
 already has an account emails that address a note to sign in, and a password
 reset for an address with no account emails a note saying so, so the answer
-looks the same for every address. Resetting your password signs you out on
-every device and browser, so sign in again with the new password. Google sign-in supplies a verified email address; Microsoft
+looks the same for every address. Resetting your password keeps you signed
+in on your other devices and browsers, and your connected apps, personal
+tokens and agent keys keep working. Google sign-in supplies a verified email address; Microsoft
 sign-in still requires confirmation. A confirmed address claims its pending
 invitations. Without an invitation, Qivo offers to create an organization with
 you as its first admin. When billing is enabled, a new unpaid organization

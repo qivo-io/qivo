@@ -859,15 +859,22 @@ export function AuthGate() {
 
   // a login with no profile anywhere: it belongs to nobody yet, so the only
   // thing to do is start an organization (an invitation would have given it a
-  // guest seat, and claimMySeats picks those up at boot)
+  // guest seat, and claimMySeats picks those up at boot). A login whose
+  // seats an organization deletion holds hears that first.
   if (phase === 'noProfile') {
+    const deleting = P.seatsDeleting()
     return shell(
       <form onSubmit={createOrg}>
-        <div className="[font-size:var(--fs-md)] [font-weight:600] [margin-bottom:8px]">
-          Create your organization
+        <div
+          className="[font-size:var(--fs-md)] [font-weight:600] [margin-bottom:8px]"
+          data-seats-deleting={deleting || undefined}
+        >
+          {deleting ? 'This organization is being deleted' : 'Create your organization'}
         </div>
         <div className="[color:var(--text-2)] [font-size:var(--fs-base)] [line-height:1.5] [margin-bottom:24px]">
-          If you expected an invitation, check which email address it was sent to.
+          {deleting
+            ? 'You no longer have access to it. You can create a new organization.'
+            : 'If you expected an invitation, check which email address it was sent to.'}
         </div>
         <div className="[margin-bottom:24px]">
           <Label htmlFor="organization-name" className={labelClass}>

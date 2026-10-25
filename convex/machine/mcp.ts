@@ -153,7 +153,7 @@ import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { PLANNABLE_FIELDS } from '../model/people'
 import { assertRemainingShape } from '../model/taskValues'
 import { teamsJson } from '../model/teams'
-import { authenticateSecret, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
+import { authenticateSecret, goneWithDeletion, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { DISCUSSION_TOOLS } from './discussion'
 import { PROJECT_TOOLS } from './projects'
 import { RECORD_TOOLS } from './records'
@@ -2415,15 +2415,17 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
       tokenHash,
       resource,
     })
-    // why a grant that lookupAccess refused stopped, when its organization's
-    // deletion stopped it
-    const deleting = () => ctx.runQuery(internal.oauthConnections.refusedForDeletion, { tokenHash })
-    if (!credential && (await deleting())) return orgDeleting()
+    // whether a grant that lookupAccess refused, or that went before touch
+    // stamped it, stopped only for its organization's deletion
+    const deleting = () =>
+      ctx.runQuery(internal.oauthConnections.refusedForDeletion, { tokenHash, resource })
     if (
       !credential ||
       !(await runMutation(internal.oauthConnections.touch, { id: credential.connectionId }))
     )
-      return unauthorized('OAuth connection is invalid, expired or disconnected')
+      return (await deleting())
+        ? orgDeleting()
+        : unauthorized('OAuth connection is invalid, expired or disconnected')
     if (
       !(await runMutation(internal.billingMetering.oauthCall, {
         connection_id: credential.connectionId,
@@ -2513,7 +2515,10 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
     profileId: cred.profileId,
     now: new Date().toISOString(),
   })
-  if (allowed === null) return unauthorized('Credential is no longer valid')
+  if (allowed === null)
+    return (await goneWithDeletion(ctx, secret))
+      ? orgDeleting()
+      : unauthorized('Credential is no longer valid')
   if (!allowed) return rateLimited()
   const body = await readBody(request)
   if (body === null) return jsonRes(413, TOO_LARGE)

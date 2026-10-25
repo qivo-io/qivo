@@ -207,7 +207,7 @@ export const countPersonMail = internalMutation({
 /** Keeps the months of a sign-in session that ended, and when it signed in,
  * so they still count (lib/signIns.ts keepSignIns). The session's delete
  * trigger schedules it for every session Better Auth ends, one at a time or
- * many in one call: sign-out, revoked sessions, a password reset, a ban and
+ * many in one call: sign-out, revoked sessions, a ban and
  * the nightly cleanup of expired sessions (lib/sessionEnd.ts endSession).
  * The trigger already kept the current month and the one before. A login
  * already deleted keeps nothing: its deletion forgot its months (adminAuth.ts

@@ -39,10 +39,13 @@ vi.mock('./lib/convex', () => ({ convex: { query: vi.fn(), mutation: vi.fn() } }
 // a login with no seat, unless a test says otherwise
 const planner = vi.hoisted(() => ({
   initStore: vi.fn<() => Promise<boolean | null>>(async () => null),
+  // whether the seatless boot found the login's organization being deleted
+  seatsDeleting: vi.fn(() => false),
 }))
 vi.mock('./store/planner', () => ({
   initStore: planner.initStore,
   P: {
+    seatsDeleting: planner.seatsDeleting,
     getOAuthConnectionContext: async () => ({
       oauthQuery: 'sig=s',
       clientName: 'Example App',
@@ -64,6 +67,7 @@ let root: Root
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   auth.session = { data: null, error: null }
+  planner.seatsDeleting.mockReturnValue(false)
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -187,6 +191,22 @@ describe('the address the sign-in gate sends', () => {
     expect(auth.requestPasswordReset).toHaveBeenLastCalledWith(
       expect.objectContaining({ email: stored }),
     )
+  })
+})
+
+/* A signed-in login with no seat gets the organization form, which says
+   first when an organization deletion holds its seats. */
+describe('a login with no seat', () => {
+  it('says why a login whose organization is being deleted has no seat, and keeps the form', async () => {
+    signIn()
+    planner.seatsDeleting.mockReturnValue(true)
+    await render()
+    await vi.waitFor(() => expect(field('organization-name')).not.toBeNull())
+    expect(container.querySelector('[data-seats-deleting]')?.textContent).toBe(
+      'This organization is being deleted',
+    )
+    expect(container.textContent).toContain('You no longer have access to it.')
+    expect(container.textContent).not.toContain('If you expected an invitation')
   })
 })
 

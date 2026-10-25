@@ -43,6 +43,7 @@ import { shownAvatarColor } from '../model/people'
 import { stampOfRow } from '../model/syncStamps'
 import { isOrgStaff, projectLevelsOf } from './access'
 import { chunkLists } from './arrayLimit'
+import { seatHeldByDeletion } from './billingAccess'
 import { byId } from './db'
 import { cutPieces, halve, type IdWindow, roundedCounts } from './idWindows.ts'
 import { loadInbox, newestFirst, recentlyReadFirst } from './inbox'
@@ -275,13 +276,21 @@ async function mapInBatches<R, T>(
 
 // --- root -------------------------------------------------------------------
 
-/** The caller's seats and organizations, or null with no seat. */
+/** The root part's answer for a login whose only seats a running
+ * organization deletion holds (lib/billingAccess.ts seatHeldByDeletion). It
+ * names no organization and no rows, only the reason. */
+const SEATS_DELETING = { deleting: true as const }
+
+/** The caller's seats and organizations, or null with no seat, or
+ * SEATS_DELETING when an organization deletion holds the only ones. */
 export async function readRoot(
   ctx: QueryCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> },
 ) {
-  /* Signed in but seatless is the app's "create your organization" signal.
-   * A failed read throws instead, so it never looks like no seat. */
-  if (ctx.myProfiles.size === 0) return null
+  /* Signed in but seatless is the app's "create your organization" signal,
+   * unless the seats are in an organization that is being deleted. A failed
+   * read throws instead, so it never looks like no seat. */
+  if (ctx.myProfiles.size === 0)
+    return (await seatHeldByDeletion(ctx, ctx.authUserId)) ? SEATS_DELETING : null
   const orgs: OrgRow[] = []
   for (const me of ctx.myProfiles.values()) {
     const org = await byId(ctx, 'organizations', me.org_id)

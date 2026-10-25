@@ -502,7 +502,10 @@ The same happens while an organization is read-only before its deletion, and
 that refusal names the deletion date. Once deletion begins, every call into
 the organization is refused with `this organization is being deleted`. A
 request whose key, token or OAuth connection the deletion has already
-removed gets that refusal as an HTTP `403` with an `error` body.
+removed, or that belongs to a member deactivated in that organization, gets
+that refusal as an HTTP `403` with an `error` body when the credential would
+otherwise still work. A credential refused for another reason, such as a
+revoked key or a connection whose browser session ended, keeps its `401`.
 An organization admin restores editing through **Settings → Organization →
 Billing**, where they can subscribe, open the customer portal and inspect
 usage by account and key or OAuth connection. **API access** shows each
@@ -778,9 +781,9 @@ access tokens issued in that session, so the client's next request gets HTTP
 `401`; its refresh token, which `offline_access` keeps, renews access without
 a new approval. The access tokens also end when the session is deleted some
 other way, such as when Qivo removes an expired session that is used again,
-and for every session that ends at once. A password reset ends every
-session of the login, so it ends the access tokens issued in each of them,
-and their refresh tokens renew access as after a sign-out. A ban ends every access token of
+and for every session that ends at once. A password reset ends no session,
+so the connections and their access and refresh tokens keep working, as do
+personal tokens and agent keys. A ban ends every access token of
 the login, also one a refresh issued after its session ended, and a banned
 login cannot renew access until the ban is lifted. A session that expires
 ends at its expiry. Qivo deletes expired sessions every night, and the
@@ -2474,7 +2477,9 @@ layer looks like the object not existing, matching the app.
   `missing credential (Authorization: Bearer qvt_… or qva_…)`,
   `unknown, revoked or deactivated agent key` and
   `unknown, expired or revoked MCP token`. They deliberately do not disclose
-  the credential's exact state.
+  the credential's exact state. The one exception is an organization whose
+  deletion has begun, which a credential of that organization that would
+  otherwise work hears as a `403` with `this organization is being deleted`.
 - Any verb but POST and the CORS preflight answers `405` with `Allow: POST,
   OPTIONS` and the body `stateless MCP server, which takes JSON-RPC by POST only`, before
   any authentication or work: an old client probing for the removed GET

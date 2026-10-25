@@ -1,11 +1,12 @@
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api, internal } from '../_generated/api'
+import { api, components, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
+import type { MutationCtx } from '../_generated/server'
 import type { BillingPlan } from '../lib/billingTypes'
 import { asMachineCaller } from '../lib/core'
 import type { EventOwner } from '../lib/taskEvents'
-import { sha256hex } from '../machine/auth'
+import { sha256hex, touchCredential } from '../machine/auth'
 import { enrollOrganization } from '../model/billing'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { noCheckoutDue, retentionDue, serviceEndedAt } from '../model/orgRetention'
@@ -984,6 +985,148 @@ describe('calls through access a running deletion has deleted', () => {
       401,
       { error: 'unknown personal access token' },
     ])
+  })
+
+  it('keep telling them until the organization is gone, also when its last steps take several', async () => {
+    const { t, f, secrets, step, profileGone } = await deleting()
+    REMOVAL_BUDGET.rows = 4
+    for (let i = 0; i < 100 && !((await profileGone(f.user)) && (await profileGone(f.agent))); i++)
+      await step()
+    const orgThere = () =>
+      t.run(
+        async (ctx) =>
+          (await ctx.db
+            .query('organizations')
+            .withIndex('by_uuid', (q) => q.eq('id', f.org.id))
+            .unique()) !== null,
+      )
+    const answers = async () => ({
+      token: await answer(await call(t, '/v1/me', secrets.token)),
+      key: await answer(await call(t, '/v1/me', secrets.key)),
+      app: await as(t, f.user)
+        .query(api.billing.status, { org_id: f.org.id })
+        .then(
+          () => 'answered',
+          (error: unknown) => (error as { data?: { message?: string } }).data?.message,
+        ),
+    })
+    const refused = {
+      token: [403, DELETING],
+      key: [403, DELETING],
+      app: 'this organization is being deleted',
+    }
+    const after = {
+      token: [401, { error: 'unknown personal access token' }],
+      key: [401, { error: 'unknown agent key' }],
+      app: 'no profile in this organization',
+    }
+    // two rows a step, so the recorded access outlasts several steps
+    REMOVAL_BUDGET.rows = 2
+    let steps = 0
+    while ((await removalOf(t, f.org.id)) !== null && steps < 500) {
+      await step()
+      steps += 1
+      expect(await answers()).toEqual((await orgThere()) ? refused : after)
+    }
+    expect(await removalOf(t, f.org.id)).toBeNull()
+    expect(await t.run((ctx) => ctx.db.query('removed_access').collect())).toEqual([])
+  })
+
+  it('tell a call whose credential the deletion deleted between its lookup and its stamp', async () => {
+    const handler = touchCredential as unknown as {
+      _handler: (ctx: MutationCtx, args: { table: string }) => Promise<unknown>
+    }
+    const original = handler._handler
+    // the deletion's step runs between the two and deletes the credential,
+    // recording it, or it went another way, unrecorded, as at a revocation
+    let recorded: string[] = []
+    vi.spyOn(handler, '_handler').mockImplementation(async (ctx, args) => {
+      const agent = args.table === 'agent_keys'
+      // every fixture of deleting() plants the same secrets
+      const hash = await sha256hex(agent ? `qva_${'live'.repeat(10)}` : `qvt_${'live'.repeat(10)}`)
+      const row = agent
+        ? await ctx.db
+            .query('agent_keys')
+            .withIndex('by_hash', (q) => q.eq('key_hash', hash))
+            .first()
+        : await ctx.db
+            .query('mcp_tokens')
+            .withIndex('by_hash', (q) => q.eq('token_hash', hash))
+            .first()
+      if (row) {
+        await ctx.db.delete(row._id)
+        const owner = await ctx.db
+          .query('profiles')
+          .withIndex('by_uuid', (q) => q.eq('id', row.profile_id))
+          .unique()
+        if (recorded.includes(args.table) && owner)
+          await ctx.db.insert('removed_access', {
+            org_id: owner.org_id,
+            kind: agent ? 'agent_keys' : 'mcp_tokens',
+            key: hash,
+          })
+      }
+      return original(ctx, args)
+    })
+    const mcp = (t: T, secret: string) =>
+      call(t, '/mcp', secret, { method: 'POST', body: toolsList })
+    recorded = ['agent_keys', 'mcp_tokens']
+    const one = await deleting()
+    expect(await answer(await call(one.t, '/v1/me', one.secrets.token))).toEqual([403, DELETING])
+    expect(await answer(await mcp(one.t, one.secrets.key))).toEqual([403, DELETING])
+    // the webhook routes stamp the same way; without the deletion's record,
+    // a credential gone meanwhile stays gone
+    recorded = ['agent_keys']
+    const two = await deleting()
+    expect(await answer(await call(two.t, '/v1/webhooks', two.secrets.key))).toEqual([
+      403,
+      DELETING,
+    ])
+    expect(await answer(await call(two.t, '/v1/webhooks', two.secrets.token))).toEqual([
+      401,
+      { error: 'Webhook credential is no longer valid' },
+    ])
+  })
+
+  it("leave a banned login's personal token unknown once the deletion deletes it", async () => {
+    const { t, f, secrets, step, profileGone } = await deleting()
+    await t.mutation(components.betterAuth.adapter.updateOne, {
+      input: {
+        model: 'user',
+        where: [{ field: '_id', value: f.user.auth_user_id as string }],
+        update: { banned: true },
+      },
+    })
+    expect(await answer(await call(t, '/v1/me', secrets.token))).toEqual([
+      401,
+      { error: 'this account has been deactivated' },
+    ])
+    REMOVAL_BUDGET.rows = 4
+    for (let i = 0; i < 100 && !(await profileGone(f.user)); i++) await step()
+    expect(await removalOf(t, f.org.id)).not.toBeNull()
+    expect(await answer(await call(t, '/v1/me', secrets.token))).toEqual([
+      401,
+      { error: 'unknown personal access token' },
+    ])
+  })
+
+  it("tell the app's root part why a login has no seat while the deletion holds it", async () => {
+    const { t, f, step, profileGone } = await deleting()
+    const root = () => as(t, f.user).query(api.workspace.root, {})
+    // the profile still stands, then the deletion's record of it
+    expect(await root()).toEqual({ deleting: true })
+    REMOVAL_BUDGET.rows = 4
+    for (let i = 0; i < 100 && !(await profileGone(f.user)); i++) await step()
+    expect(await removalOf(t, f.org.id)).not.toBeNull()
+    expect(await root()).toEqual({ deleting: true })
+    // a member of another organization still gets that one
+    expect(await as(t, f.otherAdmin).query(api.workspace.root, {})).toMatchObject({
+      orgs: [expect.objectContaining({ id: expect.not.stringMatching(f.org.id) })],
+    })
+    REMOVAL_BUDGET.rows = 256
+    await runSteps(t)
+    expect(await removalOf(t, f.org.id)).toBeNull()
+    expect(await root()).toBeNull()
   })
 
   it('tell a deactivated member and their token the same before the deletion reaches them', async () => {

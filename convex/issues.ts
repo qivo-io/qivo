@@ -470,7 +470,9 @@ export const moveCarriesSubtasks = orgQuery({
  * optional early-archive reason posted as a normal comment — author pinned
  * to the actor, sharing the archive's `now` (0111: the 'New comment' and
  * 'Archived' messages land at the same instant; the prune tie-break falls to
- * id). Archiving an already-archived row is a no-op and posts no reason.
+ * id). Archiving an already-archived row is a no-op and posts no reason;
+ * `archived` says whether this call archived the task, so the app can keep
+ * a reason that was not posted.
  * `keep_subtasks` is the archive window's choice to keep the subtasks: each
  * active direct child is detached first, exactly as a delete detaches it,
  * and becomes a top-level task; the task is archived alone and its archived
@@ -494,7 +496,7 @@ export const archive = orgMutation({
       keepSubtasks: keep_subtasks === true,
     })
     if (wasActive) await postArchiveReason(ctx, { issue: after, author: ctx.me, reason, now })
-    return { issue: await pubFor(ctx, ctx.me, after) }
+    return { issue: await pubFor(ctx, ctx.me, after), archived: wasActive }
   },
 })
 
