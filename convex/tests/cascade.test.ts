@@ -12,6 +12,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import { deleteOrgDeep, deleteTeamDeep, removeProfile } from '../model/cascade'
 import {
   fileState,
+  keepHeldFiles,
   messagesFor,
   NOW,
   newT,
@@ -456,6 +457,7 @@ describe('deleteOrgDeep', () => {
 describe('removeProfile', () => {
   // the background steps' own clock, which they stamp on archived tasks
   const STEP_TIME = '2026-03-03T03:03:03.000Z'
+  keepHeldFiles()
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(STEP_TIME)

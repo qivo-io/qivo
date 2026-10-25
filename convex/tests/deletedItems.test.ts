@@ -251,7 +251,7 @@ describe('moving a task to Deleted items', () => {
       expect(await byId(ctx, 'issues', to.id)).not.toBeNull()
       expect(await byId(ctx, 'labels', planted.labelId)).not.toBeNull()
     })
-    expect(await blobExists(t, planted.attachment.storage_id)).toBe(true)
+    expect(await fileState(t, planted.attachment.storage_id)).toBe('kept')
     const activity = await t.run((ctx) => ctx.db.query('activity_events').collect())
     expect(activity.map((e) => [e.verb, e.target_id, e.project_id])).toEqual([
       ['deleted', task.id, f.sub.id],
@@ -361,7 +361,7 @@ describe('moving a task to Deleted items', () => {
     expect((await storedIssue(t, huge.id))?.description).toBe('x'.repeat(TEXT_MAX))
     expect(await commentStored(t, note.id)).toBe(true)
     expect(await liveTask(t, huge.id)).toBeNull()
-    expect(await blobExists(t, file.storage_id)).toBe(true)
+    expect(await fileState(t, file.storage_id)).toBe('kept')
     expect(error).toHaveBeenCalledWith(
       'A deleted item cut a task too large to store',
       expect.objectContaining({ item_id: hugeItem.id, task_id: huge.id }),
@@ -958,7 +958,7 @@ describe('moving a project to Deleted items', () => {
     // the hierarchy inside is kept, and so is a parent outside
     expect((await storedIssue(t, member.id))?.parent_id).toBe(group.id)
     expect((await storedIssue(t, inChild.id))?.parent_id).toBe(outsideParent.id)
-    expect(await blobExists(t, file.storage_id)).toBe(true)
+    expect(await fileState(t, file.storage_id)).toBe('kept')
     const notices = await t.run((ctx) =>
       ctx.db
         .query('messages')
@@ -1333,7 +1333,7 @@ describe('bytes in Deleted items', () => {
       Object.assign(REAP_PAGES, pages)
     }
     expect(await blobExists(t, orphan)).toBe(false)
-    expect(await blobExists(t, trashedFile.storage_id)).toBe(true)
+    expect(await fileState(t, trashedFile.storage_id)).toBe('kept')
   })
 })
 
@@ -2023,7 +2023,7 @@ describe('organization teardown', () => {
     for (const file of files) expect(await fileState(t, file)).toBe('held')
     // the other organization keeps its item and its bytes
     expect(await itemById(t, elsewhere.item.id)).toEqual(elsewhere.item)
-    expect(await blobExists(t, elsewhere.file)).toBe(true)
+    expect(await fileState(t, elsewhere.file)).toBe('kept')
     // a step scheduled before the teardown finds nothing to do
     await runSteps(t)
     expect(await trashOf(t, f.org.id)).toEqual({ items: [], rows: [], tasks: [] })
@@ -2081,7 +2081,7 @@ describe('organization teardown', () => {
       ),
     ).toEqual(live)
     expect(await itemById(t, elsewhere.item.id)).toEqual(elsewhere.item)
-    expect(await blobExists(t, elsewhere.file)).toBe(true)
+    expect(await fileState(t, elsewhere.file)).toBe('kept')
   })
 
   it('purgeOrg stops on bytes, so stored rows of about 900 KB go in several calls within the real limits', async () => {
@@ -2230,10 +2230,10 @@ describe("an organization's deletion", () => {
       expect(await t.run((ctx) => ctx.db.query(table).collect()), table).toEqual([])
     expect(await liveRowsOf(t, draining)).toBe(0)
     for (const file of trashOnly) expect(await fileState(t, file)).toBe('held')
-    expect(await blobExists(t, readyFile)).toBe(true)
+    expect(await fileState(t, readyFile)).toBe('kept')
     expect(await t.run((ctx) => byId(ctx, 'organizations', f.org.id))).toBeNull()
     expect(await itemById(t, elsewhere.item.id)).toEqual(elsewhere.item)
-    expect(await blobExists(t, elsewhere.file)).toBe(true)
+    expect(await fileState(t, elsewhere.file)).toBe('kept')
     await assertNoDanglingRefs(t, "after an organization's deletion with Deleted items")
   })
 

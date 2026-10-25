@@ -220,7 +220,7 @@ describe('preview identity, storage ownership and cleanup', () => {
       await t.mutation(internal.panoramaImages.discardImport, { storage_id })
     }
     vi.setSystemTime(Date.now() + 61 * 60_000)
-    expect(await reap(t)).toEqual({ deleted: 0, kept: 4, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({ deleted: 0, held: 0, kept: 4, tickets: 0, accounts: 0 })
     expect(await exists(t, libraryPreview)).toBe(true)
     expect(await exists(t, customPreview)).toBe(true)
   })

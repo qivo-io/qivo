@@ -54,10 +54,11 @@ crons.weekly(
   {},
 )
 
-// Erases deleted files whose 7-day hold has ended. The hold is one interval
-// shorter than 7 days, so every file is erased within 7 days of its deletion
-// (model/fileHolds.ts). The empty arguments start a run; each leg schedules
-// the next (files.ts).
+// Erases deleted files whose hold has ended and whose scheduled erase did
+// not, and checks for a restore. The hold is two intervals shorter than 7
+// days, so a file is erased within 7 days of its deletion even when its
+// scheduled erase fails (model/fileHolds.ts). The empty arguments start a
+// run; each leg schedules the next (files.ts).
 crons.interval(
   'erase-held-files',
   { minutes: ERASE_EVERY_MS / 60_000 },

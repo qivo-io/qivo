@@ -9,12 +9,13 @@
  * a removed person's picture, a removed login's backgrounds and an
  * organization's deletion all call it, after the row stops naming the file.
  * A file that another row still names stays as it is. Otherwise a file_holds
- * row records the file with the time it may be erased. eraseFile erases a
- * file at once. It is for a file that no committed row ever named, such as an
- * upload refused in the same transaction or bytes nobody confirmed, for the
- * public demo and for the operator's panorama library, whose storage URLs
- * are permanent and public (panoramaImages.ts remove, and a replaced
- * library preview in backgroundPreviews.ts attach).
+ * row records the file with the time it may be erased, and a scheduled
+ * erase (files.ts eraseHeldFile) ends the hold at that time. eraseFile
+ * erases a file at once. It is for a file that no committed row ever named,
+ * such as an upload refused in the same transaction or bytes nobody
+ * confirmed, for the public demo and for the operator's panorama library,
+ * whose storage URLs are permanent and public (panoramaImages.ts remove, and
+ * a replaced library preview in backgroundPreviews.ts attach).
  *
  * The public demo keeps no backups and promises deletion 24 hours after a
  * demo starts, so on the demo (lib/demo.ts isDemoDeployment) releaseFile
@@ -27,30 +28,68 @@
  * counts a hold as a use, so no attach, picture or background can take a
  * held file, and the orphan sweep (files.ts reapOrphans) keeps it.
  *
- * The eraser (files.ts eraseHeldFiles) runs every ERASE_EVERY_MS. It reads
- * the holds that are due through by_erase_at and erases each file unless a
- * row names it again, as a restore or an import can, in which case it drops
- * the hold and keeps the file. */
+ * A restore rewinds file_holds with every other table, but Convex's import
+ * leaves system tables alone, so stored files and scheduled functions stay
+ * as they are. A file let go after the restored backup therefore loses its
+ * hold row but keeps its scheduled erase, and is still erased in time. A
+ * file whose row a restore brings back is in use again, and its scheduled
+ * erase keeps it.
+ *
+ * The eraser (files.ts eraseHeldFiles) runs every ERASE_EVERY_MS. It erases
+ * the due holds a scheduled erase missed, as after a failed erase or an
+ * import into another deployment. It also notices a restore (noteRestore).
+ * Files that only rows written after the restored backup named, such as
+ * attachments uploaded since, are then named by nothing and have no hold.
+ * The orphan sweep then holds them for HOLD_MS instead of erasing them, so
+ * a second restore, of a backup taken between the first backup and the
+ * first restore, still finds them. A restore goes unnoticed only when no
+ * eraser run fell between the backup and the restore, so within one
+ * interval. Files let go in that time are still erased on time, and files
+ * that only rows written in that time named go to the weekly sweep, which
+ * erases them. */
 
-import type { Id } from '../_generated/dataModel'
+import { type DocumentByName, makeFunctionReference, type SystemDataModel } from 'convex/server'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { isDemoDeployment } from '../lib/demo'
 
 /** How often the eraser runs (crons.ts). */
-export const ERASE_EVERY_MS = 60 * 60 * 1000
+export const ERASE_EVERY_MS = 30 * 60 * 1000
 
 /** How long a released file is held. Backups are kept 7 days, and the data
  * processing agreement promises that deleted data is gone from backups
- * within 7 days. A hold of 7 days less one eraser interval erases every file
- * by 7 days after its release, and keeps it for a restore of every backup
- * taken more than one interval before the release. */
-export const HOLD_MS = 7 * 24 * 60 * 60 * 1000 - ERASE_EVERY_MS
+ * within 7 days. A file's scheduled erase runs when its hold ends, and if it
+ * fails, the next eraser run erases the file. A hold of 7 days less two
+ * eraser intervals (1 hour) therefore erases every file at least one
+ * interval before 7 days after its release, which leaves room for a late
+ * run. It keeps the file for a restore of every backup taken more than an
+ * hour before the release. */
+export const HOLD_MS = 7 * 24 * 60 * 60 * 1000 - 2 * ERASE_EVERY_MS
 
-/** The most holds one eraser leg handles. Each costs at most the seven
- * index ranges of storageIdReferenced and a file lookup, so a leg reads
- * about 2,100 of Convex's 4,096, and writes at most two deletes per hold.
- * Tests lower it. */
+/** The most holds one eraser leg handles. Each costs the seven index ranges
+ * of storageIdReferenced and a file lookup, so a leg reads about 2,050 of
+ * Convex's 4,096 with the page and the first leg's restore check, and writes
+ * at most two deletes per hold. Tests lower it. */
 export const ERASE_PAGE = { holds: 256 }
+
+/** Whether releaseFile schedules each hold's erase. Always on in a
+ * deployment. convex-test runs a scheduled function when its timer fires,
+ * and the suites on fake timers that finish their steps by running every
+ * timer would also run each erase a week ahead on their clock. They turn it
+ * off to see what a deletion holds; fileHolds.test.ts tests the erase. */
+export const ERASE_TIMERS = { on: true }
+
+/* How long a restore witness waits before it runs (noteRestore). The eraser
+ * replaces it every ERASE_EVERY_MS, so it runs only if the eraser stops for a
+ * day, and then does nothing. */
+const WITNESS_MS = 24 * 60 * 60 * 1000
+
+const eraseHeldFileRef = makeFunctionReference<'mutation', { storage_id: Id<'_storage'> }, null>(
+  'files:eraseHeldFile',
+)
+const witnessRef = makeFunctionReference<'mutation', Record<string, never>, null>(
+  'files:restoreWitness',
+)
 
 /** The hold on file `storageId`, or null. */
 export const holdOf = (ctx: QueryCtx, storageId: Id<'_storage'>) =>
@@ -130,9 +169,10 @@ export async function eraseFile(ctx: MutationCtx, storageId: Id<'_storage'>): Pr
  * Lets go of file `storageId`, which a committed row named, once that row no
  * longer does. Call it after the row is deleted or patched in the same
  * transaction. Does nothing when another row still names the file or the
- * file is gone. Otherwise holds it until HOLD_MS from now, and a file held
- * already keeps the later of its two times. On the demo the file is erased
- * at once.
+ * file is gone. Otherwise holds it until HOLD_MS from now and schedules its
+ * erase for then. A file held already keeps the later of its two times, and
+ * a hold the orphan sweep made after a restore becomes this release's. On
+ * the demo the file is erased at once.
  */
 export async function releaseFile(
   ctx: MutationCtx,
@@ -146,7 +186,63 @@ export async function releaseFile(
   const held = await holdOf(ctx, storageId)
   if (held === null)
     await ctx.db.insert('file_holds', { storage_id: storageId, size_bytes: file.size, erase_at })
-  else if (held.erase_at < erase_at) await ctx.db.patch(held._id, { erase_at })
+  else if (held.erase_at < erase_at)
+    await ctx.db.patch(held._id, { erase_at, after_restore: undefined })
+  else return
+  if (ERASE_TIMERS.on)
+    await ctx.scheduler.runAt(erase_at, eraseHeldFileRef, { storage_id: storageId })
+}
+
+/**
+ * Holds file `file`, which a restore left named by nothing and unheld, until
+ * HOLD_MS after `now` (epoch milliseconds). The orphan sweep calls it after a
+ * restore instead of erasing the file. It schedules no erase: the eraser
+ * erases the file when the hold is due, and a restore that rewinds the hold
+ * leaves it to the next sweep.
+ */
+export async function holdAfterRestore(
+  ctx: MutationCtx,
+  file: DocumentByName<SystemDataModel, '_storage'>,
+  now: number,
+): Promise<void> {
+  await ctx.db.insert('file_holds', {
+    storage_id: file._id,
+    size_bytes: file.size,
+    erase_at: now + HOLD_MS,
+    after_restore: true,
+  })
+}
+
+/* Ends `hold`, the hold on file `storageId` or null when it has none, and
+ * erases the file unless a row names it again. */
+async function endHold(
+  ctx: MutationCtx,
+  storageId: Id<'_storage'>,
+  hold: Doc<'file_holds'> | null,
+): Promise<'erased' | 'kept'> {
+  if (hold !== null) await ctx.db.delete(hold._id)
+  if (await storageIdReferenced(ctx, storageId)) return 'kept'
+  await eraseFile(ctx, storageId)
+  return 'erased'
+}
+
+/**
+ * The scheduled erase of file `storageId` at `now`, the end of a hold that
+ * releaseFile made. Leaves the file to a later erase when a later release
+ * moved its hold. Otherwise ends the hold, and erases the file unless a row
+ * names it again. A missing hold row does not keep the file, because a
+ * restore rewinds the row of a file let go after the backup. Neither does a
+ * hold the orphan sweep made after a restore, which lasts longer than the
+ * release's.
+ */
+export async function eraseOnTime(
+  ctx: MutationCtx,
+  storageId: Id<'_storage'>,
+  now: number,
+): Promise<'erased' | 'kept' | 'later'> {
+  const hold = await holdOf(ctx, storageId)
+  if (hold !== null && hold.erase_at > now && hold.after_restore !== true) return 'later'
+  return await endHold(ctx, storageId, hold)
 }
 
 /** What one eraser run did: files erased, and files kept because a row
@@ -168,13 +264,49 @@ export async function eraseDueFiles(
     .query('file_holds')
     .withIndex('by_erase_at', (q) => q.lte('erase_at', now))
     .take(ERASE_PAGE.holds + 1)
-  for (const hold of due.slice(0, ERASE_PAGE.holds)) {
-    await ctx.db.delete(hold._id)
-    if (await storageIdReferenced(ctx, hold.storage_id)) counts.kept += 1
-    else {
-      await eraseFile(ctx, hold.storage_id)
-      counts.erased += 1
-    }
-  }
+  for (const hold of due.slice(0, ERASE_PAGE.holds))
+    counts[await endHold(ctx, hold.storage_id, hold)] += 1
   return due.length > ERASE_PAGE.holds
+}
+
+/* The restore_watch row, its witness, and whether a restore rewound the
+ * row: it is missing, or names a witness that a later noteRestore canceled.
+ * A witness that ran, after a day without the eraser, still counts. */
+async function watch(ctx: QueryCtx) {
+  const row = await ctx.db.query('restore_watch').first()
+  const witness = row === null ? null : await ctx.db.system.get(row.witness)
+  return { row, witness, rewound: witness === null || witness.state.kind === 'canceled' }
+}
+
+/**
+ * Whether the database went back in time since the last call, as a restore
+ * from a backup does, and remembers this call at `now` (epoch milliseconds).
+ * The restore_watch row names a scheduled witness, which each call cancels
+ * and replaces. A restore rewinds the row but not the scheduler, so the row
+ * then names a witness that a later call canceled. A missing row counts as a
+ * restore too, so a restore of a backup from before the row is noticed. That
+ * also makes the first call on a deployment answer true. On the demo, which
+ * keeps no backups, it does nothing and answers false.
+ */
+export async function noteRestore(ctx: MutationCtx, now: number): Promise<boolean> {
+  if (isDemoDeployment()) return false
+  const { row, witness, rewound } = await watch(ctx)
+  if (witness?.state.kind === 'pending') await ctx.scheduler.cancel(witness._id)
+  const next = await ctx.scheduler.runAfter(WITNESS_MS, witnessRef, {})
+  const change = rewound ? { witness: next, restored_at: now } : { witness: next }
+  if (row === null) await ctx.db.insert('restore_watch', change)
+  else await ctx.db.patch(row._id, change)
+  return rewound
+}
+
+/**
+ * Whether a restore happened that noteRestore has not noticed yet, or that
+ * it noticed after `since` (epoch milliseconds). Reads only. The orphan
+ * sweep asks it in every leg, so a run that began before a restore stops
+ * erasing once the restore happens. Always false on the demo.
+ */
+export async function restoreSince(ctx: QueryCtx, since: number): Promise<boolean> {
+  if (isDemoDeployment()) return false
+  const { row, rewound } = await watch(ctx)
+  return rewound || (row?.restored_at ?? 0) > since
 }

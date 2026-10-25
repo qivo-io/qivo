@@ -19,7 +19,7 @@ import {
 } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { convexTest, type TestConvex } from 'convex-test'
-import { expect, onTestFinished, TestRunner, vi } from 'vitest'
+import { afterEach, beforeEach, expect, onTestFinished, TestRunner, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
@@ -32,6 +32,7 @@ import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
 import { readWorkspace, type Workspace } from '../lib/workspaceJoin'
 import { type ActivityEntry, insertActivity } from '../model/activity'
+import { ERASE_TIMERS, noteRestore } from '../model/fileHolds'
 import { countersOf, countersRow, type OrgCounters } from '../model/orgs'
 import schema from '../schema'
 
@@ -263,6 +264,20 @@ function order(a: Json | undefined, b: Json | undefined): number {
   return a < b ? -1 : a > b ? 1 : 0
 }
 
+/** Turns off each held file's scheduled erase for every test of the suite
+ * (model/fileHolds.ts ERASE_TIMERS). For suites on fake timers that finish
+ * their steps by running every timer, which would otherwise erase each held
+ * file a week ahead on their clock, so they can check what a deletion
+ * holds. */
+export function keepHeldFiles(): void {
+  beforeEach(() => {
+    ERASE_TIMERS.on = false
+  })
+  afterEach(() => {
+    ERASE_TIMERS.on = true
+  })
+}
+
 /** What became of stored file `id`: 'gone' once erased, 'held' while the
  * hold of its deletion keeps it for a restore (model/fileHolds.ts), else
  * 'kept'. */
@@ -276,11 +291,18 @@ export const fileState = (t: T, id: Id<'_storage'>): Promise<'gone' | 'held' | '
     return hold === null ? 'kept' : 'held'
   })
 
+/** Starts the restore watch the eraser keeps (model/fileHolds.ts
+ * noteRestore). A deployment without it counts as restored, and its orphan
+ * sweep holds the files nothing names instead of erasing them. */
+export const watchRestores = (t: T): Promise<boolean> =>
+  t.run((ctx) => noteRestore(ctx, Date.now()))
+
 /** Runs one orphan sweep (files.reapOrphans) through all of its legs and
- * returns the counts from the one reap_orphans audit row it wrote. Works with
- * real timers, a faked Date alone, or fully faked timers. With faked timers
- * it fires only the timers already due, which the legs are, so the clock
- * stays put and later scheduled work waits. */
+ * returns the counts from the one reap_orphans audit row it wrote. It starts
+ * the restore watch first, so the sweep erases as it does between restores.
+ * Works with real timers, a faked Date alone, or fully faked timers. With
+ * faked timers it fires only the timers already due, which the legs are, so
+ * the clock stays put and later scheduled work waits. */
 export async function reap(t: T): Promise<ReapCounts> {
   const audits = () =>
     t.run(async (ctx) =>
@@ -289,6 +311,7 @@ export async function reap(t: T): Promise<ReapCounts> {
       ),
     )
   const before = (await audits()).length
+  await watchRestores(t)
   await t.mutation(internal.files.reapOrphans, {})
   await t.finishAllScheduledFunctions(() => {
     if (vi.isFakeTimers()) vi.advanceTimersByTime(0)

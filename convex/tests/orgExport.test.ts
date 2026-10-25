@@ -60,6 +60,8 @@ const EXCLUDED_TABLES = [
   // Deleted files no row names, waiting to be erased; nothing in them is
   // the organization's to export.
   'file_holds',
+  // The eraser's restore witness, deployment state.
+  'restore_watch',
   'marketing_demo',
   'issue_subscriptions',
   'messages',

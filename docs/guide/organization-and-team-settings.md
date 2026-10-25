@@ -122,8 +122,10 @@ still take access away, as while billing pauses editing
 ([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)).
 Qivo emails the admins unless one of them finished an export in the 7 days
 before the service ended. On the deletion date, Qivo deletes everything the
-organization owns, including uploaded files. Each person's sign-in and their
-other organizations remain.
+organization owns, including uploaded files. Nobody can open the files from
+then on, and Qivo erases their contents within 7 days
+([Deleted items](./how-work-is-organized.md#deleted-items)). Each person's
+sign-in and their other organizations remain.
 
 Until that date, subscribing again keeps an organization whose subscription
 ended. An admin can stop a deletion an admin asked for with **Keep

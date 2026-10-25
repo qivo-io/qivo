@@ -1012,15 +1012,27 @@ export default defineSchema({
 
   // A deleted file waiting to be erased (model/fileHolds.ts). No row names
   // its file any more; it is kept until `erase_at` so a restore from a
-  // backup without files finds it, then files.ts eraseHeldFiles erases it.
-  // One row per file. `size_bytes` is the file's size when it was let go.
+  // backup without files finds it, then its scheduled erase, or else
+  // files.ts eraseHeldFiles, erases it. One row per file. `size_bytes` is
+  // the file's size when it was let go. `after_restore` marks the hold of a
+  // file a restore left unnamed (files.ts reapOrphans), which no release
+  // made.
   file_holds: defineTable({
     storage_id: v.id('_storage'),
     size_bytes: v.number(),
     erase_at: v.number(), // epoch milliseconds
+    after_restore: v.optional(v.literal(true)),
   })
     .index('by_storage', ['storage_id'])
     .index('by_erase_at', ['erase_at']),
+
+  // One row: the scheduled witness that tells the eraser whether a restore
+  // rewound the database (model/fileHolds.ts noteRestore), and when it last
+  // found one, in epoch milliseconds.
+  restore_watch: defineTable({
+    witness: v.id('_scheduled_functions'),
+    restored_at: v.optional(v.number()),
+  }),
 
   // A REST upload in progress (model/attachments.ts). It names the caller
   // that asked for the upload URL, the task it attaches to and when it

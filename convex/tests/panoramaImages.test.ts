@@ -671,7 +671,7 @@ describe('storage ownership', () => {
     const orphan = await storage(t)
     vi.setSystemTime(Date.now() + 61 * 60_000)
     const fresh = await storage(t)
-    expect(await reap(t)).toEqual({ deleted: 1, kept: 3, tickets: 0, accounts: 0 })
+    expect(await reap(t)).toEqual({ deleted: 1, held: 0, kept: 3, tickets: 0, accounts: 0 })
     expect(await exists(t, orphan)).toBe(false)
     for (const id of [a.storage_id, b.storage_id, fresh]) expect(await exists(t, id)).toBe(true)
   })

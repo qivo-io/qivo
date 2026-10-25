@@ -2120,7 +2120,9 @@ API, that takes out an image's last reference removes the image from the
 task at once: it no longer counts toward the 100 attachments and no longer
 appears in `attachments`. A save within a day that names it again brings it
 back, unless the task has 100 attachments by then, which is a `400` with the
-full-task sentence above. After a day the image is deleted, and a task
+full-task sentence above. After a day the image is deleted, and Qivo
+erases its contents within 7 days after that
+([Deleted items](guide/how-work-is-organized.md#deleted-items)). A task
 keeps at most the 100 most recently removed images, so the oldest goes at
 once when a save removes more. An image that no
 saved description has named a day after its upload, such as one a closed

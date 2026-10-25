@@ -78,7 +78,16 @@ import {
   reserveDemoUpload,
 } from './model/demoUploads'
 import { reapDroppedImage as reapDropped } from './model/descriptionImages'
-import { type EraseCounts, eraseDueFiles, eraseFile, releaseFile } from './model/fileHolds'
+import {
+  type EraseCounts,
+  eraseDueFiles,
+  eraseFile,
+  eraseOnTime,
+  holdAfterRestore,
+  noteRestore,
+  releaseFile,
+  restoreSince,
+} from './model/fileHolds'
 import { assertProfileExpected } from './model/people'
 
 /* The byte-reference fence and the attach result live in the shared
@@ -384,10 +393,19 @@ export const gatewayAvatar = internalQuery({
  * profiles.avatar_storage_id and the panorama_images and custom_backgrounds
  * originals and previews (model/attachments.ts storageIdInUse). A deleted
  * file counts as in use while it is held (model/fileHolds.ts), so the sweep
- * leaves it to eraseHeldFiles. A restore rewinds file_holds with every other
- * table, so a file uploaded after the restored backup is named by nothing
- * and this sweep erases it. Component storage (Better Auth) is isolated from
- * this _storage table.
+ * leaves it to its scheduled erase or eraseHeldFiles. Component storage
+ * (Better Auth) is isolated from this _storage table.
+ *
+ * A restore rewinds every table but leaves the stored files, so files that
+ * only rows written after the restored backup named are named by nothing
+ * afterwards. A second restore, of a later backup, would bring their rows
+ * back. So once a restore is noticed (model/fileHolds.ts noteRestore), a
+ * run holds each such file for HOLD_MS instead of erasing it, and the eraser
+ * erases it when the hold ends. eraseHeldFiles starts such a run when it
+ * notices a restore, with `restored: true`. A run that began before a
+ * restore holds instead of erasing from the first leg that follows it. A
+ * file a release held is not among them: its hold, or after a restore its
+ * scheduled erase, still erases it on time.
  *
  * The weekly cron (crons.ts) starts a run with empty arguments, and so does
  * a manual run, which returns when the first leg ends. Name the deployment
@@ -421,10 +439,11 @@ export const gatewayAvatar = internalQuery({
 
 /** The most rows one reapOrphans leg handles in each phase. A stored file
  * older than the floor costs storageIdInUse's index ranges, eight with the
- * Deleted items check and the hold, so a files leg reads about 2,050 of
- * Convex's 4,096 and has room for more references. A tickets leg reads two ranges and
- * deletes at most two pages. An account costs a Better Auth lookup and, for
- * a removed login, its cleanup. Tests lower these. */
+ * Deleted items check and the hold, and one more to erase it, so a files
+ * leg reads about 2,310 of Convex's 4,096 with the page and the restore
+ * check, and has room for more references. A tickets leg reads two ranges
+ * and deletes at most two pages. An account costs a Better Auth lookup and,
+ * for a removed login, its cleanup. Tests lower these. */
 export const REAP_PAGES = { tickets: 1000, accounts: 64, files: 256 }
 
 /* A sweep never deletes a file younger than this when its run starts.
@@ -436,19 +455,23 @@ const REAP_FLOOR_MS = 60 * 60 * 1000
 
 const vReapCounts = v.object({
   deleted: v.number(), // unreferenced files deleted
+  // unreferenced files held after a restore instead; optional for legs
+  // scheduled before the count existed
+  held: v.optional(v.number()),
   kept: v.number(), // files kept, in use or younger than the floor
   tickets: v.number(), // expired upload tickets deleted
   accounts: v.number(), // removed logins whose appearance and backgrounds were cleared
 })
 
 /** The counts a reapOrphans run records in its reap_orphans audit row. */
-export type ReapCounts = Infer<typeof vReapCounts>
+export type ReapCounts = Required<Infer<typeof vReapCounts>>
 
 const reapArgs = {
   phase: v.optional(v.union(v.literal('tickets'), v.literal('accounts'), v.literal('files'))),
   cursor: v.optional(v.string()), // the phase's page cursor
   now: v.optional(v.number()), // the run's start, epoch milliseconds
   counts: v.optional(vReapCounts),
+  restored: v.optional(v.boolean()), // hold unreferenced files, as after a restore
 }
 type ReapLeg = ObjectType<typeof reapArgs>
 
@@ -459,7 +482,11 @@ export const reapOrphans = internalMutation({
   args: reapArgs,
   handler: async (ctx, a): Promise<null> => {
     const now = a.now ?? Date.now()
-    const counts = a.counts ?? { deleted: 0, kept: 0, tickets: 0, accounts: 0 }
+    const counts: ReapCounts = {
+      held: 0,
+      ...(a.counts ?? { deleted: 0, kept: 0, tickets: 0, accounts: 0 }),
+    }
+    let restored = a.restored === true
     let next: Pick<ReapLeg, 'phase' | 'cursor'> | null = null
     if ((a.phase ?? 'tickets') === 'tickets') {
       // Tickets own no bytes until the receiver commits the completed upload,
@@ -493,21 +520,30 @@ export const reapOrphans = internalMutation({
       next = page.isDone ? { phase: 'files' } : { phase: 'accounts', cursor: page.continueCursor }
     } else {
       const cutoff = now - REAP_FLOOR_MS
+      restored ||= await restoreSince(ctx, now)
       const page = await ctx.db.system
         .query('_storage')
         .paginate({ cursor: a.cursor ?? null, numItems: REAP_PAGES.files })
       for (const file of page.page) {
         if (file._creationTime > cutoff || (await storageIdInUse(ctx, file._id))) {
           counts.kept += 1
-          continue
+        } else if (restored) {
+          await holdAfterRestore(ctx, file, now)
+          counts.held += 1
+        } else {
+          await eraseFile(ctx, file._id)
+          counts.deleted += 1
         }
-        await eraseFile(ctx, file._id)
-        counts.deleted += 1
       }
       if (!page.isDone) next = { phase: 'files', cursor: page.continueCursor }
     }
     if (next !== null) {
-      await ctx.scheduler.runAfter(0, reapLegRef, { ...next, now, counts })
+      await ctx.scheduler.runAfter(0, reapLegRef, {
+        ...next,
+        now,
+        counts,
+        ...(restored ? { restored } : {}),
+      })
       return null
     }
     await ctx.db.insert('platform_audit_log', {
@@ -521,13 +557,18 @@ export const reapOrphans = internalMutation({
 })
 
 /* ---------------------------------------------------------- eraseHeldFiles
- * Erases the deleted files whose hold has ended (model/fileHolds.ts). The
- * hourly cron (crons.ts) starts a run with empty arguments. Each leg handles
- * one ERASE_PAGE of the holds due at the run's start and schedules the next
- * leg while due holds are left, so a run reads only due holds. A file a row
- * names again, as after a restore, loses its hold and stays. The last leg
- * logs its counts when it handled any hold. `now` lets a test or a manual
- * check move the clock; the cron never passes it. */
+ * Erases the deleted files whose hold has ended and whose scheduled erase
+ * (eraseHeldFile below) has not, as after a failed erase, an import into
+ * another deployment or a hold the orphan sweep made after a restore
+ * (model/fileHolds.ts). The cron (crons.ts) starts a run with empty
+ * arguments every ERASE_EVERY_MS. The first leg checks for a restore
+ * (noteRestore) and, when it finds one, starts an orphan sweep that holds
+ * what the restore left named by nothing. Each leg handles one ERASE_PAGE
+ * of the holds due at the run's start and schedules the next leg while due
+ * holds are left, so a run reads only due holds. A file a row names again,
+ * as after a restore, loses its hold and stays. The last leg logs its counts
+ * when it handled any hold. `now` lets a test or a manual check move the
+ * clock; the cron never passes it. */
 
 const eraseArgs = {
   now: v.optional(v.number()), // the run's start, epoch milliseconds
@@ -543,12 +584,34 @@ export const eraseHeldFiles = internalMutation({
   args: eraseArgs,
   handler: async (ctx, a): Promise<null> => {
     const now = a.now ?? Date.now()
+    if (a.counts === undefined && (await noteRestore(ctx, now))) {
+      console.log('restore check: holding the files nothing names (a restore, or the first check)')
+      await ctx.scheduler.runAfter(0, reapLegRef, { restored: true })
+    }
     const counts: EraseCounts = a.counts ?? { erased: 0, kept: 0 }
     if (await eraseDueFiles(ctx, now, counts)) {
       await ctx.scheduler.runAfter(0, eraseLegRef, { now, counts })
     } else if (counts.erased + counts.kept > 0) console.log('erased held files', counts)
     return null
   },
+})
+
+/* A held file's scheduled erase, at the end of the hold that releaseFile
+ * made (model/fileHolds.ts eraseOnTime). It is a scheduled function, so a
+ * restore that rewinds the hold leaves it in place. */
+export const eraseHeldFile = internalMutation({
+  args: { storage_id: v.id('_storage') },
+  handler: async (ctx, { storage_id }): Promise<null> => {
+    await eraseOnTime(ctx, storage_id, Date.now())
+    return null
+  },
+})
+
+/* The restore witness (model/fileHolds.ts noteRestore). Only whether it is
+ * still scheduled matters, so it does nothing if it ever runs. */
+export const restoreWitness = internalMutation({
+  args: {},
+  handler: async (): Promise<null> => null,
 })
 
 async function demoUploadUrl(

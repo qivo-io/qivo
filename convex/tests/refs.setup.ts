@@ -187,6 +187,8 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'archived_detaches.scheduled_id',
   // The next step of an organization deletion (orgRemovals.ts).
   'org_removals.scheduled_id',
+  // The eraser's restore witness, a scheduled function (model/fileHolds.ts).
+  'restore_watch.witness',
   // Binds a private local credentials file; not the id of a database row.
   'marketing_demo.credential_set_id',
   // dangles by design: the feed renders dead issue targets as plain text (0026)

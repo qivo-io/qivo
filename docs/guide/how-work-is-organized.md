@@ -262,7 +262,8 @@ A file deleted for good, with its item, with **Delete now…** or on its own,
 cannot be opened from that moment. Qivo erases its contents within 7 days,
 and keeps them until then only so that recovering the service from a backup
 can bring the file back. A profile picture or background image you replace
-or remove goes the same way. The demo erases files at once.
+or remove goes the same way, and so do the files of a deleted organization.
+The demo erases files at once.
 
 Deleted items do not count toward the organization's storage
 ([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)),
