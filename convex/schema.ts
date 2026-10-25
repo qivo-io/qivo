@@ -878,6 +878,11 @@ export default defineSchema({
     phase: v.optional(vOrgRemovalPhase),
     progress_at: v.optional(v.string()), // the last committed step
     scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
+    // While the profiles phase marks one deleted profile's guest
+    // organizations due over more than one step (model/orgDeletion.ts): that
+    // profile, and the _creationTime of the last profile with its email that
+    // the marking read (lib/billableUsers.ts markHomeProfileRemoved).
+    guest_marking: v.optional(v.object({ profile_id: v.string(), through: v.number() })),
     created_at: v.string(),
   })
     .index('by_org', ['org_id'])

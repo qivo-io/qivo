@@ -117,26 +117,39 @@ export async function markBillingMembershipChanged(
  * (getBillableUsers), so this marks those organizations due before the
  * profile goes, once per organization in `asked`, and the next minute's
  * sweep reconciles them. It schedules nothing itself, so a step that
- * deletes many such profiles stays within Convex's limits. Answers the rows
- * it read, which the deletion step counts against its budget. */
+ * deletes many such profiles stays within Convex's limits.
+ *
+ * It reads the email's profiles in order, from the _creationTime `from`
+ * when given, and counts each profile it reads and each organization it
+ * marks as one row of `budget`, the deletion step's. It answers null once it
+ * has read them all, or the _creationTime of the last one it read when the
+ * budget ran out, from which the next step goes on. That step reads that
+ * profile again, so a profile that shares its time is not skipped, and
+ * marking its organization again changes nothing that is still due. */
 export async function markHomeProfileRemoved(
   ctx: MutationCtx,
   profile: Doc<'profiles'>,
   asked: Set<string>,
-): Promise<number> {
-  if (isDemoDeployment() || !process.env.POLAR_ACCESS_TOKEN) return 0
-  if (!profile.active || !hasHomeRole(profile) || profile.email === undefined) return 0
+  budget: { rows: number },
+  from?: number,
+): Promise<number | null> {
+  if (isDemoDeployment() || !process.env.POLAR_ACCESS_TOKEN) return null
+  if (!profile.active || !hasHomeRole(profile) || profile.email === undefined) return null
   const email = profile.email.toLowerCase()
   const now = new Date().toISOString()
-  let read = 0
-  const matches = ctx.db.query('profiles').withIndex('by_email', (q) => q.eq('email', email))
+  const matches = ctx.db
+    .query('profiles')
+    .withIndex('by_email', (q) =>
+      from === undefined ? q.eq('email', email) : q.eq('email', email).gte('_creationTime', from),
+    )
   for await (const match of matches) {
-    read += 1
-    if (match.org_id === profile.org_id || match.org_role !== 'guest' || asked.has(match.org_id))
-      continue
-    asked.add(match.org_id)
-    read += 1
-    await billingDueBy(ctx, match.org_id, now)
+    budget.rows -= 1
+    if (match.org_id !== profile.org_id && match.org_role === 'guest' && !asked.has(match.org_id)) {
+      asked.add(match.org_id)
+      budget.rows -= 1
+      await billingDueBy(ctx, match.org_id, now)
+    }
+    if (budget.rows <= 0) return match._creationTime
   }
-  return read
+  return null
 }

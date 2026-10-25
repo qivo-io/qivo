@@ -22,6 +22,7 @@ import { addCalendarMonths } from '../lib/billingAccess'
 import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
 import { LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
 import { enrollOrganization, nextReminder, STORAGE_PAGE, storageUsage } from '../model/billing'
+import { REMOVAL_BUDGET } from '../model/cascade'
 import { deleteOrgStep } from '../model/orgDeletion'
 import {
   as,
@@ -1709,7 +1710,7 @@ describe('when organizations are reconciled', () => {
     ])
   })
 
-  it('counts the guest organizations a deleted profile marks due against the deletion step', async () => {
+  it('marks the guest organizations of a deleted profile due over several steps, each within its budget', async () => {
     const { t, f } = await fixture()
     const email = 'consultant@testbed.test'
     const guestOrgs = Array.from({ length: 300 }, () => uuid())
@@ -1753,23 +1754,53 @@ describe('when organizations are reconciled', () => {
       })
     })
     for (const org_id of guestOrgs) await setDue(t, org_id, iso(SYNC_SAFETY_MS / 60_000), true)
-    await t.run(async (ctx) => {
-      const removal = await ctx.db
-        .query('org_removals')
-        .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
-        .unique()
-      await deleteOrgStep(ctx, removal!)
-    })
+    const removal = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('org_removals')
+          .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
+          .unique(),
+      )
+    const step = () =>
+      t.run(async (ctx) => {
+        const row = await ctx.db
+          .query('org_removals')
+          .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
+          .unique()
+        if (row) await deleteOrgStep(ctx, row)
+      })
+    const left = async () =>
+      (
+        await t.run((ctx) =>
+          ctx.db
+            .query('profiles')
+            .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
+            .collect(),
+        )
+      ).map((p) => p.email)
+    const marked = async () =>
+      (await Promise.all(guestOrgs.map((id) => dueAt(t, id)))).filter((due) => due === NOW).length
+    // Each step reads a profile with the email and marks its organization
+    // due as two of its rows. Before, the first step read 601 profiles and
+    // marked all 300, more than twice its budget.
+    const perStep: number[] = []
+    while ((await marked()) < guestOrgs.length && perStep.length < 10) {
+      const before = await marked()
+      await step()
+      perStep.push((await marked()) - before)
+      // the profile stays, with where its marking stopped, until its last
+      // guest organization is marked
+      if ((await marked()) < guestOrgs.length) {
+        expect(await left()).toContain(email)
+        expect((await removal())?.guest_marking?.profile_id).toBe(f.otherAdmin.id)
+      }
+    }
+    expect(perStep.length).toBeGreaterThan(1)
+    for (const count of perStep) expect(count).toBeLessThanOrEqual(REMOVAL_BUDGET.rows / 2)
     expect(await queued(t, 'billingSync:reconcile')).toEqual([])
-    expect(new Set(await Promise.all(guestOrgs.map((id) => dueAt(t, id))))).toEqual(new Set([NOW]))
-    // the 600 rows it read used up the step, so the other profile waits
-    const left = await t.run((ctx) =>
-      ctx.db
-        .query('profiles')
-        .withIndex('by_org', (q) => q.eq('org_id', f.otherOrg.id))
-        .collect(),
-    )
-    expect(left.map((p) => p.email)).toEqual(['colleague@testbed.test'])
+    expect((await removal())?.guest_marking).toBeUndefined()
+    await step()
+    expect(await left()).toEqual([])
   })
 
   it('polls a subscription that is past due, unpaid or incomplete, often in its first day', async () => {
