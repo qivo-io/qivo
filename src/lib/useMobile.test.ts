@@ -228,11 +228,9 @@ describe('useMobileBackLayer', () => {
     History.prototype.go.call(history, -2)
     await show({ a: false })
     await settle()
-    expect(heard[0]).toBe('/before')
-    // jsdom aims the page's own step from where both set out, so it lands
-    // on /page after; the entry the person reached kept its address
-    expect(location.pathname).toBe('/page')
-    await back()
+    // the page's own step lands after it, and the page steps back to the
+    // entry the person reached, which keeps its address
+    expect(heard).toEqual(['/before'])
     expect(location.pathname).toBe('/before')
   })
 

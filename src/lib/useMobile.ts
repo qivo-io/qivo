@@ -80,8 +80,8 @@ function retire(id: string, below: unknown) {
     one move. The address stays the one the page shows, so a change made in
     place over a marker, such as App naming a task that left the board,
     moves down with it. A move of the person's that lands first, such as a
-    pick from the browser's Back menu, ends the step, and the entry it
-    reached keeps its own address. */
+    pick from the browser's Back menu, keeps the page on the entry it
+    reached (lib/historyIndex stepBack), which keeps its own address. */
 function settle() {
   let steps = 0
   let state = history.state
