@@ -177,6 +177,11 @@ type Answer = { state: string; split?: boolean; pieces?: number; message?: strin
 const isAnswer = (value: unknown): value is Answer =>
   typeof value === 'object' && value !== null && 'state' in value
 
+/** The root part's arguments: this app shows a login that an organization
+    deactivated its own screen, so it asks to hear of one
+    (convex/workspace.ts root). */
+export const ROOT_ARGS = { seatless: 'all' } as const
+
 /** Creates a registry over `live` that reports to `report`. `online` says
     whether the stall check may fail the workspace, false while the socket
     is down or saves pause offline. With `whole`, the caller shows only a
@@ -545,7 +550,7 @@ export function createLiveParts(
     settle({ news, progress })
   })
 
-  root = watch(api.workspace.root, {})
+  root = watch(api.workspace.root, ROOT_ARGS)
   // the wait runs from the start, so a root that never answers fails too
   watchStall(true, false)
 

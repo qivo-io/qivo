@@ -96,12 +96,12 @@ in the workspace saves, and a change you try says you are signed out instead of
 appearing. View preferences still change on this device. Losing your internet
 connection does not sign you out, unless your sign-in expires meanwhile. If an
 admin removes or deactivates you and you belong to no other organization, the notice says you
-no longer have access and offers **Reload**. After a reload, a deactivated
-person is told so instead of being offered a new organization. Your view stays as it was, but
+no longer have access and offers **Reload**. Your view stays as it was, but
 comments and images that were not already on screen no longer load, and
 attached files no longer download. Nothing in the workspace saves, read marks
 and preferences included. You can still change your appearance and delete
-connected apps.
+connected apps. After a reload, someone deactivated in their home
+organization is told so instead of being offered a new organization.
 
 If you lose your internet connection, or saving takes much longer than usual, a
 notice says so and editing pauses, read marks included. A change you try says why

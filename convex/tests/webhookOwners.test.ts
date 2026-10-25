@@ -7,7 +7,8 @@ import { LIMITS } from '../lib/limits'
 import { mcpResource } from '../lib/oauth'
 import type { EventOwner } from '../lib/taskEvents'
 import { removeProfile } from '../model/cascade'
-import { as, expectRefusal, newT, runInAuth, uuid, withOrg } from './helpers.setup'
+import { eventOwner } from '../model/taskEvents'
+import { as, expectRefusal, newT, plantLogins, runInAuth, uuid, withOrg } from './helpers.setup'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -154,8 +155,10 @@ describe('webhook owner quota cleanup', () => {
 
   /* A grant whose client Better Auth no longer has can never authorize
      again, so it gives back its quota, and so does a person whose login is
-     gone. A disabled client, a client without its resource link and a
-     banned login can be undone, and keep theirs. */
+     gone. A disabled client, a client without its resource link, a banned
+     login and a deactivated person can be undone, and keep theirs: they
+     receive nothing meanwhile (taskEvents.ts eventOwner), which the
+     organization's list says. */
   it('reclaims a full organization held by a deleted OAuth client and a deleted login, and keeps what can be undone', async () => {
     const f = await fixture()
     const clientGone = await f.credential('oauth_connections')
@@ -163,8 +166,29 @@ describe('webhook owner quota cleanup', () => {
     const unlinked = await f.credential('oauth_connections')
     const live = await f.credential('oauth_connections')
     const loginGone = await f.credential('mcp_tokens', f.fx.viewer)
-    for (const owner of [clientGone, clientDisabled, unlinked, live, loginGone])
-      await f.seed(owner, 20)
+    const banned = await f.credential('mcp_tokens', f.fx.guest)
+    // a person an admin deactivated, and a live owner whose subscriptions
+    // delivery failures disabled
+    const [login] = await plantLogins(f.t, [{ name: 'Ines', email: 'ines@testbed.test' }])
+    const ines = await f.t.run(async (ctx) => {
+      const { _id, _creationTime, ...user } = f.fx.user
+      const row = await ctx.db.insert('profiles', {
+        ...user,
+        id: uuid(),
+        auth_user_id: login,
+        email: 'ines@testbed.test',
+        name: 'Ines',
+      })
+      return (await ctx.db.get(row)) as Doc<'profiles'>
+    })
+    const deactivated = await f.credential('mcp_tokens', ines)
+    const failing = await f.credential()
+    for (const owner of [clientGone, loginGone]) await f.seed(owner, 20)
+    for (const owner of [clientDisabled, unlinked, live, banned, deactivated])
+      await f.seed(owner, 10)
+    // a suspended owner's disabled ones stay disabled
+    await f.seed(banned, 5, true)
+    await f.seed(failing, 5, true)
     const clientOf = (owner: EventOwner) => `client-${owner.credential_id}`
     // the component's own delete, which runs no trigger, so the grant stays
     await f.t.mutation(components.betterAuth.oauth.deleteClients, {
@@ -184,10 +208,20 @@ describe('webhook owner quota cleanup', () => {
         .collect())
         await ctx.db.delete(link._id)
     })
+    // banned until a time to come, so the ban can still lift
+    await f.t.mutation(components.betterAuth.adapter.updateOne, {
+      input: {
+        model: 'user',
+        where: [{ field: '_id', value: f.fx.guest.auth_user_id! }],
+        update: { banned: true, banExpires: Date.parse('2027-01-01') },
+      },
+    })
+    await f.t.run((ctx) => ctx.db.patch(ines._id, { active: false }))
     await f.t.mutation(components.betterAuth.adapter.deleteOne, {
       input: { model: 'user', where: [{ field: '_id', value: f.fx.viewer.auth_user_id! }] },
     })
-    // the organization's list says which ones no longer count
+    // the organization's list says which ones no longer count, and which
+    // receive nothing for now
     const listed = await f.t.query(internal.webhooks.listOrganization, {
       owner: await f.credential('mcp_tokens', f.fx.admin),
     })
@@ -199,8 +233,20 @@ describe('webhook owner quota cleanup', () => {
       )
     expect(statusOf(clientGone)).toEqual(new Set(['unauthorized']))
     expect(statusOf(loginGone)).toEqual(new Set(['unauthorized']))
-    for (const owner of [clientDisabled, unlinked, live])
-      expect(statusOf(owner)).toEqual(new Set(['active']))
+    for (const owner of [clientDisabled, unlinked, deactivated])
+      expect(statusOf(owner)).toEqual(new Set(['suspended']))
+    expect(statusOf(banned)).toEqual(new Set(['suspended', 'disabled']))
+    expect(statusOf(live)).toEqual(new Set(['active']))
+    expect(statusOf(failing)).toEqual(new Set(['disabled']))
+    // and what they say holds: a suspended owner is refused, a live one not
+    const resolved = await f.t.run(async (ctx) =>
+      Promise.all(
+        [clientDisabled, unlinked, banned, deactivated, live].map(
+          async (owner) => (await eventOwner(ctx, owner)) !== null,
+        ),
+      ),
+    )
+    expect(resolved).toEqual([false, false, false, false, true])
 
     await f.save(await f.credential())
     const rows = await f.rows()
@@ -208,7 +254,9 @@ describe('webhook owner quota cleanup', () => {
     const count = (owner: EventOwner) =>
       rows.filter((row) => row.owner.credential_id === owner.credential_id).length
     expect([clientGone, loginGone].map(count)).toEqual([0, 0])
-    expect([clientDisabled, unlinked, live].map(count)).toEqual([20, 20, 20])
+    expect([clientDisabled, unlinked, live, banned, deactivated, failing].map(count)).toEqual([
+      10, 10, 10, 15, 10, 5,
+    ])
     expect(await f.t.run((ctx) => ctx.db.query('webhook_health').collect())).toHaveLength(60)
   })
 

@@ -282,15 +282,21 @@ async function mapInBatches<R, T>(
  * answer (lib/billingAccess.ts seatlessState): whether a running
  * organization deletion holds its seats, and the create state. That answer
  * names no organization and no rows, only the reason and when the login may
- * create an organization. */
+ * create an organization. Without `deactivated`, a login whose seat an
+ * organization deactivated, and that no deletion holds, gets null instead,
+ * as an app from before that answer expects (workspace.ts root). */
 export async function readRoot(
   ctx: QueryCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> },
+  deactivated: boolean,
 ) {
   /* Signed in but seatless is the app's "create your organization" signal,
    * unless an organization the login cannot open holds a seat, as one being
    * deleted or one that deactivated it. A failed read throws instead, so it
    * never looks like no seat. */
-  if (ctx.myProfiles.size === 0) return await seatlessState(ctx, ctx.authUserId)
+  if (ctx.myProfiles.size === 0) {
+    const seatless = await seatlessState(ctx, ctx.authUserId)
+    return seatless?.deleting || deactivated ? seatless : null
+  }
   const orgs: OrgRow[] = []
   for (const me of ctx.myProfiles.values()) {
     const org = await byId(ctx, 'organizations', me.org_id)

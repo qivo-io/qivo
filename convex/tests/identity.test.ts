@@ -13,6 +13,7 @@ import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import { LIMITS, NAME_MAX } from '../lib/limits'
+import { homeElsewhere } from '../model/people'
 import {
   as,
   expectRefusal,
@@ -271,6 +272,34 @@ describe('claimSeatsForLogin — the claim loop', () => {
     expect(adopted.org_role).toBe('guest')
   })
 
+  /* homeElsewhere predicts the claim for invitation emails and the operator
+     console, so it must skip what the claim skips. */
+  it('an earlier deactivated invitation makes no home, so a later one is not predicted a guest seat', async () => {
+    const homeOf = (seat: Doc<'profiles'>) =>
+      t.run(async (ctx) => (await homeElsewhere(ctx, EMAIL, seat.org_id, seat))?.id ?? null)
+    const earlier = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      email: EMAIL,
+      created_at: DAY2,
+      active: false,
+    })
+    const later = await plantSeat(t, { org_id: f.org.id, email: EMAIL, created_at: DAY3 })
+    expect(await homeOf(later)).toBeNull()
+    expect(
+      await t.run(async (ctx) => (await homeElsewhere(ctx, EMAIL, f.org.id))?.id ?? null),
+    ).toBeNull()
+    // an active one is predicted, as the claim then adopts it first
+    await t.run((ctx) => ctx.db.patch(earlier._id, { active: true }))
+    expect(await homeOf(later)).toBe(f.otherOrg.id)
+    await t.run((ctx) => ctx.db.patch(earlier._id, { active: false }))
+    expect(await claim(t)).toBe(1)
+    expect(await reload(t, later)).toMatchObject({ auth_user_id: LOGIN, org_role: 'user' })
+    // once claimed, even a deactivated home seat is a home
+    await t.run((ctx) => ctx.db.patch(later._id, { active: false }))
+    const third = await plantSeat(t, { org_id: uuid(), email: EMAIL, created_at: DAY3 })
+    expect(await homeOf(third)).toBe(f.org.id)
+  })
+
   it('a login with no waiting seat claims nothing and creates nothing', async () => {
     const before = await t.run((ctx) => ctx.db.query('profiles').collect())
     expect(await claim(t, { email: 'stranger@example.test' })).toBe(0)
@@ -480,7 +509,7 @@ describe('createOrganization guards (0118)', () => {
  * state is 'now' (lib/workspaceParts.ts readRoot), so it must agree with
  * createOrganization for every set of seats a login can hold. A login with
  * no seat it can open gets the seatless answer, or null when nothing holds
- * it. */
+ * it or when an older app asks. */
 describe("the root part's create state", () => {
   type Seat = { org: 'home' | 'other'; role: 'user' | 'guest'; active: boolean }
   const cases: [string, Seat[], unknown, boolean][] = [
@@ -516,9 +545,14 @@ describe("the root part's create state", () => {
         org_role: seat.role,
         active: seat.active,
       })
-    const answer = await login.as.query(api.workspace.root, {})
+    const answer = await login.as.query(api.workspace.root, { seatless: 'all' })
     if (typeof root === 'string') expect(answer).toMatchObject({ create: root })
     else expect(answer).toEqual(root)
+    // an app from before the deactivated answer asks without it, and gets
+    // null rather than an answer it would read as a deletion
+    const before = await login.as.query(api.workspace.root, {})
+    if (typeof root === 'string') expect(before).toMatchObject({ create: root })
+    else expect(before).toBeNull()
     const created = login.as.mutation(api.identity.createOrganization, { name: 'Nimbus' })
     if (creates) expect(typeof (await created)).toBe('string')
     else await expectRefusal(created, 'rule', /^you already belong to an organization$/)

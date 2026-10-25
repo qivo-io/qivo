@@ -242,19 +242,24 @@ describe('a login with no seat', () => {
     expect(container.textContent).toContain('You can create a new organization.')
   })
 
-  it('offers no new organization to a login whose home seat another organization holds', async () => {
+  /* Outside the demo, which never shows this screen, `blocked` beside a
+     deletion means another organization deactivated the login's member
+     seat, so the screen says that too. */
+  it('tells a login whose member seat another organization deactivated so, and checks again', async () => {
     signIn()
     planner.seatless.mockReturnValue({ deleting: true, create: 'blocked' })
     await render()
     await vi.waitFor(() => expect(heading()).not.toBeNull())
-    expect(container.textContent).toContain('You no longer have access to it.')
+    expect(container.textContent).toContain(
+      'You no longer have access to it. Another organization has deactivated your account. An admin there can reactivate it, or remove you so you can create your own organization.',
+    )
     expect(container.textContent).not.toContain('create a new organization')
     expect(field('organization-name')).toBeNull()
-    expect(buttonNamed('Check again')).toBeUndefined()
+    expect(document.activeElement).toBe(buttonNamed('Check again'))
     expect(buttonNamed('Use another account')).toBeDefined()
   })
 
-  it('tells a deactivated member so, with no form and no word of a deletion', async () => {
+  it('tells a deactivated member so, with no form and no word of a deletion, and checks again', async () => {
     signIn()
     planner.seatless.mockReturnValue({ deleting: false, create: 'blocked' })
     await render()
@@ -262,15 +267,27 @@ describe('a login with no seat', () => {
     await vi.waitFor(() => expect(title()).not.toBeNull())
     expect(title()?.textContent).toBe('You no longer have access')
     expect(container.textContent).toContain(
-      'An admin of your organization has deactivated your account. They can reactivate it, or remove you so you can create your own organization.',
+      'Your organization has deactivated your account. An admin there can reactivate it, or remove you so you can create your own organization.',
     )
     expect(heading()).toBeNull()
     expect(container.textContent).not.toContain('being deleted')
     expect(container.textContent).not.toContain('If you expected an invitation')
     expect(field('organization-name')).toBeNull()
     expect(buttonNamed('Create organization')).toBeUndefined()
-    expect(buttonNamed('Check again')).toBeUndefined()
     expect(buttonNamed('Use another account')).toBeDefined()
+    // an admin's reactivation or removal reaches the screen only by a reload,
+    // which the desktop app does not offer by itself
+    expect(document.activeElement).toBe(buttonNamed('Check again'))
+    const reload = stubLocation()
+    await act(async () => buttonNamed('Check again')?.click())
+    expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('offers no Check again where the form is', async () => {
+    signIn()
+    await render()
+    await vi.waitFor(() => expect(field('organization-name')).not.toBeNull())
+    expect(buttonNamed('Check again')).toBeUndefined()
   })
 })
 

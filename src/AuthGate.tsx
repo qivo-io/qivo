@@ -77,14 +77,20 @@ function handoffDesktopOAuth(url: URL): boolean {
 
 type Phase = 'loading' | 'signedOut' | 'unverified' | 'noProfile' | 'loadFailed' | 'ready'
 
+/** What an admin of the organization that deactivated a login can do. */
+const REACTIVATE_TEXT =
+  'An admin there can reactivate it, or remove you so you can create your own organization.'
+
 /** What the seatless screen says to a login whose seats an organization
     deletion holds, by when the server lets it create an organization
-    (convex/lib/billingAccess.ts OrgCreate). */
+    (convex/lib/billingAccess.ts OrgCreate). `blocked` then means that
+    another organization, which is not being deleted, deactivated the
+    login's member seat there. */
 const SEATS_DELETING_TEXT: Record<Seatless['create'], string> = {
   now: 'You no longer have access to it. You can create a new organization.',
   after_deletion:
     'You no longer have access to it. You can create a new organization once the deletion has removed you from it.',
-  blocked: 'You no longer have access to it.',
+  blocked: `You no longer have access to it. Another organization has deactivated your account. ${REACTIVATE_TEXT}`,
 }
 
 type SessionResult = Awaited<ReturnType<typeof authClient.getSession>>
@@ -900,7 +906,7 @@ export function AuthGate() {
           {deleting
             ? SEATS_DELETING_TEXT[create]
             : deactivated
-              ? 'An admin of your organization has deactivated your account. They can reactivate it, or remove you so you can create your own organization.'
+              ? `Your organization has deactivated your account. ${REACTIVATE_TEXT}`
               : 'If you expected an invitation, check which email address it was sent to.'}
         </div>
         {create === 'now' && (
@@ -939,22 +945,21 @@ export function AuthGate() {
             {busy ? 'Creating…' : 'Create organization'}
           </Button>
         ) : (
-          create === 'after_deletion' && (
-            // the screen does not follow the deletion: a reload asks again,
-            // and shows the form once the deletion removed the seat, or the
-            // sign-in once the session ended. It takes focus, as the name
-            // field does on the form.
-            <Button
-              type="button"
-              variant="primary"
-              className="[width:100%] [justify-content:center]"
-              disabled={signOutPending}
-              autoFocus
-              onClick={() => location.reload()}
-            >
-              Check again
-            </Button>
-          )
+          // the screen follows neither the deletion nor an admin's
+          // reactivation or removal: a reload asks again, and shows the
+          // workspace, the form once the seat is gone, or the sign-in once
+          // the session ended. The desktop app has no reload of its own. It
+          // takes focus, as the name field does on the form.
+          <Button
+            type="button"
+            variant="primary"
+            className="[width:100%] [justify-content:center]"
+            disabled={signOutPending}
+            autoFocus
+            onClick={() => location.reload()}
+          >
+            Check again
+          </Button>
         )}
         <Button
           type="button"

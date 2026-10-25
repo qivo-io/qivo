@@ -2912,7 +2912,10 @@ shows `status: "unauthorized"` for a subscription whose owner can no longer
 authorize it, because its credential was revoked, expired or deleted, its
 account was removed, or its connected app no longer exists in Qivo. Such a
 subscription receives no events and holds no quota, and the next registration
-in the organization removes it.
+in the organization removes it. The list shows `status: "suspended"` for an
+active subscription whose owner Qivo refuses for now, for example because the
+owner's account is inactive. Such a subscription receives no events but keeps
+its quota, and it delivers again once its owner is allowed again.
 
 Event names are `task.created`, `task.updated`, `task.deleted`,
 `task.restored` and `comment.created`. `task.deleted` means the task moved to

@@ -106,8 +106,10 @@ function SettingsScreen({
      before the answer, and the page then moves on by itself to where the
      delete leads, or a refused delete or someone else's change took it. The
      check below keeps the page while the window is open, so the window keeps
-     what was typed in it, and runs again once it closes. Cleared with every
-     page change. */
+     what was typed in it, and runs again once the person closes it. After
+     the window's own archive or delete the hold lasts until the page moves
+     on, which can wait a moment (ProjectSettings.tsx onHolding). Cleared
+     with every page change. */
   const [holdingProject, setHoldingProject] = useStateS<string | null>(null)
   useEffectS(() => {
     setHoldingProject(null)

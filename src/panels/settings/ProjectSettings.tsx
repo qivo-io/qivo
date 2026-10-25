@@ -432,10 +432,13 @@ export function ProjectPage({
   onBackPage?: (page: string) => void
   onProjectGone?: (parent: string | null) => void
   /** told the project's id while its Archive or delete window is open, and
-      null once it closes. The page stays while the window is open, also
-      once the project left the board, so the window keeps what was typed
-      in it. The delivery that drops the project usually lands before its
-      own delete's answer, and this page leaves on its own after it. */
+      null once the person closes it. The page stays while the window is
+      open, also once the project left the board, so the window keeps what
+      was typed in it. The delivery that drops the project usually lands
+      before its own delete's answer. After its own archive or delete the
+      window closes and the page moves on, and the hold stays until the page
+      changes (Settings.tsx), because a move waits while the window's typed
+      text lets go (lib/discardQuestion.ts closeOrAsk). */
   onHolding?: (projectId: string | null) => void
 }) {
   const proj = P.project(projectId)
@@ -458,7 +461,8 @@ export function ProjectPage({
     const archive = () => {
       // a paused archive keeps the window open
       if (P.refusePausedEdit()) return
-      setRemoving(null)
+      // the hold stays until the page moves (onHolding)
+      setRemovingState(null)
       P.archiveProject(shown.id)
       window.showToast?.(`Archived “${shown.name}”`)
       onProjectGone?.(shown.parent || null)
@@ -468,7 +472,7 @@ export function ProjectPage({
     const del = async (reason: string) => {
       const parent = shown.parent || null
       if (!(await P.removeProject(shown.id, reason))) return false
-      setRemoving(null)
+      setRemovingState(null)
       window.showToast?.(`Deleted “${shown.name}”`)
       onProjectGone?.(parent)
       // a sub-project falls back to its project; a project back to the list it

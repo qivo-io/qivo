@@ -2,6 +2,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { findAuthUser, findOAuthClient, tokenExpired } from '../lib/access'
 import { byId } from '../lib/db'
+import { eventOwner } from './taskEvents'
 import { removeWebhookSubscription } from './webhookHealth'
 
 /* Whether the subscription's owner can never authorize it again. The profile
@@ -44,16 +45,14 @@ async function ownerWasRemoved(
   )
 }
 
-/** For each of `subscriptions`, whether its owner can never authorize it
- * again (ownerWasRemoved), each owner judged once. The next registration in
- * the organization removes those (pruneRemovedWebhookOwners), so they hold
- * no quota, and the organization's list shows them as unauthorized. */
-export async function ownersRemoved(
-  ctx: QueryCtx,
+/** For each of `subscriptions`, `judge`'s answer for its owner, each owner
+ * judged once. */
+async function perOwner<R>(
   subscriptions: readonly Doc<'webhook_subscriptions'>[],
-): Promise<boolean[]> {
-  const removedOwners = new Map<string, boolean>()
-  const out: boolean[] = []
+  judge: (subscription: Doc<'webhook_subscriptions'>) => Promise<R>,
+): Promise<R[]> {
+  const judged = new Map<string, R>()
+  const out: R[] = []
   for (const subscription of subscriptions) {
     const { owner } = subscription
     const key = JSON.stringify([
@@ -63,22 +62,48 @@ export async function ownersRemoved(
       owner.credential_id,
       owner.credential_row_id,
     ])
-    let removed = removedOwners.get(key)
-    if (removed === undefined) {
-      removed = await ownerWasRemoved(ctx, subscription)
-      removedOwners.set(key, removed)
+    let answer = judged.get(key)
+    if (answer === undefined) {
+      answer = await judge(subscription)
+      judged.set(key, answer)
     }
-    out.push(removed)
+    out.push(answer)
   }
   return out
 }
+
+/** How a subscription's owner stands. `removed`: it can never authorize the
+ * subscription again (ownerWasRemoved), so the next registration in the
+ * organization removes it, and it holds no quota. `suspended`: Qivo refuses
+ * the owner for now, as for a deactivated account, a banned login, or a
+ * disabled client or one without its link to the MCP resource, so the
+ * subscription receives nothing (taskEvents.ts eventOwner, which every
+ * event's fan-out, expansion and delivery asks) but keeps its quota, and
+ * delivers again once the owner is allowed again. `live` otherwise. */
+export type OwnerStanding = 'removed' | 'suspended' | 'live'
+
+/** For each of `subscriptions`, how its owner stands (OwnerStanding), for
+ * the organization's list. */
+export const ownerStandings = (
+  ctx: QueryCtx,
+  subscriptions: readonly Doc<'webhook_subscriptions'>[],
+): Promise<OwnerStanding[]> =>
+  perOwner(subscriptions, async (subscription) =>
+    (await ownerWasRemoved(ctx, subscription))
+      ? 'removed'
+      : (await eventOwner(ctx, subscription.owner)) === null
+        ? 'suspended'
+        : 'live',
+  )
 
 /** Reclaim removed owners' quota while preserving temporarily suspended subscriptions. */
 export async function pruneRemovedWebhookOwners(
   ctx: MutationCtx,
   subscriptions: Doc<'webhook_subscriptions'>[],
 ): Promise<Doc<'webhook_subscriptions'>[]> {
-  const removed = await ownersRemoved(ctx, subscriptions)
+  const removed = await perOwner(subscriptions, (subscription) =>
+    ownerWasRemoved(ctx, subscription),
+  )
   const retained: Doc<'webhook_subscriptions'>[] = []
   for (const [at, subscription] of subscriptions.entries()) {
     if (removed[at]) await removeWebhookSubscription(ctx, subscription)

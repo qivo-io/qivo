@@ -95,7 +95,8 @@ calls against the plan's included calls. Choose an earlier period to see its
 calls. An earlier paid period shows the allowance of the seats it was billed
 for, and other earlier periods show only their calls. Credentials and calls
 of people who left the organization stay listed as **Removed user**, and
-deleted credentials as **deleted**.
+deleted credentials as **deleted**. So does a connection to an app that no
+longer exists in Qivo, which can never act again.
 
 Filter by kind, by **Active** or **All**, by person, or by name, prefix or
 person. Revoked and expired credentials stay listed because their calls in
@@ -145,7 +146,8 @@ invitations. Without an invitation, Qivo offers to create an organization with
 you as its first admin. Someone whose only organization deactivated them is
 told so instead, because they cannot create another while they are still a
 member there. An admin can reactivate them, or remove them so they can create
-their own organization. When billing is enabled, a new unpaid organization
+their own organization, and **Check again** on that screen then opens the
+workspace or the form. When billing is enabled, a new unpaid organization
 opens Billing.
 
 If Microsoft blocks sign-in until an administrator approves Qivo, follow

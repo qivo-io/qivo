@@ -569,7 +569,10 @@ make changes: a personal token with change access, or an OAuth connection with
 `qivo:write`. Use these routes to reclaim shared quota when the original owner
 cannot remove a callback. The list shows `status: "unauthorized"` for a
 subscription whose owner can no longer authorize it. It receives nothing,
-holds no quota, and the next registration in the organization removes it.
+holds no quota, and the next registration in the organization removes it. The
+list shows `status: "suspended"` for an active subscription whose owner Qivo
+refuses for now, such as an inactive user. It receives nothing but keeps its
+quota, and it delivers again once its owner is allowed again.
 
 ## Stays in the app
 

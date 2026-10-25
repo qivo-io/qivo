@@ -81,7 +81,8 @@ export const byClaimOrder = (a: Doc<'profiles'>, b: Doc<'profiles'>) =>
  * null. A claimed non-guest seat elsewhere is a home already. A pending one
  * becomes the home if claiming reaches it first, that is, if it comes before
  * `subject` (the seat being judged) in claim order. Without a subject the seat
- * is a new one, which claiming reaches last. */
+ * is a new one, which claiming reaches last. A deactivated pending seat counts
+ * for nothing, because claiming skips it (identity.ts claimSeatsForLogin). */
 export async function homeElsewhere(
   ctx: QueryCtx,
   email: string,
@@ -98,7 +99,8 @@ export async function homeElsewhere(
       (p) =>
         p.org_id !== orgId &&
         p.org_role !== 'guest' &&
-        (p.auth_user_id !== undefined || subject === undefined || byClaimOrder(p, subject) < 0),
+        (p.auth_user_id !== undefined ||
+          (p.active && (subject === undefined || byClaimOrder(p, subject) < 0))),
     )
   return home ? await byId(ctx, 'organizations', home.org_id) : null
 }

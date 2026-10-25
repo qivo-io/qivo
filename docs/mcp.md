@@ -1143,6 +1143,9 @@ REST `GET /v1/webhooks/organization` and `DELETE /v1/webhooks/organization/{id}`
 to inspect and reclaim shared quota with a personal token or OAuth connection.
 That list shows `status: "unauthorized"` for a subscription whose owner can no
 longer authorize it, which holds no quota and goes at the next registration.
+It shows `status: "suspended"` for an active subscription whose owner Qivo
+refuses for now, such as an inactive user. That subscription receives nothing
+but keeps its quota until its owner is allowed again.
 Deleting another owner's subscription needs a credential that can make
 changes: a personal token with change access, or an OAuth connection with
 `qivo:write`. A read-only personal token gets HTTP 403 with

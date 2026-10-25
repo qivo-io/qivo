@@ -3,7 +3,13 @@ import { components } from './_generated/api'
 import type { QueryCtx } from './_generated/server'
 import { internalMutation, internalQuery } from './_generated/server'
 import { createAuth } from './auth'
-import { credentialAccess, findAuthUser, loginBanned, oauthClientLive } from './lib/access'
+import {
+  credentialAccess,
+  findAuthUser,
+  findOAuthClient,
+  loginBanned,
+  oauthClientLive,
+} from './lib/access'
 import { deletionBegun, removedWithOrg } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
@@ -82,6 +88,10 @@ export const getContext = authedMutation({
   },
 })
 
+/* The login's connected apps. `appGone` marks one whose OAuth client Qivo
+ * no longer has, which has ended although nothing revoked it, as when an
+ * operator deletes the client's rows by hand (lib/access.ts
+ * oauthClientLive). */
 export const list = authedQuery({
   args: {},
   handler: async (ctx) => {
@@ -107,6 +117,8 @@ export const list = authedQuery({
           revokedAt: row.revoked_at ?? null,
           // an organization admin revoked it on API access (apiAccess.ts)
           revokedByAdmin: row.revocation_reason === 'admin',
+          appGone:
+            row.revoked_at === undefined && (await findOAuthClient(ctx, row.client_id)) === null,
         })),
     )
   },

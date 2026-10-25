@@ -20,6 +20,7 @@ import {
   type OrgFixture,
   plantIssue,
   plantSeat,
+  runInAuth,
   type T,
   uuid,
   withOrg,
@@ -244,6 +245,11 @@ async function fixture(t: T) {
     if (!sub) throw new Error('fixture subscription vanished')
     return sub
   })
+  // Better Auth has every connected app's client
+  await runInAuth(t, async (ctx) => {
+    for (const name of ['claude', 'pending', 'chatgpt', 'forgotten'])
+      await ctx.db.insert('oauthClient', { clientId: `client-${name}`, redirectUris: [] })
+  })
   return { ...f, elin, ids, secrets, removedProfile, sub }
 }
 
@@ -343,6 +349,40 @@ describe('apiAccess.list', () => {
         api_block_price_cents: 100,
       },
       waived: false,
+    })
+  })
+
+  /* An operator who deletes a client's rows by hand runs no trigger, so its
+     grants keep no revocation, but they can never act again. */
+  it('shows a connected app whose OAuth client is gone as ended, to the admin and its owner', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    const claude = async () => ({
+      state: (await list(t, f)).credentials.find((r) => r.name === 'Claude')?.state,
+      owner: (await as(t, f.admin).query(api.oauthConnections.list, {})).find(
+        (row) => row.id === f.ids.claude,
+      ),
+    })
+    expect(await claude()).toMatchObject({
+      state: 'active',
+      owner: { revokedAt: null, appGone: false },
+    })
+    await runInAuth(t, async (ctx) => {
+      const client = await ctx.db
+        .query('oauthClient')
+        .withIndex('clientId', (q) => q.eq('clientId', 'client-claude'))
+        .unique()
+      if (client) await ctx.db.delete(client._id)
+    })
+    expect(await claude()).toMatchObject({
+      state: 'deleted',
+      owner: { revokedAt: null, revokedByAdmin: false, appGone: true },
+    })
+    // a revocation still says who ended it
+    await revoke(t, f.admin, f.org.id, 'oauth_connections', f.ids.claude)
+    expect(await claude()).toMatchObject({
+      state: 'revoked',
+      owner: { revokedByAdmin: true, appGone: false },
     })
   })
 
