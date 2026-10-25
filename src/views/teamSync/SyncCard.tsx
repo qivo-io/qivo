@@ -347,9 +347,7 @@ export function MentionCtl({
   // the note is saved as a comment, so a comment's cap holds it
   const ready = !!person && text.trim() !== '' && !overLimit(LIMITS.comment, text) && !sending
   const send = () => {
-    // a close that a save, Cancel or a Discard asked for can wait for the
-    // page's history, such as a phone's Back step, with the window open
-    if (!ready || letGo.current) return
+    if (!ready) return
     // The window closes once the server saves the note. A refused one (the
     // store toasts why, such as lost access or a body over the length cap
     // once escaped) keeps the window open, so the note is not lost.

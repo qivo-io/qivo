@@ -3,7 +3,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
 import { endClosing, playClosingAnimations } from '../../lib/closingAnimation.setup'
 import { pastCloseTicks } from '../../lib/discardQuestion.setup'
@@ -152,28 +152,25 @@ function button(name: string) {
   return found
 }
 const aisha = () => document.querySelector<HTMLButtonElement>('[data-sync-mention-person="aisha"]')
-/* Opens the window on a phone and writes a note. The Back step a close
-   takes waits until the returned `land`, which runs it and waits for the
-   window to close, so a test sees the window while that step is on its
-   way. */
+/* Opens the window on a phone, with the page's history and the layers'
+   listener as main.tsx and App add them, and writes a note. The window has
+   a Back step of its own, and its own close takes none. */
 async function writeOnPhone() {
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   )
+  const pageHistory = await import('../../lib/pageHistory')
+  const removeHistory = pageHistory.installPageHistory()
+  onTestFinished(pageHistory.listenBackLayers())
+  onTestFinished(removeHistory)
   await write('Can you check the soak report?', vi.fn())
   // the window's Back step is pushed after it opened
   await act(async () => await Promise.resolve())
   expect(history.state?.qivoLayer).toBeTruthy()
-  const back = history.back.bind(history)
-  const held = vi.spyOn(history, 'back').mockImplementation(() => {})
-  return async () => {
-    expect(held).toHaveBeenCalledTimes(1)
-    held.mockRestore()
-    back()
-    await act(() => vi.waitFor(() => expect(windowOpen()).toBe(false)))
-  }
 }
+const fading = () =>
+  document.querySelector('[data-sync-mention-window]')?.getAttribute('data-state') === 'closed'
 /* Ctrl+Enter in the note, the shortcut that sends it. */
 const ctrlEnter = () =>
   act(async () => {
@@ -369,29 +366,29 @@ describe('the Team sync @ window', () => {
     expect(writes).toHaveLength(1)
   })
 
-  it('stays locked on a phone until the Back step its save asked for lands', async () => {
-    const land = await writeOnPhone()
+  it('closes at once on a phone after the save, and stays locked while it fades', async () => {
+    playClosingAnimations()
+    await writeOnPhone()
     await act(async () => send()?.click())
     await act(async () => writes[0].resolve(null))
-    // the close goes back through that step
-    expect(windowOpen()).toBe(true)
+    expect(fading()).toBe(true)
     expect(send()?.disabled).toBe(true)
     expect(note()?.readOnly).toBe(true)
-    // the window is still open, so only its lock refuses the shortcut
     await ctrlEnter()
     expect(writes).toHaveLength(1)
-    await land()
+    await endClosing()
     expect(windowOpen()).toBe(false)
   })
 
-  it('sends nothing on a phone while the Back step Cancel asked for is on its way', async () => {
-    const land = await writeOnPhone()
+  it('closes at once on a phone after Cancel, and a press while it fades sends nothing', async () => {
+    playClosingAnimations()
+    await writeOnPhone()
     await act(async () => button('Cancel').click())
-    expect(windowOpen()).toBe(true)
+    expect(fading()).toBe(true)
     await act(async () => send()?.click())
     await ctrlEnter()
     expect(writes).toHaveLength(0)
-    await land()
+    await endClosing()
     expect(windowOpen()).toBe(false)
   })
 
