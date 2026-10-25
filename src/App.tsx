@@ -997,9 +997,10 @@ function App() {
   const settingsReturn = useRef(NO_RETURN)
   const syncReturn = useRef(NO_RETURN)
   const replaceNextHistory = useRef(false)
-  // each time a step back the url sync waited for ends: over closed phone
-  // layers' markers (lib/useMobile), which no popstate listener hears, or
-  // over a refused Back or Forward (onPop), so it looks again
+  // bumped each time a step back that the url sync waited for ends, so it
+  // looks again. One steps over closed phone layers' markers (lib/useMobile),
+  // which no popstate listener hears, the other over a refused Back or
+  // Forward (onPop).
   const [settled, setSettled] = useState(0)
   useEffect(() => onHistorySettled(() => setSettled((n) => n + 1)), [])
   /* The address Back or Forward reached while tasks still load, when it

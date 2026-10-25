@@ -237,7 +237,7 @@ const close = () =>
   })
 
 /** Switches the page to the view `label` with the top bar's switch. The
-    waiting window makes the page behind it inert, so a person cannot: the
+    waiting window makes the page behind it inert, so a person cannot. The
     click stands in for a move of the page while the task loads. */
 const switchView = async (label: string) => {
   const button = await waitFor(
@@ -379,7 +379,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     await back(address)
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
     const entries = history.length
-    // deleted meanwhile: the staged load shows it gone with the last tasks
+    // deleted meanwhile, which the staged load shows only with the last tasks
     await change((snap) => {
       snap.projects = snap.projects.filter((project) => project.num !== 1)
     })
@@ -400,7 +400,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
   it.each([
     // the task's address names no project, so the move takes its entry
     ['Second project', (org: string) => `/app/${org}/board/p/2`, 'board/tasks/qn-2', 0],
-    // under All projects the task's address names the scope: a new entry
+    // under All projects the task's address names the scope, so a new entry
     ['All projects', () => ALL_BOARD, 'board/all/tasks/qn-2', 1],
   ])(
     'names %s moved to while it waits as it would with the task open',

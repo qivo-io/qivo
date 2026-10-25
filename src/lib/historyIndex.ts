@@ -99,7 +99,7 @@ function record(event: PopStateEvent) {
   moved = to === null ? null : to - (step?.to ?? at)
   if (to !== null) at = to
   if (step && !step.stray && step.to !== null && to !== null && to !== step.to) {
-    // the person's: the step is still on its way, and lands next
+    // the person's move, and the step, still on its way, lands next
     step.overtaken = true
     step.stray = true
     return
