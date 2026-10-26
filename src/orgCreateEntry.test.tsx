@@ -184,15 +184,17 @@ let answerCreate = () => {}
 
 /** Has the server create the organization, and the workspace read after
     it hold the login's new admin seat. With `held`, the create waits for
-    answerCreate. */
-function createsOrganization(snap: Snapshot, held = false) {
+    answerCreate; with `readFails`, the workspace read after it fails. */
+function createsOrganization(snap: Snapshot, { held = false, readFails = false } = {}) {
   const created = structuredClone(snap)
   created.orgs.push({ ...snap.orgs[0], id: 'mine', name: 'Mine', slug: 'mine' })
   created.profiles.push({ ...snap.profiles[0], id: 'me', org_id: 'mine', org_role: 'admin' })
   created.myProfileIds.push('me')
   const land = () =>
-    network.onUpdate.mockImplementation((r, _args, next) => {
-      if (getFunctionName(r) === 'workspace:whole') next(structuredClone(created))
+    network.onUpdate.mockImplementation((r, _args, next, fail) => {
+      if (getFunctionName(r) !== 'workspace:whole') return () => {}
+      if (readFails) fail(new Error('the workspace could not be read'))
+      else next(structuredClone(created))
       return () => {}
     })
   network.mutation.mockImplementation((ref) => {
@@ -238,10 +240,10 @@ async function createFrom(opener: HTMLElement, create: boolean) {
 
 describe("the sidebar's Create your organization", () => {
   /** Boots App on a guest-only login, and answers its sidebar entry. */
-  async function entry(held = false) {
+  async function entry(created: Parameters<typeof createsOrganization>[1] = {}) {
     const snap = guestOnly()
     await boot(snap)
-    createsOrganization(snap, held)
+    createsOrganization(snap, created)
     const { syncStatus } = await import('./lib/syncStatus')
     syncStatus.setSocket({ connected: true, everConnected: true })
     const { default: App } = await import('./App')
@@ -258,7 +260,7 @@ describe("the sidebar's Create your organization", () => {
   })
 
   it("waits on Cancel while the create runs, then gives focus to the rail's New project", async () => {
-    const button = await entry(true)
+    const button = await entry({ held: true })
     button.focus()
     await act(async () => button.click())
     const name = await vi.waitFor(
@@ -298,6 +300,16 @@ describe("the sidebar's Create your organization", () => {
         'The organization was created, but Qivo could not load it. Reload the page to open it.',
       ),
     )
+  })
+
+  it('pauses edits on the workspace shown when its read fails after the create', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const button = await entry({ readFails: true })
+    await createFrom(button, true)
+    const { P } = await import('./store/planner')
+    // the read stopped the workspace's subscriptions, so it is out of date
+    expect(P.snapshotTrouble()?.kind).toBe('failed')
+    expect(P.editsPaused()).toBe(true)
   })
 
   it("gives focus to the rail's New project once the organization exists, as it leaves", async () => {
