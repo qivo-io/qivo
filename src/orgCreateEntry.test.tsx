@@ -17,6 +17,8 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    entry. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+// while set, the sign-in service answers the session read with an error
+const auth = vi.hoisted(() => ({ down: false }))
 vi.mock('./lib/convex', async () => ({
   convex: network,
   live: (await import('./store/guard/liveDouble.setup')).liveOver(network),
@@ -24,7 +26,10 @@ vi.mock('./lib/convex', async () => ({
 vi.mock('./lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
-    getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }),
+    getSession: async () =>
+      auth.down
+        ? { error: { message: 'could not reach the sign-in service' } }
+        : { data: { session: {}, user: { id: 'test-account' } } },
   },
   signOut: vi.fn(),
 }))
@@ -50,6 +55,7 @@ beforeEach(() => {
     },
   )
   window.showToast = vi.fn()
+  auth.down = false
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -279,6 +285,19 @@ describe("the sidebar's Create your organization", () => {
     for (let i = 0; i < 6; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
     expect(button.isConnected).toBe(false)
     expect(document.activeElement).toBe(document.querySelector('aside [aria-label="New project"]'))
+  })
+
+  it('closes and says so when the workspace cannot load after the organization was created', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const button = await entry()
+    // the read after the create fails
+    auth.down = true
+    await createFrom(button, true)
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain(
+        'The organization was created, but Qivo could not load it. Reload the page to open it.',
+      ),
+    )
   })
 
   it("gives focus to the rail's New project once the organization exists, as it leaves", async () => {

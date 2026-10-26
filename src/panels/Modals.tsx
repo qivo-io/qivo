@@ -2396,11 +2396,14 @@ function CreateOrgModal({
   const submit = async () => {
     if (!canSave) return
     setBusy(true)
-    const ok = await P.createOrg(name.trim())
-    setBusy(false)
-    if (ok) {
-      window.showToast?.(`“${name.trim()}” is yours. You're its first admin.`)
-      onClose()
+    try {
+      if (await P.createOrg(name.trim())) {
+        window.showToast?.(`“${name.trim()}” is yours. You're its first admin.`)
+        onClose()
+      }
+    } finally {
+      // busy refuses every close of the dialog
+      setBusy(false)
     }
   }
   return (

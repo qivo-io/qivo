@@ -5222,7 +5222,13 @@ export const PLANNER = {
       return false
     }
     // the workspace on screen never shrinks to a partial one
-    await initStore(undefined, undefined, { whole: true })
+    try {
+      await initStore(undefined, undefined, { whole: true })
+    } catch (e) {
+      // the organization exists, so a second create would be refused
+      console.error('[qivo] workspace load failed:', e)
+      toast('The organization was created, but Qivo could not load it. Reload the page to open it.')
+    }
     emit()
     return true
   },
