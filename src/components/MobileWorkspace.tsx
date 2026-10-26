@@ -2,6 +2,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { SYNC_LIMIT } from '../lib/boardGroups'
 import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
 import { createMountScheduler, useMountGuards } from '../lib/mountScheduler'
+import { noProjectsHint } from '../lib/noProjects'
 import { type RevealRequest, useReveal } from '../lib/reveal'
 import { matchesAllWords } from '../lib/search'
 import { registerTaskMount, useFollowTaskFocus } from '../lib/taskFocus'
@@ -373,7 +374,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
       })}
       {!projects.length && (
         <p className="p-5 text-text-2">
-          {query ? 'No projects match your search.' : 'Projects you join will appear here.'}
+          {query ? 'No projects match your search.' : noProjectsHint()}
         </p>
       )}
       {/* while the server would create one (P.orgCreate) */}
@@ -509,6 +510,8 @@ export function MobileTaskList({
         ),
     }))
   const count = groups.reduce((sum, group) => sum + group.tasks.length, 0)
+  // a scope across every project, with none to show (components/NoProjects)
+  const noProjects = info.wide && info.metas.length === 0
   // Focus stays on a task's row when a change moves it to another section.
   const listRef = useRef<HTMLDivElement>(null)
   const followFocus = useFollowTaskFocus(listRef)
@@ -666,13 +669,20 @@ export function MobileTaskList({
           <p>
             {P.stillLoading() !== null
               ? 'Tasks are still arriving.'
-              : activeFilters || selectedStatus !== 'all'
-                ? 'Try another status or adjust your filters.'
-                : info.mine
-                  ? 'Tasks assigned to you will appear here.'
-                  : 'Create a task to get started.'}
+              : noProjects
+                ? noProjectsHint()
+                : activeFilters || selectedStatus !== 'all'
+                  ? 'Try another status or adjust your filters.'
+                  : info.mine
+                    ? 'Tasks assigned to you will appear here.'
+                    : 'Create a task to get started.'}
           </p>
-          {(activeFilters > 0 || selectedStatus !== 'all') && (
+          {noProjects && P.canCreateProject() && (
+            <Button onClick={() => actions.newProject({ kind: 'program' })}>
+              <Icon name="plus" size={16} /> New project
+            </Button>
+          )}
+          {!noProjects && (activeFilters > 0 || selectedStatus !== 'all') && (
             <Button
               onClick={() => {
                 actions.clearFilters()

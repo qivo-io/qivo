@@ -17,6 +17,7 @@ import {
 import { dateFormatInUse } from '@/lib/dates'
 import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
 import { type RevealRequest, useReveal } from '@/lib/reveal'
+import { NoProjects } from '../components/NoProjects'
 import { Avatar, EmptyState, Icon, ProjectName, StatusDot } from '../components/qivo'
 import { registerTaskMount, useFollowTaskFocus } from '../lib/taskFocus'
 import { useUpdateBlocker } from '../lib/updateSafety'
@@ -1012,16 +1013,14 @@ function Kanban({
   /* ---------- empty states ---------- */
   if (subIds.length === 0) {
     if (wide) {
-      return (
-        <EmptyState
+      return info.metas.length === 0 ? (
+        <NoProjects
           icon="layers"
           title="Nothing to show yet"
-          hint={
-            info.metas.length === 0
-              ? 'No projects are available to you yet.'
-              : 'Tasks live in sub-projects.'
-          }
+          onNewProject={() => actions.newProject({ kind: 'program' })}
         />
+      ) : (
+        <EmptyState icon="layers" title="Nothing to show yet" hint="Tasks live in sub-projects." />
       )
     }
     return (

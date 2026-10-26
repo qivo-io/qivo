@@ -40,6 +40,7 @@ import { flushWalkInput } from './components/walkRows'
 import { addressMoved, rememberAddress } from './lib/addressBook'
 import { closeOrAsk } from './lib/discardQuestion'
 import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
+import { seesNoProject } from './lib/noProjects'
 import { parseSyncScope } from './lib/teamSync'
 import { useMobile } from './lib/useMobile'
 import './styles/mobile.css'
@@ -837,9 +838,15 @@ function App() {
       ? r0.scope || (r0.issue ? scopeForIssue(r0.issue, uiScope) : undefined)
       : undefined
   // project ids are DB uuids (not the prototype's fixed slugs): default the
-  // scope to the first visible project org-wide (navigation is flat since 0078)
+  // scope to the first visible project org-wide (navigation is flat since 0078),
+  // or for a user who can see no project to All projects, whose pages say why
+  // they are empty
   const [scope, setScope] = useState(() =>
-    liveScope(r0Scope) ? r0Scope : uiScope ? uiScope : P.visibleProjects()[0]?.id,
+    liveScope(r0Scope)
+      ? r0Scope
+      : uiScope
+        ? uiScope
+        : (P.visibleProjects()[0]?.id ?? (seesNoProject() ? P.ALL_SCOPE : undefined)),
   )
   // prefs saved before the merge may still say "split"/"resources" — both
   // collapsed into the roadmap (which now always docks the resource strip)
@@ -1298,13 +1305,17 @@ function App() {
   // access guard — keep the scope within what the current user can see. Both
   // sentinels ARE "what the user can see", so neither needs rescuing — and
   // each resolves to no project row, which would otherwise bounce it away one
-  // commit after it was entered (and persist the bounce).
+  // commit after it was entered (and persist the bounce). Once the user can
+  // see no project, the scope becomes All projects, whose pages say why they
+  // are empty, rather than a dead one that shows no page.
   useEffect(() => {
     if (P.isWideScope(scope)) return
     const metas = P.visibleProjects()
     const p = P.project(scope)
     const meta = p ? (p.type === 'meta' ? p : P.project(p.parent)) : null
-    if (!(meta && metas.some((m) => m.id === meta.id)) && metas[0]) setScope(metas[0].id)
+    if (meta && metas.some((m) => m.id === meta.id)) return
+    if (metas[0]) setScope(metas[0].id)
+    else if (seesNoProject()) setScope(P.ALL_SCOPE)
   }, [scope, rev])
 
   // User navigation must leave the inbox: the main pane renders the inbox

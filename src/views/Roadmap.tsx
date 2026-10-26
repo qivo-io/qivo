@@ -19,6 +19,7 @@ import { useTaskMemo } from '@/lib/taskMemo'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
+import { NoProjects } from '../components/NoProjects'
 import { EmptyState, Icon } from '../components/qivo'
 import { RoadmapUndo } from '../components/RoadmapUndo'
 import { WorkspaceToolbar } from '../components/WorkspaceShell'
@@ -1251,9 +1252,12 @@ function Roadmap({
     ) : (
       <WorkspaceToolbar>{toolbarRow(moves)}</WorkspaceToolbar>
     )
-  const emptyFrame = (note: React.ReactNode) =>
+  // `agenda` false: the phone shows the note in place of its agenda
+  const emptyFrame = (note: React.ReactNode, agenda = true) =>
     showMobileAgenda
-      ? mobileAgenda(0, () => {})
+      ? agenda
+        ? mobileAgenda(0, () => {})
+        : note
       : withMobileTimeline(
           <div className="roadmap-view [flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [background:var(--bg)]">
             {timelineToolbar([])}
@@ -1298,15 +1302,21 @@ function Roadmap({
   /* ---------- empty state ---------- */
   if (info.subIds.length === 0) {
     if (wide) {
+      // with no project, the phone's agenda has nothing to plan or show either
+      if (info.metas.length === 0)
+        return emptyFrame(
+          <NoProjects
+            icon="timeline"
+            title="Nothing to schedule yet"
+            onNewProject={() => actions.newProject({ kind: 'program' })}
+          />,
+          false,
+        )
       return emptyFrame(
         <EmptyState
           icon="timeline"
           title="Nothing to schedule yet"
-          hint={
-            info.metas.length === 0
-              ? 'No projects are available to you yet.'
-              : 'Tasks live in sub-projects.'
-          }
+          hint="Tasks live in sub-projects."
         />,
       )
     }
