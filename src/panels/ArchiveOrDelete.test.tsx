@@ -811,6 +811,52 @@ describe('Archived projects', () => {
     expect(document.activeElement).toBe(find('.settings-page-title h1'))
   })
 
+  /* Leaves focus nowhere, as a browser does when the focused button turns
+     disabled; jsdom keeps it there, and blur() does nothing on it. */
+  const dropFocus = () => {
+    const field = document.createElement('input')
+    document.body.append(field)
+    field.focus()
+    field.remove()
+  }
+  /* Presses Plan's Restore and has the server refuse it once the browser
+     has taken focus from the disabled button. */
+  async function refusedRestore() {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let refuse = (_: unknown) => {}
+    answers['projects:unarchive'] = () =>
+      new Promise((_, reject) => {
+        refuse = reject
+      })
+    const button = find<HTMLButtonElement>('[data-restore-project="plan"]')
+    button.focus()
+    await click(button)
+    expect(button.disabled).toBe(true)
+    dropFocus()
+    await act(async () => refuse(new Error('refused')))
+    await settle()
+    expect(button.disabled).toBe(false)
+  }
+
+  it("gives focus back to the row's Restore once a refused restore ends", async () => {
+    await show()
+    await refusedRestore()
+    expect(document.activeElement).toBe(find('[data-restore-project="plan"]'))
+  })
+
+  it('moves nothing when the row of a refused restore leaves later', async () => {
+    await show()
+    await refusedRestore()
+    // someone else restores it while focus is nowhere
+    dropFocus()
+    for (const p of snap.projects)
+      if (p.id === 'plan' || p.parent_id === 'plan') p.archived_at = undefined
+    await act(async () => deliver(snap))
+    await settle()
+    expect(has('[data-archived-project="plan"]')).toBe(false)
+    expect(document.activeElement).toBe(document.body)
+  })
+
   it('keeps keyboard focus on the page after a restore', async () => {
     await show()
     // the delivery with the project active again, as the server sends it before it answers

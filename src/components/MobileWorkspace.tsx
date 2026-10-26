@@ -106,7 +106,12 @@ export function MobileHeader({
                   align="left"
                   width={260}
                   button={(toggle) => (
-                    <Button variant="ghost" onClick={toggle} aria-label="Project actions">
+                    <Button
+                      variant="ghost"
+                      onClick={toggle}
+                      aria-label="Project actions"
+                      data-mobile-project-actions
+                    >
                       <Icon name="more" size={16} /> Project
                     </Button>
                   )}

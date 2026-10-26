@@ -416,6 +416,25 @@ describe('the API access page', () => {
     expect(document.activeElement?.textContent).toBe('No credentials match the filters.')
   })
 
+  it('moves nothing when a credential whose window was cancelled ends later', async () => {
+    await render(<ui.OrgApiAccessPage />)
+    const revoke = find<HTMLButtonElement>('[data-api-credential-revoke]', row('mcp_tokens:cursor'))
+    revoke.focus()
+    await click(revoke)
+    await click(buttonIn(find('[data-modal-shell]'), 'Cancel'))
+    expect(document.activeElement).toBe(revoke)
+    // another admin revokes it, and a Refresh that leaves focus nowhere, as
+    // a click in Safari does, reads it
+    revoke.blur()
+    Object.assign(lists[CURRENT].credentials[0], {
+      state: 'revoked',
+      revoked_at: NOW.toISOString(),
+    })
+    await click(find('[data-api-access-refresh]'))
+    expect(row('mcp_tokens:cursor').querySelector('[data-api-credential-revoke]')).toBeNull()
+    expect(document.activeElement).toBe(document.body)
+  })
+
   it('keeps the window open with the reason when the revoke is refused', async () => {
     network.mutation.mockImplementation((ref) =>
       getFunctionName(ref) === 'apiAccess:revoke'

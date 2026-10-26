@@ -441,6 +441,66 @@ describe('focus once the removal window closes', () => {
     expect(document.activeElement?.textContent).toBe('No individual users added.')
   })
 
+  it.each([
+    [
+      "a person's grant",
+      { ada: true },
+      async () => {
+        await projectPage()
+        return { press: remove('leo'), left: () => remove('leo'), next: () => remove('ada') }
+      },
+    ],
+    [
+      'a team member',
+      { viaTeam: true },
+      async () => {
+        const settings = await import('./settings/TeamSettings')
+        await show(() => <settings.TeamPage teamId="crew" setPage={vi.fn()} />)
+        const row = '[data-settings-team-member="leo"]'
+        return {
+          press: document.querySelector<HTMLButtonElement>(`${row} [data-team-member-remove]`),
+          left: () => document.querySelector(row),
+          next: () => document.querySelector('[data-team-members-none]'),
+        }
+      },
+    ],
+    [
+      'a team',
+      { viaTeam: true },
+      async () => {
+        const settings = await import('./settings/TeamSettings')
+        await show(() => <settings.OrgTeamsPage setPage={vi.fn()} />)
+        return {
+          press: document.querySelector<HTMLButtonElement>(
+            '[data-team-row="crew"] [data-team-delete]',
+          ),
+          left: () => document.querySelector('[data-team-row="crew"]'),
+          next: () => document.querySelector('[data-team-row="bench"] [data-team-open]'),
+        }
+      },
+    ],
+  ])(
+    'gives focus to the same targets when removing %s needs no window',
+    async (_, options, open) => {
+      // nobody holds a task, so nothing asks first
+      await load({ ...options, tasks: 0 })
+      vi.useFakeTimers({ toFake: ['Date'] })
+      onTestFinished(() => {
+        vi.useRealTimers()
+      })
+      const { press: button, left, next } = await open()
+      await press(button)
+      // a member's Remove and a team's Delete ask for a second click
+      if (left()) {
+        vi.setSystemTime(Date.now() + CONFIRM_IGNORE_MS)
+        await press(button)
+      }
+      expect(document.querySelector('[data-modal-shell]')).toBeNull()
+      expect(left()).toBeNull()
+      expect(document.activeElement).toBe(next())
+    },
+  )
+
   it("gives focus to the empty list's line once the last member leaves a team", async () => {
     await load({ viaTeam: true })
     vi.useFakeTimers({ toFake: ['Date'] })

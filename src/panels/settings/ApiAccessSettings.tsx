@@ -336,7 +336,12 @@ function ApiAccessPage() {
         <RevokeWindow
           row={revoking}
           me={me}
-          onClose={() => setRevoking(null)}
+          onClose={() => {
+            // closed without a revoke, so a later end of the credential, as
+            // another admin's revoke, moves nothing
+            setAsked(undefined)
+            setRevoking(null)
+          }}
           onRevoked={() => {
             setRevoking(null)
             void load(period)

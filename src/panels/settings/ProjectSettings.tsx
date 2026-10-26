@@ -20,7 +20,12 @@ import {
 import { dayInSentence, deletedAtFull } from '../../lib/deletedTime'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { limitSentence } from '../../lib/fieldLimits'
-import { focusAround, menuTrigger, useFocusWhenGone } from '../../lib/focusWhenGone'
+import {
+  focusAround,
+  menuTrigger,
+  useFocusAfterRender,
+  useFocusWhenGone,
+} from '../../lib/focusWhenGone'
 import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import type { AccessLevel, AccessRemoval, ArchivedProjectVM, ProjectVM } from '../../store/planner'
@@ -291,6 +296,7 @@ export function ArchivedProjectsPage() {
     !!restored && rows.some((row) => row.id === restored.id),
     () => restored?.focus() ?? null,
   )
+  const focusAfterRender = useFocusAfterRender()
   const restore = (r: ArchivedProjectVM) => {
     if (busy.has(r.id)) return
     setRestored({
@@ -309,7 +315,16 @@ export function ArchivedProjectsPage() {
         n.delete(r.id)
         return n
       })
-      if (ok) window.showToast?.(`Restored “${r.name}”`)
+      if (ok) {
+        window.showToast?.(`Restored “${r.name}”`)
+        return
+      }
+      // the row stays, so a later change that takes it away moves nothing,
+      // and its Restore takes back the focus it lost while disabled
+      setRestored((shown) => (shown?.id === r.id ? undefined : shown))
+      focusAfterRender(() =>
+        document.querySelector<HTMLElement>(`[data-restore-project="${r.id}"]`),
+      )
     })
   }
   // the window waits for the server, so a refusal leaves it open
@@ -564,11 +579,15 @@ function ProjectSettingsFields({
   /* Removing a grant that would leave someone unable to see tasks they work
      on first asks whether to keep them as Viewers or reassign their tasks. */
   const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
-  // where focus goes as the removal window closes, taken as it opens
+  /* Where focus goes as the removal window closes, taken as it opens. A
+     removal that needs no window takes the row away at once, and focus
+     goes there as it renders. */
   const removalFocus = React.useRef<() => HTMLElement | null>(() => null)
+  const focusAfterRender = useFocusAfterRender()
   const removeOrAsk = (change: AccessRemoval, focus: () => HTMLElement | null) => {
     removalFocus.current = focus
     if (P.startRemoval(change)) setRemoval(change)
+    else focusAfterRender(focus)
   }
   // a read-only organization's admin removes without the window
   React.useEffect(() => P.watchWriteBlock(proj.org), [proj.org])

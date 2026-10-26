@@ -151,9 +151,9 @@ async function openOnPhone(view: string) {
   await press(await find(view))
 }
 
-/** Names the new sub-project Docs in the open dialog and creates it, or
-    cancels it. */
-async function finish(create: boolean) {
+/** Names the new project or sub-project Docs in the open dialog and
+    creates it with `submit`, or cancels it. */
+async function finish(create: boolean, submit = 'Create sub-project') {
   const name = await waitFor(
     () => document.querySelector<HTMLInputElement>('[data-modal-shell] input[aria-label="Name"]'),
     'the Name field',
@@ -164,7 +164,7 @@ async function finish(create: boolean) {
       name.dispatchEvent(new Event('input', { bubbles: true }))
     })
   const shell = await waitFor(() => document.querySelector('[data-modal-shell]'), 'the dialog')
-  await press(await find(create ? 'Create sub-project' : 'Cancel', shell))
+  await press(await find(create ? submit : 'Cancel', shell))
   expect(document.querySelector('[data-modal-shell]')).toBeNull()
 }
 /** Answers the create, after which App moves into the new sub-project. */
@@ -260,6 +260,59 @@ describe('New sub-project', () => {
         await finish(create)
       }
       expect(document.activeElement).toBe(trigger)
+    },
+  )
+})
+
+describe('a project saved from the Projects page', () => {
+  // the new project's or sub-project's row in the sidebar, named Docs
+  const sidebarRow = (kind: string) =>
+    [...document.querySelectorAll<HTMLElement>(`aside [${kind}] button`)].find(
+      (button) => button.textContent === 'Docs',
+    )
+  const header = (hook: string) => document.querySelector<HTMLElement>(`[${hook}]`)
+  it.each([
+    ['desktop', 'New project', () => sidebarRow('data-project-row')],
+    ['phone', 'New project', () => header('data-mobile-project-actions')],
+    ['desktop', "a menu's New sub-project", () => sidebarRow('data-subproject-row')],
+    ['phone', "a menu's New sub-project", () => header('data-mobile-new-task')],
+  ])(
+    "on a %s, gives focus to the project's own control once App has moved into it from %s",
+    async (layout, opener, target) => {
+      phone(layout === 'phone')
+      history.replaceState(null, '', '/app/testbed/projects')
+      await boot()
+      const page = await waitFor(
+        () => document.querySelector('.mobile-project-directory'),
+        'the page',
+      )
+      let held: HTMLElement
+      if (opener === 'New project') {
+        held = await waitFor(
+          () => page.querySelector<HTMLElement>('[data-new-project]'),
+          'New project',
+        )
+        await press(held)
+        await finish(true, 'Create project')
+      } else {
+        held = await find('Plan actions', page)
+        await press(held)
+        const menu = await waitFor(
+          () => document.querySelector('[data-slot="popover-content"]'),
+          'the menu',
+        )
+        await press(await find('New sub-project', menu))
+        await finish(true)
+      }
+      // the dialog gives focus back to its opener on the page
+      expect(document.activeElement).toBe(held)
+      // which hides as App moves into the saved project
+      await save()
+      expect(held.closest('[data-hidden-view]')).not.toBeNull()
+      const own = target()
+      expect(own).toBeTruthy()
+      expect(own?.closest('[data-hidden-view]')).toBeNull()
+      expect(document.activeElement).toBe(own)
     },
   )
 })

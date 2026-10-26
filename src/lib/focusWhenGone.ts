@@ -1,4 +1,4 @@
-import { type RefObject, useLayoutEffect, useRef } from 'react'
+import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import { restoreFocus } from './focusVisibility'
 import { OUT_OF_USE } from './viewHidden'
 
@@ -23,6 +23,32 @@ export function useFocusWhenGone(
     if (active && active !== document.body && active.isConnected) return
     restoreFocus(target())
   }, [shown])
+}
+
+/** Whether focus is nowhere: on the page itself, or on an element that
+    has left it. */
+const focusIsNowhere = () => {
+  const active = document.activeElement
+  return !active || active === document.body || !active.isConnected
+}
+
+/** A focus move for the render of a change about to be made. Call the
+    answer with `target` as the change starts. Once the calling component
+    has rendered it, `target()` takes focus if focus is nowhere, as when the
+    change took away the control that held it, or a write that disabled it
+    has ended. Focus that has moved on stays where it is. */
+export function useFocusAfterRender() {
+  const pending = useRef<(() => HTMLElement | null) | null>(null)
+  const [, rendered] = useState(0)
+  useLayoutEffect(() => {
+    const target = pending.current
+    pending.current = null
+    if (target && focusIsNowhere()) restoreFocus(target())
+  })
+  return (target: () => HTMLElement | null) => {
+    pending.current = target
+    rendered((n) => n + 1)
+  }
 }
 
 /** Where focus goes once the row `id` of a list may have left: `pick` of

@@ -15,7 +15,7 @@ import {
   SettingsSection,
 } from '../../components/settingsPage'
 import { overLimit } from '../../lib/fieldLimits'
-import { focusAround } from '../../lib/focusWhenGone'
+import { focusAround, useFocusAfterRender } from '../../lib/focusWhenGone'
 import { useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { useConfirmArm } from '../../lib/useConfirmArm'
@@ -44,8 +44,10 @@ export function TeamPage({
   /* Where focus goes as that window closes, taken as it opens, because the
      removal takes the member's row away before the server accepts it. That
      is the next member's Remove, the previous one's, the empty list's line
-     or the member picker. */
+     or the member picker. A removal that needs no window takes the row away
+     at once, and focus goes there as it renders. */
   const removalFocus = useRef<() => HTMLElement | null>(() => null)
+  const focusAfterRender = useFocusAfterRender()
   // a read-only organization's admin removes members without the window
   const teamOrg = P.teamById(teamId)?.org
   useEffect(() => P.watchWriteBlock(teamOrg), [teamOrg])
@@ -174,6 +176,7 @@ export function TeamPage({
                             document.querySelector<HTMLElement>('[data-team-member-picker]'),
                         )
                         if (P.startRemoval(change)) setRemoval(change)
+                        else focusAfterRender(removalFocus.current)
                       })
                     }
                   >
@@ -253,8 +256,10 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   /* Where focus goes as that window closes, taken as it opens, because the
      delete takes the team's row away before the server accepts it. That is
      the next team's Delete, or its name once it is the last team, whose
-     Delete is disabled, else the previous team's. */
+     Delete is disabled, else the previous team's. A delete that needs no
+     window takes the row away at once, and focus goes there as it renders. */
   const removalFocus = useRef<() => HTMLElement | null>(() => null)
+  const focusAfterRender = useFocusAfterRender()
   // a read-only organization refuses the deletion before the window opens
   const homeOrg = P.homeOrg
   useEffect(() => P.watchWriteBlock(homeOrg), [homeOrg])
@@ -342,6 +347,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
                             row.querySelector<HTMLElement>('[data-team-open]'),
                         )
                         if (P.startRemoval(change)) setRemoval(change)
+                        else focusAfterRender(removalFocus.current)
                       })
                     }}
                   >

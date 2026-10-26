@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { act, useRef } from 'react'
+import { act, useRef, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { focusAround, useFocusWhenGone } from './focusWhenGone'
+import { focusAround, useFocusAfterRender, useFocusWhenGone } from './focusWhenGone'
 
 /* A control that gives way to a line once its change lands, with a
    dialog of its own that can be on screen meanwhile. */
@@ -109,5 +109,49 @@ describe('the target around a row that may leave', () => {
   it('passes by rows in a hidden view', () => {
     list(true)
     expect(target('b')()?.textContent).toBe('None')
+  })
+})
+
+describe('focus after the render of a change', () => {
+  /* A button that leaves on its own press, with a line that takes focus
+     after that render. */
+  function Row() {
+    const [shown, setShown] = useState(true)
+    const line = useRef<HTMLParagraphElement>(null)
+    const focusAfterRender = useFocusAfterRender()
+    return (
+      <>
+        {shown && (
+          <button
+            type="button"
+            onClick={() => {
+              setShown(false)
+              focusAfterRender(() => line.current)
+            }}
+          >
+            Remove
+          </button>
+        )}
+        <p ref={line} tabIndex={-1}>
+          Next
+        </p>
+        <input aria-label="Elsewhere" />
+      </>
+    )
+  }
+  const press = () => act(async () => container.querySelector('button')?.click())
+
+  it('goes to the target once the change took the focused control away', async () => {
+    await act(async () => root.render(<Row />))
+    container.querySelector('button')?.focus()
+    await press()
+    expect(document.activeElement).toBe(container.querySelector('p'))
+  })
+
+  it('stays where it moved on to', async () => {
+    await act(async () => root.render(<Row />))
+    container.querySelector('input')?.focus()
+    await press()
+    expect(document.activeElement).toBe(container.querySelector('input'))
   })
 })

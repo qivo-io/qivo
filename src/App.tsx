@@ -43,10 +43,12 @@ import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
 import { autoAllNoted, noteAutoAll, seesNoProject } from './lib/noProjects'
 import { parseSyncScope } from './lib/teamSync'
 import { useMobile } from './lib/useMobile'
+import { OUT_OF_USE } from './lib/viewHidden'
 import './styles/mobile.css'
 import { announce } from './lib/announce'
 import { closedBy, dropRefusedTask } from './lib/closingMoves'
 import { floatSlot } from './lib/floatStack'
+import { restoreFocus } from './lib/focusVisibility'
 import { menuTrigger } from './lib/focusWhenGone'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/leaveGuard'
@@ -179,11 +181,25 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
             </div>
           ) : (
             P.orgCreate === 'now' && (
-              <div
+              // a button, so the keyboard reaches it and it reads as one. The
+              // resets after the well's own classes keep its look
+              <Button
+                type="button"
+                variant="unstyled"
                 data-org-well
                 data-org-create
-                onClick={() => actions.createOrg()}
-                className="[display:flex] [align-items:center] [gap:8px] [padding:0_8px] [min-height:32px] [border-radius:var(--r-md)] [cursor:pointer] [color:var(--text-3)] [transition:background-color_var(--dur-fast)_var(--ease-out)]"
+                onClick={(e) => {
+                  const opener = e.currentTarget
+                  // the button leaves once the organization exists, and the
+                  // rail's New project comes, as its first admin can create one
+                  actions.createOrg(() =>
+                    opener.isConnected
+                      ? null
+                      : (document.querySelector<HTMLElement>('aside [aria-label="New project"]') ??
+                        document.querySelector<HTMLElement>('aside [data-mine-nav]')),
+                  )
+                }}
+                className="[display:flex] [align-items:center] [gap:8px] [padding:0_8px] [min-height:32px] [border-radius:var(--r-md)] [cursor:pointer] [color:var(--text-3)] [transition:background-color_var(--dur-fast)_var(--ease-out)] w-full border-0 bg-transparent text-left"
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = 'var(--hover)'
                 }}
@@ -192,10 +208,10 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
                 }}
               >
                 <Icon name="plus" size={16} />
-                <div className="[font-weight:600] [font-size:var(--fs-base)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
+                <span className="[font-weight:600] [font-size:var(--fs-base)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
                   Create your organization…
-                </div>
-              </div>
+                </span>
+              </Button>
             )
           )}
         </div>
@@ -329,6 +345,7 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
                   </HoverTooltip>
                 )}
                 <div
+                  data-project-row={meta.id}
                   data-on={scopeOn(meta.id) ? '' : undefined}
                   className={cn(navRowDiv, 'hoverrow gap-1 font-semibold')}
                   onClick={() => setScope(meta.id)}
@@ -936,6 +953,19 @@ function App() {
   const [modal, setModal] = useState(null)
   // the sub-project New sub-project created last, for afterNewSubProject
   const createdProject = useRef<string | null>(null)
+  /* Where focus goes in the commit that moves App into a project that has
+     finished saving (projectTarget), when it is nowhere or in a page that
+     move hides, such as the Projects page with its New project or a row's
+     menu button. A kept view hidden behind another page takes no focus. */
+  const focusAfterMove = useRef<(() => HTMLElement | null) | null>(null)
+  useLayoutEffect(() => {
+    const target = focusAfterMove.current
+    focusAfterMove.current = null
+    if (!target) return
+    const active = document.activeElement
+    const nowhere = !active || active === document.body || !active.isConnected
+    if (nowhere || active.closest(OUT_OF_USE)) restoreFocus(target())
+  })
   const [settingsPage, setSettingsPage] = useState(r0?.settings || null) // null | "account" | "org-*" | "team:<id>" | "project:<id>"
   const [inboxOpen, setInboxOpen] = useState(!!r0?.inbox || (mobile && !r0)) // the message inbox (0074)
   const [projectsOpen, setProjectsOpen] = useState(!!r0?.projects)
@@ -1468,18 +1498,22 @@ function App() {
       focusAfterClose,
     })
   }
+  /* The control that stands for project `id` once App shows it: its row in
+     the sidebar or in Settings › Projects, else the phone header's New
+     task, or its Project actions while it holds no sub-project for a task.
+     The sidebar and the header stay as App moves into a project once it is
+     saved, while the views and the Projects page go behind it. */
+  const projectTarget = (id: string) =>
+    document.querySelector<HTMLElement>(
+      `[data-project-row="${id}"] button, [data-subproject-row="${id}"] button`,
+    ) ??
+    document.querySelector<HTMLElement>('[data-mobile-new-task]') ??
+    document.querySelector<HTMLElement>('[data-mobile-project-actions]')
   /* Where focus goes as New sub-project closes after a create, for an
-     opener that names nothing else: the new sub-project's row in the
-     sidebar or in Settings › Projects, else the phone header's New task.
-     The empty states and Add sub-project buttons that open the dialog leave
-     once the sub-project shows, and the views go behind the new
-     sub-project's once it is saved; the sidebar and the header stay. */
+     opener that names nothing else. The empty states and Add sub-project
+     buttons that open the dialog leave once the sub-project shows. */
   const afterNewSubProject = () =>
-    createdProject.current
-      ? (document.querySelector<HTMLElement>(
-          `[data-subproject-row="${createdProject.current}"] button`,
-        ) ?? document.querySelector<HTMLElement>('[data-mobile-new-task]'))
-      : null
+    createdProject.current ? projectTarget(createdProject.current) : null
 
   // Jump from the issue window to the roadmap to plan an issue in context.
   // Switches to the issue's project/roadmap and closes the window so the
@@ -1846,6 +1880,7 @@ function App() {
       setScope(id)
       setProjectsOpen(false)
       setSync(null)
+      focusAfterMove.current = () => projectTarget(id)
     })
     createdProject.current = id ?? null
     setModal(null)
