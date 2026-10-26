@@ -80,7 +80,7 @@
     "reason": "shared timeline/panel geometry and data-derived heat intensity; weekly grid presentation is scoped in Resources.css"
   },
   "src/views/Roadmap.tsx": {
-    "count": 21,
+    "count": 22,
     "reason": "timeline coordinates, active utilization week geometry, transforms, measured widths, and persisted colors"
   },
   "src/views/roadmap/PlanCard.tsx": {

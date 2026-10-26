@@ -14,7 +14,8 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    once one is shared with a person who landed on All projects for want of
    one. Team sync, which covers the home organization only, asks about that
    organization's projects. The phone's Roadmap gives the desktop's note for
-   every scope with nothing to schedule. */
+   every scope with nothing to schedule, and both keep showing the scope's
+   milestones. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => ({
@@ -72,6 +73,7 @@ afterEach(async () => {
   container.remove()
   document.body.innerHTML = ''
   history.replaceState(null, '', '/')
+  sessionStorage.clear()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -128,6 +130,12 @@ const newProject = () => button('New project')
 /** The scope App saved for the fixture's person. */
 const savedScope = (snap: Snapshot) =>
   JSON.parse(localStorage.getItem(`planner.ui.v1:${snap.profiles[0].id}`) ?? '{}').scope
+
+/** Unmounts App, as a reload of the page does. */
+async function reload() {
+  await act(async () => root.unmount())
+  root = createRoot(container)
+}
 
 /** The fixture with its one person a member of Plan, a project over the
     fixture's sub-project. */
@@ -228,6 +236,47 @@ describe('a person with a project', () => {
     expect(savedScope(snap)).toBe('plan')
   })
 
+  it('keeps All projects that the person chose, after a reload while they see none', async () => {
+    const snap = member()
+    const publish = await app(snap, '/app/~/overview/all')
+    await shows('No tasks yet')
+    await publish({ ...snap, access: [], delivered_at: '2026-09-15T09:00:00.000Z' })
+    await shows(MEMBER)
+    await reload()
+    const again = await app({ ...snap, access: [] }, '/app/~/overview/all')
+    await shows(MEMBER)
+    await again({ ...snap, delivered_at: '2026-09-15T10:00:00.000Z' })
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain(MEMBER))
+    expect(location.pathname).toBe('/app/~/overview/all')
+    expect(savedScope(snap)).toBe('all')
+  })
+
+  it('keeps All projects that the person picks while it is App’s', async () => {
+    const snap = member()
+    const publish = await app({ ...snap, access: [] })
+    await shows(MEMBER)
+    const all = document.querySelector<HTMLElement>('[data-all-nav]')
+    await act(async () => all?.click())
+    expect(savedScope(snap)).toBe('all')
+    await publish({ ...snap, delivered_at: '2026-09-15T09:00:00.000Z' })
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain(MEMBER))
+    expect(location.pathname).toBe('/app/~/overview/all')
+  })
+
+  it('opens the project shared meanwhile on a reload of App’s All projects', async () => {
+    const snap = member()
+    await app({ ...snap, access: [] })
+    await shows(MEMBER)
+    await reload()
+    await app({ ...snap, access: [] }, '/app/~/overview/all')
+    await shows(MEMBER)
+    expect(savedScope(snap)).toBeUndefined()
+    await reload()
+    await app(snap, '/app/~/overview/all')
+    await vi.waitFor(() => expect(location.pathname).toBe('/app/testbed/overview/p/2'))
+    expect(savedScope(snap)).toBe('plan')
+  })
+
   it('keeps All projects when the person opened it', async () => {
     const snap = member()
     const publish = await app(snap, '/app/~/overview/all')
@@ -277,18 +326,60 @@ describe('Team sync, which covers the home organization', () => {
   })
 })
 
+/** member() with Bare, a project without sub-projects that the person
+    leads. */
+function bare(): Snapshot {
+  const snap = member()
+  const me = snap.profiles[0].id
+  const bare = { id: 'bare', key: 'BARE', num: 3, name: 'Bare', lead_id: me }
+  snap.projects.push({ ...snap.projects[1], ...bare })
+  snap.access.push({ project_id: 'bare', profile_id: me, level: 'user' })
+  return snap
+}
+
+/** `snap` with a milestone `name` on `project` a week from now, inside the
+    Roadmap's default window. */
+function withMilestone(snap: Snapshot, project: string, name: string): Snapshot {
+  const day = new Date()
+  day.setDate(day.getDate() + 7 - ((day.getDay() + 6) % 7))
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const week = `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`
+  const created_at = '2026-09-14T08:00:00.000Z'
+  snap.milestones.push({ id: `ms-${project}`, project_id: project, name, week, created_at })
+  return snap
+}
+
+describe('the Roadmap of a scope with nothing to schedule', () => {
+  it('keeps the flags of its milestones behind the note on a computer', async () => {
+    await app(bare(), '/app/testbed/roadmap/p/3')
+    await shows('Tasks live in sub-projects.')
+    expect(document.querySelector('[data-msflag]')).toBeNull()
+    await reload()
+    await app(withMilestone(bare(), 'bare', 'Bare launch'), '/app/testbed/roadmap/p/3')
+    await shows('Tasks live in sub-projects.')
+    expect(document.querySelector('[data-msflag]')?.textContent).toBe('Bare launch')
+    expect(document.querySelector('[data-no-match]')).toBeNull()
+    await reload()
+    await app(withMilestone(member(), 'plan', 'Plan launch'), '/app/~/roadmap/mine')
+    await shows('Nothing assigned to you')
+    expect(document.querySelector('[data-msflag]')?.textContent).toBe('Plan launch')
+    // All projects, when no project the person sees has a sub-project
+    await reload()
+    const only = withMilestone(bare(), 'bare', 'Bare launch')
+    only.access = only.access.filter((grant) => grant.project_id === 'bare')
+    await app(only, '/app/~/roadmap/all')
+    await shows('Tasks live in sub-projects.')
+    expect(document.querySelector('[data-msflag]')?.textContent).toBe('Bare launch')
+  })
+})
+
 describe('the phone Roadmap of a scope with nothing to schedule', () => {
   beforeEach(() => {
     phone = true
   })
 
   it('says that tasks live in sub-projects, in a project without one', async () => {
-    const snap = member()
-    const me = snap.profiles[0].id
-    const bare = { id: 'bare', key: 'BARE', num: 3, name: 'Bare', lead_id: me }
-    snap.projects.push({ ...snap.projects[1], ...bare })
-    snap.access.push({ project_id: 'bare', profile_id: me, level: 'user' })
-    await app(snap, '/app/testbed/roadmap/p/3')
+    await app(bare(), '/app/testbed/roadmap/p/3')
     await shows('Nothing to schedule yet')
     expect(document.body.textContent).toContain('Tasks live in sub-projects.')
     expect(button('New sub-project')).toBeDefined()
@@ -302,5 +393,17 @@ describe('the phone Roadmap of a scope with nothing to schedule', () => {
     await app(member(), '/app/~/roadmap/mine')
     await shows('Nothing assigned to you')
     expect(document.body.textContent).not.toContain('Upcoming milestones')
+  })
+
+  it('lists the scope’s milestones under the note', async () => {
+    await app(withMilestone(bare(), 'bare', 'Bare launch'), '/app/testbed/roadmap/p/3')
+    await shows('Tasks live in sub-projects.')
+    expect(document.body.textContent).toContain('Upcoming milestones')
+    expect(document.body.textContent).toContain('Bare launch')
+    await reload()
+    await app(withMilestone(member(), 'plan', 'Plan launch'), '/app/~/roadmap/mine')
+    await shows('Nothing assigned to you')
+    expect(document.body.textContent).toContain('Plan launch')
+    expect(document.body.textContent).not.toContain('Task schedule')
   })
 })

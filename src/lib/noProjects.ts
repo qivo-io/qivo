@@ -15,6 +15,33 @@ export function noProjectsHint(): string {
     : 'No active projects are shared with you. Ask an organization admin or a project lead for access.'
 }
 
+/* This tab's note that its All projects is App's own choice (App's autoAll),
+   not the person's, per profile. It outlives a reload, so a reload of that
+   page stays App's, and a new tab starts without it, so an address to All
+   projects opened there is the person's. */
+const autoAllKey = () => `planner.autoAll.v1:${P.CURRENT_USER}`
+
+/** Whether this tab noted its All projects as App's own (noteAutoAll).
+    Storage that cannot be read counts as no note. */
+export function autoAllNoted(): boolean {
+  try {
+    return sessionStorage.getItem(autoAllKey()) === '1'
+  } catch {
+    return false
+  }
+}
+
+/** Notes that this tab's All projects is App's own, or with `false` that it
+    is not. */
+export function noteAutoAll(on: boolean) {
+  try {
+    if (on) sessionStorage.setItem(autoAllKey(), '1')
+    else sessionStorage.removeItem(autoAllKey())
+  } catch {
+    // Without the note a reload counts All projects as the person's and stays.
+  }
+}
+
 /** noProjectsHint for Team sync, which covers the home organization only
     (seesNoProject(P.homeOrg)). A person with seats in more than one
     organization is told which one that is. */

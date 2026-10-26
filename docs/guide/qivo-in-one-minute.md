@@ -190,7 +190,8 @@ fills in below the first screen as **My tasks** does. Backlog is hidden, and
 Done appears only when its planned period overlaps the Roadmap window ([The Roadmap](./the-roadmap.md)).
 When a scope has nothing to schedule, for example a project without
 sub-projects or My view with nothing assigned to you, Roadmap says why, as it
-does on a computer, and keeps **Planning tools**.
+does on a computer. It keeps **Planning tools** and lists the scope's
+milestones below the note.
 **Timeline & team** opens a full-screen landscape view, turned sideways
 while the phone is upright. Rotate the phone to read it upright; you do not
 need to unlock screen rotation. Planning, dependencies, date-window controls

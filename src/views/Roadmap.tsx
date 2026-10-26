@@ -1199,7 +1199,7 @@ function Roadmap({
   /* The frame an empty roadmap keeps: the toolbar and the estimate walk its
      button can open — everything that still has something to do when there is
      no grid under it. The window controls are NOT here: they live in the
-     timeline's header, and an empty scope has no timeline. */
+     timeline's header, and an empty scope without milestones has no timeline. */
   const showMobileAgenda =
     mobile && mobileLayout !== 'timeline' && !session && !focusPlan && !revealTask
   const mobileAgenda = (
@@ -1303,45 +1303,46 @@ function Roadmap({
   )
 
   /* ---------- empty state ---------- */
+  /* Why a scope has nothing to schedule. Without a milestone the note is the
+     page (emptyFrame). With one, the timeline stays behind the note, as it
+     does behind "Nothing matches your filters", so its flags still show
+     (and the phone's agenda lists them): the empty state says why there are
+     no rows, not that the scope plans nothing. */
+  let emptyNote: React.ReactNode = null
   if (info.subIds.length === 0) {
-    if (wide) {
-      if (info.metas.length === 0)
-        return emptyFrame(
-          <NoProjects
-            icon="timeline"
-            title="Nothing to schedule yet"
-            onNewProject={() => actions.newProject({ kind: 'program' })}
-          />,
-        )
-      return emptyFrame(
-        <EmptyState
-          icon="timeline"
-          title="Nothing to schedule yet"
-          hint="Tasks live in sub-projects."
-        />,
-      )
-    }
-    return emptyFrame(
+    emptyNote = !wide ? (
       <EmptyState
         icon="timeline"
         title="Nothing to schedule yet"
         hint="Tasks live in sub-projects."
         actionLabel={P.levelOn(info.id) === 'lead' ? 'New sub-project' : undefined}
         onAction={() => actions.newProject({ parent: info.id })}
-      />,
+      />
+    ) : info.metas.length === 0 ? (
+      <NoProjects
+        icon="timeline"
+        title="Nothing to schedule yet"
+        onNewProject={() => actions.newProject({ kind: 'program' })}
+      />
+    ) : (
+      <EmptyState
+        icon="timeline"
+        title="Nothing to schedule yet"
+        hint="Tasks live in sub-projects."
+      />
     )
+  } else if (mine && held && held.size === 0) {
+    /* My view empties for a reason of its own, and the test above can't see
+       it: the sub-projects all exist, they just hold none of my work — so the
+       rail is empty while `subIds` is not. Without this it renders as a bare
+       grid of weeks with nothing in it and no explanation. (The Board and
+       Overview reach the same state through their own `scoped.length === 0`.)
+       Asked of the SCOPE's own set, never of `tracks`: since deviation #50 a
+       toolbar filter can empty the rail too, and that has its own note — one
+       the Clear button can actually act on. */
+    emptyNote = <EmptyState icon="user" title="Nothing assigned to you" />
   }
-  /* My view empties for a reason of its own, and the test above can't see it:
-     the sub-projects all exist, they just hold none of my work — so the rail
-     is empty while `subIds` is not. Without this it renders as a bare grid of
-     weeks with nothing in it and no explanation. (The Board and Overview reach
-     the same state through their own `scoped.length === 0`.) Asked of the
-     SCOPE's own set, never of `tracks`: since deviation #50 a toolbar filter
-     can empty the rail too, and that has its own note — one the Clear button
-     can actually act on. */
-  if (mine && held && held.size === 0) {
-    return emptyFrame(<EmptyState icon="user" title="Nothing assigned to you" />)
-  }
+  if (emptyNote && info.milestones.length === 0) return emptyFrame(emptyNote)
 
   /* Build rows; tasks within a group ordered by COMMITTED start date, so the
      list re-sorts only when a drag is released, never mid-drag.
@@ -1677,13 +1678,17 @@ function Roadmap({
     ;(g.bands.length ? g.bands[g.bands.length - 1].rows : g.own).push(L)
   })
 
-  if (showMobileAgenda) return mobileAgenda(pendingMoves.length, autoArrange)
+  // an empty scope offers no moves, as its emptyFrame does
+  if (showMobileAgenda)
+    return emptyNote
+      ? mobileAgenda(0, () => {}, emptyNote)
+      : mobileAgenda(pendingMoves.length, autoArrange)
 
   return withMobileTimeline(
     <div className="roadmap-view [flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [background:var(--bg)]">
       {/* The row is drawn by `toolbarRow` above, so that the empty states can
           draw it too — see its header for why that matters. */}
-      {timelineToolbar(pendingMoves)}
+      {timelineToolbar(emptyNote ? [] : pendingMoves)}
 
       {winPops}
 
@@ -2124,20 +2129,31 @@ function Roadmap({
                 })()}
 
                 {/* the rail pruned to nothing — sticky-left so the note sits in the
-              visible pane, not centred somewhere out along the week grid */}
-                {noMatches && (
+              visible pane, not centred somewhere out along the week grid. A
+              scope with nothing to schedule says that instead (emptyNote). */}
+                {emptyNote ? (
                   <div
-                    className="animate-in fade-in slide-in-from-bottom-1 [position:sticky] [left:0] [display:flex] [flex-direction:column] [align-items:center] [gap:8px] [padding:26px_16px]"
-                    data-no-match
+                    className="[position:sticky] [left:0] [display:flex]"
+                    data-roadmap-empty
                     style={{ width: paneW || GRID_X + timelineW + GUTTER_W }}
                   >
-                    <span className="[font-size:var(--fs-base)] [color:var(--text-3)]">
-                      Nothing matches your filters
-                    </span>
-                    <Button type="button" onClick={actions.clearFilters}>
-                      Clear filters
-                    </Button>
+                    {emptyNote}
                   </div>
+                ) : (
+                  noMatches && (
+                    <div
+                      className="animate-in fade-in slide-in-from-bottom-1 [position:sticky] [left:0] [display:flex] [flex-direction:column] [align-items:center] [gap:8px] [padding:26px_16px]"
+                      data-no-match
+                      style={{ width: paneW || GRID_X + timelineW + GUTTER_W }}
+                    >
+                      <span className="[font-size:var(--fs-base)] [color:var(--text-3)]">
+                        Nothing matches your filters
+                      </span>
+                      <Button type="button" onClick={actions.clearFilters}>
+                        Clear filters
+                      </Button>
+                    </div>
+                  )
                 )}
 
                 {/* Arrows cross heading rows while they scroll normally. Only

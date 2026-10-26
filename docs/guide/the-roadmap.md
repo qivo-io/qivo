@@ -84,6 +84,9 @@ subtask, its parent's bar follows it.
 Milestones appear as violet diamonds. Drag one to move it or click it to open
 the Milestones window ([Overview milestones](./the-overview-project-health-at-a-glance.md)). The toolbar's **Milestone** button creates one.
 Hover a truncated milestone name to read it in full.
+When a scope has nothing to schedule, for example a project without
+sub-projects or My view with nothing assigned to you, the Roadmap says why.
+If the scope has milestones, the timeline stays behind that note and shows them.
 
 ## Undo this Roadmap visit's changes
 

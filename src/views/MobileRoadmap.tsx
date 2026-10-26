@@ -33,7 +33,7 @@ type MobileRoadmapProps = {
   onSectionChange: (section: 'milestones' | 'tasks') => void
   taskState: 'all' | 'planned' | 'unplanned'
   onTaskStateChange: (state: 'all' | 'planned' | 'unplanned') => void
-  /** The note of a scope with nothing to schedule (Roadmap's emptyFrame). */
+  /** The note of a scope with nothing to schedule (Roadmap's emptyNote). */
   empty?: React.ReactNode
 }
 
@@ -102,7 +102,9 @@ const MobileRoadmapRow = memo(function MobileRoadmapRow({
  * come from the planner; the timeline remains available for spatial planning.
  * With `empty`, the agenda keeps what the desktop's empty roadmap keeps in its
  * toolbar (Undo, the planning tools and New milestone) and shows the note in
- * place of the timeline button, the sections and their lists. */
+ * place of the timeline button, the section switch and the task schedule. The
+ * scope's milestones stay listed under the note, as the desktop keeps their
+ * flags. */
 export function MobileRoadmap({
   info,
   windowStart,
@@ -201,18 +203,53 @@ export function MobileRoadmap({
       <p>Auto-move pushes planned tasks after their blockers.</p>
     </details>
   )
+  const canAddMilestone = !info.wide && P.canAddMilestone(info.id)
+  const milestoneSection = (
+    <section className="mobile-roadmap-section">
+      <div className="mobile-roadmap-section-heading">
+        <h2>Upcoming milestones</h2>
+        {canAddMilestone && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="New milestone"
+            onClick={() => actions.newMilestone({})}
+          >
+            <Icon name="plus" size={16} />
+          </Button>
+        )}
+      </div>
+      {upcoming.length ? (
+        upcoming.map(milestoneRow)
+      ) : (
+        <p className="mobile-roadmap-note">No upcoming milestones.</p>
+      )}
+      {past.length > 0 && (
+        <details className="mobile-roadmap-past">
+          <summary>Past milestones ({past.length})</summary>
+          {past.slice().reverse().map(milestoneRow)}
+        </details>
+      )}
+      {info.wide && (
+        <p className="mobile-roadmap-note">Open a project to add a milestone to its roadmap.</p>
+      )}
+    </section>
+  )
   if (empty)
     return (
       <div ref={scroller} data-scroll data-screen-label="Roadmap" className="mobile-roadmap-agenda">
         {undoControls}
         {planningTools}
         {empty}
-        {!info.wide && P.canAddMilestone(info.id) && (
-          <Button type="button" onClick={() => actions.newMilestone({})}>
-            <Icon name="diamond" size={16} />
-            New milestone
-          </Button>
-        )}
+        {milestones.length > 0
+          ? milestoneSection
+          : canAddMilestone && (
+              <Button type="button" onClick={() => actions.newMilestone({})}>
+                <Icon name="diamond" size={16} />
+                New milestone
+              </Button>
+            )}
       </div>
     )
 
@@ -252,36 +289,7 @@ export function MobileRoadmap({
       {planningTools}
 
       {section === 'milestones' ? (
-        <section className="mobile-roadmap-section">
-          <div className="mobile-roadmap-section-heading">
-            <h2>Upcoming milestones</h2>
-            {!info.wide && P.canAddMilestone(info.id) && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="New milestone"
-                onClick={() => actions.newMilestone({})}
-              >
-                <Icon name="plus" size={16} />
-              </Button>
-            )}
-          </div>
-          {upcoming.length ? (
-            upcoming.map(milestoneRow)
-          ) : (
-            <p className="mobile-roadmap-note">No upcoming milestones.</p>
-          )}
-          {past.length > 0 && (
-            <details className="mobile-roadmap-past">
-              <summary>Past milestones ({past.length})</summary>
-              {past.slice().reverse().map(milestoneRow)}
-            </details>
-          )}
-          {info.wide && (
-            <p className="mobile-roadmap-note">Open a project to add a milestone to its roadmap.</p>
-          )}
-        </section>
+        milestoneSection
       ) : (
         <section className="mobile-roadmap-section">
           <h2>Task schedule</h2>

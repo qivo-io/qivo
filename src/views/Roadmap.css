@@ -114,3 +114,12 @@
   box-shadow: 0 0 0 4px var(--roadmap-edge-ring, transparent);
   clip-path: inset(-4px -4px -4px 0);
 }
+
+/* The note of a scope with nothing to schedule, in the row area of the
+   timeline its milestones keep (Roadmap's emptyNote): text in the panel, as
+   "Nothing matches your filters" is, not a panel inside the panel. */
+.roadmap-view [data-roadmap-empty] > .qivo-empty-state {
+  background: none;
+  border: 0;
+  box-shadow: none;
+}

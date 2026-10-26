@@ -40,7 +40,7 @@ import { flushWalkInput } from './components/walkRows'
 import { addressMoved, rememberAddress } from './lib/addressBook'
 import { closeOrAsk } from './lib/discardQuestion'
 import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
-import { seesNoProject } from './lib/noProjects'
+import { autoAllNoted, noteAutoAll, seesNoProject } from './lib/noProjects'
 import { parseSyncScope } from './lib/teamSync'
 import { useMobile } from './lib/useMobile'
 import './styles/mobile.css'
@@ -849,11 +849,15 @@ function App() {
         : (P.visibleProjects()[0]?.id ?? (seesNoProject() ? P.ALL_SCOPE : undefined)),
   )
   /* All projects as App's choice, not the user's: they could see no project
-     when it opened (this boot, or the access guard below). It is never saved
-     and gives way to the first project shared with them, so they land on
-     that project, as anyone with a project does. Any other scope ends it. */
+     when it opened (this boot's fallback, or the access guard below). It is
+     never saved and gives way to the first project shared with them, so they
+     land on that project, as anyone with a project does. The tab notes it
+     (noteAutoAll), so a boot on its address stays App's; a saved All
+     projects, an address the tab did not note and any scope the user moves
+     to (move) are theirs. Any other scope ends it. */
   const autoAll = useRef<boolean>(null)
-  autoAll.current ??= P.isAllScope(scope) && seesNoProject()
+  autoAll.current ??=
+    P.isAllScope(scope) && !P.isAllScope(uiScope) && (!liveScope(r0Scope) || autoAllNoted())
   // prefs saved before the merge may still say "split"/"resources" — both
   // collapsed into the roadmap (which now always docks the resource strip)
   const uiView0 = ui0.view === 'split' || ui0.view === 'resources' ? 'roadmap' : ui0.view
@@ -1011,7 +1015,16 @@ function App() {
       windows it closes hold no unsent text, or after the person chose
       Discard. Raw setters remain for moves the person did not ask for. */
   const move = (next: UiState, go: () => void) => {
-    closeOrAsk(closedBy(hereRef.current, { ...hereRef.current, ...next }, unsent), go)
+    closeOrAsk(closedBy(hereRef.current, { ...hereRef.current, ...next }, unsent), () => {
+      // a scope the user moves to is theirs, App's own All projects too
+      // (autoAll), which the save effect would not see stay the same
+      if (next.scope !== undefined && autoAll.current) {
+        autoAll.current = false
+        noteAutoAll(false)
+        P.saveUI({ scope: next.scope })
+      }
+      go()
+    })
   }
   // edits made on the sync page are not roadmap edits, whatever the view below
   const roadmapActive = view === 'roadmap' && !settingsPage && !inboxOpen && !projectsOpen && !sync
@@ -1115,6 +1128,7 @@ function App() {
   // ui persistence; App's own All projects (autoAll) keeps the saved scope
   useEffect(() => {
     if (!P.isAllScope(scope)) autoAll.current = false
+    noteAutoAll(autoAll.current)
     P.saveUI(autoAll.current ? { view } : { scope, view })
   }, [scope, view])
 
