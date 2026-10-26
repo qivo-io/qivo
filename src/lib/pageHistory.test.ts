@@ -22,9 +22,10 @@ afterEach(() => remove())
 
 /** A browser window on `urls`, on the last, with the page's history
     installed, an App-like listener that hears the moves, and the layers'
-    listener after it; with `engine`'s Navigation API when given. */
-function page(urls: string[], engine?: 'chromium' | 'webkit' | 'firefox') {
-  const browser = browserWindow(urls[0], engine)
+    listener after it; with `engine`'s Navigation API when given, after
+    another site's entry at `elsewhere` when given. */
+function page(urls: string[], engine?: 'chromium' | 'webkit' | 'firefox', elsewhere?: string) {
+  const browser = browserWindow(urls[0], engine, elsewhere)
   const removeHistory = installPageHistory(browser.window)
   for (const url of urls.slice(1)) pushPage({}, url)
   const heard: string[] = []
@@ -303,6 +304,22 @@ describe('a layer that closes by itself', () => {
   })
 
   it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    "goes on to another site's entry when quick Backs reach the first entry listed, in %s",
+    async (engine) => {
+      const browser = page(['/a', '/page'], engine, '/elsewhere')
+      finishLayer(await layer())
+      // in Firefox the second Back's navigate event comes before the first
+      // lands, so no key names the entry the going-on is for
+      browser.person.back()
+      browser.person.back()
+      await settleMoves()
+      expect(browser.here()).toBe('/elsewhere')
+      expect(browser.heard).toEqual(['/a'])
+      expect(historyBusy()).toBe(false)
+    },
+  )
+
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
     'goes on one step per spare, so two quick Backs over two spares leave two pages, in %s',
     async (engine) => {
       const browser = page(['/a', '/b', '/c', '/page'], engine)
@@ -541,6 +558,35 @@ describe("the page's steps in turn", () => {
     browser.history.back()
     await settleMoves()
     expect(go.mock.calls).toEqual([[-1], [-1], [-1]])
+  })
+})
+
+describe('the development check on writes after a page step', () => {
+  it('warns of a write in the task of a page step', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    page(['/a', '/page'])
+    leavePage()
+    pushPage({}, '/next')
+    expect(errors).toHaveBeenCalledWith('History written right after a page step')
+    errors.mockRestore()
+  })
+
+  it("stays quiet for a write in a later popstate's task, as a browser runs each in its own", async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const browser = page(['/a', '/b', '/page'], 'firefox')
+    finishLayer(await layer())
+    // App writes the address in place as it hears a move
+    browser.window.addEventListener('popstate', () =>
+      browser.history.replaceState(browser.history.state, ''),
+    )
+    // the double lands both Backs in one task: the first one's going-on,
+    // then the second one's popstate
+    browser.person.back()
+    browser.person.back()
+    await settleMoves()
+    expect(browser.here()).toBe('/a')
+    expect(errors).not.toHaveBeenCalled()
+    errors.mockRestore()
   })
 })
 

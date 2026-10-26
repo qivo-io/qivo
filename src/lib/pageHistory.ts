@@ -21,7 +21,10 @@
    reached, or else goes on one entry more in that Back's own popstate.
    Each going-on is a single step that commutes with the person's own Backs,
    also when they are queued (Chromium and Firefox count a queued Back from
-   the one before it), so a Back still leaves one page per press. A spare
+   the one before it), so a Back still leaves one page per press. When
+   Firefox has queued a Back to the first entry the Navigation API lists, no
+   key names the entry before it, another site's, so the going-on steps in
+   that Back's popstate once App has heard it. A spare
    a Back went on from stays as a Forward entry that shows the same page,
    so a Forward onto it changes nothing on screen, one press per spare, and
    a spare under one that a new page took over stays under that page: no
@@ -131,6 +134,11 @@ let rawGo: History['go'] | null = null
 // fires the navigate events of the traversals queued by then before the
 // first lands, so it can lie past the entry the page is on (goOn)
 let ahead: number | null = null
+// with the Navigation API, the first entry listed when a queued traversal
+// goes there and the going-on waits for it to land (goOn), and whether the
+// latest popstate landed there, so the step goes once App has heard it
+let onwardAt: number | null = null
+let onwardDue = false
 let issuing = false
 let queued: (() => void)[] = []
 
@@ -224,6 +232,13 @@ function stepping() {
   }, 0)
 }
 
+/** Notes that a task of its own began, as each popstate and each of the
+    page's timers does, so a step before it no longer counts (stepping).
+    The step's own timer can come after tasks that were queued before it. */
+function laterTask() {
+  stepped = false
+}
+
 /** Runs `traverse`, a script's traversal, now, or once the one issued
     before it has started: WebKit keeps one script traversal at a time, and
     one issued before the last has started replaces it. Its timer for that
@@ -256,9 +271,10 @@ function go(delta: number) {
 
 /** Goes one entry back for a Back from a spare, in turn (serially). When
     Firefox has queued a later traversal, the step goes by key to the entry
-    before that one's, or nowhere when none is listed: Firefox may count a
-    relative step from the entry the page is on, so it would land where the
-    queued traversal does. */
+    before that one's: Firefox may count a relative step from the entry the
+    page is on, so it would land where the queued traversal does. When that
+    traversal goes to the first entry listed, as one past it leaves for
+    another site's, the step waits until it has landed (onwardAt). */
 function goOn() {
   serially(() => {
     const nav = navigationOf(current())
@@ -269,12 +285,13 @@ function goOn() {
       else current().history.go(-1)
       return
     }
-    // a queued traversal to the first entry listed leaves no entry to go
-    // to by key, and a relative step could land where it does
     const key = nav.entries()[ahead - 1]?.key
-    if (key === undefined) return
-    stepping()
-    nav.traverseTo(key).finished.catch(() => {})
+    if (key !== undefined) {
+      stepping()
+      nav.traverseTo(key).finished.catch(() => {})
+      return
+    }
+    onwardAt = ahead
   })
 }
 
@@ -282,6 +299,7 @@ function goOn() {
     the other listeners and React's commit of its popstate. */
 function settleSoon() {
   setTimeout(() => {
+    laterTask()
     if (historyBusy()) return
     const ready = waiting
     waiting = []
@@ -342,11 +360,17 @@ function landReturn(event: PopStateEvent) {
     marker down to the entry a Back reaches in its run, and goes on from a
     spare. Everything here runs before App reads the address. */
 function onPop(event: PopStateEvent) {
+  laterTask()
   const w = current()
   const from = last
   const here = positionIn(w.history.state)
   if (here !== null) at = here
   note()
+  // the traversal the going-on waits for landed on the first entry listed
+  // (goOn): the step goes once App has heard this move (onLayersPop)
+  const index = navigationOf(w)?.currentEntry?.index
+  onwardDue = onwardAt !== null && index === onwardAt
+  if (onwardDue || index === undefined || onwardAt === null || index < onwardAt) onwardAt = null
   left = shown
   shown = last
   leaving = false
@@ -396,6 +420,14 @@ function onPop(event: PopStateEvent) {
 function onLayersPop() {
   const gone = popped
   popped = []
+  // a going-on past the first entry listed, once App has heard the person's
+  // Back that reached it: a relative step, as no key names an entry before
+  if (onwardDue && !gone.length) {
+    onwardDue = false
+    go(-1)
+    return
+  }
+  onwardDue = false
   for (const [n, layer] of gone.entries()) {
     if (layer.state !== 'open') continue
     if (closeLayer(layer)) continue
@@ -520,7 +552,10 @@ export function installPageHistory(target: Window = window) {
     // a push drops the entries after the current one, and with them the
     // entry an earlier traversal went to
     else if (event.navigationType === 'push') ahead = null
-    if (event.navigationType === 'push') reruns = 0
+    if (event.navigationType === 'push') {
+      reruns = 0
+      onwardAt = null
+    }
     if (
       event.navigationType === 'reload' &&
       event.info === undefined &&
@@ -575,6 +610,8 @@ export function installPageHistory(target: Window = window) {
     stepped = false
     rawGo = null
     ahead = null
+    onwardAt = null
+    onwardDue = false
     marked.clear()
     issuing = false
     queued = []
@@ -625,7 +662,11 @@ export function finishLayer(layer: BackLayer) {
   if (layer.state === 'closed') return
   layer.state = 'closed'
   open.delete(layer)
-  if (layer.at !== null) setTimeout(() => win && firstEntryStep(), 0)
+  if (layer.at !== null)
+    setTimeout(() => {
+      laterTask()
+      if (win) firstEntryStep()
+    }, 0)
 }
 
 /** Leaves the page as a phone close does: one step back past its entry and
