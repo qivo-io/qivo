@@ -352,6 +352,8 @@ describe('the pause while Qivo cannot save', () => {
     const win = new EventTarget() as Window
     installLeaveGuard(() => true, win)
     store.P.signOut()
+    // the gate shows the lost screen for a demo the visitor left
+    expect(demo.ended.mock.calls[0][0]).toMatchObject({ phase: 'lost' })
     const event = new Event('beforeunload', { cancelable: true })
     win.dispatchEvent(event)
     expect(event.defaultPrevented).toBe(true)

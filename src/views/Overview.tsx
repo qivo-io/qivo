@@ -22,6 +22,7 @@ import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import type { StoreVersion } from '@/store/updates'
+import { NoProjects } from '../components/NoProjects'
 import {
   Avatar,
   EmptyState,
@@ -816,7 +817,7 @@ type OverviewActions = {
   setView: (view: string) => void
   openIssue: (id: string) => void
   newIssue: (init: { project?: string }) => void
-  newProject: (init: { parent?: string }) => void
+  newProject: (init: { parent?: string; kind?: 'program' }) => void
   newMilestone: (init: { week?: number }) => void
   editMilestone: (id: string) => void
 }
@@ -858,15 +859,17 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
 
   if (subIds.length === 0) {
     if (wide) {
-      return (
+      return info.metas.length === 0 ? (
+        <NoProjects
+          icon="chart"
+          title="Nothing to summarize yet"
+          onNewProject={() => actions.newProject({ kind: 'program' })}
+        />
+      ) : (
         <EmptyState
           icon="chart"
           title="Nothing to summarize yet"
-          hint={
-            info.metas.length === 0
-              ? 'No projects are available to you yet.'
-              : 'Tasks live in sub-projects.'
-          }
+          hint="Tasks live in sub-projects."
         />
       )
     }

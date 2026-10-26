@@ -91,6 +91,9 @@ step opens that step; a scoped link without a step opens the team summary.
   select one sub-project.
 
 A deleted or inaccessible team or project falls back to All projects.
+When you can see no project of your organization, the page says so and who can
+give you access. If you also belong to another organization, it names the
+organization the page covers.
 
 The people list starts with the team summary, then people by name, then agents.
 It includes owners of To Do, In Progress or In Review tasks without subtasks.

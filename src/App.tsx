@@ -40,6 +40,7 @@ import { flushWalkInput } from './components/walkRows'
 import { addressMoved, rememberAddress } from './lib/addressBook'
 import { closeOrAsk } from './lib/discardQuestion'
 import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
+import { autoAllNoted, noteAutoAll, seesNoProject } from './lib/noProjects'
 import { parseSyncScope } from './lib/teamSync'
 import { useMobile } from './lib/useMobile'
 import './styles/mobile.css'
@@ -837,10 +838,26 @@ function App() {
       ? r0.scope || (r0.issue ? scopeForIssue(r0.issue, uiScope) : undefined)
       : undefined
   // project ids are DB uuids (not the prototype's fixed slugs): default the
-  // scope to the first visible project org-wide (navigation is flat since 0078)
+  // scope to the first visible project org-wide (navigation is flat since 0078),
+  // or for a user who can see no project to All projects, whose pages say why
+  // they are empty
   const [scope, setScope] = useState(() =>
-    liveScope(r0Scope) ? r0Scope : uiScope ? uiScope : P.visibleProjects()[0]?.id,
+    liveScope(r0Scope)
+      ? r0Scope
+      : uiScope
+        ? uiScope
+        : (P.visibleProjects()[0]?.id ?? (seesNoProject() ? P.ALL_SCOPE : undefined)),
   )
+  /* All projects as App's choice, not the user's: they could see no project
+     when it opened (this boot's fallback, or the access guard below). It is
+     never saved and gives way to the first project shared with them, so they
+     land on that project, as anyone with a project does. The tab notes it
+     (noteAutoAll), so a reload of its address, or Back or Forward to it,
+     stays App's; a saved All projects, an address opened anew and any scope
+     the user moves to (move) are theirs. Any other scope ends it. */
+  const autoAll = useRef<boolean>(null)
+  autoAll.current ??=
+    P.isAllScope(scope) && !P.isAllScope(uiScope) && (!liveScope(r0Scope) || autoAllNoted())
   // prefs saved before the merge may still say "split"/"resources" — both
   // collapsed into the roadmap (which now always docks the resource strip)
   const uiView0 = ui0.view === 'split' || ui0.view === 'resources' ? 'roadmap' : ui0.view
@@ -998,7 +1015,16 @@ function App() {
       windows it closes hold no unsent text, or after the person chose
       Discard. Raw setters remain for moves the person did not ask for. */
   const move = (next: UiState, go: () => void) => {
-    closeOrAsk(closedBy(hereRef.current, { ...hereRef.current, ...next }, unsent), go)
+    closeOrAsk(closedBy(hereRef.current, { ...hereRef.current, ...next }, unsent), () => {
+      // a scope the user moves to is theirs, App's own All projects too
+      // (autoAll), which the save effect would not see stay the same
+      if (next.scope !== undefined && autoAll.current) {
+        autoAll.current = false
+        noteAutoAll(false)
+        P.saveUI({ scope: next.scope })
+      }
+      go()
+    })
   }
   // edits made on the sync page are not roadmap edits, whatever the view below
   const roadmapActive = view === 'roadmap' && !settingsPage && !inboxOpen && !projectsOpen && !sync
@@ -1099,9 +1125,11 @@ function App() {
     [],
   )
 
-  // ui persistence
+  // ui persistence; App's own All projects (autoAll) keeps the saved scope
   useEffect(() => {
-    P.saveUI({ scope, view })
+    if (!P.isAllScope(scope)) autoAll.current = false
+    noteAutoAll(autoAll.current)
+    P.saveUI(autoAll.current ? { view } : { scope, view })
   }, [scope, view])
 
   // url sync — every "page" (scope/view/open issue/settings) gets its own
@@ -1298,13 +1326,25 @@ function App() {
   // access guard — keep the scope within what the current user can see. Both
   // sentinels ARE "what the user can see", so neither needs rescuing — and
   // each resolves to no project row, which would otherwise bounce it away one
-  // commit after it was entered (and persist the bounce).
+  // commit after it was entered (and persist the bounce). Once the user can
+  // see no project, the scope becomes All projects, whose pages say why they
+  // are empty, rather than a dead one that shows no page. That All projects
+  // is App's own (autoAll), and the first project shared ends it.
   useEffect(() => {
-    if (P.isWideScope(scope)) return
+    if (P.isWideScope(scope)) {
+      const first = autoAll.current && P.visibleProjects()[0]
+      if (first) setScope(first.id)
+      return
+    }
     const metas = P.visibleProjects()
     const p = P.project(scope)
     const meta = p ? (p.type === 'meta' ? p : P.project(p.parent)) : null
-    if (!(meta && metas.some((m) => m.id === meta.id)) && metas[0]) setScope(metas[0].id)
+    if (meta && metas.some((m) => m.id === meta.id)) return
+    if (metas[0]) setScope(metas[0].id)
+    else if (seesNoProject()) {
+      autoAll.current = true
+      setScope(P.ALL_SCOPE)
+    }
   }, [scope, rev])
 
   // User navigation must leave the inbox: the main pane renders the inbox

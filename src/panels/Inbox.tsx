@@ -30,6 +30,7 @@ import {
 import { fmtDateTime } from '../lib/dates'
 import { closeOrAsk } from '../lib/discardQuestion'
 import { UnsentScopeContext, useUnsentScope } from '../lib/leaveGuard'
+import { noProjectsHint, seesNoProject } from '../lib/noProjects'
 import { notificationPermission, requestNotificationPermission } from '../lib/notify'
 import { matchesAllWords } from '../lib/search'
 import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '../lib/snooze'
@@ -819,7 +820,11 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
               data-inbox-empty
               className="[font-size:var(--fs-base)] [color:var(--text-3)] [font-style:italic] [padding:14px_10px]"
             >
-              {P.messageGroups.length === 0 ? 'No messages yet.' : 'No messages match the filters.'}
+              {P.messageGroups.length > 0
+                ? 'No messages match the filters.'
+                : seesNoProject()
+                  ? `No messages yet. ${noProjectsHint()}`
+                  : 'No messages yet.'}
             </div>
           )}
           {/* the Inbox loads the newest 500 messages (convex/lib/workspaceParts.ts readInbox) */}

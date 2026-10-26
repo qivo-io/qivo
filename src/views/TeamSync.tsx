@@ -17,11 +17,13 @@
    · Where the page is (scope and step) lives in App and the URL; the page
      reports moves through `onPlace` and corrects a place it cannot show. */
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { NoProjects } from '@/components/NoProjects'
 import { Avatar, FieldSelect, Icon } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { WalkFooter, WalkRail } from '@/components/walk'
 import { flushWalkInput, useReviewed } from '@/components/walkRows'
 import type { UnsentScope } from '@/lib/leaveGuard'
+import { seesNoProject, syncNoProjectsHint } from '@/lib/noProjects'
 import {
   bannerVerdict,
   cardsClosedBy,
@@ -577,7 +579,10 @@ export function TeamSync({
   const last = idx >= steps.length - 1
 
   let body: ReactNode
-  if (person) {
+  // with no project of the home organization to see, no step has anything to show
+  if (seesNoProject(P.homeOrg))
+    body = <NoProjects icon="people" title="Nothing to review yet" hint={syncNoProjectsHint()} />
+  else if (person) {
     const ctx = ctxFor(person)
     const prev = previousSync(person.sync ?? null, now)
     body = (

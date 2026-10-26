@@ -55,11 +55,15 @@ export class DemoSessionEnded extends Error {
 
 const REFUSALS: readonly string[] = Object.values(DEMO_UNAVAILABLE)
 
-/** How a failed demo start or lifecycle check ends the demo: expired, or
- * lost with the demo backend's own sentence when the refusal carries one of
- * them (convex/lib/demoRefusals.ts), never other text a server error
- * carries. Null for any other failure, which the gate offers to retry. */
-export function demoEnding(error: unknown): { phase: 'expired' | 'lost'; detail?: string } | null {
+/** How a demo ended, and the demo backend's own sentence for a lost one. */
+export type DemoEnding = { phase: 'expired' | 'lost'; detail?: string }
+
+/** How a failed demo start, a lifecycle check or a refusal of the loaded
+ * demo ends the demo: expired, or lost with the demo backend's own sentence
+ * when the refusal carries one of them (convex/lib/demoRefusals.ts), never
+ * other text a server error carries. Null for any other failure, which the
+ * gate offers to retry. */
+export function demoEnding(error: unknown): DemoEnding | null {
   if (error instanceof DemoSessionEnded) return { phase: error.phase }
   if (!(error instanceof ConvexError) || typeof error.data !== 'object' || !error.data) return null
   const data: { reason?: unknown; message?: unknown } = error.data
