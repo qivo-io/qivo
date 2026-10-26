@@ -1453,7 +1453,7 @@ function App() {
     // every project a lane and a track, and their + buttons name them.
     if (proj && proj.type === 'meta' && proj.children.length === 0) {
       window.showToast?.('Create a sub-project first. Tasks live in sub-projects.', 'info')
-      setModal({ kind: 'subproject', init: { parent: proj.id } })
+      openNewProject({ parent: proj.id })
       return
     }
     // …and with no target at all (a sentinel scope, nothing to put a task in

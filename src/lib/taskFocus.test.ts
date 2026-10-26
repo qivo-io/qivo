@@ -267,3 +267,25 @@ describe("restoreTaskFocus on another view's rows", () => {
     expect(document.activeElement?.textContent).toBe('New task')
   })
 })
+
+describe('restoreTaskFocus on Roadmap rows', () => {
+  /** A Roadmap view with a track named by its button, and a task row
+      under it for each id. */
+  const roadmap = (ids: string[]) =>
+    `<div data-workspace-view="roadmap"><div data-track="p1"><button data-lane-open="p1">Website</button></div>${ids
+      .map((id) => `<div><button data-roadmap-task-open="${id}">${id}</button></div>`)
+      .join('')}</div>`
+  const task = (id: string) =>
+    document.querySelector<HTMLElement>(`[data-roadmap-task-open="${id}"]`)!
+
+  it("falls back to its track's button once the track's last task left, and keeps it in the Tab order", () => {
+    document.body.innerHTML = roadmap(['A'])
+    const mark = markTaskFocus(task('A'), 'A')!
+    task('A').parentElement!.remove()
+    const track = document.querySelector<HTMLElement>('[data-lane-open]')!
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(document.activeElement).toBe(track)
+    // a button is in the Tab order on its own
+    expect(track.hasAttribute('tabindex')).toBe(false)
+  })
+})

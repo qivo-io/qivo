@@ -30,7 +30,8 @@ export type TaskFocusMark = {
 }
 
 const ROWS = '[data-card], [data-parent-heading]'
-const HEADINGS = 'h1, h2, h3, h4, h5, h6, [role="heading"]'
+// with the button that names a Roadmap track or sub-project band
+const HEADINGS = 'h1, h2, h3, h4, h5, h6, [role="heading"], [data-lane-open]'
 
 /** The mark for focus on `element`, or null outside a task row. Outside a
     Board row, `taskId` names the task of another view's row: `element`, or
@@ -265,7 +266,7 @@ function besideCell(cell: HTMLElement, pick: (cell: HTMLElement) => HTMLElement 
     focus unless it already was, or undefined once it is gone. */
 function headingTarget(heading: HTMLElement | null | undefined) {
   if (!usable(heading)) return undefined
-  if (!heading.hasAttribute('tabindex')) {
+  if (heading.tabIndex < 0 && !heading.hasAttribute('tabindex')) {
     heading.tabIndex = -1
     heading.addEventListener('blur', () => heading.removeAttribute('tabindex'), { once: true })
   }
