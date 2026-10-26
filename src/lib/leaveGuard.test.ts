@@ -5,6 +5,8 @@ import {
   hasUnsaved,
   holdUnsaved,
   installLeaveGuard,
+  LEAVING_MS,
+  pageLeaving,
 } from './leaveGuard'
 
 /** Dispatches a cancelable beforeunload and answers whether it was stopped. */
@@ -24,6 +26,22 @@ describe('leave guard', () => {
     expect(leave(win)).toBe(true)
     remove()
     expect(leave(win)).toBe(false)
+  })
+
+  it('says the page is leaving for LEAVING_MS after a beforeunload, also one that warned', () => {
+    let now = 5_000
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const win = new EventTarget() as Window
+    const remove = installLeaveGuard(() => true, win)
+    expect(pageLeaving()).toBe(false)
+    expect(leave(win)).toBe(true)
+    now += LEAVING_MS - 1
+    expect(pageLeaving()).toBe(true)
+    // a page that stayed counts as staying once that time has passed
+    now += 1
+    expect(pageLeaving()).toBe(false)
+    remove()
+    clock.mockRestore()
   })
 
   it('counts each lease on its own', () => {

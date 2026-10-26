@@ -44,7 +44,7 @@ import { NO_QUERY, SignOutFailed } from './lib/authSession'
 import { convex } from './lib/convex'
 import { overLimit } from './lib/fieldLimits'
 import { lazyFromModule } from './lib/lazyModule'
-import { leaveDeliberately, useUnsaved } from './lib/leaveGuard'
+import { leaveDeliberately, pageLeaving, useUnsaved } from './lib/leaveGuard'
 import { loadFailureText } from './lib/loadFailure'
 import { oauthConnectRequest, oauthNeedsLogin } from './lib/oauthConnection'
 import { reloadPage } from './lib/pageHistory'
@@ -338,8 +338,9 @@ export function AuthGate() {
     } catch (e) {
       if (attempt !== loadAttempt.current) return
       // The raw text, request id included, is for support, not for the card.
-      // A failed code download asks for a connection check instead.
-      console.error('[qivo] workspace load failed:', e)
+      // A failed code download asks for a connection check instead. A load
+      // the page's own next load cut off is no failure to report.
+      if (!pageLeaving()) console.error('[qivo] workspace load failed:', e)
       setAppearanceAccount(null)
       showError(
         reloadAfterCodeFailure.current
@@ -446,7 +447,8 @@ export function AuthGate() {
          here left the gate on "Loading…" for good, with nothing to click and
          nothing in the UI to read. That is exactly the shape a misconfigured
          deployment takes, so it has to end somewhere a person can act. */
-      console.error('[auth] could not establish the session', e)
+      // a session read the page's own next load cut off is expected
+      if (!pageLeaving()) console.error('[auth] could not establish the session', e)
       showError('Check your connection, then try again.', 'form')
       setBootFailed(true)
       setPhase('loadFailed')

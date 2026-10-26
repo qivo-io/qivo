@@ -12,6 +12,7 @@ import { api } from '../../convex/_generated/api'
 import { asciiEmail } from '../../convex/lib/email'
 import { NO_QUERY } from '../lib/authSession'
 import { convex } from '../lib/convex'
+import { pageLeaving } from '../lib/leaveGuard'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { AdminApp } from './AdminApp'
 import { armConvexAuth, authClient, signOutAndReload } from './auth'
@@ -80,7 +81,8 @@ export function AdminGate() {
         void gate()
       })
       .catch((e) => {
-        console.error('[admin] could not establish the session', e)
+        // a session read the page's own next load cut off is expected
+        if (!pageLeaving()) console.error('[admin] could not establish the session', e)
         setError('Sign-in service unavailable. Check your connection and try again.')
         setPhase('signedOut')
       })
