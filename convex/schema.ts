@@ -1707,7 +1707,7 @@ export default defineSchema({
 
   // A browser session that ended, such as at sign-out or a ban. The OAuth
   // access tokens issued in it before `ended_at` are refused
-  // (oauthConnections.ts lookupAccess). The row goes once every such token
+  // (oauthAccess.ts lookupAccess). The row goes once every such token
   // has expired (lib/sessionEnd.ts endSessionAccess).
   oauth_ended_sessions: defineTable({
     session_id: v.string(),

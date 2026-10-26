@@ -1266,27 +1266,24 @@ export function loginBanned(user: LoginBan, now: number): boolean {
 }
 
 /**
- * The Better Auth user row behind a login, or null when Better Auth no
- * longer has it. Each call is a query into the Better Auth component, one
- * more read than the app's own tables, so callers make it after their
- * cheaper checks pass.
+ * The ban columns of the Better Auth user row behind a login, or null when
+ * Better Auth no longer has it. Each call is a query into the Better Auth
+ * component, one more read than the app's own tables, so callers make it
+ * after their cheaper checks pass. The query loads no Better Auth
+ * (betterAuth/lookups.ts userBan), because every REST and MCP call made with
+ * a personal token or an OAuth access token makes it.
  */
 export async function findAuthUser(ctx: QueryCtx, authUserId: string): Promise<LoginBan | null> {
-  return (await ctx.runQuery(components.betterAuth.adapter.findOne, {
-    model: 'user',
-    where: [{ field: '_id', value: authUserId }],
-  })) as LoginBan | null
+  return await ctx.runQuery(components.betterAuth.lookups.userBan, { userId: authUserId })
 }
 
 /**
- * Better Auth's row for OAuth client `clientId`, or null once it no longer
- * has it. One indexed read of the Better Auth component.
+ * Whether Better Auth's OAuth client `clientId` is disabled, or null once it
+ * no longer has the client. One indexed read of the Better Auth component,
+ * which loads no Better Auth (betterAuth/lookups.ts oauthClient).
  */
 export async function findOAuthClient(ctx: QueryCtx, clientId: string) {
-  return (await ctx.runQuery(components.betterAuth.adapter.findOne, {
-    model: 'oauthClient',
-    where: [{ field: 'clientId', value: clientId }],
-  })) as { disabled?: boolean | null } | null
+  return await ctx.runQuery(components.betterAuth.lookups.oauthClient, { clientId })
 }
 
 /**
@@ -1294,7 +1291,7 @@ export async function findOAuthClient(ctx: QueryCtx, clientId: string) {
  * Auth still has the client, it is not disabled and it keeps its link to the
  * resource. Better Auth checks the link only when it issues a token, so every
  * use of a grant checks it here: each MCP or REST call
- * (oauthConnections.ts lookupAccess) and each webhook subscription's owner
+ * (oauthAccess.ts lookupAccess) and each webhook subscription's owner
  * (model/taskEvents.ts eventOwner). It costs two indexed reads of the Better
  * Auth component, so callers make it after their cheaper checks pass.
  */
@@ -1305,14 +1302,10 @@ export async function oauthClientLive(
 ): Promise<boolean> {
   const client = await findOAuthClient(ctx, clientId)
   if (!client || client.disabled) return false
-  const link = await ctx.runQuery(components.betterAuth.adapter.findOne, {
-    model: 'oauthClientResource',
-    where: [
-      { field: 'clientId', value: clientId },
-      { field: 'resourceId', value: resource },
-    ],
+  return await ctx.runQuery(components.betterAuth.lookups.clientLinked, {
+    clientId,
+    resourceId: resource,
   })
-  return link !== null
 }
 
 export const VIEWER_AGENT_READS_ONLY = 'this agent is a Viewer and can only read'

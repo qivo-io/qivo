@@ -74,7 +74,7 @@ out. `@convex-dev/better-auth` is no longer installed.
   the authorize hook and `validateOAuthQuery` in `convex/lib/oauth.ts`, the
   token endpoint's `onRequest` and before hook, the issuance check in
   `customTokenResponseFields`, and the grant's stored resource, which
-  `oauthConnections.lookupAccess` compares on every MCP request. Better
+  `oauthAccess.lookupAccess` compares on every MCP request. Better
   Auth checks the link only when it issues a token, so `lookupAccess` also
   reads the client's link on every request and refuses a token whose client
   lost it, and webhook ownership (`model/taskEvents.ts eventOwner`) refuses
@@ -144,7 +144,7 @@ out. `@convex-dev/better-auth` is no longer installed.
   transaction that deletes each session row and stores one
   `oauth_ended_sessions` row with the time the session ended, so the delete
   and the record succeed or fail together, and the work stays one write
-  however many tokens the session holds. `oauthConnections.lookupAccess`
+  however many tokens the session holds. `oauthAccess.lookupAccess`
   refuses every access token of the session created before that time, and a
   scheduled cleanup deletes the record once those tokens have expired
   (`OAUTH_ACCESS_TOKEN_TTL_SECONDS` in `convex/lib/oauth.ts`, plus a minute).
@@ -382,6 +382,21 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
   `convex/tests/demo.test.ts` refuse a caller without one, and
   `convex/tests/authTriggers.test.ts` keeps Better Auth out of these
   modules.
+- Every REST and MCP call made with a personal token or an OAuth access
+  token reads the person's login for its ban, and a call with an OAuth
+  access token also reads the token, its client and the client's resource
+  link, through the queries in `convex/betterAuth/lookups.ts`, not the
+  adapter's `findOne`, which loads Better Auth. The OAuth check itself is in
+  `convex/oauthAccess.ts`. Each query reads its row through the index
+  `findOne` would use and answers only the fields Qivo checks, so compare
+  them with the release's tables: the user's `banned` and `banExpires`, the
+  client's `clientId` and `disabled`, the resource link's `clientId` and
+  `resourceId`, and the access token's `token`, `referenceId`, `userId`,
+  `clientId`, `sessionId`, `expiresAt`, `revoked`, `confirmation` and
+  `scopes`. `convex/tests/oauth.test.ts` checks the grant's refusals with no
+  adapter function running, and `convex/tests/authTriggers.test.ts` keeps
+  Better Auth out of every module a REST or MCP call runs, following each
+  nested call.
 
 ## Comparing the copy with an official release
 

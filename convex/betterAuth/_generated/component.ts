@@ -3263,6 +3263,46 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
     };
+    lookups: {
+      accessToken: FunctionReference<
+        "query",
+        "internal",
+        { token: string },
+        null | {
+          _creationTime: number;
+          clientId: string;
+          confirmation?: null | string;
+          expiresAt?: null | number;
+          referenceId?: null | string;
+          revoked?: null | number;
+          scopes: Array<string>;
+          sessionId?: null | string;
+          userId?: null | string;
+        },
+        Name
+      >;
+      clientLinked: FunctionReference<
+        "query",
+        "internal",
+        { clientId: string; resourceId: string },
+        boolean,
+        Name
+      >;
+      oauthClient: FunctionReference<
+        "query",
+        "internal",
+        { clientId: string },
+        null | { disabled?: null | boolean },
+        Name
+      >;
+      userBan: FunctionReference<
+        "query",
+        "internal",
+        { userId: string },
+        null | { banExpires?: null | number; banned?: null | boolean },
+        Name
+      >;
+    };
     oauth: {
       deleteClients: FunctionReference<
         "mutation",

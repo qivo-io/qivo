@@ -10,7 +10,7 @@ import { api, components, internal } from '../_generated/api'
 import type { MutationCtx } from '../_generated/server'
 import { createAuth } from '../auth'
 import * as authTriggers from '../authTriggers'
-import { findMany } from '../betterAuth/adapter'
+import * as adapter from '../betterAuth/adapter'
 import authSchema from '../betterAuth/schema'
 import { LIMITS, NAME_MAX } from '../lib/limits'
 import { NO_ORGANIZATION, ORGANIZATION_GONE } from '../lib/oauth'
@@ -20,7 +20,7 @@ import { BODY_MAX_BYTES } from '../machine/shared'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { notifyIssueUpdate } from '../model/messages'
 import { deleteOrgStep } from '../model/orgDeletion'
-import { touch as touchConnection } from '../oauthConnections'
+import { touch as touchConnection } from '../oauthAccess'
 import {
   expectRefusal,
   flushWebhookEvents,
@@ -1179,7 +1179,7 @@ describe('OAuth consent and resource binding', () => {
     async (_, how, refusal) => {
       const f = await fixture()
       const c = await connect(f, READ)
-      const grant = await f.t.query(internal.oauthConnections.lookupAccess, {
+      const grant = await f.t.query(internal.oauthAccess.lookupAccess, {
         tokenHash: await sha256hex(c.access_token.slice(4)),
         resource: RESOURCE,
       })
@@ -1924,7 +1924,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     const c = await connect(f)
     // Better Auth's delete looks the row up first and skips it, without an
     // error, when that lookup fails.
-    const handler = findMany as unknown as {
+    const handler = adapter.findMany as unknown as {
       _handler: (ctx: unknown, args: { model: string }) => Promise<unknown>
     }
     const original = handler._handler
@@ -2155,7 +2155,7 @@ describe('OAuth revocation, replay and live account checks', () => {
   it('refuses access and webhook ownership while a platform ban is in force, until its banExpires', async () => {
     const f = await fixture()
     const c = await connect(f)
-    const grant = await f.t.query(internal.oauthConnections.lookupAccess, {
+    const grant = await f.t.query(internal.oauthAccess.lookupAccess, {
       tokenHash: await sha256hex(c.access_token.slice(4)),
       resource: RESOURCE,
     })
@@ -2205,6 +2205,167 @@ describe('OAuth revocation, replay and live account checks', () => {
     })
     await oauthRefusal(await refresh(f, c.request.clientId, c.refresh_token), ['invalid_grant'])
     await deniedAccess(f, c.access_token)
+  })
+})
+
+describe('the access check of every machine call, without the adapter', () => {
+  /** How many times a function of the component's adapter ran while `run`
+   * ran. Each loads Better Auth, so the checks of every MCP and REST call
+   * read their rows through betterAuth/lookups.ts instead. */
+  async function adapterCalls(run: () => Promise<unknown>) {
+    const spies = Object.values(adapter).map((fn) =>
+      vi.spyOn(fn as unknown as { _handler: (...args: never[]) => unknown }, '_handler'),
+    )
+    try {
+      await run()
+      return spies.reduce((calls, spy) => calls + spy.mock.calls.length, 0)
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
+  }
+
+  it('counts a call of any adapter function', async () => {
+    const f = await fixture()
+    const where = [{ field: '_id', value: f.userId }]
+    const calls = () =>
+      Promise.all([
+        f.t.query(components.betterAuth.adapter.findOne, { model: 'user', where }),
+        f.t.query(components.betterAuth.adapter.findMany, {
+          model: 'user',
+          where,
+          paginationOpts: { cursor: null, numItems: 1 },
+        }),
+      ])
+    expect(await adapterCalls(calls)).toBe(2)
+  })
+
+  const deleteRow = (f: Fx, table: 'oauthClient' | 'user', id: string) =>
+    runInAuth(f.t, async (ctx) => {
+      const row =
+        table === 'user'
+          ? await ctx.db.get(ctx.db.normalizeId('user', id)!)
+          : await ctx.db
+              .query('oauthClient')
+              .withIndex('clientId', (q) => q.eq('clientId', id))
+              .unique()
+      await ctx.db.delete(row!._id)
+    })
+  const LIVE = { grant: true, deleting: false, mcp: 200 }
+  const INVALID = { grant: false, deleting: false, mcp: 401 }
+  it.each([
+    ['passes a live grant', async () => {}, LIVE],
+    [
+      'refuses a grant its person disconnected',
+      async (f: Fx, connectionId: string) =>
+        f.as.mutation(api.oauthConnections.revoke, { id: connectionId }),
+      INVALID,
+    ],
+    [
+      // only the token's own column, which a ban sets on a token whose
+      // session had already ended (adminAuth.ts revokeLoginAccess), so that
+      // it stays refused after an unban
+      'refuses a token Better Auth marked revoked',
+      (f: Fx, _: string, __: string, tokenHash: string) =>
+        runInAuth(f.t, async (ctx) => {
+          const token = await ctx.db
+            .query('oauthAccessToken')
+            .withIndex('token', (q) => q.eq('token', tokenHash))
+            .unique()
+          await ctx.db.patch(token!._id, { revoked: Date.now() })
+        }),
+      INVALID,
+    ],
+    [
+      'refuses a grant whose client Better Auth deleted',
+      (f: Fx, _: string, clientId: string) => deleteRow(f, 'oauthClient', clientId),
+      INVALID,
+    ],
+    [
+      'refuses a grant whose client was disabled',
+      (f: Fx, _: string, clientId: string) => disable(f, clientId),
+      INVALID,
+    ],
+    [
+      'refuses a grant whose client lost its resource link',
+      (f: Fx, _: string, clientId: string) => unlink(f, clientId),
+      INVALID,
+    ],
+    [
+      "says the deletion to a grant its organization's deletion deleted",
+      async (f: Fx) => {
+        await beginDeletion(f)
+        await deleteGrants(f)
+      },
+      { grant: false, deleting: true, mcp: 403 },
+    ],
+    [
+      'refuses a grant whose seat was removed',
+      (f: Fx) => f.t.run((ctx) => ctx.db.delete(f.profile._id)),
+      INVALID,
+    ],
+    [
+      'refuses a grant whose seat was deactivated',
+      (f: Fx) => f.t.run((ctx) => ctx.db.patch(f.profile._id, { active: false })),
+      INVALID,
+    ],
+    ['refuses a grant whose browser session ended', (f: Fx) => signOut(f), INVALID],
+    ['refuses a grant whose login was deleted', (f: Fx) => deleteRow(f, 'user', f.userId), INVALID],
+    [
+      'refuses a grant whose login is banned',
+      (f: Fx) =>
+        runInAuth(f.t, (ctx) =>
+          ctx.db.patch(ctx.db.normalizeId('user', f.userId)!, { banned: true }),
+        ),
+      INVALID,
+    ],
+  ] as const)('%s', async (_, change, expected) => {
+    const f = await fixture()
+    const c = await connect(f, READ)
+    const args = { tokenHash: await sha256hex(c.access_token.slice(4)), resource: RESOURCE }
+    const live = await f.t.query(internal.oauthAccess.lookupAccess, args)
+    await change(f, live!.connectionId, c.request.clientId, args.tokenHash)
+    let answer = {}
+    const calls = await adapterCalls(async () => {
+      const grant = await f.t.query(internal.oauthAccess.lookupAccess, args)
+      const deleting = await f.t.query(internal.oauthAccess.refusedForDeletion, args)
+      const response = await mcp(f, c.access_token, 'list_projects')
+      answer = { grant: grant !== null, deleting, mcp: response.status }
+    })
+    expect({ ...answer, calls }).toEqual({ ...expected, calls: 0 })
+  })
+
+  it("reads a personal token's login, and its ban, without the adapter", async () => {
+    const f = await fixture()
+    const secret = `qvt_${uuid().replace(/-/g, '')}${'0'.repeat(16)}`
+    await f.t.run(async (ctx) =>
+      ctx.db.insert('mcp_tokens', {
+        id: uuid(),
+        profile_id: f.profile.id,
+        name: 'Personal key',
+        token_prefix: 'qvt_1...11111',
+        token_hash: await sha256hex(secret),
+        access: 'read',
+        created_at: new Date().toISOString(),
+      }),
+    )
+    const me = () => http(f.t, '/v1/me', { headers: { Authorization: `Bearer ${secret}` } })
+    let status = 0
+    expect(await adapterCalls(async () => (status = (await me()).status))).toBe(0)
+    expect(status).toBe(200)
+    await runInAuth(f.t, (ctx) =>
+      ctx.db.patch(ctx.db.normalizeId('user', f.userId)!, { banned: true }),
+    )
+    expect(await adapterCalls(async () => (status = (await me()).status))).toBe(0)
+    expect(status).toBe(401)
+  })
+
+  it('finds no login for an id of another table, or for a string that is no id', async () => {
+    const f = await fixture()
+    const ban = (userId: string) => f.t.query(components.betterAuth.lookups.userBan, { userId })
+    const session = await runInAuth(f.t, async (ctx) => await ctx.db.query('session').first())
+    expect(await ban(f.userId)).not.toBeNull()
+    expect(await ban(session!._id)).toBeNull()
+    expect(await ban('not an id')).toBeNull()
   })
 })
 

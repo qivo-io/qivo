@@ -2411,17 +2411,17 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
   if (secret.startsWith('qvo_')) {
     const tokenHash = await sha256hex(secret.slice(4))
     const resource = mcpResource()
-    const credential = await ctx.runQuery(internal.oauthConnections.lookupAccess, {
+    const credential = await ctx.runQuery(internal.oauthAccess.lookupAccess, {
       tokenHash,
       resource,
     })
     // whether a grant that lookupAccess refused, or that went before touch
     // stamped it, stopped only for its organization's deletion
     const deleting = () =>
-      ctx.runQuery(internal.oauthConnections.refusedForDeletion, { tokenHash, resource })
+      ctx.runQuery(internal.oauthAccess.refusedForDeletion, { tokenHash, resource })
     if (
       !credential ||
-      !(await runMutation(internal.oauthConnections.touch, { id: credential.connectionId }))
+      !(await runMutation(internal.oauthAccess.touch, { id: credential.connectionId }))
     )
       return (await deleting())
         ? orgDeleting()
@@ -2442,7 +2442,7 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
         headers: request.headers,
         bodyText: body.text,
         runEvent: async (method, params) => {
-          const live = await ctx.runQuery(internal.oauthConnections.lookupAccess, {
+          const live = await ctx.runQuery(internal.oauthAccess.lookupAccess, {
             tokenHash,
             resource,
           })
@@ -2468,7 +2468,7 @@ async function mcpResponse(ctx: ActionCtx, request: Request): Promise<Response> 
           // Both protocol versions enter this same gate. Recheck the live grant
           // on every tool in a batch, alongside the existing permission checks,
           // and pass its live access, so scopes narrowed mid-session apply.
-          const live = await ctx.runQuery(internal.oauthConnections.lookupAccess, {
+          const live = await ctx.runQuery(internal.oauthAccess.lookupAccess, {
             tokenHash,
             resource,
           })

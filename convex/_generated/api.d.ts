@@ -182,6 +182,7 @@ import type * as model_usage from "../model/usage.js";
 import type * as model_webhookHealth from "../model/webhookHealth.js";
 import type * as model_webhookOwners from "../model/webhookOwners.js";
 import type * as model_webhookQueue from "../model/webhookQueue.js";
+import type * as oauthAccess from "../oauthAccess.js";
 import type * as oauthConnections from "../oauthConnections.js";
 import type * as oauthRegistrations from "../oauthRegistrations.js";
 import type * as orgExport from "../orgExport.js";
@@ -388,6 +389,7 @@ declare const fullApi: ApiFromModules<{
   "model/webhookHealth": typeof model_webhookHealth;
   "model/webhookOwners": typeof model_webhookOwners;
   "model/webhookQueue": typeof model_webhookQueue;
+  oauthAccess: typeof oauthAccess;
   oauthConnections: typeof oauthConnections;
   oauthRegistrations: typeof oauthRegistrations;
   orgExport: typeof orgExport;

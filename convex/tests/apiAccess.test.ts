@@ -559,7 +559,7 @@ describe('apiAccess.revoke', () => {
     expect(mine.find((row) => row.id === f.ids.old)).toMatchObject({ revokedByAdmin: false })
     const apps = await as(t, f.admin).query(api.oauthConnections.list, {})
     expect(apps.find((row) => row.id === f.ids.claude)).toMatchObject({ revokedByAdmin: true })
-    expect(await t.mutation(internal.oauthConnections.touch, { id: f.ids.claude })).toBe(false)
+    expect(await t.mutation(internal.oauthAccess.touch, { id: f.ids.claude })).toBe(false)
 
     const events = await activityFor(t, org)
     expect(events.map((e) => [e.verb, e.target_id, e.label, e.detail, e.actor_id])).toEqual([

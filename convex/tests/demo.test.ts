@@ -519,7 +519,7 @@ describe('demo lifetime and capabilities', () => {
       /regular workspace/,
     )
     expect(
-      await t.query(internal.oauthConnections.lookupAccess, {
+      await t.query(internal.oauthAccess.lookupAccess, {
         tokenHash: 'anything',
         resource: 'anything',
       }),

@@ -98,7 +98,8 @@ const connectionsOf = (ctx: MutationCtx, profileId: string) =>
  * refresh. removeProfile revoked only the newest REVOKE_AT_ONCE connections,
  * so older ones are deleted here unrevoked. That is safe because consent
  * (oauthConnections.ensure), token issuance and refresh (claimIssuance) and
- * every token use (lookupAccess) refuse once the profile row is gone.
+ * every token use (oauthAccess.lookupAccess) refuse once the profile row is
+ * gone.
  * registerCode does not look at the profile, but a code it records only
  * becomes a token through claimIssuance. */
 const oauthEdge: Edge = {
