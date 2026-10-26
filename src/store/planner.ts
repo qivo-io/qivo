@@ -5226,10 +5226,15 @@ export const PLANNER = {
       await initStore(undefined, undefined, { whole: true })
     } catch (e) {
       // The organization exists, so a second create would be refused. The
-      // workspace on screen may have lost its subscriptions, so it shows as
-      // out of date with edits paused until Try again or a reload loads it.
+      // workspace on screen shows as out of date with edits paused, and a
+      // read that stopped its subscriptions starts them again, as Try
+      // again does, so its first delivery ends the trouble.
       console.error('[qivo] workspace load failed:', e)
       snapshotFailed(e)
+      if (!parts) {
+        const epoch = storeEpoch
+        parts = startParts(() => epoch === storeEpoch && !demoDisposed)
+      }
       toast('The organization was created, but Qivo could not load it. Reload the page to open it.')
     }
     emit()

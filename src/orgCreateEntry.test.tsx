@@ -179,22 +179,28 @@ describe('the phone project list', () => {
   })
 })
 
-// answers a create that createsOrganization holds
+// answers a create that createsOrganization holds, and the workspace read
+// that waits after a failed one
 let answerCreate = () => {}
+let answerRead = () => {}
 
 /** Has the server create the organization, and the workspace read after
     it hold the login's new admin seat. With `held`, the create waits for
-    answerCreate; with `readFails`, the workspace read after it fails. */
+    answerCreate; with `readFails`, the first workspace read after it fails
+    and the next waits for answerRead. */
 function createsOrganization(snap: Snapshot, { held = false, readFails = false } = {}) {
   const created = structuredClone(snap)
   created.orgs.push({ ...snap.orgs[0], id: 'mine', name: 'Mine', slug: 'mine' })
   created.profiles.push({ ...snap.profiles[0], id: 'me', org_id: 'mine', org_role: 'admin' })
   created.myProfileIds.push('me')
+  let reads = 0
   const land = () =>
     network.onUpdate.mockImplementation((r, _args, next, fail) => {
       if (getFunctionName(r) !== 'workspace:whole') return () => {}
-      if (readFails) fail(new Error('the workspace could not be read'))
-      else next(structuredClone(created))
+      reads += 1
+      if (!readFails) next(structuredClone(created))
+      else if (reads === 1) fail(new Error('the workspace could not be read'))
+      else answerRead = () => next(structuredClone(created))
       return () => {}
     })
   network.mutation.mockImplementation((ref) => {
@@ -302,7 +308,7 @@ describe("the sidebar's Create your organization", () => {
     )
   })
 
-  it('pauses edits on the workspace shown when its read fails after the create', async () => {
+  it('pauses edits when the workspace read fails after the create, until a read lands', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const button = await entry({ readFails: true })
     await createFrom(button, true)
@@ -310,6 +316,11 @@ describe("the sidebar's Create your organization", () => {
     // the read stopped the workspace's subscriptions, so it is out of date
     expect(P.snapshotTrouble()?.kind).toBe('failed')
     expect(P.editsPaused()).toBe(true)
+    // the store reads again by itself, and the workspace loads
+    await act(async () => answerRead())
+    await vi.waitFor(() => expect(P.snapshotTrouble()).toBeNull())
+    expect(P.editsPaused()).toBe(false)
+    expect(P.homeOrg).toBe('mine')
   })
 
   it("gives focus to the rail's New project once the organization exists, as it leaves", async () => {
