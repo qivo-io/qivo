@@ -381,14 +381,18 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const paneRows = useRef<ListedRows | null>(null)
   const menuRows = useRef<ListedRows | null>(null)
   const [bulkAction, setBulkAction] = useState<'read' | 'remove' | null>(null)
+  // the toolbar button the running bulk action was pressed on
+  const bulkFrom = useRef<'read' | 'remove' | null>(null)
   // also true while the server's bounded read left rows unexamined, which
   // these actions still reach (P.canMarkAllRead, P.canRemoveRead)
   const hasReadMessages = P.canRemoveRead
   const hasUnreadMessages = P.canMarkAllRead
   const runBulkAction = async (action: 'read' | 'remove') => {
     if (bulkAction || (action === 'read' ? !hasUnreadMessages : !hasReadMessages)) return
-    // from the row menu, focus goes to the first row still listed
+    // from the row menu, focus goes to the first row still listed; from the
+    // toolbar, back to its button once the action ends
     if (menu) menuRows.current = { id: null, ids: [] }
+    else bulkFrom.current = action
     setMenu(null)
     setBulkAction(action)
     try {
@@ -621,7 +625,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      in the list as it showed, else to the one before, else to the first
      row listed, else to the search field, or on a phone, which has none,
      to the empty list's line. The menu's Mark all as read and Remove all
-     read start at the first row. Focus that went elsewhere stays there. */
+     read start at the first row, and the toolbar's at their own button.
+     Focus that went elsewhere stays there. */
   const paneRow = deadItem || (paneShown.current?.uuid ?? null)
   useLayoutEffect(() => {
     if (!paneRow) return
@@ -629,13 +634,18 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     if (ids.includes(paneRow)) paneRows.current = { id: paneRow, ids }
     else if (paneRows.current?.id !== paneRow) paneRows.current = { id: paneRow, ids: [paneRow] }
   })
+  /** Whether the Inbox shows and focus is nowhere, so it can take focus. */
+  const focusFree = () => {
+    const list = listScrollRef.current
+    const active = document.activeElement
+    if (!list || list.closest(OUT_OF_USE)) return false
+    return !active || active === document.body || !active.isConnected
+  }
   /** Gives focus to `rows.id`'s row or what took its place, while focus is
       nowhere and the Inbox shows. */
   const focusRowAfter = (rows: ListedRows) => {
     const list = listScrollRef.current
-    const active = document.activeElement
-    if (!list || list.closest(OUT_OF_USE)) return
-    if (active && active !== document.body && active.isConnected) return
+    if (!list || !focusFree()) return
     const { id, ids } = rows
     const at = id === null ? -1 : ids.indexOf(id)
     const order =
@@ -668,12 +678,28 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     menuRows.current = null
     focusRowAfter(rows)
   }, [menu])
+  // A toolbar button disables itself while its action runs, and a browser
+  // takes focus from a disabled button. Once the action ends, focus goes
+  // back to the button when it is enabled again, else to the first row.
+  useEffect(() => {
+    const from = bulkFrom.current
+    if (bulkAction || !from) return
+    bulkFrom.current = null
+    const button = listScrollRef.current
+      ?.closest('[data-inbox]')
+      ?.querySelector<HTMLElement>(
+        from === 'read' ? '[data-inbox-mark-all-read]' : '[data-inbox-remove-read]',
+      )
+    if (button && !button.matches(':disabled') && focusFree()) restoreFocus(button)
+    else focusRowAfter({ id: null, ids: [] })
+  }, [bulkAction])
   // what a kept Inbox held before it hid (components/KeptView) moves no
   // focus once it shows again
   useEffect(
     () => () => {
       paneRows.current = null
       menuRows.current = null
+      bulkFrom.current = null
     },
     [],
   )

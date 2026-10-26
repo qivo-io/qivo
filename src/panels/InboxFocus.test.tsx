@@ -8,9 +8,10 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* Where keyboard focus goes in the Inbox when a row leaves the list: after
    the pane's Archive or delete window takes its task away, after a row's
-   own menu removes or snoozes it, and after that menu acts on the whole
-   list. On the real store, at desktop width unless a test takes a phone's,
-   with the server answering every write at once. */
+   own menu removes or snoozes it, and after that menu or the toolbar acts
+   on the whole list. On the real store, at desktop width unless a test
+   takes a phone's, with the server answering every write at once unless a
+   test holds it. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -173,6 +174,9 @@ async function leaveFromPane(fate: 'Archive' | 'Delete') {
   await settle()
 }
 
+/** A write the test answers or refuses. */
+type Held = { answer: (value: unknown) => void; refuse: (error: Error) => void }
+
 /** Takes a phone's width: only the phone breakpoint matches. */
 function onPhone() {
   vi.stubGlobal(
@@ -267,6 +271,50 @@ describe('Inbox focus when a row leaves', { timeout: 20_000 }, () => {
     await settle()
     expect(rowOpen(uuids[0])).toBeNull()
     expect(focused()).toBe(`row ${uuids[1]}`)
+  })
+
+  /* Runs the toolbar's Mark all as read with the server's answer held, and
+     settles it with `settleWrite` once focus left the button. A browser
+     takes focus from the button as it disables itself; jsdom keeps it there
+     and will not blur a disabled button, so focus goes to a stand-in that
+     then leaves: focus is nowhere while the write runs, as in a browser. */
+  async function markAllReadFromToolbar(settleWrite: (held: Held) => void) {
+    let held: Held = { answer: () => {}, refuse: () => {} }
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'messages:markAllRead'
+        ? new Promise((answer, refuse) => {
+            held = { answer, refuse }
+          })
+        : Promise.resolve(null),
+    )
+    const button = document.querySelector<HTMLButtonElement>('[data-inbox-mark-all-read]')
+    await press(button)
+    expect(button?.disabled).toBe(true)
+    await act(async () => {
+      const standIn = document.body.appendChild(document.createElement('button'))
+      standIn.focus()
+      standIn.remove()
+    })
+    expect(document.activeElement).toBe(document.body)
+    await act(async () => settleWrite(held))
+    await settle()
+    return button
+  }
+
+  it('gives focus back to the toolbar button once its refused action ends', async () => {
+    await openInbox(3)
+    const button = await markAllReadFromToolbar((held) => held.refuse(new Error('offline')))
+    expect(button?.disabled).toBe(false)
+    expect(document.activeElement).toBe(button)
+  })
+
+  it('gives focus to the first row after the toolbar button stays disabled', async () => {
+    const uuids = await openInbox(3)
+    const button = await markAllReadFromToolbar((held) =>
+      held.answer({ ids: ['message-0', 'message-1', 'message-2'], hasMore: false }),
+    )
+    expect(button?.disabled).toBe(true)
+    expect(focused()).toBe(`row ${uuids[0]}`)
   })
 
   it("gives focus to the empty list's line on a phone after the task window deletes the only task", async () => {
