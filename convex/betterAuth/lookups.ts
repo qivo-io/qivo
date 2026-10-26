@@ -1,12 +1,14 @@
-/* Better Auth rows that every REST and MCP call reads: the caller's login,
- * for its ban (lib/access.ts findAuthUser), and for an OAuth access token,
- * the token (oauthAccess.ts grantFor) and its client and the client's link
- * to the resource (lib/access.ts oauthClientLive). The adapter's findOne
- * (adapter.ts) loads all of Better Auth through auth.ts's options on every
- * call, so this module, like sessions.ts, imports neither. Each query reads
- * the row findOne reads for the same where clause, through the same index,
- * and answers only the fields its caller uses. Better Auth upgrades re-check
- * them against the release's tables (docs/better-auth-upgrade.md). */
+/* Better Auth rows that REST and MCP calls read: the login behind a personal
+ * token or an OAuth access token, for its ban (lib/access.ts findAuthUser),
+ * and for an OAuth access token, the token (oauthAccess.ts grantFor) and its
+ * client and the client's link to the resource (lib/access.ts
+ * oauthClientLive). An agent key belongs to no login and reads none. The
+ * adapter's findOne (adapter.ts) loads all of Better Auth through auth.ts's
+ * options on every call, so this module, like sessions.ts, imports neither.
+ * Each query reads the row findOne reads for the same where clause, through
+ * the same index, and answers only the fields its caller uses. Better Auth
+ * upgrades re-check them against the release's tables
+ * (docs/better-auth-upgrade.md). */
 
 import { v } from 'convex/values'
 import { query } from './_generated/server'

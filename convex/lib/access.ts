@@ -1270,7 +1270,8 @@ export function loginBanned(user: LoginBan, now: number): boolean {
  * Better Auth no longer has it. Each call is a query into the Better Auth
  * component, one more read than the app's own tables, so callers make it
  * after their cheaper checks pass. The query loads no Better Auth
- * (betterAuth/lookups.ts userBan), because every REST and MCP call makes it.
+ * (betterAuth/lookups.ts userBan), because every REST and MCP call made with
+ * a personal token or an OAuth access token makes it.
  */
 export async function findAuthUser(ctx: QueryCtx, authUserId: string): Promise<LoginBan | null> {
   return await ctx.runQuery(components.betterAuth.lookups.userBan, { userId: authUserId })

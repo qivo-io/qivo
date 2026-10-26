@@ -138,9 +138,9 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
      * mcpResource() for every client: the authorize hook and
      * validateOAuthQuery, the token endpoint's onRequest and before hook,
      * customTokenResponseFields and the grant's stored resource
-     * (oauthConnections.ts claimIssuance and lookupAccess). A second resource
-     * needs every client linked only to what it may use, and those
-     * single-resource checks replaced (docs/better-auth-upgrade.md). */
+     * (oauthConnections.ts claimIssuance, oauthAccess.ts lookupAccess). A
+     * second resource needs every client linked only to what it may use, and
+     * those single-resource checks replaced (docs/better-auth-upgrade.md). */
     resources: seeded,
     clientRegistrationDefaultResources: seeded,
     enforcePerClientResources: true,

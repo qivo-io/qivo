@@ -10,7 +10,7 @@ import { api, components, internal } from '../_generated/api'
 import type { MutationCtx } from '../_generated/server'
 import { createAuth } from '../auth'
 import * as authTriggers from '../authTriggers'
-import { findMany, findOne } from '../betterAuth/adapter'
+import * as adapter from '../betterAuth/adapter'
 import authSchema from '../betterAuth/schema'
 import { LIMITS, NAME_MAX } from '../lib/limits'
 import { NO_ORGANIZATION, ORGANIZATION_GONE } from '../lib/oauth'
@@ -1924,7 +1924,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     const c = await connect(f)
     // Better Auth's delete looks the row up first and skips it, without an
     // error, when that lookup fails.
-    const handler = findMany as unknown as {
+    const handler = adapter.findMany as unknown as {
       _handler: (ctx: unknown, args: { model: string }) => Promise<unknown>
     }
     const original = handler._handler
@@ -2209,28 +2209,34 @@ describe('OAuth revocation, replay and live account checks', () => {
 })
 
 describe('the access check of every machine call, without the adapter', () => {
-  /** How many times the adapter's findOne ran while `run` ran. findOne loads
-   * Better Auth, so the checks of every MCP and REST call read their rows
-   * through betterAuth/lookups.ts instead. */
-  async function adapterReads(run: () => Promise<unknown>) {
-    const handler = findOne as unknown as { _handler: (...args: never[]) => unknown }
-    const spy = vi.spyOn(handler, '_handler')
+  /** How many times a function of the component's adapter ran while `run`
+   * ran. Each loads Better Auth, so the checks of every MCP and REST call
+   * read their rows through betterAuth/lookups.ts instead. */
+  async function adapterCalls(run: () => Promise<unknown>) {
+    const spies = Object.values(adapter).map((fn) =>
+      vi.spyOn(fn as unknown as { _handler: (...args: never[]) => unknown }, '_handler'),
+    )
     try {
       await run()
-      return spy.mock.calls.length
+      return spies.reduce((calls, spy) => calls + spy.mock.calls.length, 0)
     } finally {
-      spy.mockRestore()
+      for (const spy of spies) spy.mockRestore()
     }
   }
 
-  it('counts a read through the adapter', async () => {
+  it('counts a call of any adapter function', async () => {
     const f = await fixture()
-    const read = () =>
-      f.t.query(components.betterAuth.adapter.findOne, {
-        model: 'user',
-        where: [{ field: '_id', value: f.userId }],
-      })
-    expect(await adapterReads(read)).toBe(1)
+    const where = [{ field: '_id', value: f.userId }]
+    const calls = () =>
+      Promise.all([
+        f.t.query(components.betterAuth.adapter.findOne, { model: 'user', where }),
+        f.t.query(components.betterAuth.adapter.findMany, {
+          model: 'user',
+          where,
+          paginationOpts: { cursor: null, numItems: 1 },
+        }),
+      ])
+    expect(await adapterCalls(calls)).toBe(2)
   })
 
   const deleteRow = (f: Fx, table: 'oauthClient' | 'user', id: string) =>
@@ -2252,6 +2258,21 @@ describe('the access check of every machine call, without the adapter', () => {
       'refuses a grant its person disconnected',
       async (f: Fx, connectionId: string) =>
         f.as.mutation(api.oauthConnections.revoke, { id: connectionId }),
+      INVALID,
+    ],
+    [
+      // only the token's own column, which a ban sets on a token whose
+      // session had already ended (adminAuth.ts revokeLoginAccess), so that
+      // it stays refused after an unban
+      'refuses a token Better Auth marked revoked',
+      (f: Fx, _: string, __: string, tokenHash: string) =>
+        runInAuth(f.t, async (ctx) => {
+          const token = await ctx.db
+            .query('oauthAccessToken')
+            .withIndex('token', (q) => q.eq('token', tokenHash))
+            .unique()
+          await ctx.db.patch(token!._id, { revoked: Date.now() })
+        }),
       INVALID,
     ],
     [
@@ -2302,15 +2323,15 @@ describe('the access check of every machine call, without the adapter', () => {
     const c = await connect(f, READ)
     const args = { tokenHash: await sha256hex(c.access_token.slice(4)), resource: RESOURCE }
     const live = await f.t.query(internal.oauthAccess.lookupAccess, args)
-    await change(f, live!.connectionId, c.request.clientId)
+    await change(f, live!.connectionId, c.request.clientId, args.tokenHash)
     let answer = {}
-    const reads = await adapterReads(async () => {
+    const calls = await adapterCalls(async () => {
       const grant = await f.t.query(internal.oauthAccess.lookupAccess, args)
       const deleting = await f.t.query(internal.oauthAccess.refusedForDeletion, args)
       const response = await mcp(f, c.access_token, 'list_projects')
       answer = { grant: grant !== null, deleting, mcp: response.status }
     })
-    expect({ ...answer, reads }).toEqual({ ...expected, reads: 0 })
+    expect({ ...answer, calls }).toEqual({ ...expected, calls: 0 })
   })
 
   it("reads a personal token's login, and its ban, without the adapter", async () => {
@@ -2329,13 +2350,22 @@ describe('the access check of every machine call, without the adapter', () => {
     )
     const me = () => http(f.t, '/v1/me', { headers: { Authorization: `Bearer ${secret}` } })
     let status = 0
-    expect(await adapterReads(async () => (status = (await me()).status))).toBe(0)
+    expect(await adapterCalls(async () => (status = (await me()).status))).toBe(0)
     expect(status).toBe(200)
     await runInAuth(f.t, (ctx) =>
       ctx.db.patch(ctx.db.normalizeId('user', f.userId)!, { banned: true }),
     )
-    expect(await adapterReads(async () => (status = (await me()).status))).toBe(0)
+    expect(await adapterCalls(async () => (status = (await me()).status))).toBe(0)
     expect(status).toBe(401)
+  })
+
+  it('finds no login for an id of another table, or for a string that is no id', async () => {
+    const f = await fixture()
+    const ban = (userId: string) => f.t.query(components.betterAuth.lookups.userBan, { userId })
+    const session = await runInAuth(f.t, async (ctx) => await ctx.db.query('session').first())
+    expect(await ban(f.userId)).not.toBeNull()
+    expect(await ban(session!._id)).toBeNull()
+    expect(await ban('not an id')).toBeNull()
   })
 })
 
