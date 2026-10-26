@@ -1,4 +1,4 @@
-import type { CSSProperties, PointerEvent } from 'react'
+import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
 import { useContext, useRef as useRefR } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
@@ -248,9 +248,12 @@ export function Bar({
   )
 }
 
-/* draggable milestone diamond in the header, in the row and with the label
-   room that layoutFlags (flagLanes.ts) gave it; `lanes` rows of flags sit
-   centred in the band of height `bandH` */
+/* draggable milestone diamond in the header, in the row, on the side and
+   with the room that layoutFlags (flagLanes.ts) gave it. The flag is as
+   wide as its label, so only the diamond and the name it shows take the
+   pointer, and Enter or Space opens it as a click does. A label cut short
+   still has the full name as its accessible name, and the tooltip shows it
+   with the week on hover and on keyboard focus. */
 export function MilestoneFlag({
   m,
   week,
@@ -258,8 +261,6 @@ export function MilestoneFlag({
   w1,
   weekW,
   place,
-  lanes,
-  bandH,
   movable,
   onLive,
   onCommit,
@@ -271,8 +272,6 @@ export function MilestoneFlag({
   w1: number
   weekW: number
   place: FlagPlace
-  lanes: number
-  bandH: number
   movable: boolean // edit access to the milestone's project; otherwise a click only opens it
   onLive: (id: string, week: number) => void
   onCommit: (id: string, epoch: number) => void
@@ -315,22 +314,37 @@ export function MilestoneFlag({
     }
     drag.current = null
   }
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    e.preventDefault()
+    onEdit?.(m.id)
+  }
+  const x = (week - w0) * weekW
+  const left = place.side === 'left'
   return (
     <HoverTooltip content={`${m.name}, ${P.weekLabel(week)}`}>
+      {/* biome-ignore lint/a11y/useSemanticElements: a drag handle; a native button would also click at the end of every drag. */}
       <div
         data-msflag={m.id}
+        data-msflag-side={place.side}
+        role="button"
+        tabIndex={0}
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={onUp}
+        onKeyDown={onKey}
         style={{
-          left: (week - w0) * weekW - 4.5,
-          width: place.room,
+          ...(left ? { right: (w1 - w0 + 1) * weekW - x - 4.5 } : { left: x - 4.5 }),
+          maxWidth: place.room,
           height: FLAG_LANE_H,
-          bottom: (bandH - lanes * FLAG_LANE_H) / 2 + place.lane * FLAG_LANE_H,
+          bottom: place.bottom,
         }}
         className={cn(
-          '[position:absolute] [display:flex] [align-items:center] [gap:8px] [touch-action:none] [user-select:none] [padding:0_4px_0_0] [z-index:2]',
+          '[position:absolute] [display:flex] [align-items:center] [gap:8px] [touch-action:none] [user-select:none]',
+          // a flag being dragged passes over the others, hiding what it covers
+          week === m.week ? '[z-index:2]' : '[z-index:3] bg-surface-1',
+          left ? '[flex-direction:row-reverse] [padding:0_0_0_4px]' : '[padding:0_4px_0_0]',
           movable ? '[cursor:ew-resize]' : '[cursor:pointer]',
         )}
       >

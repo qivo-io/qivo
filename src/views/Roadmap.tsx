@@ -35,7 +35,7 @@ import { MobileRoadmap } from './MobileRoadmap'
 import { ResourceStrip } from './Resources'
 import { STRIP_HEAD_H, stripHeight } from './resourcesLayout'
 import { type ChunkMemory, type LaidRow, stableChunks } from './roadmap/chunks'
-import { flagBandHeight, layoutFlags } from './roadmap/flagLanes'
+import { flagBandHeight, flagLanesIn, layoutFlags } from './roadmap/flagLanes'
 import { GRID_X, GUTTER_W, HEAD_STICK, LABEL_W, ROW_H, SUB_STICK } from './roadmap/layout'
 import { PlanCard, type PlanSession } from './roadmap/PlanCard'
 import { createRowObserver } from './roadmap/rowObserver'
@@ -51,7 +51,8 @@ const MIN_WEEK_W = 24
 
 // Week labels and milestone flags share a header above the task grid. The
 // flag band under the week numbers is two rows of flags tall, and taller when
-// one week holds more milestones (roadmap/flagLanes.ts).
+// milestones need more rows (roadmap/flagLanes.ts), up to what the panel
+// leaves after its smallest share of task rows and Team.
 const HEAD_PAD_T = 6 // breathing room above the week numbers
 const WEEK_BAND_H = 33 // calendar week number over the week's first workday
 
@@ -1481,21 +1482,38 @@ function Roadmap({
     resourceWeek <= w1
       ? resourceWeek
       : null
+  const splitT = splitAreaH || 480
   /* The header's milestone flags, each in the row that keeps its label
-     readable (roadmap/flagLanes.ts), and the header's height for them. */
+     readable (roadmap/flagLanes.ts), and the header's height for them. The
+     flag rows take at most what the split area leaves after Team's
+     smallest strip, the week numbers and a project, a sub-project and a
+     task row (or every row, when there are fewer), so a short screen, such
+     as a phone turned to landscape, keeps tasks in view. Rows past that,
+     for a week with more milestones, scroll in the band. Rows come from the
+     saved weeks, so a drag moves only its flag. */
+  const flagLanes = flagLanesIn(
+    splitT -
+      PANEL_GAP -
+      canvasPadB -
+      stripHeight(Math.min(1, stripUsers.length)) -
+      (HEAD_PAD_T + WEEK_BAND_H + 1 + 2) -
+      Math.min(totalH, ROW_H.track + ROW_H.sub + ROW_H.task),
+  )
   const shownMilestones = projMilestones.filter((m) => msWeek(m) >= w0 && msWeek(m) <= w1)
   const flagRows = layoutFlags(
-    shownMilestones.map((m) => ({ id: m.id, week: msWeek(m), name: m.name })),
-    { w0, weekW, end: NW * weekW },
+    projMilestones
+      .filter((m) => m.week >= w0 && m.week <= w1)
+      .map((m) => ({ id: m.id, week: m.week, name: m.name, live: msWeek(m) })),
+    { w0, weekW, end: NW * weekW, maxLanes: flagLanes },
   )
-  const msBandH = flagBandHeight(flagRows.lanes)
+  const flagsScroll = flagRows.lanes > flagLanes
+  const msBandH = flagBandHeight(Math.min(flagRows.lanes, flagLanes))
   const headH = HEAD_PAD_T + WEEK_BAND_H + msBandH
   // Fit all visible people in the heatmap up to a 620px
   // panel. Leave the actual timeline's header, project/sub-project bands and
   // several task rows above it; smaller viewports scroll the remaining people.
   // Header and its rule, the rows, and the panel's two borders.
   const roadContentH = headH + 1 + totalH + 2
-  const splitT = splitAreaH || 480
   const roadMinimum = Math.min(roadContentH, headH + ROW_H.track + ROW_H.sub + ROW_H.task * 3 + 6)
   const stripCap = Math.min(
     620,
@@ -1962,23 +1980,44 @@ function Roadmap({
                       </HoverTooltip>
                     )
                   })}
-                  {shownMilestones.map((m) => (
-                    <MilestoneFlag
-                      key={m.id}
-                      m={m}
-                      week={msWeek(m)}
-                      w0={w0}
-                      w1={w1}
-                      weekW={weekW}
-                      place={flagRows.places.get(m.id) ?? { lane: 0, room: weekW }}
-                      lanes={flagRows.lanes}
-                      bandH={msBandH}
-                      movable={P.canWrite(m.project)}
-                      onLive={msOnLive}
-                      onCommit={msCommit}
-                      onEdit={actions.editMilestone}
-                    />
-                  ))}
+                  {/* the flag band; it scrolls, starting at its bottom row,
+                  only when one week holds more milestones than it shows */}
+                  <div
+                    data-msband
+                    data-msband-scrolls={flagsScroll || undefined}
+                    style={{ width: timelineW, height: msBandH }}
+                    className={`[position:absolute] [left:0] [bottom:0] ${
+                      flagsScroll
+                        ? '[display:flex] [flex-direction:column-reverse] [overflow-x:hidden] [overflow-y:auto] [overscroll-behavior:contain] [scrollbar-width:thin]'
+                        : ''
+                    }`}
+                  >
+                    <div
+                      style={{ height: flagBandHeight(flagRows.lanes) }}
+                      className="[position:relative] [flex:none]"
+                    >
+                      {shownMilestones.map((m) => {
+                        const place = flagRows.places.get(m.id)
+                        return (
+                          place && (
+                            <MilestoneFlag
+                              key={m.id}
+                              m={m}
+                              week={msWeek(m)}
+                              w0={w0}
+                              w1={w1}
+                              weekW={weekW}
+                              place={place}
+                              movable={P.canWrite(m.project)}
+                              onLive={msOnLive}
+                              onCommit={msCommit}
+                              onEdit={actions.editMilestone}
+                            />
+                          )
+                        )
+                      })}
+                    </div>
+                  </div>
                   {/* THE TODAY LINE IS NOT DRAWN HERE. It belongs to the grid, and
                 it starts under the header's bottom border — where the rows do.
                 Run up through this band and it crosses the one row of text the

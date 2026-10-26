@@ -406,6 +406,30 @@ describe('the Roadmap of a scope with nothing to schedule', () => {
     expect(flags.map((flag) => flag.textContent)).toEqual(['Bare launch', 'Bare review'])
     expect(new Set(flags.map((flag) => flag.style.bottom)).size).toBe(2)
   })
+
+  it('opens a milestone from its flag with the keyboard', async () => {
+    await app(withMilestone(bare(), 'bare', 'Bare launch'), '/app/testbed/roadmap/p/3')
+    await shows('Tasks live in sub-projects.')
+    const flag = document.querySelector<HTMLElement>('[data-msflag]')
+    // a button in the tab order, named by the whole name however it is cut
+    expect(flag?.getAttribute('role')).toBe('button')
+    expect(flag?.tabIndex).toBe(0)
+    expect(flag?.textContent).toBe('Bare launch')
+    await act(async () => {
+      flag?.focus()
+      flag?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    // the Milestones window, with that milestone's editor open
+    await vi.waitFor(
+      () => {
+        const dialog = document.querySelector('[role="dialog"]')
+        expect(dialog?.textContent).toContain('Milestones')
+        const fields = [...(dialog?.querySelectorAll('input') ?? [])]
+        expect(fields.map((field) => field.value)).toContain('Bare launch')
+      },
+      { timeout: 10_000 },
+    )
+  }, 20_000)
 })
 
 /** The milestone rows of the Overview's Milestones section. */
