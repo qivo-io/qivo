@@ -7,7 +7,7 @@
    Server rules expose only the viewer's messages and allow read/snooze/delete
    actions; notification content remains server-owned. */
 import { CheckCheck, ListX, Minus, Plus } from 'lucide-react'
-import React, { useContext, useEffect, useRef, useState } from 'react'
+import React, { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DropdownChevron } from '@/components/ui/select'
@@ -29,6 +29,7 @@ import {
 } from '../components/qivo'
 import { fmtDateTime } from '../lib/dates'
 import { closeOrAsk } from '../lib/discardQuestion'
+import { restoreFocus } from '../lib/focusVisibility'
 import { UnsentScopeContext, useUnsentScope } from '../lib/leaveGuard'
 import { noProjectsHint, seesNoProject } from '../lib/noProjects'
 import { notificationPermission, requestNotificationPermission } from '../lib/notify'
@@ -36,6 +37,7 @@ import { matchesAllWords } from '../lib/search'
 import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '../lib/snooze'
 import { firstUnreadTs } from '../lib/spine'
 import { useMobile } from '../lib/useMobile'
+import { OUT_OF_USE } from '../lib/viewHidden'
 import { type MessageGroupVM, type MessageVM, P } from '../store/planner'
 import { IssueDetail } from './IssueDetail'
 
@@ -352,6 +354,10 @@ function PaneNote({ title, children }: { title?: string; children?: React.ReactN
   )
 }
 
+/** A row, by its item id, and the rows the list showed with it, in order,
+    for focus once the row leaves (focusRowAfter). */
+type ListedRows = { id: string; ids: string[] }
+
 export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadmap }) {
   const mobile = useMobile()
   const listScrollRef = useRef<HTMLDivElement>(null)
@@ -440,10 +446,15 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const paneIssue = openIssue ? P.issueById[openIssue] : null
   // the task the pane showed, kept while the address names it once the task
   // left the board, so its window stays and says so (IssueDetail TaskGone)
-  const paneShown = useRef<{ at: string; id: string } | null>(null)
-  if (paneIssue && openIssue) paneShown.current = { at: openIssue, id: paneIssue.id }
+  const paneShown = useRef<{ at: string; id: string; uuid: string } | null>(null)
+  if (paneIssue && openIssue)
+    paneShown.current = { at: openIssue, id: paneIssue.id, uuid: paneIssue.uuid }
   else if (paneShown.current?.at !== openIssue) paneShown.current = null
   const paneId = paneIssue ? paneIssue.id : (paneShown.current?.id ?? null)
+  // the rows the list showed when the pane's row was last among them, and
+  // when the row menu acted on its row, for focus once that row leaves
+  const paneRows = useRef<ListedRows | null>(null)
+  const menuRows = useRef<ListedRows | null>(null)
   const [deadItem, setDeadItem] = useState(null as string | null) // item id (= issue uuid)
   // Back or Forward to a task still to arrive (App pendingTask): the pane
   // says it is loading
@@ -562,6 +573,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     closeOrAsk([g.issueKey !== openIssue && taskScope], () => selectNow(g))
   const selectNow = (g: MessageGroupVM) => {
     queueScrollTop.current = listScrollRef.current?.scrollTop || 0
+    // the list as it shows now, which a read row leaves under Unread only
+    paneRows.current = { id: g.id, ids: visible.map((x) => x.id) }
     setFrozen({ uuid: g.issueUuid, ts: firstUnreadTs(P.messages, g.issueUuid) })
     // a task still to arrive opens once it does, and its item reads then
     const later = !g.issueKey && P.stillLoading() !== null
@@ -597,6 +610,73 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     setKinds((cur) => (cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]))
   const perm = notificationPermission()
 
+  /* Focus a row took with it. The pane's Archive or delete window takes
+     the pane's task away with its row, and the row menu's Remove and Snooze
+     take their row; the pane or the menu then closes with focus nowhere.
+     Focus goes to the row's open button, else to the row that followed it
+     in the list as it showed, else to the one before, else to the search
+     field. Focus that went elsewhere stays there. */
+  const paneRow = deadItem || (paneShown.current?.uuid ?? null)
+  useLayoutEffect(() => {
+    if (!paneRow) return
+    const ids = visible.map((g) => g.id)
+    if (ids.includes(paneRow)) paneRows.current = { id: paneRow, ids }
+    else if (paneRows.current?.id !== paneRow) paneRows.current = { id: paneRow, ids: [paneRow] }
+  })
+  /** Gives focus to `rows.id`'s row or what took its place, while focus is
+      nowhere and the Inbox shows. */
+  const focusRowAfter = (rows: ListedRows) => {
+    const list = listScrollRef.current
+    const active = document.activeElement
+    if (!list || list.closest(OUT_OF_USE)) return
+    if (active && active !== document.body && active.isConnected) return
+    const at = rows.ids.indexOf(rows.id)
+    const order = [
+      rows.id,
+      ...rows.ids.slice(at + 1),
+      ...rows.ids.slice(0, Math.max(at, 0)).reverse(),
+    ]
+    const listed = new Map(
+      [...list.querySelectorAll<HTMLElement>('[data-message]')].map((row) => [
+        row.dataset.message,
+        row,
+      ]),
+    )
+    const row = order.map((id) => listed.get(id)).find(Boolean)
+    restoreFocus(
+      row?.querySelector<HTMLElement>('.inbox-message-open') ??
+        list.closest('[data-inbox]')?.querySelector<HTMLElement>('[data-inbox-search]'),
+    )
+  }
+  // Effects, not layout effects: a phone's task window, which is modal,
+  // releases the list it made inert, and gives focus back where it can, in
+  // its own effect's cleanup, which runs before these.
+  const paneOpen = !!(paneId || deadItem || waiting)
+  const paneWas = useRef(paneOpen)
+  useEffect(() => {
+    const was = paneWas.current
+    paneWas.current = paneOpen
+    const rows = paneRows.current
+    if (!was || paneOpen || !rows) return
+    paneRows.current = null
+    focusRowAfter(rows)
+  }, [paneOpen])
+  useEffect(() => {
+    const rows = menuRows.current
+    if (menu || !rows) return
+    menuRows.current = null
+    focusRowAfter(rows)
+  }, [menu])
+  // what a kept Inbox held before it hid (components/KeptView) moves no
+  // focus once it shows again
+  useEffect(
+    () => () => {
+      paneRows.current = null
+      menuRows.current = null
+    },
+    [],
+  )
+
   // MENU_W: AnchoredPop centers on x, so a cursor menu shifts by half its width
   const MENU_W = 280
   const openMenu = (e: React.MouseEvent, g?: MessageGroupVM) => {
@@ -605,8 +685,14 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     setMenu({ x: e.clientX + MENU_W / 2, y: e.clientY, id: g?.id ?? null })
     setSnoozeFor({ hours: 1, days: 1, weeks: 1 })
   }
-  const runOnItem = (fn: (g: MessageGroupVM) => void) => {
-    if (menuGroup) fn(menuGroup)
+  /** Runs `fn` on the menu's row and closes the menu, giving focus back to
+      the row or to what took its place (focusRowAfter), unless `fn`
+      `leaves` the Inbox. */
+  const runOnItem = (fn: (g: MessageGroupVM) => void, leaves = false) => {
+    if (menuGroup) {
+      if (!leaves) menuRows.current = { id: menuGroup.id, ids: visible.map((g) => g.id) }
+      fn(menuGroup)
+    }
     setMenu(null)
   }
 
@@ -925,7 +1011,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                       runOnItem((g) => {
                         const it = P.issueById[g.issueKey]
                         if (it) showOnBoard(it.project, it.id)
-                      })
+                      }, true)
                     }
                   >
                     <Icon name="board" size={13} />
