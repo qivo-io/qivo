@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { restoreFocus } from '@/lib/focusVisibility'
+import { focusAround } from '@/lib/focusWhenGone'
 import type { api } from '../../convex/_generated/api'
 import { Icon } from '../components/qivo'
 import { SettingsGroup } from '../components/settingsPage'
@@ -30,12 +31,10 @@ export function ConnectedApps() {
   // a refused delete, shown in the dialog only and cleared when it opens
   const [deleteError, setDeleteError] = useState('')
   const [busy, setBusy] = useState(false)
-  // the Delete that opened the dialog, which takes focus back once it has
-  // closed, unless its connection is gone. Then focus goes to the next row
-  // still listed, else the nearest one before it, else the empty list's line.
-  const opener = useRef<HTMLButtonElement | null>(null)
-  const around = useRef<HTMLElement[]>([])
-  const rows = useRef<HTMLDivElement>(null)
+  // where focus goes once the dialog has closed, taken as it opens: the
+  // Delete that opened it, else, once its connection is gone, the next
+  // row's, else the nearest one before it, else the empty list's line
+  const focusAfter = useRef<() => HTMLElement | null>(() => null)
   const empty = useRef<HTMLParagraphElement>(null)
   useUpdateBlocker(busy)
   // a close clears the selection, so the closing dialog keeps its words
@@ -90,7 +89,7 @@ export function ConnectedApps() {
           No connected apps.
         </p>
       )}
-      <div ref={rows} className="space-y-2">
+      <div className="space-y-2">
         {connections?.map((connection) => (
           <div
             key={connection.id}
@@ -110,16 +109,13 @@ export function ConnectedApps() {
                 size="sm"
                 className="text-danger"
                 disabled={busy}
-                onClick={(event) => {
-                  opener.current = event.currentTarget
-                  const listed = [
-                    ...(rows.current?.querySelectorAll<HTMLElement>('[data-oauth-connection]') ??
-                      []),
-                  ]
-                  const at = listed.findIndex(
-                    (row) => row.dataset.oauthConnection === connection.id,
+                onClick={() => {
+                  focusAfter.current = focusAround(
+                    'data-oauth-connection',
+                    connection.id,
+                    (row) => row.querySelector('button'),
+                    () => empty.current,
                   )
-                  around.current = [...listed.slice(at + 1), ...listed.slice(0, at).reverse()]
                   setDeleteError('')
                   setSelected(connection)
                 }}
@@ -163,9 +159,7 @@ export function ConnectedApps() {
         <AlertDialogContent
           onCloseAutoFocus={(event) => {
             event.preventDefault()
-            if (opener.current?.isConnected) return opener.current.focus()
-            const next = around.current.find((row) => row.isConnected)
-            restoreFocus(next?.querySelector('button') ?? empty.current)
+            restoreFocus(focusAfter.current())
           }}
         >
           <AlertDialogHeader>
