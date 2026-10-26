@@ -90,7 +90,8 @@ when one week holds more than two milestones or the names need more room, as
 far as the screen leaves room for your tasks. Where a name is still cut short,
 hover the milestone or move to it with Tab to read it in full, and press Enter
 to open it. When one week holds more milestones than the header shows, scroll
-the milestone rows to reach the others.
+the milestone rows to reach the others. Beside the rows, **+N more** says how
+many milestones are out of sight above or below them.
 When a scope has nothing to schedule, for example a project without
 sub-projects or My view with nothing assigned to you, the Roadmap says why.
 If the scope has milestones, the timeline stays behind that note and shows them.

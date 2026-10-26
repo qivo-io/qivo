@@ -35,11 +35,11 @@ import { MobileRoadmap } from './MobileRoadmap'
 import { ResourceStrip } from './Resources'
 import { STRIP_HEAD_H, stripHeight } from './resourcesLayout'
 import { type ChunkMemory, type LaidRow, stableChunks } from './roadmap/chunks'
-import { flagBandHeight, flagLanesIn, layoutFlags } from './roadmap/flagLanes'
+import { type FlagView, flagBandHeight, flagLanesIn, layoutFlags } from './roadmap/flagLanes'
 import { GRID_X, GUTTER_W, HEAD_STICK, LABEL_W, ROW_H, SUB_STICK } from './roadmap/layout'
 import { PlanCard, type PlanSession } from './roadmap/PlanCard'
 import { createRowObserver } from './roadmap/rowObserver'
-import { MilestoneFlag } from './roadmap/TimelineMarks'
+import { FlagBand, MilestoneFlag } from './roadmap/TimelineMarks'
 import { TimelineRow } from './roadmap/TimelineRow'
 import { WinMenu, WinRangePicker } from './roadmap/WindowControls'
 import '../styles/mobile-views.css'
@@ -696,6 +696,14 @@ function Roadmap({
     }
     if (w != null) P.setMilestone(id, w)
   }
+  // what the flag band shows while it scrolls (FlagBand), kept only when
+  // its rows in sight or its scrollbar change, so scrolling it seldom renders
+  const [msView, setMsView] = useStateR<FlagView | null>(null)
+  const onMsView = useCallback(
+    (v: FlagView | null) =>
+      setMsView((was) => (was?.lo === v?.lo && was?.hi === v?.hi && was?.bar === v?.bar ? was : v)),
+    [],
+  )
   useLayoutEffectR(() => {
     if (draftEpoch.current === P.gridEpoch) return
     draftEpoch.current = P.gridEpoch
@@ -1489,8 +1497,9 @@ function Roadmap({
      smallest strip, the week numbers and a project, a sub-project and a
      task row (or every row, when there are fewer), so a short screen, such
      as a phone turned to landscape, keeps tasks in view. Rows past that,
-     for a week with more milestones, scroll in the band. Rows come from the
-     saved weeks, so a drag moves only its flag. */
+     for a week with more milestones, scroll in the band, and its labels end
+     before the band's scrollbar. Rows come from the saved weeks, so a drag
+     moves only its flag. */
   const flagLanes = flagLanesIn(
     splitT -
       PANEL_GAP -
@@ -1504,7 +1513,7 @@ function Roadmap({
     projMilestones
       .filter((m) => m.week >= w0 && m.week <= w1)
       .map((m) => ({ id: m.id, week: m.week, name: m.name, live: msWeek(m) })),
-    { w0, weekW, end: NW * weekW, maxLanes: flagLanes },
+    { w0, weekW, end: NW * weekW, maxLanes: flagLanes, view: msView },
   )
   const flagsScroll = flagRows.lanes > flagLanes
   const msBandH = flagBandHeight(Math.min(flagRows.lanes, flagLanes))
@@ -1980,44 +1989,34 @@ function Roadmap({
                       </HoverTooltip>
                     )
                   })}
-                  {/* the flag band; it scrolls, starting at its bottom row,
-                  only when one week holds more milestones than it shows */}
-                  <div
-                    data-msband
-                    data-msband-scrolls={flagsScroll || undefined}
-                    style={{ width: timelineW, height: msBandH }}
-                    className={`[position:absolute] [left:0] [bottom:0] ${
-                      flagsScroll
-                        ? '[display:flex] [flex-direction:column-reverse] [overflow-x:hidden] [overflow-y:auto] [overscroll-behavior:contain] [scrollbar-width:thin]'
-                        : ''
-                    }`}
+                  <FlagBand
+                    width={timelineW}
+                    height={msBandH}
+                    lanes={flagRows.lanes}
+                    scrolls={flagsScroll}
+                    onView={onMsView}
                   >
-                    <div
-                      style={{ height: flagBandHeight(flagRows.lanes) }}
-                      className="[position:relative] [flex:none]"
-                    >
-                      {shownMilestones.map((m) => {
-                        const place = flagRows.places.get(m.id)
-                        return (
-                          place && (
-                            <MilestoneFlag
-                              key={m.id}
-                              m={m}
-                              week={msWeek(m)}
-                              w0={w0}
-                              w1={w1}
-                              weekW={weekW}
-                              place={place}
-                              movable={P.canWrite(m.project)}
-                              onLive={msOnLive}
-                              onCommit={msCommit}
-                              onEdit={actions.editMilestone}
-                            />
-                          )
+                    {shownMilestones.map((m) => {
+                      const place = flagRows.places.get(m.id)
+                      return (
+                        place && (
+                          <MilestoneFlag
+                            key={m.id}
+                            m={m}
+                            week={msWeek(m)}
+                            w0={w0}
+                            w1={w1}
+                            weekW={weekW}
+                            place={place}
+                            movable={P.canWrite(m.project)}
+                            onLive={msOnLive}
+                            onCommit={msCommit}
+                            onEdit={actions.editMilestone}
+                          />
                         )
-                      })}
-                    </div>
-                  </div>
+                      )
+                    })}
+                  </FlagBand>
                   {/* THE TODAY LINE IS NOT DRAWN HERE. It belongs to the grid, and
                 it starts under the header's bottom border — where the rows do.
                 Run up through this band and it crosses the one row of text the
@@ -2045,6 +2044,23 @@ function Roadmap({
                   >
                     <Icon name="chevronRight" size={16} />
                   </Button>
+                  {/* beside a scrolling flag band, how many flags its rows
+                  above and below the ones in sight hold, as a phone shows
+                  the band's scrollbar only while it moves */}
+                  {(flagRows.above > 0 || flagRows.below > 0) && (
+                    <div
+                      aria-hidden
+                      style={{ height: msBandH }}
+                      className="[position:absolute] [left:0] [right:0] [bottom:0] [display:flex] [flex-direction:column] [justify-content:space-between] [align-items:center] [padding:2px_0] [pointer-events:none] [font-size:var(--fs-2xs)] [line-height:13px] [font-weight:600] [color:var(--text-3)] [white-space:nowrap]"
+                    >
+                      <span data-msband-more={flagRows.above > 0 ? 'above' : undefined}>
+                        {flagRows.above > 0 && `+${flagRows.above} more`}
+                      </span>
+                      <span data-msband-more={flagRows.below > 0 ? 'below' : undefined}>
+                        {flagRows.below > 0 && `+${flagRows.below} more`}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

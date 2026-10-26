@@ -1,13 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { FLAG_LABEL_MAX_W, flagBandHeight, labelWidth, layoutFlags } from './flagLanes'
+import {
+  FLAG_LABEL_MAX_W,
+  flagBandHeight,
+  flagLanesShown,
+  labelWidth,
+  layoutFlags,
+} from './flagLanes'
 
 /* The Roadmap header's milestone flags: no two flags of one week share a
    row, no label runs into the next flag of its row, a label near the
    timeline's end runs left, labels open rows up to what the header has
-   room for, and a drag moves only the dragged flag. */
+   room for, and a drag moves only the dragged flag, within the rows a
+   scrolled band shows. */
 
 const WEEK_W = 48
-const grid = { w0: 0, weekW: WEEK_W, end: 20 * WEEK_W, maxLanes: 4 }
+const grid: Parameters<typeof layoutFlags>[1] = {
+  w0: 0,
+  weekW: WEEK_W,
+  end: 20 * WEEK_W,
+  maxLanes: 4,
+}
 const flag = (id: string, week: number, name = id) => ({ id, week, name })
 const place = (flags: Parameters<typeof layoutFlags>[0], over: Partial<typeof grid> = {}) =>
   layoutFlags(flags, { ...grid, ...over })
@@ -131,5 +143,53 @@ describe('layoutFlags', () => {
     expect(at(4)).toMatchObject({ lane: 1, side: 'right' })
     expect(at(4)?.room).toBeGreaterThanOrEqual(wants('Alpha'))
     expect(at(12)?.lane).toBe(0)
+  })
+
+  it('keeps a dragged flag in the rows a scrolled band shows', () => {
+    // six in week 4 and two rows in sight, scrolled up to the top two
+    const week = Array.from({ length: 6 }, (_, i) => flag(`m${i}`, 4))
+    const top = flagLanesShown(6, flagBandHeight(6) - flagBandHeight(2), flagBandHeight(2))
+    expect(top).toEqual({ lo: 4, hi: 5 })
+    const view = { ...top, bar: 0 }
+    const at = (live: number) =>
+      place([...week.slice(0, 5), { ...week[5], live }], { maxLanes: 2, view }).places.get('m5')
+    expect(at(4)?.lane).toBe(5)
+    // every row is clear at week 8, and row 4 is the lowest in sight
+    expect(at(8)?.lane).toBe(4)
+    expect(
+      place([{ ...week[5], live: 8 }, ...week.slice(0, 5)], { maxLanes: 2 }).places.get('m5')?.lane,
+    ).toBe(0)
+  })
+
+  it('counts the flags in the rows above and below those a scrolled band shows', () => {
+    const week = Array.from({ length: 6 }, (_, i) => flag(`m${i}`, 4))
+    const counts = (view: Parameters<typeof layoutFlags>[1]['view']) => {
+      const { above, below } = place(week, { maxLanes: 2, view })
+      return [above, below]
+    }
+    expect(counts(null)).toEqual([0, 0])
+    expect(counts({ ...flagLanesShown(6, 0, flagBandHeight(2)), bar: 0 })).toEqual([4, 0])
+    expect(counts({ lo: 2, hi: 3, bar: 0 })).toEqual([2, 2])
+  })
+
+  it("ends a label before the band's scrollbar without moving its flag", () => {
+    // the name fits to the timeline's end, but not with 10 px less
+    const name = 'Pilot review'
+    const end = 18 * WEEK_W + 4.5 + 12 + labelWidth(name) + 5
+    const at = (bar: number) =>
+      place([flag('a', 18, name)], { end, view: { lo: 0, hi: 1, bar } }).places.get('a')
+    expect(at(10)).toMatchObject({ lane: 0, side: 'right' })
+    expect(at(10)?.room).toBe((at(0)?.room ?? 0) - 10)
+  })
+})
+
+describe('flagLanesShown', () => {
+  it('names the rows a band shows whole, not those it cuts', () => {
+    const band = flagBandHeight(2)
+    expect(flagLanesShown(6, 0, band)).toEqual({ lo: 0, hi: 1 })
+    // half a row up: row 0 is cut at the bottom and row 2 at the top
+    expect(flagLanesShown(6, 8, band)).toEqual({ lo: 1, hi: 1 })
+    expect(flagLanesShown(6, 2 * 16, band)).toEqual({ lo: 2, hi: 3 })
+    expect(flagLanesShown(3, 0, flagBandHeight(3))).toEqual({ lo: 0, hi: 2 })
   })
 })

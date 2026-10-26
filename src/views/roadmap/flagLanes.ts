@@ -7,8 +7,12 @@
    labels there short with an ellipsis. Flags of one week never share a row,
    so every diamond stays its own target: a week with more milestones than
    the header has room for gets a row each, and the band scrolls
-   (Roadmap.tsx). The band is always at least two rows tall, the height it
-   had before flags took rows. */
+   (FlagBand in TimelineMarks.tsx). The band is always at least two rows
+   tall, the height it had before flags took rows. While it scrolls, a
+   dragged flag keeps to the rows in sight, the layout counts the flags out
+   of sight for the band's "+N more" signs, and labels end before a
+   scrollbar that takes space. Rows and sides still come from the whole
+   timeline, so a scrollbar never moves a flag, at most cuts a name short. */
 
 /** Height of one row of flags, diamond and one line of label. */
 export const FLAG_LANE_H = 16
@@ -49,6 +53,10 @@ export type FlagPlace = {
   bottom: number
 }
 type Grid = { w0: number; weekW: number; end: number }
+/** What a scrolling band shows: its rows `lo` to `hi` whole, and `bar`
+    pixels at its right edge that its scrollbar takes, 0 where scrollbars
+    overlay the content. */
+export type FlagView = { lo: number; hi: number; bar: number }
 /** A flag at the week it is drawn in, with its label's full width. */
 type Item = { id: string; week: number; x: number; side: FlagSide; label: number }
 
@@ -71,6 +79,25 @@ export function labelWidth(name: string): number {
 /** The band's height for `lanes` rows of flags. */
 export function flagBandHeight(lanes: number): number {
   return BAND_PAD + Math.max(BASE_LANES, lanes) * FLAG_LANE_H
+}
+
+/** The offset of `lane`'s bottom edge from the bottom of `lanes` rows. */
+const laneBottom = (lanes: number, lane: number) =>
+  (flagBandHeight(lanes) - lanes * FLAG_LANE_H) / 2 + lane * FLAG_LANE_H
+
+/** The rows of `lanes` that a band `height` pixels tall shows whole, give
+    or take a pixel, when it is scrolled `from` pixels up from their bottom
+    edge. */
+export function flagLanesShown(
+  lanes: number,
+  from: number,
+  height: number,
+): Pick<FlagView, 'lo' | 'hi'> {
+  const pad = laneBottom(lanes, 0)
+  return {
+    lo: Math.max(0, Math.ceil((from - 1 - pad) / FLAG_LANE_H)),
+    hi: Math.min(lanes - 1, Math.floor((from + height + 1 - pad) / FLAG_LANE_H) - 1),
+  }
 }
 
 /** The rows of flags a band of `px` pixels shows, never fewer than two. */
@@ -133,12 +160,15 @@ const roomFor = (label: number) =>
     `w0` with `weekW` pixels a week and ends `end` pixels in. Labels open at
     most `maxLanes` rows; only a week with more flags opens more. Rows come
     from the saved weeks, so a flag being dragged moves alone: the others
-    keep their places and the band its height until the drop. Answers the
-    rows used too, at least one. */
+    keep their places and the band its height until the drop. In a band
+    that scrolls, `view` is what it shows: a dragged flag stays in the rows
+    in sight, `above` and `below` count the flags in the rows above and
+    below them, and no label runs under the scrollbar. Answers the rows used
+    too, at least one. */
 export function layoutFlags(
   flags: Flag[],
-  grid: Grid & { maxLanes: number },
-): { lanes: number; places: Map<string, FlagPlace> } {
+  grid: Grid & { maxLanes: number; view?: FlagView | null },
+): { lanes: number; places: Map<string, FlagPlace>; above: number; below: number } {
   const sorted = flags
     .slice()
     .sort((a, b) => a.week - b.week || a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
@@ -159,8 +189,11 @@ export function layoutFlags(
     rows[lane] = [...(rows[lane] ?? []), it]
   }
   const lanes = Math.max(1, rows.length)
-  const bottom = (lane: number) =>
-    (flagBandHeight(lanes) - lanes * FLAG_LANE_H) / 2 + lane * FLAG_LANE_H
+  const bottom = (lane: number) => laneBottom(lanes, lane)
+  const { view } = grid
+  const inSight = (lane: number) => !view || (lane >= view.lo && lane <= view.hi)
+  // where a label must end, short of the band's scrollbar
+  const shownEnd = grid.end - (view?.bar ?? 0)
   const places = new Map<string, FlagPlace>()
   // A label may take all the room it has, as the estimate can fall short of
   // the drawn name; the flag stays as wide as the name it shows. Each row
@@ -171,7 +204,7 @@ export function layoutFlags(
         it.side === 'right'
           ? i < row.length - 1
             ? share(it, row[i + 1]).a
-            : grid.end - it.x - HALF
+            : shownEnd - it.x - HALF
           : i > 0
             ? share(row[i - 1], it).b
             : it.x - HALF
@@ -187,6 +220,7 @@ export function layoutFlags(
     const it = itemAt(flag, flag.live, grid)
     let best: FlagPlace | null = null
     for (const [lane, row] of boxes.entries()) {
+      if (!inSight(lane)) continue
       const others = row.filter((b) => b.id !== flag.id)
       // its diamond must land clear of every other flag in the row
       const lo = it.x - HALF - LABEL_GAP
@@ -197,7 +231,7 @@ export function layoutFlags(
       const before = others.filter((b) => b.to <= lo).map((b) => b.to + LABEL_GAP)
       const room = roomFor(
         it.side === 'right'
-          ? Math.min(grid.end, ...after) - (it.x + HALF)
+          ? Math.min(shownEnd, ...after) - (it.x + HALF)
           : it.x - HALF - Math.max(0, ...before),
       )
       // the lowest row where the whole name fits, else the one with most room
@@ -205,11 +239,18 @@ export function layoutFlags(
       if (!best || (!fits(best) && room > best.room))
         best = { lane, side: it.side, room, bottom: bottom(lane) }
     }
-    // no row has room for its diamond: it passes over the others in its own
+    // no row in sight has room for its diamond: it passes over the others
+    // in its own, the row it was pressed in
     const own = places.get(flag.id)
-    const edge = it.side === 'right' ? grid.end - it.x - HALF : it.x - HALF
+    const edge = it.side === 'right' ? shownEnd - it.x - HALF : it.x - HALF
     if (best) places.set(flag.id, best)
     else if (own) places.set(flag.id, { ...own, side: it.side, room: roomFor(edge) })
   }
-  return { lanes, places }
+  const lanesOf = [...places.values()].map((p) => p.lane)
+  return {
+    lanes,
+    places,
+    above: view ? lanesOf.filter((lane) => lane > view.hi).length : 0,
+    below: view ? lanesOf.filter((lane) => lane < view.lo).length : 0,
+  }
 }

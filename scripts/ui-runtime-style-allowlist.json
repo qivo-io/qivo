@@ -80,7 +80,7 @@
     "reason": "shared timeline/panel geometry and data-derived heat intensity; weekly grid presentation is scoped in Resources.css"
   },
   "src/views/Roadmap.tsx": {
-    "count": 24,
+    "count": 23,
     "reason": "timeline coordinates, active utilization week geometry, transforms, measured widths, the milestone flag band's computed height, and persisted colors"
   },
   "src/views/roadmap/PlanCard.tsx": {
@@ -88,8 +88,8 @@
     "reason": "auto-fit control state and visible/hidden-project workload presentation"
   },
   "src/views/roadmap/TimelineMarks.tsx": {
-    "count": 4,
-    "reason": "task bar geometry and colors, edge chips, and draggable milestone positions"
+    "count": 6,
+    "reason": "task bar geometry and colors, edge chips, draggable milestone positions, and the milestone flag band's computed size and rows"
   },
   "src/views/roadmap/TimelineRow.tsx": {
     "count": 10,
