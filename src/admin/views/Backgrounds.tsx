@@ -37,6 +37,7 @@ import {
   prepareBackgroundImage,
 } from '@/lib/backgroundImageUpload'
 import { overLimit } from '@/lib/fieldLimits'
+import { restoreFocus } from '@/lib/focusVisibility'
 import type { ImageMetadata } from '@/lib/imageMetadata'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { cn } from '@/lib/utils'
@@ -187,6 +188,23 @@ function useLiveAction<A extends FunctionReference<'action'>>(action: A) {
   )
 }
 
+/** Focus props for a dialog opened without a Trigger, which Radix has
+    nothing to give focus back to. The dialog notes what had focus as it
+    opens and gives focus back there once it has closed, or to
+    `focusAfter()` when that has left the page. */
+function useReturnFocus(focusAfter?: () => HTMLElement | null) {
+  const opener = useRef<HTMLElement | null>(null)
+  return {
+    onOpenAutoFocus: () => {
+      if (document.activeElement instanceof HTMLElement) opener.current = document.activeElement
+    },
+    onCloseAutoFocus: (event: Event) => {
+      event.preventDefault()
+      restoreFocus(opener.current?.isConnected ? opener.current : focusAfter?.())
+    },
+  }
+}
+
 function Failure({ message, retry }: { message: string; retry?: () => void }) {
   return (
     <div role="alert" className="rounded-md border border-danger/40 bg-danger-soft p-3 text-sm">
@@ -330,15 +348,20 @@ function ImageMetadataRows({
   )
 }
 
+/* Once closed, it gives focus back to the button that opened it, or to
+   `focusAfter()` when an approval took that button away. */
 function ImagePreview({
   image: initialImage,
   agentFilter = 'all',
   close,
+  focusAfter,
 }: {
   image: BackgroundImage
   agentFilter?: AgentFilter
   close: () => void
+  focusAfter?: () => HTMLElement | null
 }) {
+  const returnFocus = useReturnFocus(focusAfter)
   const [selectedImage, setSelectedImage] = useState(initialImage)
   // An open modal follows asynchronous preview generation and backfills too.
   const {
@@ -439,6 +462,7 @@ function ImagePreview({
       }}
     >
       <DialogContent
+        {...returnFocus}
         data-image-review-preview={image.id}
         aria-busy={busy}
         showCloseButton={!busy}
@@ -665,6 +689,26 @@ function Library() {
     ...(agentFilter !== 'all' ? { agent_review: agentFilter } : {}),
     ...(cursors[page] ? { cursor: cursors[page] } : {}),
   })
+  const grid = useRef<HTMLDivElement>(null)
+  const empty = useRef<HTMLHeadingElement>(null)
+  const statusFilter = useRef<HTMLSelectElement>(null)
+  // the cards after and before the previewed one, nearest first, noted as
+  // the preview opens. An approval in it takes the card off the Pending
+  // review list, and focus then goes to the card now in its place, else the
+  // one before it, else the empty list's heading or the Status filter.
+  const around = useRef<HTMLElement[]>([])
+  const openPreview = (image: BackgroundImage) => {
+    const cards = [
+      ...(grid.current?.querySelectorAll<HTMLElement>('[data-background-image]') ?? []),
+    ]
+    const at = cards.findIndex((card) => card.dataset.backgroundImage === image.id)
+    around.current = [...cards.slice(at + 1), ...cards.slice(0, at).reverse()]
+    setPreview(image)
+  }
+  const focusAfterPreview = () =>
+    around.current.find((card) => card.isConnected)?.querySelector('button') ??
+    empty.current ??
+    statusFilter.current
   return (
     <div className="space-y-6">
       <ManualImageUpload />
@@ -682,6 +726,7 @@ function Library() {
           <div className="min-w-0 space-y-2">
             <Label htmlFor="background-status">Status</Label>
             <NativeSelect
+              ref={statusFilter}
               id="background-status"
               value={filter}
               onChange={(e) => {
@@ -724,7 +769,7 @@ function Library() {
       ) : data.images.length === 0 ? (
         <Card className="items-center gap-2 px-5 py-10 text-center">
           <ImageIcon className="mb-1 size-7 text-text-2" aria-hidden="true" />
-          <h2 className="text-md font-semibold">
+          <h2 ref={empty} tabIndex={-1} className="text-md font-semibold">
             {agentFilter !== 'all'
               ? 'No images match these filters'
               : page > 0
@@ -737,9 +782,9 @@ function Library() {
           </h2>
         </Card>
       ) : (
-        <div className={cn(IMAGE_GALLERY_GRID, 'items-start')}>
+        <div ref={grid} className={cn(IMAGE_GALLERY_GRID, 'items-start')}>
           {data.images.map((image) => (
-            <ImageCard key={image.id} image={image} preview={() => setPreview(image)} />
+            <ImageCard key={image.id} image={image} preview={() => openPreview(image)} />
           ))}
         </div>
       )}
@@ -766,7 +811,12 @@ function Library() {
         </div>
       </div>
       {preview && (
-        <ImagePreview image={preview} agentFilter={agentFilter} close={() => setPreview(null)} />
+        <ImagePreview
+          image={preview}
+          agentFilter={agentFilter}
+          close={() => setPreview(null)}
+          focusAfter={focusAfterPreview}
+        />
       )}
     </div>
   )
@@ -1451,6 +1501,7 @@ function SubmissionCard({
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState(false)
+  const returnFocus = useReturnFocus()
   const [confirmation, setConfirmation] = useState<{
     id: string | null
     title: string | null
@@ -1712,7 +1763,10 @@ function SubmissionCard({
             if (!open) setPreview(false)
           }}
         >
-          <DialogContent className="max-h-[calc(95dvh-var(--float-inset-y))] w-[calc(100%-2rem)] max-w-[1100px] overflow-y-auto">
+          <DialogContent
+            {...returnFocus}
+            className="max-h-[calc(95dvh-var(--float-inset-y))] w-[calc(100%-2rem)] max-w-[1100px] overflow-y-auto"
+          >
             <DialogHeader className="pr-7">
               <DialogTitle>{sourceName}</DialogTitle>
               <DialogDescription>
@@ -2223,6 +2277,7 @@ function DateAssignment({
 }) {
   const assign = useLiveMutation(api.panoramaImages.assignDate)
   const setDefault = useLiveMutation(api.panoramaImages.setDefaultImage)
+  const returnFocus = useReturnFocus()
   const [preview, setPreview] = useState(false)
   const savedId = currentId ?? current?.id ?? null
   const [selected, setSelected] = useState<string | null>(savedId)
@@ -2253,6 +2308,7 @@ function DateAssignment({
       }}
     >
       <DialogContent
+        {...returnFocus}
         className="max-h-[calc(90dvh-var(--float-inset-y))] w-[calc(100%-2rem)] max-w-4xl grid-cols-[minmax(0,1fr)] overflow-x-hidden overflow-y-auto"
         showCloseButton={!busy}
       >
