@@ -58,6 +58,7 @@ function TooltipContent({
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
   // open in a hidden kept view (lib/viewHidden.ts)
   if (useViewHidden(React.useContext(LayerOpenContext))) return null
+  // a tooltip lets presses through to what is under it, in a modal layer too (tokens.css)
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content

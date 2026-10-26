@@ -770,6 +770,20 @@ textarea {
   background: transparent;
 }
 
+/* A tooltip holds no controls and closes when the pointer leaves its
+   trigger (components/ui/tooltip.tsx), so neither the bubble nor the
+   wrapper Radix positions it in takes the pointer. A press where a tooltip
+   stands reaches what is under it, such as the Roadmap flag in the row
+   above the one it names, and closes the tooltip as any press outside it
+   does. Without this, a tooltip that focus opened would take that press.
+   While a modal layer is open, Radix sets an inline pointer-events: auto on
+   the bubble, which only !important overrides. */
+[data-slot="tooltip-content"],
+[data-radix-popper-content-wrapper]:has(> [data-slot="tooltip-content"]) {
+  /* biome-ignore lint/complexity/noImportantStyles: beats Radix's inline style in a modal */
+  pointer-events: none !important;
+}
+
 /* reveal-on-hover affordances (row "+" buttons etc.) */
 .hoverrow .hoveradd {
   opacity: 0;

@@ -15,7 +15,7 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    one. Team sync, which covers the home organization only, asks about that
    organization's projects. The phone's Roadmap gives the desktop's note for
    every scope with nothing to schedule, and both keep showing the scope's
-   milestones. */
+   milestones, as the Overview does under its own note. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => ({
@@ -361,14 +361,15 @@ function bare(): Snapshot {
 }
 
 /** `snap` with a milestone `name` on `project` a week from now, inside the
-    Roadmap's default window. */
+    Roadmap's default window. Several may share the week. */
 function withMilestone(snap: Snapshot, project: string, name: string): Snapshot {
   const day = new Date()
   day.setDate(day.getDate() + 7 - ((day.getDay() + 6) % 7))
   const pad = (n: number) => String(n).padStart(2, '0')
   const week = `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`
   const created_at = '2026-09-14T08:00:00.000Z'
-  snap.milestones.push({ id: `ms-${project}`, project_id: project, name, week, created_at })
+  const id = `ms-${project}-${snap.milestones.length}`
+  snap.milestones.push({ id, project_id: project, name, week, created_at })
   return snap
 }
 
@@ -393,6 +394,95 @@ describe('the Roadmap of a scope with nothing to schedule', () => {
     await app(only, '/app/~/roadmap/all')
     await shows('Tasks live in sub-projects.')
     expect(document.querySelector('[data-msflag]')?.textContent).toBe('Bare launch')
+    // and no empty heading for that project above the note
+    expect(document.querySelector('[data-track]')).toBeNull()
+  })
+
+  it('stands the milestones of one week in rows of their own', async () => {
+    const snap = withMilestone(withMilestone(bare(), 'bare', 'Bare launch'), 'bare', 'Bare review')
+    await app(snap, '/app/testbed/roadmap/p/3')
+    await shows('Tasks live in sub-projects.')
+    const flags = [...document.querySelectorAll<HTMLElement>('[data-msflag]')]
+    expect(flags.map((flag) => flag.textContent)).toEqual(['Bare launch', 'Bare review'])
+    expect(new Set(flags.map((flag) => flag.style.bottom)).size).toBe(2)
+  })
+
+  it('opens a milestone from its flag with the keyboard', async () => {
+    await app(withMilestone(bare(), 'bare', 'Bare launch'), '/app/testbed/roadmap/p/3')
+    await shows('Tasks live in sub-projects.')
+    const flag = document.querySelector<HTMLElement>('[data-msflag]')
+    // a button in the tab order, named by the whole name however it is cut
+    expect(flag?.getAttribute('role')).toBe('button')
+    expect(flag?.tabIndex).toBe(0)
+    expect(flag?.textContent).toBe('Bare launch')
+    await act(async () => {
+      flag?.focus()
+      flag?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    // the Milestones window, with that milestone's editor open
+    await vi.waitFor(
+      () => {
+        const dialog = document.querySelector('[role="dialog"]')
+        expect(dialog?.textContent).toContain('Milestones')
+        const fields = [...(dialog?.querySelectorAll('input') ?? [])]
+        expect(fields.map((field) => field.value)).toContain('Bare launch')
+      },
+      { timeout: 10_000 },
+    )
+  }, 20_000)
+})
+
+/** The milestone rows of the Overview's Milestones section. */
+const milestoneRows = () => [...document.querySelectorAll('main .overview-milestone')]
+
+describe('the Overview of a scope with nothing to summarize', () => {
+  it('keeps the scope’s milestones under the note on a computer', async () => {
+    await app(bare(), '/app/testbed/overview/p/3')
+    await shows('Tasks live in sub-projects.')
+    expect(document.querySelector('main .overview-section')).toBeNull()
+    await reload()
+    await app(withMilestone(bare(), 'bare', 'Bare launch'), '/app/testbed/overview/p/3')
+    await shows('Tasks live in sub-projects.')
+    expect(milestoneRows().map((row) => row.textContent)).toEqual([
+      expect.stringContaining('Bare launch'),
+    ])
+    expect(button('New sub-project')).toBeDefined()
+    expect(document.querySelector('main [aria-label="New milestone"]')).not.toBeNull()
+    // nothing counted, so no summary and no status strip
+    expect(document.querySelector('[data-ov-summary], [data-ov-strip]')).toBeNull()
+    // a project and My view whose sub-project holds no task
+    await reload()
+    const plan = withMilestone(member(), 'plan', 'Plan launch')
+    await app(plan, '/app/~/overview/mine')
+    await shows('Nothing assigned to you')
+    expect(milestoneRows()).toHaveLength(1)
+    await reload()
+    await app(plan, '/app/~/overview/all')
+    await shows('No tasks yet')
+    expect(milestoneRows()).toHaveLength(1)
+    await reload()
+    await app(plan, '/app/testbed/overview/p/2')
+    await shows('No tasks yet')
+    expect(button('New task')).toBeDefined()
+    expect(milestoneRows()).toHaveLength(1)
+    // All projects, when no project the person sees has a sub-project
+    await reload()
+    const only = withMilestone(bare(), 'bare', 'Bare launch')
+    only.access = only.access.filter((grant) => grant.project_id === 'bare')
+    await app(only, '/app/~/overview/all')
+    await shows('Tasks live in sub-projects.')
+    expect(milestoneRows()).toHaveLength(1)
+  })
+
+  it('keeps them on the phone too', async () => {
+    phone = true
+    await app(withMilestone(bare(), 'bare', 'Bare launch'), '/app/testbed/overview/p/3')
+    await shows('Tasks live in sub-projects.')
+    expect(milestoneRows()).toHaveLength(1)
+    await reload()
+    await app(withMilestone(member(), 'plan', 'Plan launch'), '/app/~/overview/mine')
+    await shows('Nothing assigned to you')
+    expect(milestoneRows()).toHaveLength(1)
   })
 })
 

@@ -1,5 +1,5 @@
-import type { CSSProperties, PointerEvent } from 'react'
-import { useContext, useRef as useRefR } from 'react'
+import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode } from 'react'
+import { useContext, useLayoutEffect, useRef as useRefR } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { LandscapeContext } from '@/lib/landscape'
@@ -7,6 +7,13 @@ import { cn } from '@/lib/utils'
 import { Icon } from '../../components/qivo'
 import type { RoadmapEdge } from '../../lib/roadmapEdges'
 import { type IssueVM, type MilestoneVM, P } from '../../store/planner'
+import {
+  FLAG_LANE_H,
+  type FlagPlace,
+  type FlagView,
+  flagBandHeight,
+  flagLanesShown,
+} from './flagLanes'
 
 export const BAR_RING = 4
 
@@ -247,13 +254,75 @@ export function Bar({
   )
 }
 
-/* draggable milestone diamond in the header */
+/* The header's band of milestone flags, `lanes` rows inside a box `height`
+   pixels tall. It scrolls, starting at its bottom row, only when one week
+   holds more milestones than it shows (`scrolls`). Then it tells `onView`
+   which rows are in sight and how wide its scrollbar is, so the layout keeps
+   a dragged flag in sight, counts the flags out of it and ends labels before
+   the scrollbar. It tells null when it does not scroll. */
+export function FlagBand({
+  width,
+  height,
+  lanes,
+  scrolls,
+  onView,
+  children,
+}: {
+  width: number
+  height: number
+  lanes: number
+  scrolls: boolean
+  onView: (view: FlagView | null) => void
+  children: ReactNode
+}) {
+  const ref = useRefR<HTMLDivElement>(null)
+  const read = () => {
+    const band = ref.current
+    if (!band || !scrolls) {
+      onView(null)
+      return
+    }
+    // a column-reverse box counts scrollTop down from 0 at its bottom row;
+    // layout sizes, so the phone's turned timeline reads the same
+    const shown = flagLanesShown(lanes, Math.max(0, -band.scrollTop), band.clientHeight)
+    onView({ ...shown, bar: band.offsetWidth - band.clientWidth })
+  }
+  useLayoutEffect(read, [scrolls, lanes, height, width])
+  return (
+    <div
+      ref={ref}
+      data-msband
+      data-msband-scrolls={scrolls || undefined}
+      onScroll={read}
+      style={{ width, height }}
+      className={`[position:absolute] [left:0] [bottom:0] ${
+        scrolls
+          ? '[display:flex] [flex-direction:column-reverse] [overflow-x:hidden] [overflow-y:auto] [overscroll-behavior:contain] [scrollbar-width:thin]'
+          : ''
+      }`}
+    >
+      <div style={{ height: flagBandHeight(lanes) }} className="[position:relative] [flex:none]">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/* draggable milestone diamond in the header, in the row, on the side and
+   with the room that layoutFlags (flagLanes.ts) gave it. The flag is as
+   wide as its label, so only the diamond and the name it shows take the
+   pointer, and Enter or Space opens it as a click does. A label cut short
+   still has the full name as its accessible name, and the tooltip shows it
+   with the week on hover and on keyboard focus. A flag whose label runs left
+   is placed from the band's left edge too, so a scrollbar that narrows the
+   band cannot move it off its week's line. */
 export function MilestoneFlag({
   m,
   week,
   w0,
   w1,
   weekW,
+  place,
   movable,
   onLive,
   onCommit,
@@ -264,6 +333,7 @@ export function MilestoneFlag({
   w0: number
   w1: number
   weekW: number
+  place: FlagPlace
   movable: boolean // edit access to the milestone's project; otherwise a click only opens it
   onLive: (id: string, week: number) => void
   onCommit: (id: string, epoch: number) => void
@@ -306,17 +376,37 @@ export function MilestoneFlag({
     }
     drag.current = null
   }
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    e.preventDefault()
+    onEdit?.(m.id)
+  }
+  const x = (week - w0) * weekW
+  const left = place.side === 'left'
   return (
     <HoverTooltip content={`${m.name}, ${P.weekLabel(week)}`}>
+      {/* biome-ignore lint/a11y/useSemanticElements: a drag handle; a native button would also click at the end of every drag. */}
       <div
         data-msflag={m.id}
+        data-msflag-side={place.side}
+        role="button"
+        tabIndex={0}
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={onUp}
-        style={{ left: (week - w0) * weekW - 4.5, width: weekW }}
+        onKeyDown={onKey}
+        style={{
+          ...(left ? { right: `calc(100% - ${x + 4.5}px)` } : { left: x - 4.5 }),
+          maxWidth: place.room,
+          height: FLAG_LANE_H,
+          bottom: place.bottom,
+        }}
         className={cn(
-          '[position:absolute] [bottom:3px] [display:flex] [align-items:center] [gap:8px] [touch-action:none] [user-select:none] [padding:2px_4px_2px_0] [z-index:2]',
+          '[position:absolute] [display:flex] [align-items:center] [gap:8px] [touch-action:none] [user-select:none]',
+          // a flag being dragged passes over the others, hiding what it covers
+          week === m.week ? '[z-index:2]' : '[z-index:3] bg-surface-1',
+          left ? '[flex-direction:row-reverse] [padding:0_0_0_4px]' : '[padding:0_4px_0_0]',
           movable ? '[cursor:ew-resize]' : '[cursor:pointer]',
         )}
       >
@@ -324,7 +414,7 @@ export function MilestoneFlag({
           style={{ background: P.MILESTONE_COLOR }}
           className="[width:9px] [height:9px] [transform:rotate(45deg)] [border-radius:var(--r-2xs)] [flex-shrink:0] [box-shadow:var(--qivo-shadow-card)]"
         />
-        <span className="min-w-0 line-clamp-2 [overflow-wrap:anywhere] [font-size:var(--fs-2xs)] [line-height:13px] [font-weight:600] [color:var(--text-2)]">
+        <span className="min-w-0 truncate [font-size:var(--fs-2xs)] [line-height:13px] [font-weight:600] [color:var(--text-2)]">
           {m.name}
         </span>
       </div>

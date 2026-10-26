@@ -857,23 +857,15 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   const grouped = wide || info.isMeta
   const subIds = info.subIds
 
+  /* Why a scope has no task to summarize. Without a milestone the note is
+     the page. With one, the note takes the place of the task sections and
+     the Milestones section stays under it, as the Roadmap keeps its flags
+     behind the same note. The note says why nothing is counted, not that
+     the scope plans nothing. */
+  const scoped = P.scopedIssues(info)
+  let emptyNote: ReactNode = null
   if (subIds.length === 0) {
-    if (wide) {
-      return info.metas.length === 0 ? (
-        <NoProjects
-          icon="chart"
-          title="Nothing to summarize yet"
-          onNewProject={() => actions.newProject({ kind: 'program' })}
-        />
-      ) : (
-        <EmptyState
-          icon="chart"
-          title="Nothing to summarize yet"
-          hint="Tasks live in sub-projects."
-        />
-      )
-    }
-    return (
+    emptyNote = !wide ? (
       <EmptyState
         icon="chart"
         title="Nothing to summarize yet"
@@ -881,22 +873,29 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         actionLabel={P.levelOn(info.id) === 'lead' ? 'New sub-project' : undefined}
         onAction={() => actions.newProject({ parent: info.id })}
       />
+    ) : info.metas.length === 0 ? (
+      <NoProjects
+        icon="chart"
+        title="Nothing to summarize yet"
+        onNewProject={() => actions.newProject({ kind: 'program' })}
+      />
+    ) : (
+      <EmptyState
+        icon="chart"
+        title="Nothing to summarize yet"
+        hint="Tasks live in sub-projects."
+      />
     )
-  }
-
-  const scoped = P.scopedIssues(info)
-  if (scoped.length === 0) {
-    // My view can be empty while the projects around it are full — say which
-    // of the two it is rather than claiming nobody has created anything
-    if (mine) {
-      return <EmptyState icon="user" title="Nothing assigned to you" />
-    }
-    // no action across all projects: creating means choosing where, and this
-    // scope is the one with nothing to choose from
-    if (wide) {
-      return <EmptyState icon="chart" title="No tasks yet" />
-    }
-    return (
+  } else if (scoped.length === 0) {
+    emptyNote = mine ? (
+      // My view can be empty while the projects around it are full — say which
+      // of the two it is rather than claiming nobody has created anything
+      <EmptyState icon="user" title="Nothing assigned to you" />
+    ) : wide ? (
+      // no action across all projects: creating means choosing where, and this
+      // scope is the one with nothing to choose from
+      <EmptyState icon="chart" title="No tasks yet" />
+    ) : (
       <EmptyState
         icon="chart"
         title="No tasks yet"
@@ -905,6 +904,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
       />
     )
   }
+  if (emptyNote && info.milestones.length === 0) return emptyNote
 
   const prog = P.progressIn(subIds, info.only)
   const inProgress = scoped.filter((i) => !P.isGroup(i) && i.status === 'progress').length
@@ -946,191 +946,198 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
       className="overview-view [flex:1] [overflow:auto]"
     >
       <div className="[padding:0_20px_40px] [max-width:var(--workspace-content-max)] [margin:0_auto] [display:flex] [flex-direction:column] [gap:var(--panel-gap)]">
-        {/* What to do, then the state it is drawn from. The sentence leads
-            because it is the only thing on this page that says which of the
-            numbers under it you should act on. */}
-        <OvSummary
-          overdue={overdueCount}
-          projected={atRiskIssues.length - overdueCount}
-          paused={pausedIssues.length}
-          inProgress={inProgress}
-          prog={prog}
-        />
+        {emptyNote ?? (
+          <>
+            {/* What to do, then the state it is drawn from. The sentence leads
+                because it is the only thing on this page that says which of the
+                numbers under it you should act on. */}
+            <OvSummary
+              overdue={overdueCount}
+              projected={atRiskIssues.length - overdueCount}
+              paused={pausedIssues.length}
+              inProgress={inProgress}
+              prog={prog}
+            />
 
-        {/* A single facts row, with enough width for a readable identity.
-            Cells wrap at compact widths without truncating milestone names. */}
-        <div
-          data-ov-strip
-          className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] items-start gap-x-6 gap-y-6 border-y border-border py-6"
-        >
-          <OvLeadStat info={info} />
-          <OvStat
-            label="Completion"
-            value={`${prog.pct}%`}
-            sub={`${prog.done} of ${prog.total} tasks done`}
-            className={cn(!mobile && 'min-w-[132px]')}
-          >
-            <ProgressBar value={prog.pct} height={5} />
-          </OvStat>
-          <OvStat
-            label="In progress"
-            value={inProgress}
-            sub={inReview ? `${inReview} in review` : undefined}
-          />
-          <OvStat label="Paused" value={pausedIssues.length} />
-          <OvStat
-            label="Next milestone"
-            value={nextMs ? nextMs.name : '—'}
-            valueClassName="font-sans text-md"
-            sub={
-              nextMs
-                ? `${P.weekNumLabel(nextMs.week)}, ${P.fmtDate(P.weekToDate(nextMs.week))}`
-                : 'None scheduled'
-            }
-          />
-        </div>
-
-        {grouped ? (
-          (() => {
-            /* A row per group, over the group's issues as this scope sees them.
-             In My view a project I have nothing in gets no row at all — an
-             all-zero health row would say "this project is stalled" when it
-             only means the work there isn't mine. */
-            // one pass over the scope's tasks for every group, not one per group
-            const groupOf = new Map<string, number[]>()
-            info.groups.forEach((g, i) => {
-              for (const id of g.subIds) groupOf.set(id, [...(groupOf.get(id) ?? []), i])
-            })
-            const held: IssueVM[][] = info.groups.map(() => [])
-            for (const it of scoped) for (const i of groupOf.get(it.project) ?? []) held[i].push(it)
-            const subIdLists = info.groups.map((g) => g.subIds)
-            const progress = P.progressByGroups(subIdLists, info.only)
-            const remaining = P.remainingByGroups(subIdLists, info.only)
-            const rows = info.groups
-              .map((g, gi) => {
-                const issues = held[gi]
-                const gp = progress[gi]
-                const leadId = P.leadOf(g.proj.id)
-                /* Projected verdicts (0064), gated PER ISSUE: `delayOf` returns the
-               raw projection for every issue — only `delayColor` consults the
-               tracking toggle — so the gate has to be asked here, and asking it
-               per issue is what a group spanning several sub-projects needs. */
-                const delayCount = (s: string) =>
-                  issues.filter((i) => {
-                    if (!P.tracksDelay(i)) return false
-                    const d = P.delayOf(i)
-                    return d && d.status === s
-                  }).length
-                return {
-                  proj: g.proj,
-                  issues,
-                  pct: gp.pct,
-                  done: gp.done,
-                  total: gp.total,
-                  remaining: remaining[gi],
-                  lead: leadId ? P.user(leadId) : null,
-                  late: delayCount('late'),
-                  behind: delayCount('behind'),
-                  paused: issues.filter((i) => P.isPaused(i)).length,
+            {/* A single facts row, with enough width for a readable identity.
+                Cells wrap at compact widths without truncating milestone names. */}
+            <div
+              data-ov-strip
+              className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] items-start gap-x-6 gap-y-6 border-y border-border py-6"
+            >
+              <OvLeadStat info={info} />
+              <OvStat
+                label="Completion"
+                value={`${prog.pct}%`}
+                sub={`${prog.done} of ${prog.total} tasks done`}
+                className={cn(!mobile && 'min-w-[132px]')}
+              >
+                <ProgressBar value={prog.pct} height={5} />
+              </OvStat>
+              <OvStat
+                label="In progress"
+                value={inProgress}
+                sub={inReview ? `${inReview} in review` : undefined}
+              />
+              <OvStat label="Paused" value={pausedIssues.length} />
+              <OvStat
+                label="Next milestone"
+                value={nextMs ? nextMs.name : '—'}
+                valueClassName="font-sans text-md"
+                sub={
+                  nextMs
+                    ? `${P.weekNumLabel(nextMs.week)}, ${P.fmtDate(P.weekToDate(nextMs.week))}`
+                    : 'None scheduled'
                 }
-              })
-              .filter((r) => !mine || r.issues.length > 0)
+              />
+            </div>
 
-            /* The sort. Name and lead compare as text, everything else as a
-             number, and NAME is always the last tiebreak so the order is total:
-             without it two groups with the same delay count would swap places on
-             every unrelated store update. */
-            const key = (r) => {
-              switch (sort.key) {
-                case 'name':
-                  return r.proj.name.toLowerCase()
-                case 'lead':
-                  return (r.lead ? r.lead.name : '￿').toLowerCase()
-                case 'progress':
-                  return r.pct
-                case 'done':
-                  return r.total ? r.done / r.total : 0
-                case 'left':
-                  return r.remaining
-                default:
-                  return r[sort.key] || 0
-              }
-            }
-            const sorted = rows.slice().sort((a, b) => {
-              const ka = key(a),
-                kb = key(b)
-              const d = ka < kb ? -1 : ka > kb ? 1 : 0
-              return (sort.dir === 'asc' ? d : -d) || a.proj.name.localeCompare(b.proj.name)
-            })
-            return (
-              <OvSection title={wide ? 'Project health' : 'Sub-project health'}>
-                <OvHealthTable
-                  rows={sorted}
-                  unit={wide ? 'Project' : 'Sub-project'}
-                  sort={sort}
-                  setSort={setSort}
-                  mobile={mobile}
-                  onOpen={(id: string) => {
-                    actions.setScope(id)
-                    actions.setView('kanban')
-                  }}
-                />
+            {grouped ? (
+              (() => {
+                /* A row per group, over the group's issues as this scope sees them.
+                 In My view a project I have nothing in gets no row at all — an
+                 all-zero health row would say "this project is stalled" when it
+                 only means the work there isn't mine. */
+                // one pass over the scope's tasks for every group, not one per group
+                const groupOf = new Map<string, number[]>()
+                info.groups.forEach((g, i) => {
+                  for (const id of g.subIds) groupOf.set(id, [...(groupOf.get(id) ?? []), i])
+                })
+                const held: IssueVM[][] = info.groups.map(() => [])
+                for (const it of scoped)
+                  for (const i of groupOf.get(it.project) ?? []) held[i].push(it)
+                const subIdLists = info.groups.map((g) => g.subIds)
+                const progress = P.progressByGroups(subIdLists, info.only)
+                const remaining = P.remainingByGroups(subIdLists, info.only)
+                const rows = info.groups
+                  .map((g, gi) => {
+                    const issues = held[gi]
+                    const gp = progress[gi]
+                    const leadId = P.leadOf(g.proj.id)
+                    /* Projected verdicts (0064), gated PER ISSUE: `delayOf` returns the
+                   raw projection for every issue — only `delayColor` consults the
+                   tracking toggle — so the gate has to be asked here, and asking it
+                   per issue is what a group spanning several sub-projects needs. */
+                    const delayCount = (s: string) =>
+                      issues.filter((i) => {
+                        if (!P.tracksDelay(i)) return false
+                        const d = P.delayOf(i)
+                        return d && d.status === s
+                      }).length
+                    return {
+                      proj: g.proj,
+                      issues,
+                      pct: gp.pct,
+                      done: gp.done,
+                      total: gp.total,
+                      remaining: remaining[gi],
+                      lead: leadId ? P.user(leadId) : null,
+                      late: delayCount('late'),
+                      behind: delayCount('behind'),
+                      paused: issues.filter((i) => P.isPaused(i)).length,
+                    }
+                  })
+                  .filter((r) => !mine || r.issues.length > 0)
+
+                /* The sort. Name and lead compare as text, everything else as a
+                 number, and NAME is always the last tiebreak so the order is total:
+                 without it two groups with the same delay count would swap places on
+                 every unrelated store update. */
+                const key = (r) => {
+                  switch (sort.key) {
+                    case 'name':
+                      return r.proj.name.toLowerCase()
+                    case 'lead':
+                      return (r.lead ? r.lead.name : '￿').toLowerCase()
+                    case 'progress':
+                      return r.pct
+                    case 'done':
+                      return r.total ? r.done / r.total : 0
+                    case 'left':
+                      return r.remaining
+                    default:
+                      return r[sort.key] || 0
+                  }
+                }
+                const sorted = rows.slice().sort((a, b) => {
+                  const ka = key(a),
+                    kb = key(b)
+                  const d = ka < kb ? -1 : ka > kb ? 1 : 0
+                  return (sort.dir === 'asc' ? d : -d) || a.proj.name.localeCompare(b.proj.name)
+                })
+                return (
+                  <OvSection title={wide ? 'Project health' : 'Sub-project health'}>
+                    <OvHealthTable
+                      rows={sorted}
+                      unit={wide ? 'Project' : 'Sub-project'}
+                      sort={sort}
+                      setSort={setSort}
+                      mobile={mobile}
+                      onOpen={(id: string) => {
+                        actions.setScope(id)
+                        actions.setView('kanban')
+                      }}
+                    />
+                  </OvSection>
+                )
+              })()
+            ) : (
+              <OvSection title="Status distribution">
+                <div className="[background:var(--surface-1)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [padding:20px] [box-shadow:var(--qivo-shadow-card)] [display:flex] [flex-direction:column] [gap:8px]">
+                  <OvStatusBar items={scoped} height={8} />
+                  <OvStatusLegend items={scoped} />
+                </div>
               </OvSection>
-            )
-          })()
-        ) : (
-          <OvSection title="Status distribution">
-            <div className="[background:var(--surface-1)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [padding:20px] [box-shadow:var(--qivo-shadow-card)] [display:flex] [flex-direction:column] [gap:8px]">
-              <OvStatusBar items={scoped} height={8} />
-              <OvStatusLegend items={scoped} />
-            </div>
-          </OvSection>
-        )}
+            )}
 
-        <OvSection
-          title={`Overdue & at risk${atRiskIssues.length ? `, ${atRiskIssues.length}` : ''}`}
-        >
-          {atRiskIssues.length ? (
-            <div className="[display:flex] [flex-direction:column] [gap:8px]">
-              <DeferredList
-                id="overview-at-risk"
-                items={atRiskIssues}
-                keyOf={rowKey}
-                render={atRiskRow}
-                estimate={rowEstimate}
-                gap={8}
-                initial={initial}
-                scheduler={scheduler}
-                label={pendingRows}
-              />
-            </div>
-          ) : (
-            <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
-              No deadlines are overdue or at risk.
-            </div>
-          )}
-        </OvSection>
-        <OvSection title={`Paused tasks${pausedIssues.length ? `, ${pausedIssues.length}` : ''}`}>
-          {pausedIssues.length ? (
-            <div className="[display:flex] [flex-direction:column] [gap:8px]">
-              <DeferredList
-                id="overview-paused"
-                items={pausedIssues}
-                keyOf={rowKey}
-                render={pausedRow}
-                estimate={rowEstimate}
-                gap={8}
-                initial={initial}
-                scheduler={scheduler}
-                label={pendingRows}
-              />
-            </div>
-          ) : (
-            <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
-              Nothing is paused right now.
-            </div>
-          )}
-        </OvSection>
+            <OvSection
+              title={`Overdue & at risk${atRiskIssues.length ? `, ${atRiskIssues.length}` : ''}`}
+            >
+              {atRiskIssues.length ? (
+                <div className="[display:flex] [flex-direction:column] [gap:8px]">
+                  <DeferredList
+                    id="overview-at-risk"
+                    items={atRiskIssues}
+                    keyOf={rowKey}
+                    render={atRiskRow}
+                    estimate={rowEstimate}
+                    gap={8}
+                    initial={initial}
+                    scheduler={scheduler}
+                    label={pendingRows}
+                  />
+                </div>
+              ) : (
+                <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
+                  No deadlines are overdue or at risk.
+                </div>
+              )}
+            </OvSection>
+            <OvSection
+              title={`Paused tasks${pausedIssues.length ? `, ${pausedIssues.length}` : ''}`}
+            >
+              {pausedIssues.length ? (
+                <div className="[display:flex] [flex-direction:column] [gap:8px]">
+                  <DeferredList
+                    id="overview-paused"
+                    items={pausedIssues}
+                    keyOf={rowKey}
+                    render={pausedRow}
+                    estimate={rowEstimate}
+                    gap={8}
+                    initial={initial}
+                    scheduler={scheduler}
+                    label={pendingRows}
+                  />
+                </div>
+              ) : (
+                <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
+                  Nothing is paused right now.
+                </div>
+              )}
+            </OvSection>
+          </>
+        )}
         {/* a milestone belongs to ONE project's roadmap (0078) — a scope
             spanning every project names none to add it to, so the + is a
             project scope's affordance only */}
