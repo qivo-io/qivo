@@ -21,7 +21,8 @@ with the task's card shown behind it ([Your inbox](./working-together.md#your-in
 The **description** supports formatted text, headings, lists, quotes, links
 and code. Use the formatting row or type Markdown shortcuts. Formatting
 keys include Ctrl/Cmd+B/I/U/E, Ctrl/Cmd+Shift+X and Ctrl/Cmd+K for links.
-Click a link to open, edit or remove it.
+Shift+Enter or Ctrl/Cmd+Enter starts a new line within a paragraph. Click a
+link to open, edit or remove it.
 
 Type **@** to mention someone. Search by partial name, initials or email
 fragments, in any order, and choose with arrow keys and Enter or a click.

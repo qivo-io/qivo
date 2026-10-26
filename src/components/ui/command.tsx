@@ -11,11 +11,14 @@ import {
 import { commandSearchFilter } from '@/lib/search'
 import { cn } from '@/lib/utils'
 
+/* A searchable list. Arrows, Home, End and Enter move and choose; cmdk's
+   Ctrl+N, J, P and K stay the browser's (Qivo has no shortcut keys). */
 function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
   return (
     <CommandPrimitive
       data-slot="command"
       filter={commandSearchFilter}
+      vimBindings={false}
       className={cn(
         'flex h-full w-full flex-col overflow-hidden rounded-md bg-popover text-popover-foreground',
         className,
@@ -157,16 +160,6 @@ function CommandItem({ className, ...props }: React.ComponentProps<typeof Comman
   )
 }
 
-function CommandShortcut({ className, ...props }: React.ComponentProps<'span'>) {
-  return (
-    <span
-      data-slot="command-shortcut"
-      className={cn('ml-auto text-xs tracking-widest text-muted-foreground', className)}
-      {...props}
-    />
-  )
-}
-
 export {
   Command,
   CommandDialog,
@@ -176,5 +169,4 @@ export {
   CommandItem,
   CommandList,
   CommandSeparator,
-  CommandShortcut,
 }

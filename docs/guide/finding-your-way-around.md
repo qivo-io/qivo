@@ -198,7 +198,7 @@ and deleted ones from Deleted items.
   comment editor it first leaves the text, asking before it discards changes.
 - **Enter** submits single-line fields.
 - **Ctrl/Cmd+K** links the selected editor text. The editor's other formatting
-  keys are in [The discussion column](./the-task-window.md#the-discussion-column).
+  and line-break keys are in [The discussion column](./the-task-window.md#the-discussion-column).
 
 Qivo has no other shortcuts. Saving a draft, sending a note, adding a label
 and every other action use their buttons.
