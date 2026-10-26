@@ -710,12 +710,21 @@ function Library() {
   // for the preview, once an approval in it took its opener away
   const previewFocus = useRef<() => HTMLElement | null>(() => null)
   // the card whose own Approve or Remove image runs, and where focus goes
-  // once the card has left the list, until it leaves or its write is
-  // refused. The list without it can come in the same render as the press.
-  // Focus that the card left nowhere then moves.
-  const [acted, setActed] = useState<{ id: string; focus: () => HTMLElement | null } | null>(null)
+  // once the card has left the list, until it leaves, its write is refused,
+  // or its write landed with the card still listed, as in All images. The
+  // list without it can come in the same render as the press. Focus that
+  // the card left nowhere then moves.
+  const [acted, setActed] = useState<{
+    id: string
+    focus: () => HTMLElement | null
+    landed?: boolean
+  } | null>(null)
   useLayoutEffect(() => {
-    if (!acted || data?.images.some((image) => image.id === acted.id)) return
+    if (!acted) return
+    if (data?.images.some((image) => image.id === acted.id)) {
+      if (acted.landed) setActed(null)
+      return
+    }
     setActed(null)
     const active = document.activeElement
     if (active && active !== document.body && active.isConnected) return
@@ -805,7 +814,9 @@ function Library() {
                 setPreview(image)
               }}
               acting={(action) => {
-                if (action)
+                if (action === 'landed')
+                  setActed((last) => (last?.id === image.id ? { ...last, landed: true } : last))
+                else if (action)
                   setActed({ id: image.id, focus: around(image.id, `[data-image-${action}]`) })
                 else setActed((last) => (last?.id === image.id ? null : last))
               }}
@@ -974,8 +985,8 @@ function ManualImageResult({ id, dismiss }: { id: string; dismiss: () => void })
   )
 }
 
-/* `acting` hears that the card's own Approve or Remove image starts, and
-   null when its write is refused. `inLibrary` marks a card of the Library's
+/* `acting` hears that the card's own Approve or Remove image starts,
+   'landed' once its write has, and null when its write is refused. `inLibrary` marks a card of the Library's
    list with data-library-image. */
 function ImageCard({
   image,
@@ -985,7 +996,7 @@ function ImageCard({
 }: {
   image: BackgroundImage
   preview: () => void
-  acting?: (action: 'approve' | 'remove' | null) => void
+  acting?: (action: 'approve' | 'remove' | 'landed' | null) => void
   inLibrary?: boolean
 }) {
   const removeNoteId = useId()
@@ -1023,6 +1034,7 @@ function ImageCard({
       // nowhere goes to the card's preview. Another operator's change of
       // the status moves nothing.
       focusAfterRender(() => previewButton.current)
+      acting?.('landed')
     } catch (error) {
       setError(errorMessage(error))
       acting?.(null)

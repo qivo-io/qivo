@@ -245,6 +245,24 @@ describe('the library preview', () => {
   })
 })
 
+describe('the preview over All images', () => {
+  it('keeps focus in the preview when Approve and next approves the last image waiting', async () => {
+    server.images = [image('lake', 'Lake', 'approved'), image('dunes', 'Dunes')]
+    await render()
+    await showAll()
+    await press(button('Preview Dunes'))
+    const dialog = dialogs().at(-1)!
+    await press(button('Approve and next', footer()))
+    expect(document.querySelector('[data-image-review-notice]')?.textContent).toBe(
+      'Image approved. No more images waiting for review.',
+    )
+    // the card behind the preview stays listed, approved, and takes no focus
+    expect(control('dunes', 'approve')).toBeNull()
+    expect(dialog.isConnected).toBe(true)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+  })
+})
+
 describe('the dialogs opened from a button that stays', () => {
   it('gives focus back to Change default once the default’s dialog closes', async () => {
     server.images = [image('lake', 'Lake', 'approved'), image('dunes', 'Dunes', 'approved')]
@@ -316,6 +334,19 @@ describe('a card’s own Approve and Remove image', () => {
     await press(document.querySelector<HTMLElement>('[data-image-remove-confirm="ridge"]')!)
     expect(control('ridge', 'remove')).toBeNull()
     expect(document.activeElement).toBe(preview('ridge'))
+  })
+
+  it('moves no focus when a card approved in All images leaves the list later', async () => {
+    await render()
+    await showAll()
+    await press(control('ridge', 'approve')!)
+    expect(document.activeElement).toBe(preview('ridge'))
+    dropFocus()
+    // another change takes the card off the list
+    server.images = server.images.filter((i) => i.id !== 'ridge')
+    await act(async () => publish())
+    expect(preview('ridge')).toBeNull()
+    expect(document.activeElement).toBe(document.body)
   })
 
   it('moves no focus when another operator approves an image in All images', async () => {
