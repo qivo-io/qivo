@@ -50,6 +50,8 @@ const server = vi.hoisted(() => ({
   images: [] as Image[],
   defaultId: null as string | null,
   watches: new Set<Watch>(),
+  // while set, each write waits here for the test to refuse it
+  refusals: null as ((error: Error) => void)[] | null,
 }))
 /** What a live query answers now. */
 function answer(name: string, args: Record<string, unknown>): unknown {
@@ -117,6 +119,8 @@ vi.mock('../../lib/convex', () => ({
 vi.mock('../convex', () => ({
   runAction: vi.fn(),
   sendMutation: async (ref: Parameters<typeof getFunctionName>[0], args: { id: string }) => {
+    const refusals = server.refusals
+    if (refusals) await new Promise((_, refuse) => refusals.push(refuse))
     const name = getFunctionName(ref)
     const status =
       name === 'panoramaImages:approve'
@@ -150,6 +154,7 @@ beforeEach(async () => {
   server.images = [image('lake', 'Lake'), image('ridge', 'Ridge'), image('dunes', 'Dunes')]
   server.defaultId = null
   server.watches.clear()
+  server.refusals = null
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -184,10 +189,20 @@ async function press(target: HTMLElement) {
   target.focus()
   await act(async () => target.click())
 }
+/** Leaves focus nowhere, as a browser can when it disables the focused
+    button. jsdom keeps focus on a disabled button and ignores its blur. */
+function dropFocus() {
+  const elsewhere = document.body.appendChild(document.createElement('button'))
+  elsewhere.focus()
+  elsewhere.remove()
+}
 const dialogs = () => [...document.querySelectorAll('[role="dialog"]')]
 const footer = () => dialogs().at(-1)?.querySelector('[data-slot="dialog-footer"]') ?? document
 const preview = (id: string) =>
   document.querySelector<HTMLElement>(`[data-background-image="${id}"] button`)
+const control = (id: string, name: 'approve' | 'remove') =>
+  document.querySelector<HTMLButtonElement>(`[data-image-${name}="${id}"]`)
+const card = (id: string) => document.querySelector(`[data-background-image="${id}"]`) ?? document
 
 describe('the library preview', () => {
   it('gives focus to the card now in its place after Approve and next took the card away', async () => {
@@ -265,9 +280,6 @@ describe('the dialogs opened from a button that stays', () => {
 })
 
 describe('a card’s own Approve and Remove image', () => {
-  const control = (id: string, name: 'approve' | 'remove') =>
-    document.querySelector<HTMLElement>(`[data-image-${name}="${id}"]`)
-
   it('gives focus to the next card’s Approve once an approval took the card off the list', async () => {
     await render()
     await press(control('ridge', 'approve')!)
@@ -291,5 +303,38 @@ describe('a card’s own Approve and Remove image', () => {
     await press(control('ridge', 'approve')!)
     expect(control('ridge', 'approve')).toBeNull()
     expect(document.activeElement).toBe(preview('ridge'))
+  })
+
+  it('gives focus back to Approve once its write is refused, and a later removal of the card moves none', async () => {
+    server.refusals = []
+    await render()
+    const approve = control('ridge', 'approve')!
+    await press(approve)
+    expect(approve.disabled).toBe(true)
+    dropFocus()
+    expect(document.activeElement).toBe(document.body)
+    await act(async () => server.refusals?.[0](new Error('The image changed. Review it again.')))
+    expect(document.activeElement).toBe(approve)
+    // the operator clicks the page, and another operator approves the image
+    approve.blur()
+    server.images = server.images.map((i) => (i.id === 'ridge' ? { ...i, status: 'approved' } : i))
+    await act(async () => publish())
+    expect(preview('ridge')).toBeNull()
+    expect(document.activeElement).toBe(document.body)
+  })
+})
+
+describe('a card’s remove panel', () => {
+  it('gives focus to the reason field when Remove opens the panel', async () => {
+    await render()
+    await press(control('ridge', 'remove')!)
+    expect(document.activeElement).toBe(card('ridge').querySelector('textarea'))
+  })
+
+  it('gives focus back to Remove when the panel’s Cancel closes it', async () => {
+    await render()
+    await press(control('ridge', 'remove')!)
+    await press(button('Cancel', card('ridge')))
+    expect(document.activeElement).toBe(control('ridge', 'remove'))
   })
 })

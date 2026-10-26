@@ -718,8 +718,9 @@ function Library() {
     )
   }
   // the card whose own Approve or Remove image runs, and that button, until
-  // the card leaves the list. The list without it can come in the same
-  // render as the press. Focus that the card left nowhere then moves.
+  // the card leaves the list or its write is refused. The list without it
+  // can come in the same render as the press. Focus that the card left
+  // nowhere then moves.
   const [acted, setActed] = useState<{ id: string; control: string } | null>(null)
   useLayoutEffect(() => {
     if (!acted || data?.images.some((image) => image.id === acted.id)) return
@@ -811,8 +812,10 @@ function Library() {
                 setPreview(image)
               }}
               acting={(action) => {
-                noteAround(image.id)
-                setActed({ id: image.id, control: `[data-image-${action}]` })
+                if (action) {
+                  noteAround(image.id)
+                  setActed({ id: image.id, control: `[data-image-${action}]` })
+                } else setActed((last) => (last?.id === image.id ? null : last))
               }}
             />
           ))}
@@ -979,7 +982,8 @@ function ManualImageResult({ id, dismiss }: { id: string; dismiss: () => void })
   )
 }
 
-/* `acting` hears that the card's own Approve or Remove image starts. */
+/* `acting` hears that the card's own Approve or Remove image starts, and
+   null when its write is refused. */
 function ImageCard({
   image,
   preview,
@@ -987,7 +991,7 @@ function ImageCard({
 }: {
   image: BackgroundImage
   preview: () => void
-  acting?: (action: 'approve' | 'remove') => void
+  acting?: (action: 'approve' | 'remove' | null) => void
 }) {
   const removeNoteId = useId()
   const approve = useLiveMutation(api.panoramaImages.approve)
@@ -998,11 +1002,22 @@ function ImageCard({
   const [error, setError] = useState('')
   useUpdateBlocker(removing || busy)
   const previewButton = useRef<HTMLButtonElement>(null)
+  const approveButton = useRef<HTMLButtonElement>(null)
+  const removeButton = useRef<HTMLButtonElement>(null)
+  const noteField = useRef<HTMLTextAreaElement>(null)
+  const confirmButton = useRef<HTMLButtonElement>(null)
   // An approval or a removal that keeps the card, as All images and
   // Selected image do, takes away the button pressed. Focus it left
   // nowhere goes to the card's preview.
   useFocusWhenGone(image.status === 'pending', () => previewButton.current)
   useFocusWhenGone(image.status !== 'removed', () => previewButton.current)
+  // Remove swaps its button for the confirm panel, and Cancel swaps it
+  // back. Focus that the swap left nowhere goes along.
+  useFocusWhenGone(!removing, () => noteField.current)
+  useFocusWhenGone(removing, () => removeButton.current)
+  // A write disables its button, which a browser can take focus off, and a
+  // refused write leaves the button in place
+  useFocusWhenGone(busy, () => (removing ? confirmButton.current : approveButton.current))
   const perform = async (action: 'approve' | 'remove') => {
     acting?.(action)
     setBusy(true)
@@ -1014,6 +1029,7 @@ function ImageCard({
       setRemoving(false)
     } catch (error) {
       setError(errorMessage(error))
+      acting?.(null)
     } finally {
       setBusy(false)
     }
@@ -1077,6 +1093,7 @@ function ImageCard({
               <div className="space-y-2">
                 <Label htmlFor={removeNoteId}>Reason (optional)</Label>
                 <LimitedTextarea
+                  ref={noteField}
                   id={removeNoteId}
                   limit={LIMITS.imageRemoveNote}
                   value={note}
@@ -1088,6 +1105,7 @@ function ImageCard({
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button
+                  ref={confirmButton}
                   type="button"
                   data-image-remove-confirm={image.id}
                   variant="destructive"
@@ -1113,6 +1131,7 @@ function ImageCard({
             <div className="flex flex-wrap gap-2 border-t border-border pt-6">
               {image.status === 'pending' && (
                 <Button
+                  ref={approveButton}
                   type="button"
                   data-image-approve={image.id}
                   variant="primary"
@@ -1124,6 +1143,7 @@ function ImageCard({
                 </Button>
               )}
               <Button
+                ref={removeButton}
                 type="button"
                 data-image-remove={image.id}
                 disabled={busy}
