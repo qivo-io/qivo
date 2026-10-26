@@ -157,6 +157,7 @@ function ModalShell({
       return false
     },
     mobile || isLandscapeRoadmapOpen(),
+    busy,
   )
   const cancel = () => {
     cancelling.current = true

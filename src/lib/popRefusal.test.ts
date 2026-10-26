@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { browserWindow, settleMoves } from './historyDouble.setup'
 import { createUnsentScope } from './leaveGuard'
 import {
+  busyLayerLeft,
   finishLayer,
   historyBusy,
   holdLayers,
@@ -49,6 +50,7 @@ async function refusing(
   const applied: string[] = []
   browser.window.addEventListener('popstate', (event) => {
     if (!(event instanceof PopStateEvent)) return
+    if (busyLayerLeft() && holdLayers(event)) return
     if (scope.held().length && refusal.refuse(event, [scope])) return
     if (holdLayers(event)) return
     refusal.accepted()
@@ -230,6 +232,27 @@ describe('a phone layer that a move passes', () => {
       expect(menu.state).toBe('open')
       expect(browser.here()).toBe('/task')
       expect(layerOf(browser.history.state)).toBe(menu.marker)
+      expect(browser.applied).toEqual([])
+      expect(historyBusy()).toBe(false)
+    },
+  )
+
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    'holds its page without a question when it is busy and the app would refuse the pick, in %s',
+    async (engine) => {
+      const browser = await refusing(['/a', '/b', '/task'], 2, engine)
+      // a dialog whose request still runs
+      const dialog = openLayer(
+        () => false,
+        () => true,
+      )
+      await Promise.resolve()
+      browser.person.pick(0)
+      await settleMoves()
+      expect(browser.ask).not.toHaveBeenCalled()
+      expect(dialog.state).toBe('open')
+      expect(browser.here()).toBe('/task')
+      expect(layerOf(browser.history.state)).toBe(dialog.marker)
       expect(browser.applied).toEqual([])
       expect(historyBusy()).toBe(false)
     },

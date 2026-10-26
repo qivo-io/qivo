@@ -9,7 +9,8 @@ import { goTo, refuseMove, returning, returnStepLanded, returnTo, voidReturn } f
    and asks only once it is back. Discard then takes the refused move again.
    The refused popstate and the return reach no other popstate listener,
    such as the phone layers' (lib/pageHistory listenBackLayers), and no
-   layer is asked about the move (holdLayers). With the Navigation API the
+   layer is asked about the move (holdLayers), unless a busy one would hold
+   the page anyway (busyLayerLeft): then it holds it and nothing asks. With the Navigation API the
    return goes by key and lands whatever the person did meanwhile, and a
    move refused while it is on its way joins it: one question, for the
    latest move. Without the API it goes by position, a move that lands

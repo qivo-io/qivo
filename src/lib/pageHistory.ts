@@ -51,7 +51,8 @@
    quick Backs that Chromium and Firefox counted past a layer that refused
    its close do, is offered to those layers before App shows it
    (holdLayers): one that refuses holds its page, and the move returns to
-   its marker the same way. */
+   its marker the same way. A busy layer, which refuses every close for now,
+   holds its page before App would ask about unsent text (busyLayerLeft). */
 
 /** A phone layer's place in the history (useMobileBackLayer). */
 export type BackLayer = {
@@ -65,6 +66,9 @@ export type BackLayer = {
   key: string | null
   base: number | null
   readonly onBack: () => unknown
+  /** whether it refuses every close for now, as a dialog whose request
+      still runs does */
+  readonly busy: () => boolean
 }
 
 /** An entry as the page last saw it: its position, state, address and, with
@@ -426,19 +430,30 @@ function onPop(event: PopStateEvent) {
   }
 }
 
+/** The layers the latest move left whose page it lands below, top first. */
+function leftBelow() {
+  const here = positionIn(current().history.state)
+  return popped.filter((layer) => here === null || layer.base === null || here < layer.base)
+}
+
+/** Whether the latest move left an open busy layer whose page it lands
+    below. Such a layer holds the page whatever App would ask, so App's
+    popstate listener calls holdLayers first then, and asks nothing about
+    unsent text for a move that cannot happen yet. */
+export function busyLayerLeft() {
+  return leftBelow().some((layer) => layer.state === 'open' && layer.busy())
+}
+
 /** Offers the latest move to the open layers it left whose page it lands
     below, top first: each closes, or one refuses and holds its page. The
     move then returns to that layer's marker, hidden from the other
     listeners, and the layers under it stay open. App's popstate listener
     calls it when it does not refuse the move itself, before it shows the
-    page the move reached, so a move App refuses closes no layer. Answers
-    whether a layer held the page. */
+    page the move reached, so a move App refuses closes no layer, and first
+    when a busy layer would hold the page (busyLayerLeft). Answers whether a
+    layer held the page. */
 export function holdLayers(event: PopStateEvent) {
-  const here = positionIn(current().history.state)
-  const leaving = popped.filter(
-    (layer) => here === null || layer.base === null || here < layer.base,
-  )
-  for (const layer of leaving) {
+  for (const layer of leftBelow()) {
     if (layer.state !== 'open' || closeLayer(layer)) continue
     const marker = { at: layer.at, state: null, url: '', key: layer.key }
     // a return already on its way, this layer's or a refusal's, goes back
@@ -703,7 +718,7 @@ export function pushPage(state: object, url: string) {
     the address sync of the commit that opened it, once no page move is on
     its way. `onBack` runs when a Back leaves its marker, the top layer
     first, and answers false to keep it open. */
-export function openLayer(onBack: () => unknown): BackLayer {
+export function openLayer(onBack: () => unknown, busy = () => false): BackLayer {
   seq += 1
   const layer: BackLayer = {
     state: 'open',
@@ -712,6 +727,7 @@ export function openLayer(onBack: () => unknown): BackLayer {
     key: null,
     base: null,
     onBack,
+    busy,
   }
   open.add(layer)
   queueMicrotask(() => whenQuiet(() => markLayer(layer)))

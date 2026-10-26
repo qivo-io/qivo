@@ -54,6 +54,7 @@ import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/leaveGuard'
 import { afterProjectSaved } from './lib/newProjectAccess'
 import {
+  busyLayerLeft,
   historyBusy,
   holdLayers,
   leavePage,
@@ -1308,6 +1309,10 @@ function App() {
         projectsOpen: !!r.projects,
         sync: r.sync && P.homeOrg ? syncPlaceFor(r.sync, mobileRef.current) : null,
       }
+      /* A busy phone layer the move left below its page, as a dialog whose
+         request still runs, holds the page whatever App would ask, so App
+         asks nothing about a move that cannot happen yet. */
+      if (busyLayerLeft() && holdLayers(event)) return
       /* Back or Forward that would close a window holding unsent text
          returns to the entry it left, so nothing moves, and asks there
          (lib/popRefusal). When it has no entry to return to, the address it
@@ -1359,7 +1364,8 @@ function App() {
     }
     window.addEventListener('popstate', onPop)
     // the phone layers hear a move after App, so never one App refuses
-    // (holdLayers asks them only when App does not refuse it)
+    // (holdLayers asks them only when App does not refuse it, or first for
+    // a busy layer, which holds the page anyway)
     const stopLayers = listenBackLayers()
     return () => {
       window.removeEventListener('popstate', onPop)
