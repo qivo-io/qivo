@@ -510,7 +510,8 @@ function Roadmap({
   const toolbarRef = useRefR<HTMLDivElement | null>(null)
   /* The Milestones window opened from a flag can delete that milestone, and
      the flag with it. Focus then goes to the next flag, the previous one,
-     the toolbar's Milestone or its filter field. */
+     the toolbar's Milestone or its filter field, else, as on a phone, whose
+     toolbar folds into a closed Filters & planning, that fold's summary. */
   const editMilestone = (id: string) =>
     actions.editMilestone(
       id,
@@ -518,9 +519,17 @@ function Roadmap({
         'data-msflag',
         id,
         (flag) => flag,
-        () =>
-          toolbarRef.current?.querySelector<HTMLElement>('[data-new-milestone]') ??
-          toolbarRef.current?.querySelector<HTMLElement>('[data-filter-group] input'),
+        () => {
+          const toolbar = toolbarRef.current
+          // a control in a closed fold shows nothing to focus
+          const open = (element: HTMLElement | null | undefined) =>
+            element && !element.closest('details:not([open])') ? element : null
+          return (
+            open(toolbar?.querySelector<HTMLElement>('[data-new-milestone]')) ??
+            open(toolbar?.querySelector<HTMLElement>('[data-filter-group] input')) ??
+            toolbar?.closest('details')?.querySelector<HTMLElement>(':scope > summary')
+          )
+        },
       ),
     )
   useEffectR(() => {

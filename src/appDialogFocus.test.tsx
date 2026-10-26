@@ -402,6 +402,7 @@ describe('Milestones', { timeout: 30_000 }, () => {
     ['Overview', false, 'data-overview-milestone', 'New milestone'],
     ['phone agenda', true, 'data-agenda-milestone', 'New milestone'],
     ['Roadmap flag', false, 'data-msflag', 'Milestone'],
+    ['phone timeline flag', true, 'data-msflag', 'Filters & planning'],
   ])(
     'gives focus to the next row, else the previous one, else New milestone, after the %s deleted its milestone',
     async (where, onPhone, attr, add) => {
@@ -409,13 +410,14 @@ describe('Milestones', { timeout: 30_000 }, () => {
       await boot((snap) => {
         plan(snap)
         // the Roadmap's flags show the weeks of its window, from this one on
-        if (where === 'Roadmap flag')
+        if (attr === 'data-msflag')
           snap.milestones.forEach((m, n) => {
             m.week = mondayIn(n + 1)
           })
       })
       if (onPhone) await openOnPhone('Roadmap')
       if (where === 'Roadmap flag') await press(await find('Roadmap'))
+      if (where === 'phone timeline flag') await press(await find('Timeline & team'))
       vi.useFakeTimers({ toFake: ['Date'] })
       const row = (id: string) =>
         waitFor(() => document.querySelector<HTMLElement>(`[${attr}="${id}"]`), id)
@@ -423,9 +425,13 @@ describe('Milestones', { timeout: 30_000 }, () => {
       expect(document.activeElement).toBe(await row('beta'))
       await deleteFrom(await row('beta'))
       expect(document.querySelector(`[${attr}]`)).toBeNull()
-      // the Roadmap's toolbar sits above main
-      const scope = where === 'Roadmap flag' ? document : document.querySelector('main')
-      expect(document.activeElement).toBe(await find(add, scope ?? document))
+      // the Roadmap's toolbar sits above main, and the phone timeline folds
+      // it into a closed Filters & planning, whose summary takes focus
+      if (where === 'phone timeline flag') expect(document.activeElement?.textContent).toBe(add)
+      else {
+        const scope = where === 'Roadmap flag' ? document : document.querySelector('main')
+        expect(document.activeElement).toBe(await find(add, scope ?? document))
+      }
     },
   )
 
