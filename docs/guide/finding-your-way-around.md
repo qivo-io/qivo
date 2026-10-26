@@ -63,6 +63,11 @@ that an organization admin or a project lead can give you access. An
 organization admin sees every project, so for an admin they say that the
 organization has no active projects. **New project** appears there if you can
 create projects ([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)).
+Team sync covers your home organization only, so it says the same when you can
+see none of that organization's projects, and names the organization if you
+belong to more than one ([Team sync](./planning-against-real-capacity.md#team-sync)).
+Once a project is shared with you, Qivo opens it, at once and on your next
+visit, unless you chose All projects yourself.
 
 If you hold a guest identity in another organization, the Team strip lists
 it separately from your home identity. Their capacity is not combined.

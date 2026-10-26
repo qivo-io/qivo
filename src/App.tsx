@@ -848,6 +848,12 @@ function App() {
         ? uiScope
         : (P.visibleProjects()[0]?.id ?? (seesNoProject() ? P.ALL_SCOPE : undefined)),
   )
+  /* All projects as App's choice, not the user's: they could see no project
+     when it opened (this boot, or the access guard below). It is never saved
+     and gives way to the first project shared with them, so they land on
+     that project, as anyone with a project does. Any other scope ends it. */
+  const autoAll = useRef<boolean>(null)
+  autoAll.current ??= P.isAllScope(scope) && seesNoProject()
   // prefs saved before the merge may still say "split"/"resources" — both
   // collapsed into the roadmap (which now always docks the resource strip)
   const uiView0 = ui0.view === 'split' || ui0.view === 'resources' ? 'roadmap' : ui0.view
@@ -1106,9 +1112,10 @@ function App() {
     [],
   )
 
-  // ui persistence
+  // ui persistence; App's own All projects (autoAll) keeps the saved scope
   useEffect(() => {
-    P.saveUI({ scope, view })
+    if (!P.isAllScope(scope)) autoAll.current = false
+    P.saveUI(autoAll.current ? { view } : { scope, view })
   }, [scope, view])
 
   // url sync — every "page" (scope/view/open issue/settings) gets its own
@@ -1307,15 +1314,23 @@ function App() {
   // each resolves to no project row, which would otherwise bounce it away one
   // commit after it was entered (and persist the bounce). Once the user can
   // see no project, the scope becomes All projects, whose pages say why they
-  // are empty, rather than a dead one that shows no page.
+  // are empty, rather than a dead one that shows no page. That All projects
+  // is App's own (autoAll), and the first project shared ends it.
   useEffect(() => {
-    if (P.isWideScope(scope)) return
+    if (P.isWideScope(scope)) {
+      const first = autoAll.current && P.visibleProjects()[0]
+      if (first) setScope(first.id)
+      return
+    }
     const metas = P.visibleProjects()
     const p = P.project(scope)
     const meta = p ? (p.type === 'meta' ? p : P.project(p.parent)) : null
     if (meta && metas.some((m) => m.id === meta.id)) return
     if (metas[0]) setScope(metas[0].id)
-    else if (seesNoProject()) setScope(P.ALL_SCOPE)
+    else if (seesNoProject()) {
+      autoAll.current = true
+      setScope(P.ALL_SCOPE)
+    }
   }, [scope, rev])
 
   // User navigation must leave the inbox: the main pane renders the inbox

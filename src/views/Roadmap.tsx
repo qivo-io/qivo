@@ -1202,7 +1202,11 @@ function Roadmap({
      timeline's header, and an empty scope has no timeline. */
   const showMobileAgenda =
     mobile && mobileLayout !== 'timeline' && !session && !focusPlan && !revealTask
-  const mobileAgenda = (corrections: number, onAutoCorrect: () => void) => (
+  const mobileAgenda = (
+    corrections: number,
+    onAutoCorrect: () => void,
+    empty?: React.ReactNode,
+  ) => (
     <>
       <MobileRoadmap
         info={info}
@@ -1220,6 +1224,7 @@ function Roadmap({
         onSectionChange={setMobileAgendaSection}
         taskState={mobileTaskState}
         onTaskStateChange={setMobileTaskState}
+        empty={empty}
       />
       {updEst && <UpdateEstimateModal onClose={() => setUpdEst(false)} />}
     </>
@@ -1252,12 +1257,10 @@ function Roadmap({
     ) : (
       <WorkspaceToolbar>{toolbarRow(moves)}</WorkspaceToolbar>
     )
-  // `agenda` false: the phone shows the note in place of its agenda
-  const emptyFrame = (note: React.ReactNode, agenda = true) =>
+  // the phone's agenda shows the note in place of its sections (MobileRoadmap)
+  const emptyFrame = (note: React.ReactNode) =>
     showMobileAgenda
-      ? agenda
-        ? mobileAgenda(0, () => {})
-        : note
+      ? mobileAgenda(0, () => {}, note)
       : withMobileTimeline(
           <div className="roadmap-view [flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [background:var(--bg)]">
             {timelineToolbar([])}
@@ -1302,7 +1305,6 @@ function Roadmap({
   /* ---------- empty state ---------- */
   if (info.subIds.length === 0) {
     if (wide) {
-      // with no project, the phone's agenda has nothing to plan or show either
       if (info.metas.length === 0)
         return emptyFrame(
           <NoProjects
@@ -1310,7 +1312,6 @@ function Roadmap({
             title="Nothing to schedule yet"
             onNewProject={() => actions.newProject({ kind: 'program' })}
           />,
-          false,
         )
       return emptyFrame(
         <EmptyState

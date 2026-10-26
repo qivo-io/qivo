@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button'
 import { WalkFooter, WalkRail } from '@/components/walk'
 import { flushWalkInput, useReviewed } from '@/components/walkRows'
 import type { UnsentScope } from '@/lib/leaveGuard'
-import { seesNoProject } from '@/lib/noProjects'
+import { seesNoProject, syncNoProjectsHint } from '@/lib/noProjects'
 import {
   bannerVerdict,
   cardsClosedBy,
@@ -579,8 +579,9 @@ export function TeamSync({
   const last = idx >= steps.length - 1
 
   let body: ReactNode
-  // with no project to see, no step has anything to show
-  if (seesNoProject()) body = <NoProjects icon="people" title="Nothing to review yet" />
+  // with no project of the home organization to see, no step has anything to show
+  if (seesNoProject(P.homeOrg))
+    body = <NoProjects icon="people" title="Nothing to review yet" hint={syncNoProjectsHint()} />
   else if (person) {
     const ctx = ctxFor(person)
     const prev = previousSync(person.sync ?? null, now)
