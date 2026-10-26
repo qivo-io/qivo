@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
-import { act, useRef, useState } from 'react'
+import { act, type ReactNode, useRef, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { focusAround, useFocusAfterRender, useFocusWhenGone } from './focusWhenGone'
 
 /* A control that gives way to a line once its change lands, with a
@@ -14,13 +17,13 @@ function Panel({ shown, dialog }: { shown: boolean; dialog: boolean }) {
   return (
     <>
       {shown ? (
-        <button type="button">Act</button>
+        <Button type="button">Act</Button>
       ) : (
         <p ref={line} tabIndex={-1}>
           Done
         </p>
       )}
-      <input aria-label="Elsewhere" />
+      <Input aria-label="Elsewhere" />
       {dialog && <div ref={content} />}
     </>
   )
@@ -28,8 +31,10 @@ function Panel({ shown, dialog }: { shown: boolean; dialog: boolean }) {
 
 let container: HTMLDivElement
 let root: Root
-const show = (shown: boolean, dialog = false) =>
-  act(async () => root.render(<Panel shown={shown} dialog={dialog} />))
+/** Renders `node` as the app does, under the tooltips' provider. */
+const mount = (node: ReactNode) =>
+  act(async () => root.render(<TooltipProvider>{node}</TooltipProvider>))
+const show = (shown: boolean, dialog = false) => mount(<Panel shown={shown} dialog={dialog} />)
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -79,18 +84,17 @@ describe('focus when a control leaves for one its write still disables', () => {
     return (
       <>
         {shown ? (
-          <button type="button">Act</button>
+          <Button type="button">Act</Button>
         ) : (
-          <button ref={next} type="button" disabled={busy}>
+          <Button ref={next} type="button" disabled={busy}>
             Next
-          </button>
+          </Button>
         )}
-        <input aria-label="Elsewhere" />
+        <Input aria-label="Elsewhere" />
       </>
     )
   }
-  const swap = (shown: boolean, busy: boolean) =>
-    act(async () => root.render(<Swap shown={shown} busy={busy} />))
+  const swap = (shown: boolean, busy: boolean) => mount(<Swap shown={shown} busy={busy} />)
 
   it('goes to the button once the write has ended', async () => {
     await swap(true, true)
@@ -114,7 +118,7 @@ describe('the target around a row that may leave', () => {
      rows in a kept view hidden behind another page. */
   function list(hidden = false) {
     container.innerHTML = `<div ${hidden ? 'data-hidden-view' : ''}>${['a', 'b', 'c']
-      .map((id) => `<div data-row="${id}"><button>${id}</button></div>`)
+      .map((id) => `<div data-row="${id}"><button>${id}</Button></div>`)
       .join('')}</div><p tabindex="-1">None</p>`
   }
   const row = (id: string) => container.querySelector(`[data-row="${id}"]`)
@@ -160,7 +164,7 @@ describe('focus after the render of a change', () => {
     return (
       <>
         {shown && (
-          <button
+          <Button
             type="button"
             onClick={() => {
               setShown(false)
@@ -168,26 +172,26 @@ describe('focus after the render of a change', () => {
             }}
           >
             Remove
-          </button>
+          </Button>
         )}
         <p ref={line} tabIndex={-1}>
           Next
         </p>
-        <input aria-label="Elsewhere" />
+        <Input aria-label="Elsewhere" />
       </>
     )
   }
   const press = () => act(async () => container.querySelector('button')?.click())
 
   it('goes to the target once the change took the focused control away', async () => {
-    await act(async () => root.render(<Row />))
+    await mount(<Row />)
     container.querySelector('button')?.focus()
     await press()
     expect(document.activeElement).toBe(container.querySelector('p'))
   })
 
   it('stays where it moved on to', async () => {
-    await act(async () => root.render(<Row />))
+    await mount(<Row />)
     container.querySelector('input')?.focus()
     await press()
     expect(document.activeElement).toBe(container.querySelector('input'))
