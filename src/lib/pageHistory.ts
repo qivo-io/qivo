@@ -46,7 +46,11 @@
 
    A Back or Forward the app refuses (lib/popRefusal) returns to the entry it
    left, hidden from every other listener: by key with the Navigation API,
-   which lands there whatever moved first, and by position without it. */
+   which lands there whatever moved first, and by position without it. A
+   move that lands below the page of open layers it left, as quick Backs
+   that Chromium and Firefox counted past a layer that refused its close
+   do, is offered to those layers before App hears it: one that refuses
+   holds its page, and the move returns to its marker the same way. */
 
 /** A phone layer's place in the history (useMobileBackLayer). */
 export type BackLayer = {
@@ -55,6 +59,10 @@ export type BackLayer = {
   /** its marker's token, and that marker's position, null until it is on */
   readonly marker: string
   at: number | null
+  /** with the Navigation API, its marker's key; the position of the page's
+      entry under it */
+  key: string | null
+  base: number | null
   readonly onBack: () => unknown
 }
 
@@ -387,6 +395,7 @@ function onPop(event: PopStateEvent) {
     .filter((layer) => layer.at !== null && (here === null || layer.at > here))
     .sort((a, b) => b.at! - a.at!)
   if (ret && landReturn(event)) return
+  if (popped.length && holdPage(event, here)) return
   const firstEntry = settling
   settling = false
   // a Back from a marker to an entry of its run, which shows the same page
@@ -411,6 +420,38 @@ function onPop(event: PopStateEvent) {
     if (reached) closeLayer(reached)
     else goOn()
   }
+}
+
+/** Offers the latest move to the open layers it left whose page it lands
+    below, top first, before App hears it: each closes, or one refuses and
+    holds its page. The move then returns to that layer's marker, hidden
+    from the other listeners, and the layers under it stay open. Answers
+    whether a layer held the page. */
+function holdPage(event: PopStateEvent, here: number | null) {
+  const leaving = popped.filter(
+    (layer) => here === null || layer.base === null || here < layer.base,
+  )
+  for (const [n, layer] of leaving.entries()) {
+    if (layer.state !== 'open' || closeLayer(layer)) continue
+    const kept = leaving.slice(n).filter((other) => other.state === 'open')
+    popped = popped.filter((other) => !kept.includes(other))
+    const marker = { at: layer.at, state: null, url: '', key: layer.key }
+    // a return already on its way, this layer's or a refusal's, goes back
+    // into the page, and lands whatever moved first; one that cannot start
+    // leaves the move to App, and the layers their markers over the page it
+    // reaches (onLayersPop)
+    if (!ret && !returnTo(marker, () => {})) {
+      whenQuiet(() => {
+        for (const other of kept.reverse()) markLayer(other)
+      })
+      return false
+    }
+    event.stopImmediatePropagation()
+    shown = left
+    popped = []
+    return true
+  }
+  return false
 }
 
 /** The layers' popstate listener, which App adds right after its own, so a
@@ -462,6 +503,8 @@ function markLayer(layer: BackLayer) {
       w.location.href,
     )
   layer.at = at
+  layer.key = last.key
+  layer.base = at - depthIn(last.state)
   marked.add(at)
 }
 
@@ -649,7 +692,14 @@ export function pushPage(state: object, url: string) {
     first, and answers false to keep it open. */
 export function openLayer(onBack: () => unknown): BackLayer {
   seq += 1
-  const layer: BackLayer = { state: 'open', marker: `${LOAD}:${seq}`, at: null, onBack }
+  const layer: BackLayer = {
+    state: 'open',
+    marker: `${LOAD}:${seq}`,
+    at: null,
+    key: null,
+    base: null,
+    onBack,
+  }
   open.add(layer)
   queueMicrotask(() => whenQuiet(() => markLayer(layer)))
   return layer

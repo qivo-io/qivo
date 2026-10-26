@@ -398,6 +398,42 @@ describe('a layer that closes by itself', () => {
     expect(browser.urls()).toEqual(['/before', '/page', '/page'])
     expect(browser.heard).toEqual(['/page'])
   })
+
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    'holds the page for a layer that refused its close when quick Backs past it reach the pages before, in %s',
+    async (engine) => {
+      const browser = page(['/a', '/b', '/page'], engine)
+      const asked = vi.fn(() => false)
+      const dialog = await layer(asked)
+      // the first Back asks; Chromium and Firefox count the others past the
+      // page, from the entry the one before goes to
+      browser.person.back()
+      browser.person.back()
+      browser.person.back()
+      await settleMoves()
+      expect(dialog.state).toBe('open')
+      expect(browser.here()).toBe('/page')
+      expect(layerOf(browser.history.state)).toBe(dialog.marker)
+      expect(browser.heard.every((url) => url === '/page')).toBe(true)
+      expect(historyBusy()).toBe(false)
+    },
+  )
+
+  it.each([undefined, 'chromium', 'firefox'] as const)(
+    'holds the page for a refusing layer that a Back-menu pick leaves, and returns to its marker unheard, in %s',
+    async (engine) => {
+      const browser = page(['/a', '/b', '/page'], engine)
+      const menu = await layer()
+      const dialog = await layer(() => false)
+      browser.person.pick(0)
+      await settleMoves()
+      expect([menu.state, dialog.state]).toEqual(['open', 'open'])
+      expect(browser.here()).toBe('/page')
+      expect(layerOf(browser.history.state)).toBe(dialog.marker)
+      expect(browser.heard).toEqual([])
+      expect(historyBusy()).toBe(false)
+    },
+  )
 })
 
 describe("a spare over the session's first entry", () => {
