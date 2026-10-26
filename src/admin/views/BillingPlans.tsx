@@ -62,9 +62,10 @@ export function BillingPlans() {
     void reload().catch((cause: unknown) => setError(billingError(cause)))
   }, [reload])
 
-  /** Runs one change, then reloads the catalogue. Answers whether it
-   * landed. Its refusal goes to `refuse`, the page's alert unless a dialog
-   * shows it. */
+  /** Runs one change, then reloads the catalogue. Answers whether the
+   * change landed. Its refusal goes to `refuse`, the page's alert unless a
+   * dialog shows it, and a reload that fails after it landed goes to the
+   * page's alert. */
   async function write(work: () => Promise<void>, refuse: (refusal: string) => void = setError) {
     if (activeWrite.current) return false
     activeWrite.current = true
@@ -73,12 +74,14 @@ export function BillingPlans() {
     setError('')
     setMessage('')
     try {
-      await work()
-      await reload()
+      try {
+        await work()
+      } catch (cause) {
+        refuse(billingError(cause))
+        return false
+      }
+      await reload().catch((cause: unknown) => setError(billingError(cause)))
       return true
-    } catch (cause) {
-      refuse(billingError(cause))
-      return false
     } finally {
       activeWrite.current = false
       setBusy(false)
@@ -308,9 +311,12 @@ export function BillingPlans() {
 
 /** A plan's default line, or the question that makes a connected plan the
  * default for new customers. The question waits for the change and shows
- * its refusal, then closes once the catalogue has reloaded. It stays
- * mounted as its button gives way to the default line, so it fades, and
- * focus then goes to that line. */
+ * its refusal, then closes once the catalogue has reloaded. A change sent
+ * just before the connection dropped waits for the reconnect, as Convex
+ * sends it again, and the question waits with it: the console sends no
+ * other change meanwhile (admin/convex). It stays mounted as its button
+ * gives way to the default line, so it fades, and focus then goes to that
+ * line. */
 function MakeDefault({
   plan,
   isDefault,

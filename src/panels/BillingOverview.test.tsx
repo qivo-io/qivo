@@ -153,6 +153,23 @@ describe('the Cancel subscription question', () => {
     expect(document.activeElement).toBe(document.querySelector('[data-billing-portal]'))
   })
 
+  it('gives focus to Manage billing when the refresh comes after the answer and the close', async () => {
+    const trigger = document.querySelector('[data-billing-cancel]')
+    await act(async () => confirm()?.click())
+    await act(async () => answers[0](null))
+    await endClosing()
+    expect(document.activeElement).toBe(trigger)
+    await act(async () =>
+      refresh({
+        ...SUMMARY,
+        cancel_at_period_end: true,
+        cancel_available: false,
+        portal_available: true,
+      }),
+    )
+    expect(document.activeElement).toBe(document.querySelector('[data-billing-portal]'))
+  })
+
   it('closes a question that waits for nothing when a refresh takes its button away', async () => {
     await act(async () => refresh({ ...SUMMARY, cancel_available: false }))
     expect(dialog()?.getAttribute('data-state')).toBe('closed')

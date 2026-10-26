@@ -14,6 +14,8 @@ import { BillingPlans } from './BillingPlans'
 const server = vi.hoisted(() => ({
   defaultId: 'team-2025',
   changes: [] as { resolve: () => void; reject: (cause: Error) => void }[],
+  // the catalogue's reads fail from now on
+  down: false,
 }))
 const plan = (id: string, name: string): BillingPlan => ({
   id,
@@ -35,10 +37,13 @@ const plan = (id: string, name: string): BillingPlan => ({
 })
 vi.mock('@/lib/convex', () => ({
   convex: {
-    query: async () => ({
-      plans: [plan('team-2025', 'Team 2025'), plan('team-2026', 'Team 2026')],
-      default_plan_id: server.defaultId,
-    }),
+    query: async () => {
+      if (server.down) throw new Error('The catalogue could not be read')
+      return {
+        plans: [plan('team-2025', 'Team 2025'), plan('team-2026', 'Team 2026')],
+        default_plan_id: server.defaultId,
+      }
+    },
   },
 }))
 vi.mock('../convex', () => ({
@@ -63,6 +68,7 @@ beforeEach(async () => {
   playClosingAnimations()
   server.defaultId = 'team-2025'
   server.changes.length = 0
+  server.down = false
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -114,5 +120,19 @@ describe('the Make default question', () => {
     expect(dialog()?.querySelector('[role="alert"]')?.textContent).toBeTruthy()
     expect(confirm()?.textContent).toBe('Make default')
     expect(line()).toBeNull()
+  })
+
+  it('closes once the change lands, and the page says when only the reload after it failed', async () => {
+    await act(async () => confirm()?.click())
+    server.down = true
+    await act(async () => server.changes[0].resolve())
+    expect(dialog()?.getAttribute('data-state')).toBe('closed')
+    expect(dialog()?.querySelector('[role="alert"]')).toBeNull()
+    expect(document.querySelector('[data-billing-plans] > [role="alert"]')?.textContent).toBe(
+      'The catalogue could not be read',
+    )
+    expect(document.querySelector('[data-billing-plans] > [role="status"]')?.textContent).toMatch(
+      /^Team 2026 is the default/,
+    )
   })
 })

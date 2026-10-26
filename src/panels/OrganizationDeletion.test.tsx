@@ -13,7 +13,11 @@ import { OrganizationDeletion } from './OrganizationDeletion'
    request is answered by hand. */
 
 const server = vi.hoisted(() => ({
-  requests: [] as { resolve: (value: null) => void; args: unknown }[],
+  requests: [] as {
+    resolve: (value: null) => void
+    reject: (cause: Error) => void
+    args: unknown
+  }[],
   // the organization's removal state, as its subscription delivers it
   state: {
     slug: 'northstar-labs',
@@ -29,7 +33,9 @@ const server = vi.hoisted(() => ({
 vi.mock('../lib/convex', () => ({
   convex: {
     action: (_ref: unknown, args: unknown) =>
-      new Promise((resolve) => server.requests.push({ resolve, args })),
+      new Promise((resolve, reject) => server.requests.push({ resolve, reject, args })),
+    mutation: (_ref: unknown, args: unknown) =>
+      new Promise((resolve, reject) => server.requests.push({ resolve, reject, args })),
   },
 }))
 vi.mock('../lib/orgRemovalState', () => ({
@@ -42,16 +48,19 @@ vi.mock('../lib/orgRemovalState', () => ({
       () => server.state,
     ),
 }))
-/** Delivers the scheduled deletion, as the state's subscription does. */
-const scheduleDeletion = () =>
+/** Delivers the scheduled deletion, or with `false` its stop, as the
+    state's subscription does. */
+const scheduleDeletion = (scheduled = true) =>
   act(async () => {
     server.state = {
       ...server.state,
-      deletion: {
-        reason: 'requested',
-        delete_after: '2026-11-25T00:00:00.000Z',
-        keep_available: true,
-      },
+      deletion: scheduled
+        ? {
+            reason: 'requested',
+            delete_after: '2026-11-25T00:00:00.000Z',
+            keep_available: true,
+          }
+        : null,
     }
     for (const listener of server.listeners) listener()
   })
@@ -144,6 +153,7 @@ describe('the Delete organization question', () => {
     expect(server.requests).toEqual([
       {
         resolve: expect.any(Function),
+        reject: expect.any(Function),
         args: { org_id: 'org-northstar', confirm: 'northstar-labs' },
       },
     ])
@@ -182,5 +192,46 @@ describe('the Delete organization question', () => {
     await endClosing()
     expect(dialog()).toBeNull()
     expect(document.activeElement).toBe(document.querySelector('[data-org-deletion-date]'))
+  })
+
+  it('gives focus to its date when the deletion arrives after the answer and the close', async () => {
+    await askAndConfirm()
+    await act(async () => confirm()?.click())
+    await act(async () => server.requests[0].resolve(null))
+    await endClosing()
+    expect(document.activeElement).toBe(document.querySelector('[data-org-delete]'))
+    await scheduleDeletion()
+    expect(document.activeElement).toBe(document.querySelector('[data-org-deletion-date]'))
+  })
+
+  it('drops a refusal that a lost answer left when the deletion arrives after all', async () => {
+    await askAndConfirm()
+    await act(async () => confirm()?.click())
+    await act(async () =>
+      server.requests[0].reject(new Error('Connection lost while action was in flight')),
+    )
+    expect(dialog()?.querySelector('[role="alert"]')?.textContent).toBe(
+      'The organization could not be deleted. Try again.',
+    )
+    await scheduleDeletion()
+    expect(dialog()?.getAttribute('data-state')).toBe('closed')
+    // the closing question still shows it, the page does not
+    expect(dialog()?.querySelector('[role="alert"]')).not.toBeNull()
+    expect(document.querySelector('[data-org-deletion] [role="alert"]')).toBeNull()
+    await endClosing()
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+  })
+})
+
+describe('Keep organization', () => {
+  it('gives focus to Delete organization once the stopped deletion takes its button away', async () => {
+    await scheduleDeletion()
+    const keep = document.querySelector<HTMLButtonElement>('[data-org-keep]')
+    keep?.focus()
+    await act(async () => keep?.click())
+    await act(async () => server.requests[0].resolve(null))
+    expect(document.activeElement).toBe(keep)
+    await scheduleDeletion(false)
+    expect(document.activeElement).toBe(document.querySelector('[data-org-delete]'))
   })
 })

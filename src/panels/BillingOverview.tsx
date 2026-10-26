@@ -16,6 +16,7 @@ import { billingDate, billingMoney } from '@/lib/billingDisplay'
 import { useClosingWords } from '@/lib/closingWords'
 import { limitSentence } from '@/lib/fieldLimits'
 import { restoreFocus } from '@/lib/focusVisibility'
+import { useFocusWhenGone } from '@/lib/focusWhenGone'
 import type { BillingSummary } from '../../convex/lib/billingTypes'
 import { LIMITS } from '../../convex/lib/limits'
 
@@ -280,7 +281,7 @@ export function BillingOverview({
  * cancelling is `available`. A refresh that takes it away leaves an open
  * question open while it cancels or shows a refusal, and closes one that
  * waits for nothing.
- * Once the dialog has closed without its button, focus goes to
+ * Once its button is gone, focus that it or the closed dialog left goes to
  * `focusAfter`. */
 function CancelSubscription({
   available,
@@ -305,9 +306,13 @@ function CancelSubscription({
   // cancellation, so the busy words never wait on the page's busy
   const [cancelling, setCancelling] = useState(false)
   const opener = useRef<HTMLButtonElement>(null)
+  const question = useRef<HTMLDivElement>(null)
   // cancelled elsewhere while the question waits for nothing and shows no
   // refusal
   if (!available && open && !busy && !cancelling && !error) setOpen(false)
+  // the refresh can arrive after the answer, once focus went back to the
+  // button it takes away
+  useFocusWhenGone(available, focusAfter, question)
   // Keep subscription clears the refusal as the dialog closes. It shows it,
   // and a finished cancellation's busy words, until it has faded.
   const shown = useClosingWords(open, { error, busy: busy || cancelling })
@@ -330,6 +335,7 @@ function CancelSubscription({
         </AlertDialogTrigger>
       )}
       <AlertDialogContent
+        ref={question}
         onCloseAutoFocus={(event) => {
           if (opener.current?.isConnected) return
           event.preventDefault()

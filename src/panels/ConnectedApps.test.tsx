@@ -111,6 +111,36 @@ describe('the Connected apps delete question', () => {
     expect(dialog()).toBeNull()
   })
 
+  it.each([
+    ['the next row', 'claude', 'cursor'],
+    ['the row before when it was the last', 'cursor', 'claude'],
+  ])('gives focus to %s once the deleted row has left', async (_, deleted, next) => {
+    await ask(deleted)
+    await act(async () => button('Delete connection').click())
+    await answer(store.revokes, true)
+    await answer(
+      store.lists,
+      APPS.filter((app) => app.id !== deleted),
+    )
+    await endClosing()
+    const row = document.querySelector(`[data-oauth-connection="${next}"]`)
+    expect(row && document.activeElement).toBe(row && button('Delete', row))
+  })
+
+  it("gives focus to the empty list's line once the last row has left", async () => {
+    await ask('claude')
+    await act(async () => button('Delete connection').click())
+    await answer(store.revokes, true)
+    await answer(store.lists, [APPS[1]])
+    await endClosing()
+    await ask('cursor')
+    await act(async () => button('Delete connection').click())
+    await answer(store.revokes, true)
+    await answer(store.lists, [])
+    await endClosing()
+    expect(document.activeElement?.textContent).toBe('No connected apps.')
+  })
+
   it('keeps a refused delete in the dialog, not on the page', async () => {
     await ask('claude')
     await act(async () => button('Delete connection').click())

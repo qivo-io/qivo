@@ -19,6 +19,7 @@ import { billingDate } from '@/lib/billingDisplay'
 import { useClosingWords } from '@/lib/closingWords'
 import { convex } from '@/lib/convex'
 import { restoreFocus } from '@/lib/focusVisibility'
+import { useFocusWhenGone } from '@/lib/focusWhenGone'
 import { holdUnsaved } from '@/lib/leaveGuard'
 import { useOrgRemovalState } from '@/lib/orgRemovalState'
 import { useUpdateBlocker } from '@/lib/updateSafety'
@@ -34,8 +35,9 @@ const failure = (cause: unknown, fallback: string) => {
 /** Lets an admin delete the organization after its read-only period, or
  * stop a deletion an admin asked for. The question stays mounted when the
  * scheduled deletion arrives: it waits for its own request, and one that
- * waits for nothing closes. Once it has closed without its button, focus
- * goes to the deletion's date. */
+ * waits for nothing closes. Once its button is gone, focus that it or the
+ * closed question left goes to the deletion's date, and once Keep
+ * organization is gone, to Delete organization when it is back. */
 export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgName: string }) {
   const state = useOrgRemovalState(orgId)
   const [open, setOpen] = useState(false)
@@ -44,9 +46,19 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
   const [error, setError] = useState('')
   const opener = useRef<HTMLButtonElement>(null)
   const scheduled = useRef<HTMLParagraphElement>(null)
+  const question = useRef<HTMLDivElement>(null)
   useUpdateBlocker(busy)
-  // another admin's deletion, while the question waits for nothing
-  if (state?.deletion && open && !busy) setOpen(false)
+  // another admin's deletion, or this one's after a lost answer, while the
+  // question waits for nothing: what it typed and its refusal go with it
+  if (state?.deletion && open && !busy) {
+    setOpen(false)
+    setConfirm('')
+    setError('')
+  }
+  // the deletion or its stop can arrive after the answer, once focus went
+  // back to the button it takes away
+  useFocusWhenGone(!!state && !state.deletion, () => scheduled.current, question)
+  useFocusWhenGone(!!state?.deletion?.keep_available, () => opener.current ?? scheduled.current)
   // Cancel clears the confirmation and the refusal, and a finished deletion
   // clears busy, as the dialog closes. It shows them until it has faded.
   const shown = useClosingWords(open, { confirm, error, busy })
@@ -134,6 +146,7 @@ export function OrganizationDeletion({ orgId, orgName }: { orgId: string; orgNam
           </AlertDialogTrigger>
         )}
         <AlertDialogContent
+          ref={question}
           onCloseAutoFocus={(event) => {
             if (opener.current?.isConnected) return
             event.preventDefault()

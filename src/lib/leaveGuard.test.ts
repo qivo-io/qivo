@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   createUnsentScope,
   DISCARD_MS,
@@ -29,10 +29,12 @@ describe('leave guard', () => {
   })
 
   it('says the page is leaving for LEAVING_MS after a beforeunload, also one that warned', () => {
-    let now = 5_000
+    // past any beforeunload an earlier test dispatched on the real clock
+    let now = performance.now() + 10 * LEAVING_MS
     const clock = vi.spyOn(performance, 'now').mockImplementation(() => now)
+    onTestFinished(() => clock.mockRestore())
     const win = new EventTarget() as Window
-    const remove = installLeaveGuard(() => true, win)
+    onTestFinished(installLeaveGuard(() => true, win))
     expect(pageLeaving()).toBe(false)
     expect(leave(win)).toBe(true)
     now += LEAVING_MS - 1
@@ -40,8 +42,6 @@ describe('leave guard', () => {
     // a page that stayed counts as staying once that time has passed
     now += 1
     expect(pageLeaving()).toBe(false)
-    remove()
-    clock.mockRestore()
   })
 
   it('counts each lease on its own', () => {
