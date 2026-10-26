@@ -852,9 +852,9 @@ function App() {
      when it opened (this boot's fallback, or the access guard below). It is
      never saved and gives way to the first project shared with them, so they
      land on that project, as anyone with a project does. The tab notes it
-     (noteAutoAll), so a boot on its address stays App's; a saved All
-     projects, an address the tab did not note and any scope the user moves
-     to (move) are theirs. Any other scope ends it. */
+     (noteAutoAll), so a reload of its address, or Back or Forward to it,
+     stays App's; a saved All projects, an address opened anew and any scope
+     the user moves to (move) are theirs. Any other scope ends it. */
   const autoAll = useRef<boolean>(null)
   autoAll.current ??=
     P.isAllScope(scope) && !P.isAllScope(uiScope) && (!liveScope(r0Scope) || autoAllNoted())

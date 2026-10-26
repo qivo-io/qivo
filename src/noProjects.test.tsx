@@ -131,10 +131,23 @@ const newProject = () => button('New project')
 const savedScope = (snap: Snapshot) =>
   JSON.parse(localStorage.getItem(`planner.ui.v1:${snap.profiles[0].id}`) ?? '{}').scope
 
-/** Unmounts App, as a reload of the page does. */
-async function reload() {
+/** Unmounts App, as leaving the page does. With `type`, the next page load
+    is a reload ('reload') or Back or Forward ('back_forward'), as
+    PerformanceNavigationTiming says; without it, one that opens an address
+    anew. */
+async function reload(type?: 'reload' | 'back_forward') {
   await act(async () => root.unmount())
   root = createRoot(container)
+  vi.restoreAllMocks()
+  const load = {
+    name: '',
+    entryType: 'navigation',
+    startTime: 0,
+    duration: 0,
+    toJSON: () => ({}),
+    type,
+  }
+  if (type) vi.spyOn(performance, 'getEntriesByType').mockReturnValue([load])
 }
 
 /** The fixture with its one person a member of Plan, a project over the
@@ -267,14 +280,24 @@ describe('a person with a project', () => {
     const snap = member()
     await app({ ...snap, access: [] })
     await shows(MEMBER)
-    await reload()
+    await reload('reload')
     await app({ ...snap, access: [] }, '/app/~/overview/all')
     await shows(MEMBER)
     expect(savedScope(snap)).toBeUndefined()
-    await reload()
+    await reload('back_forward')
     await app(snap, '/app/~/overview/all')
     await vi.waitFor(() => expect(location.pathname).toBe('/app/testbed/overview/p/2'))
     expect(savedScope(snap)).toBe('plan')
+  })
+
+  it('keeps an All projects address opened anew in the tab where App had it', async () => {
+    const snap = member()
+    await app({ ...snap, access: [] })
+    await shows(MEMBER)
+    await reload()
+    await app(snap, '/app/~/roadmap/all')
+    await vi.waitFor(() => expect(savedScope(snap)).toBe('all'))
+    expect(location.pathname).toBe('/app/~/roadmap/all')
   })
 
   it('keeps All projects when the person opened it', async () => {
