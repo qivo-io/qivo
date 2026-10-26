@@ -190,9 +190,9 @@ Use the row controls to change tasks without opening them:
   one. Choose an active person with User or Lead access. The task moves to
   their page and workload figures update.
 - **@** posts a comment mentioning an active person who can see the task.
-  Pick someone, write a note and press **Send** or Ctrl/Cmd+Enter. It starts
-  with the assignee selected on a reviewer's row, or the reviewer on a
-  Waiting on review row. The recipient gets an Inbox notification ([Your inbox](./working-together.md#your-inbox)).
+  Pick someone, write a note and press **Send**. It starts with the assignee
+  selected on a reviewer's row, or the reviewer on a Waiting on review row.
+  The recipient gets an Inbox notification ([Your inbox](./working-together.md#your-inbox)).
   The window closes once the comment is saved, and the note cannot change
   while Qivo saves it. If Qivo refuses it, for example after you lose edit
   access, your note stays in the window, also if you closed it meanwhile.

@@ -5,6 +5,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { hasTooltip } from '@/lib/passEscapeOn'
 import { HoverTooltip, TooltipProvider } from './tooltip'
 
+/* passEscapeOn sends each Escape a tooltip takes on a frame or two and a
+   timer later. Each test waits for every one it started (afterEach), so
+   none reaches the next test or fires once the file's DOM is gone. Every
+   tooltip here leaves after its Escape, so each pass-on ends by sending. */
+const passOns = vi.hoisted(() => ({ started: 0, sent: 0 }))
+vi.mock('@/lib/passEscapeOn', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/passEscapeOn')>()
+  return {
+    ...actual,
+    passEscapeOn: (...args: Parameters<typeof actual.passEscapeOn>) => {
+      passOns.started++
+      actual.passEscapeOn(...args)
+    },
+  }
+})
+// the Escapes the tests press themselves, which no pass-on sent
+const pressed = new WeakSet<Event>()
+const countPassedOn = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && !pressed.has(event)) passOns.sent++
+}
+
 let container: HTMLDivElement
 let root: Root
 
@@ -41,13 +62,23 @@ beforeEach(() => {
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
+  passOns.started = 0
+  passOns.sent = 0
+  // capture on window sees a passed-on Escape before anything can stop it
+  window.addEventListener('keydown', countPassedOn, { capture: true })
 })
 
 afterEach(async () => {
-  await act(async () => root.unmount())
-  container.remove()
-  vi.restoreAllMocks()
-  vi.unstubAllGlobals()
+  try {
+    await act(() => vi.waitFor(() => expect(passOns.sent).toBe(passOns.started)))
+  } finally {
+    // a pass-on that never came fails its own test, not the ones after it
+    window.removeEventListener('keydown', countPassedOn, { capture: true })
+    await act(async () => root.unmount())
+    container.remove()
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  }
 })
 
 const content = () => document.querySelector('[data-slot="tooltip-content"]')
@@ -65,9 +96,9 @@ async function endExitAnimation() {
 
 const pressEscape = (target: Element) =>
   act(async () => {
-    target.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
-    )
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    pressed.add(event)
+    target.dispatchEvent(event)
   })
 
 describe('HoverTooltip', () => {

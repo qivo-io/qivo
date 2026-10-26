@@ -19,9 +19,10 @@ with the task's card shown behind it ([Your inbox](./working-together.md#your-in
 ## The discussion column
 
 The **description** supports formatted text, headings, lists, quotes, links
-and code. Use the formatting row or type Markdown shortcuts. Keyboard
-shortcuts include Ctrl/Cmd+B/I/U/E, Ctrl/Cmd+Shift+X and Ctrl/Cmd+K for links.
-Click a link to open, edit or remove it.
+and code. Use the formatting row or type Markdown shortcuts. Formatting
+keys include Ctrl/Cmd+B/I/U/E, Ctrl/Cmd+Shift+X and Ctrl/Cmd+K for links.
+Shift+Enter or Ctrl/Cmd+Enter starts a new line within a paragraph. Click a
+link to open, edit or remove it.
 
 Type **@** to mention someone. Search by partial name, initials or email
 fragments, in any order, and choose with arrow keys and Enter or a click.
@@ -30,10 +31,10 @@ subscribe them to the task.
 
 Paste or drag images into descriptions. Hover for Copy or Download, or
 double-click for full size. Inline images cannot be pasted across tasks.
-**Save / Discard** appears when the draft changes. Press **Save** or
-Ctrl/Cmd+S to save. The formatting row and save controls remain visible while
-long drafts scroll. Descriptions and comments can hold up to 20,000
-characters, including formatting. Near the limit the editor shows how many
+**Save / Discard** appears when the draft changes. Press **Save** to save.
+The formatting row and save controls remain visible while long drafts
+scroll. Descriptions and comments can hold up to 20,000 characters,
+including formatting. Near the limit the editor shows how many
 characters the draft holds, and a longer draft cannot be saved until you
 shorten it. Older text saved over this limit can be read but not edited.
 
@@ -101,9 +102,9 @@ Read-only access shows the values but disables editing ([Project access](./who-s
 to clear it.
 
 Use the buttons beside **Labels**, **Parent**, **Subtasks** and **Linked tasks**
-to add or change them. **L** opens the label picker. Relationship pickers can
-create a task if no existing task matches. Attachments support drag-and-drop
-and follow the organization's per-file size limit ([Attachment limits](./organization-and-team-settings.md)).
+to add or change them. Relationship pickers can create a task if no existing
+task matches. Attachments support drag-and-drop and follow the
+organization's per-file size limit ([Attachment limits](./organization-and-team-settings.md)).
 
 A task has at most 20 labels, 100 links and 100 attachments, with images in
 its description counted as attachments while the description shows them.

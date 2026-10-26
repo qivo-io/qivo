@@ -235,14 +235,6 @@ try {
       await remove(manager, account.id).evaluate((button) => button === document.activeElement),
       true,
     )
-    await manager.keyboard.press('l')
-    assert.equal(await popup(manager).isVisible(), true)
-    assert.equal(manager.url(), taskURL, 'L in subscriber controls changed the task URL')
-    assert.equal(
-      await manager.getByPlaceholder('Add labels…', { exact: true }).count(),
-      0,
-      'L in subscriber controls opened the task label picker',
-    )
     await page.locator('[data-task-subscribe="on"]').waitFor({ state: 'attached' })
     await page.locator('[data-task-subscribe-me="on"]').waitFor()
     assert.equal((await persistedRoster(manager)).subscribers.includes(account.id), true)
