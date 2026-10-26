@@ -165,6 +165,18 @@ describe('restoreTaskFocus', () => {
     expect(focused()).toEqual({ task: { card: 'C' }, key: 'title' })
   })
 
+  it("falls back to the Board's filter row when no card of its column and no empty state is left", () => {
+    // across all projects, with a filter on: no new task buttons, and the
+    // lane goes with its last card while the other lanes stay
+    document.body.innerHTML =
+      '<div data-filter-row><input placeholder="Filter tasks…"><button>Me only</button></div>' +
+      board(lane(cell('todo', card('A'))) + lane(cell('todo', '') + cell('review', card('B'))))
+    const mark = markTaskFocus(control('data-card="A"', 'title'))!
+    document.querySelector('[data-lane]')!.remove()
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(document.activeElement).toBe(document.querySelector('[data-filter-row] input'))
+  })
+
   it("falls back to the title of the Board's empty state when it has no control, for that focus only", () => {
     document.body.innerHTML = board(lane(cell('todo', card('A'))))
     const mark = markTaskFocus(control('data-card="A"', 'title'))!

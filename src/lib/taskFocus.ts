@@ -189,16 +189,28 @@ export function restoreTaskFocus(
     card in the nearest cell beside it in its lane. A cell that left with
     its lane, as filters hide a lane with no card, gives the column's
     button, else a card in another cell of the column. Another view's row
-    gives the heading above it. Last comes the empty state the view shows
+    gives the heading above it. Then comes the empty state the view shows
     in place of its rows (data-empty-state): its control, else its title.
-    `pick` finds the row of a cell at the remembered index. */
+    A Board card's last resort is the first control of the Board's filter
+    row (App's data-filter-row), whose filters can hide a lane and its
+    column's cards. `pick` finds the row of a cell at the remembered
+    index. */
 function besideTarget(mark: TaskFocusMark, pick: (cell: HTMLElement) => HTMLElement | undefined) {
   const { place, view, status } = mark
   let target: HTMLElement | undefined
   if (mark.attribute) target = headingTarget(mark.heading)
   else if (usable(place)) target = columnAdd(view ?? document, status) ?? besideCell(place, pick)
   else if (usable(view)) target = columnAdd(view, status) ?? inColumn(view, status, pick)
-  return target ?? (usable(view) ? emptyState(view) : undefined)
+  if (target || !usable(view)) return target
+  return emptyState(view) ?? (mark.attribute ? undefined : filterControl())
+}
+
+/** The first control of the Board's filter row. */
+function filterControl() {
+  const control = document
+    .querySelector('[data-filter-row]')
+    ?.querySelector<HTMLElement>('input:not(:disabled), button:not(:disabled)')
+  return usable(control) ? control : undefined
 }
 
 /** The new task button of the column `status` names in `view`. */
