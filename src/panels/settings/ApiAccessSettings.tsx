@@ -35,6 +35,7 @@ import {
   stateTag,
 } from '../../lib/apiAccess'
 import { DEMO_MODE } from '../../lib/demoMode'
+import { focusAround, useFocusWhenGone } from '../../lib/focusWhenGone'
 import { P } from '../../store/planner'
 import { ModalShell } from '../Modals'
 import { DemoCapabilityNotice } from './controls'
@@ -89,6 +90,12 @@ function ApiAccessPage() {
     search: '',
   })
   const [revoking, setRevoking] = useState<ApiCredentialRow | null>(null)
+  /* The credential whose Revoke opened the window last, with where focus
+     goes once that Revoke has left: the next row's Revoke, the previous
+     row's, the line that says no credential matches, or the filter field.
+     The window gives focus back to the Revoke, and the list read after the
+     revoke takes it away, with the row itself under the Active filter. */
+  const [asked, setAsked] = useState<{ key: string; focus: () => HTMLElement | null }>()
   // A newer request replaces an older one still in flight.
   const sequence = useRef(0)
 
@@ -126,6 +133,10 @@ function ApiAccessPage() {
   const rows = list ? filterCredentials(list.credentials, { ...filters, person }) : []
   const largest = rows.reduce((max, row) => Math.max(max, row.calls), 0)
   const set = (patch: Partial<ApiAccessFilters>) => setFilters((f) => ({ ...f, ...patch }))
+  useFocusWhenGone(
+    !!asked && rows.some((row) => credentialKey(row) === asked.key && !credentialEnded(row)),
+    () => asked?.focus() ?? null,
+  )
 
   return (
     <>
@@ -260,7 +271,9 @@ function ApiAccessPage() {
           {list.credentials.length === 0 ? (
             <p className="text-sm text-text-2">No API credentials yet.</p>
           ) : rows.length === 0 ? (
-            <p className="text-sm text-text-2">No credentials match the filters.</p>
+            <p data-api-access-none="" tabIndex={-1} className="text-sm text-text-2">
+              No credentials match the filters.
+            </p>
           ) : (
             <>
               <div
@@ -286,12 +299,27 @@ function ApiAccessPage() {
                 <div>
                   {rows.map((row) => (
                     <CredentialRow
-                      key={`${row.table}:${row.id}`}
+                      key={credentialKey(row)}
                       row={row}
                       me={me}
                       now={now}
                       largest={largest}
-                      onRevoke={() => setRevoking(row)}
+                      onRevoke={() => {
+                        const key = credentialKey(row)
+                        setAsked({
+                          key,
+                          focus: focusAround(
+                            'data-api-credential',
+                            key,
+                            (shown) =>
+                              shown.querySelector<HTMLElement>('[data-api-credential-revoke]'),
+                            () =>
+                              document.querySelector<HTMLElement>('[data-api-access-none]') ??
+                              document.querySelector<HTMLElement>('[data-api-access-search]'),
+                          ),
+                        })
+                        setRevoking(row)
+                      }}
                     />
                   ))}
                 </div>
@@ -318,6 +346,9 @@ function ApiAccessPage() {
     </>
   )
 }
+
+/** The key a credential is listed under, unique across its three tables. */
+const credentialKey = (row: ApiCredentialRow) => `${row.table}:${row.id}`
 
 /* One credential. Revoked, expired and deleted ones are dimmed and cannot be
    revoked; one whose owner's account is inactive can. The calls bar is scaled
@@ -352,7 +383,7 @@ function CredentialRow({
   ]
   return (
     <div
-      data-api-credential={`${row.table}:${row.id}`}
+      data-api-credential={credentialKey(row)}
       className="border-t border-border first:border-t-0 hover:bg-hover/60"
     >
       <div className={cn('flex items-center gap-3 px-3 py-1.5', ended && 'opacity-60')}>
@@ -487,7 +518,7 @@ function RevokeWindow({
       submitLabel={busy ? 'Revoking…' : 'Revoke'}
       footerLeft={error ? <span className="text-sm text-danger">{error}</span> : undefined}
     >
-      <div data-api-access-revoke={`${row.table}:${row.id}`}>
+      <div data-api-access-revoke={credentialKey(row)}>
         <p className="text-base leading-normal text-text-2">{revokeSentence(row, me)}</p>
         <div className="mt-3 flex items-center gap-2.5 rounded-md border border-border px-3 py-2">
           <Icon name={KIND_ICON[row.table]} size={16} color="var(--text-2)" />

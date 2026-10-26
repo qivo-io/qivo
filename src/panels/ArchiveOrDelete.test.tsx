@@ -745,8 +745,9 @@ describe('Archive or delete a project', () => {
 })
 
 describe('Archived projects', () => {
-  it('keeps keyboard focus on the page after a delete', async () => {
-    // Plan and Docs are archived, with their sub-projects, and Mira leads both
+  /* Shows the page with Plan and Docs archived, with their sub-projects,
+     and Mira leading both. */
+  async function show() {
     for (const p of snap.projects) p.archived_at = AT
     const docs = snap.projects.find((p) => p.id === 'docs')
     if (docs) docs.lead_id = 'mira'
@@ -765,6 +766,10 @@ describe('Archived projects', () => {
       ),
     )
     await settle()
+  }
+
+  it('keeps keyboard focus on the page after a delete', async () => {
+    await show()
     // the delivery without the project, as the server sends it before it answers
     const drop = (id: string) => {
       snap.projects = snap.projects.filter((p) => p.id !== id && p.parent_id !== id)
@@ -803,6 +808,32 @@ describe('Archived projects', () => {
     expect(document.activeElement).toBe(find('[data-restore-project="docs"]'))
     // no row is left, so focus goes to the page heading
     await remove('docs', 'Docs')
+    expect(document.activeElement).toBe(find('.settings-page-title h1'))
+  })
+
+  it('keeps keyboard focus on the page after a restore', async () => {
+    await show()
+    // the delivery with the project active again, as the server sends it before it answers
+    answers['projects:unarchive'] = async () => {
+      const id = writes().at(-1)?.args.id
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      for (const p of snap.projects)
+        if (p.id === id || p.parent_id === id) p.archived_at = undefined
+      deliver(snap)
+      return null
+    }
+    const restore = async (id: string) => {
+      const button = find<HTMLButtonElement>(`[data-restore-project="${id}"]`)
+      button.focus()
+      await click(button)
+      await settle()
+      expect(has(`[data-archived-project="${id}"]`)).toBe(false)
+    }
+    // the row left, so focus goes to the next row's first button
+    await restore('plan')
+    expect(document.activeElement).toBe(find('[data-restore-project="docs"]'))
+    // no row is left, so focus goes to the page heading
+    await restore('docs')
     expect(document.activeElement).toBe(find('.settings-page-title h1'))
   })
 })

@@ -47,6 +47,7 @@ import './styles/mobile.css'
 import { announce } from './lib/announce'
 import { closedBy, dropRefusedTask } from './lib/closingMoves'
 import { floatSlot } from './lib/floatStack'
+import { menuTrigger } from './lib/focusWhenGone'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/leaveGuard'
 import { afterProjectSaved } from './lib/newProjectAccess'
@@ -369,9 +370,10 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
                       <>
                         {P.levelOn(meta.id) === 'lead' && (
                           <MenuItem
-                            onClick={() => {
+                            onClick={(e) => {
+                              const trigger = menuTrigger(e.currentTarget)
                               close()
-                              actions.newProject({ parent: meta.id })
+                              actions.newProject({ parent: meta.id }, () => trigger)
                             }}
                           >
                             <Icon name="plus" size={16} />
@@ -411,6 +413,7 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
                     // from doing six unrelated jobs at once.
                     <div
                       key={sp.id}
+                      data-subproject-row={sp.id}
                       data-on={scopeOn(sp.id) ? '' : undefined}
                       onClick={() => setScope(sp.id)}
                       className={cn(navRowDiv, 'planner-subproject relative pl-6')}
@@ -927,7 +930,12 @@ function App() {
   const [tweaks, setTweaks] = useState(() => ({
     metaViz: ui0.metaViz || 'swimlanes',
   }))
-  const [modal, setModal] = useState(null) // {kind:"issue"|"program"|"subproject"|"milestone", init}
+  // {kind:"issue"|"program"|"subproject"|"milestone"|"createorg", init,
+  // focusAfterClose}. The opener gives focusAfterClose (ModalShell) when it
+  // leaves while the dialog is open, as a menu row does
+  const [modal, setModal] = useState(null)
+  // the sub-project New sub-project created last, for afterNewSubProject
+  const createdProject = useRef<string | null>(null)
   const [settingsPage, setSettingsPage] = useState(r0?.settings || null) // null | "account" | "org-*" | "team:<id>" | "project:<id>"
   const [inboxOpen, setInboxOpen] = useState(!!r0?.inbox || (mobile && !r0)) // the message inbox (0074)
   const [projectsOpen, setProjectsOpen] = useState(!!r0?.projects)
@@ -1452,11 +1460,26 @@ function App() {
   // "New project" and "New sub-project" are separate dialogs; kind:"program"
   // (sidebar header +, palette) opens the project one, everything else —
   // always parented — opens the sub-project one
-  const openNewProject = (init) =>
+  const openNewProject = (init, focusAfterClose?: () => HTMLElement | null) => {
+    createdProject.current = null
     setModal({
       kind: init && init.kind === 'program' ? 'program' : 'subproject',
       init: { ...init },
+      focusAfterClose,
     })
+  }
+  /* Where focus goes as New sub-project closes after a create, for an
+     opener that names nothing else: the new sub-project's row in the
+     sidebar or in Settings › Projects, else the phone header's New task.
+     The empty states and Add sub-project buttons that open the dialog leave
+     once the sub-project shows, and the views go behind the new
+     sub-project's once it is saved; the sidebar and the header stay. */
+  const afterNewSubProject = () =>
+    createdProject.current
+      ? (document.querySelector<HTMLElement>(
+          `[data-subproject-row="${createdProject.current}"] button`,
+        ) ?? document.querySelector<HTMLElement>('[data-mobile-new-task]'))
+      : null
 
   // Jump from the issue window to the roadmap to plan an issue in context.
   // Switches to the issue's project/roadmap and closes the window so the
@@ -1651,7 +1674,8 @@ function App() {
     newIssue: openNewIssue,
     newProject: openNewProject,
     newMilestone: openNewMilestone,
-    editMilestone: (id) => setModal({ kind: 'milestone', init: { id } }),
+    editMilestone: (id, focusAfterClose?: () => HTMLElement | null) =>
+      setModal({ kind: 'milestone', init: { id }, focusAfterClose }),
     // settings and the inbox each own the screen, one at a time
     openSettings: (page) => openSettingsOn(page || (mobile ? 'menu' : 'account'), null),
     // Settings › Archived tasks on one project (the project menus' entry)
@@ -1736,7 +1760,8 @@ function App() {
     setView: navView,
     planOnRoadmap,
     openPalette: () => setPaletteOpen(true),
-    createOrg: () => setModal({ kind: 'createorg' }),
+    createOrg: (focusAfterClose?: () => HTMLElement | null) =>
+      setModal({ kind: 'createorg', focusAfterClose }),
   }
   // a click on a desktop notification opens the inbox as the Inbox button
   // does, asking first when a window holds unsent text
@@ -1822,6 +1847,7 @@ function App() {
       setProjectsOpen(false)
       setSync(null)
     })
+    createdProject.current = id ?? null
     setModal(null)
   }
 
@@ -1906,12 +1932,19 @@ function App() {
           init={modal.init}
           onClose={() => setModal(null)}
           onCreate={createProject}
+          focusAfterClose={() => modal.focusAfterClose?.() ?? afterNewSubProject()}
         />
       )}
       {modal.kind === 'milestone' && (
-        <MilestoneModal init={modal.init} onClose={() => setModal(null)} />
+        <MilestoneModal
+          init={modal.init}
+          onClose={() => setModal(null)}
+          focusAfterClose={modal.focusAfterClose}
+        />
       )}
-      {modal.kind === 'createorg' && <CreateOrgModal onClose={() => setModal(null)} />}
+      {modal.kind === 'createorg' && (
+        <CreateOrgModal onClose={() => setModal(null)} focusAfterClose={modal.focusAfterClose} />
+      )}
     </DeferredOverlay>
   )
 
@@ -1959,7 +1992,9 @@ function App() {
                   }
                   onExit={exitSettings}
                   onNewProject={() => openNewProject({ kind: 'program' })}
-                  onNewSubProject={(parent) => openNewProject({ parent })}
+                  onNewSubProject={(parent, focusAfterClose) =>
+                    openNewProject({ parent }, focusAfterClose)
+                  }
                   archivedTasksProject={archiveProject || scopeMeta}
                   onOpenArchivedTasks={(projectId) =>
                     move({ settingsPage: ARCHIVED_TASKS_PAGE }, () => {

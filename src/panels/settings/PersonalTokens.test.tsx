@@ -269,6 +269,38 @@ describe('the token list', () => {
     expect(mutations()).not.toContain('tokens:revokeMcpToken')
   })
 
+  it('gives focus to the next row once a deleted token leaves, and to New token after the last', async () => {
+    tokens = [token('zapier', { expiresAt: ending('2026-09-30') }), token('laptop', {})]
+    await render()
+    network.mutation.mockImplementation((ref, args) => {
+      const name = getFunctionName(ref)
+      if (name === 'tokens:deleteMcpToken') tokens = tokens.filter((t) => t.id !== args.id)
+      if (name === 'tokens:revokeMcpToken')
+        tokens = tokens.map((t) => (t.id === args.id ? { ...t, revokedAt: NOW.toISOString() } : t))
+      return Promise.resolve(null)
+    })
+    /* Confirms the button of row `id` from the keyboard's focus. */
+    const confirm = async (id: string) => {
+      const press = find<HTMLButtonElement>(`[data-mcp-token="${id}"] button`)
+      press.focus()
+      await click(press)
+      vi.setSystemTime(Date.now() + CONFIRM_IGNORE_MS)
+      await click(press)
+      await settle()
+      return press
+    }
+    await confirm('zapier')
+    expect(document.querySelector('[data-mcp-token="zapier"]')).toBeNull()
+    expect(document.activeElement).toBe(find('[data-mcp-token="laptop"] button'))
+    // a revoked token keeps its row, and its button keeps focus
+    const revoke = await confirm('laptop')
+    expect(revoke.getAttribute('aria-label')).toBe('Delete revoked token')
+    expect(document.activeElement).toBe(revoke)
+    await confirm('laptop')
+    expect(document.querySelector('[data-mcp-token]')).toBeNull()
+    expect(document.activeElement).toBe(find('[data-mcp-new-token]'))
+  })
+
   it('marks a token expired when its expiry passes during the day', async () => {
     // created in a zone ahead of this one, so it ends mid-afternoon here
     const ends = new Date(NOW.getTime() + 50)

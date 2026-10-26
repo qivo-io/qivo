@@ -20,6 +20,7 @@ import {
 import { dayInSentence, deletedAtFull } from '../../lib/deletedTime'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { limitSentence } from '../../lib/fieldLimits'
+import { focusAround, menuTrigger, useFocusWhenGone } from '../../lib/focusWhenGone'
 import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import type { AccessLevel, AccessRemoval, ArchivedProjectVM, ProjectVM } from '../../store/planner'
@@ -43,7 +44,8 @@ export function OrgProjectsPage({
 }: {
   setPage: (page: string) => void
   onNewProject: () => void
-  onNewSubProject: (parent: string) => void
+  /** opens New sub-project; `focusAfterClose` is what takes focus as it closes */
+  onNewSubProject: (parent: string, focusAfterClose?: () => HTMLElement | null) => void
   onOpenArchivedTasks: (projectId: string) => void
 }) {
   const visible = P.visibleProjects()
@@ -102,9 +104,10 @@ export function OrgProjectsPage({
               <>
                 {lead && (
                   <MenuItem
-                    onClick={() => {
+                    onClick={(e) => {
+                      const trigger = menuTrigger(e.currentTarget)
                       close()
-                      onNewSubProject(m.id)
+                      onNewSubProject(m.id, () => trigger)
                     }}
                   >
                     <Icon name="plus" size={16} />
@@ -279,8 +282,26 @@ export function ArchivedProjectsPage() {
       document.querySelector<HTMLElement>('.settings-page-title h1')
     )
   }
+  /* The project whose Restore was pressed last, with where focus goes once
+     its row has left: the next row's first button, the previous row's, or
+     the page heading. The row leaves with the delivery that restores it,
+     and its Restore, disabled while it waits, has left focus nowhere. */
+  const [restored, setRestored] = useStateS<{ id: string; focus: () => HTMLElement | null }>()
+  useFocusWhenGone(
+    !!restored && rows.some((row) => row.id === restored.id),
+    () => restored?.focus() ?? null,
+  )
   const restore = (r: ArchivedProjectVM) => {
     if (busy.has(r.id)) return
+    setRestored({
+      id: r.id,
+      focus: focusAround(
+        'data-archived-project',
+        r.id,
+        (row) => row.querySelector<HTMLElement>('button:not(:disabled)'),
+        () => document.querySelector<HTMLElement>('.settings-page-title h1'),
+      ),
+    })
     setBusy((s: Set<string>) => new Set(s).add(r.id))
     void P.unarchiveProject(r.id).then((ok: boolean) => {
       setBusy((s: Set<string>) => {
@@ -508,6 +529,21 @@ export function ProjectPage({
   )
 }
 
+/** Where focus goes once the access of team or user `id` may have left the
+    access editor: that row's Remove while it is listed, as after Change to
+    Viewer, else the next row's in its list, the previous row's, the list's
+    empty line or the Add picker. Call it as the removal starts. */
+function focusAfterAccessRemoval(kind: 'team' | 'user', id: string) {
+  return focusAround(
+    `data-project-access-${kind}`,
+    id,
+    (row) => row.querySelector<HTMLElement>('[data-project-access-remove]:not(:disabled)'),
+    () =>
+      document.querySelector<HTMLElement>(`[data-project-access-none="${kind}"]`) ??
+      document.querySelector<HTMLElement>('[data-project-access-picker]'),
+  )
+}
+
 /** A project's settings sections while the project is in the store, for
     ProjectPage, which owns the Archive or delete window that `onRemove`
     opens and gives focus back to `removeButton`. */
@@ -528,7 +564,10 @@ function ProjectSettingsFields({
   /* Removing a grant that would leave someone unable to see tasks they work
      on first asks whether to keep them as Viewers or reassign their tasks. */
   const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
-  const removeOrAsk = (change: AccessRemoval) => {
+  // where focus goes as the removal window closes, taken as it opens
+  const removalFocus = React.useRef<() => HTMLElement | null>(() => null)
+  const removeOrAsk = (change: AccessRemoval, focus: () => HTMLElement | null) => {
+    removalFocus.current = focus
     if (P.startRemoval(change)) setRemoval(change)
   }
   // a read-only organization's admin removes without the window
@@ -801,12 +840,18 @@ function ProjectSettingsFields({
             access={proj.access || {}}
             onTeamChange={(teamId, level) =>
               level === null
-                ? removeOrAsk({ kind: 'teamGrant', projectId: proj.id, teamId })
+                ? removeOrAsk(
+                    { kind: 'teamGrant', projectId: proj.id, teamId },
+                    focusAfterAccessRemoval('team', teamId),
+                  )
                 : P.setProjectTeamAccess(proj.id, teamId, level)
             }
             onUserChange={(userId, level) =>
               level === null
-                ? removeOrAsk({ kind: 'userGrant', projectId: proj.id, userId })
+                ? removeOrAsk(
+                    { kind: 'userGrant', projectId: proj.id, userId },
+                    focusAfterAccessRemoval('user', userId),
+                  )
                 : P.setProjectAccess(proj.id, userId, level)
             }
             role={grantRole}
@@ -820,6 +865,7 @@ function ProjectSettingsFields({
               key={JSON.stringify(removal)}
               change={removal}
               onClose={() => setRemoval(null)}
+              focusAfterClose={() => removalFocus.current()}
             />
           )}
           {/* External invitees gain a guest seat with access to this project. */}

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Avatar, Icon, StatusDot } from '../components/qivo'
 import { SYNC_LIMIT } from '../lib/boardGroups'
+import { focusAround } from '../lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
 import { createMountScheduler, useMountGuards } from '../lib/mountScheduler'
 import { isRoadmapTaskVisible } from '../lib/roadmapVisibility'
@@ -170,7 +171,23 @@ export function MobileRoadmap({
       type="button"
       variant="unstyled"
       className="mobile-roadmap-row"
-      onClick={() => actions.editMilestone(m.id)}
+      data-agenda-milestone={m.id}
+      onClick={() =>
+        // the window can delete this milestone, and its row with it. Focus
+        // then goes to the next row, the previous one, New milestone or the
+        // empty list's line. A row in the closed past list is out of reach
+        actions.editMilestone(
+          m.id,
+          focusAround(
+            'data-agenda-milestone',
+            m.id,
+            (row) => (row.closest('details:not([open])') ? null : row),
+            () =>
+              scroller.current?.querySelector<HTMLElement>('[data-new-milestone]') ??
+              scroller.current?.querySelector<HTMLElement>('[data-no-milestones]'),
+          ),
+        )
+      }
       aria-label={`${P.canWrite(m.project) ? 'Edit' : 'View'} milestone ${m.name}`}
     >
       <Icon name="diamond" size={16} color={P.MILESTONE_COLOR} />

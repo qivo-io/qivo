@@ -172,3 +172,60 @@ describe('the phone project list', () => {
     expect(createOrg).toHaveBeenCalledOnce()
   })
 })
+
+describe('Create your organization on the Projects page', () => {
+  it('gives focus to New project once the organization exists, as its button leaves', async () => {
+    const snap = guestOnly()
+    // the workspace read after the create, with the login's new admin seat
+    const created = structuredClone(snap)
+    created.orgs.push({ ...snap.orgs[0], id: 'mine', name: 'Mine', slug: 'mine' })
+    created.profiles.push({ ...snap.profiles[0], id: 'me', org_id: 'mine', org_role: 'admin' })
+    created.myProfileIds.push('me')
+    history.replaceState(null, '', '/app/testbed/projects')
+    await boot(snap)
+    network.mutation.mockImplementation((ref) => {
+      if (getFunctionName(ref) === 'identity:createOrganization')
+        network.onUpdate.mockImplementation((r, _args, next) => {
+          if (getFunctionName(r) === 'workspace:whole') next(structuredClone(created))
+          return () => {}
+        })
+      return Promise.resolve(null)
+    })
+    const { syncStatus } = await import('./lib/syncStatus')
+    syncStatus.setSocket({ connected: true, everConnected: true })
+    const { default: App } = await import('./App')
+    const list = '.mobile-project-directory'
+    await show(<App />, list)
+    const button = (text: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>(`${list} button`)].find(
+        (b) => b.textContent?.trim() === text,
+      )
+    const opener = await vi.waitFor(() => {
+      const found = button('Create your organization')
+      if (!found) throw new Error('missing the entry')
+      return found
+    })
+    opener.focus()
+    await act(async () => opener.click())
+    const name = await vi.waitFor(
+      () => {
+        const found = document.querySelector<HTMLInputElement>('[data-create-org]')
+        if (!found) throw new Error('missing the name field')
+        return found
+      },
+      { timeout: 10_000 },
+    )
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(name, 'Mine')
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const create = [
+      ...document.querySelectorAll<HTMLButtonElement>('[data-modal-shell] button'),
+    ].find((b) => b.textContent === 'Create')
+    await act(async () => create?.click())
+    await vi.waitFor(() => expect(document.querySelector('[data-modal-shell]')).toBeNull())
+    for (let i = 0; i < 6; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+    expect(opener.isConnected).toBe(false)
+    expect(document.activeElement).toBe(button('New project'))
+  })
+})

@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { BILLING_READ_ONLY } from '../../convex/lib/billingAccess'
 import { TooltipProvider } from '../components/ui/tooltip'
+import { CONFIRM_IGNORE_MS } from '../lib/useConfirmArm'
 import type { AccessRemoval } from '../store/planner'
 import { plannerFixture } from '../store/plannerFixture.setup'
 
@@ -38,6 +39,8 @@ const READ_ONLY = new ConvexError({
 })
 
 let P: Planner
+let snap: ReturnType<typeof plannerFixture>
+let deliver: (snapshot: ReturnType<typeof plannerFixture>) => void
 let container: HTMLDivElement
 let root: Root
 let work: string
@@ -49,20 +52,23 @@ let refusal: unknown
    organization admin, which the server refuses every removal while the
    organization is read-only. `tasks` is how many open tasks Leo holds, and
    `level` his grant. With `viaTeam`, Leo's grant comes from the Crew team,
-   one of two teams, instead. */
+   one of two teams, instead. With `ada`, Ada Berg, who holds no task, has a
+   User grant of her own. */
 async function load({
   lead = false,
   tasks = 1,
   level = 'user',
   viaTeam = false,
+  ada = false,
 }: {
   lead?: boolean
   tasks?: number
   level?: 'user' | 'viewer'
   viaTeam?: boolean
+  ada?: boolean
 } = {}) {
   vi.resetModules()
-  const snap = plannerFixture()
+  snap = plannerFixture()
   const org = snap.orgs[0].id
   work = snap.projects[0].id
   snap.projects[0].type = 'meta'
@@ -89,6 +95,16 @@ async function load({
     snap.teamMembers.push({ team_id: 'crew', profile_id: 'leo', is_leader: false })
     snap.teamAccess.push({ project_id: work, team_id: 'crew', level })
   } else snap.access.push({ project_id: work, profile_id: 'leo', level })
+  if (ada) {
+    snap.profiles.push({
+      ...snap.profiles[0],
+      id: 'ada',
+      auth_user_id: 'account-ada',
+      name: 'Ada Berg',
+      org_role: 'user',
+    })
+    snap.access.push({ project_id: work, profile_id: 'ada', level: 'user' })
+  }
   for (let n = 1; n <= tasks; n++)
     snap.issues.push({
       id: `t${n}`,
@@ -109,7 +125,10 @@ async function load({
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole') next(structuredClone(snap))
+    if (name === 'workspace:whole') {
+      deliver = (snapshot) => next(structuredClone(snapshot))
+      deliver(snap)
+    }
     if (name === 'billing:status') {
       status = () => next({ writable })
       status()
@@ -351,6 +370,120 @@ describe('the reassign cap in the removal window', () => {
     await open()
     expect(reassignCard()).toContain(
       'One removal reassigns at most 120 tasks, so reassign some of these tasks first.',
+    )
+  })
+})
+
+describe('focus once the removal window closes', () => {
+  /* Renders `page` on the live store, as Settings does. */
+  async function show(page: () => React.ReactNode) {
+    const version = await import('../store/usePlannerVersion')
+    function Live() {
+      version.usePlannerVersion()
+      return page()
+    }
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <Live />
+        </TooltipProvider>,
+      ),
+    )
+    await settle()
+  }
+  const press = async (button: HTMLButtonElement | null | undefined) => {
+    if (!button) throw new Error('Missing button')
+    button.focus()
+    await act(async () => button.click())
+    await settle()
+  }
+  const shellButton = (label: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>('[data-modal-shell] button')].find(
+      (b) => b.textContent === label,
+    )
+  const remove = (id: string) =>
+    document.querySelector<HTMLButtonElement>(
+      `[data-project-access-user="${id}"] [data-project-access-remove]`,
+    )
+  async function projectPage() {
+    const settings = await import('./settings/ProjectSettings')
+    await show(() => <settings.ProjectPage projectId={work} setPage={vi.fn()} />)
+  }
+
+  it("gives focus to the row's own Remove after Change to Viewer, and to the next row's once the row leaves", async () => {
+    await load({ ada: true })
+    await projectPage()
+    await press(remove('leo'))
+    await press(shellButton('Change to Viewer'))
+    expect(document.querySelector('[data-modal-shell]')).toBeNull()
+    expect(P.levelOn(work, 'leo')).toBe('viewer')
+    expect(document.activeElement).toBe(remove('leo'))
+    // Ada is listed before Leo, so she is the row before his
+    await press(remove('leo'))
+    await press(shellButton('Reassign and remove'))
+    expect(document.querySelector('[data-modal-shell]')).toBeNull()
+    expect(remove('leo')).toBeNull()
+    expect(document.activeElement).toBe(remove('ada'))
+  })
+
+  it('gives focus to the empty list once someone else removed the access meanwhile', async () => {
+    await load()
+    await projectPage()
+    await press(remove('leo'))
+    snap.access = snap.access.filter((a) => a.profile_id !== 'leo')
+    await act(async () => deliver({ ...snap, delivered_at: '2026-09-15T09:00:00.000Z' }))
+    await press(shellButton('Change to Viewer'))
+    expect(window.showToast).toHaveBeenCalledWith(
+      'Leo Berg no longer has this access. Nothing was changed.',
+      'info',
+    )
+    expect(document.querySelector('[data-modal-shell]')).toBeNull()
+    expect(document.activeElement?.textContent).toBe('No individual users added.')
+  })
+
+  it("gives focus to the empty list's line once the last member leaves a team", async () => {
+    await load({ viaTeam: true })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    onTestFinished(() => {
+      vi.useRealTimers()
+    })
+    const settings = await import('./settings/TeamSettings')
+    await show(() => <settings.TeamPage teamId="crew" setPage={vi.fn()} />)
+    const leave = document.querySelector<HTMLButtonElement>(
+      '[data-settings-team-member="leo"] [data-team-member-remove]',
+    )
+    await press(leave)
+    vi.setSystemTime(Date.now() + CONFIRM_IGNORE_MS)
+    await press(leave)
+    await press(shellButton('Keep as Viewer and remove'))
+    expect(document.querySelector('[data-modal-shell]')).toBeNull()
+    expect(document.querySelector('[data-settings-team-member="leo"]')).toBeNull()
+    expect(document.activeElement?.textContent).toBe('No members yet.')
+  })
+
+  it("gives focus to the next team's name once a deleted team leaves, as the last team's Delete is disabled", async () => {
+    await load({ viaTeam: true })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    onTestFinished(() => {
+      vi.useRealTimers()
+    })
+    const settings = await import('./settings/TeamSettings')
+    await show(() => <settings.OrgTeamsPage setPage={vi.fn()} />)
+    const del = document.querySelector<HTMLButtonElement>(
+      '[data-team-row="crew"] [data-team-delete]',
+    )
+    await press(del)
+    vi.setSystemTime(Date.now() + CONFIRM_IGNORE_MS)
+    await press(del)
+    await press(shellButton('Keep as Viewer and delete'))
+    expect(document.querySelector('[data-modal-shell]')).toBeNull()
+    expect(document.querySelector('[data-team-row="crew"]')).toBeNull()
+    expect(document.querySelector('[data-team-row="bench"] [data-team-delete]')).toHaveProperty(
+      'disabled',
+      true,
+    )
+    expect(document.activeElement).toBe(
+      document.querySelector('[data-team-row="bench"] [data-team-open]'),
     )
   })
 })
