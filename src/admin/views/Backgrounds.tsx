@@ -38,7 +38,7 @@ import {
 } from '@/lib/backgroundImageUpload'
 import { overLimit } from '@/lib/fieldLimits'
 import { restoreFocus } from '@/lib/focusVisibility'
-import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
+import { focusAround, useFocusAfterRender, useFocusWhenGone } from '@/lib/focusWhenGone'
 import type { ImageMetadata } from '@/lib/imageMetadata'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { cn } from '@/lib/utils'
@@ -1001,11 +1001,7 @@ function ImageCard({
   const removeButton = useRef<HTMLButtonElement>(null)
   const noteField = useRef<HTMLTextAreaElement>(null)
   const confirmButton = useRef<HTMLButtonElement>(null)
-  // An approval or a removal that keeps the card, as All images and
-  // Selected image do, takes away the button pressed. Focus it left
-  // nowhere goes to the card's preview.
-  useFocusWhenGone(image.status === 'pending', () => previewButton.current)
-  useFocusWhenGone(image.status !== 'removed', () => previewButton.current)
+  const focusAfterRender = useFocusAfterRender()
   // Remove swaps its button for the confirm panel, and Cancel swaps it
   // back. Focus that the swap left nowhere goes along.
   useFocusWhenGone(!removing, () => noteField.current)
@@ -1022,6 +1018,11 @@ function ImageCard({
         await approve({ id: image.id, expected_agent_review_id: image.agent_review_id ?? null })
       else await remove({ id: image.id, ...(note.trim() ? { note: note.trim() } : {}) })
       setRemoving(false)
+      // An approval or a removal that keeps the card, as All images and
+      // Selected image do, takes away the button pressed. Focus it left
+      // nowhere goes to the card's preview. Another operator's change of
+      // the status moves nothing.
+      focusAfterRender(() => previewButton.current)
     } catch (error) {
       setError(errorMessage(error))
       acting?.(null)

@@ -203,6 +203,12 @@ const preview = (id: string) =>
 const control = (id: string, name: 'approve' | 'remove') =>
   document.querySelector<HTMLButtonElement>(`[data-image-${name}="${id}"]`)
 const card = (id: string) => document.querySelector(`[data-background-image="${id}"]`) ?? document
+/** Shows All images, where a reviewed image keeps its card. */
+async function showAll() {
+  const status = document.querySelector<HTMLSelectElement>('#background-status')!
+  status.value = 'all'
+  await act(async () => status.dispatchEvent(new Event('change', { bubbles: true })))
+}
 
 describe('the library preview', () => {
   it('gives focus to the card now in its place after Approve and next took the card away', async () => {
@@ -297,12 +303,29 @@ describe('a card’s own Approve and Remove image', () => {
 
   it('gives focus to the card’s preview when an approval keeps the card in All images', async () => {
     await render()
-    const status = document.querySelector<HTMLSelectElement>('#background-status')!
-    status.value = 'all'
-    await act(async () => status.dispatchEvent(new Event('change', { bubbles: true })))
+    await showAll()
     await press(control('ridge', 'approve')!)
     expect(control('ridge', 'approve')).toBeNull()
     expect(document.activeElement).toBe(preview('ridge'))
+  })
+
+  it('gives focus to the card’s preview when a removal keeps the card in All images', async () => {
+    await render()
+    await showAll()
+    await press(control('ridge', 'remove')!)
+    await press(document.querySelector<HTMLElement>('[data-image-remove-confirm="ridge"]')!)
+    expect(control('ridge', 'remove')).toBeNull()
+    expect(document.activeElement).toBe(preview('ridge'))
+  })
+
+  it('moves no focus when another operator approves an image in All images', async () => {
+    await render()
+    await showAll()
+    dropFocus()
+    server.images = server.images.map((i) => (i.id === 'ridge' ? { ...i, status: 'approved' } : i))
+    await act(async () => publish())
+    expect(control('ridge', 'approve')).toBeNull()
+    expect(document.activeElement).toBe(document.body)
   })
 
   it('gives focus back to Approve once its write is refused, and a later removal of the card moves none', async () => {
