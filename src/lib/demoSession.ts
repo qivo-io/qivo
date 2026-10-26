@@ -1,3 +1,6 @@
+import { ConvexError } from 'convex/values'
+import { DEMO_UNAVAILABLE } from '../../convex/lib/demoRefusals'
+
 export const DEMO_MARKER_KEY = 'qivo-demo-lifecycle-v1'
 export const DEMO_STARTUP_TIMEOUT_MS = 30_000
 
@@ -48,6 +51,23 @@ export class DemoSessionEnded extends Error {
       phase === 'expired' ? 'Your demo has expired.' : 'Your demo session is no longer available.',
     )
   }
+}
+
+const REFUSALS: readonly string[] = Object.values(DEMO_UNAVAILABLE)
+
+/** How a failed demo start or lifecycle check ends the demo: expired, or
+ * lost with the demo backend's own sentence when the refusal carries one of
+ * them (convex/lib/demoRefusals.ts), never other text a server error
+ * carries. Null for any other failure, which the gate offers to retry. */
+export function demoEnding(error: unknown): { phase: 'expired' | 'lost'; detail?: string } | null {
+  if (error instanceof DemoSessionEnded) return { phase: error.phase }
+  if (!(error instanceof ConvexError) || typeof error.data !== 'object' || !error.data) return null
+  const data: { reason?: unknown; message?: unknown } = error.data
+  if (data.reason === 'demo_expired') return { phase: 'expired' }
+  if (data.reason !== 'demo_unavailable') return null
+  const detail =
+    typeof data.message === 'string' && REFUSALS.includes(data.message) ? data.message : undefined
+  return { phase: 'lost', detail }
 }
 
 export class DemoStartupTimeout extends Error {
@@ -165,9 +185,9 @@ export async function startDemo(
   const current = await demoStartupStep(deps.current, signal)
   if (['expired', 'deleting'].includes(current.status)) throw new DemoSessionEnded('expired')
   if (current.status === 'missing') throw new DemoSessionEnded('lost')
-  // The server builds a demo one bounded step a call, each answer a step
-  // further until it is ready. An answer that is not refuses, so a stuck
-  // demo never loops.
+  // The server builds a demo one bounded call at a time, each a few seed
+  // steps and each answer a step of progress further until it is ready. An
+  // answer that is not refuses, so a stuck demo never loops.
   let ready = current
   while (ready.status === 'unprovisioned') {
     const done = ready.progress?.step ?? 0

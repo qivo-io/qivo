@@ -1,9 +1,10 @@
 /* Copied from get-convex/better-auth src/client/create-client.ts at 3f41cbcf
  * (Apache-2.0, see ../../LICENSE). Qivo changed it:
  * - It keeps the members Qivo uses: adapter, getAuth, getHeaders,
- *   safeGetAuthUser, getAuthUser, triggersApi and registerRoutes with CORS.
+ *   triggersApi and registerRoutes with CORS. safeGetAuthUser, getAuthUser,
  *   getAnyUserById, setUserId, clientApi, registerRoutesLazy and the verbose
- *   logging are left out.
+ *   logging are left out. Qivo reads the caller's login with its own
+ *   session check (convex/lib/authUser.ts), which loads no Better Auth.
  * - registerRoutes no longer redirects /.well-known/openid-configuration to
  *   the convex() plugin's discovery document, which is gone (see
  *   ../plugins/convex/index.ts).
@@ -13,7 +14,6 @@
  * - The component API includes incrementOne (see create-api.ts).
  * - Types replace `any`. */
 import type {
-  DataModelFromSchemaDefinition,
   FunctionReference,
   GenericDataModel,
   GenericMutationCtx,
@@ -23,7 +23,7 @@ import type {
 } from 'convex/server'
 import { httpActionGeneric, internalMutationGeneric } from 'convex/server'
 import type { GenericValidator, Infer } from 'convex/values'
-import { ConvexError, v } from 'convex/values'
+import { v } from 'convex/values'
 import { corsRouter } from 'convex-helpers/server/cors'
 import type { CreateAuth, GenericCtx, TrustedOriginsOption } from '../utils'
 import { type AdapterApi, convexAdapter } from './adapter'
@@ -72,7 +72,7 @@ const restoreOriginalForwardedHeaders = (request: Request) => {
 
 /**
  * The app's side of the Better Auth component: the database adapter, the
- * signed-in user, the trigger functions and the HTTP routes.
+ * trigger functions and the HTTP routes.
  *
  * @param component - `components.betterAuth` from `./_generated/api`.
  * @param config.local - The component's schema.
@@ -89,33 +89,6 @@ export const createClient = <
     | { triggers?: undefined; authFunctions?: undefined }
   ),
 ) => {
-  type BetterAuthDataModel = DataModelFromSchemaDefinition<Schema>
-  type UserDoc = BetterAuthDataModel['user']['document']
-
-  const safeGetAuthUser = async (ctx: GenericCtx<DataModel>) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return
-    const session = await ctx.runQuery(component.adapter.findOne, {
-      model: 'session',
-      where: [
-        { field: '_id', value: identity.sessionId as string },
-        { field: 'expiresAt', operator: 'gt', value: Date.now() },
-      ],
-    })
-    if (!session) return
-    const doc: UserDoc | null = await ctx.runQuery(component.adapter.findOne, {
-      model: 'user',
-      where: [{ field: '_id', value: identity.subject }],
-    })
-    return doc ?? undefined
-  }
-
-  const getAuthUser = async (ctx: GenericCtx<DataModel>) => {
-    const user = await safeGetAuthUser(ctx)
-    if (!user) throw new ConvexError('Unauthenticated')
-    return user
-  }
-
   const getHeaders = async (ctx: GenericCtx<DataModel>) => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) return new Headers()
@@ -148,12 +121,6 @@ export const createClient = <
 
     /** Headers that carry the current session's token as a Bearer token. */
     getHeaders,
-
-    /** The signed-in user, or undefined when there is none. */
-    safeGetAuthUser,
-
-    /** The signed-in user. Throws when there is none. */
-    getAuthUser,
 
     /** The internal mutations that run the triggers in the app, which
      * `authFunctions` must name. */

@@ -3310,4 +3310,19 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         Name
       >;
     };
+    sessions: {
+      liveSessionUser: FunctionReference<
+        "query",
+        "internal",
+        { sessionId: string; userId: string },
+        null | {
+          _id: string;
+          email: string;
+          emailVerified: boolean;
+          isAnonymous: boolean | null;
+          name: string;
+        },
+        Name
+      >;
+    };
   };

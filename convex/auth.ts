@@ -46,8 +46,7 @@ import { type AuthLetterIntent, sendAuthLetter } from './mail'
  * crossDomain's redirect target — every OAuth and reset round trip then fails
  * originCheck with nothing naming the var that is missing. Staying out of
  * module scope also keeps that failure on the auth surface that needs the
- * origin, rather than on every module that imports this one for authComponent
- * alone (identity.ts does exactly that). */
+ * origin, rather than on every module that imports this one. */
 const requireSiteUrl = () => {
   const url = process.env.SITE_URL
   if (!url) throw new Error('SITE_URL is not set, so the app origin is unknown')

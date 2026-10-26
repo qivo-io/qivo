@@ -5,7 +5,8 @@
  *
  * Fixtures are local to this file on purpose — helpers.setup.ts is another
  * agent's surface this phase. withLogin mirrors identity.test.ts's: a real
- * component user + session, the two rows getAuthUser reads. */
+ * component user + session, the two rows requireLiveAuthUser reads
+ * (betterAuth/sessions.ts liveSessionUser). */
 /// <reference types="vite/client" />
 
 import type { WithoutSystemFields } from 'convex/server'

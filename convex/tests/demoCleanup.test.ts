@@ -784,8 +784,8 @@ describe('public Northstar provisioning and bounded deletion', () => {
     const t = testBackend()
     const abandoned = await makeDemo(t, false)
     // a visitor who left while the demo was being built
-    const halfway = await makeDemo(t, 5)
-    expect(halfway).toMatchObject({ status: 'unprovisioned', provision: { step: 5 } })
+    const halfway = await makeDemo(t, 3)
+    expect(halfway).toMatchObject({ status: 'unprovisioned', provision: { step: 3 } })
     const stalled = await makeDemo(t, false)
     const live = await makeDemo(t)
     await t.run(async (ctx) => {

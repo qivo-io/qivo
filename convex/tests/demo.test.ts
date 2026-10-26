@@ -14,8 +14,17 @@ import {
   DEMO_WRITES_PER_MINUTE,
   DEMO_WRITES_TOTAL,
 } from '../lib/demo'
-import { PUBLIC_DEMO_STEPS } from '../model/demoSeed'
+import { DEMO_UNAVAILABLE } from '../lib/demoRefusals'
+import {
+  NORTHSTAR_STEPS,
+  newNorthstarRun,
+  PUBLIC_DEMO_CALL_SIZES,
+  PUBLIC_DEMO_CALLS,
+  PUBLIC_DEMO_STEPS,
+  stepCalls,
+} from '../model/demoSeed'
 import { expectRefusal, newT, type T, uuid, workspaceOf } from './helpers.setup'
+import { NORTHSTAR, plantNorthstar } from './northstar.setup'
 
 const componentModules = import.meta.glob('../betterAuth/**/*.ts')
 let t: T
@@ -203,6 +212,56 @@ describe('public demo ownership and authentication', () => {
       'forbidden',
       /temporary demo login/,
     )
+  })
+
+  it("provisions only in the token's live session of an existing anonymous login", async () => {
+    const login = await anonymousLogin()
+    const other = await anonymousLogin()
+    const userId = login.user._id as string
+    const sessionId = login.session._id as string
+    const refused = (as: typeof login.as) =>
+      expectRefusal(as.mutation(api.demo.ensureMine, {}), 'forbidden', /temporary demo login/)
+    const step = async () =>
+      (
+        await t.run((ctx) =>
+          ctx.db
+            .query('demo_sessions')
+            .withIndex('by_auth_user', (q) => q.eq('auth_user_id', userId))
+            .unique(),
+        )
+      )?.provision?.step
+    expect(await login.as.mutation(api.demo.ensureMine, {})).toMatchObject({
+      status: 'unprovisioned',
+      progress: { step: 1 },
+    })
+    // A token without a session, or with another login's live session.
+    await refused(t.withIdentity({ subject: userId }))
+    await refused(t.withIdentity({ subject: userId, sessionId: other.session._id as string }))
+    await refused(t.withIdentity({ subject: userId, sessionId: 'not-a-session-id' }))
+    // The session at its expiry, then gone.
+    const setSession = (update: { expiresAt: number }) =>
+      t.mutation(components.betterAuth.adapter.updateOne, {
+        input: { model: 'session', where: [{ field: '_id', value: sessionId }], update },
+      })
+    await setSession({ expiresAt: Date.now() })
+    await refused(login.as)
+    await setSession({ expiresAt: Number.NaN })
+    await refused(login.as)
+    await setSession({ expiresAt: Date.now() + 1 })
+    expect(await login.as.mutation(api.demo.ensureMine, {})).toMatchObject({
+      progress: { step: 2 },
+    })
+    await t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'session', where: [{ field: '_id', value: sessionId }] },
+    })
+    await refused(login.as)
+    // A live session whose login is gone. No trigger runs on this raw
+    // delete, so the receipt is still active.
+    await t.mutation(components.betterAuth.adapter.deleteOne, {
+      input: { model: 'user', where: [{ field: '_id', value: other.user._id as string }] },
+    })
+    await refused(other.as)
+    expect(await step()).toBe(2)
   })
 
   it('disables anonymous auth on normal deployments and preserves stable plugin schema', async () => {
@@ -686,13 +745,31 @@ describe('demo lifetime and capabilities', () => {
 })
 
 describe('public demo provisioning steps', () => {
+  it('runs every step once, and a step past the call sizes in a call of its own', () => {
+    expect(stepCalls([1, 2, 3, 4, 5], [2, 2])).toEqual([[1, 2], [3, 4], [5]])
+    expect(stepCalls([1, 2, 3], [2, 2, 2])).toEqual([[1, 2], [3]])
+    expect(PUBLIC_DEMO_CALLS.flat()).toEqual(NORTHSTAR_STEPS)
+    expect(PUBLIC_DEMO_STEPS).toBe(PUBLIC_DEMO_CALLS.length)
+    // The sizes fit today's data. Retune them when this fails.
+    expect(PUBLIC_DEMO_CALL_SIZES.reduce((n, size) => n + size, 0)).toBe(NORTHSTAR_STEPS.length)
+  })
+
   // The whole Northstar work in one transaction read 1,612 index ranges
   // and 1,668 documents and wrote about 1,400 documents, which could pass
-  // Convex's 1 s mutation limit on a slow backend. Each call now runs one
-  // bounded step, held to the marketing seed's per-call budget.
-  it('provisions a demo in calls of at most 300 index ranges, 350 documents read and 150 written', async () => {
+  // Convex's 1 s mutation limit on a slow backend. Each call runs a few of
+  // its steps (PUBLIC_DEMO_CALLS), held to a third of Convex's byte limits
+  // and to counts that keep it inside a third of the rest. convex-test does
+  // not keep the time limit, so the range budget stands in for it
+  // (model/demoSeed.ts PUBLIC_DEMO_CALL_SIZES has the numbers).
+  it('provisions a demo in calls inside a budget near their use, every step once', async () => {
     const limited = newT({
-      transactionLimits: { databaseQueries: 300, documentsRead: 350, documentsWritten: 150 },
+      transactionLimits: {
+        databaseQueries: 630,
+        documentsRead: 900,
+        documentsWritten: 650,
+        bytesRead: Math.floor((16 * 1024 * 1024) / 3),
+        bytesWritten: Math.floor((16 * 1024 * 1024) / 3),
+      },
     })
     limited.registerComponent('betterAuth', authSchema, componentModules)
     const login = await anonymousLogin(limited)
@@ -713,6 +790,42 @@ describe('public demo provisioning steps', () => {
     expect(org).toMatchObject({ id: answers.at(-1)?.orgId, max_attachment_mb: 5 })
     const tasks = await limited.run((ctx) => ctx.db.query('issues').collect())
     expect(tasks).toHaveLength(MARKETING_DEMO.issues.length)
+  })
+
+  it('gives the public demo the notices and follows of a seed that asks person by person', async () => {
+    const login = await anonymousLogin()
+    await provision(login.as)
+    const receipt = (await t.run((ctx) => ctx.db.query('demo_sessions').unique()))!
+    // the same data through writeNorthstarWork, which reads no sight up
+    // front, at the same anchor and write time (the frozen clock)
+    const stepped = await plantNorthstar(t, receipt.anchor, new Date().toISOString())
+    const byKey = async (namespace: string, orgId: string) => {
+      const { ids } = await newNorthstarRun(namespace)
+      const person = new Map(Object.entries(ids.person).map(([key, id]) => [id, key]))
+      const issue = new Map(Object.entries(ids.issue).map(([key, id]) => [id, key]))
+      return t.run(async (ctx) => ({
+        notices: (await ctx.db.query('messages').collect())
+          .filter((m) => m.org_id === orgId)
+          .map((m) =>
+            [
+              person.get(m.recipient_id),
+              m.actor_id && person.get(m.actor_id),
+              issue.get(m.issue_id),
+              m.kind,
+              m.detail,
+            ].join(' '),
+          )
+          .sort(),
+        follows: (await ctx.db.query('issue_subscriptions').collect())
+          .filter((follow) => issue.has(follow.issue_id))
+          .map((follow) => `${issue.get(follow.issue_id)} ${person.get(follow.profile_id)}`)
+          .sort(),
+      }))
+    }
+    const demo = await byKey(`public-demo:${receipt.id}`, receipt.org_id!)
+    expect(demo.notices.length).toBeGreaterThan(100)
+    expect(demo.follows.length).toBeGreaterThan(100)
+    expect(demo).toEqual(await byKey(NORTHSTAR, stepped.org.id))
   })
 
   it('refuses the workspace until the last step, and resumes at the step a stopped visitor left', async () => {
@@ -738,14 +851,26 @@ describe('public demo provisioning steps', () => {
     await login.as.mutation(api.demo.ensureMine, {})
     await t.run(async (ctx) => {
       const receipt = (await ctx.db.query('demo_sessions').unique())!
-      await ctx.db.patch(receipt._id, { provision: { ...receipt.provision!, layout: '26:0' } })
+      // 26 of the 27 calls of the layout before the steps were grouped
+      await ctx.db.patch(receipt._id, {
+        provision: { ...receipt.provision!, step: 26, layout: '27:0' },
+      })
+    })
+    // a demo that cannot finish shows none of its steps done
+    expect((await login.as.query(api.demo.current, {})).progress).toEqual({
+      step: 0,
+      steps: PUBLIC_DEMO_STEPS,
     })
     const refusal = await expectRefusal(
       login.as.mutation(api.demo.ensureMine, {}),
       'forbidden',
       /updated while your demo was being prepared\. Start a new demo\./,
     )
-    expect(refusal.data.reason).toBe('demo_unavailable')
+    // the demo app shows this sentence on its refusal screen
+    expect(refusal.data).toMatchObject({
+      reason: 'demo_unavailable',
+      message: DEMO_UNAVAILABLE.updated,
+    })
   })
 
   it('gives a dataset edit without a version bump a new layout, so a demo halfway refuses', async () => {

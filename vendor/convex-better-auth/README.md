@@ -75,8 +75,10 @@ TypeScript rules like any other code.
   `convex/betterAuth/`.
 - `react`, `react-start`, `nextjs`, `test`, `auth.ts`, `auth-options.ts` and
   every test file.
-- From `createClient`: `getAnyUserById`, `setUserId`, `clientApi`,
-  `registerRoutesLazy` and the verbose logging.
+- From `createClient`: `safeGetAuthUser`, `getAuthUser`, `getAnyUserById`,
+  `setUserId`, `clientApi`, `registerRoutesLazy` and the verbose logging.
+  Qivo reads the caller's login with its own session check in
+  `convex/lib/authUser.ts`, which loads no Better Auth.
 - From the `convex()` plugin: the static JWKS option, the deprecated
   `jwtExpirationSeconds`, the base path checks, `/convex/latest-jwks`,
   `/convex/rotate-keys`, the key rotation after a token error and the OpenAPI

@@ -868,7 +868,8 @@ describe('calls through access a running deletion has deleted', () => {
   const DELETING = { error: 'this organization is being deleted' }
 
   /* Creates an organization as `profile`'s login, through a session of its
-   * own, which createOrganization reads (authComponent.getAuthUser). */
+   * own, which createOrganization reads (lib/authUser.ts
+   * requireLiveAuthUser). */
   async function createOrg(t: T, profile: Doc<'profiles'>) {
     const subject = profile.auth_user_id as string
     const now = Date.now()

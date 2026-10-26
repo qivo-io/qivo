@@ -20,7 +20,11 @@ import { Button } from './ui/button'
 export function SnapshotNotice() {
   usePlannerVersion('health')
   const trouble = P.snapshotTrouble()
-  const pause = trouble ? null : P.savePause()
+  // The save pause concerns a loaded workspace, and the store passes its
+  // changes on only then (store/planner.ts). Before a workspace loads, as
+  // on the demo's start screen, or once the demo disposed it, the notice
+  // says nothing about saving, rather than a pause it would not clear.
+  const pause = trouble || !P.loaded ? null : P.savePause()
   const report = trouble || pause ? null : P.unconfirmedReport()
   // Details belong to one failure, so a later one starts with them closed.
   const [detailsFor, setDetailsFor] = useState<number | null>(null)

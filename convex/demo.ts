@@ -6,7 +6,7 @@ import { components, internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
 import { internalMutation, internalQuery } from './_generated/server'
-import { authComponent } from './auth'
+import { liveAuthUser } from './lib/authUser'
 import { byId } from './lib/db'
 import {
   demoAdmissionOpen,
@@ -16,9 +16,10 @@ import {
   requireActiveDemo,
   requireDemoDeployment,
 } from './lib/demo'
+import { DEMO_UNAVAILABLE } from './lib/demoRefusals'
 import { demoBootstrapMutation, demoConfigurationQuery, demoLifecycleQuery } from './lib/functions'
 import { recordDemoCreated } from './model/demoMetrics'
-import { PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from './model/demoSeed'
+import { PUBLIC_DEMO_LAYOUT, PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from './model/demoSeed'
 
 export type DemoCurrent = {
   mode: 'demo'
@@ -46,9 +47,15 @@ async function publicReceipt(
     expiresAt: receipt?.expires_at ?? null,
     orgId: org?.id ?? null,
     orgSlug: org?.slug ?? null,
+    // A demo begun before a deploy that changed the calls cannot finish, as
+    // its next call refuses it (provisionPublicDemoStep), so it shows none
+    // of its steps done, never a bar that looks finished.
     progress:
       status === 'unprovisioned'
-        ? { step: receipt?.provision?.step ?? 0, steps: PUBLIC_DEMO_STEPS }
+        ? {
+            step: receipt?.provision?.layout === PUBLIC_DEMO_LAYOUT ? receipt.provision.step : 0,
+            steps: PUBLIC_DEMO_STEPS,
+          }
         : null,
     serverNow: now,
   }
@@ -68,16 +75,18 @@ export const current = demoLifecycleQuery({
     publicReceipt(ctx, await demoForAuth(ctx, ctx.authUserId)),
 })
 
-/** Runs the next bounded step of the visitor's demo (model/demoSeed.ts
- * provisionPublicDemoStep) and answers the demo's state. The browser calls
- * it again while the answer is 'unprovisioned', each call one step further,
- * until it answers 'ready'. A ready demo is answered as it is. */
+/** Runs the next bounded call of the visitor's demo build (model/demoSeed.ts
+ * provisionPublicDemoStep, a few steps of the seed) and answers the demo's
+ * state. The browser calls it again while the answer is 'unprovisioned',
+ * each call one step of progress further, until it answers 'ready'. A ready
+ * demo is answered as it is. */
 export const ensureMine = demoBootstrapMutation({
   args: {},
   handler: async (ctx): Promise<DemoCurrent> => {
-    const user = await authComponent.safeGetAuthUser(ctx)
-    if (!user?.isAnonymous)
-      throw demoRefusal('A temporary demo login is required.', 'demo_unavailable')
+    // The live session and its login, without loading Better Auth: this
+    // runs once for each call of a start (lib/authUser.ts).
+    const user = await liveAuthUser(ctx)
+    if (!user?.isAnonymous) throw demoRefusal(DEMO_UNAVAILABLE.loginRequired, 'demo_unavailable')
     const receipt = await requireActiveDemo(ctx, ctx.authUserId, { ready: false })
     if (receipt.status === 'ready') {
       const org = receipt.org_id ? await byId(ctx, 'organizations', receipt.org_id) : null

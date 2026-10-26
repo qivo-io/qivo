@@ -2,8 +2,11 @@
  * each row a bulk delete removes, in that delete's transaction, and every
  * call loads its module's imports again. A trigger whose module loaded
  * Better Auth cost about 30 ms a session on a local backend, and a ban of
- * 200 sessions then failed on Convex's time limit for one transaction. This
- * keeps Better Auth and auth.ts out of everything the triggers load. */
+ * 200 sessions then failed on Convex's time limit for one transaction. A
+ * demo start calls demo.ts once for each of its calls, every app boot calls
+ * identity.ts claimMySeats, and each makes the component lookup for the
+ * caller's session (betterAuth/sessions.ts). This keeps Better Auth,
+ * auth.ts and the adapter's client out of everything these modules load. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -14,13 +17,16 @@ const sources = import.meta.glob(['../**/*.ts', '!../tests/**', '!../**/_generat
   import: 'default',
 }) as Record<string, string>
 
-/** The modules a module imports at run time, `import type` left out, as
- * written: a relative path or a package name. */
+/** The modules a module imports or re-exports at run time, `import type`
+ * and `export type` left out, as written: a relative path or a package
+ * name. */
 function runtimeImports(source: string): string[] {
   const out: string[] = []
   for (const match of source.matchAll(/^import\s+(type\s+)?[^'"]*?from\s+'([^']+)'/gms))
     if (!match[1]) out.push(match[2])
   for (const match of source.matchAll(/^import\s+'([^']+)'/gm)) out.push(match[1])
+  const reexport = /^export\s+(type\s+)?(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s*from\s+'([^']+)'/gm
+  for (const match of source.matchAll(reexport)) if (!match[1]) out.push(match[2])
   return out
 }
 
@@ -54,18 +60,39 @@ function loaded(entry: string) {
   return { modules, packages }
 }
 
-describe('the auth triggers', () => {
-  it('load neither Better Auth nor auth.ts', () => {
-    const { modules, packages } = loaded('../authTriggers.ts')
-    expect(modules.has('../lib/sessionEnd.ts')).toBe(true)
-    expect(modules.has('../auth.ts')).toBe(false)
-    expect([...packages].filter((name) => /^(@better-auth|better-auth)\b/.test(name))).toEqual([])
+/** The Better Auth packages and Qivo's copy of the adapter among `loaded`. */
+function betterAuthIn({ modules, packages }: ReturnType<typeof loaded>) {
+  return [
+    ...[...packages].filter((name) => /^(@better-auth|better-auth)\b/.test(name)),
+    ...[...modules].filter((path) => path.includes('vendor/convex-better-auth')),
+  ]
+}
+
+describe('the auth triggers, the demo start and the boot claim', () => {
+  it.each([
+    ['../authTriggers.ts', '../lib/sessionEnd.ts'],
+    ['../demo.ts', '../lib/authUser.ts'],
+    ['../identity.ts', '../lib/authUser.ts'],
+    ['../betterAuth/sessions.ts', '../betterAuth/_generated/server'],
+  ])('%s loads neither Better Auth nor auth.ts', (entry, uses) => {
+    const found = loaded(entry)
+    expect(found.modules.has(uses)).toBe(true)
+    expect(found.modules.has('../auth.ts')).toBe(false)
+    expect(betterAuthIn(found)).toEqual([])
   })
 
   it('see a module that would load Better Auth', () => {
-    // the module the triggers lived in before, which loads auth.ts
-    const { modules, packages } = loaded('../demo.ts')
-    expect(modules.has('../auth.ts')).toBe(true)
-    expect([...packages].some((name) => name.startsWith('better-auth'))).toBe(true)
+    // adminAuth.ts calls Better Auth's API through auth.ts
+    const found = loaded('../adminAuth.ts')
+    expect(found.modules.has('../auth.ts')).toBe(true)
+    expect(betterAuthIn(found).some((name) => name.startsWith('better-auth'))).toBe(true)
+    // the component adapter's functions build Better Auth's options
+    expect(loaded('../betterAuth/adapter.ts').modules.has('../auth.ts')).toBe(true)
+  })
+
+  it('follow a module reached only through a re-export', () => {
+    // demo.ts reaches lib/panoramaImage.ts only through lib/panorama.ts's
+    // `export { ... } from './panoramaImage'`
+    expect(loaded('../demo.ts').modules.has('../lib/panoramaImage.ts')).toBe(true)
   })
 })

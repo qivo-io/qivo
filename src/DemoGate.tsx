@@ -15,6 +15,7 @@ import {
   type DemoProgress,
   DemoSessionEnded,
   demoCountdown,
+  demoEnding,
   demoStartupStep,
   readDemoMarker,
   runDemoStartup,
@@ -41,6 +42,8 @@ export function DemoGate() {
     readDemoMarker(localStorage) ? 'preparing' : 'intro',
   )
   const [error, setError] = useState('')
+  // the demo backend's own sentence for a lost demo (lib/demoSession.ts demoEnding)
+  const [refusal, setRefusal] = useState('')
   const [remaining, setRemaining] = useState(0)
   const [attempt, setAttempt] = useState(0)
   const [progress, setProgress] = useState<DemoProgress | null>(null)
@@ -52,7 +55,7 @@ export function DemoGate() {
   const creationRequested = useRef(false)
   const clock = useRef({ received: 0, remaining: 0, serverNow: 0 })
 
-  const end = useCallback((next: 'expired' | 'lost') => {
+  const end = useCallback((next: 'expired' | 'lost', detail?: string) => {
     if (ended.current) return
     ended.current = true
     creationRequested.current = false
@@ -68,7 +71,9 @@ export function DemoGate() {
     // reload may put an expired snapshot back on screen.
     disposeDemoStore()
     clearLocalSession()
-    if (active.current) setPhase(next)
+    if (!active.current) return
+    setRefusal(detail ?? '')
+    setPhase(next)
   }, [])
 
   useEffect(() => {
@@ -143,10 +148,10 @@ export function DemoGate() {
       signal.throwIfAborted()
       acceptLifecycle(result)
       if (ended.current) return
-      stopLifecycle.current = convex.onUpdate(api.demo.current, {}, acceptLifecycle, () => {
+      stopLifecycle.current = convex.onUpdate(api.demo.current, {}, acceptLifecycle, (error) => {
         // A connection drop normally stays pending in Convex. A reported
         // lifecycle refusal must never preserve editable workspace data.
-        if (!cancelled) end('lost')
+        if (!cancelled) end('lost', demoEnding(error)?.detail)
       })
       const openingPath = ['/', '/app', '/app/'].includes(location.pathname)
         ? `/app/${result.orgSlug}/board/all`
@@ -164,19 +169,10 @@ export function DemoGate() {
       setPhase('ready')
     }, controller.signal).catch((error) => {
       if (cancelled || ended.current) return
-      if (error instanceof DemoSessionEnded) {
-        end(error.phase)
+      const ending = demoEnding(error)
+      if (ending) {
+        end(ending.phase, ending.detail)
         return
-      }
-      if (error instanceof ConvexError && typeof error.data === 'object') {
-        if (error.data?.reason === 'demo_expired') {
-          end('expired')
-          return
-        }
-        if (error.data?.reason === 'demo_unavailable') {
-          end('lost')
-          return
-        }
       }
       cancelled = true
       active.current = false
@@ -231,7 +227,7 @@ export function DemoGate() {
             }
           tick()
         })
-        .catch(() => end('lost'))
+        .catch((error) => end('lost', demoEnding(error)?.detail))
     }
     const refused = (event: Event) =>
       end((event as CustomEvent).detail === 'lost' ? 'lost' : 'expired')
@@ -300,7 +296,7 @@ export function DemoGate() {
                 : phase === 'expired'
                   ? 'Your 24 hours are up. Qivo automatically removes your demo and temporary login.'
                   : phase === 'lost'
-                    ? 'Start a new private copy to explore Qivo again.'
+                    ? refusal || 'Start a new private copy to explore Qivo again.'
                     : error}
           </p>
           {phase === 'intro' && (

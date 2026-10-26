@@ -1,8 +1,12 @@
+import { ConvexError } from 'convex/values'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DEMO_UNAVAILABLE } from '../../convex/lib/demoRefusals'
 import {
   DEMO_MARKER_KEY,
   DEMO_STARTUP_TIMEOUT_MS,
   type DemoLifecycle,
+  DemoSessionEnded,
+  demoEnding,
   demoStartupStep,
   readDemoMarker,
   runDemoStartup,
@@ -446,5 +450,37 @@ describe('private demo startup', () => {
     expect(first.orgId).toBe(second.orgId)
     expect(deps.signIn).toHaveBeenCalledTimes(1)
     expect(deps.ensureMine).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('how a refused demo ends', () => {
+  const refusal = (reason: string, message: string | number) =>
+    new ConvexError({ code: 'forbidden', message, reason })
+
+  it('shows the demo backend’s own sentence for a demo it no longer serves', () => {
+    expect(demoEnding(refusal('demo_unavailable', DEMO_UNAVAILABLE.updated))).toEqual({
+      phase: 'lost',
+      detail: 'Qivo was updated while your demo was being prepared. Start a new demo.',
+    })
+    for (const sentence of Object.values(DEMO_UNAVAILABLE))
+      expect(demoEnding(refusal('demo_unavailable', sentence))?.detail).toBe(sentence)
+    expect(demoEnding(refusal('demo_expired', 'Your demo has expired.'))).toEqual({
+      phase: 'expired',
+    })
+    expect(demoEnding(new DemoSessionEnded('lost'))).toEqual({ phase: 'lost' })
+  })
+
+  it('shows no other server text, and leaves other failures to Retry', () => {
+    // the generic lost screen, not text the demo's refusals never write
+    expect(demoEnding(refusal('demo_unavailable', 'Index by_auth_user is not ready.'))).toEqual({
+      phase: 'lost',
+      detail: undefined,
+    })
+    expect(demoEnding(refusal('demo_unavailable', 42))?.detail).toBeUndefined()
+    expect(
+      demoEnding(refusal('demo_limit', 'The demo is busy. Please try again later.')),
+    ).toBeNull()
+    expect(demoEnding(new Error(DEMO_UNAVAILABLE.updated))).toBeNull()
+    expect(demoEnding(new ConvexError(DEMO_UNAVAILABLE.updated))).toBeNull()
   })
 })
