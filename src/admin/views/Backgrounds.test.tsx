@@ -117,11 +117,16 @@ vi.mock('../../lib/convex', () => ({
 vi.mock('../convex', () => ({
   runAction: vi.fn(),
   sendMutation: async (ref: Parameters<typeof getFunctionName>[0], args: { id: string }) => {
-    if (getFunctionName(ref) === 'panoramaImages:approve') {
-      const approved = server.images.find((i) => i.id === args.id)
-      if (approved) approved.status = 'approved'
-      publish()
-    }
+    const name = getFunctionName(ref)
+    const status =
+      name === 'panoramaImages:approve'
+        ? 'approved'
+        : name === 'panoramaImages:remove'
+          ? 'removed'
+          : null
+    // a new image, as Convex answers with new objects and leaves the old alone
+    if (status) server.images = server.images.map((i) => (i.id === args.id ? { ...i, status } : i))
+    publish()
     return null
   },
 }))
@@ -256,5 +261,35 @@ describe('the dialogs opened from a button that stays', () => {
     await act(async () => button('Close', footer()).click())
     await endClosing()
     expect(document.activeElement).toBe(thumbnail)
+  })
+})
+
+describe('a card’s own Approve and Remove image', () => {
+  const control = (id: string, name: 'approve' | 'remove') =>
+    document.querySelector<HTMLElement>(`[data-image-${name}="${id}"]`)
+
+  it('gives focus to the next card’s Approve once an approval took the card off the list', async () => {
+    await render()
+    await press(control('ridge', 'approve')!)
+    expect(preview('ridge')).toBeNull()
+    expect(document.activeElement).toBe(control('dunes', 'approve'))
+  })
+
+  it('gives focus to the Remove of the card before once a removal took the last card away', async () => {
+    await render()
+    await press(control('dunes', 'remove')!)
+    await press(document.querySelector<HTMLElement>('[data-image-remove-confirm="dunes"]')!)
+    expect(preview('dunes')).toBeNull()
+    expect(document.activeElement).toBe(control('ridge', 'remove'))
+  })
+
+  it('gives focus to the card’s preview when an approval keeps the card in All images', async () => {
+    await render()
+    const status = document.querySelector<HTMLSelectElement>('#background-status')!
+    status.value = 'all'
+    await act(async () => status.dispatchEvent(new Event('change', { bubbles: true })))
+    await press(control('ridge', 'approve')!)
+    expect(control('ridge', 'approve')).toBeNull()
+    expect(document.activeElement).toBe(preview('ridge'))
   })
 })

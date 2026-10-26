@@ -4,7 +4,7 @@ import type { FunctionArgs, FunctionReference, FunctionReturnType } from 'convex
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { Check, ImageIcon, Maximize2 } from 'lucide-react'
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { LimitedInput, LimitedTextarea } from '@/components/LimitedField'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -38,6 +38,7 @@ import {
 } from '@/lib/backgroundImageUpload'
 import { overLimit } from '@/lib/fieldLimits'
 import { restoreFocus } from '@/lib/focusVisibility'
+import { useFocusWhenGone } from '@/lib/focusWhenGone'
 import type { ImageMetadata } from '@/lib/imageMetadata'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { cn } from '@/lib/utils'
@@ -692,23 +693,41 @@ function Library() {
   const grid = useRef<HTMLDivElement>(null)
   const empty = useRef<HTMLHeadingElement>(null)
   const statusFilter = useRef<HTMLSelectElement>(null)
-  // the cards after and before the previewed one, nearest first, noted as
-  // the preview opens. An approval in it takes the card off the Pending
-  // review list, and focus then goes to the card now in its place, else the
-  // one before it, else the empty list's heading or the Status filter.
+  // the cards after and before the one a preview or the card's own Approve
+  // or Remove image acts on, nearest first, noted as it starts. An approval
+  // or a removal takes the card off a list of one status, and focus then
+  // goes to the card now in its place, else the one before it, else the
+  // empty list's heading or the Status filter.
   const around = useRef<HTMLElement[]>([])
-  const openPreview = (image: BackgroundImage) => {
+  const noteAround = (id: string) => {
     const cards = [
       ...(grid.current?.querySelectorAll<HTMLElement>('[data-background-image]') ?? []),
     ]
-    const at = cards.findIndex((card) => card.dataset.backgroundImage === image.id)
+    const at = cards.findIndex((card) => card.dataset.backgroundImage === id)
     around.current = [...cards.slice(at + 1), ...cards.slice(0, at).reverse()]
-    setPreview(image)
   }
-  const focusAfterPreview = () =>
-    around.current.find((card) => card.isConnected)?.querySelector('button') ??
-    empty.current ??
-    statusFilter.current
+  /** Where focus goes once the noted card has left. In a card, that is
+      `control`, or the card's preview when it has none. */
+  const focusAround = (control = 'button') => {
+    const card = around.current.find((candidate) => candidate.isConnected)
+    return (
+      card?.querySelector<HTMLElement>(`${control}:not(:disabled)`) ??
+      card?.querySelector('button') ??
+      empty.current ??
+      statusFilter.current
+    )
+  }
+  // the card whose own Approve or Remove image runs, and that button, until
+  // the card leaves the list. The list without it can come in the same
+  // render as the press. Focus that the card left nowhere then moves.
+  const [acted, setActed] = useState<{ id: string; control: string } | null>(null)
+  useLayoutEffect(() => {
+    if (!acted || data?.images.some((image) => image.id === acted.id)) return
+    setActed(null)
+    const active = document.activeElement
+    if (active && active !== document.body && active.isConnected) return
+    restoreFocus(focusAround(acted.control))
+  }, [acted, data])
   return (
     <div className="space-y-6">
       <ManualImageUpload />
@@ -784,7 +803,18 @@ function Library() {
       ) : (
         <div ref={grid} className={cn(IMAGE_GALLERY_GRID, 'items-start')}>
           {data.images.map((image) => (
-            <ImageCard key={image.id} image={image} preview={() => openPreview(image)} />
+            <ImageCard
+              key={image.id}
+              image={image}
+              preview={() => {
+                noteAround(image.id)
+                setPreview(image)
+              }}
+              acting={(action) => {
+                noteAround(image.id)
+                setActed({ id: image.id, control: `[data-image-${action}]` })
+              }}
+            />
           ))}
         </div>
       )}
@@ -815,7 +845,7 @@ function Library() {
           image={preview}
           agentFilter={agentFilter}
           close={() => setPreview(null)}
-          focusAfter={focusAfterPreview}
+          focusAfter={focusAround}
         />
       )}
     </div>
@@ -949,7 +979,16 @@ function ManualImageResult({ id, dismiss }: { id: string; dismiss: () => void })
   )
 }
 
-function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => void }) {
+/* `acting` hears that the card's own Approve or Remove image starts. */
+function ImageCard({
+  image,
+  preview,
+  acting,
+}: {
+  image: BackgroundImage
+  preview: () => void
+  acting?: (action: 'approve' | 'remove') => void
+}) {
   const removeNoteId = useId()
   const approve = useLiveMutation(api.panoramaImages.approve)
   const remove = useLiveMutation(api.panoramaImages.remove)
@@ -958,7 +997,14 @@ function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   useUpdateBlocker(removing || busy)
+  const previewButton = useRef<HTMLButtonElement>(null)
+  // An approval or a removal that keeps the card, as All images and
+  // Selected image do, takes away the button pressed. Focus it left
+  // nowhere goes to the card's preview.
+  useFocusWhenGone(image.status === 'pending', () => previewButton.current)
+  useFocusWhenGone(image.status !== 'removed', () => previewButton.current)
   const perform = async (action: 'approve' | 'remove') => {
+    acting?.(action)
     setBusy(true)
     setError('')
     try {
@@ -975,6 +1021,7 @@ function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => 
   return (
     <Card data-background-image={image.id} className="min-w-0 gap-0 overflow-hidden py-0">
       <Button
+        ref={previewButton}
         type="button"
         variant="unstyled"
         onClick={preview}
