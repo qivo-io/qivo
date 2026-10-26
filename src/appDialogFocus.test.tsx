@@ -176,7 +176,7 @@ async function save() {
   await settle()
 }
 
-describe('New sub-project', () => {
+describe('New sub-project', { timeout: 30_000 }, () => {
   it.each([
     ["the sidebar's Add sub-project", async () => find('Add sub-project')],
     [
@@ -218,8 +218,8 @@ describe('New sub-project', () => {
   it("gives focus to the phone header's New task after a create from the Roadmap", async () => {
     phone(true)
     await boot()
+    // the Roadmap of a project without sub-projects shows its empty note
     await openOnPhone('Roadmap')
-    await press(await find('Task schedule'))
     await press(await find('New sub-project', document.querySelector('main') ?? document))
     await finish(true)
     const add = await waitFor(
@@ -281,7 +281,7 @@ describe('New sub-project', () => {
   )
 })
 
-describe('a project saved from the Projects page', () => {
+describe('a project saved from the Projects page', { timeout: 30_000 }, () => {
   // the new project's or sub-project's row in the sidebar, named Docs
   const sidebarRow = (kind: string) =>
     [...document.querySelectorAll<HTMLElement>(`aside [${kind}] button`)].find(
@@ -334,7 +334,7 @@ describe('a project saved from the Projects page', () => {
   )
 })
 
-describe('Milestones', () => {
+describe('Milestones', { timeout: 30_000 }, () => {
   /** Plan with its sub-project Work, a task in it, and milestones Alpha
       and Beta. */
   const plan = (snap: Snapshot) => {

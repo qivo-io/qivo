@@ -133,6 +133,9 @@ async function load({ unread }: { unread?: number } = {}) {
 }
 
 beforeEach(() => {
+  // jsdom scrolls nothing, and a focus given back to a box the test placed
+  // outside the window scrolls it into view
+  Element.prototype.scrollIntoView = () => {}
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal(
     'matchMedia',
