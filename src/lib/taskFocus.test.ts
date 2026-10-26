@@ -317,4 +317,18 @@ describe('restoreTaskFocus on the phone Board', () => {
     expect(restoreTaskFocus(last, { scroll: false, beside: true })).toBe(true)
     expect(focused()).toEqual({ task: { card: 'A' }, key: 'title' })
   })
+
+  it('falls back to the nearest group before it once one archive took several groups', () => {
+    document.body.innerHTML = phone([
+      ['backlog', ['A']],
+      ['todo', ['B']],
+      ['progress', ['C']],
+    ])
+    const mark = markTaskFocus(control('data-card="C"', 'title'))!
+    // a parent archived with its subtask empties To Do and In Progress
+    document.querySelectorAll('section')[2].remove()
+    document.querySelectorAll('section')[1].remove()
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(focused()).toEqual({ task: { card: 'A' }, key: 'title' })
+  })
 })

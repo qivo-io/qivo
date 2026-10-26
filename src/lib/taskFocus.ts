@@ -246,16 +246,16 @@ function inColumn(
   return undefined
 }
 
-/** What `pick` finds in the cell of `view` now at `at`, else in the one
-    before it. */
+/** What `pick` finds in the cell of `view` now at `at`, else in the
+    nearest one before it, as when the cells after it left too. */
 function nearCell(
   view: HTMLElement,
   at: number,
   pick: (cell: HTMLElement) => HTMLElement | undefined,
 ) {
   const cells = [...view.querySelectorAll<HTMLElement>(CELLS)].filter(usable)
-  for (const cell of [cells[at], cells[at - 1]]) {
-    const target = cell && pick(cell)
+  for (let index = Math.min(at, cells.length - 1); index >= 0; index--) {
+    const target = pick(cells[index])
     if (target) return target
   }
   return undefined
