@@ -127,6 +127,19 @@ describe('the Connected apps delete question', () => {
     expect(row && document.activeElement).toBe(row && button('Delete', row))
   })
 
+  it('gives focus to the next row once a reload that outlasts the closing has ended', async () => {
+    await ask('claude')
+    await act(async () => button('Delete connection').click())
+    await answer(store.revokes, true)
+    await endClosing()
+    expect(dialog()).toBeNull()
+    // the next row's Delete waits disabled for the list
+    expect(document.activeElement).toBe(document.body)
+    await answer(store.lists, [APPS[1]])
+    const row = document.querySelector('[data-oauth-connection="cursor"]')
+    expect(row && document.activeElement).toBe(row && button('Delete', row))
+  })
+
   it("gives focus to the empty list's line once the last row has left", async () => {
     await ask('claude')
     await act(async () => button('Delete connection').click())

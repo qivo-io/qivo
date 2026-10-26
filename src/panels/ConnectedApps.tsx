@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { restoreFocus } from '@/lib/focusVisibility'
-import { focusAround } from '@/lib/focusWhenGone'
+import { focusAround, useFocusAfterRender } from '@/lib/focusWhenGone'
 import type { api } from '../../convex/_generated/api'
 import { Icon } from '../components/qivo'
 import { SettingsGroup } from '../components/settingsPage'
@@ -35,7 +35,9 @@ export function ConnectedApps() {
   // Delete that opened it, else, once its connection is gone, the next
   // row's, else the nearest one before it, else the empty list's line
   const focusAfter = useRef<() => HTMLElement | null>(() => null)
+  const focusAfterRender = useFocusAfterRender()
   const empty = useRef<HTMLParagraphElement>(null)
+  const content = useRef<HTMLDivElement>(null)
   useUpdateBlocker(busy)
   // a close clears the selection, so the closing dialog keeps its words
   const shown = useClosingWords(!!selected, { name: selected?.clientName, busy })
@@ -60,6 +62,10 @@ export function ConnectedApps() {
       )
       setSelected(null)
       await reload()
+      // The rows' Delete buttons stay disabled while the list reloads, so a
+      // dialog that closed first left focus nowhere. One still fading gives
+      // focus itself.
+      focusAfterRender(() => (content.current?.isConnected ? null : focusAfter.current()))
     } else setDeleteError('Could not delete this connection. Try again.')
     setBusy(false)
   }
@@ -157,6 +163,7 @@ export function ConnectedApps() {
         }}
       >
         <AlertDialogContent
+          ref={content}
           onCloseAutoFocus={(event) => {
             event.preventDefault()
             restoreFocus(focusAfter.current())

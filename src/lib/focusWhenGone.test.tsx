@@ -49,7 +49,7 @@ describe('focus when a control leaves', () => {
     await show(true)
     container.querySelector('button')?.focus()
     await show(false)
-    expect(document.activeElement?.textContent).toBe('Done')
+    expect(document.activeElement).toBe(container.querySelector('p'))
   })
 
   it('stays where it moved on to', async () => {
@@ -68,6 +68,44 @@ describe('focus when a control leaves', () => {
   it('moves nothing for a control that never showed', async () => {
     await show(false)
     expect(document.activeElement).toBe(document.body)
+  })
+})
+
+describe('focus when a control leaves for one its write still disables', () => {
+  /* A control that gives way to a button disabled while `busy`. */
+  function Swap({ shown, busy }: { shown: boolean; busy: boolean }) {
+    const next = useRef<HTMLButtonElement>(null)
+    useFocusWhenGone(shown, () => next.current)
+    return (
+      <>
+        {shown ? (
+          <button type="button">Act</button>
+        ) : (
+          <button ref={next} type="button" disabled={busy}>
+            Next
+          </button>
+        )}
+        <input aria-label="Elsewhere" />
+      </>
+    )
+  }
+  const swap = (shown: boolean, busy: boolean) =>
+    act(async () => root.render(<Swap shown={shown} busy={busy} />))
+
+  it('goes to the button once the write has ended', async () => {
+    await swap(true, true)
+    await swap(false, true)
+    expect(document.activeElement).toBe(document.body)
+    await swap(false, false)
+    expect(document.activeElement).toBe(container.querySelector('button'))
+  })
+
+  it('stays where it moved on to while the button waited', async () => {
+    await swap(true, true)
+    await swap(false, true)
+    container.querySelector('input')?.focus()
+    await swap(false, false)
+    expect(document.activeElement).toBe(container.querySelector('input'))
   })
 })
 

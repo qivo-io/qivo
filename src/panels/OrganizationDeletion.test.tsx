@@ -234,4 +234,18 @@ describe('Keep organization', () => {
     await scheduleDeletion(false)
     expect(document.activeElement).toBe(document.querySelector('[data-org-delete]'))
   })
+
+  it('gives focus to Delete organization once its own write ends when the stop arrives first', async () => {
+    await scheduleDeletion()
+    const keep = document.querySelector<HTMLButtonElement>('[data-org-keep]')
+    keep?.focus()
+    await act(async () => keep?.click())
+    await scheduleDeletion(false)
+    // the write still runs, so the button that came back waits disabled
+    const opener = document.querySelector<HTMLButtonElement>('[data-org-delete]')
+    expect(opener?.disabled).toBe(true)
+    expect(document.activeElement).toBe(document.body)
+    await act(async () => server.requests[0].resolve(null))
+    expect(document.activeElement).toBe(opener)
+  })
 })

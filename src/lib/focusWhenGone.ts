@@ -2,34 +2,43 @@ import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import { restoreFocus } from './focusVisibility'
 import { OUT_OF_USE } from './viewHidden'
 
+/** Whether focus is nowhere: on the page itself, or on an element that
+    has left it. */
+const focusIsNowhere = () => {
+  const active = document.activeElement
+  return !active || active === document.body || !active.isConnected
+}
+
 /** Gives focus to `target()` when a control leaves the page (`shown` turns
     false) while focus is nowhere, as when a dialog gave focus back to its
     button before the change it asked for arrived and took that button
-    away. Focus that has moved on stays where it is, and a control that
-    never showed moves nothing. While the content of `dialog` is on screen,
-    as it waits or fades, its own close gives focus instead: a button it
-    disabled leaves focus nowhere then too. */
+    away. A target that a write still disables takes focus at the first
+    render of the calling component that enables it. Focus that has moved
+    on stays where it is, and a control that never showed moves nothing.
+    While the content of `dialog` is on screen, as it waits or fades, its
+    own close gives focus instead: a button it disabled leaves focus
+    nowhere then too. */
 export function useFocusWhenGone(
   shown: boolean,
   target: () => HTMLElement | null,
   dialog?: RefObject<HTMLElement | null>,
 ) {
   const was = useRef(shown)
+  // the control left while its target was disabled
+  const waiting = useRef(false)
   useLayoutEffect(() => {
-    const before = was.current
+    const left = was.current && !shown
     was.current = shown
-    if (!before || shown || dialog?.current?.isConnected) return
-    const active = document.activeElement
-    if (active && active !== document.body && active.isConnected) return
-    restoreFocus(target())
-  }, [shown])
-}
-
-/** Whether focus is nowhere: on the page itself, or on an element that
-    has left it. */
-const focusIsNowhere = () => {
-  const active = document.activeElement
-  return !active || active === document.body || !active.isConnected
+    if (!left && (shown || !waiting.current)) {
+      waiting.current = false
+      return
+    }
+    waiting.current = false
+    if (dialog?.current?.isConnected || !focusIsNowhere()) return
+    const element = target()
+    if (element?.matches(':disabled')) waiting.current = true
+    else restoreFocus(element)
+  })
 }
 
 /** A focus move for the render of a change about to be made. Call the
