@@ -7,8 +7,9 @@ import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* Where keyboard focus goes in the Inbox when a row leaves the list: after
-   the pane's Archive or delete window takes its task away, and after a
-   row's own menu removes or snoozes it. On the real store, desktop width,
+   the pane's Archive or delete window takes its task away, after a row's
+   own menu removes or snoozes it, and after that menu acts on the whole
+   list. On the real store, at desktop width unless a test takes a phone's,
    with the server answering every write at once. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -33,8 +34,9 @@ let onClose: ReturnType<typeof vi.fn<() => void>>
 
 /* Renders the Inbox as App holds it with `count` tasks, one item each,
    listed task-0 first (the newest), and the pane on task `shown`, if any.
-   Answers the task uuids in list order. */
-async function openInbox(count: number, shown: number | null = null) {
+   The items of the tasks `read` are read. Answers the task uuids in list
+   order. */
+async function openInbox(count: number, shown: number | null = null, read: number[] = []) {
   vi.resetModules()
   snap = plannerFixture()
   const uuids: string[] = []
@@ -65,6 +67,7 @@ async function openInbox(count: number, shown: number | null = null) {
       kind: 'comment',
       detail: 'New comment',
       created_at: new Date(AT - n * 60_000).toISOString(),
+      ...(read.includes(n) ? { read_at: new Date(AT).toISOString() } : {}),
     })
   }
   network.onUpdate.mockImplementation((ref, _args, next) => {
@@ -130,6 +133,7 @@ function focused() {
   const row = element.closest<HTMLElement>('[data-message]')
   if (row && element.matches('.inbox-message-open')) return `row ${row.dataset.message}`
   if (element.matches('[data-inbox-search]')) return 'the search field'
+  if (element.matches('[data-inbox-empty]')) return 'the empty list'
   return element.outerHTML.slice(0, 120)
 }
 
@@ -167,6 +171,18 @@ async function leaveFromPane(fate: 'Archive' | 'Delete') {
     })
   })
   await settle()
+}
+
+/** Takes a phone's width: only the phone breakpoint matches. */
+function onPhone() {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: query === '(max-width: 760px)',
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  )
 }
 
 /** Opens the row menu of `uuid`'s row from its open button, as the context
@@ -237,6 +253,50 @@ describe('Inbox focus when a row leaves', { timeout: 20_000 }, () => {
     await settle()
     expect(rowOpen(uuids[0])).toBeNull()
     expect(focused()).toBe(`row ${uuids[1]}`)
+  })
+
+  it('gives focus to the first row still listed after the row menu removes all read', async () => {
+    const uuids = await openInbox(3, null, [0])
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'messages:removeRead'
+        ? { ids: ['message-0'], hasMore: false }
+        : null,
+    )
+    await openRowMenu(uuids[2])
+    await press(document.querySelector<HTMLElement>('[data-msg-menu-remove-read]'))
+    await settle()
+    expect(rowOpen(uuids[0])).toBeNull()
+    expect(focused()).toBe(`row ${uuids[1]}`)
+  })
+
+  it("gives focus to the empty list's line on a phone after the task window deletes the only task", async () => {
+    onPhone()
+    await openInbox(1, 0)
+    expect(document.querySelector('[data-inbox-search]')).toBeNull()
+    // the window takes focus a frame after it opens, which would close a
+    // menu opened before
+    await act(async () => {
+      await vi.waitFor(() => {
+        if (!document.activeElement?.matches('[data-mobile-task-back]'))
+          throw new Error('the window has no focus yet')
+      })
+    })
+    await leaveFromPane('Delete')
+    expect(focused()).toBe('the empty list')
+  })
+
+  it("gives focus to the empty list's line on a phone after the row menu removes the last row", async () => {
+    onPhone()
+    const [uuid] = await openInbox(1)
+    expect(document.querySelector('[data-inbox-search]')).toBeNull()
+    await press(document.querySelector<HTMLElement>('.inbox-message-actions'))
+    const remove = [...document.querySelectorAll<HTMLElement>('[data-msg-menu] button')].find(
+      (b) => b.textContent === 'Remove notification',
+    )
+    await press(remove)
+    await settle()
+    expect(rowOpen(uuid)).toBeNull()
+    expect(focused()).toBe('the empty list')
   })
 
   it('gives focus to the row before it after its menu snoozes the last row', async () => {

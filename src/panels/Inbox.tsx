@@ -355,8 +355,9 @@ function PaneNote({ title, children }: { title?: string; children?: React.ReactN
 }
 
 /** A row, by its item id, and the rows the list showed with it, in order,
-    for focus once the row leaves (focusRowAfter). */
-type ListedRows = { id: string; ids: string[] }
+    for focus once the row leaves (focusRowAfter). A null id stands for the
+    whole list, whose first row takes focus. */
+type ListedRows = { id: string | null; ids: string[] }
 
 export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadmap }) {
   const mobile = useMobile()
@@ -374,6 +375,11 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const [search, setSearch] = useState('')
   const [, setNoteN] = useState(0) // re-render after a permission grant
   const [menu, setMenu] = useState(null as { x: number; y: number; id: string | null } | null) // right-click menu
+  // the rows the list showed when the pane's row was last among them, and
+  // when the row menu acted on its row or on the whole list, for focus once
+  // that row leaves (focusRowAfter)
+  const paneRows = useRef<ListedRows | null>(null)
+  const menuRows = useRef<ListedRows | null>(null)
   const [bulkAction, setBulkAction] = useState<'read' | 'remove' | null>(null)
   // also true while the server's bounded read left rows unexamined, which
   // these actions still reach (P.canMarkAllRead, P.canRemoveRead)
@@ -381,6 +387,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const hasUnreadMessages = P.canMarkAllRead
   const runBulkAction = async (action: 'read' | 'remove') => {
     if (bulkAction || (action === 'read' ? !hasUnreadMessages : !hasReadMessages)) return
+    // from the row menu, focus goes to the first row still listed
+    if (menu) menuRows.current = { id: null, ids: [] }
     setMenu(null)
     setBulkAction(action)
     try {
@@ -451,10 +459,6 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     paneShown.current = { at: openIssue, id: paneIssue.id, uuid: paneIssue.uuid }
   else if (paneShown.current?.at !== openIssue) paneShown.current = null
   const paneId = paneIssue ? paneIssue.id : (paneShown.current?.id ?? null)
-  // the rows the list showed when the pane's row was last among them, and
-  // when the row menu acted on its row, for focus once that row leaves
-  const paneRows = useRef<ListedRows | null>(null)
-  const menuRows = useRef<ListedRows | null>(null)
   const [deadItem, setDeadItem] = useState(null as string | null) // item id (= issue uuid)
   // Back or Forward to a task still to arrive (App pendingTask): the pane
   // says it is loading
@@ -614,8 +618,10 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      the pane's task away with its row, and the row menu's Remove and Snooze
      take their row; the pane or the menu then closes with focus nowhere.
      Focus goes to the row's open button, else to the row that followed it
-     in the list as it showed, else to the one before, else to the search
-     field. Focus that went elsewhere stays there. */
+     in the list as it showed, else to the one before, else to the first
+     row listed, else to the search field, or on a phone, which has none,
+     to the empty list's line. The menu's Mark all as read and Remove all
+     read start at the first row. Focus that went elsewhere stays there. */
   const paneRow = deadItem || (paneShown.current?.uuid ?? null)
   useLayoutEffect(() => {
     if (!paneRow) return
@@ -630,22 +636,17 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     const active = document.activeElement
     if (!list || list.closest(OUT_OF_USE)) return
     if (active && active !== document.body && active.isConnected) return
-    const at = rows.ids.indexOf(rows.id)
-    const order = [
-      rows.id,
-      ...rows.ids.slice(at + 1),
-      ...rows.ids.slice(0, Math.max(at, 0)).reverse(),
-    ]
-    const listed = new Map(
-      [...list.querySelectorAll<HTMLElement>('[data-message]')].map((row) => [
-        row.dataset.message,
-        row,
-      ]),
-    )
-    const row = order.map((id) => listed.get(id)).find(Boolean)
+    const { id, ids } = rows
+    const at = id === null ? -1 : ids.indexOf(id)
+    const order =
+      id === null ? [] : [id, ...ids.slice(at + 1), ...ids.slice(0, Math.max(at, 0)).reverse()]
+    const shown = [...list.querySelectorAll<HTMLElement>('[data-message]')]
+    const listed = new Map(shown.map((row) => [row.dataset.message, row]))
+    const row = order.map((item) => listed.get(item)).find(Boolean) ?? shown[0]
     restoreFocus(
       row?.querySelector<HTMLElement>('.inbox-message-open') ??
-        list.closest('[data-inbox]')?.querySelector<HTMLElement>('[data-inbox-search]'),
+        list.closest('[data-inbox]')?.querySelector<HTMLElement>('[data-inbox-search]') ??
+        list.querySelector<HTMLElement>('[data-inbox-empty]'),
     )
   }
   // Effects, not layout effects: a phone's task window, which is modal,
@@ -904,6 +905,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           {visible.length === 0 && (
             <div
               data-inbox-empty
+              // focus comes here when a phone's list lost its last row (focusRowAfter)
+              tabIndex={-1}
               className="[font-size:var(--fs-base)] [color:var(--text-3)] [font-style:italic] [padding:14px_10px]"
             >
               {P.messageGroups.length > 0
