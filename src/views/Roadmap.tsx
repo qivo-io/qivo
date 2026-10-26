@@ -13,6 +13,7 @@ import {
 } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { focusAround } from '@/lib/focusWhenGone'
 import { REVEAL_MS } from '@/lib/reveal'
 import { isRoadmapTaskVisible } from '@/lib/roadmapVisibility'
 import { useTaskMemo } from '@/lib/taskMemo'
@@ -507,6 +508,21 @@ function Roadmap({
   const [hlUser, setHlUser] = useStateR(null)
   const stripPanelRef = useRefR<HTMLElement | null>(null)
   const toolbarRef = useRefR<HTMLDivElement | null>(null)
+  /* The Milestones window opened from a flag can delete that milestone, and
+     the flag with it. Focus then goes to the next flag, the previous one,
+     the toolbar's Milestone or its filter field. */
+  const editMilestone = (id: string) =>
+    actions.editMilestone(
+      id,
+      focusAround(
+        'data-msflag',
+        id,
+        (flag) => flag,
+        () =>
+          toolbarRef.current?.querySelector<HTMLElement>('[data-new-milestone]') ??
+          toolbarRef.current?.querySelector<HTMLElement>('[data-filter-group] input'),
+      ),
+    )
   useEffectR(() => {
     if (!hlUser) return
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2011,7 +2027,7 @@ function Roadmap({
                             movable={P.canWrite(m.project)}
                             onLive={msOnLive}
                             onCommit={msCommit}
-                            onEdit={actions.editMilestone}
+                            onEdit={editMilestone}
                           />
                         )
                       )

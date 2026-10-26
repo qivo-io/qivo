@@ -368,10 +368,24 @@ describe('Milestones', { timeout: 30_000 }, () => {
       { id: 'beta', project_id: 'plan', name: 'Beta', week: '2026-11-02', created_at: AT },
     )
   }
+  /** The Monday `weeks` weeks after this week's, as a milestone's week. */
+  const mondayIn = (weeks: number) => {
+    const day = new Date()
+    day.setDate(day.getDate() + 7 * weeks - ((day.getDay() + 6) % 7))
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`
+  }
   /** Opens the window from `row` and deletes its milestone there, then
-      closes it with Done. */
+      closes it with Done. A Roadmap flag opens on Enter, as it is a drag
+      handle that a click does not open. */
   async function deleteFrom(row: HTMLElement) {
-    await press(row)
+    if (row.hasAttribute('data-msflag')) {
+      row.focus()
+      await act(async () => {
+        row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      })
+      await settle()
+    } else await press(row)
     const del = await find(
       'Delete',
       await waitFor(() => document.querySelector('[data-milestone-editor]'), 'the editor'),
@@ -385,14 +399,23 @@ describe('Milestones', { timeout: 30_000 }, () => {
   }
 
   it.each([
-    ['Overview', false, 'data-overview-milestone'],
-    ['phone agenda', true, 'data-agenda-milestone'],
+    ['Overview', false, 'data-overview-milestone', 'New milestone'],
+    ['phone agenda', true, 'data-agenda-milestone', 'New milestone'],
+    ['Roadmap flag', false, 'data-msflag', 'Milestone'],
   ])(
-    'gives focus to the next row, else the previous one, else New milestone, after the %s row deleted its milestone',
-    async (_, onPhone, attr) => {
+    'gives focus to the next row, else the previous one, else New milestone, after the %s deleted its milestone',
+    async (where, onPhone, attr, add) => {
       phone(onPhone)
-      await boot(plan)
+      await boot((snap) => {
+        plan(snap)
+        // the Roadmap's flags show the weeks of its window, from this one on
+        if (where === 'Roadmap flag')
+          snap.milestones.forEach((m, n) => {
+            m.week = mondayIn(n + 1)
+          })
+      })
       if (onPhone) await openOnPhone('Roadmap')
+      if (where === 'Roadmap flag') await press(await find('Roadmap'))
       vi.useFakeTimers({ toFake: ['Date'] })
       const row = (id: string) =>
         waitFor(() => document.querySelector<HTMLElement>(`[${attr}="${id}"]`), id)
@@ -400,9 +423,9 @@ describe('Milestones', { timeout: 30_000 }, () => {
       expect(document.activeElement).toBe(await row('beta'))
       await deleteFrom(await row('beta'))
       expect(document.querySelector(`[${attr}]`)).toBeNull()
-      expect(document.activeElement).toBe(
-        await find('New milestone', document.querySelector('main') ?? document),
-      )
+      // the Roadmap's toolbar sits above main
+      const scope = where === 'Roadmap flag' ? document : document.querySelector('main')
+      expect(document.activeElement).toBe(await find(add, scope ?? document))
     },
   )
 
