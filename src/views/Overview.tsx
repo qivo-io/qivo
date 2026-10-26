@@ -19,6 +19,7 @@ import { relativeWeek, weekToISO } from '@/lib/dates'
 import { focusAround } from '@/lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
+import { shownEmptyState } from '@/lib/taskFocus'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
@@ -851,7 +852,8 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   const [sort, setSort] = useStateO({ key: 'late', dir: 'desc' })
   /* The Milestones window opened from a row can delete that milestone, and
      the row with it. Focus then goes to the next row, the previous one, the
-     + or the empty list's line. */
+     + or the empty list's line, else, once the last one went from a scope
+     with no task to show, the note the page shows instead. */
   const newMilestone = useRef<HTMLButtonElement>(null)
   const noMilestones = useRef<HTMLDivElement>(null)
   const editMilestone = (id: string) =>
@@ -861,7 +863,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         'data-overview-milestone',
         id,
         (row) => row,
-        () => newMilestone.current ?? noMilestones.current,
+        () => newMilestone.current ?? noMilestones.current ?? shownEmptyState(),
       ),
     )
   // `wide` = a scope that names no project (All projects, My view); `mine` is

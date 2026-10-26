@@ -405,4 +405,29 @@ describe('Milestones', () => {
       )
     },
   )
+
+  it.each([
+    ['Overview', false, 'data-overview-milestone', 'New sub-project'],
+    ['phone agenda', true, 'data-agenda-milestone', 'New milestone'],
+  ])(
+    "gives focus to the page's empty note once the %s row deleted the last milestone of a project without sub-projects",
+    async (_, onPhone, attr, target) => {
+      phone(onPhone)
+      await boot((snap) => {
+        plan(snap)
+        snap.projects = snap.projects.filter((p) => p.id === 'plan')
+        snap.issues = []
+      })
+      if (onPhone) await openOnPhone('Roadmap')
+      vi.useFakeTimers({ toFake: ['Date'] })
+      const row = (id: string) =>
+        waitFor(() => document.querySelector<HTMLElement>(`[${attr}="${id}"]`), id)
+      await deleteFrom(await row('alpha'))
+      await deleteFrom(await row('beta'))
+      expect(document.querySelector(`[${attr}]`)).toBeNull()
+      expect(document.activeElement).toBe(
+        await find(target, document.querySelector('main') ?? document),
+      )
+    },
+  )
 })

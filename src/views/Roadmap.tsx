@@ -2219,6 +2219,7 @@ function Roadmap({
                     <div
                       className="animate-in fade-in slide-in-from-bottom-1 [position:sticky] [left:0] [display:flex] [flex-direction:column] [align-items:center] [gap:8px] [padding:26px_16px]"
                       data-no-match
+                      data-empty-state
                       style={{ width: paneW || GRID_X + timelineW + GUTTER_W }}
                     >
                       <span className="[font-size:var(--fs-base)] [color:var(--text-3)]">

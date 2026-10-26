@@ -261,6 +261,13 @@ function nearCell(
   return undefined
 }
 
+/** The control of the empty state that the shown view shows in place of
+    its rows, else its title. */
+export function shownEmptyState() {
+  const view = document.querySelector<HTMLElement>('[data-workspace-view]')
+  return (view && emptyState(view)) ?? null
+}
+
 /** The control of the empty state `view` shows, else its title. */
 function emptyState(view: HTMLElement) {
   const state = view.querySelector<HTMLElement>('[data-empty-state]')

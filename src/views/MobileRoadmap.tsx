@@ -231,6 +231,7 @@ export function MobileRoadmap({
             variant="ghost"
             size="icon"
             aria-label="New milestone"
+            data-new-milestone
             onClick={() => actions.newMilestone({})}
           >
             <Icon name="plus" size={16} />
@@ -240,7 +241,9 @@ export function MobileRoadmap({
       {upcoming.length ? (
         upcoming.map(milestoneRow)
       ) : (
-        <p className="mobile-roadmap-note">No upcoming milestones.</p>
+        <p data-no-milestones tabIndex={-1} className="mobile-roadmap-note">
+          No upcoming milestones.
+        </p>
       )}
       {past.length > 0 && (
         <details className="mobile-roadmap-past">
@@ -262,7 +265,7 @@ export function MobileRoadmap({
         {milestones.length > 0
           ? milestoneSection
           : canAddMilestone && (
-              <Button type="button" onClick={() => actions.newMilestone({})}>
+              <Button type="button" data-new-milestone onClick={() => actions.newMilestone({})}>
                 <Icon name="diamond" size={16} />
                 New milestone
               </Button>
