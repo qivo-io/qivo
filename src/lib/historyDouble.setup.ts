@@ -41,6 +41,10 @@
    reload navigate event in one task (`reloads` counts one that nothing
    cancels); the others do nothing then.
 
+   `elsewhere` puts another site's entry before the first: the Navigation
+   API does not list it, and a traversal there leaves the document, firing
+   no navigate event and no popstate in it.
+
    A limit: the double dispatches each popstate from script, so no
    microtask runs between its listeners, while a browser runs them after
    each listener (React commits App's popstate there, before the layers'
@@ -63,8 +67,9 @@ const ORIGIN = 'https://qivo.test'
 const pathOf = (url: string | URL) => String(url).replace(ORIGIN, '')
 
 /** A window on `url` whose history moves as a browser's does, with the
-    Navigation API of `navigation` when given. */
-export function browserWindow(url: string, navigation?: Engine) {
+    Navigation API of `navigation` when given, after another site's entry
+    at `elsewhere` when given. */
+export function browserWindow(url: string, navigation?: Engine, elsewhere?: string) {
   const win = new EventTarget()
   const nav = new EventTarget()
   let keys = 0
@@ -72,13 +77,21 @@ export function browserWindow(url: string, navigation?: Engine) {
     keys += 1
     return { state, url: at, key: `k${keys}` }
   }
-  const entries: Entry[] = [entry(null, url)]
-  let index = 0
+  const entries: Entry[] = elsewhere
+    ? [entry(null, elsewhere), entry(null, url)]
+    : [entry(null, url)]
+  // the first entry of this site's documents, the first the Navigation API lists
+  const listed = elsewhere ? 1 : 0
+  let index = listed
   let queue: Job[] = []
   let pumping = false
   let reloads = 0
 
-  const navEntry = (n: number) => ({ key: entries[n].key, index: n, url: ORIGIN + entries[n].url })
+  const navEntry = (n: number) => ({
+    key: entries[n].key,
+    index: n - listed,
+    url: ORIGIN + entries[n].url,
+  })
   const webkit = navigation === 'webkit' || navigation === 'ios'
   /** Fires beforeunload, which WebKit on a phone never does. */
   const unload = () => {
@@ -92,11 +105,11 @@ export function browserWindow(url: string, navigation?: Engine) {
   }
   /** Fires the navigate event of a move to `to` from `from`; true unless canceled. */
   const navigate = (to: number, from: number, info: unknown, type = 'traverse') => {
-    if (!navigation) return true
+    if (!navigation || to < listed) return true
     const event = Object.assign(new Event('navigate', { cancelable: true }), {
       navigationType: type,
       info,
-      destination: { key: entries[to]?.key, index: to, url: ORIGIN + entries[to]?.url },
+      destination: { key: entries[to]?.key, index: to - listed, url: ORIGIN + entries[to]?.url },
       currentFrom: from,
     })
     nav.dispatchEvent(event)
@@ -105,6 +118,8 @@ export function browserWindow(url: string, navigation?: Engine) {
   const commit = (to: number) => {
     const from = index
     index = to
+    // another site's document: this one is gone
+    if (to < listed) return
     if (navigation)
       nav.dispatchEvent(
         Object.assign(new Event('currententrychange'), {
@@ -297,7 +312,7 @@ export function browserWindow(url: string, navigation?: Engine) {
   if (navigation) Object.defineProperty(nav, 'currentEntry', { get: () => navEntry(index) })
   if (navigation)
     Object.assign(nav, {
-      entries: () => entries.map((_, n) => navEntry(n)),
+      entries: () => entries.slice(listed).map((_, n) => navEntry(n + listed)),
       traverseTo(key: string, options?: { info?: unknown }) {
         let done: Job['done']
         const committed = new Promise<void>((resolve, reject) => {

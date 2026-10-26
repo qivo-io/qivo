@@ -44,16 +44,22 @@ export function useMobile() {
  * false to stay open (a dialog busy with something that must finish, or one
  * that asks first); after a Back the layer then gets its marker again, so the
  * next Back still closes it instead of leaving the page. `onClose` gets the
- * layer's close, so a close it holds back can run it again later. */
+ * layer's close, so a close it holds back can run it again later. `busy`
+ * marks a layer whose `onClose` refuses every close for now, as a dialog
+ * whose request still runs: a move past its page is held before App would
+ * ask about unsent text, since it could not leave anyway. */
 export function useMobileBackLayer(
   open: boolean,
   onClose: (close: () => void) => unknown,
   enabled?: boolean,
+  busy = false,
 ) {
   const mobile = useMobile()
   const useHistory = enabled ?? mobile
   const closeRef = useRef(onClose)
   closeRef.current = onClose
+  const busyRef = useRef(busy)
+  busyRef.current = busy
   const layer = useRef<BackLayer | null>(null)
   const close = () => {
     const mine = layer.current
@@ -64,7 +70,10 @@ export function useMobileBackLayer(
   // of the same commit, which then takes its place
   useLayoutEffect(() => {
     if (!useHistory || !open) return
-    const mine = openLayer(() => closeRef.current(close))
+    const mine = openLayer(
+      () => closeRef.current(close),
+      () => busyRef.current,
+    )
     layer.current = mine
     return () => {
       finishLayer(mine)

@@ -16,8 +16,10 @@ import {
 import { DeferredList } from '@/components/DeferredList'
 import { SYNC_LIMIT } from '@/lib/boardGroups'
 import { relativeWeek, weekToISO } from '@/lib/dates'
+import { focusAround } from '@/lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
+import { shownEmptyState } from '@/lib/taskFocus'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
@@ -673,6 +675,7 @@ function OvMilestoneRow({
       type="button"
       onClick={() => onEdit(m.id)}
       title={`Edit “${m.name}”${owner ? `, ${owner}` : ''}`}
+      data-overview-milestone={m.id}
       data-next={next ? '' : undefined}
       className={cn(
         'overview-milestone min-h-16 w-full justify-start gap-3 whitespace-normal rounded-md p-3 text-left font-sans',
@@ -819,7 +822,8 @@ type OverviewActions = {
   newIssue: (init: { project?: string }) => void
   newProject: (init: { parent?: string; kind?: 'program' }) => void
   newMilestone: (init: { week?: number }) => void
-  editMilestone: (id: string) => void
+  /** `focusAfterClose` is what takes focus as the Milestones window closes */
+  editMilestone: (id: string, focusAfterClose?: () => HTMLElement | null) => void
 }
 
 function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions }) {
@@ -846,6 +850,22 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
      Held here rather than inside the table so it survives the table
      re-rendering under a store update. */
   const [sort, setSort] = useStateO({ key: 'late', dir: 'desc' })
+  /* The Milestones window opened from a row can delete that milestone, and
+     the row with it. Focus then goes to the next row, the previous one, the
+     + or the empty list's line, else, once the last one went from a scope
+     with no task to show, the note the page shows instead. */
+  const newMilestone = useRef<HTMLButtonElement>(null)
+  const noMilestones = useRef<HTMLDivElement>(null)
+  const editMilestone = (id: string) =>
+    actions.editMilestone(
+      id,
+      focusAround(
+        'data-overview-milestone',
+        id,
+        (row) => row,
+        () => newMilestone.current ?? noMilestones.current ?? shownEmptyState(),
+      ),
+    )
   // `wide` = a scope that names no project (All projects, My view); `mine` is
   // the one of those that also narrows to my own tasks. The Overview renders
   // no filter row, so it takes no `filters` — the scope's own `only` predicate
@@ -1152,6 +1172,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                 className="w-control-xs h-control-xs"
                 aria-label="New milestone"
                 title="New milestone"
+                ref={newMilestone}
                 onClick={() => actions.newMilestone({})}
               >
                 <Icon name="plus" size={16} />
@@ -1166,11 +1187,15 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
                 m={m}
                 next={nextMs && m.id === nextMs.id}
                 owner={wide ? P.projectLabelOf(m.project) : null}
-                onEdit={actions.editMilestone}
+                onEdit={editMilestone}
               />
             ))}
             {msSorted.length === 0 && (
-              <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]">
+              <div
+                ref={noMilestones}
+                tabIndex={-1}
+                className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]"
+              >
                 {wide
                   ? 'No milestones in any of your projects yet.'
                   : 'No milestones yet. Add one with the + button.'}

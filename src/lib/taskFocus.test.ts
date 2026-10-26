@@ -112,6 +112,84 @@ describe('restoreTaskFocus', () => {
     expect(document.activeElement?.scrollIntoView).not.toHaveBeenCalled()
   })
 
+  it("falls back to its column's new task button once its cell is empty", () => {
+    document.body.innerHTML =
+      '<button data-status-add="todo">New task in To Do</button>' +
+      `<div>${cell('todo', card('A'))}${cell('review', card('B'))}</div>`
+    const mark = markTaskFocus(control('data-card="A"', 'title'))!
+    document.querySelector('[data-card="A"]')!.remove()
+    expect(restoreTaskFocus(mark, { scroll: false })).toBe(false)
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(document.activeElement?.textContent).toBe('New task in To Do')
+  })
+
+  it('falls back to a card in the nearest cell beside an empty one, the next one first', () => {
+    // no new task buttons, as in side-boards and across all projects
+    document.body.innerHTML = `<div>${cell('backlog', card('X'))}${cell('todo', card('A'))}${cell('progress', '')}${cell('review', card('B'))}</div>`
+    const mark = markTaskFocus(control('data-card="A"', 'title'))!
+    document.querySelector('[data-card="A"]')!.remove()
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(focused()).toEqual({ task: { card: 'X' }, key: 'title' })
+    document.querySelector('[data-card="X"]')!.remove()
+    // nothing next to it now: the one two cells on
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(focused()).toEqual({ task: { card: 'B' }, key: 'title' })
+  })
+
+  /** A shown Board view holding `html`. */
+  const board = (html: string) => `<div data-workspace-view="kanban">${html}</div>`
+  /** A lane of cells, as Kanban draws one. */
+  const lane = (html: string) => `<div data-lane>${html}</div>`
+
+  it("falls back to its column's new task button once its lane is gone", () => {
+    document.body.innerHTML = board(
+      '<button data-status-add="todo">New task in To Do</button>' +
+        lane(cell('todo', card('A'))) +
+        lane(cell('todo', '') + cell('review', card('B'))),
+    )
+    const mark = markTaskFocus(control('data-card="A"', 'title'))!
+    // a filter hides the lane once its last card goes
+    document.querySelector('[data-lane]')!.remove()
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(document.activeElement?.textContent).toBe('New task in To Do')
+  })
+
+  it('falls back to a card in another cell of its column once its lane is gone', () => {
+    // no new task buttons, as across all projects
+    document.body.innerHTML = board(
+      lane(cell('todo', card('A'))) + lane(cell('todo', card('C')) + cell('review', card('B'))),
+    )
+    const mark = markTaskFocus(control('data-card="A"', 'title'))!
+    document.querySelector('[data-lane]')!.remove()
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(focused()).toEqual({ task: { card: 'C' }, key: 'title' })
+  })
+
+  it("falls back to the Board's filter row when no card of its column and no empty state is left", () => {
+    // across all projects, with a filter on: no new task buttons, and the
+    // lane goes with its last card while the other lanes stay
+    document.body.innerHTML =
+      '<div data-filter-row><input placeholder="Filter tasks…"><button>Me only</button></div>' +
+      board(lane(cell('todo', card('A'))) + lane(cell('todo', '') + cell('review', card('B'))))
+    const mark = markTaskFocus(control('data-card="A"', 'title'))!
+    document.querySelector('[data-lane]')!.remove()
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(document.activeElement).toBe(document.querySelector('[data-filter-row] input'))
+  })
+
+  it("falls back to the title of the Board's empty state when it has no control, for that focus only", () => {
+    document.body.innerHTML = board(lane(cell('todo', card('A'))))
+    const mark = markTaskFocus(control('data-card="A"', 'title'))!
+    // the scope's last task went: the view shows its empty state instead
+    document.querySelector('[data-workspace-view]')!.innerHTML =
+      '<div data-empty-state><div data-empty-state-title>No tasks yet</div></div>'
+    const title = document.querySelector<HTMLElement>('[data-empty-state-title]')!
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(document.activeElement).toBe(title)
+    title.blur()
+    expect(title.hasAttribute('tabindex')).toBe(false)
+  })
+
   it('never falls back into a cell drawn again, such as another scope with the same lane key', () => {
     document.body.innerHTML = cell('todo', card('A') + card('B'))
     const mark = markTaskFocus(control('data-card="B"', 'title'))!
@@ -141,5 +219,116 @@ describe('restoreTaskFocus', () => {
     } finally {
       unregister()
     }
+  })
+})
+
+describe("restoreTaskFocus on another view's rows", () => {
+  /** A view's list under `heading`, its rows naming their tasks. */
+  const view = (heading: string, ids: string[]) =>
+    `<div data-workspace-view="overview"><h2>${heading}</h2>${ids.map((id) => `<button data-ovrow="${id}">${id}</button>`).join('')}</div>`
+  const row = (id: string) => document.querySelector<HTMLElement>(`[data-ovrow="${id}"]`)!
+
+  it('takes no mark for an element that does not name the task', () => {
+    document.body.innerHTML = view('Paused', ['A'])
+    expect(markTaskFocus(row('A'), 'B')).toBeNull()
+    expect(markTaskFocus(row('A'))).toBeNull()
+  })
+
+  it('finds the task in a row drawn again, else the row now in its place', () => {
+    document.body.innerHTML = view('Paused', ['A', 'B', 'C'])
+    const mark = markTaskFocus(row('B'), 'B')!
+    document.querySelector('[data-workspace-view]')!.innerHTML = `<h2>Paused</h2>${['A', 'B', 'C']
+      .map((id) => `<button data-ovrow="${id}">${id}</button>`)
+      .join('')}`
+    expect(restoreTaskFocus(mark, { scroll: false, nearby: false })).toBe(true)
+    expect(document.activeElement).toBe(row('B'))
+    row('B').remove()
+    expect(restoreTaskFocus(mark, { scroll: false })).toBe(true)
+    expect(document.activeElement).toBe(row('C'))
+  })
+
+  it('falls back to the heading above it once no such row is left, for that focus only', () => {
+    document.body.innerHTML = view('Paused', ['A'])
+    const mark = markTaskFocus(row('A'), 'A')!
+    row('A').remove()
+    const heading = document.querySelector<HTMLElement>('h2')!
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(document.activeElement).toBe(heading)
+    heading.blur()
+    expect(heading.hasAttribute('tabindex')).toBe(false)
+  })
+
+  it("falls back to the view's empty state once its list went with the heading above it", () => {
+    document.body.innerHTML = view('Paused', ['A'])
+    const mark = markTaskFocus(row('A'), 'A')!
+    document.querySelector('[data-workspace-view]')!.innerHTML =
+      '<div data-empty-state><div data-empty-state-title>No tasks yet</div><button>New task</button></div>'
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(document.activeElement?.textContent).toBe('New task')
+  })
+})
+
+describe('restoreTaskFocus on Roadmap rows', () => {
+  /** A Roadmap view with a track named by its button, and a task row
+      under it for each id. */
+  const roadmap = (ids: string[]) =>
+    `<div data-workspace-view="roadmap"><div data-track="p1"><button data-lane-open="p1">Website</button></div>${ids
+      .map((id) => `<div><button data-roadmap-task-open="${id}">${id}</button></div>`)
+      .join('')}</div>`
+  const task = (id: string) =>
+    document.querySelector<HTMLElement>(`[data-roadmap-task-open="${id}"]`)!
+
+  it("falls back to its track's button once the track's last task left, and keeps it in the Tab order", () => {
+    document.body.innerHTML = roadmap(['A'])
+    const mark = markTaskFocus(task('A'), 'A')!
+    task('A').parentElement!.remove()
+    const track = document.querySelector<HTMLElement>('[data-lane-open]')!
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(document.activeElement).toBe(track)
+    // a button is in the Tab order on its own
+    expect(track.hasAttribute('tabindex')).toBe(false)
+  })
+})
+
+describe('restoreTaskFocus on the phone Board', () => {
+  /** The phone's Board: a section with a heading and one cell for each
+      status that holds cards, as MobileWorkspace draws them. */
+  const phone = (groups: [string, string[]][]) =>
+    `<div data-workspace-view="kanban">${groups
+      .map(
+        ([status, ids]) =>
+          `<section><h2>${status}</h2><div data-board-cell="phone" data-status="${status}">${ids.map(card).join('')}</div></section>`,
+      )
+      .join('')}</div>`
+
+  it('falls back to a card in the group now in its place once its group left, else the one before', () => {
+    document.body.innerHTML = phone([
+      ['todo', ['A']],
+      ['progress', ['B']],
+      ['review', ['C']],
+    ])
+    const mark = markTaskFocus(control('data-card="B"', 'title'))!
+    // the phone drops a group with no card left
+    document.querySelectorAll('section')[1].remove()
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(focused()).toEqual({ task: { card: 'C' }, key: 'title' })
+    const last = markTaskFocus(control('data-card="C"', 'title'))!
+    document.querySelectorAll('section')[1].remove()
+    expect(restoreTaskFocus(last, { scroll: false, beside: true })).toBe(true)
+    expect(focused()).toEqual({ task: { card: 'A' }, key: 'title' })
+  })
+
+  it('falls back to the nearest group before it once one archive took several groups', () => {
+    document.body.innerHTML = phone([
+      ['backlog', ['A']],
+      ['todo', ['B']],
+      ['progress', ['C']],
+    ])
+    const mark = markTaskFocus(control('data-card="C"', 'title'))!
+    // a parent archived with its subtask empties To Do and In Progress
+    document.querySelectorAll('section')[2].remove()
+    document.querySelectorAll('section')[1].remove()
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(focused()).toEqual({ task: { card: 'A' }, key: 'title' })
   })
 })

@@ -59,7 +59,7 @@ function SettingsScreen({
   onBackPage?: (page: string) => void
   onExit: () => void
   onNewProject: () => void
-  onNewSubProject: (parent: string) => void
+  onNewSubProject: (parent: string, focusAfterClose?: () => HTMLElement | null) => void
   /** the project Archived tasks opens on, or null for the current scope's */
   archivedTasksProject?: string | null
   /** opens Archived tasks on one project, from a project row's menu */

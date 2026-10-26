@@ -104,6 +104,7 @@ export function ProjectAccessEditor({
                   variant="ghost"
                   size="icon"
                   className="h-control-sm w-control-sm shrink-0"
+                  data-project-access-remove
                   aria-label={`Remove ${name} team access`}
                   title={`Remove ${name} team access`}
                   disabled={!canManageTeams}
@@ -114,7 +115,11 @@ export function ProjectAccessEditor({
               </div>
             )
           })}
-          {teamIds.length === 0 && <p className="text-sm text-text-2">No teams added.</p>}
+          {teamIds.length === 0 && (
+            <p data-project-access-none="team" tabIndex={-1} className="text-sm text-text-2">
+              No teams added.
+            </p>
+          )}
         </div>
       </SettingsGroup>
 
@@ -174,6 +179,7 @@ export function ProjectAccessEditor({
                   variant="ghost"
                   size="icon"
                   className="h-control-sm w-control-sm shrink-0"
+                  data-project-access-remove
                   aria-label={`Remove ${user.name} direct access`}
                   title={`Remove ${user.name} direct access`}
                   disabled={!canEdit || userRole === 'lead'}
@@ -185,7 +191,9 @@ export function ProjectAccessEditor({
             )
           })}
           {userIds.length === 0 && (
-            <p className="text-sm text-text-2">No individual users added.</p>
+            <p data-project-access-none="user" tabIndex={-1} className="text-sm text-text-2">
+              No individual users added.
+            </p>
           )}
         </div>
       </SettingsGroup>

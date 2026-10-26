@@ -29,6 +29,19 @@ import { useLatest } from './useLatest'
 const leases = new Set<symbol>()
 // set once the page leaves on purpose, after the person was told what it loses
 let leaving = false
+// when the page last heard beforeunload (pageLeaving)
+let unloadAt = Number.NEGATIVE_INFINITY
+
+/** How long after a beforeunload a failed request counts as cut off by the
+    page's next load. WebKit 26.6 and Firefox 155 rejected the session fetch
+    0 to 25 ms after it, before pagehide (measured on 2026-10-26). */
+export const LEAVING_MS = 1000
+
+/** Whether a beforeunload came within LEAVING_MS: a request that fails now
+    was most likely cut off by the page's own load, which is expected and
+    no error to report. A page that stays counts as staying once that time
+    has passed. */
+export const pageLeaving = () => performance.now() - unloadAt < LEAVING_MS
 
 /** Whether an editor or an upload holds something unsent. */
 export const hasUnsaved = () => leases.size > 0
@@ -145,10 +158,12 @@ export function leaveDeliberately() {
   leaving = true
 }
 
-/** Warns before the page unloads while `unsaved()` holds. Answers a function
-    that removes the handler. */
+/** Warns before the page unloads while `unsaved()` holds, and notes each
+    beforeunload for pageLeaving. Answers a function that removes the
+    handler. */
 export function installLeaveGuard(unsaved: () => boolean, win: Window = window) {
   const onBeforeUnload = (event: BeforeUnloadEvent) => {
+    unloadAt = performance.now()
     if (leaving || !unsaved()) return
     event.preventDefault()
     // older browsers show the warning only for a returnValue

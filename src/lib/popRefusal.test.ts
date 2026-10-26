@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { browserWindow, settleMoves } from './historyDouble.setup'
 import { createUnsentScope } from './leaveGuard'
 import {
+  busyLayerLeft,
   finishLayer,
   historyBusy,
+  holdLayers,
   installPageHistory,
   listenBackLayers,
   onHistorySettled,
@@ -24,8 +26,8 @@ afterEach(() => remove())
 
 /** A window on `urls`, on the entry at `at`, in `engine`'s order (none
     without the Navigation API), with an App-like listener that refuses
-    while its scope holds text, and a later listener, as the phone layers'
-    is. */
+    while its scope holds text and otherwise lets a refusing phone layer
+    hold the page, and a later listener, as the phone layers' is. */
 async function refusing(
   urls: string[],
   at: number,
@@ -48,7 +50,9 @@ async function refusing(
   const applied: string[] = []
   browser.window.addEventListener('popstate', (event) => {
     if (!(event instanceof PopStateEvent)) return
+    if (busyLayerLeft() && holdLayers(event)) return
     if (scope.held().length && refusal.refuse(event, [scope])) return
+    if (holdLayers(event)) return
     refusal.accepted()
     applied.push(browser.here())
   })
@@ -211,6 +215,71 @@ describe.each(['chromium', 'firefox', 'webkit'] as const)(
     })
   },
 )
+
+describe('a phone layer that a move passes', () => {
+  const layerOf = (state: unknown) => (state as { qivoLayer?: string } | null)?.qivoLayer
+
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    'stays open when the app refuses a pick from the Back menu that passes its page, in %s',
+    async (engine) => {
+      const browser = await refusing(['/a', '/b', '/task'], 2, engine)
+      // a menu, which closes on any Back
+      const menu = openLayer(() => {})
+      await Promise.resolve()
+      browser.person.pick(0)
+      await settleMoves()
+      expect(browser.ask).toHaveBeenCalledTimes(1)
+      expect(menu.state).toBe('open')
+      expect(browser.here()).toBe('/task')
+      expect(layerOf(browser.history.state)).toBe(menu.marker)
+      expect(browser.applied).toEqual([])
+      expect(historyBusy()).toBe(false)
+    },
+  )
+
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    'holds its page without a question when it is busy and the app would refuse the pick, in %s',
+    async (engine) => {
+      const browser = await refusing(['/a', '/b', '/task'], 2, engine)
+      // a dialog whose request still runs
+      const dialog = openLayer(
+        () => false,
+        () => true,
+      )
+      await Promise.resolve()
+      browser.person.pick(0)
+      await settleMoves()
+      expect(browser.ask).not.toHaveBeenCalled()
+      expect(dialog.state).toBe('open')
+      expect(browser.here()).toBe('/task')
+      expect(layerOf(browser.history.state)).toBe(dialog.marker)
+      expect(browser.applied).toEqual([])
+      expect(historyBusy()).toBe(false)
+    },
+  )
+
+  it("lands a held page's return heard once the app took a later Back, in chromium", async () => {
+    const browser = await refusing(['/a', '/b', '/page'], 2, 'chromium')
+    browser.scope.discard()
+    let asked = 0
+    const dialog = openLayer(() => {
+      asked += 1
+      // busy until its request ends, right after the Back that held the page
+      if (asked === 2) queueMicrotask(() => finishLayer(dialog))
+      return false
+    })
+    await Promise.resolve()
+    // the first Back asks, the second lands past the page and is held, and
+    // the third, once the dialog has closed, the app takes
+    browser.person.back()
+    browser.person.back()
+    browser.person.back()
+    await settleMoves()
+    expect(asked).toBe(2)
+    expect(browser.applied.at(-1)).toBe(browser.here())
+    expect(historyBusy()).toBe(false)
+  })
+})
 
 describe('a return that a move the app took overtook', () => {
   it.each(['chromium', 'webkit', 'firefox'] as const)(

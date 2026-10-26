@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { FieldHint, SettingsField, SettingsGroup, SettingsSection } from '@/components/settingsPage'
 import {
   AlertDialog,
@@ -15,6 +15,8 @@ import { Button } from '@/components/ui/button'
 import { billingDate, billingMoney } from '@/lib/billingDisplay'
 import { useClosingWords } from '@/lib/closingWords'
 import { limitSentence } from '@/lib/fieldLimits'
+import { restoreFocus } from '@/lib/focusVisibility'
+import { useFocusWhenGone } from '@/lib/focusWhenGone'
 import type { BillingSummary } from '../../convex/lib/billingTypes'
 import { LIMITS } from '../../convex/lib/limits'
 
@@ -74,6 +76,9 @@ export function BillingOverview({
   onExport: () => void
 }) {
   const plan = billing.plan
+  // where focus goes once Cancel subscription has closed without its button
+  const portal = useRef<HTMLButtonElement>(null)
+  const status = useRef<HTMLParagraphElement>(null)
   return (
     <>
       <SettingsSection title="Subscription" data-billing-subscription="">
@@ -92,7 +97,7 @@ export function BillingOverview({
           )}
         </SettingsField>
         <SettingsField label="Status" width={550} hint={statusExplanation(billing)}>
-          <p data-billing-status className="text-base">
+          <p ref={status} tabIndex={-1} data-billing-status className="text-base">
             {billing.enabled ? statusLabels[billing.status] : 'Billing not enabled'}
           </p>
         </SettingsField>
@@ -139,19 +144,27 @@ export function BillingOverview({
               </Button>
             )}
             {billing.portal_available && (
-              <Button type="button" data-billing-portal disabled={busy} onClick={onManage}>
+              <Button
+                ref={portal}
+                type="button"
+                data-billing-portal
+                disabled={busy}
+                onClick={onManage}
+              >
                 {busy ? 'Opening…' : 'Manage billing'}
               </Button>
             )}
-            {billing.cancel_available && (
-              <CancelSubscription
-                endsAt={billing.current_period_end}
-                lastExportAt={billing.last_export_at}
-                busy={busy}
-                onCancel={onCancel}
-                onExport={onExport}
-              />
-            )}
+            {/* mounted also once cancelling is no longer available, so a
+                refresh that takes its button away lets the dialog fade */}
+            <CancelSubscription
+              available={billing.cancel_available}
+              endsAt={billing.current_period_end}
+              lastExportAt={billing.last_export_at}
+              busy={busy}
+              onCancel={onCancel}
+              onExport={onExport}
+              focusAfter={() => portal.current ?? status.current}
+            />
           </div>
           <FieldHint>
             {billing.status === 'complimentary'
@@ -264,41 +277,71 @@ export function BillingOverview({
 
 /** Cancelling stops renewal. The subscription ends with its paid period,
  * without a refund, and the read-only period before deletion starts then, so
- * the dialog says so and offers the export first. */
+ * the dialog says so and offers the export first. Its button shows while
+ * cancelling is `available`. A refresh that takes it away leaves an open
+ * question open while it cancels or shows a refusal, and closes one that
+ * waits for nothing.
+ * Once its button is gone, focus that it or the closed dialog left goes to
+ * `focusAfter`. */
 function CancelSubscription({
+  available,
   endsAt,
   lastExportAt,
   busy,
   onCancel,
   onExport,
+  focusAfter,
 }: {
+  available: boolean
   endsAt: string | null
   lastExportAt: string | null
   busy: boolean
   onCancel: () => Promise<string | null>
   onExport: () => void
+  focusAfter: () => HTMLElement | null
 }) {
   const [open, setOpen] = useState(false)
   const [error, setError] = useState('')
-  // Keep subscription clears the refusal, and a finished cancellation clears
-  // busy, as the dialog closes. It shows them until it has faded.
-  const shown = useClosingWords(open, { error, busy })
+  // from the press until a refusal, or the next opening after the
+  // cancellation, so the busy words never wait on the page's busy
+  const [cancelling, setCancelling] = useState(false)
+  const opener = useRef<HTMLButtonElement>(null)
+  const question = useRef<HTMLDivElement>(null)
+  // cancelled elsewhere while the question waits for nothing and shows no
+  // refusal
+  if (!available && open && !busy && !cancelling && !error) setOpen(false)
+  // the refresh can arrive after the answer, once focus went back to the
+  // button it takes away
+  useFocusWhenGone(available, focusAfter, question)
+  // Keep subscription clears the refusal as the dialog closes. It shows it,
+  // and a finished cancellation's busy words, until it has faded.
+  const shown = useClosingWords(open, { error, busy: busy || cancelling })
   return (
     <AlertDialog
       open={open}
       onOpenChange={(next) => {
         if (busy) return
         setOpen(next)
-        if (!next) setError('')
+        if (next) setCancelling(false)
+        else setError('')
       }}
     >
       {/* the trigger takes focus back once the dialog has closed */}
-      <AlertDialogTrigger asChild>
-        <Button type="button" variant="outline" data-billing-cancel disabled={busy}>
-          Cancel subscription
-        </Button>
-      </AlertDialogTrigger>
-      <AlertDialogContent>
+      {available && (
+        <AlertDialogTrigger asChild>
+          <Button ref={opener} type="button" variant="outline" data-billing-cancel disabled={busy}>
+            Cancel subscription
+          </Button>
+        </AlertDialogTrigger>
+      )}
+      <AlertDialogContent
+        ref={question}
+        onCloseAutoFocus={(event) => {
+          if (opener.current?.isConnected) return
+          event.preventDefault()
+          restoreFocus(focusAfter())
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel subscription?</AlertDialogTitle>
           <AlertDialogDescription>
@@ -330,9 +373,12 @@ function CancelSubscription({
             onClick={(event) => {
               event.preventDefault()
               setError('')
-              void onCancel().then((refusal) =>
-                refusal === null ? setOpen(false) : setError(refusal),
-              )
+              setCancelling(true)
+              void onCancel().then((refusal) => {
+                if (refusal === null) return setOpen(false)
+                setCancelling(false)
+                setError(refusal)
+              })
             }}
           >
             {shown.busy ? 'Cancelling…' : 'Cancel subscription'}

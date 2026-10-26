@@ -17,6 +17,8 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    entry. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+// while set, the sign-in service answers the session read with an error
+const auth = vi.hoisted(() => ({ down: false }))
 vi.mock('./lib/convex', async () => ({
   convex: network,
   live: (await import('./store/guard/liveDouble.setup')).liveOver(network),
@@ -24,7 +26,10 @@ vi.mock('./lib/convex', async () => ({
 vi.mock('./lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
-    getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }),
+    getSession: async () =>
+      auth.down
+        ? { error: { message: 'could not reach the sign-in service' } }
+        : { data: { session: {}, user: { id: 'test-account' } } },
   },
   signOut: vi.fn(),
 }))
@@ -50,6 +55,7 @@ beforeEach(() => {
     },
   )
   window.showToast = vi.fn()
+  auth.down = false
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -170,5 +176,183 @@ describe('the phone project list', () => {
     await vi.waitFor(() => expect(entry()).toBeDefined())
     await act(async () => entry()?.click())
     expect(createOrg).toHaveBeenCalledOnce()
+  })
+})
+
+// answers a create that createsOrganization holds, and the workspace read
+// that waits after a failed one
+let answerCreate = () => {}
+let answerRead = () => {}
+
+/** Has the server create the organization, and the workspace read after
+    it hold the login's new admin seat. With `held`, the create waits for
+    answerCreate; with `readFails`, the first workspace read after it fails
+    and the next waits for answerRead. */
+function createsOrganization(snap: Snapshot, { held = false, readFails = false } = {}) {
+  const created = structuredClone(snap)
+  created.orgs.push({ ...snap.orgs[0], id: 'mine', name: 'Mine', slug: 'mine' })
+  created.profiles.push({ ...snap.profiles[0], id: 'me', org_id: 'mine', org_role: 'admin' })
+  created.myProfileIds.push('me')
+  let reads = 0
+  const land = () =>
+    network.onUpdate.mockImplementation((r, _args, next, fail) => {
+      if (getFunctionName(r) !== 'workspace:whole') return () => {}
+      reads += 1
+      if (!readFails) next(structuredClone(created))
+      else if (reads === 1) fail(new Error('the workspace could not be read'))
+      else answerRead = () => next(structuredClone(created))
+      return () => {}
+    })
+  network.mutation.mockImplementation((ref) => {
+    if (getFunctionName(ref) !== 'identity:createOrganization') return Promise.resolve(null)
+    if (!held) {
+      land()
+      return Promise.resolve(null)
+    }
+    return new Promise((resolve) => {
+      answerCreate = () => {
+        land()
+        resolve(null)
+      }
+    })
+  })
+}
+
+/** Focuses and presses `opener`, then names the organization and creates
+    it, or cancels the dialog. */
+async function createFrom(opener: HTMLElement, create: boolean) {
+  opener.focus()
+  await act(async () => opener.click())
+  const name = await vi.waitFor(
+    () => {
+      const found = document.querySelector<HTMLInputElement>('[data-create-org]')
+      if (!found) throw new Error('missing the name field')
+      return found
+    },
+    { timeout: 10_000 },
+  )
+  if (create)
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(name, 'Mine')
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  const press = [...document.querySelectorAll<HTMLButtonElement>('[data-modal-shell] button')].find(
+    (b) => b.textContent === (create ? 'Create' : 'Cancel'),
+  )
+  await act(async () => press?.click())
+  await vi.waitFor(() => expect(document.querySelector('[data-modal-shell]')).toBeNull())
+  for (let i = 0; i < 6; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+}
+
+describe("the sidebar's Create your organization", () => {
+  /** Boots App on a guest-only login, and answers its sidebar entry. */
+  async function entry(created: Parameters<typeof createsOrganization>[1] = {}) {
+    const snap = guestOnly()
+    await boot(snap)
+    createsOrganization(snap, created)
+    const { syncStatus } = await import('./lib/syncStatus')
+    syncStatus.setSocket({ connected: true, everConnected: true })
+    const { default: App } = await import('./App')
+    await show(<App />, '[data-org-create]')
+    return document.querySelector<HTMLElement>('[data-org-create]') as HTMLElement
+  }
+
+  it('is a button the keyboard reaches, and takes focus back after Cancel', async () => {
+    const button = await entry()
+    expect(button.tagName).toBe('BUTTON')
+    expect(button.getAttribute('type')).toBe('button')
+    await createFrom(button, false)
+    expect(document.activeElement).toBe(button)
+  })
+
+  it("waits on Cancel while the create runs, then gives focus to the rail's New project", async () => {
+    const button = await entry({ held: true })
+    button.focus()
+    await act(async () => button.click())
+    const name = await vi.waitFor(
+      () => {
+        const found = document.querySelector<HTMLInputElement>('[data-create-org]')
+        if (!found) throw new Error('missing the name field')
+        return found
+      },
+      { timeout: 10_000 },
+    )
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(name, 'Mine')
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const shellButton = (label: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>('[data-modal-shell] button')].find(
+        (b) => b.textContent === label,
+      )
+    await act(async () => shellButton('Create')?.click())
+    await act(async () => shellButton('Cancel')?.click())
+    expect(document.querySelector('[data-modal-shell]')).not.toBeNull()
+    await act(async () => answerCreate())
+    await vi.waitFor(() => expect(document.querySelector('[data-modal-shell]')).toBeNull())
+    for (let i = 0; i < 6; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+    expect(button.isConnected).toBe(false)
+    expect(document.activeElement).toBe(document.querySelector('aside [aria-label="New project"]'))
+  })
+
+  it('closes and says so when the workspace cannot load after the organization was created', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const button = await entry()
+    // the read after the create fails
+    auth.down = true
+    await createFrom(button, true)
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain(
+        'The organization was created, but Qivo could not load it. Reload the page to open it.',
+      ),
+    )
+  })
+
+  it('pauses edits when the workspace read fails after the create, until a read lands', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const button = await entry({ readFails: true })
+    await createFrom(button, true)
+    const { P } = await import('./store/planner')
+    // the read stopped the workspace's subscriptions, so it is out of date
+    expect(P.snapshotTrouble()?.kind).toBe('failed')
+    expect(P.editsPaused()).toBe(true)
+    // the store reads again by itself, and the workspace loads
+    await act(async () => answerRead())
+    await vi.waitFor(() => expect(P.snapshotTrouble()).toBeNull())
+    expect(P.editsPaused()).toBe(false)
+    expect(P.homeOrg).toBe('mine')
+  })
+
+  it("gives focus to the rail's New project once the organization exists, as it leaves", async () => {
+    const button = await entry()
+    await createFrom(button, true)
+    expect(button.isConnected).toBe(false)
+    expect(document.activeElement).toBe(document.querySelector('aside [aria-label="New project"]'))
+  })
+})
+
+describe('Create your organization on the Projects page', () => {
+  it('gives focus to New project once the organization exists, as its button leaves', async () => {
+    const snap = guestOnly()
+    history.replaceState(null, '', '/app/testbed/projects')
+    await boot(snap)
+    createsOrganization(snap)
+    const { syncStatus } = await import('./lib/syncStatus')
+    syncStatus.setSocket({ connected: true, everConnected: true })
+    const { default: App } = await import('./App')
+    const list = '.mobile-project-directory'
+    await show(<App />, list)
+    const button = (text: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>(`${list} button`)].find(
+        (b) => b.textContent?.trim() === text,
+      )
+    const opener = await vi.waitFor(() => {
+      const found = button('Create your organization')
+      if (!found) throw new Error('missing the entry')
+      return found
+    })
+    await createFrom(opener, true)
+    expect(opener.isConnected).toBe(false)
+    expect(document.activeElement).toBe(button('New project'))
   })
 })

@@ -745,8 +745,9 @@ describe('Archive or delete a project', () => {
 })
 
 describe('Archived projects', () => {
-  it('keeps keyboard focus on the page after a delete', async () => {
-    // Plan and Docs are archived, with their sub-projects, and Mira leads both
+  /* Shows the page with Plan and Docs archived, with their sub-projects,
+     and Mira leading both. */
+  async function show() {
     for (const p of snap.projects) p.archived_at = AT
     const docs = snap.projects.find((p) => p.id === 'docs')
     if (docs) docs.lead_id = 'mira'
@@ -765,6 +766,10 @@ describe('Archived projects', () => {
       ),
     )
     await settle()
+  }
+
+  it('keeps keyboard focus on the page after a delete', async () => {
+    await show()
     // the delivery without the project, as the server sends it before it answers
     const drop = (id: string) => {
       snap.projects = snap.projects.filter((p) => p.id !== id && p.parent_id !== id)
@@ -803,6 +808,106 @@ describe('Archived projects', () => {
     expect(document.activeElement).toBe(find('[data-restore-project="docs"]'))
     // no row is left, so focus goes to the page heading
     await remove('docs', 'Docs')
+    expect(document.activeElement).toBe(find('.settings-page-title h1'))
+  })
+
+  /* Leaves focus nowhere, as a browser does when the focused button turns
+     disabled; jsdom keeps it there, and blur() does nothing on it. */
+  const dropFocus = () => {
+    const field = document.createElement('input')
+    document.body.append(field)
+    field.focus()
+    field.remove()
+  }
+  /* Presses Plan's Restore and has the server refuse it once the browser
+     has taken focus from the disabled button. */
+  async function refusedRestore() {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let refuse = (_: unknown) => {}
+    answers['projects:unarchive'] = () =>
+      new Promise((_, reject) => {
+        refuse = reject
+      })
+    const button = find<HTMLButtonElement>('[data-restore-project="plan"]')
+    button.focus()
+    await click(button)
+    expect(button.disabled).toBe(true)
+    dropFocus()
+    await act(async () => refuse(new Error('refused')))
+    await settle()
+    expect(button.disabled).toBe(false)
+  }
+
+  it("gives focus back to the row's Restore once a refused restore ends", async () => {
+    await show()
+    await refusedRestore()
+    expect(document.activeElement).toBe(find('[data-restore-project="plan"]'))
+  })
+
+  it('moves nothing when the row of a refused restore leaves later', async () => {
+    await show()
+    await refusedRestore()
+    // someone else restores it while focus is nowhere
+    dropFocus()
+    for (const p of snap.projects)
+      if (p.id === 'plan' || p.parent_id === 'plan') p.archived_at = undefined
+    await act(async () => deliver(snap))
+    await settle()
+    expect(has('[data-archived-project="plan"]')).toBe(false)
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('moves nothing when a project it restored is archived again and leaves later', async () => {
+    await show()
+    const plan = (archived: string | undefined) => {
+      for (const p of snap.projects)
+        if (p.id === 'plan' || p.parent_id === 'plan') p.archived_at = archived
+      deliver(snap)
+    }
+    answers['projects:unarchive'] = async () => {
+      plan(undefined)
+      return null
+    }
+    const button = find<HTMLButtonElement>('[data-restore-project="plan"]')
+    button.focus()
+    await click(button)
+    await settle()
+    expect(has('[data-archived-project="plan"]')).toBe(false)
+    // another admin archives it again, and someone restores it once more
+    // while focus is nowhere
+    await act(async () => plan(AT))
+    await settle()
+    expect(has('[data-archived-project="plan"]')).toBe(true)
+    dropFocus()
+    await act(async () => plan(undefined))
+    await settle()
+    expect(has('[data-archived-project="plan"]')).toBe(false)
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('keeps keyboard focus on the page after a restore', async () => {
+    await show()
+    // the delivery with the project active again, as the server sends it before it answers
+    answers['projects:unarchive'] = async () => {
+      const id = writes().at(-1)?.args.id
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      for (const p of snap.projects)
+        if (p.id === id || p.parent_id === id) p.archived_at = undefined
+      deliver(snap)
+      return null
+    }
+    const restore = async (id: string) => {
+      const button = find<HTMLButtonElement>(`[data-restore-project="${id}"]`)
+      button.focus()
+      await click(button)
+      await settle()
+      expect(has(`[data-archived-project="${id}"]`)).toBe(false)
+    }
+    // the row left, so focus goes to the next row's first button
+    await restore('plan')
+    expect(document.activeElement).toBe(find('[data-restore-project="docs"]'))
+    // no row is left, so focus goes to the page heading
+    await restore('docs')
     expect(document.activeElement).toBe(find('.settings-page-title h1'))
   })
 })

@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { getFunctionName } from 'convex/server'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BOARD_TEST_TIMEOUT, cell, loadBoard, taskRow } from '../views/boardFixture.setup'
 
 /* Closing a task window returns focus to the Board card it was opened
-   from, also when an edit in the window moved that card to another cell.
-   The Board and the window share one root, as in App. */
+   from, also when an edit in the window moved that card to another cell,
+   and to what took the opener's place when the window archived its task.
+   The view and the window share one root, as in App. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -29,6 +31,8 @@ beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
   Element.prototype.scrollIntoView = vi.fn()
+  // the Overview's panel clipping asks for running animations
+  Element.prototype.getAnimations = () => []
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal(
     'ResizeObserver',
@@ -162,5 +166,152 @@ describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
     }, 'b')
     expect(title).toBeTruthy()
     expect(document.activeElement).toBe(title)
+  })
+})
+
+describe('archiving the task from its window', { timeout: BOARD_TEST_TIMEOUT }, () => {
+  type Board = Awaited<ReturnType<typeof loadBoard>>
+  type Status = Parameters<typeof taskRow>[2]
+  /** Loads the Board's store with `tasks` (uuid, status and whether it is
+      paused), with the server accepting an archive. */
+  async function load(tasks: [string, Status, boolean?][]) {
+    const board = await loadBoard(network, (snap) => {
+      tasks.forEach(([uuid, status, paused = false], n) => {
+        snap.issues.push({ ...taskRow(snap, uuid, status, n + 1), paused })
+      })
+    })
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'issues:archive' ? Promise.resolve(null) : new Promise(() => {}),
+    )
+    return board
+  }
+  /** What has focus: a control by its label, or the page. */
+  const focused = () => {
+    const element = document.activeElement
+    if (!element || element === document.body) return 'the page'
+    return element.getAttribute('aria-label') || element.textContent?.trim() || element.tagName
+  }
+  /* Opens the window from `opener` as a press does, archives its task there
+     with a reason, as the window asks for unfinished work, and waits until
+     the window has closed and focus has settled. */
+  async function archiveFrom(opener: HTMLElement | null | undefined) {
+    if (!opener) throw new Error('no opener')
+    await act(async () => {
+      opener.focus()
+      opener.click()
+    })
+    await settle()
+    const press = async (element: HTMLElement | null | undefined) => {
+      if (!element) throw new Error('nothing to press')
+      await act(async () => {
+        element.focus()
+        element.click()
+      })
+    }
+    await press(document.querySelector<HTMLElement>('[aria-label="Task actions"]'))
+    await press(document.querySelector<HTMLElement>('[data-task-fate]'))
+    const reason = document.querySelector<HTMLTextAreaElement>('[data-fate-reason]')
+    if (!reason) throw new Error('the Archive or delete window did not open')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(
+        reason,
+        'Done elsewhere',
+      )
+      reason.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await press(
+      [...document.querySelectorAll<HTMLButtonElement>('[data-modal-shell] button')].find(
+        (b) => b.textContent === 'Archive',
+      ),
+    )
+    await settle()
+    expect(document.querySelector('[data-task-close]')).toBeNull()
+  }
+  const renderBoard = async (board: Board) => {
+    const { IssueDetail } = await import('./IssueDetail')
+    await board.render(root, (opened, close, open) => (
+      <IssueDetail issueId={opened} onClose={close} onOpen={open} />
+    ))
+  }
+  const title = (board: Board, uuid: string) =>
+    board.card(uuid)?.querySelector<HTMLElement>('[data-focus-key="title"]')
+
+  it("gives focus to its column's new task button when its card was alone in its cell", async () => {
+    const board = await load([
+      ['a', 'progress'],
+      ['b', 'todo'],
+    ])
+    await renderBoard(board)
+    await archiveFrom(title(board, 'a'))
+    expect(board.card('a')).toBeNull()
+    expect(focused()).toBe('New task in In Progress')
+  })
+
+  it("gives focus to the Board's empty state when the window archived the scope's last task", async () => {
+    const board = await load([['a', 'progress']])
+    // the Board's view, as App keeps it
+    container.setAttribute('data-workspace-view', 'kanban')
+    await renderBoard(board)
+    await archiveFrom(title(board, 'a'))
+    expect(document.querySelector('[data-empty-state-title]')?.textContent).toBe('No tasks yet')
+    expect(focused()).toBe('New task')
+  })
+
+  /* The Overview as App shows it, in its view, with the window beside it. */
+  async function renderOverview(board: Board) {
+    const { IssueDetail } = await import('./IssueDetail')
+    const { Overview } = await import('../views/Overview')
+    function Screen({ info }: { info: Parameters<typeof Overview>[0]['info'] }) {
+      const [opened, setOpened] = useState<string | null>(null)
+      const actions = {
+        setScope: vi.fn(),
+        setView: vi.fn(),
+        openIssue: setOpened,
+        newIssue: vi.fn(),
+        newProject: vi.fn(),
+        newMilestone: vi.fn(),
+        editMilestone: vi.fn(),
+      }
+      return (
+        <>
+          <div data-workspace-view="overview">
+            <Overview info={info} actions={actions} />
+          </div>
+          <IssueDetail issueId={opened} onClose={() => setOpened(null)} onOpen={setOpened} />
+        </>
+      )
+    }
+    await board.renderView(root, (info) => <Screen info={info} />)
+  }
+  /** The Overview's paused rows, by the task each names. */
+  const pausedRows = () =>
+    [...document.querySelectorAll<HTMLElement>('[data-ovrow]')].map((row) => row.dataset.ovrow)
+  const pausedRow = (task: string | undefined) =>
+    [...document.querySelectorAll<HTMLElement>('[data-ovrow]')].find(
+      (row) => row.dataset.ovrow === task,
+    )
+
+  it('gives focus to the row now in its place in the list it was opened from', async () => {
+    const board = await load([
+      ['a', 'progress', true],
+      ['b', 'progress', true],
+      ['c', 'progress', true],
+    ])
+    await renderOverview(board)
+    const [before, middle, after] = pausedRows()
+    await archiveFrom(pausedRow(middle))
+    expect(pausedRows()).toEqual([before, after])
+    expect(document.activeElement).toBe(pausedRow(after))
+  })
+
+  it("gives focus to the list's heading when its last row went", async () => {
+    const board = await load([
+      ['a', 'progress', true],
+      ['b', 'todo'],
+    ])
+    await renderOverview(board)
+    await archiveFrom(pausedRow(pausedRows()[0]))
+    expect(document.querySelector('[data-ovrow]')).toBeNull()
+    expect(focused()).toBe('Paused tasks')
   })
 })

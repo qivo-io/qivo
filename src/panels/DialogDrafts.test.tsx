@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react'
+import { act, type ReactNode, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Input } from '../components/ui/input'
@@ -178,6 +178,56 @@ describe('closing a dialog with typed text', { timeout: 20_000 }, () => {
     await back()
     await press('Discard')
     await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+  })
+
+  it('closes at once on a phone Cancel, so a Create pressed right after creates nothing', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    )
+    const pageHistory = await import('../lib/pageHistory')
+    const removeHistory = pageHistory.installPageHistory()
+    onTestFinished(pageHistory.listenBackLayers())
+    onTestFinished(removeHistory)
+    // a page with one before it, so its spare is not over the first entry
+    history.pushState(null, '', '/before')
+    history.pushState(null, '', '/page')
+    const onCreate = vi.fn()
+    // the page around the dialog, which unmounts it on its close as App does
+    function Page() {
+      const [open, setOpen] = useState(true)
+      return open ? (
+        <dialogs.ModalShell
+          icon="key"
+          title="New token"
+          onClose={() => setOpen(false)}
+          onSubmit={onCreate}
+          canSubmit
+          submitLabel="Create"
+          unsent={['token name']}
+        >
+          <Input aria-label="Name" />
+        </dialogs.ModalShell>
+      ) : null
+    }
+    await render(<Page />)
+    await act(async () => await Promise.resolve())
+    const marker = history.state?.qivoLayer
+    const entries = history.length
+    expect(marker).toBeTruthy()
+    await type('Name', 'Deploy bot')
+    const create = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Create')
+    const cancel = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Cancel')
+    expect(create?.disabled).toBe(false)
+    // the press lands before any history step could
+    await act(async () => cancel?.click())
+    expect(document.querySelector('[data-modal-shell]')).toBeNull()
+    await act(async () => create?.click())
+    await act(() => new Promise((resolve) => setTimeout(resolve, 30)))
+    expect(onCreate).not.toHaveBeenCalled()
+    // no step: the dialog's marker stays as a spare
+    expect(history.length).toBe(entries)
+    expect(history.state?.qivoLayer).toBe(marker)
   })
 
   it('asks again after a Cancel the dialog refused', async () => {

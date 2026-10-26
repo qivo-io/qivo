@@ -4,6 +4,7 @@ import { browserWindow, settleMoves } from './historyDouble.setup'
 import {
   finishLayer,
   historyBusy,
+  holdLayers,
   installPageHistory,
   leavePage,
   listenBackLayers,
@@ -21,14 +22,18 @@ let remove = () => {}
 afterEach(() => remove())
 
 /** A browser window on `urls`, on the last, with the page's history
-    installed, an App-like listener that hears the moves, and the layers'
-    listener after it; with `engine`'s Navigation API when given. */
-function page(urls: string[], engine?: 'chromium' | 'webkit' | 'firefox') {
-  const browser = browserWindow(urls[0], engine)
+    installed, an App-like listener that hears the moves no layer held, and
+    the layers' listener after it; with `engine`'s Navigation API when given,
+    after another site's entry at `elsewhere` when given. */
+function page(urls: string[], engine?: 'chromium' | 'webkit' | 'firefox', elsewhere?: string) {
+  const browser = browserWindow(urls[0], engine, elsewhere)
   const removeHistory = installPageHistory(browser.window)
   for (const url of urls.slice(1)) pushPage({}, url)
   const heard: string[] = []
-  browser.window.addEventListener('popstate', () => heard.push(browser.here()))
+  browser.window.addEventListener('popstate', (event) => {
+    if (event instanceof PopStateEvent && holdLayers(event)) return
+    heard.push(browser.here())
+  })
   const stopLayers = listenBackLayers(browser.window)
   remove = () => {
     stopLayers()
@@ -303,6 +308,22 @@ describe('a layer that closes by itself', () => {
   })
 
   it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    "goes on to another site's entry when quick Backs reach the first entry listed, in %s",
+    async (engine) => {
+      const browser = page(['/a', '/page'], engine, '/elsewhere')
+      finishLayer(await layer())
+      // in Firefox the second Back's navigate event comes before the first
+      // lands, so no key names the entry the going-on is for
+      browser.person.back()
+      browser.person.back()
+      await settleMoves()
+      expect(browser.here()).toBe('/elsewhere')
+      expect(browser.heard).toEqual(['/a'])
+      expect(historyBusy()).toBe(false)
+    },
+  )
+
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
     'goes on one step per spare, so two quick Backs over two spares leave two pages, in %s',
     async (engine) => {
       const browser = page(['/a', '/b', '/c', '/page'], engine)
@@ -380,6 +401,69 @@ describe('a layer that closes by itself', () => {
     expect(layerOf(browser.history.state)).toBe(dialog.marker)
     expect(browser.urls()).toEqual(['/before', '/page', '/page'])
     expect(browser.heard).toEqual(['/page'])
+  })
+
+  it.each([undefined, 'chromium', 'webkit', 'firefox'] as const)(
+    'holds the page for a layer that refused its close when quick Backs past it reach the pages before, in %s',
+    async (engine) => {
+      const browser = page(['/a', '/b', '/page'], engine)
+      const asked = vi.fn(() => false)
+      const dialog = await layer(asked)
+      // the first Back asks; Chromium and Firefox count the others past the
+      // page, from the entry the one before goes to
+      browser.person.back()
+      browser.person.back()
+      browser.person.back()
+      await settleMoves()
+      expect(dialog.state).toBe('open')
+      expect(browser.here()).toBe('/page')
+      expect(layerOf(browser.history.state)).toBe(dialog.marker)
+      expect(browser.heard.every((url) => url === '/page')).toBe(true)
+      expect(historyBusy()).toBe(false)
+    },
+  )
+
+  it.each([undefined, 'chromium', 'firefox'] as const)(
+    'holds the page for a refusing layer that a Back-menu pick leaves, and returns to its marker unheard, in %s',
+    async (engine) => {
+      const browser = page(['/a', '/b', '/page'], engine)
+      const menu = await layer()
+      const dialog = await layer(() => false)
+      browser.person.pick(0)
+      await settleMoves()
+      expect([menu.state, dialog.state]).toEqual(['open', 'open'])
+      expect(browser.here()).toBe('/page')
+      expect(layerOf(browser.history.state)).toBe(dialog.marker)
+      expect(browser.heard).toEqual([])
+      expect(historyBusy()).toBe(false)
+    },
+  )
+})
+
+describe('a layer that refuses a move to an entry without a position', () => {
+  it('gets its marker back only once App has read that entry', async () => {
+    // an entry from before the page's history was installed, without a position
+    const browser = browserWindow('/before')
+    browser.history.pushState(null, '', '/start')
+    const removeHistory = installPageHistory(browser.window)
+    pushPage({}, '/page')
+    const read: unknown[] = []
+    browser.window.addEventListener('popstate', (event) => {
+      if (event instanceof PopStateEvent && holdLayers(event)) return
+      read.push(browser.history.state)
+    })
+    const stopLayers = listenBackLayers(browser.window)
+    remove = () => {
+      stopLayers()
+      removeHistory()
+    }
+    const dialog = await layer(() => false)
+    browser.person.pick(0)
+    await settleMoves()
+    expect(read).toEqual([null])
+    expect(dialog.state).toBe('open')
+    expect(browser.urls()).toEqual(['/before', '/before'])
+    expect(layerOf(browser.history.state)).toBe(dialog.marker)
   })
 })
 
@@ -541,6 +625,35 @@ describe("the page's steps in turn", () => {
     browser.history.back()
     await settleMoves()
     expect(go.mock.calls).toEqual([[-1], [-1], [-1]])
+  })
+})
+
+describe('the development check on writes after a page step', () => {
+  it('warns of a write in the task of a page step', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    page(['/a', '/page'])
+    leavePage()
+    pushPage({}, '/next')
+    expect(errors).toHaveBeenCalledWith('History written right after a page step')
+    errors.mockRestore()
+  })
+
+  it("stays quiet for a write in a later popstate's task, as a browser runs each in its own", async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const browser = page(['/a', '/b', '/page'], 'firefox')
+    finishLayer(await layer())
+    // App writes the address in place as it hears a move
+    browser.window.addEventListener('popstate', () =>
+      browser.history.replaceState(browser.history.state, ''),
+    )
+    // the double lands both Backs in one task: the first one's going-on,
+    // then the second one's popstate
+    browser.person.back()
+    browser.person.back()
+    await settleMoves()
+    expect(browser.here()).toBe('/a')
+    expect(errors).not.toHaveBeenCalled()
+    errors.mockRestore()
   })
 })
 

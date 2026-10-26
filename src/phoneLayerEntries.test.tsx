@@ -382,3 +382,79 @@ describe('a Forward that would close a comment not yet sent', { timeout: 30_000 
     expect(history.length).toBe(entries)
   })
 })
+
+describe('a pick from the Back menu past a task with a comment not yet sent', {
+  timeout: 30_000,
+}, () => {
+  /** Opens task QN-1's window on a phone from the Board and types a comment
+      in it. Answers the task's address. */
+  async function taskWithComment() {
+    await boot('/app/testbed/board/p/1', true)
+    const row = await waitFor(
+      () => document.querySelector<HTMLElement>('.mobile-task-row'),
+      'the task row',
+    )
+    await act(async () => row.click())
+    await waitFor(() => document.querySelector('[data-task-chrome]'), 'the task window')
+    // the window takes focus once it opened, which would close a menu
+    await waitFor(
+      () => document.activeElement?.closest('[role="dialog"]'),
+      'focus in the task window',
+    )
+    const composer = await waitFor(
+      () =>
+        document.querySelector<TiptapEditorHTMLElement>(
+          '[role="textbox"][aria-label="Leave a comment"]',
+        )?.editor,
+      'the comment editor',
+    )
+    await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    await settle()
+    return location.pathname
+  }
+  const question = () => document.querySelector('[data-discard-prompt] h2')?.textContent ?? null
+
+  it('asks first and keeps the search open over the task', async () => {
+    const task = await taskWithComment()
+    // a layer that closes on any Back
+    await press('Search tasks and projects')
+    await waitFor(() => document.querySelector('[cmdk-root] input'), 'the search box')
+    await settle()
+    expect(history.state?.qivoLayer).toBeTruthy()
+    // past the task's page, to the Board
+    await act(async () => history.go(-2))
+    await settle()
+    await waitFor(() => question(), 'the question')
+    expect(document.querySelector('[cmdk-root]')).not.toBeNull()
+    expect(location.pathname).toBe(task)
+  })
+
+  it('holds the page for a dialog whose request still runs, and asks nothing', async () => {
+    const task = await taskWithComment()
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'issues:archive' ? new Promise(() => {}) : Promise.resolve(null),
+    )
+    await press('Task actions')
+    await press('Archive or delete…')
+    // unfinished work needs a reason to be archived
+    const reason = await waitFor(
+      () => document.querySelector<HTMLTextAreaElement>('[data-modal-shell] textarea'),
+      'the reason',
+    )
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(
+        reason,
+        'Replaced by the new rig',
+      )
+      reason.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await press('Archive')
+    await settle()
+    expect(history.state?.qivoLayer).toBeTruthy()
+    await act(async () => history.go(-2))
+    await settle()
+    expect(question()).toBeNull()
+    expect(document.querySelector('[data-modal-shell]')).not.toBeNull()
+    expect(location.pathname).toBe(task)
+  })
+})

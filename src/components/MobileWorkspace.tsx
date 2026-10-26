@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { SYNC_LIMIT } from '../lib/boardGroups'
+import { menuTrigger } from '../lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
 import { createMountScheduler, useMountGuards } from '../lib/mountScheduler'
 import { noProjectsHint } from '../lib/noProjects'
@@ -105,7 +106,12 @@ export function MobileHeader({
                   align="left"
                   width={260}
                   button={(toggle) => (
-                    <Button variant="ghost" onClick={toggle} aria-label="Project actions">
+                    <Button
+                      variant="ghost"
+                      onClick={toggle}
+                      aria-label="Project actions"
+                      data-mobile-project-actions
+                    >
                       <Icon name="more" size={16} /> Project
                     </Button>
                   )}
@@ -122,9 +128,10 @@ export function MobileHeader({
                       </MenuItem>
                       {project.type === 'meta' && P.levelOn(project.id) === 'lead' && (
                         <MenuItem
-                          onClick={() => {
+                          onClick={(e) => {
+                            const trigger = menuTrigger(e.currentTarget)
                             close()
-                            actions.newProject({ parent: project.id })
+                            actions.newProject({ parent: project.id }, () => trigger)
                           }}
                         >
                           <Icon name="plus" size={16} /> New sub-project
@@ -157,7 +164,7 @@ export function MobileHeader({
                 </span>
               )}
               {canCreate && (
-                <Button onClick={() => actions.newIssue({})}>
+                <Button data-mobile-new-task onClick={() => actions.newIssue({})}>
                   <Icon name="plus" size={16} /> New task
                 </Button>
               )}
@@ -254,6 +261,7 @@ export function MobileNavigation({
 /** The directory preserves project and sub-project actions without a tiny rail. */
 export function ProjectDirectory({ actions }: { actions: Actions }) {
   const mobile = useMobile()
+  const directory = useRef<HTMLDivElement>(null)
   const [search, setSearch] = useState('')
   const query = mobile ? '' : search
   const projects = P.visibleProjects().filter((project) =>
@@ -263,7 +271,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
     ),
   )
   return (
-    <div className="mobile-project-directory">
+    <div ref={directory} className="mobile-project-directory">
       {!mobile && (
         <Input
           value={search}
@@ -278,7 +286,7 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
           <Icon name="layers" size={16} /> All projects
         </Button>
         {P.canCreateProject() && (
-          <Button onClick={() => actions.newProject({ kind: 'program' })}>
+          <Button data-new-project onClick={() => actions.newProject({ kind: 'program' })}>
             <Icon name="plus" size={16} /> New project
           </Button>
         )}
@@ -329,9 +337,10 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
                   <>
                     {P.levelOn(project.id) === 'lead' && (
                       <MenuItem
-                        onClick={() => {
+                        onClick={(e) => {
+                          const trigger = menuTrigger(e.currentTarget)
                           close()
-                          actions.newProject({ parent: project.id })
+                          actions.newProject({ parent: project.id }, () => trigger)
                         }}
                       >
                         <Icon name="plus" size={16} /> New sub-project
@@ -379,7 +388,19 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
       )}
       {/* while the server would create one (P.orgCreate) */}
       {!P.homeOrg && P.orgCreate === 'now' && (
-        <Button onClick={actions.createOrg}>
+        <Button
+          onClick={(e) => {
+            const opener = e.currentTarget
+            // the button leaves once the organization exists, and New
+            // project comes, as the organization's first admin can create one
+            actions.createOrg(() =>
+              opener.isConnected
+                ? null
+                : (directory.current?.querySelector<HTMLElement>('[data-new-project]') ??
+                  directory.current?.querySelector<HTMLElement>('[data-all-nav]')),
+            )
+          }}
+        >
           <Icon name="plus" size={16} /> Create your organization
         </Button>
       )}
@@ -663,9 +684,11 @@ export function MobileTaskList({
         </section>
       ))}
       {count === 0 && (
-        <div className="mobile-task-empty">
+        <div className="mobile-task-empty" data-empty-state>
           <Icon name="board" size={24} />
-          <h2>{P.stillLoading() === null ? 'No tasks here' : 'Loading tasks…'}</h2>
+          <h2 data-empty-state-title>
+            {P.stillLoading() === null ? 'No tasks here' : 'Loading tasks…'}
+          </h2>
           <p>
             {P.stillLoading() !== null
               ? 'Tasks are still arriving.'

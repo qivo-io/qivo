@@ -21,7 +21,10 @@
    reached, or else goes on one entry more in that Back's own popstate.
    Each going-on is a single step that commutes with the person's own Backs,
    also when they are queued (Chromium and Firefox count a queued Back from
-   the one before it), so a Back still leaves one page per press. A spare
+   the one before it), so a Back still leaves one page per press. When
+   Firefox has queued a Back to the first entry the Navigation API lists, no
+   key names the entry before it, another site's, so the going-on steps in
+   that Back's popstate once App has heard it. A spare
    a Back went on from stays as a Forward entry that shows the same page,
    so a Forward onto it changes nothing on screen, one press per spare, and
    a spare under one that a new page took over stays under that page: no
@@ -43,7 +46,13 @@
 
    A Back or Forward the app refuses (lib/popRefusal) returns to the entry it
    left, hidden from every other listener: by key with the Navigation API,
-   which lands there whatever moved first, and by position without it. */
+   which lands there whatever moved first, and by position without it. A
+   move App takes that lands below the page of open layers it left, as
+   quick Backs that Chromium and Firefox counted past a layer that refused
+   its close do, is offered to those layers before App shows it
+   (holdLayers): one that refuses holds its page, and the move returns to
+   its marker the same way. A busy layer, which refuses every close for now,
+   holds its page before App would ask about unsent text (busyLayerLeft). */
 
 /** A phone layer's place in the history (useMobileBackLayer). */
 export type BackLayer = {
@@ -52,7 +61,14 @@ export type BackLayer = {
   /** its marker's token, and that marker's position, null until it is on */
   readonly marker: string
   at: number | null
+  /** with the Navigation API, its marker's key; the position of the page's
+      entry under it */
+  key: string | null
+  base: number | null
   readonly onBack: () => unknown
+  /** whether it refuses every close for now, as a dialog whose request
+      still runs does */
+  readonly busy: () => boolean
 }
 
 /** An entry as the page last saw it: its position, state, address and, with
@@ -82,9 +98,12 @@ let left: Entry = last
 // the latest popstate's step, null when an end of it has no position
 let moved: number | null = null
 // open layers in the order they opened, and those the last popstate left,
-// top first, for the layers' listener (listenBackLayers)
+// top first, for holdLayers and the layers' listener (listenBackLayers).
+// The layers a refusing one kept that get their markers back once App has
+// read the entry the move reached, bottom first (holdLayers).
 const open = new Set<BackLayer>()
 let popped: BackLayer[] = []
+let keep: BackLayer[] = []
 // the first-entry step on its way (firstEntryStep)
 let settling = false
 // a phone close's step past the page on its way (leavePage)
@@ -131,6 +150,11 @@ let rawGo: History['go'] | null = null
 // fires the navigate events of the traversals queued by then before the
 // first lands, so it can lie past the entry the page is on (goOn)
 let ahead: number | null = null
+// with the Navigation API, the first entry listed when a queued traversal
+// goes there and the going-on waits for it to land (goOn), and whether the
+// latest popstate landed there, so the step goes once App has heard it
+let onwardAt: number | null = null
+let onwardDue = false
 let issuing = false
 let queued: (() => void)[] = []
 
@@ -224,6 +248,13 @@ function stepping() {
   }, 0)
 }
 
+/** Notes that a task of its own began, as each popstate and each of the
+    page's timers does, so a step before it no longer counts (stepping).
+    The step's own timer can come after tasks that were queued before it. */
+function laterTask() {
+  stepped = false
+}
+
 /** Runs `traverse`, a script's traversal, now, or once the one issued
     before it has started: WebKit keeps one script traversal at a time, and
     one issued before the last has started replaces it. Its timer for that
@@ -256,9 +287,10 @@ function go(delta: number) {
 
 /** Goes one entry back for a Back from a spare, in turn (serially). When
     Firefox has queued a later traversal, the step goes by key to the entry
-    before that one's, or nowhere when none is listed: Firefox may count a
-    relative step from the entry the page is on, so it would land where the
-    queued traversal does. */
+    before that one's: Firefox may count a relative step from the entry the
+    page is on, so it would land where the queued traversal does. When that
+    traversal goes to the first entry listed, as one past it leaves for
+    another site's, the step waits until it has landed (onwardAt). */
 function goOn() {
   serially(() => {
     const nav = navigationOf(current())
@@ -269,12 +301,13 @@ function goOn() {
       else current().history.go(-1)
       return
     }
-    // a queued traversal to the first entry listed leaves no entry to go
-    // to by key, and a relative step could land where it does
     const key = nav.entries()[ahead - 1]?.key
-    if (key === undefined) return
-    stepping()
-    nav.traverseTo(key).finished.catch(() => {})
+    if (key !== undefined) {
+      stepping()
+      nav.traverseTo(key).finished.catch(() => {})
+      return
+    }
+    onwardAt = ahead
   })
 }
 
@@ -282,6 +315,7 @@ function goOn() {
     the other listeners and React's commit of its popstate. */
 function settleSoon() {
   setTimeout(() => {
+    laterTask()
     if (historyBusy()) return
     const ready = waiting
     waiting = []
@@ -342,11 +376,17 @@ function landReturn(event: PopStateEvent) {
     marker down to the entry a Back reaches in its run, and goes on from a
     spare. Everything here runs before App reads the address. */
 function onPop(event: PopStateEvent) {
+  laterTask()
   const w = current()
   const from = last
   const here = positionIn(w.history.state)
   if (here !== null) at = here
   note()
+  // the traversal the going-on waits for landed on the first entry listed
+  // (goOn): the step goes once App has heard this move (onLayersPop)
+  const index = navigationOf(w)?.currentEntry?.index
+  onwardDue = onwardAt !== null && index === onwardAt
+  if (onwardDue || index === undefined || onwardAt === null || index < onwardAt) onwardAt = null
   left = shown
   shown = last
   leaving = false
@@ -358,10 +398,11 @@ function onPop(event: PopStateEvent) {
     settleSoon()
   }
   // the open layers this move left, top first (an entry without a position
-  // is below them all), for the layers' listener after App's
+  // is below them all), for holdLayers and the layers' listener in App's turn
   popped = [...open]
     .filter((layer) => layer.at !== null && (here === null || layer.at > here))
     .sort((a, b) => b.at! - a.at!)
+  keep = []
   if (ret && landReturn(event)) return
   const firstEntry = settling
   settling = false
@@ -389,25 +430,84 @@ function onPop(event: PopStateEvent) {
   }
 }
 
+/** The layers the latest move left whose page it lands below, top first. */
+function leftBelow() {
+  const here = positionIn(current().history.state)
+  return popped.filter((layer) => here === null || layer.base === null || here < layer.base)
+}
+
+/** Whether the latest move left an open busy layer whose page it lands
+    below. Such a layer holds the page whatever App would ask, so App's
+    popstate listener calls holdLayers first then, and asks nothing about
+    unsent text for a move that cannot happen yet. */
+export function busyLayerLeft() {
+  return leftBelow().some((layer) => layer.state === 'open' && layer.busy())
+}
+
+/** Offers the latest move to the open layers it left whose page it lands
+    below, top first: each closes, or one refuses and holds its page. The
+    move then returns to that layer's marker, hidden from the other
+    listeners, and the layers under it stay open. App's popstate listener
+    calls it when it does not refuse the move itself, before it shows the
+    page the move reached, so a move App refuses closes no layer, and first
+    when a busy layer would hold the page (busyLayerLeft). Answers whether a
+    layer held the page. */
+export function holdLayers(event: PopStateEvent) {
+  for (const layer of leftBelow()) {
+    if (layer.state !== 'open' || closeLayer(layer)) continue
+    const marker = { at: layer.at, state: null, url: '', key: layer.key }
+    // a return already on its way, this layer's or a refusal's, goes back
+    // into the page, and lands whatever moved first
+    if (ret || returnTo(marker, () => {})) {
+      event.stopImmediatePropagation()
+      shown = left
+      popped = []
+      return true
+    }
+    // one that cannot start leaves the move to App: the layer and those
+    // under it that the move also left get their markers back over the
+    // entry it reached, once App has read it (onLayersPop)
+    keep = popped
+      .slice(popped.indexOf(layer))
+      .filter((other) => other.state === 'open')
+      .reverse()
+    popped = []
+    return false
+  }
+  return false
+}
+
 /** The layers' popstate listener, which App adds right after its own, so a
     move App refuses never reaches it. Each open layer the move left closes,
     the top one first; one that answers false stays, and it and the layers
-    under it that the move also left get their markers back. */
+    under it that the move also left get their markers back, as do the
+    layers holdLayers kept. */
 function onLayersPop() {
   const gone = popped
+  let kept = keep
   popped = []
+  keep = []
+  // a going-on past the first entry listed, once App has heard the person's
+  // Back that reached it: a relative step, as no key names an entry before
+  if (onwardDue && !gone.length && !kept.length) {
+    onwardDue = false
+    go(-1)
+    return
+  }
+  onwardDue = false
   for (const [n, layer] of gone.entries()) {
     if (layer.state !== 'open') continue
     if (closeLayer(layer)) continue
-    const kept = gone
+    kept = gone
       .slice(n)
       .filter((other) => other.state === 'open')
       .reverse()
-    whenQuiet(() => {
-      for (const other of kept) markLayer(other)
-    })
-    return
+    break
   }
+  if (!kept.length) return
+  whenQuiet(() => {
+    for (const other of kept) markLayer(other)
+  })
 }
 
 /** Puts `layer`'s marker on: it takes over the spare the page is on when no
@@ -430,6 +530,8 @@ function markLayer(layer: BackLayer) {
       w.location.href,
     )
   layer.at = at
+  layer.key = last.key
+  layer.base = at - depthIn(last.state)
   marked.add(at)
 }
 
@@ -520,7 +622,10 @@ export function installPageHistory(target: Window = window) {
     // a push drops the entries after the current one, and with them the
     // entry an earlier traversal went to
     else if (event.navigationType === 'push') ahead = null
-    if (event.navigationType === 'push') reruns = 0
+    if (event.navigationType === 'push') {
+      reruns = 0
+      onwardAt = null
+    }
     if (
       event.navigationType === 'reload' &&
       event.info === undefined &&
@@ -563,6 +668,7 @@ export function installPageHistory(target: Window = window) {
     win = null
     open.clear()
     popped = []
+    keep = []
     moved = null
     settling = false
     leaving = false
@@ -575,6 +681,8 @@ export function installPageHistory(target: Window = window) {
     stepped = false
     rawGo = null
     ahead = null
+    onwardAt = null
+    onwardDue = false
     marked.clear()
     issuing = false
     queued = []
@@ -610,9 +718,17 @@ export function pushPage(state: object, url: string) {
     the address sync of the commit that opened it, once no page move is on
     its way. `onBack` runs when a Back leaves its marker, the top layer
     first, and answers false to keep it open. */
-export function openLayer(onBack: () => unknown): BackLayer {
+export function openLayer(onBack: () => unknown, busy = () => false): BackLayer {
   seq += 1
-  const layer: BackLayer = { state: 'open', marker: `${LOAD}:${seq}`, at: null, onBack }
+  const layer: BackLayer = {
+    state: 'open',
+    marker: `${LOAD}:${seq}`,
+    at: null,
+    key: null,
+    base: null,
+    onBack,
+    busy,
+  }
   open.add(layer)
   queueMicrotask(() => whenQuiet(() => markLayer(layer)))
   return layer
@@ -625,7 +741,11 @@ export function finishLayer(layer: BackLayer) {
   if (layer.state === 'closed') return
   layer.state = 'closed'
   open.delete(layer)
-  if (layer.at !== null) setTimeout(() => win && firstEntryStep(), 0)
+  if (layer.at !== null)
+    setTimeout(() => {
+      laterTask()
+      if (win) firstEntryStep()
+    }, 0)
 }
 
 /** Leaves the page as a phone close does: one step back past its entry and

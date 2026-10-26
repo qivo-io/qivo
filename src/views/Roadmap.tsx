@@ -13,6 +13,7 @@ import {
 } from 'react'
 import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
+import { focusAround } from '@/lib/focusWhenGone'
 import { REVEAL_MS } from '@/lib/reveal'
 import { isRoadmapTaskVisible } from '@/lib/roadmapVisibility'
 import { useTaskMemo } from '@/lib/taskMemo'
@@ -507,6 +508,30 @@ function Roadmap({
   const [hlUser, setHlUser] = useStateR(null)
   const stripPanelRef = useRefR<HTMLElement | null>(null)
   const toolbarRef = useRefR<HTMLDivElement | null>(null)
+  /* The Milestones window opened from a flag can delete that milestone, and
+     the flag with it. Focus then goes to the next flag, the previous one,
+     the toolbar's Milestone or its filter field, else, as on a phone, whose
+     toolbar folds into a closed Filters & planning, that fold's summary. */
+  const editMilestone = (id: string) =>
+    actions.editMilestone(
+      id,
+      focusAround(
+        'data-msflag',
+        id,
+        (flag) => flag,
+        () => {
+          const toolbar = toolbarRef.current
+          // a control in a closed fold shows nothing to focus
+          const open = (element: HTMLElement | null | undefined) =>
+            element && !element.closest('details:not([open])') ? element : null
+          return (
+            open(toolbar?.querySelector<HTMLElement>('[data-new-milestone]')) ??
+            open(toolbar?.querySelector<HTMLElement>('[data-filter-group] input')) ??
+            toolbar?.closest('details')?.querySelector<HTMLElement>(':scope > summary')
+          )
+        },
+      ),
+    )
   useEffectR(() => {
     if (!hlUser) return
     const onKeyDown = (event: KeyboardEvent) => {
@@ -2011,7 +2036,7 @@ function Roadmap({
                             movable={P.canWrite(m.project)}
                             onLive={msOnLive}
                             onCommit={msCommit}
-                            onEdit={actions.editMilestone}
+                            onEdit={editMilestone}
                           />
                         )
                       )
@@ -2219,6 +2244,7 @@ function Roadmap({
                     <div
                       className="animate-in fade-in slide-in-from-bottom-1 [position:sticky] [left:0] [display:flex] [flex-direction:column] [align-items:center] [gap:8px] [padding:26px_16px]"
                       data-no-match
+                      data-empty-state
                       style={{ width: paneW || GRID_X + timelineW + GUTTER_W }}
                     >
                       <span className="[font-size:var(--fs-base)] [color:var(--text-3)]">

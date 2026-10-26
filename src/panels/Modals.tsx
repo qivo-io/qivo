@@ -157,6 +157,7 @@ function ModalShell({
       return false
     },
     mobile || isLandscapeRoadmapOpen(),
+    busy,
   )
   const cancel = () => {
     cancelling.current = true
@@ -644,10 +645,12 @@ function NewSubProjectModal({
   init = {},
   onClose,
   onCreate,
+  focusAfterClose,
 }: {
   init?: { parent?: string }
   onClose: () => void
   onCreate: (p: NewProjectInput, opts: { withStarter: boolean }) => void
+  focusAfterClose?: () => HTMLElement | null
 }) {
   const metas = P.projects.filter((p) => p.type === 'meta' && P.levelOn(p.id) === 'lead')
   const [name, setName] = useStateM('')
@@ -690,6 +693,7 @@ function NewSubProjectModal({
       icon="layers"
       title="New sub-project"
       onClose={onClose}
+      focusAfterClose={focusAfterClose}
       unsent={[!!name.trim() && 'name']}
       onSubmit={submit}
       canSubmit={canSave}
@@ -920,7 +924,17 @@ function MoveIssueModal({
    and the removal goes ahead, leaving the tasks (P.removalLeavesTasks). A
    removal the read-only organization refuses closes it (P.removalRefused). */
 const NOBODY = '__nobody__'
-function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClose: () => void }) {
+function AccessRemovalModal({
+  change,
+  onClose,
+  focusAfterClose,
+}: {
+  change: AccessRemoval
+  onClose: () => void
+  /** what takes focus as the window closes, as the removal takes the row
+      of the button that opened it away before the server accepts it */
+  focusAfterClose?: () => HTMLElement | null
+}) {
   const read = () => {
     const removal = P.accessRemoval(change)
     return { ...removal, choices: P.reassignChoices(change, removal.items) }
@@ -1042,6 +1056,7 @@ function AccessRemovalModal({ change, onClose }: { change: AccessRemoval; onClos
       icon="warning"
       title={title}
       onClose={onClose}
+      focusAfterClose={focusAfterClose}
       busy={saving}
       onSubmit={submit}
       canSubmit={!saving}
@@ -1970,9 +1985,13 @@ function UnusedReason({
 function MilestoneModal({
   init = {},
   onClose,
+  focusAfterClose,
 }: {
   init?: { id?: string; week?: number; project?: string | null }
   onClose: () => void
+  /** what takes focus as the window closes, for an opener whose milestone
+      was deleted here */
+  focusAfterClose?: () => HTMLElement | null
 }) {
   // milestones sit on a project's roadmap (0078) — a new one needs one, and
   // writing takes user level on it. The project is fixed when the window
@@ -2034,6 +2053,7 @@ function MilestoneModal({
       // the shell's chip is set in mono for task keys; a project name is prose
       badge={project && <span className="font-sans">{project.name}</span>}
       onClose={onClose}
+      focusAfterClose={focusAfterClose}
       width={600}
       footer={(close) => (
         <>
@@ -2357,7 +2377,15 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
    signed up and was invited straight into someone else's project as a guest
    (0081). One home organization per login, forever, so this is a one-time
    door; `create_organization` refuses a second. */
-function CreateOrgModal({ onClose }: { onClose: () => void }) {
+function CreateOrgModal({
+  onClose,
+  focusAfterClose,
+}: {
+  onClose: () => void
+  /** what takes focus as the window closes, as the button that opened it
+      leaves once the organization exists */
+  focusAfterClose?: () => HTMLElement | null
+}) {
   const [name, setName] = useStateM('')
   const [busy, setBusy] = useStateM(false)
   const ref = useRefM<HTMLInputElement>(null)
@@ -2368,11 +2396,14 @@ function CreateOrgModal({ onClose }: { onClose: () => void }) {
   const submit = async () => {
     if (!canSave) return
     setBusy(true)
-    const ok = await P.createOrg(name.trim())
-    setBusy(false)
-    if (ok) {
-      window.showToast?.(`“${name.trim()}” is yours. You're its first admin.`)
-      onClose()
+    try {
+      if (await P.createOrg(name.trim())) {
+        window.showToast?.(`“${name.trim()}” is yours. You're its first admin.`)
+        onClose()
+      }
+    } finally {
+      // busy refuses every close of the dialog
+      setBusy(false)
     }
   }
   return (
@@ -2380,6 +2411,10 @@ function CreateOrgModal({ onClose }: { onClose: () => void }) {
       icon="people"
       title="Create your organization"
       onClose={onClose}
+      focusAfterClose={focusAfterClose}
+      // the button that opened it leaves once the organization exists, so a
+      // close while the create runs would leave focus nowhere
+      busy={busy}
       unsent={[!!name.trim() && 'organization name']}
       onSubmit={submit}
       canSubmit={canSave}

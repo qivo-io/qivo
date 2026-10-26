@@ -5222,7 +5222,21 @@ export const PLANNER = {
       return false
     }
     // the workspace on screen never shrinks to a partial one
-    await initStore(undefined, undefined, { whole: true })
+    try {
+      await initStore(undefined, undefined, { whole: true })
+    } catch (e) {
+      // The organization exists, so a second create would be refused. The
+      // workspace on screen shows as out of date with edits paused, and a
+      // read that stopped its subscriptions starts them again, as Try
+      // again does, so its first delivery ends the trouble.
+      console.error('[qivo] workspace load failed:', e)
+      snapshotFailed(e)
+      if (!parts) {
+        const epoch = storeEpoch
+        parts = startParts(() => epoch === storeEpoch && !demoDisposed)
+      }
+      toast('The organization was created, but Qivo could not load it. Reload the page to open it.')
+    }
     emit()
     return true
   },

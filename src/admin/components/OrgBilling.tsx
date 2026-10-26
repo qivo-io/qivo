@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { FieldHint, SettingsField, SettingsGroup, SettingsSection } from '@/components/settingsPage'
 import {
   AlertDialog,
@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { billingDate, billingError, billingMoney } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
+import { restoreFocus } from '@/lib/focusVisibility'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../../convex/_generated/api'
 import type { BillingPlan, BillingSummary } from '../../../convex/lib/billingTypes'
@@ -32,6 +33,26 @@ export function OrgBilling({ orgId, seatsVersion = 0 }: { orgId: string; seatsVe
   const [busy, setBusy] = useState(false)
   const activeWrite = useRef(false)
   useUpdateBlocker(busy || (!!summary && !!planId && planId !== summary.plan?.id))
+  const assignButton = useRef<HTMLButtonElement>(null)
+  const grantButton = useRef<HTMLButtonElement>(null)
+  const assignedPlan = useRef<HTMLParagraphElement>(null)
+  // The button of the question that closed last. A question closes as its
+  // write starts, and the write disables its button until it ends, so focus
+  // goes back once no write runs: to the button, or to the assigned plan
+  // line while the button stays disabled, as after an assignment.
+  const [askedBy, setAskedBy] = useState<HTMLButtonElement | null>(null)
+  useLayoutEffect(() => {
+    if (!askedBy || busy) return
+    setAskedBy(null)
+    // focus that has moved on meanwhile stays where it is
+    const active = document.activeElement
+    if (active && active !== document.body && active.isConnected) return
+    restoreFocus(askedBy.disabled ? assignedPlan.current : askedBy)
+  }, [askedBy, busy])
+  const giveFocusBack = (button: RefObject<HTMLButtonElement | null>) => (event: Event) => {
+    event.preventDefault()
+    setAskedBy(button.current)
+  }
 
   const reload = useCallback(async () => {
     const [billing, catalogue] = await Promise.all([
@@ -118,7 +139,7 @@ export function OrgBilling({ orgId, seatsVersion = 0 }: { orgId: string; seatsVe
       {summary && (
         <>
           <SettingsField label="Assigned plan" width={550}>
-            <p className="text-base font-semibold">
+            <p ref={assignedPlan} tabIndex={-1} className="text-base font-semibold">
               {summary.plan?.name ?? 'No plan assigned'}
               {summary.plan && !summary.plan_assigned ? ' (default; not assigned yet)' : ''}
             </p>
@@ -194,6 +215,7 @@ export function OrgBilling({ orgId, seatsVersion = 0 }: { orgId: string; seatsVe
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button
+                    ref={assignButton}
                     type="button"
                     disabled={
                       busy ||
@@ -205,7 +227,7 @@ export function OrgBilling({ orgId, seatsVersion = 0 }: { orgId: string; seatsVe
                     Assign plan
                   </Button>
                 </AlertDialogTrigger>
-                <AlertDialogContent size="sm">
+                <AlertDialogContent size="sm" onCloseAutoFocus={giveFocusBack(assignButton)}>
                   <AlertDialogHeader>
                     <AlertDialogTitle>Assign this billing plan?</AlertDialogTitle>
                     <AlertDialogDescription>
@@ -241,11 +263,16 @@ export function OrgBilling({ orgId, seatsVersion = 0 }: { orgId: string; seatsVe
           >
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button type="button" data-grant-complimentary disabled={busy || !canGrant}>
+                <Button
+                  ref={grantButton}
+                  type="button"
+                  data-grant-complimentary
+                  disabled={busy || !canGrant}
+                >
                   {busy ? 'Saving…' : 'Grant six months free'}
                 </Button>
               </AlertDialogTrigger>
-              <AlertDialogContent size="sm">
+              <AlertDialogContent size="sm" onCloseAutoFocus={giveFocusBack(grantButton)}>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Grant six months of complimentary access?</AlertDialogTitle>
                   <AlertDialogDescription>

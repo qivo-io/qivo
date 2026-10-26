@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useSyncExternalStore } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -9,20 +9,61 @@ import { OrganizationDeletion } from './OrganizationDeletion'
 /* Settings › General's Delete organization question as it closes. Cancel
    clears the typed confirmation and a finished request clears busy, so the
    closing dialog keeps what it showed open, and an opening starts empty.
-   The request is answered by hand. */
+   The scheduled deletion can arrive before the request's answer. The
+   request is answered by hand. */
 
 const server = vi.hoisted(() => ({
-  requests: [] as { resolve: (value: null) => void; args: unknown }[],
+  requests: [] as {
+    resolve: (value: null) => void
+    reject: (cause: Error) => void
+    args: unknown
+  }[],
+  // the organization's removal state, as its subscription delivers it
+  state: {
+    slug: 'northstar-labs',
+    last_export_at: null as string | null,
+    deletion: null as null | {
+      reason: 'requested'
+      delete_after: string
+      keep_available: boolean
+    },
+  },
+  listeners: new Set<() => void>(),
 }))
 vi.mock('../lib/convex', () => ({
   convex: {
     action: (_ref: unknown, args: unknown) =>
-      new Promise((resolve) => server.requests.push({ resolve, args })),
+      new Promise((resolve, reject) => server.requests.push({ resolve, reject, args })),
+    mutation: (_ref: unknown, args: unknown) =>
+      new Promise((resolve, reject) => server.requests.push({ resolve, reject, args })),
   },
 }))
 vi.mock('../lib/orgRemovalState', () => ({
-  useOrgRemovalState: () => ({ slug: 'northstar-labs', last_export_at: null, deletion: null }),
+  useOrgRemovalState: () =>
+    useSyncExternalStore(
+      (listener) => {
+        server.listeners.add(listener)
+        return () => server.listeners.delete(listener)
+      },
+      () => server.state,
+    ),
 }))
+/** Delivers the scheduled deletion, or with `false` its stop, as the
+    state's subscription does. */
+const scheduleDeletion = (scheduled = true) =>
+  act(async () => {
+    server.state = {
+      ...server.state,
+      deletion: scheduled
+        ? {
+            reason: 'requested',
+            delete_after: '2026-11-25T00:00:00.000Z',
+            keep_available: true,
+          }
+        : null,
+    }
+    for (const listener of server.listeners) listener()
+  })
 vi.mock('../store/planner', () => ({ P: { cannotSaveText: () => null } }))
 
 let container: HTMLDivElement
@@ -32,6 +73,7 @@ beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   playClosingAnimations()
   server.requests.length = 0
+  server.state = { ...server.state, deletion: null }
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -111,6 +153,7 @@ describe('the Delete organization question', () => {
     expect(server.requests).toEqual([
       {
         resolve: expect.any(Function),
+        reject: expect.any(Function),
         args: { org_id: 'org-northstar', confirm: 'northstar-labs' },
       },
     ])
@@ -122,5 +165,87 @@ describe('the Delete organization question', () => {
     expect(confirm()?.disabled).toBe(true)
     await endClosing()
     expect(dialog()).toBeNull()
+  })
+
+  it('stays while it deletes when the deletion arrives first, then fades and gives focus to its date', async () => {
+    await askAndConfirm()
+    await act(async () => confirm()?.click())
+    await scheduleDeletion()
+    expect(document.querySelector('[data-org-delete]')).toBeNull()
+    expect(dialog()?.getAttribute('data-state')).toBe('open')
+    expect(confirm()?.textContent).toBe('Deleting…')
+    await act(async () => server.requests[0].resolve(null))
+    expect(dialog()?.getAttribute('data-state')).toBe('closed')
+    expect(confirm()?.textContent).toBe('Deleting…')
+    await endClosing()
+    expect(dialog()).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('[data-org-deletion-date]'))
+  })
+
+  it("closes a question that waits for nothing when another admin's deletion arrives", async () => {
+    await askAndConfirm()
+    await scheduleDeletion()
+    expect(dialog()?.getAttribute('data-state')).toBe('closed')
+    expect(field()?.value).toBe('northstar-labs')
+    await act(async () => confirm()?.click())
+    expect(server.requests).toHaveLength(0)
+    await endClosing()
+    expect(dialog()).toBeNull()
+    expect(document.activeElement).toBe(document.querySelector('[data-org-deletion-date]'))
+  })
+
+  it('gives focus to its date when the deletion arrives after the answer and the close', async () => {
+    await askAndConfirm()
+    await act(async () => confirm()?.click())
+    await act(async () => server.requests[0].resolve(null))
+    await endClosing()
+    expect(document.activeElement).toBe(document.querySelector('[data-org-delete]'))
+    await scheduleDeletion()
+    expect(document.activeElement).toBe(document.querySelector('[data-org-deletion-date]'))
+  })
+
+  it('drops a refusal that a lost answer left when the deletion arrives after all', async () => {
+    await askAndConfirm()
+    await act(async () => confirm()?.click())
+    await act(async () =>
+      server.requests[0].reject(new Error('Connection lost while action was in flight')),
+    )
+    expect(dialog()?.querySelector('[role="alert"]')?.textContent).toBe(
+      'The organization could not be deleted. Try again.',
+    )
+    await scheduleDeletion()
+    expect(dialog()?.getAttribute('data-state')).toBe('closed')
+    // the closing question still shows it, the page does not
+    expect(dialog()?.querySelector('[role="alert"]')).not.toBeNull()
+    expect(document.querySelector('[data-org-deletion] [role="alert"]')).toBeNull()
+    await endClosing()
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+  })
+})
+
+describe('Keep organization', () => {
+  it('gives focus to Delete organization once the stopped deletion takes its button away', async () => {
+    await scheduleDeletion()
+    const keep = document.querySelector<HTMLButtonElement>('[data-org-keep]')
+    keep?.focus()
+    await act(async () => keep?.click())
+    await act(async () => server.requests[0].resolve(null))
+    expect(document.activeElement).toBe(keep)
+    await scheduleDeletion(false)
+    expect(document.activeElement).toBe(document.querySelector('[data-org-delete]'))
+  })
+
+  it('gives focus to Delete organization once its own write ends when the stop arrives first', async () => {
+    await scheduleDeletion()
+    const keep = document.querySelector<HTMLButtonElement>('[data-org-keep]')
+    keep?.focus()
+    await act(async () => keep?.click())
+    await scheduleDeletion(false)
+    // the write still runs, so the button that came back waits disabled
+    const opener = document.querySelector<HTMLButtonElement>('[data-org-delete]')
+    expect(opener?.disabled).toBe(true)
+    expect(document.activeElement).toBe(document.body)
+    await act(async () => server.requests[0].resolve(null))
+    expect(document.activeElement).toBe(opener)
   })
 })

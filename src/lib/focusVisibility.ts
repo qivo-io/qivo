@@ -40,11 +40,21 @@ export function lastInputWasPointer() {
 // Native selects release focus after a pointer pick. Keep that same policy
 // when a confirmation returns to one; other controls keep their Tab anchor
 // and use the shared CSS gate to restore focus silently after pointer use.
+// Keyboard focus that lands wholly outside the window, as on a control
+// above a phone's scrolled page, scrolls into view as a plain focus would.
 export function restoreFocus(element: HTMLElement | null | undefined) {
   element?.focus({ preventScroll: true })
-  if (element?.matches('[data-slot="native-select"]') && lastInputWasPointer()) {
-    element.blur()
-  }
+  if (!element || document.activeElement !== element) return
+  if (lastInputWasPointer()) {
+    if (element.matches('[data-slot="native-select"]')) element.blur()
+  } else if (outOfView(element)) element.scrollIntoView({ block: 'nearest' })
+}
+
+/** Whether `element` has a box and none of it is inside the window. */
+function outOfView(element: HTMLElement) {
+  const box = element.getBoundingClientRect()
+  if (!box.width && !box.height) return false
+  return box.bottom <= 0 || box.top >= innerHeight || box.right <= 0 || box.left >= innerWidth
 }
 
 // A customizable select (tokens.css) draws its open list in the page, so the

@@ -370,6 +370,71 @@ describe('the API access page', () => {
     expect(listCalls()).toHaveLength(2)
   })
 
+  it('gives focus to the next Revoke, else the previous one, else the line, once a revoke takes its own away', async () => {
+    // the server revokes, and the list read after it says so. The list
+    // answers after the window has given focus back to the Revoke, as the
+    // network does
+    const read = network.query.getMockImplementation()
+    network.query.mockImplementation(async (ref, args) => {
+      await new Promise((resolve) => setTimeout(() => setTimeout(resolve, 0), 0))
+      return read?.(ref, args)
+    })
+    network.mutation.mockImplementation((ref, args) => {
+      const name = getFunctionName(ref)
+      if (name === 'apiAccess:revoke')
+        for (const c of lists[CURRENT].credentials)
+          if (c.table === args.table && c.id === args.id)
+            Object.assign(c, { state: 'revoked', revoked_at: NOW.toISOString() })
+      return Promise.resolve(name === 'apiAccess:revoke' ? true : null)
+    })
+    await render(<ui.OrgApiAccessPage />)
+    const revoke = async (id: string) => {
+      const button = find<HTMLButtonElement>('[data-api-credential-revoke]', row(id))
+      button.focus()
+      await click(button)
+      await click(buttonIn(find('[data-modal-shell]'), 'Revoke'))
+      expect(document.querySelector('[data-modal-shell]')).toBeNull()
+    }
+    // the row stays without its Revoke, so focus goes to the next row's
+    await revoke('mcp_tokens:cursor')
+    expect(row('mcp_tokens:cursor').querySelector('[data-api-credential-revoke]')).toBeNull()
+    expect(document.activeElement).toBe(
+      find('[data-api-credential-revoke]', row('oauth_connections:claude')),
+    )
+    // the Active filter drops the row, and the last one goes to the one before it
+    await click(buttonIn(find('[aria-label="State"]'), 'Active'))
+    await revoke('mcp_tokens:sheets-export-script')
+    expect(
+      document.querySelector('[data-api-credential="mcp_tokens:sheets-export-script"]'),
+    ).toBeNull()
+    expect(document.activeElement).toBe(
+      find('[data-api-credential-revoke]', row('agent_keys:github-actions')),
+    )
+    // with no row left, focus goes to the line that says so
+    await type(find<HTMLInputElement>('[data-api-access-search]'), 'GitHub')
+    await revoke('agent_keys:github-actions')
+    expect(document.activeElement?.textContent).toBe('No credentials match the filters.')
+  })
+
+  it('moves nothing when a credential whose window was cancelled ends later', async () => {
+    await render(<ui.OrgApiAccessPage />)
+    const revoke = find<HTMLButtonElement>('[data-api-credential-revoke]', row('mcp_tokens:cursor'))
+    revoke.focus()
+    await click(revoke)
+    await click(buttonIn(find('[data-modal-shell]'), 'Cancel'))
+    expect(document.activeElement).toBe(revoke)
+    // another admin revokes it, and a Refresh that leaves focus nowhere, as
+    // a click in Safari does, reads it
+    revoke.blur()
+    Object.assign(lists[CURRENT].credentials[0], {
+      state: 'revoked',
+      revoked_at: NOW.toISOString(),
+    })
+    await click(find('[data-api-access-refresh]'))
+    expect(row('mcp_tokens:cursor').querySelector('[data-api-credential-revoke]')).toBeNull()
+    expect(document.activeElement).toBe(document.body)
+  })
+
   it('keeps the window open with the reason when the revoke is refused', async () => {
     network.mutation.mockImplementation((ref) =>
       getFunctionName(ref) === 'apiAccess:revoke'

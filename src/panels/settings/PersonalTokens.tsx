@@ -19,6 +19,7 @@ import { Icon } from '../../components/qivo'
 import { SettingsGroup } from '../../components/settingsPage'
 import { isoFromDate } from '../../lib/dates'
 import { overLimit } from '../../lib/fieldLimits'
+import { focusAround, useFocusWhenGone } from '../../lib/focusWhenGone'
 import { watchLocalDay } from '../../lib/localDay'
 import { connectionScopeLabel } from '../../lib/oauthConnection'
 import {
@@ -83,6 +84,14 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
   useEffect(() => {
     reload()
   }, [])
+  /* The token whose Delete or Revoke was confirmed last, with where focus
+     goes once a delete has taken its row away: the next row's button, the
+     previous row's, or New token. A revoked token keeps its row. */
+  const [acted, setActed] = useState<{ id: string; focus: () => HTMLElement | null }>()
+  useFocusWhenGone(
+    !!acted && Array.isArray(tokens) && tokens.some((t) => t.id === acted.id),
+    () => acted?.focus() ?? null,
+  )
 
   return (
     <SettingsGroup legend="Personal access tokens" data-mcp-tokens="">
@@ -117,7 +126,20 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
               token={t}
               now={now}
               armed={confirm.armed === t.id}
-              onPress={(action) => confirm.press(t.id, action)}
+              onPress={(action) =>
+                confirm.press(t.id, () => {
+                  setActed({
+                    id: t.id,
+                    focus: focusAround(
+                      'data-mcp-token',
+                      t.id,
+                      (row) => row.querySelector<HTMLElement>('button'),
+                      () => document.querySelector<HTMLElement>('[data-mcp-new-token]'),
+                    ),
+                  })
+                  action()
+                })
+              }
               onChanged={reload}
             />
           ))}

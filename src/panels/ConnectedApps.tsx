@@ -11,6 +11,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { restoreFocus } from '@/lib/focusVisibility'
+import { focusAround, useFocusAfterRender } from '@/lib/focusWhenGone'
 import type { api } from '../../convex/_generated/api'
 import { Icon } from '../components/qivo'
 import { SettingsGroup } from '../components/settingsPage'
@@ -29,9 +31,13 @@ export function ConnectedApps() {
   // a refused delete, shown in the dialog only and cleared when it opens
   const [deleteError, setDeleteError] = useState('')
   const [busy, setBusy] = useState(false)
-  // the Delete that opened the dialog, which takes focus back once it has
-  // closed, unless its connection is gone
-  const opener = useRef<HTMLButtonElement | null>(null)
+  // where focus goes once the dialog has closed, taken as it opens: the
+  // Delete that opened it, else, once its connection is gone, the next
+  // row's, else the nearest one before it, else the empty list's line
+  const focusAfter = useRef<() => HTMLElement | null>(() => null)
+  const focusAfterRender = useFocusAfterRender()
+  const empty = useRef<HTMLParagraphElement>(null)
+  const content = useRef<HTMLDivElement>(null)
   useUpdateBlocker(busy)
   // a close clears the selection, so the closing dialog keeps its words
   const shown = useClosingWords(!!selected, { name: selected?.clientName, busy })
@@ -56,6 +62,10 @@ export function ConnectedApps() {
       )
       setSelected(null)
       await reload()
+      // The rows' Delete buttons stay disabled while the list reloads, so a
+      // dialog that closed first left focus nowhere. One still fading gives
+      // focus itself.
+      focusAfterRender(() => (content.current?.isConnected ? null : focusAfter.current()))
     } else setDeleteError('Could not delete this connection. Try again.')
     setBusy(false)
   }
@@ -80,7 +90,11 @@ export function ConnectedApps() {
           </Button>
         </div>
       )}
-      {connections?.length === 0 && <p className="text-sm text-text-2">No connected apps.</p>}
+      {connections?.length === 0 && (
+        <p ref={empty} tabIndex={-1} className="text-sm text-text-2">
+          No connected apps.
+        </p>
+      )}
       <div className="space-y-2">
         {connections?.map((connection) => (
           <div
@@ -101,8 +115,13 @@ export function ConnectedApps() {
                 size="sm"
                 className="text-danger"
                 disabled={busy}
-                onClick={(event) => {
-                  opener.current = event.currentTarget
+                onClick={() => {
+                  focusAfter.current = focusAround(
+                    'data-oauth-connection',
+                    connection.id,
+                    (row) => row.querySelector('button'),
+                    () => empty.current,
+                  )
                   setDeleteError('')
                   setSelected(connection)
                 }}
@@ -144,10 +163,10 @@ export function ConnectedApps() {
         }}
       >
         <AlertDialogContent
+          ref={content}
           onCloseAutoFocus={(event) => {
-            if (!opener.current?.isConnected) return
             event.preventDefault()
-            opener.current.focus()
+            restoreFocus(focusAfter.current())
           }}
         >
           <AlertDialogHeader>

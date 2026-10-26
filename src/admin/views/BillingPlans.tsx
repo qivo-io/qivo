@@ -16,8 +16,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
 import { billingError, billingMoney } from '@/lib/billingDisplay'
+import { useClosingWords } from '@/lib/closingWords'
 import { convex } from '@/lib/convex'
 import { overLimit } from '@/lib/fieldLimits'
+import { restoreFocus } from '@/lib/focusVisibility'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../../convex/_generated/api'
 import type { BillingPlan } from '../../../convex/lib/billingTypes'
@@ -60,18 +62,26 @@ export function BillingPlans() {
     void reload().catch((cause: unknown) => setError(billingError(cause)))
   }, [reload])
 
-  async function write(work: () => Promise<void>) {
-    if (activeWrite.current) return
+  /** Runs one change, then reloads the catalogue. Answers whether the
+   * change landed. Its refusal goes to `refuse`, the page's alert unless a
+   * dialog shows it, and a reload that fails after it landed goes to the
+   * page's alert. */
+  async function write(work: () => Promise<void>, refuse: (refusal: string) => void = setError) {
+    if (activeWrite.current) return false
     activeWrite.current = true
     const release = beginUpdateBlock()
     setBusy(true)
     setError('')
     setMessage('')
     try {
-      await work()
-      await reload()
-    } catch (cause) {
-      setError(billingError(cause))
+      try {
+        await work()
+      } catch (cause) {
+        refuse(billingError(cause))
+        return false
+      }
+      await reload().catch((cause: unknown) => setError(billingError(cause)))
+      return true
     } finally {
       activeWrite.current = false
       setBusy(false)
@@ -192,50 +202,19 @@ export function BillingPlans() {
               {plan.api_block_size.toLocaleString()} calls.
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              {defaultId === plan.id ? (
-                <p className="text-sm font-semibold">Default for new customers</p>
-              ) : plan.archived ? (
-                <p className="text-sm text-text-2">Archived</p>
-              ) : (
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={busy || !plan.polar_product_id}
-                    >
-                      Use for new customers
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent size="sm">
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Make {plan.name} the default?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        New organizations will use this connected plan. Existing organizations keep
-                        their current terms.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
-                      <AlertDialogAction
-                        onClick={() =>
-                          void write(async () => {
-                            await sendMutation(api.adminBilling.setDefaultPlan, {
-                              plan_id: plan.id,
-                            })
-                            setMessage(
-                              `${plan.name} is the default for new customers. Existing organizations keep their plans.`,
-                            )
-                          })
-                        }
-                      >
-                        Make default
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              )}
+              <MakeDefault
+                plan={plan}
+                isDefault={defaultId === plan.id}
+                busy={busy}
+                onConfirm={(refuse) =>
+                  write(async () => {
+                    await sendMutation(api.adminBilling.setDefaultPlan, { plan_id: plan.id })
+                    setMessage(
+                      `${plan.name} is the default for new customers. Existing organizations keep their plans.`,
+                    )
+                  }, refuse)
+                }
+              />
               {!plan.polar_product_id && (
                 <p className="text-sm text-text-2">Payment product is not configured.</p>
               )}
@@ -330,6 +309,111 @@ export function BillingPlans() {
   )
 }
 
+/** A plan's default line, or the question that makes a connected plan the
+ * default for new customers. The question waits for the change and shows
+ * its refusal, then closes once the catalogue has reloaded. A change sent
+ * just before the connection dropped waits for the reconnect, as Convex
+ * sends it again, and the question waits with it: the console sends no
+ * other change meanwhile (admin/convex). It stays mounted as its button
+ * gives way to the default line, so it fades, and focus then goes to that
+ * line. */
+function MakeDefault({
+  plan,
+  isDefault,
+  busy,
+  onConfirm,
+}: {
+  plan: BillingPlan
+  isDefault: boolean
+  busy: boolean
+  /** makes the plan the default, giving a refusal to `refuse`, and answers
+      whether it landed */
+  onConfirm: (refuse: (refusal: string) => void) => Promise<boolean>
+}) {
+  const [open, setOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const opener = useRef<HTMLButtonElement>(null)
+  const status = useRef<HTMLParagraphElement>(null)
+  // a reload while it waits for nothing that shows the plan as the default,
+  // or archived, ends the question
+  if (open && !saving && (isDefault || plan.archived)) setOpen(false)
+  // Cancel clears the refusal, and the change clears saving, as the dialog
+  // closes. It shows them until it has faded.
+  const shown = useClosingWords(open, { error, saving })
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (saving) return
+        setOpen(next)
+        setError('')
+      }}
+    >
+      {isDefault ? (
+        <p ref={status} tabIndex={-1} className="text-sm font-semibold">
+          Default for new customers
+        </p>
+      ) : plan.archived ? (
+        <p ref={status} tabIndex={-1} className="text-sm text-text-2">
+          Archived
+        </p>
+      ) : (
+        <AlertDialogTrigger asChild>
+          <Button
+            ref={opener}
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy || !plan.polar_product_id}
+          >
+            Use for new customers
+          </Button>
+        </AlertDialogTrigger>
+      )}
+      <AlertDialogContent
+        size="sm"
+        onCloseAutoFocus={(event) => {
+          if (opener.current?.isConnected) return
+          event.preventDefault()
+          restoreFocus(status.current)
+        }}
+      >
+        <AlertDialogHeader>
+          <AlertDialogTitle>Make {plan.name} the default?</AlertDialogTitle>
+          <AlertDialogDescription>
+            New organizations will use this connected plan. Existing organizations keep their
+            current terms.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {shown.error && (
+          <p role="alert" className="text-sm text-danger">
+            {shown.error}
+          </p>
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={shown.saving}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            data-make-default
+            disabled={shown.saving}
+            onClick={(event) => {
+              event.preventDefault()
+              setSaving(true)
+              setError('')
+              void onConfirm(setError).then((landed) => {
+                setSaving(false)
+                if (landed) setOpen(false)
+              })
+            }}
+          >
+            {shown.saving ? 'Saving…' : 'Make default'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
 function ConnectPlan({
   busy,
   onConnect,
@@ -339,7 +423,7 @@ function ConnectPlan({
     polar_product_id: string
     api_meter_id: string
     storage_meter_id: string
-  }) => Promise<void>
+  }) => Promise<unknown>
 }) {
   const [product, setProduct] = useState('')
   const [apiMeter, setApiMeter] = useState('')

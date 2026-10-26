@@ -4,7 +4,7 @@ import type { FunctionArgs, FunctionReference, FunctionReturnType } from 'convex
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { Check, ImageIcon, Maximize2 } from 'lucide-react'
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { LimitedInput, LimitedTextarea } from '@/components/LimitedField'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -37,6 +37,8 @@ import {
   prepareBackgroundImage,
 } from '@/lib/backgroundImageUpload'
 import { overLimit } from '@/lib/fieldLimits'
+import { restoreFocus } from '@/lib/focusVisibility'
+import { focusAround, useFocusAfterRender, useFocusWhenGone } from '@/lib/focusWhenGone'
 import type { ImageMetadata } from '@/lib/imageMetadata'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { cn } from '@/lib/utils'
@@ -187,6 +189,23 @@ function useLiveAction<A extends FunctionReference<'action'>>(action: A) {
   )
 }
 
+/** Focus props for a dialog opened without a Trigger, which Radix has
+    nothing to give focus back to. The dialog notes what had focus as it
+    opens and gives focus back there once it has closed, or to
+    `focusAfter()` when that has left the page. */
+function useReturnFocus(focusAfter?: () => HTMLElement | null) {
+  const opener = useRef<HTMLElement | null>(null)
+  return {
+    onOpenAutoFocus: () => {
+      if (document.activeElement instanceof HTMLElement) opener.current = document.activeElement
+    },
+    onCloseAutoFocus: (event: Event) => {
+      event.preventDefault()
+      restoreFocus(opener.current?.isConnected ? opener.current : focusAfter?.())
+    },
+  }
+}
+
 function Failure({ message, retry }: { message: string; retry?: () => void }) {
   return (
     <div role="alert" className="rounded-md border border-danger/40 bg-danger-soft p-3 text-sm">
@@ -330,15 +349,20 @@ function ImageMetadataRows({
   )
 }
 
+/* Once closed, it gives focus back to the button that opened it, or to
+   `focusAfter()` when an approval took that button away. */
 function ImagePreview({
   image: initialImage,
   agentFilter = 'all',
   close,
+  focusAfter,
 }: {
   image: BackgroundImage
   agentFilter?: AgentFilter
   close: () => void
+  focusAfter?: () => HTMLElement | null
 }) {
+  const returnFocus = useReturnFocus(focusAfter)
   const [selectedImage, setSelectedImage] = useState(initialImage)
   // An open modal follows asynchronous preview generation and backfills too.
   const {
@@ -439,6 +463,7 @@ function ImagePreview({
       }}
     >
       <DialogContent
+        {...returnFocus}
         data-image-review-preview={image.id}
         aria-busy={busy}
         showCloseButton={!busy}
@@ -665,6 +690,46 @@ function Library() {
     ...(agentFilter !== 'all' ? { agent_review: agentFilter } : {}),
     ...(cursors[page] ? { cursor: cursors[page] } : {}),
   })
+  const empty = useRef<HTMLHeadingElement>(null)
+  const statusFilter = useRef<HTMLSelectElement>(null)
+  /** Where focus goes once an approval or a removal may have taken card
+      `id` off a list of one status, read as the action starts: `control`
+      in the card now in its place, or that card's preview when it has
+      none, else in the one before it, else the empty list's heading or
+      the Status filter. The list's own cards carry data-library-image,
+      because Selected image above can show one of them again. */
+  const around = (id: string, control = 'button') =>
+    focusAround(
+      'data-library-image',
+      id,
+      (card) =>
+        card.querySelector<HTMLElement>(`${control}:not(:disabled)`) ??
+        card.querySelector('button'),
+      () => empty.current ?? statusFilter.current,
+    )
+  // for the preview, once an approval in it took its opener away
+  const previewFocus = useRef<() => HTMLElement | null>(() => null)
+  // the card whose own Approve or Remove image runs, and where focus goes
+  // once the card has left the list, until it leaves, its write is refused,
+  // or its write landed with the card still listed, as in All images. The
+  // list without it can come in the same render as the press. Focus that
+  // the card left nowhere then moves.
+  const [acted, setActed] = useState<{
+    id: string
+    focus: () => HTMLElement | null
+    landed?: boolean
+  } | null>(null)
+  useLayoutEffect(() => {
+    if (!acted) return
+    if (data?.images.some((image) => image.id === acted.id)) {
+      if (acted.landed) setActed(null)
+      return
+    }
+    setActed(null)
+    const active = document.activeElement
+    if (active && active !== document.body && active.isConnected) return
+    restoreFocus(acted.focus())
+  }, [acted, data])
   return (
     <div className="space-y-6">
       <ManualImageUpload />
@@ -682,6 +747,7 @@ function Library() {
           <div className="min-w-0 space-y-2">
             <Label htmlFor="background-status">Status</Label>
             <NativeSelect
+              ref={statusFilter}
               id="background-status"
               value={filter}
               onChange={(e) => {
@@ -724,7 +790,7 @@ function Library() {
       ) : data.images.length === 0 ? (
         <Card className="items-center gap-2 px-5 py-10 text-center">
           <ImageIcon className="mb-1 size-7 text-text-2" aria-hidden="true" />
-          <h2 className="text-md font-semibold">
+          <h2 ref={empty} tabIndex={-1} className="text-md font-semibold">
             {agentFilter !== 'all'
               ? 'No images match these filters'
               : page > 0
@@ -739,7 +805,22 @@ function Library() {
       ) : (
         <div className={cn(IMAGE_GALLERY_GRID, 'items-start')}>
           {data.images.map((image) => (
-            <ImageCard key={image.id} image={image} preview={() => setPreview(image)} />
+            <ImageCard
+              key={image.id}
+              image={image}
+              inLibrary
+              preview={() => {
+                previewFocus.current = around(image.id)
+                setPreview(image)
+              }}
+              acting={(action) => {
+                if (action === 'landed')
+                  setActed((last) => (last?.id === image.id ? { ...last, landed: true } : last))
+                else if (action)
+                  setActed({ id: image.id, focus: around(image.id, `[data-image-${action}]`) })
+                else setActed((last) => (last?.id === image.id ? null : last))
+              }}
+            />
           ))}
         </div>
       )}
@@ -766,7 +847,12 @@ function Library() {
         </div>
       </div>
       {preview && (
-        <ImagePreview image={preview} agentFilter={agentFilter} close={() => setPreview(null)} />
+        <ImagePreview
+          image={preview}
+          agentFilter={agentFilter}
+          close={() => setPreview(null)}
+          focusAfter={() => previewFocus.current()}
+        />
       )}
     </div>
   )
@@ -899,7 +985,20 @@ function ManualImageResult({ id, dismiss }: { id: string; dismiss: () => void })
   )
 }
 
-function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => void }) {
+/* `acting` hears that the card's own Approve or Remove image starts,
+   'landed' once its write has, and null when its write is refused. `inLibrary` marks a card of the Library's
+   list with data-library-image. */
+function ImageCard({
+  image,
+  preview,
+  acting,
+  inLibrary = false,
+}: {
+  image: BackgroundImage
+  preview: () => void
+  acting?: (action: 'approve' | 'remove' | 'landed' | null) => void
+  inLibrary?: boolean
+}) {
   const removeNoteId = useId()
   const approve = useLiveMutation(api.panoramaImages.approve)
   const remove = useLiveMutation(api.panoramaImages.remove)
@@ -908,7 +1007,21 @@ function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   useUpdateBlocker(removing || busy)
+  const previewButton = useRef<HTMLButtonElement>(null)
+  const approveButton = useRef<HTMLButtonElement>(null)
+  const removeButton = useRef<HTMLButtonElement>(null)
+  const noteField = useRef<HTMLTextAreaElement>(null)
+  const confirmButton = useRef<HTMLButtonElement>(null)
+  const focusAfterRender = useFocusAfterRender()
+  // Remove swaps its button for the confirm panel, and Cancel swaps it
+  // back. Focus that the swap left nowhere goes along.
+  useFocusWhenGone(!removing, () => noteField.current)
+  useFocusWhenGone(removing, () => removeButton.current)
+  // A write disables its button, which a browser can take focus off, and a
+  // refused write leaves the button in place
+  useFocusWhenGone(busy, () => (removing ? confirmButton.current : approveButton.current))
   const perform = async (action: 'approve' | 'remove') => {
+    acting?.(action)
     setBusy(true)
     setError('')
     try {
@@ -916,15 +1029,27 @@ function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => 
         await approve({ id: image.id, expected_agent_review_id: image.agent_review_id ?? null })
       else await remove({ id: image.id, ...(note.trim() ? { note: note.trim() } : {}) })
       setRemoving(false)
+      // An approval or a removal that keeps the card, as All images and
+      // Selected image do, takes away the button pressed. Focus it left
+      // nowhere goes to the card's preview. Another operator's change of
+      // the status moves nothing.
+      focusAfterRender(() => previewButton.current)
+      acting?.('landed')
     } catch (error) {
       setError(errorMessage(error))
+      acting?.(null)
     } finally {
       setBusy(false)
     }
   }
   return (
-    <Card data-background-image={image.id} className="min-w-0 gap-0 overflow-hidden py-0">
+    <Card
+      data-background-image={image.id}
+      data-library-image={inLibrary ? image.id : undefined}
+      className="min-w-0 gap-0 overflow-hidden py-0"
+    >
       <Button
+        ref={previewButton}
         type="button"
         variant="unstyled"
         onClick={preview}
@@ -980,6 +1105,7 @@ function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => 
               <div className="space-y-2">
                 <Label htmlFor={removeNoteId}>Reason (optional)</Label>
                 <LimitedTextarea
+                  ref={noteField}
                   id={removeNoteId}
                   limit={LIMITS.imageRemoveNote}
                   value={note}
@@ -991,6 +1117,7 @@ function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => 
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button
+                  ref={confirmButton}
                   type="button"
                   data-image-remove-confirm={image.id}
                   variant="destructive"
@@ -1016,6 +1143,7 @@ function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => 
             <div className="flex flex-wrap gap-2 border-t border-border pt-6">
               {image.status === 'pending' && (
                 <Button
+                  ref={approveButton}
                   type="button"
                   data-image-approve={image.id}
                   variant="primary"
@@ -1027,6 +1155,7 @@ function ImageCard({ image, preview }: { image: BackgroundImage; preview: () => 
                 </Button>
               )}
               <Button
+                ref={removeButton}
                 type="button"
                 data-image-remove={image.id}
                 disabled={busy}
@@ -1451,6 +1580,7 @@ function SubmissionCard({
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [preview, setPreview] = useState(false)
+  const returnFocus = useReturnFocus()
   const [confirmation, setConfirmation] = useState<{
     id: string | null
     title: string | null
@@ -1712,7 +1842,10 @@ function SubmissionCard({
             if (!open) setPreview(false)
           }}
         >
-          <DialogContent className="max-h-[calc(95dvh-var(--float-inset-y))] w-[calc(100%-2rem)] max-w-[1100px] overflow-y-auto">
+          <DialogContent
+            {...returnFocus}
+            className="max-h-[calc(95dvh-var(--float-inset-y))] w-[calc(100%-2rem)] max-w-[1100px] overflow-y-auto"
+          >
             <DialogHeader className="pr-7">
               <DialogTitle>{sourceName}</DialogTitle>
               <DialogDescription>
@@ -2223,6 +2356,7 @@ function DateAssignment({
 }) {
   const assign = useLiveMutation(api.panoramaImages.assignDate)
   const setDefault = useLiveMutation(api.panoramaImages.setDefaultImage)
+  const returnFocus = useReturnFocus()
   const [preview, setPreview] = useState(false)
   const savedId = currentId ?? current?.id ?? null
   const [selected, setSelected] = useState<string | null>(savedId)
@@ -2253,6 +2387,7 @@ function DateAssignment({
       }}
     >
       <DialogContent
+        {...returnFocus}
         className="max-h-[calc(90dvh-var(--float-inset-y))] w-[calc(100%-2rem)] max-w-4xl grid-cols-[minmax(0,1fr)] overflow-x-hidden overflow-y-auto"
         showCloseButton={!busy}
       >
