@@ -2,6 +2,7 @@ import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Id } from '../../convex/_generated/dataModel'
+import { DEMO_UNAVAILABLE } from '../../convex/lib/demoRefusals'
 import type { Seatless } from '../../convex/lib/workspaceJoin'
 import { SEATS_DELETING } from './guard/liveDouble.setup'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
@@ -49,7 +50,8 @@ describe('snapshot trouble', () => {
   let threads: { deliver: (page: unknown) => void; unsubscribe: ReturnType<typeof vi.fn> }[]
   let sent: Sent[]
   let showToast: ReturnType<typeof vi.fn>
-  let firstDelivery: 'deliver' | 'fail' | 'deleting' | 'deactivated'
+  // an error is the boot's failure, else a query failure
+  let firstDelivery: 'deliver' | 'fail' | 'deleting' | 'deactivated' | Error
 
   const live = () => subscriptions[subscriptions.length - 1]
   const settle = async () => {
@@ -112,7 +114,7 @@ describe('snapshot trouble', () => {
           if (firstDelivery === 'deliver') deliver(structuredClone(snapshot))
           else if (firstDelivery === 'deleting') deliver(SEATS_DELETING)
           else if (firstDelivery === 'deactivated') deliver(DEACTIVATED)
-          else fail(new Error(QUERY_FAILURE))
+          else fail(firstDelivery instanceof Error ? firstDelivery : new Error(QUERY_FAILURE))
         }
       } else if (getFunctionName(ref) === 'snapshot:commentThread')
         threads.push({ deliver, unsubscribe })
@@ -821,17 +823,50 @@ describe('snapshot trouble', () => {
     demo.on = true
     await boot()
     live().deliver(null)
-    expect(demo.ended).toHaveBeenCalled()
+    // no refusal, so the gate says the demo expired
+    expect(demo.ended).toHaveBeenCalledWith()
     expect(store.P.snapshotTrouble()).toBeNull()
     store.disposeDemoStore()
   })
 
-  it('lets the demo end itself instead of reporting trouble', async () => {
+  /* The demo gate shows the ending it reads from the refusal the store ends
+     the demo with (lib/demoSession.ts demoEnding), so each passes it on. */
+  const unavailable = () =>
+    new ConvexError({
+      code: 'forbidden',
+      message: DEMO_UNAVAILABLE.mainDeployment,
+      reason: 'demo_unavailable',
+    })
+
+  it('lets the demo end itself with the refusal instead of reporting trouble', async () => {
     demo.on = true
     await boot()
-    live().fail(new ConvexError({ code: 'forbidden', message: 'demo', reason: 'demo_expired' }))
-    expect(demo.ended).toHaveBeenCalled()
+    const expired = new ConvexError({ code: 'forbidden', message: 'demo', reason: 'demo_expired' })
+    live().fail(expired)
+    expect(demo.ended).toHaveBeenCalledWith(expired)
     expect(store.P.snapshotTrouble()).toBeNull()
     store.disposeDemoStore()
+  })
+
+  it('ends the demo with the refusal of a write', async () => {
+    demo.on = true
+    await boot()
+    const { P } = store
+    P.updateIssue(P.issues[0].id, { status: 'progress' })
+    expect(sentNames()).toEqual(['issues:update'])
+    const refusal = unavailable()
+    sent[0].reject(refusal)
+    await settle()
+    expect(demo.ended).toHaveBeenCalledWith(refusal)
+    store.disposeDemoStore()
+  })
+
+  it('ends the demo with the refusal of its boot', async () => {
+    demo.on = true
+    const refusal = unavailable()
+    firstDelivery = refusal
+    store = await import('./planner')
+    await expect(store.initStore()).rejects.toBe(refusal)
+    expect(demo.ended).toHaveBeenCalledWith(refusal)
   })
 })

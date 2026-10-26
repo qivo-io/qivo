@@ -104,6 +104,7 @@ import {
 import { DELAY_COLORS, DELAY_LABELS, DELAY_NEUTRAL, type DelayInfo } from '../lib/delay'
 import type { PurgeRefusal, RestoreRefusal } from '../lib/deletedItems'
 import { attachmentTooLarge, DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
+import { DemoSessionEnded } from '../lib/demoSession'
 import { sentence as asSentence, cleanName, limitSentence } from '../lib/fieldLimits'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
@@ -2713,7 +2714,8 @@ function dispatch<M extends FunctionReference<'mutation'>>(
         return result
       })
       .catch((error) => {
-        if (DEMO_MODE && epoch === storeEpoch && isDemoLifecycleRefusal(error)) notifyDemoEnded()
+        if (DEMO_MODE && epoch === storeEpoch && isDemoLifecycleRefusal(error))
+          notifyDemoEnded(error)
         const orgId = args && 'org_id' in args ? args.org_id : undefined
         noteReadOnlyRefusal(orgId, error)
         if (typeof error === 'object' && error !== null) {
@@ -8698,7 +8700,7 @@ export const PLANNER = {
     if (DEMO_MODE) {
       unconfirmedNote.forgetAll()
       clearAvatarSources()
-      notifyDemoEnded('lost')
+      notifyDemoEnded(new DemoSessionEnded('lost'))
       return
     }
     if (signingOut) return
@@ -8763,6 +8765,8 @@ let stopDayWatch: (() => void) | null = null
 const RETRY_GAP_MS = 5000
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 
+/** Whether `error` refuses the demo itself, which ends it with the error as
+    the cause the demo gate reads (lib/demoMode.ts notifyDemoEnded). */
 function isDemoLifecycleRefusal(error: unknown) {
   const data = errData(error)
   return (
@@ -8887,7 +8891,7 @@ function startParts(
         settled = true
         if (ws.state === 'failed') {
           bootFailed = true
-          if (DEMO_MODE && isDemoLifecycleRefusal(ws.error)) notifyDemoEnded()
+          if (DEMO_MODE && isDemoLifecycleRefusal(ws.error)) notifyDemoEnded(ws.error)
           first?.reject(ws.error)
           return
         }
@@ -8949,7 +8953,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
     // Convex keeps the subscription and reruns the failed part when the data
     // it read changes, and a later complete transition ends the trouble.
     const demoEnded = DEMO_MODE && isDemoLifecycleRefusal(ws.error)
-    if (demoEnded) notifyDemoEnded()
+    if (demoEnded) notifyDemoEnded(ws.error)
     console.error('[qivo] workspace part failed:', ws.error)
     snapshotCurrent = false
     if (!demoEnded) snapshotFailed(ws.error)

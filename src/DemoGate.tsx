@@ -11,6 +11,7 @@ import { convex } from './lib/convex'
 import { DEMO_ENDED_EVENT, WORKSPACE_SIGNUP_URL } from './lib/demoMode'
 import {
   DEMO_MARKER_KEY,
+  type DemoEnding,
   type DemoLifecycle,
   type DemoProgress,
   DemoSessionEnded,
@@ -229,8 +230,11 @@ export function DemoGate() {
         })
         .catch((error) => end('lost', demoEnding(error)?.detail))
     }
-    const refused = (event: Event) =>
-      end((event as CustomEvent).detail === 'lost' ? 'lost' : 'expired')
+    // the refusal the store ended the demo with (lib/demoMode.ts notifyDemoEnded)
+    const refused = (event: Event) => {
+      const ending: DemoEnding = demoEnding((event as CustomEvent).detail) ?? { phase: 'expired' }
+      end(ending.phase, ending.detail)
+    }
     const storage = (event: StorageEvent) => {
       if (event.key !== DEMO_MARKER_KEY) return
       const marker = readDemoMarker(localStorage)
