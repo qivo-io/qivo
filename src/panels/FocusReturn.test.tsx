@@ -247,6 +247,16 @@ describe('archiving the task from its window', { timeout: BOARD_TEST_TIMEOUT }, 
     expect(focused()).toBe('New task in In Progress')
   })
 
+  it("gives focus to the Board's empty state when the window archived the scope's last task", async () => {
+    const board = await load([['a', 'progress']])
+    // the Board's view, as App keeps it
+    container.setAttribute('data-workspace-view', 'kanban')
+    await renderBoard(board)
+    await archiveFrom(title(board, 'a'))
+    expect(document.querySelector('[data-empty-state-title]')?.textContent).toBe('No tasks yet')
+    expect(focused()).toBe('New task')
+  })
+
   /* The Overview as App shows it, in its view, with the window beside it. */
   async function renderOverview(board: Board) {
     const { IssueDetail } = await import('./IssueDetail')

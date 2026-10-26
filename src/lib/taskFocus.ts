@@ -10,11 +10,12 @@ import { OUT_OF_USE } from './viewHidden'
    view that names its task in a data attribute, such as an Overview or
    Roadmap row, is remembered the same way within its view. */
 
-/** Where focus was: the task, its row kind, the control, and the cell the
+/** Where focus was: the task, its row kind, the control, the cell the
     card was in (its lane key, status and element) with the card's index
-    there. Another view's row ('other') keeps its view as the place, the
-    attribute that names its task, its index among the view's rows with
-    that attribute, and the heading above it there. */
+    there, and the shown view (data-workspace-view) it was in. Another
+    view's row ('other') keeps that view as the place too, the attribute
+    that names its task, its index among the view's rows with that
+    attribute, and the heading above it there. */
 export type TaskFocusMark = {
   taskId: string
   row: 'card' | 'parent' | 'other'
@@ -23,6 +24,7 @@ export type TaskFocusMark = {
   status: string | null
   place: HTMLElement | null
   index: number
+  view?: HTMLElement | null
   attribute?: string
   heading?: HTMLElement | null
 }
@@ -52,6 +54,7 @@ export function markTaskFocus(
     status: cell?.dataset.status ?? null,
     place: cell,
     index: cell ? [...cell.querySelectorAll(ROWS)].indexOf(row) : -1,
+    view: row.closest<HTMLElement>('[data-workspace-view]'),
   }
 }
 
@@ -82,6 +85,7 @@ function markViewRow(element: Element, taskId: string): TaskFocusMark | null {
     status: null,
     place: view,
     index: [...view.querySelectorAll(`[${attribute}]`)].indexOf(row),
+    view,
     attribute,
     heading: above.at(-1) ?? null,
   }
@@ -109,10 +113,8 @@ const usable = (element: HTMLElement | null | undefined): element is HTMLElement
     the remembered place, as long as that place is still on the page: the
     card in the Board cell (a lane key alone repeats across scopes), or
     another view's row with the same attribute in that view. With `beside`
-    too, a place left without such rows falls back further: a Board cell to
-    its column's new task button (data-status-add), else to a card in the
-    nearest cell beside it in its lane, and a view to the heading above the
-    row. Scrolls into view only when `scroll` is set. With `mount` false it
+    too, a place left without such rows falls back further (besideTarget).
+    Scrolls into view only when `scroll` is set. With `mount` false it
     searches only what is mounted, as it must inside a React commit; with
     `exact` it takes only the remembered row, in the same kind and cell, so
     a mounted copy of a parent heading in another cell does not stand in
@@ -170,12 +172,9 @@ export function restoreTaskFocus(
   let target = mark.control ? rows.map((row) => keyed(row, mark.control)).find(usable) : undefined
   target ??= rows.map((row) => keyed(row)).find(usable)
   // exact takes the remembered row or nothing, never a neighbour
-  if (!target && !rows.length && nearby && !exact && usable(mark.place)) {
-    target = atIndex(mark.place)
-    if (!target && beside)
-      target = attribute
-        ? headingTarget(mark.heading)
-        : (columnAdd(mark.place, mark.status) ?? besideCell(mark.place, atIndex))
+  if (!target && !rows.length && nearby && !exact) {
+    if (usable(mark.place)) target = atIndex(mark.place)
+    if (!target && beside) target = besideTarget(mark, atIndex)
   }
   if (!usable(target)) return false
   target.focus({ preventScroll: true })
@@ -184,12 +183,52 @@ export function restoreTaskFocus(
   return true
 }
 
-/** The new task button of the column `status` names, in the view the Board
-    cell `cell` is in. */
-function columnAdd(cell: HTMLElement, status: string | null) {
-  const view = cell.closest('[data-workspace-view]') ?? document
+/** Where focus goes, with `beside`, once the place `mark` remembers holds
+    no row, as long as the view it was in is still shown. A Board cell on
+    the page gives its column's new task button (data-status-add), else a
+    card in the nearest cell beside it in its lane. A cell that left with
+    its lane, as filters hide a lane with no card, gives the column's
+    button, else a card in another cell of the column. Another view's row
+    gives the heading above it. Last comes the empty state the view shows
+    in place of its rows (data-empty-state): its control, else its title.
+    `pick` finds the row of a cell at the remembered index. */
+function besideTarget(mark: TaskFocusMark, pick: (cell: HTMLElement) => HTMLElement | undefined) {
+  const { place, view, status } = mark
+  let target: HTMLElement | undefined
+  if (mark.attribute) target = headingTarget(mark.heading)
+  else if (usable(place)) target = columnAdd(view ?? document, status) ?? besideCell(place, pick)
+  else if (usable(view)) target = columnAdd(view, status) ?? inColumn(view, status, pick)
+  return target ?? (usable(view) ? emptyState(view) : undefined)
+}
+
+/** The new task button of the column `status` names in `view`. */
+function columnAdd(view: ParentNode, status: string | null) {
   return [...view.querySelectorAll<HTMLElement>('[data-status-add]')].find(
     (button) => button.dataset.statusAdd === status && usable(button),
+  )
+}
+
+/** What `pick` finds in the first Board cell of the column `status` names
+    in `view`. */
+function inColumn(
+  view: HTMLElement,
+  status: string | null,
+  pick: (cell: HTMLElement) => HTMLElement | undefined,
+) {
+  for (const cell of view.querySelectorAll<HTMLElement>('[data-board-cell]')) {
+    const target = cell.dataset.status === status ? pick(cell) : undefined
+    if (target) return target
+  }
+  return undefined
+}
+
+/** The control of the empty state `view` shows, else its title. */
+function emptyState(view: HTMLElement) {
+  const state = view.querySelector<HTMLElement>('[data-empty-state]')
+  if (!state) return undefined
+  return (
+    state.querySelector<HTMLElement>('button:not(:disabled)') ??
+    headingTarget(state.querySelector<HTMLElement>('[data-empty-state-title]'))
   )
 }
 
@@ -210,8 +249,8 @@ function besideCell(cell: HTMLElement, pick: (cell: HTMLElement) => HTMLElement 
   return undefined
 }
 
-/** `heading`, focusable until it loses focus unless it already was, or
-    undefined once it is gone. */
+/** `heading`, or a title that stands for one, focusable until it loses
+    focus unless it already was, or undefined once it is gone. */
 function headingTarget(heading: HTMLElement | null | undefined) {
   if (!usable(heading)) return undefined
   if (!heading.hasAttribute('tabindex')) {

@@ -1283,11 +1283,18 @@ function EmptyState({
   onSecondary?: () => void
 }) {
   return (
-    <div className="qivo-empty-state animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [align-items:center] [justify-content:center] [gap:6px] [padding:40px] [min-height:260px]">
+    // where a task window gives focus once the last row it was opened from
+    // left the view (lib/taskFocus.ts)
+    <div
+      data-empty-state
+      className="qivo-empty-state animate-in fade-in slide-in-from-bottom-1 [flex:1] [display:flex] [flex-direction:column] [align-items:center] [justify-content:center] [gap:6px] [padding:40px] [min-height:260px]"
+    >
       <div className="[width:52px] [height:52px] [border-radius:var(--r-xl)] [background:var(--surface-2)] [border:1px_solid_var(--border)] [display:grid] [place-items:center] [margin-bottom:8px] [box-shadow:var(--qivo-shadow-card)]">
         <Icon name={icon} size={22} color="var(--text-3)" />
       </div>
-      <div className="[font-size:var(--fs-md)] [font-weight:600]">{title}</div>
+      <div data-empty-state-title className="[font-size:var(--fs-md)] [font-weight:600]">
+        {title}
+      </div>
       {hint && (
         <div className="[font-size:var(--fs-base)] [color:var(--text-3)] [max-width:380px] [text-align:center] [line-height:1.5]">
           {hint}

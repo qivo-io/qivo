@@ -563,8 +563,12 @@ function ColHeaderRow({
 
 function NoMatchNote({ onClear }: { onClear: () => void }) {
   return (
-    <div className="board-empty-note animate-in fade-in slide-in-from-bottom-1 [display:flex] [flex-direction:column] [align-items:center] [gap:6px] [padding:26px_16px]">
-      <span className="[font-size:var(--fs-base)] [color:var(--text-3)]">
+    <div
+      // an empty state, as taskFocus.ts reads it
+      data-empty-state
+      className="board-empty-note animate-in fade-in slide-in-from-bottom-1 [display:flex] [flex-direction:column] [align-items:center] [gap:6px] [padding:26px_16px]"
+    >
+      <span data-empty-state-title className="[font-size:var(--fs-base)] [color:var(--text-3)]">
         {P.stillLoading() === null
           ? 'Nothing matches your filters'
           : 'Nothing matches your filters yet. Tasks are still loading.'}
