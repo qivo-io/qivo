@@ -1859,35 +1859,44 @@ function App() {
     // Projects and sub-projects are led by people and shared through explicit grants.
     if (p.type === 'meta') p.access = p.access || {}
     const placeAtCreate = placeRef.current
-    const id = P.addProject(p, () => {
-      if (withStarter) {
-        P.addIssue({
-          title: p.name,
-          project: id,
-          status: 'backlog',
-          priority: 'medium',
-          assignee: p.lead || null,
-          parent: null,
+    const id = P.addProject(
+      p,
+      () => {
+        if (withStarter) {
+          P.addIssue({
+            title: p.name,
+            project: id,
+            status: 'backlog',
+            priority: 'medium',
+            assignee: p.lead || null,
+            parent: null,
+          })
+        }
+        // Visibility comes from the draft by the rule the dialog's warning used,
+        // not from the rows, which hold the project only until the delivery
+        // that holds it arrives when the creator cannot see it.
+        // Sub-projects ignore it, since their creator leads the parent.
+        const saved = afterProjectSaved({
+          type: p.type,
+          name: p.name,
+          visible: P.seesNewProject(p),
         })
-      }
-      // Visibility comes from the draft by the rule the dialog's warning used,
-      // not from the rows, which hold the project only until the delivery
-      // that holds it arrives when the creator cannot see it.
-      // Sub-projects ignore it, since their creator leads the parent.
-      const saved = afterProjectSaved({
-        type: p.type,
-        name: p.name,
-        visible: P.seesNewProject(p),
-      })
-      window.showToast?.(saved.message)
-      // stay put when the creator cannot see it, or moved elsewhere while it
-      // saved; otherwise follow the new project
-      if (!saved.open || placeRef.current !== placeAtCreate) return
-      setScope(id)
-      setProjectsOpen(false)
-      setSync(null)
-      focusAfterMove.current = () => projectTarget(id)
-    })
+        window.showToast?.(saved.message)
+        // stay put when the creator cannot see it, or moved elsewhere while it
+        // saved; otherwise follow the new project
+        if (!saved.open || placeRef.current !== placeAtCreate) return
+        setScope(id)
+        setProjectsOpen(false)
+        setSync(null)
+        focusAfterMove.current = () => projectTarget(id)
+      },
+      () => {
+        // the refusal takes away the sub-project's row, which the dialog gave
+        // focus to as it closed (afterNewSubProject), and its parent stays
+        const { parent } = p
+        if (parent) focusAfterMove.current = () => projectTarget(parent)
+      },
+    )
     createdProject.current = id ?? null
     setModal(null)
   }

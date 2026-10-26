@@ -296,6 +296,11 @@ export function ArchivedProjectsPage() {
     !!restored && rows.some((row) => row.id === restored.id),
     () => restored?.focus() ?? null,
   )
+  // a restore whose row has left is done, so a later change that lists the
+  // project and takes it away again moves nothing
+  React.useLayoutEffect(() => {
+    if (restored && !rows.some((row) => row.id === restored.id)) setRestored(undefined)
+  })
   const focusAfterRender = useFocusAfterRender()
   const restore = (r: ArchivedProjectVM) => {
     if (busy.has(r.id)) return

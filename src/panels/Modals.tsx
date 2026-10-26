@@ -2409,6 +2409,9 @@ function CreateOrgModal({
       title="Create your organization"
       onClose={onClose}
       focusAfterClose={focusAfterClose}
+      // the button that opened it leaves once the organization exists, so a
+      // close while the create runs would leave focus nowhere
+      busy={busy}
       unsent={[!!name.trim() && 'organization name']}
       onSubmit={submit}
       canSubmit={canSave}

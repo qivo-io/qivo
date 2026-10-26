@@ -857,6 +857,34 @@ describe('Archived projects', () => {
     expect(document.activeElement).toBe(document.body)
   })
 
+  it('moves nothing when a project it restored is archived again and leaves later', async () => {
+    await show()
+    const plan = (archived: string | undefined) => {
+      for (const p of snap.projects)
+        if (p.id === 'plan' || p.parent_id === 'plan') p.archived_at = archived
+      deliver(snap)
+    }
+    answers['projects:unarchive'] = async () => {
+      plan(undefined)
+      return null
+    }
+    const button = find<HTMLButtonElement>('[data-restore-project="plan"]')
+    button.focus()
+    await click(button)
+    await settle()
+    expect(has('[data-archived-project="plan"]')).toBe(false)
+    // another admin archives it again, and someone restores it once more
+    // while focus is nowhere
+    await act(async () => plan(AT))
+    await settle()
+    expect(has('[data-archived-project="plan"]')).toBe(true)
+    dropFocus()
+    await act(async () => plan(undefined))
+    await settle()
+    expect(has('[data-archived-project="plan"]')).toBe(false)
+    expect(document.activeElement).toBe(document.body)
+  })
+
   it('keeps keyboard focus on the page after a restore', async () => {
     await show()
     // the delivery with the project active again, as the server sends it before it answers

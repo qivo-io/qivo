@@ -173,20 +173,34 @@ describe('the phone project list', () => {
   })
 })
 
+// answers a create that createsOrganization holds
+let answerCreate = () => {}
+
 /** Has the server create the organization, and the workspace read after
-    it hold the login's new admin seat. */
-function createsOrganization(snap: Snapshot) {
+    it hold the login's new admin seat. With `held`, the create waits for
+    answerCreate. */
+function createsOrganization(snap: Snapshot, held = false) {
   const created = structuredClone(snap)
   created.orgs.push({ ...snap.orgs[0], id: 'mine', name: 'Mine', slug: 'mine' })
   created.profiles.push({ ...snap.profiles[0], id: 'me', org_id: 'mine', org_role: 'admin' })
   created.myProfileIds.push('me')
+  const land = () =>
+    network.onUpdate.mockImplementation((r, _args, next) => {
+      if (getFunctionName(r) === 'workspace:whole') next(structuredClone(created))
+      return () => {}
+    })
   network.mutation.mockImplementation((ref) => {
-    if (getFunctionName(ref) === 'identity:createOrganization')
-      network.onUpdate.mockImplementation((r, _args, next) => {
-        if (getFunctionName(r) === 'workspace:whole') next(structuredClone(created))
-        return () => {}
-      })
-    return Promise.resolve(null)
+    if (getFunctionName(ref) !== 'identity:createOrganization') return Promise.resolve(null)
+    if (!held) {
+      land()
+      return Promise.resolve(null)
+    }
+    return new Promise((resolve) => {
+      answerCreate = () => {
+        land()
+        resolve(null)
+      }
+    })
   })
 }
 
@@ -218,10 +232,10 @@ async function createFrom(opener: HTMLElement, create: boolean) {
 
 describe("the sidebar's Create your organization", () => {
   /** Boots App on a guest-only login, and answers its sidebar entry. */
-  async function entry() {
+  async function entry(held = false) {
     const snap = guestOnly()
     await boot(snap)
-    createsOrganization(snap)
+    createsOrganization(snap, held)
     const { syncStatus } = await import('./lib/syncStatus')
     syncStatus.setSocket({ connected: true, everConnected: true })
     const { default: App } = await import('./App')
@@ -235,6 +249,36 @@ describe("the sidebar's Create your organization", () => {
     expect(button.getAttribute('type')).toBe('button')
     await createFrom(button, false)
     expect(document.activeElement).toBe(button)
+  })
+
+  it("waits on Cancel while the create runs, then gives focus to the rail's New project", async () => {
+    const button = await entry(true)
+    button.focus()
+    await act(async () => button.click())
+    const name = await vi.waitFor(
+      () => {
+        const found = document.querySelector<HTMLInputElement>('[data-create-org]')
+        if (!found) throw new Error('missing the name field')
+        return found
+      },
+      { timeout: 10_000 },
+    )
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(name, 'Mine')
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const shellButton = (label: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>('[data-modal-shell] button')].find(
+        (b) => b.textContent === label,
+      )
+    await act(async () => shellButton('Create')?.click())
+    await act(async () => shellButton('Cancel')?.click())
+    expect(document.querySelector('[data-modal-shell]')).not.toBeNull()
+    await act(async () => answerCreate())
+    await vi.waitFor(() => expect(document.querySelector('[data-modal-shell]')).toBeNull())
+    for (let i = 0; i < 6; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+    expect(button.isConnected).toBe(false)
+    expect(document.activeElement).toBe(document.querySelector('aside [aria-label="New project"]'))
   })
 
   it("gives focus to the rail's New project once the organization exists, as it leaves", async () => {

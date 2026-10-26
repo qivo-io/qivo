@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -31,8 +32,9 @@ const AT = '2026-09-14T08:00:00.000Z'
 
 let container: HTMLDivElement
 let root: Root
-// answers the held projects.create
+// answers the held projects.create, or refuses it
 let saved: () => void
+let refused: () => void
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -122,8 +124,9 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}) {
   network.mutation.mockImplementation((ref) => {
     const name = getFunctionName(ref)
     if (name === 'projects:create')
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
         saved = () => resolve({ num: 2, key: 'DOCS' })
+        refused = () => reject(new ConvexError({ message: 'Qivo cannot save changes right now.' }))
       })
     return Promise.resolve(null)
   })
@@ -197,6 +200,20 @@ describe('New sub-project', () => {
       expect(document.activeElement).toBe(row)
     },
   )
+
+  it("gives focus to the project's sidebar row when the server refuses the sub-project", async () => {
+    await boot()
+    await press(await find('Add sub-project'))
+    await finish(true)
+    const row = await find('Docs', document.querySelector('aside') ?? document)
+    expect(document.activeElement).toBe(row)
+    await act(async () => refused())
+    await settle()
+    expect(row.isConnected).toBe(false)
+    expect(document.activeElement).toBe(
+      document.querySelector('aside [data-project-row="plan"] button'),
+    )
+  })
 
   it("gives focus to the phone header's New task after a create from the Roadmap", async () => {
     phone(true)
