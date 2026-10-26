@@ -635,7 +635,7 @@ describe('access ends in the removal transaction', () => {
         },
       },
     })
-    // the link registration gives a client (oauthConnections.ts lookupAccess)
+    // the link registration gives a client (oauthAccess.ts lookupAccess)
     await t.mutation(components.betterAuth.adapter.create, {
       input: { model: 'oauthClientResource', data: { clientId, resourceId: mcpResource() } },
     })
@@ -670,7 +670,7 @@ describe('access ends in the removal transaction', () => {
         isAgent: true,
         now: new Date().toISOString(),
       }),
-      grant: await t.query(internal.oauthConnections.lookupAccess, {
+      grant: await t.query(internal.oauthAccess.lookupAccess, {
         tokenHash: grantHash,
         resource: mcpResource(),
       }),

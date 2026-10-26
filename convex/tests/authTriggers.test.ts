@@ -5,8 +5,11 @@
  * 200 sessions then failed on Convex's time limit for one transaction. A
  * demo start calls demo.ts once for each of its calls, every app boot calls
  * identity.ts claimMySeats, and each makes the component lookup for the
- * caller's session (betterAuth/sessions.ts). This keeps Better Auth,
- * auth.ts and the adapter's client out of everything these modules load. */
+ * caller's session (betterAuth/sessions.ts). Every REST and MCP call checks
+ * its credential through nested calls (machine/auth.ts, oauthAccess.ts) and
+ * the component lookups of its login and OAuth token (betterAuth/
+ * lookups.ts). This keeps Better Auth, auth.ts and the adapter's client out
+ * of everything these modules load. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -68,17 +71,42 @@ function betterAuthIn({ modules, packages }: ReturnType<typeof loaded>) {
   ]
 }
 
-describe('the auth triggers, the demo start and the boot claim', () => {
+describe('the auth triggers, the demo start, the boot claim and the machine calls', () => {
   it.each([
     ['../authTriggers.ts', '../lib/sessionEnd.ts'],
     ['../demo.ts', '../lib/authUser.ts'],
     ['../identity.ts', '../lib/authUser.ts'],
     ['../betterAuth/sessions.ts', '../betterAuth/_generated/server'],
+    ['../oauthAccess.ts', '../lib/access.ts'],
+    ['../machine/auth.ts', '../lib/access.ts'],
+    ['../betterAuth/lookups.ts', '../betterAuth/schema.ts'],
   ])('%s loads neither Better Auth nor auth.ts', (entry, uses) => {
     const found = loaded(entry)
     expect(found.modules.has(uses)).toBe(true)
     expect(found.modules.has('../auth.ts')).toBe(false)
     expect(betterAuthIn(found)).toEqual([])
+  })
+
+  it('reach every module whose functions the REST and MCP routes call', () => {
+    // the modules machine/*.ts names in a function reference, such as
+    // internal.oauthAccess.lookupAccess or internal.machine.records.x; it
+    // names no public function (api.*) and makes no reference by name
+    const called = new Set<string>()
+    for (const [path, source] of Object.entries(sources))
+      if (path.startsWith('../machine/'))
+        for (const match of source.matchAll(/\binternal\.([\w.]+)\.\w+/g))
+          called.add(`../${match[1].replace(/\./g, '/')}.ts`)
+    expect(called).toContain('../oauthAccess.ts')
+    expect(called).toContain('../machine/auth.ts')
+    for (const path of called) {
+      expect(path in sources, path).toBe(true)
+      const found = loaded(path)
+      expect([path, found.modules.has('../auth.ts'), betterAuthIn(found)]).toEqual([
+        path,
+        false,
+        [],
+      ])
+    }
   })
 
   it('see a module that would load Better Auth', () => {

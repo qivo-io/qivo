@@ -1512,17 +1512,17 @@ async function webhookResponse(
   if (secret.startsWith('qvo_')) {
     const tokenHash = await sha256hex(secret.slice(4))
     const resource = mcpResource()
-    const credential = await ctx.runQuery(internal.oauthConnections.lookupAccess, {
+    const credential = await ctx.runQuery(internal.oauthAccess.lookupAccess, {
       tokenHash,
       resource,
     })
     if (
       !credential ||
-      !(await runMutation(internal.oauthConnections.touch, { id: credential.connectionId }))
+      !(await runMutation(internal.oauthAccess.touch, { id: credential.connectionId }))
     )
       // a grant its organization's deletion stopped, also between the lookup
       // and the stamp, says so
-      return (await ctx.runQuery(internal.oauthConnections.refusedForDeletion, {
+      return (await ctx.runQuery(internal.oauthAccess.refusedForDeletion, {
         tokenHash,
         resource,
       }))

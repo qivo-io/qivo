@@ -117,7 +117,7 @@ export const deleteClients = mutation({
 /** Deletes up to `numItems` OAuth token rows that protect nothing any more,
  * and answers how many it deleted (app authRetention.ts expireTokens):
  * - An access token that expired before `expiredBefore`. /mcp refuses it
- *   anyway (oauthConnections.ts lookupAccess), and revoking it changes
+ *   anyway (oauthAccess.ts lookupAccess), and revoking it changes
  *   nothing.
  * - A refresh token that expired before `expiredBefore`. Better Auth refuses
  *   an expired one before it looks at its revocation, so even its replay

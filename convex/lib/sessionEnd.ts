@@ -54,7 +54,7 @@ export async function endSession(ctx: MutationCtx, session: EndedSession, endedA
  * `endedAt`, such as at sign-out, a ban or the nightly cleanup of expired
  * sessions. It writes one record for the session, however many tokens the
  * session holds, and /mcp refuses every token issued before it
- * (oauthConnections.ts lookupAccess). The record goes once those tokens have
+ * (oauthAccess.ts lookupAccess). The record goes once those tokens have
  * expired, so an end longer ago than an access token lasts writes nothing.
  * The session's refresh tokens, which `offline_access` keeps, stay, and an
  * access token they issue later works. */

@@ -220,7 +220,7 @@ const REVOKE_PAGE = 500
  * but a token a refresh issued after its session had already ended, by a
  * sign-out or the nightly cleanup of expired sessions (authRetention.ts),
  * belongs to no session left to end. The ban refuses those while it lasts
- * (oauthConnections.ts lookupAccess); this keeps them refused after an
+ * (oauthAccess.ts lookupAccess); this keeps them refused after an
  * unban. Each page is its own transaction, and the ban holds already. */
 async function revokeLoginAccess(ctx: ActionCtx, authUserId: string) {
   const now = Date.now()
@@ -413,7 +413,7 @@ const purgeLoginTokensRef = makeFunctionReference<'mutation', { auth_user_id: st
  * then up to LOGIN_PURGE.receipts of its roadmap undo receipts, and schedules
  * the next step while any remain. They grant nothing once the user row is
  * gone: Better Auth answers no session for a missing user, and
- * oauthConnections.lookupAccess requires the user. */
+ * oauthAccess.lookupAccess requires the user. */
 async function purgeTokenRows(ctx: MutationCtx, userId: string): Promise<void> {
   let left = LOGIN_PURGE.rows
   const more = () => ctx.scheduler.runAfter(0, purgeLoginTokensRef, { auth_user_id: userId })

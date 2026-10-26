@@ -972,7 +972,7 @@ const EXEMPT: Record<string, string> = {
     'counts every machine request before authentication (machine HTTP actions)',
   'billingMetering:oauthCall':
     "counts an OAuth request against the person's allowance (machine HTTP actions)",
-  'oauthConnections:touch': 'stamps last_used_at on an OAuth connection (machine HTTP actions)',
+  'oauthAccess:touch': 'stamps last_used_at on an OAuth connection (machine HTTP actions)',
   'webhooks:save': 'takes an owner; any valid credential may create its own subscription',
   'webhooks:remove': 'takes an owner; any valid credential may remove its own subscription',
   'webhooks:removeOrganization':
@@ -1009,7 +1009,7 @@ describe('every machine write takes the credential access', () => {
     expect(names).toContain('machine/mcp:createIssue')
     expect(names).toContain('machine/rest:addComment')
     expect(names).toContain('billingMetering:ingress')
-    expect(names).toContain('oauthConnections:touch')
+    expect(names).toContain('oauthAccess:touch')
     // an action is followed into its own code and the helpers it imports
     const delivery = walk.codeRunBy('webhookActions:deliver').join('\n')
     expect(delivery).toContain('export async function postWebhook(')
@@ -1355,7 +1355,7 @@ async function credentials() {
         data: { clientId, redirectUris: ['https://client.example/callback'], scopes },
       },
     })
-    // the link registration gives a client (oauthConnections.ts lookupAccess)
+    // the link registration gives a client (oauthAccess.ts lookupAccess)
     await t.mutation(components.betterAuth.adapter.create, {
       input: { model: 'oauthClientResource', data: { clientId, resourceId: mcpResource() } },
     })
@@ -1649,7 +1649,7 @@ describe('read-only credentials over HTTP', () => {
     const c = await credentials()
     const grant = await c.oauth(['qivo:read', 'qivo:write'])
     const lookup = () =>
-      c.t.query(internal.oauthConnections.lookupAccess, {
+      c.t.query(internal.oauthAccess.lookupAccess, {
         tokenHash: grant.tokenHash,
         resource: mcpResource(),
       })
