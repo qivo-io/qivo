@@ -112,6 +112,30 @@ describe('restoreTaskFocus', () => {
     expect(document.activeElement?.scrollIntoView).not.toHaveBeenCalled()
   })
 
+  it("falls back to its column's new task button once its cell is empty", () => {
+    document.body.innerHTML =
+      '<button data-status-add="todo">New task in To Do</button>' +
+      `<div>${cell('todo', card('A'))}${cell('review', card('B'))}</div>`
+    const mark = markTaskFocus(control('data-card="A"', 'title'))!
+    document.querySelector('[data-card="A"]')!.remove()
+    expect(restoreTaskFocus(mark, { scroll: false })).toBe(false)
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(document.activeElement?.textContent).toBe('New task in To Do')
+  })
+
+  it('falls back to a card in the nearest cell beside an empty one, the next one first', () => {
+    // no new task buttons, as in side-boards and across all projects
+    document.body.innerHTML = `<div>${cell('backlog', card('X'))}${cell('todo', card('A'))}${cell('progress', '')}${cell('review', card('B'))}</div>`
+    const mark = markTaskFocus(control('data-card="A"', 'title'))!
+    document.querySelector('[data-card="A"]')!.remove()
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(focused()).toEqual({ task: { card: 'X' }, key: 'title' })
+    document.querySelector('[data-card="X"]')!.remove()
+    // nothing next to it now: the one two cells on
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(focused()).toEqual({ task: { card: 'B' }, key: 'title' })
+  })
+
   it('never falls back into a cell drawn again, such as another scope with the same lane key', () => {
     document.body.innerHTML = cell('todo', card('A') + card('B'))
     const mark = markTaskFocus(control('data-card="B"', 'title'))!
@@ -141,5 +165,42 @@ describe('restoreTaskFocus', () => {
     } finally {
       unregister()
     }
+  })
+})
+
+describe("restoreTaskFocus on another view's rows", () => {
+  /** A view's list under `heading`, its rows naming their tasks. */
+  const view = (heading: string, ids: string[]) =>
+    `<div data-workspace-view="overview"><h2>${heading}</h2>${ids.map((id) => `<button data-ovrow="${id}">${id}</button>`).join('')}</div>`
+  const row = (id: string) => document.querySelector<HTMLElement>(`[data-ovrow="${id}"]`)!
+
+  it('takes no mark for an element that does not name the task', () => {
+    document.body.innerHTML = view('Paused', ['A'])
+    expect(markTaskFocus(row('A'), 'B')).toBeNull()
+    expect(markTaskFocus(row('A'))).toBeNull()
+  })
+
+  it('finds the task in a row drawn again, else the row now in its place', () => {
+    document.body.innerHTML = view('Paused', ['A', 'B', 'C'])
+    const mark = markTaskFocus(row('B'), 'B')!
+    document.querySelector('[data-workspace-view]')!.innerHTML = `<h2>Paused</h2>${['A', 'B', 'C']
+      .map((id) => `<button data-ovrow="${id}">${id}</button>`)
+      .join('')}`
+    expect(restoreTaskFocus(mark, { scroll: false, nearby: false })).toBe(true)
+    expect(document.activeElement).toBe(row('B'))
+    row('B').remove()
+    expect(restoreTaskFocus(mark, { scroll: false })).toBe(true)
+    expect(document.activeElement).toBe(row('C'))
+  })
+
+  it('falls back to the heading above it once no such row is left, for that focus only', () => {
+    document.body.innerHTML = view('Paused', ['A'])
+    const mark = markTaskFocus(row('A'), 'A')!
+    row('A').remove()
+    const heading = document.querySelector<HTMLElement>('h2')!
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(document.activeElement).toBe(heading)
+    heading.blur()
+    expect(heading.hasAttribute('tabindex')).toBe(false)
   })
 })

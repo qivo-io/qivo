@@ -1752,9 +1752,10 @@ function IssueDetail({
     const dialog = frame.querySelector<HTMLElement>('[role="dialog"]')
     let previousFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null
-    // Where in a task's card the opener was. Changing the task here can move
-    // its card, which replaces the opener.
-    let previousMark = markTaskFocus(previousFocus)
+    // Where in a task's card, or in another view's row of the task, the
+    // opener was. Changing the task here can move its card, which replaces
+    // the opener.
+    let previousMark = markTaskFocus(previousFocus, issueId)
     const outside = new Map<HTMLElement, boolean>()
     const focusable = () =>
       Array.from(
@@ -1778,7 +1779,7 @@ function IssueDetail({
       const landed = document.activeElement
       if (landed instanceof HTMLElement && landed !== document.body && !frame.contains(landed)) {
         previousFocus = landed
-        previousMark = markTaskFocus(landed)
+        previousMark = markTaskFocus(landed, issueId)
       }
       // The Inbox task lives inside main. Isolate sibling branches on the way
       // to body, rather than making its own ancestor inert. Menus and dialogs
@@ -1863,7 +1864,8 @@ function IssueDetail({
         // still commits the close, so search once that commit is done and
         // the Board shows the tasks where they are now: the opener's task,
         // else the title of the task the window showed last, and only then
-        // the card that took the opener's place.
+        // the card or row that took the opener's place, or what is beside
+        // the place it left empty (restoreTaskFocus).
         const shown = lastShown.current
         queueMicrotask(() => {
           const scroll = !lastInputWasPointer()
@@ -1873,7 +1875,7 @@ function IssueDetail({
             const anywhere = { cell: null, status: null, place: null, index: -1 }
             if (restoreTaskFocus({ ...title, ...anywhere }, { scroll })) return
           }
-          if (previousMark) restoreTaskFocus(previousMark, { scroll })
+          if (previousMark) restoreTaskFocus(previousMark, { scroll, beside: true })
         })
       }
     }

@@ -545,6 +545,9 @@ function ColHeaderRow({
               variant="ghost"
               size="icon"
               className="w-control-sm h-control-sm"
+              // where a task window gives focus once it took the last card
+              // of a cell in this column (taskFocus.ts)
+              data-status-add={s.id}
               aria-label={`New task in ${s.name}`}
               title={`New task in ${s.name}`}
               onClick={() => onAdd(s.id)}
