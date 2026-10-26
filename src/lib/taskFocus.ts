@@ -12,7 +12,8 @@ import { OUT_OF_USE } from './viewHidden'
 
 /** Where focus was: the task, its row kind, the control, the cell the
     card was in (its lane key, status and element) with the card's index
-    there, and the shown view (data-workspace-view) it was in. Another
+    there, the shown view (data-workspace-view) it was in and the cell's
+    index among that view's cells. Another
     view's row ('other') keeps that view as the place too, the attribute
     that names its task, its index among the view's rows with that
     attribute, and the heading above it there. */
@@ -25,11 +26,13 @@ export type TaskFocusMark = {
   place: HTMLElement | null
   index: number
   view?: HTMLElement | null
+  cellIndex?: number
   attribute?: string
   heading?: HTMLElement | null
 }
 
 const ROWS = '[data-card], [data-parent-heading]'
+const CELLS = '[data-board-cell]'
 // with the button that names a Roadmap track or sub-project band
 const HEADINGS = 'h1, h2, h3, h4, h5, h6, [role="heading"], [data-lane-open]'
 
@@ -46,7 +49,8 @@ export function markTaskFocus(
   if (!row) return taskId ? markViewRow(element, taskId) : null
   const card = row.hasAttribute('data-card')
   const control = element.closest('[data-focus-key]')
-  const cell = row.closest<HTMLElement>('[data-board-cell]')
+  const cell = row.closest<HTMLElement>(CELLS)
+  const view = row.closest<HTMLElement>('[data-workspace-view]')
   return {
     taskId: (card ? row.dataset.card : row.dataset.parentHeading) ?? '',
     row: card ? 'card' : 'parent',
@@ -55,7 +59,8 @@ export function markTaskFocus(
     status: cell?.dataset.status ?? null,
     place: cell,
     index: cell ? [...cell.querySelectorAll(ROWS)].indexOf(row) : -1,
-    view: row.closest<HTMLElement>('[data-workspace-view]'),
+    view,
+    cellIndex: cell && view ? [...view.querySelectorAll(CELLS)].indexOf(cell) : -1,
   }
 }
 
@@ -148,7 +153,7 @@ export function restoreTaskFocus(
   // in every cell that holds one of its children, the remembered cell and
   // then the remembered lane.
   const rank = (row: HTMLElement) => {
-    const cell = row.closest<HTMLElement>('[data-board-cell]')
+    const cell = row.closest<HTMLElement>(CELLS)
     const place =
       cell?.dataset.boardCell !== mark.cell ? 2 : cell?.dataset.status === mark.status ? 0 : 1
     return (kind(row) === mark.row ? 0 : 3) + place
@@ -189,19 +194,25 @@ export function restoreTaskFocus(
     the page gives its column's new task button (data-status-add), else a
     card in the nearest cell beside it in its lane. A cell that left with
     its lane, as filters hide a lane with no card, gives the column's
-    button, else a card in another cell of the column. Another view's row
-    gives the heading above it. Then comes the empty state the view shows
-    in place of its rows (data-empty-state): its control, else its title.
-    A Board card's last resort is the first control of the Board's filter
-    row (App's data-filter-row), whose filters can hide a lane and its
-    column's cards. `pick` finds the row of a cell at the remembered
-    index. */
+    button, else a card in another cell of the column, else, on the phone,
+    whose Board lists one cell for each status (data-board-cell="phone"), a
+    card in the cell now in its place, else in the one before. Another
+    view's row gives the heading above it. Then comes the empty state the
+    view shows in place of its rows (data-empty-state): its control, else
+    its title. A Board card's last resort is the first control of the
+    Board's filter row (App's data-filter-row), whose filters can hide a
+    lane and its column's cards. `pick` finds the row of a cell at the
+    remembered index. */
 function besideTarget(mark: TaskFocusMark, pick: (cell: HTMLElement) => HTMLElement | undefined) {
   const { place, view, status } = mark
   let target: HTMLElement | undefined
   if (mark.attribute) target = headingTarget(mark.heading)
   else if (usable(place)) target = columnAdd(view ?? document, status) ?? besideCell(place, pick)
-  else if (usable(view)) target = columnAdd(view, status) ?? inColumn(view, status, pick)
+  else if (usable(view))
+    target =
+      columnAdd(view, status) ??
+      inColumn(view, status, pick) ??
+      (mark.cell === 'phone' ? nearCell(view, mark.cellIndex ?? -1, pick) : undefined)
   if (target || !usable(view)) return target
   return emptyState(view) ?? (mark.attribute ? undefined : filterControl())
 }
@@ -228,8 +239,23 @@ function inColumn(
   status: string | null,
   pick: (cell: HTMLElement) => HTMLElement | undefined,
 ) {
-  for (const cell of view.querySelectorAll<HTMLElement>('[data-board-cell]')) {
+  for (const cell of view.querySelectorAll<HTMLElement>(CELLS)) {
     const target = cell.dataset.status === status ? pick(cell) : undefined
+    if (target) return target
+  }
+  return undefined
+}
+
+/** What `pick` finds in the cell of `view` now at `at`, else in the one
+    before it. */
+function nearCell(
+  view: HTMLElement,
+  at: number,
+  pick: (cell: HTMLElement) => HTMLElement | undefined,
+) {
+  const cells = [...view.querySelectorAll<HTMLElement>(CELLS)].filter(usable)
+  for (const cell of [cells[at], cells[at - 1]]) {
+    const target = cell && pick(cell)
     if (target) return target
   }
   return undefined
@@ -249,8 +275,7 @@ function emptyState(view: HTMLElement) {
     the next one first at an equal distance. */
 function besideCell(cell: HTMLElement, pick: (cell: HTMLElement) => HTMLElement | undefined) {
   const cells = [...(cell.parentElement?.children ?? [])].filter(
-    (other): other is HTMLElement =>
-      other instanceof HTMLElement && other.matches('[data-board-cell]'),
+    (other): other is HTMLElement => other instanceof HTMLElement && other.matches(CELLS),
   )
   const at = cells.indexOf(cell)
   for (let step = 1; step < cells.length; step++) {

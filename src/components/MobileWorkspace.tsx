@@ -684,9 +684,11 @@ export function MobileTaskList({
         </section>
       ))}
       {count === 0 && (
-        <div className="mobile-task-empty">
+        <div className="mobile-task-empty" data-empty-state>
           <Icon name="board" size={24} />
-          <h2>{P.stillLoading() === null ? 'No tasks here' : 'Loading tasks…'}</h2>
+          <h2 data-empty-state-title>
+            {P.stillLoading() === null ? 'No tasks here' : 'Loading tasks…'}
+          </h2>
           <p>
             {P.stillLoading() !== null
               ? 'Tasks are still arriving.'

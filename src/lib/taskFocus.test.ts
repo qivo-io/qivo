@@ -289,3 +289,32 @@ describe('restoreTaskFocus on Roadmap rows', () => {
     expect(track.hasAttribute('tabindex')).toBe(false)
   })
 })
+
+describe('restoreTaskFocus on the phone Board', () => {
+  /** The phone's Board: a section with a heading and one cell for each
+      status that holds cards, as MobileWorkspace draws them. */
+  const phone = (groups: [string, string[]][]) =>
+    `<div data-workspace-view="kanban">${groups
+      .map(
+        ([status, ids]) =>
+          `<section><h2>${status}</h2><div data-board-cell="phone" data-status="${status}">${ids.map(card).join('')}</div></section>`,
+      )
+      .join('')}</div>`
+
+  it('falls back to a card in the group now in its place once its group left, else the one before', () => {
+    document.body.innerHTML = phone([
+      ['todo', ['A']],
+      ['progress', ['B']],
+      ['review', ['C']],
+    ])
+    const mark = markTaskFocus(control('data-card="B"', 'title'))!
+    // the phone drops a group with no card left
+    document.querySelectorAll('section')[1].remove()
+    expect(restoreTaskFocus(mark, { scroll: false, beside: true })).toBe(true)
+    expect(focused()).toEqual({ task: { card: 'C' }, key: 'title' })
+    const last = markTaskFocus(control('data-card="C"', 'title'))!
+    document.querySelectorAll('section')[1].remove()
+    expect(restoreTaskFocus(last, { scroll: false, beside: true })).toBe(true)
+    expect(focused()).toEqual({ task: { card: 'A' }, key: 'title' })
+  })
+})
