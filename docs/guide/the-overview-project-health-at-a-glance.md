@@ -36,3 +36,7 @@ press Enter. Use **Edit** to change an existing milestone, then **Save**,
 window. Qivo adds milestones to the top-level project. People with read-only
 access to it, including people whose access covers only a sub-project, can
 view milestones but cannot add, move or edit them.
+
+When a scope has no task to summarize, for example a project without
+sub-projects or My view with nothing assigned to you, Overview says why. If
+the scope has milestones, **Milestones** stays below that note.

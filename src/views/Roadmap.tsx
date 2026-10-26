@@ -324,9 +324,18 @@ function Roadmap({
      whole list in one place: a project with no sub-project at all, whose
      `subIds.some()` is vacuously false. That project's empty track is the
      honest picture of the scope — it is what "the rail's shape is the scope's
-     shape" means — and it kept it before either gate existed. */
+     shape" means — and it kept it before either gate existed.
+     A scope where no project has a sub-project is the exception. Its empty
+     note (emptyNote below) already says that tasks live in sub-projects, so
+     a track per project would only stack empty headings above that note.
+     Its rail stays bare, like the rail of a project without sub-projects. */
   const pruning = !!held || clearable
-  const tracks = pruning ? allTracks.filter((tr) => tr.subIds.some(shows)) : allTracks
+  const tracks =
+    info.subIds.length === 0
+      ? []
+      : pruning
+        ? allTracks.filter((tr) => tr.subIds.some(shows))
+        : allTracks
   // the track an issue's sub-project rolls up into
   const trackIdOf = (projectId) => {
     if (!wide) return projectId
