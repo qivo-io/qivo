@@ -44,8 +44,9 @@ Fill the two `VITE_CONVEX_*` placeholders with your own development backend
 URLs. External contributors should provision their own Convex development
 project and configure its sign-in/runtime environment; do not use Qivo's hosted
 production backend as a test environment. Never commit `.env` or real credentials.
-Authorized maintainers follow [AGENTS.md](AGENTS.md), which points to private
-setup instructions and the shared command-level credential helper.
+Authorized maintainers follow private instructions, which their checkouts get as
+an ignored `AGENTS.md`. They cover setup and the shared command-level credential
+helper.
 
 Set backend `QIVO_ENVIRONMENT=development` explicitly. Fixture provisioning
 requires private generated credentials and an absolute

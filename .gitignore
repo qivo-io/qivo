@@ -9,7 +9,11 @@ scripts/shots/
 # Where older contract passes left their live-credential stash. The setup now
 # keeps it in the private fixture directory and removes this file.
 tests/contract/.credentials.json
-# Machine-local agent configuration. Verification instructions are in AGENTS.md.
+# Maintainer agent instructions are private. A Git hook copies them into each
+# maintainer checkout as AGENTS.md, so never commit that file.
+/AGENTS.md
+/CLAUDE.md
+# Machine-local agent configuration.
 .claude/
 
 desktop/release/
