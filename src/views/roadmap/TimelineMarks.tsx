@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { Icon } from '../../components/qivo'
 import type { RoadmapEdge } from '../../lib/roadmapEdges'
 import { type IssueVM, type MilestoneVM, P } from '../../store/planner'
+import { FLAG_LANE_H, type FlagPlace } from './flagLanes'
 
 export const BAR_RING = 4
 
@@ -247,13 +248,18 @@ export function Bar({
   )
 }
 
-/* draggable milestone diamond in the header */
+/* draggable milestone diamond in the header, in the row and with the label
+   room that layoutFlags (flagLanes.ts) gave it; `lanes` rows of flags sit
+   centred in the band of height `bandH` */
 export function MilestoneFlag({
   m,
   week,
   w0,
   w1,
   weekW,
+  place,
+  lanes,
+  bandH,
   movable,
   onLive,
   onCommit,
@@ -264,6 +270,9 @@ export function MilestoneFlag({
   w0: number
   w1: number
   weekW: number
+  place: FlagPlace
+  lanes: number
+  bandH: number
   movable: boolean // edit access to the milestone's project; otherwise a click only opens it
   onLive: (id: string, week: number) => void
   onCommit: (id: string, epoch: number) => void
@@ -314,9 +323,14 @@ export function MilestoneFlag({
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={onUp}
-        style={{ left: (week - w0) * weekW - 4.5, width: weekW }}
+        style={{
+          left: (week - w0) * weekW - 4.5,
+          width: place.room,
+          height: FLAG_LANE_H,
+          bottom: (bandH - lanes * FLAG_LANE_H) / 2 + place.lane * FLAG_LANE_H,
+        }}
         className={cn(
-          '[position:absolute] [bottom:3px] [display:flex] [align-items:center] [gap:8px] [touch-action:none] [user-select:none] [padding:2px_4px_2px_0] [z-index:2]',
+          '[position:absolute] [display:flex] [align-items:center] [gap:8px] [touch-action:none] [user-select:none] [padding:0_4px_0_0] [z-index:2]',
           movable ? '[cursor:ew-resize]' : '[cursor:pointer]',
         )}
       >
@@ -324,7 +338,7 @@ export function MilestoneFlag({
           style={{ background: P.MILESTONE_COLOR }}
           className="[width:9px] [height:9px] [transform:rotate(45deg)] [border-radius:var(--r-2xs)] [flex-shrink:0] [box-shadow:var(--qivo-shadow-card)]"
         />
-        <span className="min-w-0 line-clamp-2 [overflow-wrap:anywhere] [font-size:var(--fs-2xs)] [line-height:13px] [font-weight:600] [color:var(--text-2)]">
+        <span className="min-w-0 truncate [font-size:var(--fs-2xs)] [line-height:13px] [font-weight:600] [color:var(--text-2)]">
           {m.name}
         </span>
       </div>

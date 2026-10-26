@@ -35,6 +35,7 @@ import { MobileRoadmap } from './MobileRoadmap'
 import { ResourceStrip } from './Resources'
 import { STRIP_HEAD_H, stripHeight } from './resourcesLayout'
 import { type ChunkMemory, type LaidRow, stableChunks } from './roadmap/chunks'
+import { flagBandHeight, layoutFlags } from './roadmap/flagLanes'
 import { GRID_X, GUTTER_W, HEAD_STICK, LABEL_W, ROW_H, SUB_STICK } from './roadmap/layout'
 import { PlanCard, type PlanSession } from './roadmap/PlanCard'
 import { createRowObserver } from './roadmap/rowObserver'
@@ -48,11 +49,11 @@ const BASE_WEEK_W = 36
 // Below this width the grid scrolls; wider weeks fill the selected window.
 const MIN_WEEK_W = 24
 
-// Week labels and milestone flags share a fixed header above the task grid.
+// Week labels and milestone flags share a header above the task grid. The
+// flag band under the week numbers is two rows of flags tall, and taller when
+// one week holds more milestones (roadmap/flagLanes.ts).
 const HEAD_PAD_T = 6 // breathing room above the week numbers
 const WEEK_BAND_H = 33 // calendar week number over the week's first workday
-const MS_BAND_H = 36 // milestone flags with up to two lines of text
-const HEAD_H = HEAD_PAD_T + WEEK_BAND_H + MS_BAND_H
 
 /* The timeline panel keeps its Task/week header above the task scrollport.
    Header, tasks and Team share a horizontal origin, while only task rows
@@ -1480,13 +1481,22 @@ function Roadmap({
     resourceWeek <= w1
       ? resourceWeek
       : null
+  /* The header's milestone flags, each in the row that keeps its label
+     readable (roadmap/flagLanes.ts), and the header's height for them. */
+  const shownMilestones = projMilestones.filter((m) => msWeek(m) >= w0 && msWeek(m) <= w1)
+  const flagRows = layoutFlags(
+    shownMilestones.map((m) => ({ id: m.id, week: msWeek(m), name: m.name })),
+    { w0, weekW, end: NW * weekW },
+  )
+  const msBandH = flagBandHeight(flagRows.lanes)
+  const headH = HEAD_PAD_T + WEEK_BAND_H + msBandH
   // Fit all visible people in the heatmap up to a 620px
   // panel. Leave the actual timeline's header, project/sub-project bands and
   // several task rows above it; smaller viewports scroll the remaining people.
   // Header and its rule, the rows, and the panel's two borders.
-  const roadContentH = HEAD_H + 1 + totalH + 2
+  const roadContentH = headH + 1 + totalH + 2
   const splitT = splitAreaH || 480
-  const roadMinimum = Math.min(roadContentH, HEAD_H + ROW_H.track + ROW_H.sub + ROW_H.task * 3 + 6)
+  const roadMinimum = Math.min(roadContentH, headH + ROW_H.track + ROW_H.sub + ROW_H.task * 3 + 6)
   const stripCap = Math.min(
     620,
     Math.max(
@@ -1846,7 +1856,7 @@ function Roadmap({
                   style={{
                     width: GUTTER_W,
                     left: LABEL_W,
-                    padding: `${HEAD_PAD_T}px 0 ${MS_BAND_H}px`,
+                    padding: `${HEAD_PAD_T}px 0 ${msBandH}px`,
                   }}
                   className="roadmap-edge-column roadmap-edge-before [position:sticky] [z-index:3] [display:grid] [place-items:center]"
                 >
@@ -1867,7 +1877,7 @@ function Roadmap({
                 <div
                   style={{
                     width: timelineW,
-                    height: HEAD_H,
+                    height: headH,
                     // Keep the week ruler between its two pinned pan controls.
                     clipPath: `inset(0 max(0px, calc(${GRID_X + timelineW + GUTTER_W - paneW}px - var(--roadmap-scroll-left, 0px))) 0 var(--roadmap-scroll-left, 0px))`,
                   }}
@@ -1952,22 +1962,23 @@ function Roadmap({
                       </HoverTooltip>
                     )
                   })}
-                  {projMilestones
-                    .filter((m) => msWeek(m) >= w0 && msWeek(m) <= w1)
-                    .map((m) => (
-                      <MilestoneFlag
-                        key={m.id}
-                        m={m}
-                        week={msWeek(m)}
-                        w0={w0}
-                        w1={w1}
-                        weekW={weekW}
-                        movable={P.canWrite(m.project)}
-                        onLive={msOnLive}
-                        onCommit={msCommit}
-                        onEdit={actions.editMilestone}
-                      />
-                    ))}
+                  {shownMilestones.map((m) => (
+                    <MilestoneFlag
+                      key={m.id}
+                      m={m}
+                      week={msWeek(m)}
+                      w0={w0}
+                      w1={w1}
+                      weekW={weekW}
+                      place={flagRows.places.get(m.id) ?? { lane: 0, room: weekW }}
+                      lanes={flagRows.lanes}
+                      bandH={msBandH}
+                      movable={P.canWrite(m.project)}
+                      onLive={msOnLive}
+                      onCommit={msCommit}
+                      onEdit={actions.editMilestone}
+                    />
+                  ))}
                   {/* THE TODAY LINE IS NOT DRAWN HERE. It belongs to the grid, and
                 it starts under the header's bottom border — where the rows do.
                 Run up through this band and it crosses the one row of text the
@@ -1980,7 +1991,7 @@ function Roadmap({
                 {/* the forward arrow's gutter — pinned to the pane's right edge for
               the same reason its twin pins to the rail */}
                 <div
-                  style={{ width: GUTTER_W, padding: `${HEAD_PAD_T}px 0 ${MS_BAND_H}px` }}
+                  style={{ width: GUTTER_W, padding: `${HEAD_PAD_T}px 0 ${msBandH}px` }}
                   className="roadmap-edge-column roadmap-edge-after [position:sticky] [right:0] [z-index:3] [display:grid] [place-items:center]"
                 >
                   <Button

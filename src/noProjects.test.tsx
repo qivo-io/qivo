@@ -361,14 +361,15 @@ function bare(): Snapshot {
 }
 
 /** `snap` with a milestone `name` on `project` a week from now, inside the
-    Roadmap's default window. */
+    Roadmap's default window. Several may share the week. */
 function withMilestone(snap: Snapshot, project: string, name: string): Snapshot {
   const day = new Date()
   day.setDate(day.getDate() + 7 - ((day.getDay() + 6) % 7))
   const pad = (n: number) => String(n).padStart(2, '0')
   const week = `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`
   const created_at = '2026-09-14T08:00:00.000Z'
-  snap.milestones.push({ id: `ms-${project}`, project_id: project, name, week, created_at })
+  const id = `ms-${project}-${snap.milestones.length}`
+  snap.milestones.push({ id, project_id: project, name, week, created_at })
   return snap
 }
 
@@ -395,6 +396,15 @@ describe('the Roadmap of a scope with nothing to schedule', () => {
     expect(document.querySelector('[data-msflag]')?.textContent).toBe('Bare launch')
     // and no empty heading for that project above the note
     expect(document.querySelector('[data-track]')).toBeNull()
+  })
+
+  it('stands the milestones of one week in rows of their own', async () => {
+    const snap = withMilestone(withMilestone(bare(), 'bare', 'Bare launch'), 'bare', 'Bare review')
+    await app(snap, '/app/testbed/roadmap/p/3')
+    await shows('Tasks live in sub-projects.')
+    const flags = [...document.querySelectorAll<HTMLElement>('[data-msflag]')]
+    expect(flags.map((flag) => flag.textContent)).toEqual(['Bare launch', 'Bare review'])
+    expect(new Set(flags.map((flag) => flag.style.bottom)).size).toBe(2)
   })
 })
 

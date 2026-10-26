@@ -770,6 +770,16 @@ textarea {
   background: transparent;
 }
 
+/* A tooltip holds no controls (components/ui/tooltip.tsx), so neither the
+   bubble nor the wrapper Radix positions it in takes the pointer. A press
+   where a tooltip stands reaches the control under it, such as the Roadmap
+   flag in the row above the one it names, and closes the tooltip as any
+   press outside it does. Without this, a tooltip that focus opened would
+   take that press. */
+[data-radix-popper-content-wrapper]:has(> [data-slot="tooltip-content"]) {
+  pointer-events: none;
+}
+
 /* reveal-on-hover affordances (row "+" buttons etc.) */
 .hoverrow .hoveradd {
   opacity: 0;
