@@ -38,7 +38,7 @@ import {
 } from '@/lib/backgroundImageUpload'
 import { overLimit } from '@/lib/fieldLimits'
 import { restoreFocus } from '@/lib/focusVisibility'
-import { useFocusWhenGone } from '@/lib/focusWhenGone'
+import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
 import type { ImageMetadata } from '@/lib/imageMetadata'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { cn } from '@/lib/utils'
@@ -690,44 +690,36 @@ function Library() {
     ...(agentFilter !== 'all' ? { agent_review: agentFilter } : {}),
     ...(cursors[page] ? { cursor: cursors[page] } : {}),
   })
-  const grid = useRef<HTMLDivElement>(null)
   const empty = useRef<HTMLHeadingElement>(null)
   const statusFilter = useRef<HTMLSelectElement>(null)
-  // the cards after and before the one a preview or the card's own Approve
-  // or Remove image acts on, nearest first, noted as it starts. An approval
-  // or a removal takes the card off a list of one status, and focus then
-  // goes to the card now in its place, else the one before it, else the
-  // empty list's heading or the Status filter.
-  const around = useRef<HTMLElement[]>([])
-  const noteAround = (id: string) => {
-    const cards = [
-      ...(grid.current?.querySelectorAll<HTMLElement>('[data-background-image]') ?? []),
-    ]
-    const at = cards.findIndex((card) => card.dataset.backgroundImage === id)
-    around.current = [...cards.slice(at + 1), ...cards.slice(0, at).reverse()]
-  }
-  /** Where focus goes once the noted card has left. In a card, that is
-      `control`, or the card's preview when it has none. */
-  const focusAround = (control = 'button') => {
-    const card = around.current.find((candidate) => candidate.isConnected)
-    return (
-      card?.querySelector<HTMLElement>(`${control}:not(:disabled)`) ??
-      card?.querySelector('button') ??
-      empty.current ??
-      statusFilter.current
+  /** Where focus goes once an approval or a removal may have taken card
+      `id` off a list of one status, read as the action starts: `control`
+      in the card now in its place, or that card's preview when it has
+      none, else in the one before it, else the empty list's heading or
+      the Status filter. The list's own cards carry data-library-image,
+      because Selected image above can show one of them again. */
+  const around = (id: string, control = 'button') =>
+    focusAround(
+      'data-library-image',
+      id,
+      (card) =>
+        card.querySelector<HTMLElement>(`${control}:not(:disabled)`) ??
+        card.querySelector('button'),
+      () => empty.current ?? statusFilter.current,
     )
-  }
-  // the card whose own Approve or Remove image runs, and that button, until
-  // the card leaves the list or its write is refused. The list without it
-  // can come in the same render as the press. Focus that the card left
-  // nowhere then moves.
-  const [acted, setActed] = useState<{ id: string; control: string } | null>(null)
+  // for the preview, once an approval in it took its opener away
+  const previewFocus = useRef<() => HTMLElement | null>(() => null)
+  // the card whose own Approve or Remove image runs, and where focus goes
+  // once the card has left the list, until it leaves or its write is
+  // refused. The list without it can come in the same render as the press.
+  // Focus that the card left nowhere then moves.
+  const [acted, setActed] = useState<{ id: string; focus: () => HTMLElement | null } | null>(null)
   useLayoutEffect(() => {
     if (!acted || data?.images.some((image) => image.id === acted.id)) return
     setActed(null)
     const active = document.activeElement
     if (active && active !== document.body && active.isConnected) return
-    restoreFocus(focusAround(acted.control))
+    restoreFocus(acted.focus())
   }, [acted, data])
   return (
     <div className="space-y-6">
@@ -802,20 +794,20 @@ function Library() {
           </h2>
         </Card>
       ) : (
-        <div ref={grid} className={cn(IMAGE_GALLERY_GRID, 'items-start')}>
+        <div className={cn(IMAGE_GALLERY_GRID, 'items-start')}>
           {data.images.map((image) => (
             <ImageCard
               key={image.id}
               image={image}
+              inLibrary
               preview={() => {
-                noteAround(image.id)
+                previewFocus.current = around(image.id)
                 setPreview(image)
               }}
               acting={(action) => {
-                if (action) {
-                  noteAround(image.id)
-                  setActed({ id: image.id, control: `[data-image-${action}]` })
-                } else setActed((last) => (last?.id === image.id ? null : last))
+                if (action)
+                  setActed({ id: image.id, focus: around(image.id, `[data-image-${action}]`) })
+                else setActed((last) => (last?.id === image.id ? null : last))
               }}
             />
           ))}
@@ -848,7 +840,7 @@ function Library() {
           image={preview}
           agentFilter={agentFilter}
           close={() => setPreview(null)}
-          focusAfter={focusAround}
+          focusAfter={() => previewFocus.current()}
         />
       )}
     </div>
@@ -983,15 +975,18 @@ function ManualImageResult({ id, dismiss }: { id: string; dismiss: () => void })
 }
 
 /* `acting` hears that the card's own Approve or Remove image starts, and
-   null when its write is refused. */
+   null when its write is refused. `inLibrary` marks a card of the Library's
+   list with data-library-image. */
 function ImageCard({
   image,
   preview,
   acting,
+  inLibrary = false,
 }: {
   image: BackgroundImage
   preview: () => void
   acting?: (action: 'approve' | 'remove' | null) => void
+  inLibrary?: boolean
 }) {
   const removeNoteId = useId()
   const approve = useLiveMutation(api.panoramaImages.approve)
@@ -1035,7 +1030,11 @@ function ImageCard({
     }
   }
   return (
-    <Card data-background-image={image.id} className="min-w-0 gap-0 overflow-hidden py-0">
+    <Card
+      data-background-image={image.id}
+      data-library-image={inLibrary ? image.id : undefined}
+      className="min-w-0 gap-0 overflow-hidden py-0"
+    >
       <Button
         ref={previewButton}
         type="button"
