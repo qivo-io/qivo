@@ -7,7 +7,7 @@ import { hasTooltip } from '@/lib/passEscapeOn'
    (convex/model/descriptionImages.ts).
    Editable users load this component lazily.
 
-   Save/Mod-S commits; blur retains drafts and dirty unmount discards with a
+   Save commits; blur retains drafts and dirty unmount discards with a
    toast, unless the person chose Discard. Escape, in the text or on the
    editor's controls (toolbar, link pop, buttons), closes popovers, then,
    once the person confirms the discard (DiscardPrompt), reverts dirty
@@ -444,7 +444,6 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   }
   const openLinkPopoverRef = useRef(openLinkPopover)
   openLinkPopoverRef.current = openLinkPopover
-  const commitRef = useRef<() => void>(() => {}) // assigned below commit()
   const escapeTextRef = useRef<() => boolean>(() => false) // assigned below onKeyDown
 
   const extensions = useMemo(
@@ -604,10 +603,6 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
           return {
             'Mod-Shift-x': () => this.editor.commands.toggleStrike(),
             'Mod-k': () => openLinkPopoverRef.current(),
-            'Mod-s': () => {
-              commitRef.current()
-              return true
-            }, // ours, not the browser save dialog
           }
         },
       }),
@@ -956,11 +951,10 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     // save took out stays, uncounted, for a day, and a save that shows it
     // again brings it back (convex/model/descriptionImages.ts), so an att:
     // node an undo resurrects still has its attachment. No state reset: it
-    // would also yank the caret to the doc start under a focused Mod-S.
+    // would also yank the caret to the doc start.
     committedDocRef.current = ed.state.doc
     refreshDirty()
   }
-  commitRef.current = commit
 
   const revert = () => {
     const ed = editorRef.current
@@ -1622,9 +1616,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
           <Button
             type="button"
             className="h-control-sm [font-size:var(--fs-sm)] [font-weight:600] [background:var(--primary)] [border-color:var(--primary)] [color:#fff]"
-            title={comment ? `${comment.label} (${MOD}S)` : `Save description (${MOD}S)`}
+            title={comment ? undefined : 'Save description'}
             // off while the counted text is over the cap; commit refuses a
-            // keyboard save of a text counted before the last keystrokes
+            // save of a text counted before the last keystrokes
             disabled={sending || count > limit.max}
             onClick={commit}
           >

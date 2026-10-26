@@ -171,18 +171,19 @@ async function writeOnPhone() {
 }
 const fading = () =>
   document.querySelector('[data-sync-mention-window]')?.getAttribute('data-state') === 'closed'
-/* Ctrl+Enter in the note, the shortcut that sends it. */
-const ctrlEnter = () =>
-  act(async () => {
-    note()?.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'Enter',
-        ctrlKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    )
+/* Ctrl+Enter, or Cmd+Enter with `meta`, in the note. True when the app
+   took the key from the browser. */
+async function modEnter(meta = false) {
+  const event = new KeyboardEvent('keydown', {
+    key: 'Enter',
+    ctrlKey: !meta,
+    metaKey: meta,
+    bubbles: true,
+    cancelable: true,
   })
+  await act(async () => note()?.dispatchEvent(event))
+  return event.defaultPrevented
+}
 /* The @ glyph opens a closed window and closes an open one. */
 async function toggle() {
   await act(async () => {
@@ -316,8 +317,6 @@ describe('the Team sync @ window', () => {
     expect(aisha()?.disabled).toBe(true)
     expect(button('Cancel').disabled).toBe(true)
     await act(async () => send()?.click())
-    // the note keeps focus, and a shortcut there sends nothing either
-    await ctrlEnter()
     expect(writes).toHaveLength(1)
     await endClosing()
     expect(windowOpen()).toBe(false)
@@ -339,7 +338,6 @@ describe('the Team sync @ window', () => {
     expect(send()?.disabled).toBe(false)
     await act(async () => send()?.click())
     await act(async () => send()?.click())
-    await ctrlEnter()
     expect(writes).toHaveLength(0)
     await endClosing()
     expect(windowOpen()).toBe(false)
@@ -374,7 +372,7 @@ describe('the Team sync @ window', () => {
     expect(fading()).toBe(true)
     expect(send()?.disabled).toBe(true)
     expect(note()?.readOnly).toBe(true)
-    await ctrlEnter()
+    await act(async () => send()?.click())
     expect(writes).toHaveLength(1)
     await endClosing()
     expect(windowOpen()).toBe(false)
@@ -386,10 +384,20 @@ describe('the Team sync @ window', () => {
     await act(async () => button('Cancel').click())
     expect(fading()).toBe(true)
     await act(async () => send()?.click())
-    await ctrlEnter()
     expect(writes).toHaveLength(0)
     await endClosing()
     expect(windowOpen()).toBe(false)
+  })
+
+  it('sends nothing on Ctrl+Enter or Cmd+Enter, and keeps the note for Send', async () => {
+    await write('Can you check the soak report?', vi.fn())
+    expect(await modEnter()).toBe(false)
+    expect(await modEnter(true)).toBe(false)
+    expect(writes).toHaveLength(0)
+    expect(windowOpen()).toBe(true)
+    expect(note()?.value).toBe('Can you check the soak report?')
+    await act(async () => send()?.click())
+    expect(writes).toHaveLength(1)
   })
 
   it('closes once the server saves the comment', async () => {

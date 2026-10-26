@@ -42,9 +42,9 @@ export function BackLink({ onClick, to }: { onClick: () => void; to: string }) {
   )
 }
 
-/** A settings text that saves on blur or Enter. A text over `limit` is not
-    saved: the field keeps it, shows it invalid and says why. Leaving the
-    stored text unchanged says nothing. */
+/** A settings text that saves on blur, and a single-line one also on Enter.
+    A text over `limit` is not saved: the field keeps it, shows it invalid
+    and says why. Leaving the stored text unchanged says nothing. */
 export function TextField({
   label,
   value,
@@ -93,7 +93,7 @@ export function TextField({
         onChange={(e) => setV(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && (!multiline || e.ctrlKey || e.metaKey)) {
+          if (e.key === 'Enter' && !multiline) {
             e.preventDefault()
             e.currentTarget.blur()
           }

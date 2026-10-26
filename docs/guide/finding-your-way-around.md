@@ -197,8 +197,8 @@ and deleted ones from Deleted items.
 - **Esc** closes the topmost popover, dialog or task window. In a description or
   comment editor it first leaves the text, asking before it discards changes.
 - **Enter** submits single-line fields.
-- **L** opens the label picker in a task window.
-- **Ctrl/Cmd+S** saves a description or comment draft.
-- **Ctrl/Cmd+K** links the selected editor text.
+- **Ctrl/Cmd+K** links the selected editor text. The editor's other formatting
+  keys are in [The discussion column](./the-task-window.md#the-discussion-column).
 
-There are no app-level shortcuts for switching views or opening Search.
+Qivo has no other shortcuts. Saving a draft, sending a note, adding a label
+and every other action use their buttons.

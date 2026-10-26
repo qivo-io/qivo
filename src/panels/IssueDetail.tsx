@@ -36,7 +36,6 @@ import {
   FieldSelect,
   Icon,
   IssueKey,
-  Kbd,
   MenuItem,
   Popover,
   PriorityIcon,
@@ -573,7 +572,6 @@ export function LabelPickerPopup({
           placeholder="Add labels…"
           className="[flex:1] [min-width:0] [background:transparent] [border:none] [outline:none] [color:var(--text-1)] [font-size:var(--fs-base)] [font-family:var(--sans)] [padding:0]"
         />
-        <Kbd>L</Kbd>
       </div>
       <div className="[display:flex] [flex-direction:column] [gap:2px] [max-height:240px] [overflow-y:auto] [padding:5px]">
         {matches.map((l) => {
@@ -1483,7 +1481,7 @@ function IssueDetail({
       set({ x: window.innerWidth / 2, y: 140 })
       return
     }
-    // L works from anywhere in a long panel: bring the heading on screen
+    // A heading scrolled partly out of a long panel: bring it on screen
     // BEFORE measuring, or the popup would open off-viewport. Must be
     // "instant": browser smooth scrolling would keep firing scroll events
     // after the popup mounts, and its close-on-scroll would eat it. Then wait
@@ -1493,12 +1491,6 @@ function IssueDetail({
       const r = head.getBoundingClientRect()
       set({ x: r.left + width / 2, y: r.bottom - 4 })
     })
-  }
-  const openLabelPicker = () => {
-    if (mobile) {
-      setMobileTab('details')
-      requestAnimationFrame(() => openPickerUnder(labelSecRef, setLabelAnchor, 300))
-    } else openPickerUnder(labelSecRef, setLabelAnchor, 300)
   }
   /* Puts the window's own state back as it is when a task opens in it: no
      title in editing, no picker, Move or Archive or delete window open, and
@@ -1555,31 +1547,6 @@ function IssueDetail({
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
   }, [onClose, embedded])
-  useEffectID(() => {
-    // L opens the label picker (unless focus is in a form control) — never in
-    // the embedded frame, which has no Labels section for it to open under
-    if (!issueId || embedded) return
-    const h = (e) => {
-      if (e.key !== 'l' && e.key !== 'L') return
-      if (e.metaKey || e.ctrlKey || e.altKey) return
-      const t = e.target
-      if (
-        t &&
-        (t.tagName === 'INPUT' ||
-          t.tagName === 'TEXTAREA' ||
-          t.tagName === 'SELECT' ||
-          t.isContentEditable)
-      )
-        return
-      // a focused FieldSelect trigger/menu owns the keyboard like a native select would
-      if (t?.closest?.('[data-fieldselect],[data-fieldselect-menu]')) return
-      if (t?.closest?.('[data-task-subscribers]')) return
-      e.preventDefault()
-      openLabelPicker()
-    }
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
-  }, [issueId])
 
   const it = issueId ? P.issueById[issueId] : null
   // what the window last showed of this task, kept for once it is gone
@@ -3385,8 +3352,8 @@ function IssueDetail({
                               size="icon"
                               className="task-heading-action"
                               aria-label="Add label"
-                              title="Add label (L)"
-                              onClick={openLabelPicker}
+                              title="Add label"
+                              onClick={() => openPickerUnder(labelSecRef, setLabelAnchor, 300)}
                             >
                               <Icon name="plus" size={16} />
                             </Button>

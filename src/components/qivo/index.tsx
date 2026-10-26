@@ -266,14 +266,6 @@ function ProjectNameOf({ id, withOwner }: { id: string | null | undefined; withO
   const place = P.projectPlace(id, !!withOwner)
   return place ? <ProjectName {...place} /> : null
 }
-function Kbd({ children }: { children?: ReactNode }) {
-  return (
-    <span className="!font-mono [font-size:var(--fs-xs)] [background:var(--surface-3)] [border:1px_solid_var(--border)] [color:var(--text-3)] [padding:1px_5px] [border-radius:var(--r-sm)] [line-height:1.4]">
-      {children}
-    </span>
-  )
-}
-
 /* Button-anchored portal with a transparent backdrop. It consumes outside
    clicks and the first Escape so dismissal cannot also close a parent modal.
    Portaling avoids transformed/scrolling ancestors; the backdrop stops wheel
@@ -1335,7 +1327,6 @@ export {
   FieldSelect,
   Icon,
   IssueKey,
-  Kbd,
   MenuDivider,
   MenuItem,
   PausedMark,

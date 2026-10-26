@@ -434,12 +434,6 @@ export function MentionCtl({
           readOnly={locked}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault()
-              send()
-            }
-          }}
           wrapperClassName="mb-2"
           className="max-h-[min(48dvh,260px)] min-h-0 resize-none overflow-y-auto bg-surface-1 text-sm"
         />

@@ -1,5 +1,5 @@
 /* App shell: sidebar hierarchy, top bar, view switching, command palette,
-   keyboard shortcuts, toasts, modals, theme. */
+   toasts, modals, theme. */
 import { type ReactNode, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
@@ -542,9 +542,9 @@ const VIEW_CLASS =
 const PAGE_CLASS = '[flex:1] [display:flex] [flex-direction:column] [overflow:hidden]'
 
 const VIEWS = [
-  { id: 'overview', label: 'Overview', icon: 'chart', kbd: '1' },
-  { id: 'kanban', label: 'Board', icon: 'board', kbd: '2' },
-  { id: 'roadmap', label: 'Roadmap', icon: 'timeline', kbd: '3' },
+  { id: 'overview', label: 'Overview', icon: 'chart' },
+  { id: 'kanban', label: 'Board', icon: 'board' },
+  { id: 'roadmap', label: 'Roadmap', icon: 'timeline' },
 ]
 
 /* The desktop top bar: the Inbox glyph and the three views in one switch,
