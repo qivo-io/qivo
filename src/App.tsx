@@ -52,6 +52,7 @@ import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/l
 import { afterProjectSaved } from './lib/newProjectAccess'
 import {
   historyBusy,
+  holdLayers,
   leavePage,
   listenBackLayers,
   onHistorySettled,
@@ -1282,6 +1283,10 @@ function App() {
         }
         return
       }
+      /* A phone layer the move left below its page that refuses its close,
+         as a busy dialog does, holds the page: the move returns to its
+         marker unheard (lib/pageHistory holdLayers). */
+      if (holdLayers(event)) return
       refusal.accepted()
       /* An address that is not the page's own, such as one to a task or
          project that is gone, gives way to the page's in place, as on a
@@ -1316,6 +1321,7 @@ function App() {
     }
     window.addEventListener('popstate', onPop)
     // the phone layers hear a move after App, so never one App refuses
+    // (holdLayers asks them only when App does not refuse it)
     const stopLayers = listenBackLayers()
     return () => {
       window.removeEventListener('popstate', onPop)

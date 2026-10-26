@@ -8,13 +8,13 @@ import { goTo, refuseMove, returning, returnStepLanded, returnTo, voidReturn } f
    left (lib/pageHistory returnTo), which keeps the entries on both sides,
    and asks only once it is back. Discard then takes the refused move again.
    The refused popstate and the return reach no other popstate listener,
-   such as the phone layers' (lib/pageHistory listenBackLayers). With the
-   Navigation API the return goes by key and lands whatever the person did
-   meanwhile, and a move refused while it is on its way joins it: one
-   question, for the latest move. Without the API it goes by position, a
-   move that lands first is the move from then on, and the return's step
-   then lands as one more move, refused in turn, before the page steps
-   again.
+   such as the phone layers' (lib/pageHistory listenBackLayers), and no
+   layer is asked about the move (holdLayers). With the Navigation API the
+   return goes by key and lands whatever the person did meanwhile, and a
+   move refused while it is on its way joins it: one question, for the
+   latest move. Without the API it goes by position, a move that lands
+   first is the move from then on, and the return's step then lands as one
+   more move, refused in turn, before the page steps again.
 
    When the page cannot return, as for a move that left no entry to return
    to, App pushes the address it left back instead (App onPop). */
@@ -52,9 +52,9 @@ export function createPopRefusal(ask: Ask) {
       return true
     },
     /** App took a Back or Forward that closes nothing held: a return still
-        on its way then lands heard, as the move it now is. */
+        on its way, a refusal's or a held page's (lib/pageHistory
+        holdLayers), then lands heard, as the move it now is. */
     accepted() {
-      if (!held) return
       held = null
       voidReturn()
     },

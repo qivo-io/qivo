@@ -4,6 +4,7 @@ import { browserWindow, settleMoves } from './historyDouble.setup'
 import {
   finishLayer,
   historyBusy,
+  holdLayers,
   installPageHistory,
   leavePage,
   listenBackLayers,
@@ -21,15 +22,18 @@ let remove = () => {}
 afterEach(() => remove())
 
 /** A browser window on `urls`, on the last, with the page's history
-    installed, an App-like listener that hears the moves, and the layers'
-    listener after it; with `engine`'s Navigation API when given, after
-    another site's entry at `elsewhere` when given. */
+    installed, an App-like listener that hears the moves no layer held, and
+    the layers' listener after it; with `engine`'s Navigation API when given,
+    after another site's entry at `elsewhere` when given. */
 function page(urls: string[], engine?: 'chromium' | 'webkit' | 'firefox', elsewhere?: string) {
   const browser = browserWindow(urls[0], engine, elsewhere)
   const removeHistory = installPageHistory(browser.window)
   for (const url of urls.slice(1)) pushPage({}, url)
   const heard: string[] = []
-  browser.window.addEventListener('popstate', () => heard.push(browser.here()))
+  browser.window.addEventListener('popstate', (event) => {
+    if (event instanceof PopStateEvent && holdLayers(event)) return
+    heard.push(browser.here())
+  })
   const stopLayers = listenBackLayers(browser.window)
   remove = () => {
     stopLayers()
@@ -434,6 +438,33 @@ describe('a layer that closes by itself', () => {
       expect(historyBusy()).toBe(false)
     },
   )
+})
+
+describe('a layer that refuses a move to an entry without a position', () => {
+  it('gets its marker back only once App has read that entry', async () => {
+    // an entry from before the page's history was installed, without a position
+    const browser = browserWindow('/before')
+    browser.history.pushState(null, '', '/start')
+    const removeHistory = installPageHistory(browser.window)
+    pushPage({}, '/page')
+    const read: unknown[] = []
+    browser.window.addEventListener('popstate', (event) => {
+      if (event instanceof PopStateEvent && holdLayers(event)) return
+      read.push(browser.history.state)
+    })
+    const stopLayers = listenBackLayers(browser.window)
+    remove = () => {
+      stopLayers()
+      removeHistory()
+    }
+    const dialog = await layer(() => false)
+    browser.person.pick(0)
+    await settleMoves()
+    expect(read).toEqual([null])
+    expect(dialog.state).toBe('open')
+    expect(browser.urls()).toEqual(['/before', '/before'])
+    expect(layerOf(browser.history.state)).toBe(dialog.marker)
+  })
 })
 
 describe("a spare over the session's first entry", () => {
