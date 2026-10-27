@@ -88,4 +88,4 @@ jobs:
 
       # Includes the Convex function-surface manifest and wrapper checks.
       - name: Test
-        run: npm test
+        run: npm test -- --maxWorkers=4
