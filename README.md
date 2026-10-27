@@ -114,8 +114,11 @@ npx vitest run --project node src/store --maxWorkers=2    # a directory, in one 
 ```
 
 The projects are `node`, for everything outside `convex/`, and `convex`.
-`npx vitest related FILE` is no shortcut here. Most source files reach
-`src/store/planner.ts`, so it runs most of the suite.
+`npx vitest related FILE` runs every test that reaches FILE through its
+imports. For a module that `src/store/planner.ts` imports, that is over a
+hundred test files, and for a file that `convex/` code imports it includes
+nearly every Convex test, because the Convex test helper loads all of
+`convex/`.
 
 Do not run full gates concurrently across agents. `npm run test:contract`, demo
 reset/seed commands and browser smoke tools can write to a backend; they are
