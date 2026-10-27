@@ -120,6 +120,14 @@ hundred test files, and for a file that `convex/` code imports it includes
 nearly every Convex test, because the Convex test helper loads all of
 `convex/`.
 
+The Convex tests run convex-test with
+[convex/convex-test#154](https://github.com/convex/convex-test/pull/154)
+applied, so that a query reads only the documents of its own table.
+`scripts/convex-test-table-ids.mjs` applies it as Vitest loads convex-test, and
+fails on any convex-test version other than the one it was checked against.
+When an upgrade includes #154, delete that patch as the file says. Otherwise
+check its edits against the new version.
+
 Do not run full gates concurrently across agents. `npm run test:contract`, demo
 reset/seed commands and browser smoke tools can write to a backend; they are
 not part of the safe migration gate and must target an authorized isolated

@@ -5,9 +5,12 @@
  * convex/ tests run in edge-runtime, the environment closest to the Convex
  * isolate (no node globals leaking into code that will not have them).
  * convex-test must be inlined so its import.meta.glob default and the
- * `global.Convex` syscall proxy are processed by vite inside that VM. */
+ * `global.Convex` syscall proxy are processed by vite inside that VM.
+ * Inlining also lets convexTestTableIds apply convex/convex-test#154 to it,
+ * so that a query reads only its own table's documents. */
 import { fileURLToPath } from 'node:url'
 import { configDefaults, defineConfig } from 'vitest/config'
+import { convexTestTableIds } from './scripts/convex-test-table-ids.mjs'
 
 export default defineConfig({
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
@@ -43,6 +46,7 @@ export default defineConfig({
       },
       {
         extends: true,
+        plugins: [convexTestTableIds()],
         test: {
           name: 'convex',
           environment: 'edge-runtime',
