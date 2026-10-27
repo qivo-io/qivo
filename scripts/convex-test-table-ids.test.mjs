@@ -39,11 +39,13 @@ describe('withTableIds', () => {
 
 describe('convexTestTableIds', () => {
   const { transform } = convexTestTableIds()
+  // Vite gives the plugin module IDs with forward slashes, on Windows too.
+  const id = file.replaceAll('\\', '/')
 
   it('patches dist/index.js of convex-test and no other module', () => {
-    expect(transform(installed, file).code).toBe(withTableIds(installed, version))
-    expect(transform(installed, `${file}?v=1`).code).toBe(withTableIds(installed, version))
-    const other = file.replace('/dist/index.js', '/dist/transactionMetrics.js')
+    expect(transform(installed, id).code).toBe(withTableIds(installed, version))
+    expect(transform(installed, `${id}?v=1`).code).toBe(withTableIds(installed, version))
+    const other = id.replace('/dist/index.js', '/dist/transactionMetrics.js')
     expect(transform(installed, other)).toBeNull()
   })
 })

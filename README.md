@@ -120,7 +120,7 @@ hundred test files, and for a file that `convex/` code imports it includes
 nearly every Convex test, because the Convex test helper loads all of
 `convex/`.
 
-The Convex tests run convex-test with
+The tests run convex-test with
 [convex/convex-test#154](https://github.com/convex/convex-test/pull/154)
 applied, so that a query reads only the documents of its own table.
 `scripts/convex-test-table-ids.mjs` applies it as Vitest loads convex-test, and

@@ -781,9 +781,9 @@ describe('provider state, retries and billing snapshots', () => {
   })
 
   /* An organization with the 5,000 tasks below, on transaction limits as the
-   * backend sets them. convex-test reads every stored document for each
-   * index lookup, and counting the files looks up each task once, so each
-   * test below counts them once. */
+   * backend sets them. convex-test reads every stored document of a table
+   * for each index lookup on it, and counting the files looks up each task
+   * once, so each test below counts them once. */
   async function fiveThousandTasks() {
     const { t, f } = await fixture({ transactionLimits: true })
     await t.mutation(apply, { payload: remote(f.org.id), event_id: 'first-period' })
