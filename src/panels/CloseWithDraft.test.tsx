@@ -171,14 +171,34 @@ const renames = () =>
   network.mutation.mock.calls
     .filter(([ref, args]) => getFunctionName(ref) === 'issues:update' && 'title' in args.patch)
     .map(([, args]) => args.patch.title)
-/** Drops the connection long enough that edits pause. */
+/** Drops the connection long enough that edits pause, once the window's
+    editors have loaded, as they had after the real wait this replaces. The
+    wait runs on fake timers. The status reads Date.now() when its timer
+    fires, so Date is fake too. Its clock starts the wait's length in the
+    past, so once the real timers are back the drop lies that far behind
+    Date.now(), as after a real wait. Going back to real timers drops any
+    timer still pending, so none may be. */
 async function goOffline() {
+  await editorOf('Task description')
+  await editorOf('Leave a comment')
   const { syncStatus, OFFLINE_DELAY_MS } = await import('../lib/syncStatus')
-  await act(async () => {
-    syncStatus.setSocket({ connected: true, everConnected: true })
-    syncStatus.setSocket({ connected: false, everConnected: true })
-    await new Promise((resolve) => setTimeout(resolve, OFFLINE_DELAY_MS + 50))
+  const wait = OFFLINE_DELAY_MS + 50
+  vi.useFakeTimers({
+    now: Date.now() - wait,
+    toFake: ['Date', 'setTimeout', 'clearTimeout'],
+    // a timer set before the wait stays real, and clearing it still works
+    shouldClearNativeTimers: true,
   })
+  try {
+    await act(async () => {
+      syncStatus.setSocket({ connected: true, everConnected: true })
+      syncStatus.setSocket({ connected: false, everConnected: true })
+      await vi.advanceTimersByTimeAsync(wait)
+    })
+    expect(vi.getTimerCount(), 'timers pending after the wait').toBe(0)
+  } finally {
+    vi.useRealTimers()
+  }
 }
 /** Types `value` into the title field as React reads input. */
 async function typeTitle(value: string) {

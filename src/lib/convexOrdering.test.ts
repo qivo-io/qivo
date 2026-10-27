@@ -1,6 +1,6 @@
 import { ConvexClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createLiveQueries } from './liveQueries'
 
 /* The store's optimistic layers (store/planner.ts send) rely on three things
@@ -263,15 +263,29 @@ describe('live queries over the base client', () => {
 
   it('after the socket reconnects, names every watched query again with the next connection count, unchanged values included', async () => {
     const { list, count, socket, seen } = await start()
-    // the server drops the socket
-    socket.readyState = 3
-    socket.onclose?.({ code: 1011, reason: 'gone' })
+    // The client reconnects after a jittered backoff of 0.5 to 1.5 s. Fake
+    // timers spend the same 2 s budget in 20 ms steps without real waiting.
+    // Date and performance, which the client and the transport read, stay
+    // real.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     let again = ScriptedSocket.last
-    for (let i = 0; i < 100 && (again === socket || again?.readyState !== 1); i++) {
-      await new Promise((resolve) => setTimeout(resolve, 20))
-      again = ScriptedSocket.last
+    try {
+      // the server drops the socket
+      socket.readyState = 3
+      socket.onclose?.({ code: 1011, reason: 'gone' })
+      for (let i = 0; i < 100 && (again === socket || again?.readyState !== 1); i++) {
+        await vi.advanceTimersByTimeAsync(20)
+        again = ScriptedSocket.last
+      }
+    } finally {
+      // Drops every fake timer still pending. After a reconnect that is the
+      // client's 60 s server inactivity timer, which close() in afterEach
+      // would clear anyway. Without one it is the reconnect or the new
+      // socket's open, so the checks below fail.
+      vi.useRealTimers()
     }
     expect(again).not.toBe(socket)
+    expect(again?.readyState, 'the new socket is open').toBe(1)
     await tick()
     // the new connection asks for every query again, from an empty set
     const ask = again!.sent.filter((m) => m.type === 'ModifyQuerySet').at(-1)!

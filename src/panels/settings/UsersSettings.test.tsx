@@ -95,6 +95,8 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  // a test that timed out inside a pause leaves the fake timers on
+  vi.useRealTimers()
   await act(async () => root.unmount())
   container.remove()
   vi.unstubAllGlobals()
@@ -253,18 +255,35 @@ describe('Add person', () => {
     await show()
     await type(nameInput(), 'Jørn Hansen')
     const email = find<HTMLInputElement>('[data-add-email]')
-    // longer than the 500 ms the note waits for typing to pause
-    const pause = () => act(() => new Promise((done) => setTimeout(done, 600)))
+    // Runs `typing` and then lets 600 ms pass, longer than the 500 ms the
+    // note waits for typing to pause. Timeouts run on fake time from the
+    // first keystroke to the end of the pause, so it takes no real time, and
+    // the clock stays real as in the rest of this file. Going back to real
+    // time drops any timeout still pending, so none may be.
+    const pauseAfter = async (typing: () => Promise<void>) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        await typing()
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(600)
+        })
+        expect(vi.getTimerCount(), 'timeouts pending after the pause').toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
+    }
     // an address on its way to .com is refused at bo@example.c for a moment
-    await type(email, 'bo@example.c')
-    await type(email, 'bo@example.com')
-    await pause()
+    await pauseAfter(async () => {
+      await type(email, 'bo@example.c')
+      await type(email, 'bo@example.com')
+    })
     expect(document.querySelector('[data-add-email-refusal]')).toBeNull()
-    await type(email, 'jørn@example.no')
-    expect(addButton().disabled).toBe(true)
-    // the reason waits until typing pauses
-    expect(document.querySelector('[data-add-email-refusal]')).toBeNull()
-    await pause()
+    await pauseAfter(async () => {
+      await type(email, 'jørn@example.no')
+      expect(addButton().disabled).toBe(true)
+      // the reason waits until typing pauses
+      expect(document.querySelector('[data-add-email-refusal]')).toBeNull()
+    })
     const note = find('[data-add-email-refusal]')
     expect(note.textContent).toBe(sentence(NO_PASSWORD_LOGIN))
     expect(note.textContent).toMatch(

@@ -330,13 +330,43 @@ async function search(value: string) {
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
-/** Waits past the search's 250ms pause. */
+/** Types `value` and lets 300ms pass, past the search's 250ms pause, with
+    timeouts on fake time. `atOnce` runs at fake time 0, once the timeouts
+    due then have run, and `beforeDue` 1ms before the pause ends. The fixed
+    clock moves with each step and is set back before the page renders.
+    Going back to real time drops any timeout still pending, so none may be. */
+async function searchAndPause(
+  value: string,
+  checks: { atOnce?: () => void; beforeDue?: () => void } = {},
+) {
+  const now = Date.now()
+  const advance = (ms: number) =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms)
+      vi.setSystemTime(now)
+    })
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+  try {
+    await search(value)
+    await advance(0)
+    checks.atOnce?.()
+    await advance(249)
+    checks.beforeDue?.()
+    await advance(51)
+    expect(vi.getTimerCount(), 'timeouts pending after the pause').toBe(0)
+  } finally {
+    vi.useFakeTimers({ toFake: ['Date'] })
+  }
+}
+/** Waits a real 300ms, longer than the search's 250ms pause, after a
+    delivery that must not start the search again. Fake time would have to
+    cover the delivery, whose settle() waits for real timeouts, so this pause
+    stays real. */
 const pause = () => act(async () => await new Promise((r) => setTimeout(r, 300)))
 /** Types `value`, waits past the pause and answers the search with
     `matches`, `capped` when more may match. */
 async function found(value: string, matches: DeletedMatch[], capped = false) {
-  await search(value)
-  await pause()
+  await searchAndPause(value)
   const last = searches[searches.length - 1]
   await act(async () => last.next(matches, capped))
   await settle()
@@ -1192,9 +1222,7 @@ describe('searching inside deleted projects', () => {
       deferred: [],
     })
     await deliver([trial(), task(1)])
-    await search('Book')
-    expect(searches).toEqual([])
-    await pause()
+    await searchAndPause('Book', { beforeDue: () => expect(searches).toEqual([]) })
     expect(searches.map((s) => s.text)).toEqual(['Book'])
     await act(async () => searches[0].next([hit(), hit({ key: 'QN-99', item_id: 'gone' })]))
     await settle()
@@ -1224,12 +1252,9 @@ describe('searching inside deleted projects', () => {
         blocked: { reason: 'not_lead', project: 'Field trial Q3', lead: 'Mira Holm' },
       }),
     ])
-    await search('Boo')
-    await pause()
+    await searchAndPause('Boo')
     // a new text stops following the old one at once
-    await search('Book')
-    expect(searches[0].live).toBe(false)
-    await pause()
+    await searchAndPause('Book', { atOnce: () => expect(searches[0].live).toBe(false) })
     expect(searches.map((s) => s.text)).toEqual(['Boo', 'Book'])
     await act(async () => searches[1].next([hit({ can_restore: false })]))
     // a late answer for the older text, with a hit the newer text no longer finds
@@ -1278,8 +1303,7 @@ describe('searching inside deleted projects', () => {
     expect(text('[data-deleted-row="item-5"] [data-row-note="blocked"]')).toBe(
       'Its project, Field trial Q3, is in Deleted items too.',
     )
-    await search('Book')
-    await pause()
+    await searchAndPause('Book')
     await act(async () => searches[0].next([hit()]))
     await settle()
     await click(find('[data-deleted-match="QN-12"] [data-restore]'))

@@ -138,17 +138,29 @@ describe('persistent account profile image bytes', () => {
   })
 
   it('does not let a late read repopulate after clear or disposal', async () => {
-    let resolveRead!: (record: AvatarImageCacheRecord | null) => void
-    const f = fixture()
-    f.store.read = () => new Promise((resolve) => (resolveRead = resolve))
-    const cache = createAvatarImageCache(scope, { store: f.store })
-    cache.sync(['avatar:alice:old'])
-    const oldRead = cache.read('avatar:alice:old')
-    await cache.clear()
-    resolveRead({ scope, entries: [{ key: 'avatar:alice:old', blob: picture('stale') }] })
-    expect(await oldRead).toBeNull()
-    expect(await cache.read('avatar:alice:old')).toBeNull()
-    cache.dispose()
+    vi.useFakeTimers()
+    try {
+      let resolveRead!: (record: AvatarImageCacheRecord | null) => void
+      const f = fixture()
+      f.store.read = () => new Promise((resolve) => (resolveRead = resolve))
+      const cache = createAvatarImageCache(scope, { store: f.store })
+      cache.sync(['avatar:alice:old'])
+      const oldRead = cache.read('avatar:alice:old')
+      // The read resolves as soon as clear has finished, which waits out the
+      // stalled read's timeout.
+      const cleared = cache
+        .clear()
+        .then(() =>
+          resolveRead({ scope, entries: [{ key: 'avatar:alice:old', blob: picture('stale') }] }),
+        )
+      await vi.advanceTimersByTimeAsync(751)
+      await cleared
+      expect(await oldRead).toBeNull()
+      expect(await cache.read('avatar:alice:old')).toBeNull()
+      cache.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('bounds a stalled write without blocking reads or shutdown', async () => {
