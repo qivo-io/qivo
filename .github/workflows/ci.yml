@@ -45,6 +45,9 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: No tracked agent instruction files
+        run: npm run check:agent-files
+
       - name: Install desktop runtime dependencies
         run: npm run desktop:install
 

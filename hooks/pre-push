@@ -1,6 +1,14 @@
 #!/bin/sh
 # Match verify:local and CI against the working tree, including uncommitted edits.
-# Enable with `git config core.hooksPath hooks`. Branch protection already makes
+# Enable it from the clone's shared hooks directory, so that the hooks there
+# keep running, with these commands in any of its checkouts:
+#   git config --unset core.hooksPath  # only if an earlier setup set it
+#   hook="$(git rev-parse --path-format=absolute --git-common-dir)/hooks/pre-push"
+#   printf '#!/bin/sh\nexec "$(git rev-parse --show-toplevel)/hooks/pre-push" "$@"\n' > "$hook"
+#   chmod +x "$hook"
+# Do not set core.hooksPath. Git would then skip .git/hooks, including the
+# post-checkout hook that copies the maintainers' instructions into each
+# checkout as AGENTS.md. Branch protection already makes
 # main require the quality (CI) and secrets (Secret scanning) checks. This gate
 # finds the same quality failures before a push instead of in CI. --no-verify is
 # for scratch work.
@@ -30,6 +38,7 @@ run() {
 
 printf 'quality gate\n'
 run 'node version'      node scripts/node-version.mjs
+run 'agent files'       npm run --silent check:agent-files
 run 'biome ci'          npx biome ci . --diagnostic-level=error
 run 'lint'              npm run --silent lint
 run 'UI conventions'    npm run --silent check:ui

@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, posix, relative, resolve } from 'node:path'
 import { normalizePath } from 'vite'
+import { agentFiles } from './agent-files.mjs'
 
 /* Development only. The dev server serves every file under the checkout
    unless server.fs.deny refuses it, and reloads open pages when a watched
@@ -124,6 +125,10 @@ export function devServerFiles(root) {
         // left in tests/contract/.credentials.json.
         'credentials.json',
         '*.credentials.json',
+        // The maintainers' private agent instructions at the checkout's root.
+        ...[...checkouts].flatMap((checkout) =>
+          agentFiles.map((name) => literalGlob(`${checkout}/${name}`)),
+        ),
         ...directories.flatMap((directory) => {
           const glob = literalGlob(directory)
           return [glob, `${glob}/**`]

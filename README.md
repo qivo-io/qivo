@@ -44,8 +44,15 @@ Fill the two `VITE_CONVEX_*` placeholders with your own development backend
 URLs. External contributors should provision their own Convex development
 project and configure its sign-in/runtime environment; do not use Qivo's hosted
 production backend as a test environment. Never commit `.env` or real credentials.
-Authorized maintainers follow [AGENTS.md](AGENTS.md), which points to private
-setup instructions and the shared command-level credential helper.
+Authorized maintainers follow private instructions, `AGENTS-public-repo.md` in
+`qivo-io/qivo-internal`. A `post-checkout` Git hook from their agent tooling
+copies that file into each maintainer checkout as an ignored, read-only
+`AGENTS.md`. It covers setup, the shared command-level credential helper and
+the rules for deployments and production. If a maintainer checkout has no
+`AGENTS.md`, as after the pull that stopped tracking it, switch to the branch
+again, such as `git switch main`, which runs the hook, or read
+`git show origin/main:AGENTS-public-repo.md` in the qivo-internal checkout. Run
+no authenticated, deployment, seed, reset or production command before that.
 
 Set backend `QIVO_ENVIRONMENT=development` explicitly. Fixture provisioning
 requires private generated credentials and an absolute
@@ -117,6 +124,15 @@ Desktop packaging is described in [desktop/README.md](desktop/README.md).
 Desktop installers are not published yet. The manual **Desktop test build**
 workflow builds unsigned Windows and Linux test installers as workflow
 artifacts.
+
+## Contributing
+
+- Changes to access control must fail closed.
+- A change to the REST API, MCP or the guide updates `docs/rest-api.md`,
+  `docs/mcp.md` or `docs/guide/` in the same change. Guide slugs, headings and
+  agent-guide links are public URLs, which `node scripts/docs-contract.mjs`
+  checks.
+- Public interfaces and documentation call work items tasks, never issues.
 
 ## Repository boundary and license
 

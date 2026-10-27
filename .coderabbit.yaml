@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
-# CodeRabbit reviews each change with its CLI before the pull request opens
-# (AGENTS.md, "Reviews before a pull request"), so it does not review on
+# CodeRabbit reviews each change with its CLI before the pull request opens,
+# as the maintainers' agent instructions say, so it does not review on
 # GitHub by itself: no automatic review, status, progress message or reply to
 # a comment that does not mention it. A comment that mentions @coderabbitai
 # still gets an answer, so do not use one.
