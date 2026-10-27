@@ -11,6 +11,12 @@ import { describe, expect, it } from 'vitest'
 import { testCertificate, testKey } from '../tests/fixtures/local-tls.mjs'
 
 const run = promisify(execFile)
+// @electron/get starts a 30-second progress-bar timer even when quiet, and
+// clears it only after a download succeeds. Without this, a failed download
+// keeps the child alive until the `timeout` below kills it.
+const noProgress = { ELECTRON_GET_NO_PROGRESS: '1' }
+// How a child that reported its error and exited on its own fails.
+const failed = (error) => ({ code: 1, killed: false, stderr: expect.stringContaining(error) })
 const artifact = 'electron-v44.4.3-linux-x64.zip'
 const contents = 'Synthetic Electron download for proxy compatibility checks.'
 const checksum = createHash('sha256').update(contents).digest('hex')
@@ -70,6 +76,7 @@ describe('Electron packaging downloader proxy compatibility', () => {
           timeout: 10_000,
           env: {
             // Avoid inheriting a developer's mirror or proxy configuration.
+            ...noProgress,
             ELECTRON_GET_USE_PROXY: '1',
             ROARR_LOG: 'true',
             GLOBAL_AGENT_HTTP_PROXY: `http://127.0.0.1:${proxy.address().port}`,
@@ -77,9 +84,7 @@ describe('Electron packaging downloader proxy compatibility', () => {
           },
         })
         if (corrupt) {
-          await expect(result).rejects.toMatchObject({
-            stderr: expect.stringContaining('did not match expected checksum'),
-          })
+          await expect(result).rejects.toMatchObject(failed('did not match expected checksum'))
         } else {
           const output = (await result).stdout
           expect(output.split('\n').at(-1)).toBe(contents)
@@ -163,6 +168,7 @@ describe('Electron packaging downloader proxy compatibility', () => {
           {
             timeout: 10_000,
             env: {
+              ...noProgress,
               ELECTRON_GET_USE_PROXY: '1',
               GLOBAL_AGENT_HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}`,
               ...(trust ? { NODE_EXTRA_CA_CERTS: certificatePath } : {}),
@@ -170,7 +176,7 @@ describe('Electron packaging downloader proxy compatibility', () => {
           },
         )
         if (error) {
-          await expect(result).rejects.toMatchObject({ stderr: expect.stringContaining(error) })
+          await expect(result).rejects.toMatchObject(failed(error))
         } else {
           expect((await result).stdout).toBe(contents)
         }
