@@ -56,6 +56,11 @@ const REDIRECT = 'https://client.example.test/callback'
 const READ = 'qivo:read offline_access'
 const WRITE = 'qivo:read qivo:write offline_access'
 const PASSWORD = 'Hermetic OAuth password 314159!'
+// Every fixture stores this hash in a fresh database and signs in for real,
+// which checks the password against it with scrypt. Hashing it once saves the
+// file a scrypt run per fixture.
+let passwordHash: Promise<string> | undefined
+const storedPassword = () => (passwordHash ??= hashPassword(PASSWORD))
 process.env.SITE_URL = APP
 process.env.CONVEX_SITE_URL = SITE
 process.env.BETTER_AUTH_SECRET = 'oauth-hermetic-secret-not-a-real-deployment-314159'
@@ -88,7 +93,7 @@ async function fixture(role: 'user' | 'viewer' = 'user') {
         accountId: user._id,
         userId: user._id,
         providerId: 'credential',
-        password: await hashPassword(PASSWORD),
+        password: await storedPassword(),
         createdAt: now,
         updatedAt: now,
       },
