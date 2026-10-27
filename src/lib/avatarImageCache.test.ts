@@ -3,6 +3,7 @@ import {
   AVATAR_IMAGE_MAX_BYTES,
   AVATAR_IMAGE_MAX_ENTRIES,
   AVATAR_IMAGE_MAX_TOTAL_BYTES,
+  AVATAR_IMAGE_STORAGE_TIMEOUT_MS,
   type AvatarImageCacheRecord,
   type AvatarImageCacheStore,
   avatarCacheScope,
@@ -153,7 +154,7 @@ describe('persistent account profile image bytes', () => {
         .then(() =>
           resolveRead({ scope, entries: [{ key: 'avatar:alice:old', blob: picture('stale') }] }),
         )
-      await vi.advanceTimersByTimeAsync(751)
+      await vi.advanceTimersByTimeAsync(AVATAR_IMAGE_STORAGE_TIMEOUT_MS + 1)
       await cleared
       expect(await oldRead).toBeNull()
       expect(await cache.read('avatar:alice:old')).toBeNull()
