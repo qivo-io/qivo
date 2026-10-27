@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { browserWindow, settleMoves } from './historyDouble.setup'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { browserWindow, fakeTime, settleMoves } from './historyDouble.setup'
 import { createUnsentScope } from './leaveGuard'
 import {
   busyLayerLeft,
@@ -22,7 +22,15 @@ import { createPopRefusal } from './popRefusal'
    back, and takes the move again after Discard. */
 
 let remove = () => {}
-afterEach(() => remove())
+beforeEach(fakeTime)
+afterEach(() => {
+  try {
+    remove()
+  } finally {
+    // drops the fake timers still pending, so none runs in the next test
+    vi.useRealTimers()
+  }
+})
 
 /** A window on `urls`, on the entry at `at`, in `engine`'s order (none
     without the Navigation API), with an App-like listener that refuses
