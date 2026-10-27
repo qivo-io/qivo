@@ -51,6 +51,9 @@ jobs:
       - name: Install desktop runtime dependencies
         run: npm run desktop:install
 
+      - name: Installed dependencies match the lockfiles
+        run: npm run check:dependencies
+
       # A warning fails the gate as an error does.
       - name: Lint and format (biome)
         run: npx biome ci . --error-on-warnings

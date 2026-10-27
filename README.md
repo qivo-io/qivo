@@ -74,10 +74,11 @@ To see the website, run `npm run build` and then `npm run preview`.
 npm run verify:local
 ```
 
-This sequential gate checks formatting, lint, UI conventions, that every
-TypeScript file is in a typecheck, the types of the frontend, backend, desktop
-app, tests and tooling, production build and hermetic tests with at most two
-workers. The backend check also fails when a `convex/` file that runs in
+This sequential gate checks that the installed packages match the lockfiles,
+formatting, lint, UI conventions, that every TypeScript file is in a
+typecheck, the types of the frontend, backend, desktop app, tests and tooling,
+production build and hermetic tests with at most two workers.
+The backend check also fails when a `convex/` file that runs in
 Convex's default runtime uses a Node global such as `Buffer` or a Node module.
 Only the files that start with `'use node'` and the tests may, because Convex
 bundles every other file for the default runtime, whichever files import it.
@@ -95,6 +96,10 @@ declares one differently, so a Convex update gets a review of the copy here
 and of the module rules in `scripts/convex-api-modules.mjs`.
 It needs no deployment credentials and does not reset any hosted data.
 `npm run verify:static` runs every check of this gate except the tests.
+When `npm run check:dependencies` fails, as after a pull or a branch switch
+without a new install, run `npm ci` and `npm run desktop:install`. Builds,
+tests and timings from an install that differs from the lockfiles do not show
+what CI will do.
 Do not run full gates concurrently across agents. `npm run test:contract`, demo
 reset/seed commands and browser smoke tools can write to a backend; they are
 not part of the safe migration gate and must target an authorized isolated
