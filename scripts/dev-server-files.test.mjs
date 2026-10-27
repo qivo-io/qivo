@@ -26,6 +26,8 @@ const denied = [
   '.claude/worktrees/other/dev-temp/token.txt',
   'scripts/shots/admin-04-users.png',
   '.git',
+  'AGENTS.md',
+  'CLAUDE.md',
 ]
 
 /** Symlinks in served directories, each to a refused file: in a local

@@ -10,9 +10,9 @@ scripts/shots/
 # keeps it in the private fixture directory and removes this file.
 tests/contract/.credentials.json
 # Maintainer agent instructions are private. A Git hook copies them into each
-# maintainer checkout as AGENTS.md, so never commit that file.
+# maintainer checkout as AGENTS.md, so never commit that file. CI refuses a
+# tracked AGENTS.md or CLAUDE.md (scripts/check-agent-files.mjs).
 /AGENTS.md
-/CLAUDE.md
 # Machine-local agent configuration.
 .claude/
 
