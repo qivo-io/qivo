@@ -42,7 +42,11 @@ describe('dependencyDrift', () => {
   }
 
   it('passes an install that matches the lockfile, without the other platforms', () => {
-    expect(dependencyDrift(project(locked, matching))).toEqual([])
+    const root = project(locked, matching)
+    // npm's own folders and files, which are not packages
+    mkdirSync(join(root, 'node_modules/.bin'))
+    writeFileSync(join(root, 'node_modules/.package-lock.json'), '{}')
+    expect(dependencyDrift(root)).toEqual([])
   })
 
   it('names a locked package that is missing, including a nested one', () => {
@@ -65,6 +69,25 @@ describe('dependencyDrift', () => {
     ])
   })
 
+  it('names an installed package the lockfile does not name, a nested one too', () => {
+    const extra = {
+      ...matching,
+      // left by an older lockfile, it shadows the hoisted vite for vitest
+      'node_modules/vitest/node_modules/vite': '8.3.3',
+      'node_modules/@types/removed': '1.0.0',
+    }
+    expect(dependencyDrift(project(locked, extra))).toEqual([
+      'node_modules/@types/removed is installed, but the lockfile does not name it',
+      'node_modules/vitest/node_modules/vite is installed, but the lockfile does not name it',
+    ])
+  })
+
+  it('names an installed package.json that is not JSON', () => {
+    const root = project(locked, matching)
+    writeFileSync(join(root, 'node_modules/a/package.json'), '{"version": "1.0')
+    expect(dependencyDrift(root)).toEqual(['node_modules/a/package.json is not valid JSON'])
+  })
+
   it('names the problems of a subdirectory by their path from the root', () => {
     const root = project({ 'node_modules/electron-updater': { version: '6.8.3' } }, {}, 'desktop')
     expect(dependencyDrift(root, 'desktop')).toEqual([
@@ -72,9 +95,14 @@ describe('dependencyDrift', () => {
     ])
   })
 
-  it('refuses a lockfile without a packages map', () => {
+  it('refuses a lockfile without a packages map, or one that is not JSON', () => {
     const root = project({}, {})
     writeFileSync(join(root, 'package-lock.json'), JSON.stringify({ lockfileVersion: 1 }))
     expect(() => dependencyDrift(root)).toThrow('package-lock.json has no packages map')
+    mkdirSync(join(root, 'desktop'))
+    writeFileSync(join(root, 'desktop/package-lock.json'), '<<<<<<< HEAD\n{}')
+    expect(() => dependencyDrift(root, 'desktop')).toThrow(
+      'desktop/package-lock.json is not valid JSON.',
+    )
   })
 })
