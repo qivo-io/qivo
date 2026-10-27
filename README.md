@@ -103,6 +103,20 @@ When `npm run check:dependencies` fails, as after a pull or a branch switch
 without a new install, run `npm ci` and `npm run desktop:install`. Builds,
 tests and timings from an install that differs from the lockfiles do not show
 what CI will do.
+
+While you edit, run the tests that cover the change, with at most two
+workers, and run `npm run verify:local` before the change goes to review:
+
+```sh
+npx vitest run convex/tests/oauth.test.ts --maxWorkers=2  # one file
+npx vitest run convex/tests/oauth.test.ts -t 'refresh'    # tests whose name matches
+npx vitest run --project node src/store --maxWorkers=2    # a directory, in one project
+```
+
+The projects are `node`, for everything outside `convex/`, and `convex`.
+`npx vitest related FILE` is no shortcut here. Most source files reach
+`src/store/planner.ts`, so it runs most of the suite.
+
 Do not run full gates concurrently across agents. `npm run test:contract`, demo
 reset/seed commands and browser smoke tools can write to a backend; they are
 not part of the safe migration gate and must target an authorized isolated
