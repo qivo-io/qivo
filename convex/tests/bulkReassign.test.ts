@@ -540,8 +540,8 @@ describe('reassigning the tasks of an access removal', () => {
     // More people of Hardware than one background step tells follow only the
     // last task, so a full step runs inside a limit of 1,000 index ranges and
     // the next one takes over. No more: convex-test reads every stored
-    // document for each index range, so this test's time grows with the
-    // square of the count.
+    // document of a table for each index range on it, so this test's time
+    // grows with the square of the count.
     const last = fx.tasks[fx.tasks.length - 1]
     const extra = await fx.t.run(async (ctx) => {
       const ids: string[] = []
