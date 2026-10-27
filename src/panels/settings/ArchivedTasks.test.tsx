@@ -223,14 +223,28 @@ async function click(element: HTMLElement) {
   await act(async () => element.click())
   await settle()
 }
-/** Types `value` into the search and waits past its 250ms pause. */
+/** Types `value` into the search and waits past its 250ms pause. The typing
+    and the pause run with timeouts on fake time, so the pause takes no real
+    time. The fixed clock moves with the pause and is set back before the
+    page renders. Going back to real time drops any timeout still pending, so
+    none may be. */
 async function type(value: string) {
   const input = find<HTMLInputElement>('[data-archive-search]')
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value)
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  })
-  await act(async () => await new Promise((r) => setTimeout(r, 300)))
+  const now = Date.now()
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+  try {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300)
+      vi.setSystemTime(now)
+    })
+    expect(vi.getTimerCount(), 'timeouts pending after the pause').toBe(0)
+  } finally {
+    vi.useFakeTimers({ toFake: ['Date'] })
+  }
   await settle()
 }
 /** Chooses `projectId` in the project select. */

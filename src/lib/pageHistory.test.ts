@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { browserWindow, settleMoves } from './historyDouble.setup'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { browserWindow, fakeTime, settleMoves } from './historyDouble.setup'
 import {
   finishLayer,
   historyBusy,
@@ -19,7 +19,15 @@ import {
    nothing, its marker is a spare, and one Back still leaves the page. */
 
 let remove = () => {}
-afterEach(() => remove())
+beforeEach(fakeTime)
+afterEach(() => {
+  try {
+    remove()
+  } finally {
+    // drops the fake timers still pending, so none runs in the next test
+    vi.useRealTimers()
+  }
+})
 
 /** A browser window on `urls`, on the last, with the page's history
     installed, an App-like listener that hears the moves no layer held, and
@@ -491,8 +499,9 @@ describe("a spare over the session's first entry", () => {
   it("holds a new layer's marker until its step has landed, so the step cannot take it", async () => {
     const browser = page(['/page'])
     finishLayer(await layer())
-    // the step sets out once what closed the layer has committed
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // the step sets out once what closed the layer has committed, in a
+    // timer due now, and lands in the timers it sets, which run later
+    await vi.advanceTimersByTimeAsync(0)
     expect(historyBusy()).toBe(true)
     const next = await layer()
     await settleMoves()

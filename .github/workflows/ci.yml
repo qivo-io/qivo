@@ -51,21 +51,22 @@ jobs:
       - name: Install desktop runtime dependencies
         run: npm run desktop:install
 
-      # A warning fails the gate as an error does.
+      - name: Installed dependencies match the lockfiles
+        run: npm run check:dependencies
+
+      # biome ci runs the formatter and every lint rule, so the gate runs
+      # oxlint alone after it. A warning fails the gate as an error does.
       - name: Lint and format (biome)
         run: npx biome ci . --error-on-warnings
 
-      - name: Lint (biome and oxlint)
-        run: npm run lint
+      - name: Lint (oxlint)
+        run: npm run lint:oxlint
 
       - name: UI component and styling conventions
         run: npm run check:ui
 
       - name: Every TypeScript file in a typecheck
         run: npm run check:typecheck
-
-      - name: Typecheck frontend
-        run: npm run typecheck
 
       - name: Typecheck frontend core (strict)
         run: npm run typecheck:strict
@@ -81,7 +82,8 @@ jobs:
       - name: Typecheck tests and tooling (Node, strict)
         run: npm run typecheck:node
 
-      - name: Build
+      # The build typechecks the frontend before it bundles.
+      - name: Typecheck frontend and build
         run: npm run build
 
       # Includes the Convex function-surface manifest and wrapper checks.

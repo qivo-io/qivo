@@ -20,7 +20,7 @@ cd "$(git rev-parse --show-toplevel)"
 # repository's config, so the gate finds the repository from its directory.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
 
-# Show errors locally; CI also emits advisory warnings as annotations.
+# Prints a step's output only when it fails.
 run() {
   printf '  %-24s' "$1"
   shift
@@ -38,17 +38,19 @@ run() {
 
 printf 'quality gate\n'
 run 'node version'      node scripts/node-version.mjs
+run 'dependencies'      npm run --silent check:dependencies
 run 'agent files'       npm run --silent check:agent-files
-run 'biome ci'          npx biome ci . --diagnostic-level=error
-run 'lint'              npm run --silent lint
+# biome ci runs the formatter and every lint rule, and a warning fails it.
+run 'biome ci'          npx biome ci . --error-on-warnings
+run 'oxlint'            npm run --silent lint:oxlint
 run 'UI conventions'    npm run --silent check:ui
 run 'typecheck coverage' npm run --silent check:typecheck
-run 'typecheck'         npm run --silent typecheck
 run 'typecheck:strict'  npm run --silent typecheck:strict
 run 'typecheck:convex'  npm run --silent typecheck:convex
 run 'typecheck:desktop' npm run --silent typecheck:desktop
 run 'typecheck:node'    npm run --silent typecheck:node
-run 'build'             npm run --silent build
+# The build typechecks the frontend before it bundles.
+run 'typecheck and build' npm run --silent build
 # Match verify:local's worker cap so fixture-heavy tests have CPU headroom.
 run 'test'              npm test --silent -- --maxWorkers=2
 printf 'all green\n'

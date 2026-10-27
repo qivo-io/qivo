@@ -51,6 +51,11 @@ describe('website build', () => {
     return outDir
   }
 
+  // One default build serves the tests that only read the files it returns.
+  // Tests that change its input or read the files it wrote build their own.
+  let defaultBuild
+  const defaultSite = () => (defaultBuild ??= buildSite({ outDir: appOutput(), env: {} }))
+
   it('publishes the website next to the application without touching its files', () => {
     const outDir = appOutput()
     const files = buildSite({ outDir, env: { QIVO_ENVIRONMENT: 'production' } })
@@ -96,7 +101,7 @@ describe('website build', () => {
   // vercel.json lets browsers keep these files for a year, so a font whose
   // bytes change must never be published under a name already in use.
   it('publishes each font under a name that contains its own content hash', () => {
-    const files = buildSite({ outDir: appOutput(), env: {} })
+    const files = defaultSite()
     const fonts = [...files.keys()].filter((name) => name.endsWith('.woff2'))
     expect(
       fonts.map((name) => name.replace(/^marketing\/fonts\/|\.[0-9a-f]{8}\.woff2$/g, '')),
@@ -109,7 +114,7 @@ describe('website build', () => {
 
   // Chrome holds the first paint only for font preloads parsed before <body>.
   it('preloads the fonts of its stylesheet at the top of every page head', () => {
-    const files = buildSite({ outDir: appOutput(), env: {} })
+    const files = defaultSite()
     const pages = [...files.keys()].filter((name) => name.endsWith('.html'))
     expect(pages).toEqual(
       expect.arrayContaining(['index.html', 'pricing/index.html', 'docs/index.html']),
@@ -138,7 +143,7 @@ describe('website build', () => {
   // A file missing from ASSETS would leave a page with a broken image or
   // without its script, while the page itself still builds.
   it('publishes every local script, image and stylesheet resource its pages load', () => {
-    const files = buildSite({ outDir: appOutput(), env: {} })
+    const files = defaultSite()
     const loaded = new Set()
     for (const [name, body] of files) {
       if (!name.endsWith('.html')) continue
@@ -238,7 +243,7 @@ describe('website build', () => {
       /third-party resource/,
     ],
   ])('rejects output %s with unsafe content', (file, body, message) => {
-    const files = buildSite({ outDir: appOutput(), env: {} })
+    const files = defaultSite()
     // The real pages pass, including absolute canonical links and outbound <a> links.
     expect(() => verifyOutput(files)).not.toThrow()
     expect(() =>

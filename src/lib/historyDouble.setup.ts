@@ -1,5 +1,7 @@
 /* A window double whose session history moves as browsers move it, for the
-   history tests (lib/pageHistory, lib/popRefusal, lib/useMobile).
+   history tests (lib/pageHistory and lib/popRefusal). Its timers run on fake
+   time. A test file calls fakeTime in beforeEach and vi.useRealTimers in
+   afterEach, and settleMoves moves the clock.
 
    jsdom counts a move's distance from the entry the page called go on and
    has no Navigation API. Browsers queue every traversal, the person's and
@@ -49,6 +51,8 @@
    microtask runs between its listeners, while a browser runs them after
    each listener (React commits App's popstate there, before the layers'
    listener). */
+
+import { vi } from 'vitest'
 
 type Engine = 'chromium' | 'webkit' | 'ios' | 'firefox'
 type Entry = { state: unknown; url: string; key: string }
@@ -359,5 +363,17 @@ export function browserWindow(url: string, navigation?: Engine, elsewhere?: stri
   }
 }
 
-/** Lets every move on its way land, and what they started. */
-export const settleMoves = () => new Promise((resolve) => setTimeout(resolve, 40))
+/** Puts a history test on fake time, for its beforeEach. It fakes the
+    timers the double and the page set, and Date, which an unsent scope's
+    Discard reads (lib/leaveGuard). Microtasks stay real, as a layer's
+    marker waits for one (openLayer). So do setInterval, setImmediate,
+    requestAnimationFrame and performance, which none of them uses. Add one
+    here before the page or the double starts to. */
+export function fakeTime() {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+}
+
+/** Lets every move on its way land, and what they started. It runs the
+    timers due in the next 40 ms of fake time (fakeTime) in order, each with
+    the microtasks it queued before the next timer. */
+export const settleMoves = () => vi.advanceTimersByTimeAsync(40)
