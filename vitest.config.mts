@@ -22,6 +22,9 @@ export default defineConfig({
      * requirement. See convex/tests/env.setup.ts. */
     setupFiles: ['convex/tests/env.setup.ts'],
     server: { deps: { inline: ['convex-test'] } },
+    // Four test files at a time, here and in CI, whose runner has four CPUs.
+    // `--maxWorkers` overrides it for one run.
+    maxWorkers: 4,
     /* tests/contract/** is the LIVE contract pass (vitest.contract.config.mts,
      * `npm run test:contract`): it reseeds and drives the shared dev
      * deployment. `*.test.mts` matches vitest's default include, so without
