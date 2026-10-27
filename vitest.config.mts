@@ -22,6 +22,10 @@ export default defineConfig({
      * requirement. See convex/tests/env.setup.ts. */
     setupFiles: ['convex/tests/env.setup.ts'],
     server: { deps: { inline: ['convex-test'] } },
+    /* A test's limit only has to catch a hang. A test shares the CPU with the
+     * other workers, and a busy machine or CI runner makes it several times
+     * slower than usual, so every test gets 20 s unless it sets its own. */
+    testTimeout: 20_000,
     /* tests/contract/** is the LIVE contract pass (vitest.contract.config.mts,
      * `npm run test:contract`): it reseeds and drives the shared dev
      * deployment. `*.test.mts` matches vitest's default include, so without
@@ -51,8 +55,6 @@ export default defineConfig({
         test: {
           name: 'convex',
           environment: 'edge-runtime',
-          // Full fixture transactions need time to finish on shared CI workers.
-          testTimeout: 20_000,
           include: ['convex/**/*.test.ts'],
         },
       },

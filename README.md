@@ -77,7 +77,8 @@ npm run verify:local
 This sequential gate checks that the installed packages match the lockfiles,
 formatting, lint, UI conventions, that every TypeScript file is in a
 typecheck, the types of the frontend, backend, desktop app, tests and tooling,
-production build and hermetic tests with at most two workers. The build
+production build and hermetic tests on four workers, as CI and the pre-push
+hook run them. The build
 typechecks the frontend before it bundles, and `biome ci` runs every Biome
 lint rule, so the gate runs neither check a second time. `npm run typecheck`
 and `npm run lint` still run them alone.
@@ -104,13 +105,13 @@ without a new install, run `npm ci` and `npm run desktop:install`. Builds,
 tests and timings from an install that differs from the lockfiles do not show
 what CI will do.
 
-While you edit, run the tests that cover the change, with at most two
-workers, and run `npm run verify:local` before the change goes to review:
+While you edit, run the tests that cover the change, and run
+`npm run verify:local` before the change goes to review:
 
 ```sh
-npx vitest run convex/tests/oauth.test.ts --maxWorkers=2  # one file
-npx vitest run convex/tests/oauth.test.ts -t 'refresh'    # tests whose name matches
-npx vitest run --project node src/store --maxWorkers=2    # a directory, in one project
+npx vitest run convex/tests/oauth.test.ts                # one file
+npx vitest run convex/tests/oauth.test.ts -t 'refresh'   # tests whose name matches
+npx vitest run --project node src/store                  # a directory, in one project
 ```
 
 The projects are `node`, for everything outside `convex/`, and `convex`.

@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:contract": "vitest run --config vitest.contract.config.mts",
-    "verify:local": "npm run verify:static && npm test -- --maxWorkers=2",
+    "verify:local": "npm run verify:static && npm test -- --maxWorkers=4",
     "verify:static": "node scripts/node-version.mjs && npm run check:dependencies && npm run check:agent-files && npx biome ci . --error-on-warnings && npm run lint:oxlint && npm run check:ui && npm run check:typecheck && npm run typecheck:strict && npm run typecheck:convex && npm run typecheck:desktop && npm run typecheck:node && npm run build",
     "check:agent-files": "node scripts/check-agent-files.mjs",
     "check:dependencies": "node scripts/check-dependencies.mjs",

@@ -51,6 +51,6 @@ run 'typecheck:desktop' npm run --silent typecheck:desktop
 run 'typecheck:node'    npm run --silent typecheck:node
 # The build typechecks the frontend before it bundles.
 run 'typecheck and build' npm run --silent build
-# Match verify:local's worker cap so fixture-heavy tests have CPU headroom.
-run 'test'              npm test --silent -- --maxWorkers=2
+# The same four workers as verify:local and CI.
+run 'test'              npm test --silent -- --maxWorkers=4
 printf 'all green\n'
