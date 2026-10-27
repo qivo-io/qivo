@@ -77,7 +77,10 @@ npm run verify:local
 This sequential gate checks that the installed packages match the lockfiles,
 formatting, lint, UI conventions, that every TypeScript file is in a
 typecheck, the types of the frontend, backend, desktop app, tests and tooling,
-production build and hermetic tests with at most two workers.
+production build and hermetic tests with at most two workers. The build
+typechecks the frontend before it bundles, and `biome ci` runs every Biome
+lint rule, so the gate runs neither check a second time. `npm run typecheck`
+and `npm run lint` still run them alone.
 The backend check also fails when a `convex/` file that runs in
 Convex's default runtime uses a Node global such as `Buffer` or a Node module.
 Only the files that start with `'use node'` and the tests may, because Convex
