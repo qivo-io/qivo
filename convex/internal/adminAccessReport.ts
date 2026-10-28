@@ -14,13 +14,18 @@
  * the level a standard user with the same rows holds (ordinaryOf). For
  * every active admin it finds:
  *   leaves      a live project of a meta tree whose top-level project is
- *               live too, which they would no longer see. A parent they
- *               see only because they reach one of its sub-projects stays
- *               in their navigation, so it does not leave. It then shows
- *               its milestones read-only and no tasks, as every task sits
- *               on a sub-project.
- *   read_only   such a project they would see as a Viewer only, so they
- *               can no longer change its tasks.
+ *               live too, which they would no longer see.
+ *   read_only   such a project they would see as a Viewer only. On a
+ *               sub-project they can no longer change its tasks. On a
+ *               top-level project they can no longer change its
+ *               milestones, which model/milestones.ts lets only User and
+ *               above write.
+ *   navigation_only
+ *               a top-level project they would see only because they reach
+ *               one of its sub-projects, by a grant, a team share or as its
+ *               lead. It stays in their navigation as a Viewer, so it does
+ *               not leave, but they can no longer change its milestones.
+ *               Its other sub-projects are reported on their own.
  *   unchecked   a top-level project they would see only through one of
  *               its sub-projects, if at all, whose sub-projects are more
  *               than SUBS allows a page to read. Check it by hand. Also,
@@ -178,6 +183,7 @@ type Part = (typeof PARTS)[Exclude<Phase, 'projects'>][number]
 const KINDS = [
   'leaves',
   'read_only',
+  'navigation_only',
   'unchecked',
   'held_task',
   'follow',
@@ -198,7 +204,7 @@ type ProjectWhere = {
 /** One finding (see the header). An organization's `unchecked` names
  * neither an admin nor a project. */
 type Finding =
-  | ({ kind: 'leaves' | 'read_only' } & ProjectWhere)
+  | ({ kind: 'leaves' | 'read_only' | 'navigation_only' } & ProjectWhere)
   | {
       kind: 'unchecked'
       org_id: string
@@ -527,7 +533,7 @@ async function judgeProject(
       return
     }
     if ((await levels.level(project.id)) !== null) {
-      page.kept += 1
+      page.findings.push({ kind: 'navigation_only', ...where })
       return
     }
   }

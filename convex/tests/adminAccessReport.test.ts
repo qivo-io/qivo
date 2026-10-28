@@ -209,7 +209,8 @@ async function expectedKinds(
     if (!inTree || p.archived_at !== undefined || root.archived_at !== undefined) continue
     const own = await projectLevel(ctx, asUser, p, false)
     if (own === 'viewer') out[p.id] = 'read_only'
-    else if (own === null && (await projectLevel(ctx, asUser, p)) === null) out[p.id] = 'leaves'
+    else if (own === null)
+      out[p.id] = (await projectLevel(ctx, asUser, p)) === null ? 'leaves' : 'navigation_only'
   }
   return out
 }
@@ -290,8 +291,10 @@ describe('the projects phase', () => {
 
     // a team share on the top-level project reaches it and every sub-project
     expect(await projectKinds(t, byTeam.id)).toEqual({ [f.hidden.id]: 'leaves' })
-    // a grant on one sub-project keeps it and its parent, for navigation
+    // a grant on one sub-project keeps it, and its parent for navigation
+    // only, where milestone edits leave
     expect(await projectKinds(t, byGrant.id)).toEqual({
+      [f.meta.id]: 'navigation_only',
       [f.sub2.id]: 'leaves',
       [f.hidden.id]: 'leaves',
     })
@@ -309,7 +312,7 @@ describe('the projects phase', () => {
     const pages = await pagesOf(t, 'projects')
     // five admins of the organization on four projects, and the other's one
     expect(pages.reduce((n, page) => n + page.checked, 0)).toBe(5 * 4 + 1)
-    expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(3 + 2 + 1)
+    expect(pages.reduce((n, page) => n + page.kept, 0)).toBe(3 + 1 + 1)
   })
 
   it('leaves out inactive admins, other roles, projects outside a meta tree and archived projects', async () => {
@@ -930,12 +933,17 @@ describe('within Convex limits', () => {
     const count = (profileId: string, kind: string) =>
       findings.filter((finding) => finding.profile_id === profileId && finding.kind === kind).length
     // the fixture's admin keeps nothing, the one in teams every sub-project
-    // and its parent, and the third the two trees they lead, their 100
-    // sub-projects and those sub-projects' three parents
+    // and its parent for navigation, and the third the two trees they lead,
+    // their 100 sub-projects and those sub-projects' three parents for
+    // navigation
     expect(count(f.admin.id, 'leaves')).toBe(2_004)
     expect(count(inTeams.id, 'leaves')).toBe(4)
+    expect(count(inTeams.id, 'navigation_only')).toBe(40)
     expect(count(granted.id, 'leaves')).toBe(2_004 - 2 * 50 - 100 - 3)
-    expect(findings.filter((finding) => finding.kind !== 'leaves')).toEqual([])
+    expect(count(granted.id, 'navigation_only')).toBe(3)
+    expect(
+      findings.filter((finding) => finding.kind !== 'leaves' && finding.kind !== 'navigation_only'),
+    ).toEqual([])
   }, 120_000)
 
   it('ends each work page by its room over 600 open tasks with full descriptions', async () => {
