@@ -1,5 +1,5 @@
 import { getFunctionName } from 'convex/server'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../convex/lib/limits'
 import {
   inboxCommentId,
@@ -13,28 +13,45 @@ import {
 
 /* A local backend the seed talks to: Nora and the people in `fake.people`,
    Northstar with one sub-project, the tasks `fake.issues` holds, in the
-   workspace parts, and every mutation it receives, with the login it came
-   as. A comment whose id `fake.comments` holds is refused as taken. */
-const fake = vi.hoisted(() => ({ issues: [], calls: [], people: [], comments: new Set() }))
+   workspace parts, the personal tokens `fake.tokens` holds, and every
+   mutation it receives, with the login it came as. A comment whose id
+   `fake.comments` holds is refused as taken. */
+const fake = vi.hoisted(() => ({
+  issues: [],
+  calls: [],
+  people: [],
+  comments: new Set(),
+  tokens: [],
+}))
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
     setAdminAuth(_key, identity) {
       this.login = identity?.subject
     }
-    async query(ref) {
+    async query(ref, args) {
       const name = getFunctionName(ref)
+      // a system table answers the admin itself, never a person it acts as
+      if (name === '_system/cli/tableData' && this.login)
+        throw new Error("You don't have permission to perform this operation.")
       if (name === '_system/cli/tableData')
         return {
-          page: [
-            {
-              email: 'nora@demo.qivo.io',
-              auth_user_id: 'nora-login',
-              id: 'nora',
-              name: 'Nora Lindqvist',
-              org_id: 'org',
-            },
-            ...fake.people,
-          ],
+          page: {
+            profiles: [
+              {
+                email: 'nora@demo.qivo.io',
+                auth_user_id: 'nora-login',
+                id: 'nora',
+                name: 'Nora Lindqvist',
+                org_id: 'org',
+                kind: 'person',
+                active: true,
+              },
+              ...fake.people,
+            ],
+            mcp_tokens: fake.tokens,
+            agent_keys: [],
+          }[args.table],
+          isDone: true,
         }
       // the workspace parts (convex/workspace.ts), one window of each kind
       return {
@@ -104,12 +121,24 @@ describe('board-scale-seed', () => {
     expect(() => parseSeedArgs([...local, '--tasks', '100', '--inbox', '101'])).toThrow(/--inbox/)
     expect(() => parseSeedArgs([...local, '--inbox', '-1'])).toThrow(/--inbox/)
     expect(() => parseSeedArgs([...local, '--inbox', '2.5'])).toThrow(/--inbox/)
+    // no tasks hold no inbox items
+    expect(parseSeedArgs([...local, '--tasks', '0']).inbox).toBe(0)
+    expect(() => parseSeedArgs([...local, '--tasks', '0', '--inbox', '1'])).toThrow(/--inbox/)
   })
 
   it('refuses anything but a disposable local backend before it connects', async () => {
     expect(() => parseSeedArgs(['--url', 'http://127.0.0.1:3214'])).toThrow(/--local backend only/)
-    expect(() => parseSeedArgs([...local, '--tasks', '0'])).toThrow(/--tasks/)
-    expect(() => parseSeedArgs([...local, '--tasks', '30001'])).toThrow(/1 to 30000/)
+    expect(() => parseSeedArgs([...local, '--tasks', '-1'])).toThrow(/--tasks/)
+    expect(() => parseSeedArgs([...local, '--tasks', '30001'])).toThrow(/0 to 30000/)
+    expect(parseSeedArgs([...local, '--tasks', '0']).tasks).toBe(0)
+    // credentials call the backend's own site origin, on loopback only
+    expect(() => parseSeedArgs([...local, '--credentials', '5'])).toThrow(/--api-url/)
+    expect(() =>
+      parseSeedArgs([...local, '--credentials', '5', '--api-url', 'https://x.convex.site']),
+    ).toThrow(/--api-url/)
+    expect(() =>
+      parseSeedArgs([...local, '--credentials', '501', '--api-url', 'http://127.0.0.1:3215']),
+    ).toThrow(/0 to 500/)
     expect(parseSeedArgs([...local, '--tasks', '30000']).tasks).toBe(30_000)
     const refused = (args, extra = {}) =>
       runBoardScaleSeed(args, { env: { ...env, ...extra }, log: () => {} })
@@ -409,5 +438,54 @@ describe('board-scale-seed --inbox', () => {
     expect(fake.comments.size).toBe(6)
     expect(lines.at(-1)).toBe('Done: 2 inbox comments posted for Nora, 4 there before.')
     fake.people = []
+  })
+})
+
+describe('board-scale-seed credentials', () => {
+  // a person with a login and an agent beside Nora
+  beforeEach(() => {
+    fake.people = [
+      { auth_user_id: 'leo-login', id: 'leo', org_id: 'org', kind: 'person', active: true },
+      { id: 'atlas', org_id: 'org', kind: 'agent', active: true },
+    ]
+  })
+  afterEach(() => {
+    fake.people = []
+  })
+
+  it('adds tokens as their owners and agent keys as Nora, each with its calls, and only the missing ones again', async () => {
+    fake.calls = []
+    fake.issues = []
+    fake.tokens = [{ name: 'Raycast (scale 1)', profile_id: 'leo' }]
+    const fetched = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url, init) => {
+        fetched.push([url, init.headers.Authorization.slice(0, 4)])
+        return { ok: true, status: 200, headers: new Headers() }
+      }),
+    )
+    await runBoardScaleSeed(
+      [...local, '--tasks', '0', '--credentials', '4', '--api-url', 'http://127.0.0.1:3215'],
+      { env, log: () => {} },
+    )
+    vi.unstubAllGlobals()
+    // number 1 is there already; 2 and 3 are tokens, 4 an agent key
+    expect(fake.calls.map(([name, fields, as]) => [name, fields.name, as])).toEqual([
+      ['tokens:createMcpToken', 'Zed (scale 2)', 'nora-login'],
+      ['tokens:createMcpToken', 'Sheets sync (scale 3)', 'leo-login'],
+      ['tokens:createAgentKey', 'Nightly build (scale 4)', 'nora-login'],
+    ])
+    expect(fake.calls[0][1]).toMatchObject({ profile_id: 'nora', access: 'read' })
+    expect(fake.calls[0][1].token_prefix).toMatch(/^qvt_[0-9a-f]{7}$/)
+    expect(fake.calls[2][1]).toMatchObject({ org_id: 'org', agent_id: 'atlas' })
+    expect(fake.calls[2][1].key_prefix).toMatch(/^qva_[0-9a-f]{3}\.\.\.[0-9a-f]{5}$/)
+    // 1 + n % 4 calls each, with the new secrets, on the site origin
+    expect(fetched.map(([, scheme]) => scheme)).toEqual([
+      ...Array(3).fill('Bear'),
+      ...Array(4).fill('Bear'),
+      'Bear',
+    ])
+    expect(new Set(fetched.map(([url]) => url))).toEqual(new Set(['http://127.0.0.1:3215/v1/me']))
   })
 })

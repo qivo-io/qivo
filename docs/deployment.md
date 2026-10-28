@@ -284,7 +284,7 @@ which takes the same loopback origins, `QIVO_FIXTURE_LOCAL=true` and
 `QIVO_LOCAL_ADMIN_KEY` as the Northstar seed and refuses every other
 target. It adds 10,000 tasks and a parent for every 25 of them, as Nora,
 the organization's admin, through the app's own task mutations, one at a
-time. `--tasks` sets any count from 1 to 30,000, which the app's workspace
+time. `--tasks` sets any count from 0 to 30,000, which the app's workspace
 parts load in windows. The tasks come in every status, with subtasks, due dates, pauses,
 long titles and unowned tasks. Their titles read like Northstar's, so the
 Board's card height estimates meet realistic text, and each description
@@ -301,6 +301,14 @@ message and an agent has no login. Each comment's id comes from its task's
 id, so a rerun posts only where no comment is yet, and a larger `--inbox`
 adds items on the next tasks. For example, `--tasks 1300 --inbox 600` and
 then `--tasks 1300 --inbox 1200` give Nora 600 more unread items.
+
+To page **Settings → Organization → API access**, add
+`--credentials <count> --api-url <backend site origin>` (up to 500, with
+`--tasks 0` for no tasks). Every fourth credential is an agent key of one of
+Northstar's agents and the rest are personal tokens of its people, each
+made through the app's own mutations, and each new one makes one to four
+`GET /v1/me` calls on the site origin, so the calls write their own usage.
+A second run adds only the credentials still missing.
 
 ## Production release
 

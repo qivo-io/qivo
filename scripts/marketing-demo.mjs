@@ -79,7 +79,7 @@ const SEED_STEPS = 100
 /** A loopback HTTP origin, the only kind a --local run talks to. */
 const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):[0-9]{1,5}$/
 /** Whether `value` is a loopback HTTP origin with a valid port. */
-const isLoopbackOrigin = (value) => LOOPBACK_ORIGIN.test(value) && URL.canParse(value)
+export const isLoopbackOrigin = (value) => LOOPBACK_ORIGIN.test(value) && URL.canParse(value)
 
 export class DemoCliError extends Error {}
 /** A known refusal from the backend, which repeating the call cannot pass. */
