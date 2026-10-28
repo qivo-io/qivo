@@ -24,10 +24,15 @@ import { archiveCursorText } from '../lib/archivedTasks'
 import { ORG_DELETING } from '../lib/billingAccess'
 import { LEVEL_RANK, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { BY_IDS_MAX, LIMITS, LIST_BATCH } from '../lib/limits'
-import { NAMED_READ, namedCeiling } from '../lib/namedPages'
+import { NAMED_READ } from '../lib/namedPages'
 import { sha256hex } from '../machine/auth'
-import { labelCountRun, shownCount } from '../model/labelCounts'
-import { LABEL_RIGHTS_UNCHECKED, labelBatch, labelJson, labelListAsk } from '../model/labels'
+import {
+  LABEL_RIGHTS_UNCHECKED,
+  type LabelListArgs,
+  labelJson,
+  pickerLabels,
+  settingsLabels,
+} from '../model/labels'
 import { SHAPES } from './accessShapes.setup'
 import {
   as,
@@ -103,12 +108,10 @@ const names = (prefix: string, n: number) =>
     (_, i) => `${prefix}${String(i).padStart(Math.max(2, String(n - 1).length), '0')}`,
   )
 
-type ListArgs = { search?: string; after?: string; through?: string }
-
-const settings = (t: T, who: Doc<'profiles'>, org_id: string, a: ListArgs = {}) =>
+const settings = (t: T, who: Doc<'profiles'>, org_id: string, a: LabelListArgs = {}) =>
   as(t, who).query(api.labels.settingsPage, { org_id, ...a })
 
-const picker = (t: T, who: Doc<'profiles'>, org_id: string, a: ListArgs = {}) =>
+const picker = (t: T, who: Doc<'profiles'>, org_id: string, a: LabelListArgs = {}) =>
   as(t, who).query(api.labels.picker, { org_id, ...a })
 
 /** Every batch of a list from its start, following `next` until it is null. */
@@ -839,7 +842,7 @@ describe('refusals', () => {
     expect(
       (await settings(t, f.admin, f.org.id, { search: ' L ', after: searched })).rows,
     ).toHaveLength(5)
-    const bad: [string, ListArgs][] = [
+    const bad: [string, LabelListArgs][] = [
       ['malformed', { after: 'not a cursor' }],
       ['changed by one character', { after: flipped }],
       ['from another organization', { after: foreign }],
@@ -894,30 +897,6 @@ async function measured<R>(
   })
 }
 
-/* The settingsPage handler after the seat check, for its metrics. */
-const settingsBatch = (ctx: QueryCtx, orgId: string, a: ListArgs) =>
-  (async () => {
-    const ask = await labelListAsk('labels.settings', orgId, a)
-    const ceiling = await namedCeiling(ctx)
-    const counting = (await labelCountRun(ctx, orgId)) !== null
-    return await labelBatch(ctx, ask, {
-      ceiling,
-      row: async (label, lookup) => ({
-        ...labelJson(label),
-        active_tasks: shownCount(
-          await lookup(() =>
-            ctx.db
-              .query('label_counts')
-              .withIndex('by_label', (q) => q.eq('label_id', label.id))
-              .unique(),
-          ),
-          label,
-          counting,
-        ),
-      }),
-    })
-  })()
-
 describe('real limits', () => {
   it('reads 20,000 labels inside the limits of one transaction a call', async () => {
     const t = newT({ transactionLimits: true })
@@ -931,7 +910,7 @@ describe('real limits', () => {
       })
     }
     // a first batch without search
-    const first = await measured(t, (ctx) => settingsBatch(ctx, f.org.id, {}))
+    const first = await measured(t, (ctx) => settingsLabels(ctx, f.admin, {}))
     console.log('settingsPage first batch', first.read)
     expect(first.out.rows).toHaveLength(LIST_BATCH)
     expect(first.read.ranges).toBeLessThan(100)
@@ -945,7 +924,7 @@ describe('real limits', () => {
     for (;;) {
       if (calls.length > 10) throw new Error('the search did not reach the end')
       const b = await measured(t, (ctx) =>
-        settingsBatch(ctx, f.org.id, { search: 'nomatch', after }),
+        settingsLabels(ctx, f.admin, { search: 'nomatch', after }),
       )
       calls.push({ ...b.read, stopped: b.out.stopped })
       expect(b.out.rows).toEqual([])
@@ -998,19 +977,13 @@ describe('real limits', () => {
     // walk's whole share after it still answers inside the limits
     const member = await staffSeat(t, f, 'Member of many')
     await plantTeams(t, f, member, 2000, f.sub.id)
-    const both = await measured(t, async (ctx) => {
-      const may = await canWriteOrgLabels(ctx, member)
-      const checked = await ctx.meta.getTransactionMetrics()
-      const ask = await labelListAsk('labels.picker', f.org.id, { search: 'nomatch' })
-      const batch = await labelBatch(ctx, ask, {
-        ceiling: await namedCeiling(ctx),
-        row: async (label) => labelJson(label),
-      })
-      return { may, checkRanges: checked.databaseQueries.used, stopped: batch.stopped }
-    })
-    console.log('canWriteOrgLabels over 2,000 shared teams, then a picker search', both)
-    expect(both.out).toMatchObject({ may: null, stopped: true })
-    expect(both.out.checkRanges).toBeLessThanOrEqual(LABEL_WRITE_READ.ranges + 4)
+    const alone = await measured(t, (ctx) => canWriteOrgLabels(ctx, member))
+    const both = await measured(t, (ctx) => pickerLabels(ctx, member, { search: 'nomatch' }))
+    console.log('canWriteOrgLabels over 2,000 shared teams', alone.read)
+    console.log('labels.picker searching after it', both.read)
+    expect(alone.out).toBeNull()
+    expect(alone.read.ranges).toBeLessThanOrEqual(LABEL_WRITE_READ.ranges + 4)
+    expect(both.out).toMatchObject({ can_create: null, rows: [], stopped: true })
     expect(both.read.ranges).toBeLessThan(4096 - 16)
     const searched = await picker(t, member, f.org.id, { search: 'nomatch' })
     expect(searched).toMatchObject({ can_create: null, rows: [], stopped: true })

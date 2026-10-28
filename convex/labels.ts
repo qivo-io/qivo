@@ -22,31 +22,26 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
-import { canManageOrgLabels, canWriteOrgLabels, hasProjectLevel } from './lib/access'
+import { hasProjectLevel } from './lib/access'
 import { byId } from './lib/db'
 import { badRequest, forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
 import { BY_IDS_MAX } from './lib/limits'
-import { namedCeiling } from './lib/namedPages'
-import { labelCountRow, labelCountRun, shownCount } from './model/labelCounts'
 import {
   assertLabelManager,
   createLabelCore,
   deleteLabelCore,
-  labelBatch,
+  type LabelBatch,
+  type LabelRow,
   labelJson,
-  labelListAsk,
+  pickerLabels,
+  type SettingsLabelRow,
   setTaskLabel,
+  settingsLabels,
   updateLabelCore,
   vLabelExpected,
 } from './model/labels'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
-
-/** A label as the app's label lists show it. */
-type LabelRow = ReturnType<typeof labelJson>
-
-/** A label as Settings > Labels shows it, with its usage. */
-type SettingsRow = LabelRow & { active_tasks: number | null }
 
 /** The arguments of a label list: an optional search, and the cursors of
  * the batch's start (`after`, none for the first batch) and, to keep a
@@ -67,35 +62,11 @@ const vListArgs = {
  * organization's counts are being prepared, when every count is null. The
  * batch, its search, `next`, `stopped` and `exact` are model/labels.ts
  * labelBatch's. Only active organization admins may read it, as only they
- * manage labels. */
+ * manage labels (model/labels.ts settingsLabels). */
 export const settingsPage = orgQuery({
   args: vListArgs,
-  handler: async (
-    ctx,
-    a,
-  ): Promise<{
-    rows: SettingsRow[]
-    next: string | null
-    stopped: boolean
-    counting: boolean
-    exact: SettingsRow | null
-  }> => {
-    if (!canManageOrgLabels(ctx.me)) {
-      throw forbidden('only organization admins see the label list with its usage')
-    }
-    const ask = await labelListAsk('labels.settings', ctx.me.org_id, a)
-    const ceiling = await namedCeiling(ctx)
-    // one read of the run for the whole batch
-    const counting = (await labelCountRun(ctx, ctx.me.org_id)) !== null
-    const batch = await labelBatch(ctx, ask, {
-      ceiling,
-      row: async (label, lookup) => ({
-        ...labelJson(label),
-        active_tasks: shownCount(await lookup(() => labelCountRow(ctx, label.id)), label, counting),
-      }),
-    })
-    return { ...batch, counting }
-  },
+  handler: (ctx, a): Promise<LabelBatch<SettingsLabelRow> & { counting: boolean }> =>
+    settingsLabels(ctx, ctx.me, a),
 })
 
 /* ------------------------------------------------------------------ picker
@@ -109,29 +80,11 @@ export const settingsPage = orgQuery({
  * in this organization (lib/access.ts canWriteOrgLabels), or null when the
  * check could not finish in this request; later batches leave it out. The
  * picker offers creating a label only in the caller's home organization,
- * which the app decides, not this query. */
+ * which the app decides, not this query (model/labels.ts pickerLabels). */
 export const picker = orgQuery({
   args: vListArgs,
-  handler: async (
-    ctx,
-    a,
-  ): Promise<{
-    rows: LabelRow[]
-    next: string | null
-    stopped: boolean
-    exact: LabelRow | null
-    can_create?: boolean | null
-  }> => {
-    const ask = await labelListAsk('labels.picker', ctx.me.org_id, a)
-    // the check under its own ceiling, then the walk under one counted from
-    // after it (lib/access.ts LABEL_WRITE_READ)
-    const can_create = ask.after === null ? await canWriteOrgLabels(ctx, ctx.me) : undefined
-    const batch = await labelBatch(ctx, ask, {
-      ceiling: await namedCeiling(ctx),
-      row: async (label) => labelJson(label),
-    })
-    return can_create === undefined ? batch : { ...batch, can_create }
-  },
+  handler: (ctx, a): Promise<LabelBatch<LabelRow> & { can_create?: boolean | null }> =>
+    pickerLabels(ctx, ctx.me, a),
 })
 
 /* ------------------------------------------------------------------- byIds */

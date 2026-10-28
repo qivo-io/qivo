@@ -25,6 +25,7 @@ import {
   indexAfter,
   type NamedAt,
   type NamedIndex,
+  namedCeiling,
   namedCursor,
   openNamedCursor,
   readBatch,
@@ -34,7 +35,14 @@ import { allWordsMatcher } from '../lib/search'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, DELETES, type Fields, filledText, type Next } from './expected'
 import { assertCanEdit } from './issues'
-import { deleteLabelCount, insertLabelCount, tallyAssignment } from './labelCounts'
+import {
+  deleteLabelCount,
+  insertLabelCount,
+  labelCountRow,
+  labelCountRun,
+  shownCount,
+  tallyAssignment,
+} from './labelCounts'
 
 /** The refusal of a label create whose rights check could not finish in one
  * request (lib/access.ts canWriteOrgLabels answered null). */
@@ -278,6 +286,58 @@ export async function labelBatch<Row>(
 /** A lookup of at most one document, counted when a batch reads it
  * (lib/namedPages.ts ReadGuard lookup). */
 export type Lookup = <D extends GenericDocument>(read: () => Promise<D | null>) => Promise<D | null>
+
+/** A label as the app's label lists show it. */
+export type LabelRow = ReturnType<typeof labelJson>
+
+/** A label as Settings > Labels shows it, with its usage. */
+export type SettingsLabelRow = LabelRow & { active_tasks: number | null }
+
+/** What a label list is asked for (labels.settingsPage and labels.picker). */
+export type LabelListArgs = { search?: string; after?: string; through?: string }
+
+/** labels.settingsPage for `me`: one batch for Settings > Labels, each row
+ * with its usage (model/labelCounts.ts shownCount), read with one read of
+ * the organization's label_count_runs row, and `counting` while it exists.
+ * Refuses anyone but an active organization admin. */
+export async function settingsLabels(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: LabelListArgs,
+): Promise<LabelBatch<SettingsLabelRow> & { counting: boolean }> {
+  if (!canManageOrgLabels(me)) {
+    throw forbidden('only organization admins see the label list with its usage')
+  }
+  const ask = await labelListAsk('labels.settings', me.org_id, a)
+  const ceiling = await namedCeiling(ctx)
+  const counting = (await labelCountRun(ctx, me.org_id)) !== null
+  const batch = await labelBatch(ctx, ask, {
+    ceiling,
+    row: async (label, lookup) => ({
+      ...labelJson(label),
+      active_tasks: shownCount(await lookup(() => labelCountRow(ctx, label.id)), label, counting),
+    }),
+  })
+  return { ...batch, counting }
+}
+
+/** labels.picker for `me`: one batch for the task label picker, and in a
+ * first batch (no `after`) `can_create` from lib/access.ts
+ * canWriteOrgLabels, which runs under its own ceiling before the walk runs
+ * under one counted from after it (lib/access.ts LABEL_WRITE_READ). */
+export async function pickerLabels(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: LabelListArgs,
+): Promise<LabelBatch<LabelRow> & { can_create?: boolean | null }> {
+  const ask = await labelListAsk('labels.picker', me.org_id, a)
+  const can_create = ask.after === null ? await canWriteOrgLabels(ctx, me) : undefined
+  const batch = await labelBatch(ctx, ask, {
+    ceiling: await namedCeiling(ctx),
+    row: async (label) => labelJson(label),
+  })
+  return can_create === undefined ? batch : { ...batch, can_create }
+}
 
 /** The organization's label with this id, or with this name in any case;
  * null when none matches. */

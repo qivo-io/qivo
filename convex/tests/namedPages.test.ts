@@ -17,7 +17,6 @@ import {
   type Named,
   type NamedAt,
   type NamedBatch,
-  type NamedIndex,
   type NamedStream,
   type NamedTie,
   namedCursor,
@@ -255,49 +254,52 @@ describe('the order', () => {
     expect(batch).toMatchObject({ rows: ['id40'], ended: false, stopped: true })
   })
 
-  it('resumes inside a creation instant that rows of one key share', async () => {
-    // rows as an index holds them: key, creation time, id
-    type Entry = { key: string; time: number; id: string }
-    const entries: Entry[] = [
-      { key: 'k', time: 1, id: 'a' },
-      { key: 'k', time: 1, id: 'b' },
-      { key: 'k', time: 1, id: 'c' },
-      { key: 'k', time: 2, id: 'a' },
-      { key: 'l', time: 1, id: 'a' },
+  it('resumes inside a creation instant that labels of one name share, through labelIndex', async () => {
+    const labels = [
+      fakeLabel('k', 1, 'a'),
+      fakeLabel('k', 1, 'b'),
+      fakeLabel('k', 1, 'c'),
+      fakeLabel('k', 2, 'a'),
+      fakeLabel('l', 1, 'a'),
     ]
-    const range = (keep: (e: Entry) => boolean) =>
-      async function* () {
-        for (const e of entries) if (keep(e)) yield e
-      }
-    // the three ranges model/labels.ts labelIndex reads after a position
-    const index: NamedIndex<Entry, readonly [number, string]> = {
-      all: range(() => true),
-      after: ({ key, tie: [time] }) => [
-        range((e) => e.key === key && e.time === time),
-        range((e) => e.key === key && e.time > time),
-        range((e) => e.key > key),
-      ],
-      at: (e) => ({ key: e.key, tie: [e.time, e.id] }),
-    }
-    const t = newT()
     const seen: string[] = []
-    let after: NamedAt<readonly [number, string]> | null = null
+    let after: NamedAt<LabelTie> | null = null
+    let asked: unknown[] = []
     for (let round = 0; round < 10; round++) {
-      const from: NamedAt<readonly [number, string]> | null = after
-      const batch: NamedBatch<string> = await t.run((ctx) =>
-        readBatch(ctx, {
-          stream: indexAfter(index, from),
-          keep: async (e: Entry) => `${e.key}${e.time}${e.id}`,
-          limit: 1,
-          through: null,
-          ceiling: { ranges: 1e9, documents: 1e9, bytes: 1e12 },
-        }),
-      )
+      const { ctx, ranges } = labelsCtx(labels)
+      const batch: NamedBatch<string> = await readBatch(ctx, {
+        stream: indexAfter(labelIndex(ctx, ORG), after),
+        keep: async (label: Doc<'labels'>) =>
+          `${label.name_lower}${label._creationTime}${label._id}`,
+        limit: 1,
+        through: null,
+        ceiling: { ranges: 1e9, documents: 1e9, bytes: 1e12 },
+      })
+      // the resume after k1c reads all three ranges
+      if (round === 3) asked = ranges
       seen.push(...batch.rows)
       if (batch.ended) break
-      after = { key: batch.at.key, tie: [Number(batch.at.tie[0]), String(batch.at.tie[1])] }
+      after = labelAt(batch.at)
     }
     expect(seen).toEqual(['k1a', 'k1b', 'k1c', 'k2a', 'l1a'])
+    // after k at instant 1 and id c: the rest of the instant, the rest of the
+    // name, then every greater name
+    expect(asked).toEqual([
+      [
+        { field: 'org_id', op: 'eq', value: ORG },
+        { field: 'name_lower', op: 'eq', value: 'k' },
+        { field: '_creationTime', op: 'eq', value: 1 },
+      ],
+      [
+        { field: 'org_id', op: 'eq', value: ORG },
+        { field: 'name_lower', op: 'eq', value: 'k' },
+        { field: '_creationTime', op: 'gt', value: 1 },
+      ],
+      [
+        { field: 'org_id', op: 'eq', value: ORG },
+        { field: 'name_lower', op: 'gt', value: 'k' },
+      ],
+    ])
   })
 })
 
