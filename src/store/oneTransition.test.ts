@@ -2,10 +2,10 @@ import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
-/* The workspace parts and the open task's thread come in Convex
-   transitions (store/liveParts.ts). One transition that changes both a
-   task and the thread repaints once and tells the views once, and one that
-   changes nothing on screen tells them nothing. */
+/* The workspace parts and the open task's thread and history come in
+   Convex transitions (store/liveParts.ts). One transition that changes a
+   task, the thread and the history repaints once and tells the views once,
+   and one that changes nothing on screen tells them nothing. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -29,6 +29,7 @@ describe('one transition', () => {
   let snapshot: Snapshot
   let deliver: (snap: Snapshot) => void
   let deliverThread: (page: unknown) => void
+  let deliverHistory: (page: unknown) => void
   let emits: number
 
   beforeEach(async () => {
@@ -58,20 +59,15 @@ describe('one transition', () => {
       if (name === 'workspace:whole') {
         deliver = receive
         receive(structuredClone(snapshot))
-      } else if (name === 'snapshot:commentThread') deliverThread = receive
+      } else if (name === 'snapshot:threadComments') deliverThread = receive
+      else if (name === 'snapshot:threadHistory') deliverHistory = receive
       return () => {}
     })
     store = await import('./planner')
     await store.initStore()
     store.P.watchComments('task-a')
     await new Promise((resolve) => setTimeout(resolve, 0))
-    deliverThread({
-      comments: [],
-      earlier: false,
-      events: [],
-      events_earlier: false,
-      events_next: null,
-    })
+    deliverThread({ comments: [], earlier: false })
     emits = 0
     store.P.subscribe(() => emits++)
   })
@@ -92,16 +88,36 @@ describe('one transition', () => {
     double.live?.batch(() => {
       snapshot.issues[0].title = 'Renamed elsewhere'
       deliver(structuredClone(snapshot))
-      deliverThread({
-        comments: [comment],
-        earlier: false,
-        events: [],
-        events_earlier: false,
-        events_next: null,
-      })
+      deliverThread({ comments: [comment], earlier: false })
     })
     expect(store.P.issues.find((i) => i.uuid === 'task-a')?.title).toBe('Renamed elsewhere')
     expect(store.P.comments.map((c) => c.body)).toEqual(['Looks good'])
+    expect(emits).toBe(1)
+  })
+
+  it('repaints a task change, a new comment and a new change of one transition once', async () => {
+    store.P.showHistory({}, true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    deliverHistory({ events: [], earlier: false, next: null })
+    emits = 0
+    const event = {
+      id: 'event-1',
+      org_id: snapshot.orgs[0].id,
+      ts: AT,
+      actor_id: snapshot.profiles[0].id,
+      verb: 'renamed',
+      target_type: 'issue',
+      target_id: 'task-a',
+      label: 'QN-1',
+    }
+    double.live?.batch(() => {
+      snapshot.issues[0].title = 'Renamed elsewhere'
+      deliver(structuredClone(snapshot))
+      deliverThread({ comments: [], earlier: false })
+      deliverHistory({ events: [event], earlier: false, next: null })
+    })
+    expect(store.P.issues.find((i) => i.uuid === 'task-a')?.title).toBe('Renamed elsewhere')
+    expect(store.P.threadEvents.map((e) => e.id)).toEqual(['event-1'])
     expect(emits).toBe(1)
   })
 

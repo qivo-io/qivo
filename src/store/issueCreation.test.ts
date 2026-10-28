@@ -46,7 +46,7 @@ describe('task creation through the client store', () => {
     requests = []
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((ref, _args, next) => {
-      if (getFunctionName(ref) === 'snapshot:commentThread') deliverThread = next
+      if (getFunctionName(ref) === 'snapshot:threadComments') deliverThread = next
       if (getFunctionName(ref) !== 'workspace:whole') return () => {}
       publish = next
       next(structuredClone(snap))
@@ -91,7 +91,7 @@ describe('task creation through the client store', () => {
     // the server refuses the thread of a task it does not hold yet
     const threads = () =>
       network.onUpdate.mock.calls.filter(
-        ([ref]) => getFunctionName(ref) === 'snapshot:commentThread',
+        ([ref]) => getFunctionName(ref) === 'snapshot:threadComments',
       )
     const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' })!
     const task = P.issueById[key]
@@ -136,7 +136,6 @@ describe('task creation through the client store', () => {
     deliverThread({
       comments: [{ ...comment, body: '#51', created_at: NOW }],
       earlier: true,
-      events: [],
     })
     expect(P.comments.map((c) => c.id)).toEqual(['comment-51'])
     expect(P.commentsEarlier).toBe('more')

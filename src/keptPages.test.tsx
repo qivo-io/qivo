@@ -110,8 +110,8 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
     if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'teamSync:lastComments')
       next({ rows: [{ issue_id: 't1', at: '2026-09-10T08:00:00.000Z' }], complete: true })
-    else if (name === 'snapshot:commentThread') {
-      next({ comments: [], earlier: false, events: [] })
+    else if (name === 'snapshot:threadComments') {
+      next({ comments: [], earlier: false })
       const thread = { stopped: false }
       threads.push(thread)
       return () => {

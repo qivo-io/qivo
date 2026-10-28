@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { firstUnreadTs, mergeSpine, spineWindow, unreadMark } from './spine'
+import { firstUnreadTs, mergeSpine, spineWindow, unreadMark, unreadStart } from './spine'
 
 const c = (id: string, ts: number) => ({ id, ts, body: id })
 const e = (id: string, ts: number) => ({ id, ts, verb: 'moved' })
@@ -59,6 +59,39 @@ describe('firstUnreadTs', () => {
 
   it('is null without an issue', () => {
     expect(firstUnreadTs([msg(A, 100, false)], null)).toBe(null)
+  })
+})
+
+describe('unreadStart', () => {
+  const kinded = (issueUuid: string, ts: number, read: boolean, kind: 'comment' | 'change') => ({
+    ...msg(issueUuid, ts, read),
+    kind,
+  })
+
+  it('says a change is unread only for an unread change message about the task', () => {
+    expect(unreadStart([kinded(A, 100, false, 'change')], A)).toEqual({ ts: 100, change: true })
+    expect(unreadStart([kinded(A, 100, false, 'comment')], A)).toEqual({ ts: 100, change: false })
+    // a read change, or one about another task, is not this visit's
+    expect(
+      unreadStart([kinded(A, 50, true, 'change'), kinded(A, 100, false, 'comment')], A),
+    ).toEqual({ ts: 100, change: false })
+    expect(
+      unreadStart([kinded(B, 50, false, 'change'), kinded(A, 100, false, 'comment')], A),
+    ).toEqual({ ts: 100, change: false })
+  })
+
+  it('finds a change after the first unread comment', () => {
+    expect(
+      unreadStart([kinded(A, 300, false, 'change'), kinded(A, 200, false, 'comment')], A),
+    ).toEqual({ ts: 200, change: true })
+  })
+
+  it('is empty without an issue or anything unread', () => {
+    expect(unreadStart([kinded(A, 100, false, 'change')], null)).toEqual({
+      ts: null,
+      change: false,
+    })
+    expect(unreadStart([], A)).toEqual({ ts: null, change: false })
   })
 })
 

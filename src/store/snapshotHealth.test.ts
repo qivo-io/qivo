@@ -116,7 +116,7 @@ describe('snapshot trouble', () => {
           else if (firstDelivery === 'deactivated') deliver(DEACTIVATED)
           else fail(firstDelivery instanceof Error ? firstDelivery : new Error(QUERY_FAILURE))
         }
-      } else if (getFunctionName(ref) === 'snapshot:commentThread')
+      } else if (getFunctionName(ref) === 'snapshot:threadComments')
         threads.push({ deliver, unsubscribe })
       return unsubscribe
     })

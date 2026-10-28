@@ -49,7 +49,7 @@ vi.mock('../../lib/images', async (original) => ({
 }))
 
 const QUERY_FAILURE = '[CONVEX Q(workspace:whole)] Server Error'
-const THREAD_FAILURE = '[CONVEX Q(snapshot:commentThread)] Server Error'
+const THREAD_FAILURE = '[CONVEX Q(snapshot:threadComments)] Server Error'
 const REFUSAL = () => new ConvexError({ code: 'forbidden', message: 'no write access' })
 
 let store: typeof import('../planner')
@@ -90,7 +90,7 @@ async function boot(recipe: Recipe) {
   const d = server()
   d.reset()
   d.publish('workspace:whole', snap, false)
-  d.publish('snapshot:commentThread', page, false)
+  d.publish('snapshot:threadComments', page, false)
   // a new listener gets the held snapshot on a 0 ms timer, as from Convex
   let booted = false
   const booting = store.initStore().then(() => {
@@ -248,7 +248,7 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
           args = sent
           beforeAnswer = probe().rows(true)
           // the query fails before the answer, so no delivery holds the write
-          if (thread) server().fail('snapshot:commentThread', new Error(THREAD_FAILURE))
+          if (thread) server().fail('snapshot:threadComments', new Error(THREAD_FAILURE))
           else server().fail('workspace:whole', new Error(QUERY_FAILURE))
         }
         resolve(answerOf(recipe, name, sent))
@@ -270,7 +270,7 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
       await settle()
       expect(probe().rows()).toEqual(shown)
       // the server's rows end the trouble and hold every accepted write
-      if (thread) server().publish('snapshot:commentThread', threadOf(recipe, args))
+      if (thread) server().publish('snapshot:threadComments', threadOf(recipe, args))
       else server().publish('workspace:whole', truthOf(recipe, args))
       await settle()
       expect(P().snapshotTrouble()).toBeNull()
@@ -291,7 +291,7 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
       // what the write painted when it was sent, before any delivery
       const early = probe().rows(true)
       // Convex delivers the write before it answers
-      if (recipe.thread) server().publish('snapshot:commentThread', threadOf(recipe, pending))
+      if (recipe.thread) server().publish('snapshot:threadComments', threadOf(recipe, pending))
       else server().publish('workspace:whole', truthOf(recipe, pending))
       await settle()
       const painted = probe().rows(true)

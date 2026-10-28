@@ -67,7 +67,7 @@ export async function loadBoard(
     if (name === 'workspace:whole') {
       deliver = (snap) => next(structuredClone(snap))
       deliver(snapshot)
-    } else if (name === 'snapshot:commentThread') next({ comments: [], earlier: false, events: [] })
+    } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     return () => {}
   })
   network.mutation.mockImplementation((ref) =>

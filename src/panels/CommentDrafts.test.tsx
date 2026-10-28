@@ -11,7 +11,7 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 import type { Row } from '../store/rows'
 
 /* The comment composer and the thread's failed state in the task window, on
-   the real store and the real editor. Comment writes and the commentThread
+   the real store and the real editor. Comment writes and the threadComments
    subscription are answered by hand, and the server answers a new
    subscription after a round trip (`later`). Comment #n is posted n minutes
    after START. */
@@ -84,10 +84,9 @@ async function load(description = '') {
   network.onUpdate.mockImplementation((ref, _args, next, onError) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
-    else if (name === 'snapshot:commentThread') {
+    else if (name === 'snapshot:threadComments') {
       subscriptions++
-      // a delivery also carries the task's changes, which these tests leave out
-      deliver = (page) => next({ ...page, events: [] })
+      deliver = (page) => next(page)
       fail = (e) => onError(e)
       return () => {}
     }

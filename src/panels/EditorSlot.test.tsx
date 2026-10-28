@@ -77,7 +77,7 @@ describe('the task editor while its code waits for the connection', { timeout: 2
     network.onUpdate.mockImplementation((ref, _args, next) => {
       const name = getFunctionName(ref)
       if (name === 'workspace:whole') next(structuredClone(snap))
-      else if (name === 'snapshot:commentThread') next({ comments: [], earlier: false, events: [] })
+      else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
       return () => {}
     })
     network.query.mockResolvedValue(null)

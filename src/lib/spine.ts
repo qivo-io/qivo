@@ -1,6 +1,7 @@
 /* Inbox and task conversations share oldest-first ordering and unread marks.
    Keep them consistent while both surfaces share the same comment cache. */
 
+import type { MessageKind } from '../../convex/lib/enums'
 import type { ActivityVM, CommentVM } from '../store/planner'
 
 /* Generic over the row shapes (defaulting to the store's view models) so the
@@ -70,6 +71,23 @@ export function firstUnreadTs(
     if (oldest === null || m.ts < oldest) oldest = m.ts
   }
   return oldest
+}
+
+/** Where a visit's unread part of a task starts (firstUnreadTs), and
+    whether its unread messages include a change, which only the All filter
+    shows. The task window freezes both when the task opens, before the
+    visit marks the messages read. */
+export type UnreadStart = { ts: number | null; change: boolean }
+
+/* The unread start of task `issueUuid` in `messages` (UnreadStart). */
+export function unreadStart(
+  messages: readonly (UnreadSource & { kind: MessageKind })[],
+  issueUuid: string | null,
+): UnreadStart {
+  const ts = firstUnreadTs(messages, issueUuid)
+  const change =
+    ts !== null && messages.some((m) => !m.read && m.issueUuid === issueUuid && m.kind === 'change')
+  return { ts, change }
 }
 
 export type UnreadMark = {

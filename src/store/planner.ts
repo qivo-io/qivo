@@ -142,7 +142,14 @@ import {
   paints,
   type View,
 } from './layers'
-import { createLiveParts, type LiveParts, type PartsReport } from './liveParts'
+import {
+  createLiveParts,
+  type LiveParts,
+  type PartsReport,
+  SIDE_NAMES,
+  type SideName,
+  type SideNews,
+} from './liveParts'
 import { createPreferences } from './preferences'
 import { createWorkspaceRows, RowMap, rowCopies } from './rowMap'
 import { keep, keepItems, sameData } from './stable'
@@ -308,7 +315,8 @@ const rows = {
   // comments for ONE issue — the open modal's (watchComments); other issues'
   // comments are never fetched, so this is not org-wide state
   comments: new Map<string, Row<'comments'>>(),
-  // the watched issue's history, delivered with its comments (commentThread)
+  // the watched issue's history while a window shows All (P.showHistory),
+  // from its own side query (threadHistory)
   threadEvents: [] as Row<'activity_events'>[],
   // inbox messages (0074) — the snapshot returns only the signed-in user's
   // rows; generation is server-side (notify triggers), clients only mark
@@ -383,14 +391,24 @@ let commentsWatchEpoch = 0
    (store/workspaceBase.ts) is for the rest. null = nothing delivered yet for the watched issue. It is the
    thread's live window, its newest comments, oldest first in thread order. */
 let commentsSnap: Row<'comments'>[] | null = null
-/* The watched task's history from the same delivery as commentsSnap, its
-   newest page, oldest first in insertion order, the task window's changes
-   under All. */
-let eventsSnap: Row<'activity_events'>[] = []
+/* The windows that show the watched task's history under All
+   (P.showHistory). The history has its own side query, which runs only
+   while one of them does, so a task open under Comments reads no history. */
+const historyOwners = new Set<object>()
+/* The task and organization of the history the parts watch, or null. */
+let historyWatched: { task: string; org: string } | null = null
+/* Moves on whenever the history starts over (resetHistory), so an earlier
+   page asked for before that is dropped when it answers. */
+let historyEpoch = 0
+/* The last page the history's subscription delivered (threadHistory), its
+   newest rows, oldest first in insertion order, the task window's changes
+   under All. null until the first delivery, and while no window shows All,
+   since the history is dropped whenever its subscription stops. */
+let historySnap: Row<'activity_events'>[] | null = null
 /* The watched task's history older than that page, oldest first: earlier
    pages (P.loadEarlierHistory) and rows that left the page as newer ones
-   arrived. Server truth like eventsSnap, but not live, so a row someone's
-   change hides from the person stays until the task opens again. */
+   arrived. Server truth like historySnap, but not live, so a row someone's
+   change hides from the person stays until the history loads again. */
 let olderEvents: Row<'activity_events'>[] = []
 /* Whether the watched task's first history row is loaded, so nothing is
    earlier, and how the last load of an earlier page of history went. */
@@ -423,26 +441,31 @@ let earlierLoad: 'idle' | 'loading' | 'failed' = 'idle'
     (P.commentsEarlier). */
 export type CommentsEarlier = 'none' | 'more' | 'loading' | 'failed'
 
-/** Whether the watched thread's subscription failed (P.commentsFailure):
-    'failed' until a later delivery or Retry, 'retrying' from Retry until the
-    server answers the new subscription (subscribeThread), else 'none'. */
+/** Whether the watched thread's subscription failed (P.commentsFailure),
+    or its history's (P.historyFailure): 'failed' until a later delivery or
+    Retry, 'retrying' from Retry until the server answers the new
+    subscription, else 'none'. */
 export type CommentsFailure = 'none' | 'failed' | 'retrying'
 
-/* Builds the watched thread's rows from its last delivery and the comments
-   loaded before it, empty while nothing is delivered (or nothing watched).
+/* Builds the watched thread's rows from its last deliveries and the rows
+   loaded before them: the comments, empty while none are delivered (or
+   nothing is watched), and the history, empty while it is not delivered.
    The thread's layers paint over them (repaint). */
 function buildThreadRows() {
+  rows.threadEvents =
+    historySnap === null
+      ? []
+      : structuredClone([
+          ...new Map([...olderEvents, ...historySnap].map((r) => [r.id, r])).values(),
+        ])
+  PLANNER.historyLoaded = historySnap !== null
   if (commentsSnap === null) {
     rows.comments = new Map()
-    rows.threadEvents = []
     return
   }
   rows.comments = new Map(
     structuredClone([...olderComments, ...commentsSnap]).map((r) => [r.id, r]),
   )
-  rows.threadEvents = structuredClone([
-    ...new Map([...olderEvents, ...eventsSnap].map((r) => [r.id, r])).values(),
-  ])
   PLANNER.commentsLoaded = true
 }
 
@@ -456,14 +479,7 @@ function buildThreadRows() {
    (checkSlidOut). When the window no longer meets what was loaded, because
    more comments arrived between two deliveries than it holds, the thread
    starts over from the window. */
-function receiveThread(page: {
-  comments: Row<'comments'>[]
-  earlier: boolean
-  events: Row<'activity_events'>[]
-  events_earlier: boolean
-  events_next: string | null
-}): Row<'comments'>[] {
-  receiveHistory(page, commentsSnap === null)
+function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }): Row<'comments'>[] {
   const prev = commentsSnap
   const first = page.comments[0]
   let slid: Row<'comments'>[] = []
@@ -498,42 +514,52 @@ function receiveThread(page: {
   return slid
 }
 
-/* Records the history page of a delivery of the watched thread, `first`
-   when it is the first since the thread was watched. A page with nothing
-   earlier holds the whole history. A page whose first row the last one
-   held slid forward as new rows arrived: the rows before that one left at
-   its old end and move to olderEvents, so the history a reader loaded
-   stays. A page whose first row is in olderEvents reaches back into what
-   was loaded, and one that again holds no row repeats the last. Neither
-   moves historyNext, which stays older than every row they hold. Any other
-   page, one that no longer meets the last because more rows arrived
-   between two deliveries than it holds, or one that gained rows at its old
-   end because what the person sees changed, starts the history over from
-   the page. */
-function receiveHistory(
-  page: {
-    events: Row<'activity_events'>[]
-    events_earlier: boolean
-    events_next?: string | null
-  },
-  first: boolean,
-) {
-  const prev = eventsSnap
+/* Records a delivery of the watched task's live history page. The first
+   since the history started over starts it. A page with nothing earlier
+   holds the whole history. A page whose first row the last one held slid
+   forward as new rows arrived: the rows before that one left at its old
+   end and move to olderEvents, so the history a reader loaded stays. A
+   page whose first row is in olderEvents reaches back into what was
+   loaded, and one that again holds no row repeats the last. Neither moves
+   historyNext, which stays older than every row they hold. Any other page,
+   one that no longer meets the last because more rows arrived between two
+   deliveries than it holds, or one that gained rows at its old end because
+   what the person sees changed, starts the history over from the page. */
+function receiveHistory(page: {
+  events: Row<'activity_events'>[]
+  earlier: boolean
+  next: string | null
+}) {
+  const first = historySnap === null
+  const prev = historySnap ?? []
   const restart = () => {
     olderEvents = []
-    historyStart = !page.events_earlier
-    historyNext = page.events_next ?? null
+    historyStart = !page.earlier
+    historyNext = page.next
   }
   const head = page.events[0]
   const at = head ? prev.findIndex((r) => r.id === head.id) : -1
   const back = head ? olderEvents.findIndex((r) => r.id === head.id) : -1
-  if (first || !page.events_earlier) restart()
+  if (first || !page.earlier) restart()
   else if (at !== -1) {
     const known = new Set(olderEvents.map((r) => r.id))
     olderEvents = [...olderEvents, ...prev.slice(0, at).filter((r) => !known.has(r.id))]
   } else if (back !== -1) olderEvents = olderEvents.slice(0, back)
   else if (head !== undefined || prev.length > 0) restart()
-  eventsSnap = page.events
+  historySnap = page.events
+}
+
+/* Drops the watched task's history and starts it over, empty until its
+   subscription delivers again. The caller stops the subscription when no
+   window shows All any more, and repaints. */
+function resetHistory() {
+  historyEpoch++
+  historySnap = null
+  olderEvents = []
+  historyNext = null
+  historyStart = false
+  historyLoad = 'idle'
+  PLANNER.historyFailure = 'none'
 }
 
 /* Drops the comments in `slid` that were deleted rather than pushed out of
@@ -612,7 +638,8 @@ function subscribeWaitingThread() {
 }
 
 /* Subscribes to the watched thread `issueUuid` in organization `orgId`, as
-   the side query of the live parts, replacing any earlier one. Its answers
+   the thread side query of the live parts, replacing any earlier one, and
+   to its history too while a window shows All (startHistory). Its answers
    come with the transitions that bring them (threadNews), so one that also
    changes the workspace repaints once. A delivery is the thread's new
    anchor, and the comment writes still waiting paint over it again (owe),
@@ -622,13 +649,48 @@ function subscribeWaitingThread() {
 function subscribeThread(issueUuid: string, orgId: string) {
   if (!parts) return
   threadWatched = { task: issueUuid, org: orgId }
-  parts.watchSide(api.snapshot.commentThread, { org_id: orgId, issue_id: issueUuid })
+  parts.watchSide('thread', api.snapshot.threadComments, { org_id: orgId, issue_id: issueUuid })
+  if (historyOwners.size > 0) startHistory()
 }
 
 /* Stops the thread's side query. */
 function stopThread() {
-  parts?.stopSide()
+  parts?.stopSide('thread')
   threadWatched = null
+}
+
+/* Asks for the watched task's history, for a window that shows All. It
+   subscribes as the history side query of the live parts beside the
+   thread's (subscribeHistory), unless that already runs. A task the server
+   does not hold, such as one whose create is on its way, gets an empty
+   history, as watchComments gives it an empty thread; its history
+   subscribes once its thread does. Answers whether the rows changed. */
+function startHistory(): boolean {
+  if (!watchedComments) return false
+  if (threadWatched) {
+    if (historyWatched?.task !== threadWatched.task || historyWatched.org !== threadWatched.org)
+      subscribeHistory(threadWatched.task, threadWatched.org)
+    return false
+  }
+  if (historySnap !== null || serverTask(watchedComments)) return false
+  historySnap = []
+  historyStart = true
+  return true
+}
+
+/* Subscribes to the history of task `issueUuid` in organization `orgId`,
+   replacing any earlier subscription. Its answers come with the transitions
+   that bring them (historyNews). */
+function subscribeHistory(issueUuid: string, orgId: string) {
+  if (!parts) return
+  historyWatched = { task: issueUuid, org: orgId }
+  parts.watchSide('history', api.snapshot.threadHistory, { org_id: orgId, issue_id: issueUuid })
+}
+
+/* Stops the history's side query. */
+function stopHistory() {
+  parts?.stopSide('history')
+  historyWatched = null
 }
 
 /* The thread's news in one transition. A failed query keeps the comments
@@ -640,7 +702,7 @@ function stopThread() {
    says access ended, and the comments on screen stay, like the rest of the
    last snapshot. A task that leaves the snapshot closes its window, which
    drops the thread. */
-function threadNews(news: NonNullable<PartsReport['side']>) {
+function threadNews(news: SideNews) {
   const watched = threadWatched
   if (!watched || watchedComments !== watched.task) return
   const issueUuid = watched.task
@@ -658,17 +720,13 @@ function threadNews(news: NonNullable<PartsReport['side']>) {
       return
     }
     commentsSnap = []
-    eventsSnap = []
     olderComments = []
-    olderEvents = []
-    historyNext = null
     threadStart = true
-    historyStart = true
     threadDelivered(issueUuid)
     return
   }
   PLANNER.commentsFailure = 'none'
-  const page = anchor(news.value as FunctionReturnType<typeof api.snapshot.commentThread>)
+  const page = anchor(news.value as FunctionReturnType<typeof api.snapshot.threadComments>)
   const slid = receiveThread(page)
   if (slid.length && page.comments[0])
     void checkSlidOut(watched.org, issueUuid, page.comments[0].id, slid, current)
@@ -683,6 +741,39 @@ function threadDelivered(issueUuid: string) {
   threadCurrent = true
   layers.dropSaved('thread', issueUuid)
   owe('thread')
+}
+
+/* The history's news in one transition, like the thread's (threadNews): a
+   failed query keeps the rows delivered before it and shows as
+   P.historyFailure until the next delivery, and not_found loads the history
+   empty. A delivery is the history's new anchor and paints the thread
+   again, but it is no thread delivery (threadDelivered): it holds no
+   comment write, so the saved parts of accepted ones stay and paint over
+   it until the thread's own delivery holds them. */
+function historyNews(news: SideNews) {
+  const watched = historyWatched
+  if (!watched || watchedComments !== watched.task) return
+  if ('error' in news) {
+    const err = news.error
+    console.error('[qivo] history subscription failed:', err)
+    if (errData(err).code !== 'not_found') {
+      PLANNER.historyFailure = 'failed'
+      emit('comments')
+      return
+    }
+    historySnap = []
+    olderEvents = []
+    historyNext = null
+    historyStart = true
+  } else receiveHistory(anchor(news.value as FunctionReturnType<typeof api.snapshot.threadHistory>))
+  PLANNER.historyFailure = 'none'
+  owe('thread')
+}
+
+/* What each side query's news goes to. */
+const SIDE_NEWS: Record<SideName, (news: SideNews) => void> = {
+  thread: threadNews,
+  history: historyNews,
 }
 
 /* Desktop notifications (0074): fired once per inbox row id. An id set, not
@@ -1175,7 +1266,7 @@ function refuseText(limit: Limit, text: string): boolean {
    optimistic layer (store/layers.ts). The rows on screen are always built
    the same way: the server's rows of the last snapshot delivery painted
    (the base, store/workspaceBase.ts, which a repaint brings up to the
-   newest delivery, rowMap.ts beginRepaint) and the watched thread (commentsSnap, olderComments, eventsSnap), then every live
+   newest delivery, rowMap.ts beginRepaint) and the watched thread (commentsSnap, olderComments, historySnap, olderEvents), then every live
    layer painted over them in order (repaint). So:
 
    - A refused write takes away only its own layer, and every other change
@@ -3187,7 +3278,7 @@ function rebuildComments() {
   PLANNER.commentsEarlier =
     !PLANNER.commentsLoaded || threadStart ? 'none' : earlierLoad === 'idle' ? 'more' : earlierLoad
   PLANNER.historyEarlier =
-    !PLANNER.commentsLoaded || historyStart ? 'none' : historyLoad === 'idle' ? 'more' : historyLoad
+    !PLANNER.historyLoaded || historyStart ? 'none' : historyLoad === 'idle' ? 'more' : historyLoad
 }
 
 /** Rebuilds every view model from the rows. The tasks reshape only where
@@ -4499,20 +4590,25 @@ export const PLANNER = {
   issues: [] as IssueVM[],
   issueById: {} as Record<string, IssueVM>,
   milestones: [] as MilestoneVM[],
-  // the watched task's history, delivered with its comments (watchComments)
+  // the watched task's history, oldest first, while a window shows All
+  // (showHistory); empty until it is delivered
   threadEvents: [] as ActivityVM[],
   labels: [] as LabelVM[],
   labelById: {} as Record<string, LabelVM>,
   comments: [] as CommentVM[],
-  commentsLoaded: false, // the watched issue's thread (watchComments)
+  commentsLoaded: false, // the watched issue's comments (watchComments)
   // whether the watched thread holds comments before the oldest loaded one.
   // 'none' once its first comment is loaded (or before anything is), else
   // 'more', or 'loading' while P.loadEarlierComments runs and 'failed' after
   // it failed
   commentsEarlier: 'none' as CommentsEarlier,
   // whether the watched task's history holds rows before the oldest loaded
-  // one, as commentsEarlier says for its comments (P.loadEarlierHistory)
+  // one, as commentsEarlier says for its comments (P.loadEarlierHistory);
+  // 'none' until the history is delivered
   historyEarlier: 'none' as CommentsEarlier,
+  // whether the watched task's history arrived, which only a window that
+  // shows All asks for (showHistory); false again once none does
+  historyLoaded: false,
   /* Changes whenever a rebuild changes anything a task's view reads besides
      the task's own view model and delay (store/taskIndex.ts): people (but not their
      Team sync stamps), organizations and their settings, projects and
@@ -4523,6 +4619,9 @@ export const PLANNER = {
   // whether the watched thread stopped loading; the comments delivered
   // before the failure stay (P.retryComments)
   commentsFailure: 'none' as CommentsFailure,
+  // whether the watched task's history stopped loading, as commentsFailure
+  // says for its comments (P.retryHistory)
+  historyFailure: 'none' as CommentsFailure,
   // Team sync (watchTeamSync): issue UUID → ms of its latest comment, or
   // null when it has none, for the open, visible tasks the last answer
   // covered; a task with no entry is not known yet
@@ -6659,29 +6758,27 @@ export const PLANNER = {
     return download ? `${url}&download=1` : url
   },
 
-  /** Subscribe to one task's thread (subscribeThread). Comment changes
-      still waiting for their answer paint over it again, and saved ones of
-      other tasks go. */
+  /** Subscribe to one task's thread (subscribeThread), and to its history
+      while a window shows All (showHistory). Comment changes still waiting
+      for their answer paint over it again, and saved ones of other tasks
+      go. */
   watchComments: (issueUuid: string | null) => {
     if (watchedComments === issueUuid) return
     ++commentsWatchEpoch
     watchedComments = issueUuid
     stopThread()
+    stopHistory()
+    resetHistory()
     commentsSnap = null
-    eventsSnap = []
     olderComments = []
-    olderEvents = []
-    historyNext = null
     acceptedCommentChanges.clear()
     threadStart = false
-    historyStart = false
     earlierLoad = 'idle'
-    historyLoad = 'idle'
     threadCurrent = false
     layers.dropSaved('thread', issueUuid ?? undefined, true)
     PLANNER.commentsLoaded = false
     PLANNER.commentsFailure = 'none'
-    // commentThread is org-scoped; the watched issue is in the snapshot,
+    // threadComments is org-scoped; the watched issue is in the snapshot,
     // which is where its org comes from. An unknown uuid loads an empty
     // thread rather than spinning forever, and so does a new task whose
     // create is on its way: it has no comments yet, and its thread
@@ -6690,10 +6787,42 @@ export const PLANNER = {
     if (issueUuid && !row) {
       PLANNER.commentsLoaded = true
       threadStart = true
-      historyStart = true
+      if (historyOwners.size > 0) startHistory()
     }
     repaint({ thread: true })
     if (issueUuid && row) subscribeThread(issueUuid, row.org_id)
+  },
+
+  /** Registers whether the window `owner` shows All for the watched task,
+      which shows its history beside the comments. The history subscribes
+      while at least one window does (startHistory), and stops as soon as
+      none does, which drops every history row, so a window back on
+      Comments asks for no history at all. Each window passes one object of
+      its own, since the Inbox pane and its pop-out can show one task under
+      different filters. */
+  showHistory: (owner: object, on: boolean) => {
+    const before = historyOwners.size
+    if (on) historyOwners.add(owner)
+    else historyOwners.delete(owner)
+    if (before > 0 === historyOwners.size > 0) return
+    if (on) {
+      if (startHistory()) repaint({ thread: true })
+      return
+    }
+    stopHistory()
+    resetHistory()
+    repaint({ thread: true })
+  },
+
+  /** Retry for the history, as retryComments is for the comments: a fresh
+      subscription, with 'retrying' until the server answers it. Does
+      nothing unless the history failed. */
+  retryHistory: () => {
+    const watched = historyWatched
+    if (!watched || PLANNER.historyFailure !== 'failed') return
+    PLANNER.historyFailure = 'retrying'
+    emit('comments')
+    subscribeHistory(watched.task, watched.org)
   },
 
   /** Retry. A fresh subscription makes the server run the watched thread's
@@ -6767,15 +6896,17 @@ export const PLANNER = {
 
   /** Loads the history before the oldest loaded row of the watched task
       (snapshot.historyBefore, one page) and adds it above. One load at a
-      time. A failure shows as historyEarlier 'failed', and calling this
-      again retries. Never throws. */
+      time, and only once the live page is delivered. An answer that comes
+      after the history stopped or the task changed is dropped. A failure
+      shows as historyEarlier 'failed', and calling this again retries.
+      Never throws. */
   loadEarlierHistory: async (): Promise<void> => {
     const issueUuid = watchedComments
-    const watchEpoch = commentsWatchEpoch
+    const epoch = historyEpoch
     const row = issueUuid ? rows.issues.get(issueUuid) : undefined
-    if (!issueUuid || !row || commentsSnap === null || historyStart || historyLoad === 'loading')
+    if (!issueUuid || !row || historySnap === null || historyStart || historyLoad === 'loading')
       return
-    const current = () => watchedComments === issueUuid && commentsWatchEpoch === watchEpoch
+    const current = () => watchedComments === issueUuid && historyEpoch === epoch
     const show = (state: typeof historyLoad) => {
       historyLoad = state
       repaint({ thread: true })
@@ -6799,7 +6930,7 @@ export const PLANNER = {
     // Added only above the row the page was asked about. When the history
     // started over from its live page meanwhile, the next click asks again.
     if (historyNext === before) {
-      const known = new Set([...olderEvents, ...eventsSnap].map((r) => r.id))
+      const known = new Set([...olderEvents, ...(historySnap ?? [])].map((r) => r.id))
       olderEvents = [...anchor(page.events.filter((r) => !known.has(r.id))), ...olderEvents]
       historyNext = page.next
       if (!page.earlier) historyStart = true
@@ -8994,10 +9125,11 @@ syncStatus.subscribe((ended) => {
   setTimeout(() => preferences.retry(), 0)
 })
 
-/* The thread's news that came with the boot's transitions, before the
-   first workspace settled the boot. initStore hands it on once the store
-   holds that workspace, unless a later transition brought newer news. */
-let bootThreadNews: PartsReport['side'] | undefined
+/* The side queries' news that came with the boot's transitions, before the
+   first workspace settled the boot, the latest of each side. initStore
+   hands it on once the store holds that workspace, except a side a later
+   transition brought newer news of. */
+const bootSideNews = new Map<SideName, SideNews>()
 
 /** Starts the workspace's live parts. With `first`, the first transition
     that completes or fails the workspace settles it (boot); without, every
@@ -9025,7 +9157,10 @@ function startParts(
       if (!stillCurrent() || bootFailed) return
       const ws = news.workspace
       if (!settled) {
-        if (news.side) bootThreadNews = news.side
+        for (const name of SIDE_NAMES) {
+          const side = news.sides?.[name]
+          if (side) bootSideNews.set(name, side)
+        }
         if (ws.state === 'held' || (ws.state === 'partial' && first?.whole)) return
         settled = true
         if (ws.state === 'failed') {
@@ -9050,12 +9185,15 @@ function startParts(
         first?.resolve(snap)
         return
       }
-      // the workspace and the thread of one transition repaint once
+      // the workspace and the side queries of one transition repaint once
       together(() => {
         receiveWorkspace(ws, news.at)
-        if (!news.side) return
-        bootThreadNews = undefined
-        threadNews(news.side)
+        for (const name of SIDE_NAMES) {
+          const side = news.sides?.[name]
+          if (!side) continue
+          bootSideNews.delete(name)
+          SIDE_NEWS[name](side)
+        }
       })
     },
     online,
@@ -9152,15 +9290,18 @@ function retrySnapshot() {
   parts = startParts(() => epoch === storeEpoch && !demoDisposed)
 }
 
-/** Stops the live parts and the thread riding along. No thread delivery
-    holds a write accepted after this, so none counts as current until the
-    next subscription answers. */
+/** Stops the live parts and the thread and history riding along. No
+    thread delivery holds a write accepted after this, so none counts as
+    current until the next subscription answers. What the thread and its
+    history delivered stays until the next parts deliver again
+    (subscribeWaitingThread). */
 function stopParts() {
   parts?.stop()
   parts = null
   threadWatched = null
+  historyWatched = null
   threadCurrent = false
-  bootThreadNews = undefined
+  bootSideNews.clear()
 }
 
 /** Destroy demo memory before rendering the expired/session-loss screen.
@@ -9177,15 +9318,12 @@ export function disposeDemoStore() {
   resetSnapshotTrouble()
   watchedComments = null
   commentsSnap = null
-  eventsSnap = []
   olderComments = []
-  olderEvents = []
-  historyNext = null
+  historyOwners.clear()
+  resetHistory()
   acceptedCommentChanges.clear()
   threadStart = false
-  historyStart = false
   earlierLoad = 'idle'
-  historyLoad = 'idle'
   ++syncWatchEpoch
   stopSyncParts()
   syncFallback = new Map()
@@ -9243,6 +9381,7 @@ export function disposeDemoStore() {
   PLANNER.loaded = false
   PLANNER.commentsLoaded = false
   PLANNER.commentsFailure = 'none'
+  PLANNER.historyLoaded = false
   rebuild(new Date(), true)
   emit()
 }
@@ -9408,12 +9547,15 @@ export async function initStore(
     stopParts()
     return null
   }
-  // a thread watched before a re-init rides along with the new parts, and
-  // one watched during the boot hears what the boot's transitions brought
+  // a thread and its history watched before a re-init ride along with the
+  // new parts, and ones watched during the boot hear what the boot's
+  // transitions brought, which repaints once
   subscribeWaitingThread()
-  const bootNews = bootThreadNews
-  bootThreadNews = undefined
-  if (bootNews) threadNews(bootNews)
+  const bootNews = [...bootSideNews]
+  bootSideNews.clear()
+  together(() => {
+    for (const [name, side] of bootNews) SIDE_NEWS[name](side)
+  })
   // the rows, with any layer from before a re-init painted over them
   paintRows(true, false)
   avatarSources.sync(

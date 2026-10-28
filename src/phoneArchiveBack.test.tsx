@@ -122,7 +122,7 @@ async function openArchive() {
     if (name === 'workspace:whole') {
       publish = (value) => next(structuredClone(value))
       publish(snap)
-    } else if (name === 'snapshot:commentThread') next({ comments: [], earlier: false, events: [] })
+    } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     return () => {}
   })
   let answer = () => {}

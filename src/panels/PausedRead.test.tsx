@@ -91,8 +91,7 @@ describe('the task window while snapshot trouble pauses edits', { timeout: 30_00
       if (name === 'workspace:whole') {
         live = { deliver: next, fail }
         next(structuredClone(snap))
-      } else if (name === 'snapshot:commentThread')
-        next({ comments: [], earlier: false, events: [] })
+      } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
       return () => {}
     })
     network.query.mockResolvedValue(null)
