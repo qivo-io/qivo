@@ -129,10 +129,16 @@
  * Each page reads in its own transaction, so a change between two pages
  * can be missed or seen twice. Run the report again right before the
  * release with the split. A page checks its room before each organization,
- * part of projects (PART), project, admin, task, follow and row, and ends
- * only between two creation times, so its cursor can point into an
- * organization's projects, into one project's admins and into one admin's
- * tasks, follows, tokens and apps. */
+ * part of projects (PART), project, admin, task, follow and row, and its
+ * cursor names the creation time and document id of the last row it judged
+ * (Position). So it can point into an organization's projects, into one
+ * project's admins and into one admin's tasks, follows, tokens and apps,
+ * also between two rows created at one time, as an import can leave them.
+ * A page that goes on inside such a tie reads the tie's rows up to its
+ * cursor again, as an index range cannot start at a document id, so a tie
+ * of more than about 16 MiB of rows still passes Convex's read limit. run
+ * then answers `failed` with that page's cursor, and the rows of that time
+ * are left to check by hand. */
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize, type Value, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -303,16 +309,18 @@ type PageResult = {
 }
 
 /** Where a page goes on from, as its cursor holds it as JSON. Organizations
- * before `org` are done, all of them without it. projects: `org`'s projects
- * created through `after` are done and, with `project`, that project's
+ * before `org` are done, all of them without it. `after` and `id` are the
+ * Position of the last row done in a range. projects: `org`'s projects
+ * through that position are done and, with `project`, that project's
  * admins through `admin` in id order. work and machine: `org`'s admins
- * before `admin` in id order are done, and of `part`, the rows created
- * through `after`, those of `admin` or for webhooks the organization's.
- * machine also carries `admin`'s active tokens and approved apps so far. */
+ * before `admin` in id order are done, and of `part`, the rows through that
+ * position, those of `admin` or for webhooks the organization's. machine
+ * also carries `admin`'s active tokens and approved apps so far. */
 type Cursor = {
   phase: Phase
   org?: string
   after?: number
+  id?: string
   project?: string
   admin?: string
   part?: Part
@@ -331,6 +339,7 @@ const CURSOR_FIELDS: Record<
 > = {
   org: isText,
   after: (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0,
+  id: isText,
   project: (value, phase) => phase === 'projects' && isText(value),
   admin: isText,
   part: (value, phase) => PARTS[phase].some((part) => part === value),
@@ -358,8 +367,9 @@ function parseCursor(raw: string, phase: Phase): Cursor {
   if (fields === null || fields.phase !== phase)
     throw new Error(`cursor must be one a page of the ${phase} phase answered`)
   // inside a project the cursor names the last admin done, and inside an
-  // admin's rows the part; the organization's webhooks name no admin, and
-  // a creation time in the work and machine phases belongs to a part
+  // admin's rows the part; the organization's webhooks name no admin, a
+  // creation time in the work and machine phases belongs to a part, and an
+  // id to a creation time
   const adminPart = fields.part !== undefined && fields.part !== 'webhooks'
   const valid =
     Object.entries(fields).every(
@@ -371,6 +381,7 @@ function parseCursor(raw: string, phase: Phase): Cursor {
     (fields.admin !== undefined) ===
       (phase === 'projects' ? fields.project !== undefined : adminPart) &&
     (phase === 'projects' || fields.after === undefined || fields.part !== undefined) &&
+    (fields.id === undefined || fields.after !== undefined) &&
     (fields.org !== undefined || Object.keys(fields).length === 1)
   if (!valid) throw new Error(`cursor must be one a page of the ${phase} phase answered`)
   return fields as Cursor
@@ -632,27 +643,54 @@ async function treeOf(
   return root
 }
 
-/** Judges each row of `rows`, which hold the rows created after `after` in
- * creation order, with `judge`. Answers the page with the cursor `at(last)`
- * gives, `last` the creation time of the last row judged, once the page is
- * full between two creation times, else null once the rows end. */
-async function walk<R extends { _creationTime: number }>(
+/** A place in an index range, just after the row created at `time` whose
+ * document id is `id`, or after every row created at `time` or before
+ * without `id`. Convex's indexes order the rows of one creation time by
+ * their document id, so a page can end between two of them. */
+type Position = { time: number; id?: string }
+
+/** A range of one index up to its creation time, which `range` bounds to
+ * the rows created at (`'eq'`) or after (`'gt'`) a time. */
+type Range<R> = (bound: 'eq' | 'gt', time: number) => AsyncIterable<R>
+
+/** The rows of `range` after `from`, in index order: those created at its
+ * time whose id sorts after its id, then those created later, as
+ * lib/archivedTasks.ts reads one moment of its archive. An index range
+ * cannot start at an id, so the rows of that time up to `from` are read
+ * again and passed over. */
+async function* rowsAfter<R extends { _id: string; _creationTime: number }>(
+  range: Range<R>,
+  from: Position,
+): AsyncGenerator<R> {
+  const { id } = from
+  if (id !== undefined) for await (const row of range('eq', from.time)) if (row._id > id) yield row
+  yield* range('gt', from.time)
+}
+
+/** Judges each row of `range` after `from` with `judge`. Answers the page
+ * with the cursor `at(last)` gives, `last` the position of the last row
+ * judged, once the page is full, else null once the rows end. */
+async function walk<R extends { _id: string; _creationTime: number }>(
   page: Page,
-  rows: AsyncIterable<R>,
-  after: number,
+  range: Range<R>,
+  from: Position,
   judge: (row: R) => Promise<void>,
-  at: (last: number) => Cursor,
+  at: (last: Position) => Cursor,
 ): Promise<PageResult | null> {
-  let last = after
-  for await (const row of rows) {
-    if (row._creationTime !== last && (await full(page))) return answer(page, at(last))
+  let last = from
+  for await (const row of rowsAfter(range, from)) {
+    if (await full(page)) return answer(page, at(last))
     await judge(row)
     page.checked += 1
     page.moved = true
-    last = row._creationTime
+    last = { time: row._creationTime, id: row._id }
   }
   return null
 }
+
+/** `cursor` with the position `at`, its id left out without one. */
+const placed = (cursor: Cursor, at: Position): Cursor =>
+  at.id === undefined ? { ...cursor, after: at.time } : { ...cursor, after: at.time, id: at.id }
 
 /** Judges what `admin` keeps of live project `project` under top-level
  * project `root`, by `levels`, their ordinary levels. */
@@ -700,57 +738,46 @@ async function judgeProject(
   page.findings.push({ kind: 'leaves', ...where })
 }
 
-/** The live projects of organization `orgId` created after `after`, in
- * creation order. */
-const liveProjects = (ctx: QueryCtx, orgId: string, after: number) =>
-  ctx.db
-    .query('projects')
-    .withIndex('by_archived_org', (q) =>
-      q.eq('archived_at', undefined).eq('org_id', orgId).gt('_creationTime', after),
-    )
+/** The live projects of organization `orgId`, in creation order. */
+const liveProjects =
+  (ctx: QueryCtx, orgId: string): Range<Doc<'projects'>> =>
+  (bound, time) =>
+    ctx.db.query('projects').withIndex('by_archived_org', (q) => {
+      const live = q.eq('archived_at', undefined).eq('org_id', orgId)
+      return bound === 'eq' ? live.eq('_creationTime', time) : live.gt('_creationTime', time)
+    })
 
-/** The next part of organization `orgId`'s live projects created after
- * `after`, at most `most` of them, with the parents they name, which the
- * part reads too, and with them every other project created at the last
- * one's time, as the next part starts after that time. The part ends at
- * PART.bytes of the projects and of the parents it read, so small
- * sub-projects under large parents end it as soon as large projects do. A
- * parent read already in the page, as a part's project or as a parent, is
- * read again by neither. `more` is false once the part holds the rest. */
+/** The next part of organization `orgId`'s live projects after `from`, at
+ * most `most` of them, with the parents they name, which the part reads too.
+ * The part ends at PART.bytes of the projects and of the parents it read,
+ * so small sub-projects under large parents end it as soon as large
+ * projects do. A parent read already in the page, as a part's project or as
+ * a parent, is read again by neither. `more` is false once the part holds
+ * the rest. */
 async function projectPart(
   page: Page,
   orgId: string,
-  after: number,
+  from: Position,
   most: number,
 ): Promise<{ rows: Doc<'projects'>[]; parents: Doc<'projects'>[]; more: boolean }> {
-  const { ctx } = page
   const rows: Doc<'projects'>[] = []
   const parents = new Map<string, Doc<'projects'>>()
   let bytes = 0
-  const add = async (project: Doc<'projects'>) => {
+  for await (const project of rowsAfter(liveProjects(page.ctx, orgId), from)) {
     rows.push(project)
     page.projects.set(project.id, Promise.resolve(project))
     bytes += getDocumentSize(project)
     const parentId = project.parent_id
-    if (parentId === undefined || parents.has(parentId)) return
-    const read = page.projects.has(parentId)
-    const parent = await projectOf(page, parentId)
-    if (parent === null) return
-    parents.set(parentId, parent)
-    if (!read) bytes += getDocumentSize(parent)
-  }
-  for await (const project of liveProjects(ctx, orgId, after)) {
-    await add(project)
-    if (rows.length >= most || bytes >= PART.bytes) {
-      const last = project._creationTime
-      const tied = ctx.db
-        .query('projects')
-        .withIndex('by_archived_org', (q) =>
-          q.eq('archived_at', undefined).eq('org_id', orgId).eq('_creationTime', last),
-        )
-      for await (const same of tied) if (!rows.some((row) => row._id === same._id)) await add(same)
-      return { rows, parents: [...parents.values()], more: true }
+    if (parentId !== undefined && !parents.has(parentId)) {
+      const read = page.projects.has(parentId)
+      const parent = await projectOf(page, parentId)
+      if (parent !== null) {
+        parents.set(parentId, parent)
+        if (!read) bytes += getDocumentSize(parent)
+      }
     }
+    if (rows.length >= most || bytes >= PART.bytes)
+      return { rows, parents: [...parents.values()], more: true }
   }
   return { rows, parents: [...parents.values()], more: false }
 }
@@ -772,17 +799,17 @@ async function nextProjectOrg(ctx: QueryCtx, orgId?: string): Promise<string | n
 async function projectsPage(page: Page, at: Cursor): Promise<PageResult> {
   const { ctx } = page
   let orgId = at.org ?? (await nextProjectOrg(ctx))
-  let after = at.after ?? 0
+  let from: Position = { time: at.after ?? 0, id: at.id }
   // the project the page goes on inside of, and its last admin done
   let inside = at.project === undefined ? null : { project: at.project, admin: at.admin ?? '' }
   while (orgId !== null) {
     const org = orgId
-    if (await full(page)) return answer(page, { phase: 'projects', org, after })
+    if (await full(page)) return answer(page, placed({ phase: 'projects', org }, from))
     const admins = await adminsOf(page, org)
-    let last = after
+    let last = from
     // an organization without active admins has nothing to judge
     for (let more = admins.length > 0; more; ) {
-      if (await full(page)) return answer(page, { phase: 'projects', org, after: last })
+      if (await full(page)) return answer(page, placed({ phase: 'projects', org }, last))
       // about as many projects as the page has pairs left
       const most = Math.min(
         PART.rows,
@@ -794,10 +821,7 @@ async function projectsPage(page: Page, at: Cursor): Promise<PageResult> {
       const known = [...part.rows, ...part.parents]
       const levels = admins.map((admin) => projectLevelsOf(ctx, ordinaryOf(admin), known))
       for (const project of part.rows) {
-        // a page ends only between two creation times
-        const apart = project._creationTime !== last
-        if (apart && (await full(page)))
-          return answer(page, { phase: 'projects', org, after: last })
+        if (await full(page)) return answer(page, placed({ phase: 'projects', org }, last))
         const root = await treeOf(levels[0], project, org, true)
         // the last admin done with this project, by this page or the one
         // before
@@ -805,26 +829,23 @@ async function projectsPage(page: Page, at: Cursor): Promise<PageResult> {
         if (root !== null)
           for (const [i, admin] of admins.entries()) {
             if (done !== null && admin.id <= done) continue
-            if (done !== null && apart && (await full(page)))
-              return answer(page, {
-                phase: 'projects',
-                org,
-                after: last,
-                project: project.id,
-                admin: done,
-              })
+            if (done !== null && (await full(page)))
+              return answer(
+                page,
+                placed({ phase: 'projects', org, project: project.id, admin: done }, last),
+              )
             await judgeProject(page, admin, levels[i], project, root)
             page.checked += 1
             page.moved = true
             done = admin.id
           }
         page.moved = true
-        last = project._creationTime
+        last = { time: project._creationTime, id: project._id }
       }
     }
     page.moved = true
     orgId = await nextProjectOrg(ctx, org)
-    after = 0
+    from = { time: 0 }
     inside = null
   }
   return answer(page, null)
@@ -839,11 +860,15 @@ const orgsFrom = (ctx: QueryCtx, orgId?: string) =>
 /** The parts of `phase` for one admin from `from`, which goes on inside
  * one of them, or all of them, each with the creation time it starts
  * after. */
-function partsFrom(parts: readonly Part[], from: Cursor | undefined) {
+function partsFrom(
+  parts: readonly Part[],
+  from: Cursor | undefined,
+): { part: Part; position: Position }[] {
   const start = from?.part === undefined ? 0 : Math.max(0, parts.indexOf(from.part))
-  return parts
-    .slice(start)
-    .map((part) => ({ part, after: part === from?.part ? (from.after ?? 0) : 0 }))
+  return parts.slice(start).map((part) => ({
+    part,
+    position: part === from?.part ? { time: from.after ?? 0, id: from.id } : { time: 0 },
+  }))
 }
 
 /** Reports `task`, which `admin` holds as `role`, when it is open in a live
@@ -909,48 +934,40 @@ async function workPage(page: Page, at: Cursor): Promise<PageResult> {
       const from = resume?.admin === admin.id ? resume : undefined
       if (from === undefined && (await full(page)))
         return answer(page, { phase: 'work', org, admin: admin.id, part: 'assigned' })
-      for (const { part, after } of partsFrom(PARTS.work, from)) {
-        const stopAt = (last: number): Cursor => ({
-          phase: 'work',
-          org,
-          admin: admin.id,
-          part,
-          after: last,
-        })
+      for (const { part, position } of partsFrom(PARTS.work, from)) {
+        const stopAt = (last: Position): Cursor =>
+          placed({ phase: 'work', org, admin: admin.id, part }, last)
+        const assigned: Range<Doc<'issues'>> = (bound, time) =>
+          ctx.db.query('issues').withIndex('by_assignee_archived', (q) => {
+            const open = q.eq('assignee_id', admin.id).eq('archived_at', undefined)
+            return bound === 'eq' ? open.eq('_creationTime', time) : open.gt('_creationTime', time)
+          })
+        const reviewing: Range<Doc<'issues'>> = (bound, time) =>
+          ctx.db.query('issues').withIndex('by_reviewer_archived', (q) => {
+            const open = q.eq('reviewer_id', admin.id).eq('archived_at', undefined)
+            return bound === 'eq' ? open.eq('_creationTime', time) : open.gt('_creationTime', time)
+          })
         const stopped =
           part === 'follows' || part === 'marked_follows'
             ? await walk(
                 page,
-                ctx.db.query('issue_subscriptions').withIndex('by_profile_task_archived', (q) =>
-                  q
-                    .eq('profile_id', admin.id)
-                    .eq('task_archived', part === 'marked_follows' ? true : undefined)
-                    .gt('_creationTime', after),
-                ),
-                after,
+                (bound, time) =>
+                  ctx.db.query('issue_subscriptions').withIndex('by_profile_task_archived', (q) => {
+                    const follows = q
+                      .eq('profile_id', admin.id)
+                      .eq('task_archived', part === 'marked_follows' ? true : undefined)
+                    return bound === 'eq'
+                      ? follows.eq('_creationTime', time)
+                      : follows.gt('_creationTime', time)
+                  }),
+                position,
                 (follow) => judgeFollow(page, admin, follow),
                 stopAt,
               )
             : await walk(
                 page,
-                part === 'assigned'
-                  ? ctx.db
-                      .query('issues')
-                      .withIndex('by_assignee_archived', (q) =>
-                        q
-                          .eq('assignee_id', admin.id)
-                          .eq('archived_at', undefined)
-                          .gt('_creationTime', after),
-                      )
-                  : ctx.db
-                      .query('issues')
-                      .withIndex('by_reviewer_archived', (q) =>
-                        q
-                          .eq('reviewer_id', admin.id)
-                          .eq('archived_at', undefined)
-                          .gt('_creationTime', after),
-                      ),
-                after,
+                part === 'assigned' ? assigned : reviewing,
+                position,
                 (task) =>
                   judgeTask(page, admin, part === 'assigned' ? 'assignee' : 'reviewer', task),
                 stopAt,
@@ -1015,16 +1032,17 @@ async function machinePage(page: Page, at: Cursor): Promise<PageResult> {
     const resume = at.org === org ? at : undefined
     const admins = await adminsOf(page, org)
     if (admins.length > 0 && (resume?.part ?? 'webhooks') === 'webhooks') {
-      const after = resume?.after ?? 0
       const byAdmin = new Map(admins.map((admin) => [admin.id, admin]))
       const stopped = await walk(
         page,
-        ctx.db
-          .query('webhook_subscriptions')
-          .withIndex('by_org', (q) => q.eq('org_id', org).gt('_creationTime', after)),
-        after,
+        (bound, time) =>
+          ctx.db.query('webhook_subscriptions').withIndex('by_org', (q) => {
+            const own = q.eq('org_id', org)
+            return bound === 'eq' ? own.eq('_creationTime', time) : own.gt('_creationTime', time)
+          }),
+        { time: resume?.after ?? 0, id: resume?.id },
         (subscription) => judgeWebhook(page, byAdmin, subscription),
-        (last) => ({ phase: 'machine', org, part: 'webhooks', after: last }),
+        (last) => placed({ phase: 'machine', org, part: 'webhooks' }, last),
       )
       if (stopped !== null) return stopped
     }
@@ -1034,25 +1052,21 @@ async function machinePage(page: Page, at: Cursor): Promise<PageResult> {
       if (from === undefined && (await full(page)))
         return answer(page, { phase: 'machine', org, admin: admin.id, part: 'tokens' })
       const held = { tokens: from?.tokens ?? 0, apps: from?.apps ?? 0 }
-      for (const { part, after } of partsFrom(['tokens', 'apps'], from)) {
-        const stopAt = (last: number): Cursor => ({
-          phase: 'machine',
-          org,
-          admin: admin.id,
-          part,
-          after: last,
-          ...held,
-        })
+      for (const { part, position } of partsFrom(['tokens', 'apps'], from)) {
+        const stopAt = (last: Position): Cursor =>
+          placed({ phase: 'machine', org, admin: admin.id, part, ...held }, last)
         const stopped =
           part === 'tokens'
             ? await walk(
                 page,
-                ctx.db
-                  .query('mcp_tokens')
-                  .withIndex('by_profile', (q) =>
-                    q.eq('profile_id', admin.id).gt('_creationTime', after),
-                  ),
-                after,
+                (bound, time) =>
+                  ctx.db.query('mcp_tokens').withIndex('by_profile', (q) => {
+                    const own = q.eq('profile_id', admin.id)
+                    return bound === 'eq'
+                      ? own.eq('_creationTime', time)
+                      : own.gt('_creationTime', time)
+                  }),
+                position,
                 async (token) => {
                   if (token.revoked_at === undefined && !tokenExpired(token, page.now))
                     held.tokens += 1
@@ -1061,12 +1075,14 @@ async function machinePage(page: Page, at: Cursor): Promise<PageResult> {
               )
             : await walk(
                 page,
-                ctx.db
-                  .query('oauth_connections')
-                  .withIndex('by_profile', (q) =>
-                    q.eq('profile_id', admin.id).gt('_creationTime', after),
-                  ),
-                after,
+                (bound, time) =>
+                  ctx.db.query('oauth_connections').withIndex('by_profile', (q) => {
+                    const own = q.eq('profile_id', admin.id)
+                    return bound === 'eq'
+                      ? own.eq('_creationTime', time)
+                      : own.gt('_creationTime', time)
+                  }),
+                position,
                 async (app) => {
                   if (app.approved_at !== undefined && app.revoked_at === undefined) held.apps += 1
                 },

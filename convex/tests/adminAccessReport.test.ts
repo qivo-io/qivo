@@ -7,7 +7,7 @@
 /// <reference types="vite/client" />
 
 import type { GenericDocument } from 'convex/server'
-import { compareValues, type Value } from 'convex/values'
+import { compareValues, getDocumentSize, type Value } from 'convex/values'
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, TableNames } from '../_generated/dataModel'
@@ -966,30 +966,56 @@ const holds = (row: GenericDocument, { field, op, value }: Bound): boolean => {
   return { eq: c === 0, gt: c > 0, gte: c >= 0, lt: c < 0, lte: c <= 0 }[op]
 }
 
-/* `list` as a query answers it. */
-const answered = (list: GenericDocument[]) => ({
-  order: (direction: 'asc' | 'desc') => answered(direction === 'desc' ? [...list].reverse() : list),
-  collect: async () => list,
-  take: async (n: number) => list.slice(0, n),
-  first: async () => list[0] ?? null,
-  unique: async () => {
-    if (list.length > 1) throw new Error('unique() found more than one row')
-    return list[0] ?? null
-  },
-  async *[Symbol.asyncIterator]() {
-    yield* list
-  },
-})
+/* What a memory ctx has read, against Convex's limits for one transaction:
+ * 16 MiB, 32,000 documents and 4,096 index ranges. A read past one throws,
+ * as a deployment refuses it. */
+type Reads = Record<'bytesRead' | 'documentsRead' | 'databaseQueries', number>
+const LIMITS_OF: Reads = {
+  bytesRead: 16 * 1024 * 1024,
+  documentsRead: 32_000,
+  databaseQueries: 4_096,
+}
+const charge = (reads: Reads, field: keyof Reads, amount: number) => {
+  reads[field] += amount
+  if (reads[field] > LIMITS_OF[field]) throw new Error(`memory ctx: past the ${field} limit`)
+}
+
+/* `list` as a query answers it, charging `reads` for each row it hands out. */
+const answered = (list: GenericDocument[], reads: Reads) => {
+  const read = (rows: GenericDocument[]) => {
+    for (const row of rows) {
+      charge(reads, 'bytesRead', getDocumentSize(row))
+      charge(reads, 'documentsRead', 1)
+    }
+    return rows
+  }
+  return {
+    order: (direction: 'asc' | 'desc') =>
+      answered(direction === 'desc' ? [...list].reverse() : list, reads),
+    collect: async () => read(list),
+    take: async (n: number) => read(list.slice(0, n)),
+    first: async () => read(list.slice(0, 1))[0] ?? null,
+    unique: async () => {
+      if (read(list.slice(0, 2)).length > 1) throw new Error('unique() found more than one row')
+      return list[0] ?? null
+    },
+    async *[Symbol.asyncIterator]() {
+      for (const row of list) yield read([row])[0]
+    },
+  }
+}
 
 /* A QueryCtx over `rows`, in memory, whose index ranges are schema.ts's and
  * whose rows come in Convex's index order: the index's fields, then
  * _creationTime, then _id. Convex can give rows the same _creationTime, as
- * an import can, and convex-test never does, so ties are tested on this. A
- * page on it never reaches its share of the limits (ROOM), so its size ends
- * it. */
+ * an import can, and convex-test never does, so ties are tested on this. It
+ * counts what it reads as one transaction, which its metrics report and
+ * Convex's limits bound (Reads). */
 function memoryCtx(rows: Partial<Record<TableNames, GenericDocument[]>>): QueryCtx {
+  const reads: Reads = { bytesRead: 0, documentsRead: 0, databaseQueries: 0 }
   const query = (table: TableNames) => ({
     withIndex: (index: string, build: (q: Builder) => Builder = (q) => q) => {
+      charge(reads, 'databaseQueries', 1)
       const fields =
         index === 'by_creation_time'
           ? []
@@ -1006,19 +1032,17 @@ function memoryCtx(rows: Partial<Record<TableNames, GenericDocument[]>>): QueryC
           }
           return 0
         })
-      return answered(list)
+      return answered(list, reads)
     },
   })
-  const metrics = Object.fromEntries(
-    ['bytesRead', 'documentsRead', 'databaseQueries'].map((name) => [
-      name,
-      { used: 0, remaining: 1e9 },
-    ]),
-  )
-  return {
-    db: { query },
-    meta: { getTransactionMetrics: async () => metrics },
-  } as unknown as QueryCtx
+  const metrics = async () =>
+    Object.fromEntries(
+      Object.entries(reads).map(([field, used]) => [
+        field,
+        { used, remaining: LIMITS_OF[field as keyof Reads] - used },
+      ]),
+    )
+  return { db: { query }, meta: { getTransactionMetrics: metrics } } as unknown as QueryCtx
 }
 
 /* A row of the memory ctx created at `time`; rows planted later sort after
@@ -1030,15 +1054,20 @@ const at = (time: number, fields: Record<string, Value>): GenericDocument => ({
   ...fields,
 })
 
-/* Every page of `phase` on `ctx` at `size`, its findings and how many pairs
- * or rows each page judged. */
-async function memoryPages(ctx: QueryCtx, phase: Phase, size: number) {
+/* Every page of `phase` over `rows` at `size`, each in a memory ctx of its
+ * own, as each page is its own transaction: their findings, and how many
+ * pages there were. */
+async function memoryPages(
+  rows: Partial<Record<TableNames, GenericDocument[]>>,
+  phase: Phase,
+  size: number,
+): Promise<{ findings: Finding[]; pages: number }> {
   const findings: Finding[] = []
   let cursor: string | null = null
-  for (let i = 0; i < 1_000; i++) {
-    const page = await reportPage(ctx, phase, cursor, size)
+  for (let pages = 1; pages <= 1_000; pages++) {
+    const page = await reportPage(memoryCtx(rows), phase, cursor, size)
     findings.push(...page.findings)
-    if (page.done) return findings
+    if (page.done) return { findings, pages }
     cursor = page.cursor
   }
   throw new Error(`the ${phase} phase did not end`)
@@ -1083,23 +1112,83 @@ describe('rows that share a _creationTime', () => {
     ),
   }
 
-  it('lets no projects page end between two projects or admins of one time', async () => {
-    const ctx = memoryCtx(rows)
-    const whole = await memoryPages(ctx, 'projects', 1_000)
+  it('walks projects pages that end between two projects or admins of one time', async () => {
+    const whole = (await memoryPages(rows, 'projects', 1_000)).findings
     // each admin loses all eight projects
     expect(whole).toHaveLength(16)
     expect(new Set(whole.map((found) => found.kind))).toEqual(new Set(['leaves']))
     for (const size of [1, 2, 3, 4, 5])
-      expect(lines(await memoryPages(ctx, 'projects', size))).toEqual(lines(whole))
+      expect(lines((await memoryPages(rows, 'projects', size)).findings)).toEqual(lines(whole))
   })
 
-  it("lets no work page end between two of an admin's tasks or follows of one time", async () => {
-    const ctx = memoryCtx(rows)
-    const whole = await memoryPages(ctx, 'work', 1_000)
+  it("walks work pages that end between two of an admin's tasks or follows of one time", async () => {
+    const whole = (await memoryPages(rows, 'work', 1_000)).findings
     expect(whole.filter((found) => found.kind === 'held_task')).toHaveLength(5)
     expect(whole.filter((found) => found.kind === 'follow')).toHaveLength(3)
     for (const size of [1, 2, 3, 4])
-      expect(lines(await memoryPages(ctx, 'work', size))).toEqual(lines(whole))
+      expect(lines((await memoryPages(rows, 'work', size)).findings)).toEqual(lines(whole))
+  })
+
+  it('ends work pages at their room inside a tie of large tasks, which one page cannot read', async () => {
+    // 40 tasks of 60 KB at times of their own, then 250 created at one
+    // time, 15 MB together, which the first page reaches with 2.4 MB read
+    const description = 'x'.repeat(60_000)
+    const task = (time: number, n: number) =>
+      at(time, {
+        id: `big${n}`,
+        org_id: 'org',
+        project_id: 's0',
+        num: 100 + n,
+        status: 'todo',
+        assignee_id: 'a1',
+        description,
+      })
+    const large = {
+      ...rows,
+      issues: [
+        ...Array.from({ length: 40 }, (_, n) => task(100 + n, n)),
+        ...Array.from({ length: 250 }, (_, n) => task(1_000, 40 + n)),
+      ],
+      issue_subscriptions: [],
+    }
+    const { findings, pages } = await memoryPages(large, 'work', 2_000)
+    expect(findings).toHaveLength(290)
+    expect(new Set(findings.map((found) => 'task_id' in found && found.task_id)).size).toBe(290)
+    // a page that goes on inside the tie reads its rows up to the cursor
+    // again, so past half of them each page judges about one
+    expect(pages).toBeGreaterThan(2)
+  })
+
+  it('ends projects pages at their room inside a tie of large projects', async () => {
+    // eight top-level projects with legacy icons of 900 KiB at times of
+    // their own, then twelve created at one time, 10.8 MB together
+    const icon = 'x'.repeat(900 * 1024)
+    const top = (time: number, n: number) =>
+      at(time, { id: `big${n}`, org_id: 'org', type: 'meta', key: `B${n}`, name: `big${n}`, icon })
+    const large = {
+      ...rows,
+      projects: [
+        ...Array.from({ length: 8 }, (_, n) => top(100 + n, n)),
+        ...Array.from({ length: 12 }, (_, n) => top(1_000, 8 + n)),
+      ],
+    }
+    const { findings, pages } = await memoryPages(large, 'projects', 4_000)
+    // each admin loses all twenty
+    expect(lines(findings)).toEqual(
+      lines(
+        ['a1', 'a2'].flatMap((profile_id) =>
+          Array.from({ length: 20 }, (_, n) => ({
+            kind: 'leaves' as const,
+            org_id: 'org',
+            profile_id,
+            project_id: `big${n}`,
+            key: `B${n}`,
+            top_level_id: `big${n}`,
+          })),
+        ),
+      ),
+    )
+    expect(pages).toBeGreaterThan(2)
   })
 })
 
