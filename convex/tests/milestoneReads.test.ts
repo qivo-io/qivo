@@ -113,7 +113,8 @@ const compared = (a: Placed, b: Placed): number => {
 const ascending = (rows: readonly Doc<'milestones'>[]) => [...rows].sort(compared).map((m) => m.id)
 const descending = (rows: readonly Doc<'milestones'>[]) => ascending(rows).reverse()
 
-/* Every batch of a section from its start, following `next`. */
+/* Every batch of a section from its start, following `next`, each of
+ * which must move past the position it started after. */
 async function walk(
   caller: Caller,
   args: Omit<SectionArgs, 'after'>,
@@ -126,14 +127,17 @@ async function walk(
       ...(after === undefined ? {} : { after }),
     })
     batches.push(batch)
-    if (batch.next === null)
-      return { ids: batches.flatMap((b) => b.rows.map((r) => r.id)), batches }
-    after = batch.next
+    const { next } = batch
+    if (next === null) return { ids: batches.flatMap((b) => b.rows.map((r) => r.id)), batches }
+    if (after !== undefined)
+      expect(args.side === 'upcoming' ? compared(next, after) : compared(after, next)).toBe(1)
+    after = next
   }
   throw new Error('a section did not end within 500 batches')
 }
 
-/* Every batch of a range from its start, following `next`. */
+/* Every batch of a range from its start, following `next`, each of which
+ * must move past the position it started after. */
 async function walkRange(
   caller: Caller,
   args: Omit<RangeArgs, 'after'>,
@@ -146,9 +150,10 @@ async function walkRange(
       ...(after === undefined ? {} : { after }),
     })
     batches.push(batch)
-    if (batch.next === null)
-      return { ids: batches.flatMap((b) => b.rows.map((r) => r.id)), batches }
-    after = batch.next
+    const { next } = batch
+    if (next === null) return { ids: batches.flatMap((b) => b.rows.map((r) => r.id)), batches }
+    if (after !== undefined) expect(compared(next, after)).toBe(1)
+    after = next
   }
   throw new Error('a range did not end within 500 batches')
 }
@@ -767,6 +772,55 @@ describe('a range of days', () => {
     }
   })
 
+  it('stops on 2026-02-31 under a lowered budget and goes on past it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // stored before 2026-10-16, shown on 3 March, sorted before 1 March
+    const rows = await plantMany(t, [
+      { project: f.meta.id, week: '2026-02-31', name: 'Overflow' },
+      { project: f.meta.id, week: '2026-03-09', name: 'Ninth' },
+      { project: f.meta.id, week: '2026-03-16', name: 'Sixteenth' },
+      { project: f.hidden.id, week: '2026-03-02', name: 'Second' },
+      { project: f.hidden.id, week: '2026-03-03', name: 'Third' },
+      { project: f.hidden.id, week: '2026-03-10', name: 'Tenth' },
+    ])
+    const stoppedOn = new Set<string>()
+    for (let documents = 1; documents <= 6; documents++) {
+      MILESTONE_READ.documents = documents
+      const { ids, batches } = await walkRange(as(t, f.user), {
+        projects: [f.meta.id, f.hidden.id],
+        from: '2026-03-02',
+        to: '2026-03-30',
+      })
+      expect(ids).toEqual(ascending(rows))
+      for (const b of batches) if (b.stopped !== null) stoppedOn.add(b.stopped)
+    }
+    // a stop on the day that does not exist, which `from` refuses, goes on
+    // through `after`
+    expect(stoppedOn.has('2026-02-31')).toBe(true)
+  })
+
+  it('places 2026-02-31 in upcoming from 3 March and in past from 4 March', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantMany(t, [
+      { project: f.meta.id, week: '2026-02-31', name: 'Overflow' },
+      { project: f.meta.id, week: '2026-03-01', name: 'First' },
+      { project: f.meta.id, week: '2026-03-03', name: 'Third' },
+    ])
+    const user = as(t, f.user)
+    const names = async (from: string, side: 'upcoming' | 'past') =>
+      (await walk(user, { projects: [f.meta.id], from, side, limit: 1 })).batches.flatMap((b) =>
+        b.rows.map((r) => r.name),
+      )
+    expect(await names('2026-03-03', 'past')).toEqual(['First'])
+    expect(await names('2026-03-03', 'upcoming')).toEqual(['Overflow', 'Third'])
+    // newest first by stored day, so the overflow day comes after 1 March,
+    // two days out of order
+    expect(await names('2026-03-04', 'past')).toEqual(['Third', 'First', 'Overflow'])
+    expect(await names('2026-03-04', 'upcoming')).toEqual([])
+  })
+
   it('leaves the access checks before the read out of its budget', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -807,6 +861,35 @@ describe('one milestone by id', () => {
     // a parent shown only for navigation to a sub-project
     await plantHiddenSibling(t, f, f.guest)
     expect(await get(f.guest)).toEqual({ row: rowOf(row), project, can_write: false })
+  })
+
+  it("answers a milestone through the caller's seat in another organization until the grant goes", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const seat = await guestElsewhere(t, f)
+    const row = await plant(t, f.otherProject.id, MONDAY, 'Elsewhere')
+    const user = as(t, f.user)
+    expect(await user.query(api.milestones.get, { id: row.id })).toEqual({
+      row: rowOf(row),
+      project: {
+        id: f.otherProject.id,
+        name: f.otherProject.name,
+        key: f.otherProject.key,
+        org_id: f.otherOrg.id,
+      },
+      can_write: true,
+    })
+    await t.run(async (ctx) => {
+      const grant = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.otherProject.id).eq('profile_id', seat.id),
+        )
+        .unique()
+      if (grant === null) throw new Error('the guest seat holds no grant')
+      await ctx.db.delete(grant._id)
+    })
+    expect(await user.query(api.milestones.get, { id: row.id })).toBeNull()
   })
 
   it('answers null for what the caller cannot see or the app does not show', async () => {
