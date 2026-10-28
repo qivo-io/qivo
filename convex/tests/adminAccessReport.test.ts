@@ -6,10 +6,12 @@
  * access shape and the Northstar seed. */
 /// <reference types="vite/client" />
 
+import type { GenericDocument } from 'convex/server'
+import { compareValues, type Value } from 'convex/values'
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
-import type { MutationCtx } from '../_generated/server'
+import type { Doc, TableNames } from '../_generated/dataModel'
+import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ADMINS, OWN, ordinaryOf, ROOM, RUN, reportPage, SUBS } from '../internal/adminAccessReport'
 import {
   accessRowsOf,
@@ -38,6 +40,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import schema from '../schema'
 import { plantNorthstar } from './northstar.setup'
 
 type Phase = Parameters<typeof reportPage>[1]
@@ -942,6 +945,161 @@ describe('paging', () => {
     await expect(
       t.query(report.check, { phase: 'projects', cursor: result.cursor, page_size: 1 }),
     ).rejects.toThrow()
+  })
+})
+
+/* ------------------------------------------------------------------ ties */
+
+/* One bound of an index range: a field pinned or bounded to `value`. */
+type Bound = { field: string; op: 'eq' | 'gt' | 'gte' | 'lt' | 'lte'; value: Value | undefined }
+type Builder = { bounds: Bound[] } & Record<
+  Bound['op'],
+  (field: string, value: Value | undefined) => Builder
+>
+const builder = (bounds: Bound[]): Builder => {
+  const at = (op: Bound['op']) => (field: string, value: Value | undefined) =>
+    builder([...bounds, { field, op, value }])
+  return { bounds, eq: at('eq'), gt: at('gt'), gte: at('gte'), lt: at('lt'), lte: at('lte') }
+}
+const holds = (row: GenericDocument, { field, op, value }: Bound): boolean => {
+  const c = compareValues(row[field], value)
+  return { eq: c === 0, gt: c > 0, gte: c >= 0, lt: c < 0, lte: c <= 0 }[op]
+}
+
+/* `list` as a query answers it. */
+const answered = (list: GenericDocument[]) => ({
+  order: (direction: 'asc' | 'desc') => answered(direction === 'desc' ? [...list].reverse() : list),
+  collect: async () => list,
+  take: async (n: number) => list.slice(0, n),
+  first: async () => list[0] ?? null,
+  unique: async () => {
+    if (list.length > 1) throw new Error('unique() found more than one row')
+    return list[0] ?? null
+  },
+  async *[Symbol.asyncIterator]() {
+    yield* list
+  },
+})
+
+/* A QueryCtx over `rows`, in memory, whose index ranges are schema.ts's and
+ * whose rows come in Convex's index order: the index's fields, then
+ * _creationTime, then _id. Convex can give rows the same _creationTime, as
+ * an import can, and convex-test never does, so ties are tested on this. A
+ * page on it never reaches its share of the limits (ROOM), so its size ends
+ * it. */
+function memoryCtx(rows: Partial<Record<TableNames, GenericDocument[]>>): QueryCtx {
+  const query = (table: TableNames) => ({
+    withIndex: (index: string, build: (q: Builder) => Builder = (q) => q) => {
+      const fields =
+        index === 'by_creation_time'
+          ? []
+          : schema.tables[table][' indexes']().find((i) => i.indexDescriptor === index)?.fields
+      if (fields === undefined) throw new Error(`${table} has no index ${index}`)
+      const key = [...fields, '_creationTime', '_id']
+      const { bounds } = build(builder([]))
+      const list = (rows[table] ?? [])
+        .filter((row) => bounds.every((bound) => holds(row, bound)))
+        .sort((a, b) => {
+          for (const field of key) {
+            const c = compareValues(a[field], b[field])
+            if (c !== 0) return c
+          }
+          return 0
+        })
+      return answered(list)
+    },
+  })
+  const metrics = Object.fromEntries(
+    ['bytesRead', 'documentsRead', 'databaseQueries'].map((name) => [
+      name,
+      { used: 0, remaining: 1e9 },
+    ]),
+  )
+  return {
+    db: { query },
+    meta: { getTransactionMetrics: async () => metrics },
+  } as unknown as QueryCtx
+}
+
+/* A row of the memory ctx created at `time`; rows planted later sort after
+ * earlier ones of that time. */
+let planted = 0
+const at = (time: number, fields: Record<string, Value>): GenericDocument => ({
+  _id: `row${String(planted++).padStart(5, '0')}`,
+  _creationTime: time,
+  ...fields,
+})
+
+/* Every page of `phase` on `ctx` at `size`, its findings and how many pairs
+ * or rows each page judged. */
+async function memoryPages(ctx: QueryCtx, phase: Phase, size: number) {
+  const findings: Finding[] = []
+  let cursor: string | null = null
+  for (let i = 0; i < 1_000; i++) {
+    const page = await reportPage(ctx, phase, cursor, size)
+    findings.push(...page.findings)
+    if (page.done) return findings
+    cursor = page.cursor
+  }
+  throw new Error(`the ${phase} phase did not end`)
+}
+
+describe('rows that share a _creationTime', () => {
+  // two admins with no access, a top-level project and six sub-projects
+  // created at 1, 2, 2, 3, 3, 3 and 4, and a second top-level project at 4
+  const admin = (id: string) =>
+    at(1, { id, org_id: 'org', org_role: 'admin', active: true, kind: 'person', name: id })
+  const project = (time: number, id: string, parent_id?: string) =>
+    at(time, {
+      id,
+      org_id: 'org',
+      type: parent_id === undefined ? 'meta' : 'project',
+      key: id.toUpperCase(),
+      name: id,
+      ...(parent_id === undefined ? {} : { parent_id }),
+    })
+  const rows = {
+    organizations: [at(1, { id: 'org', name: 'Ties' })],
+    profiles: [admin('a1'), admin('a2')],
+    projects: [
+      project(1, 'm'),
+      ...[2, 2, 3, 3, 3, 4].map((time, n) => project(time, `s${n}`, 'm')),
+      project(4, 'n'),
+    ],
+    // the first admin holds five open tasks in a sub-project, created two
+    // and three to an instant, and follows three of them, at one instant
+    issues: [10, 10, 11, 11, 11].map((time, n) =>
+      at(time, {
+        id: `t${n}`,
+        org_id: 'org',
+        project_id: 's0',
+        num: n + 1,
+        status: 'todo',
+        assignee_id: 'a1',
+      }),
+    ),
+    issue_subscriptions: [0, 1, 2].map((n) =>
+      at(20, { issue_id: `t${n}`, profile_id: 'a1', created_at: NOW }),
+    ),
+  }
+
+  it('lets no projects page end between two projects or admins of one time', async () => {
+    const ctx = memoryCtx(rows)
+    const whole = await memoryPages(ctx, 'projects', 1_000)
+    // each admin loses all eight projects
+    expect(whole).toHaveLength(16)
+    expect(new Set(whole.map((found) => found.kind))).toEqual(new Set(['leaves']))
+    for (const size of [1, 2, 3, 4, 5])
+      expect(lines(await memoryPages(ctx, 'projects', size))).toEqual(lines(whole))
+  })
+
+  it("lets no work page end between two of an admin's tasks or follows of one time", async () => {
+    const ctx = memoryCtx(rows)
+    const whole = await memoryPages(ctx, 'work', 1_000)
+    expect(whole.filter((found) => found.kind === 'held_task')).toHaveLength(5)
+    expect(whole.filter((found) => found.kind === 'follow')).toHaveLength(3)
+    for (const size of [1, 2, 3, 4])
+      expect(lines(await memoryPages(ctx, 'work', size))).toEqual(lines(whole))
   })
 })
 
