@@ -1119,7 +1119,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 194
+const PUBLIC_COUNT = 196
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
