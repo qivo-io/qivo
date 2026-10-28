@@ -1,7 +1,10 @@
 Open **Settings → Organization → General** to change the organization's name,
 address, attachment limit, calendar, who can create projects and default
 planning hours. Organization, team, project and milestone names allow up to
-80 characters ([Limits](./limits.md)).
+80 characters ([Limits](./limits.md)). If someone else changes the name,
+address or a number while you edit it, your text stays and the field saves
+nothing until you choose **Use saved** or **Keep mine**
+([When someone else changed it first](./working-together.md#when-someone-else-changed-it-first)).
 
 - **Date format** offers six formats with a preview.
 - **Workdays start on** sets the first day of each roadmap week.
@@ -166,6 +169,9 @@ Only an organization admin can change the address. Before saving, note:
 - The change takes effect immediately. Old links stop working, with no redirect.
 - The old address becomes available for another organization to claim.
 - Taken or reserved addresses cannot be saved. Qivo explains the refusal.
+- If someone else changes the address while you edit it, the field shows
+  their address and **Save** waits until you choose **Use saved** or
+  **Keep mine**.
 - The organization's change history records the old address, new address and
   person who changed it. Organization admins find it in the
   [export](#export-data).
