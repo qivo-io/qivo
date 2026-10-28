@@ -686,12 +686,6 @@ export const MILESTONE_READ = {
  * let one more document of any size through after its last look. */
 const MILESTONE_RESERVE: ReadCeiling = { ranges: 0, documents: 1, bytes: DOCUMENT_MAX_BYTES }
 
-/* Why a read failed that could not read every project through its first
- * day past the read's start within the request's own limits. The two days
- * that takes at most for each of 200 projects fit unless their names hold
- * megabytes. */
-const FIRST_DAYS_TOO_LARGE = 'the first milestones of these projects do not fit in one read'
-
 /** The share of the request the check of a read's projects
  * (milestoneProjects) may read, counted from the check's start, as
  * MILESTONE_READ is for the read after it. Tests lower these. */
@@ -860,7 +854,9 @@ export async function milestoneProjects(
 type ProjectLevels = ReturnType<typeof projectLevelsOf>
 
 /* Whether one of the projects `projectIds` holds a milestone the app shows
- * before `day`, read newest first until the first, under `guard`. */
+ * before `day`, read newest first until the first, under `guard`. True as
+ * well when the guard stops before every project was asked, so a project
+ * whose history went unread never reads as one without history. */
 async function holdsPast(
   ctx: QueryCtx,
   projectIds: readonly string[],
@@ -868,13 +864,13 @@ async function holdsPast(
   guard: CeilingGuard,
 ): Promise<boolean> {
   for (const projectId of projectIds) {
-    if (!(await guard.range())) throw new Error(FIRST_DAYS_TOO_LARGE)
+    if (!(await guard.range())) return true
     const rows = ctx.db
       .query('milestones')
       .withIndex('by_project_week', (q) => q.eq('project_id', projectId).lt('week', day))
       .order('desc')
     for await (const row of rows) {
-      if (!(await guard.document())) throw new Error(FIRST_DAYS_TOO_LARGE)
+      if (!(await guard.document())) return true
       const shown = shownDay(row.week)
       if (shown !== null && shown < day) return true
     }
@@ -930,11 +926,14 @@ type Lane = {
  * answers the matches up to it, `next` at it and `stopped` at its stored
  * day. A continuation then answers nothing again and skips nothing. Each
  * project is first read through a day past `after`, whatever the ceiling,
- * within the request's own limits, so every call moves the frontier on. A
+ * within the request's own limits, so every call moves the frontier on; a
+ * read whose projects' first days do not fit there is refused
+ * (MILESTONE_READ_TOO_LARGE), and the caller can ask for fewer projects. A
  * full batch answers `next` null only when no row of the span follows, so a
  * search can answer a `next` that leads to an empty last batch. With
  * `pastBefore`, the batch also says whether one of the projects holds a
- * milestone shown before that day.
+ * milestone shown before that day, once the projects are open and within
+ * the request's own limits, and says true when those ran out first.
  *
  * `after` is a plain position, not a sealed one. Every position a batch
  * answers is a milestone of a project the caller may list, or the frontier
@@ -1044,6 +1043,14 @@ export async function readMilestones(
   }))
   const rows: Doc<'milestones'>[] = []
   try {
+    // every project through a day past `after`, as a continuation reads the
+    // day of `after` again for the milestones after it on that day
+    for (const lane of lanes)
+      while (
+        !lane.done &&
+        (lane.through === null || (after !== null && !before(after, lane.through)))
+      )
+        if (!(await readDay(lane, opening))) throw readTooLarge()
     const past =
       o.pastBefore === undefined ? undefined : await holdsPast(ctx, projects, o.pastBefore, opening)
     const answer = (next: MilestonePosition | null, stopped: string | null): MilestoneBatch => ({
@@ -1052,14 +1059,6 @@ export async function readMilestones(
       stopped,
       ...(past === undefined ? {} : { past }),
     })
-    // every project through a day past `after`, as a continuation reads the
-    // day of `after` again for the milestones after it on that day
-    for (const lane of lanes)
-      while (
-        !lane.done &&
-        (lane.through === null || (after !== null && !before(after, lane.through)))
-      )
-        if (!(await readDay(lane, opening))) throw new Error(FIRST_DAYS_TOO_LARGE)
     for (;;) {
       const last = rows.at(-1)
       if (last !== undefined && rows.length >= o.limit) {
@@ -1095,7 +1094,7 @@ export async function readMilestones(
       if (!(await readDay(lag, budget))) {
         // every project was read through a day past `after`
         const frontier = lag.through
-        if (frontier === null) throw new Error(FIRST_DAYS_TOO_LARGE)
+        if (frontier === null) throw new Error('a stopped read had not opened every project')
         return answer(frontier, frontier.week)
       }
     }

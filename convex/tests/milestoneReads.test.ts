@@ -879,6 +879,37 @@ const measured = (
   })
 
 describe('under Convex limits', () => {
+  it('opens every project before it asks about the past, and answers past true when the request ran out first', async () => {
+    const t = newT({ transactionLimits: { databaseQueries: 100 } })
+    const projects = [uuid(), uuid(), uuid()]
+    const rows = await plantMany(
+      t,
+      projects.map((project, i) => ({ project, week: plus(MONDAY, i), name: `M ${i}` })),
+    )
+    // a first upcoming batch that may start `left` more index ranges
+    const read = (left: number) =>
+      t.query(async (ctx) => {
+        while ((await ctx.meta.getTransactionMetrics()).databaseQueries.remaining > left)
+          await ctx.db.query('organizations').first()
+        const batch = await readMilestones(ctx, projects, {
+          span: { from: MONDAY, order: 'asc' },
+          after: null,
+          search: '',
+          limit: 10,
+          pastBefore: MONDAY,
+        })
+        return { ...batch, rows: batch.rows.map((m) => m.id) }
+      })
+    const all = { rows: ascending(rows), next: null, stopped: null }
+    // three ranges open the projects, and three more ask about their past
+    expect(await read(6)).toEqual({ ...all, past: false })
+    // with one range left for the past, two projects' history goes unasked
+    expect(await read(4)).toEqual({ ...all, past: true })
+    // without room to open every project the read is refused
+    const e = await expectRefusal(read(2), 'rule', /Choose fewer projects/)
+    expect(e.data.reason).toBe(MILESTONE_READ_TOO_LARGE)
+  })
+
   it('refuses a read whose navigation-only parents need more reads than the request allows', async () => {
     const t = newT({ transactionLimits: { documentsRead: 2500 } })
     const f = await withOrg(t)
