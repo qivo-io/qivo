@@ -416,6 +416,24 @@ describe('refusals', () => {
     ).toMatchObject({ state: 'archived', task: { id: foreignArchived.id } })
   })
 
+  it('answers unavailable, not an error, for a task in a project whose tree is broken', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a sub-project whose parent row is gone, and two that are each other's parent
+    const orphaned = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: uuid() })
+    const a = await plantProject(t, { org_id: f.org.id, type: 'project' })
+    const b = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: a.id })
+    await t.run((ctx) => ctx.db.patch(a._id, { parent_id: b.id }))
+    for (const project of [orphaned, a]) {
+      for (const extra of [{}, { archived_at: NOW }]) {
+        const task = await plantIssue(t, { org_id: f.org.id, project_id: project.id, ...extra })
+        expect(
+          await as(t, f.admin).query(api.taskWindow.task, { org_id: f.org.id, ref: task.id }),
+        ).toEqual({ state: 'unavailable' })
+      }
+    }
+  })
+
   it('resolves a number both organizations hold to the pinned organization only', async () => {
     const t = newT()
     const f = await withOrg(t)

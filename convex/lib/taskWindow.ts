@@ -52,10 +52,13 @@ import { relationRow, type TaskRow, taskFields } from './workspaceParts'
  * `bytes` and `linkBytes` cap what readWindowTask and readWindowLinks read,
  * not counting the caller's own grants, memberships and team shares
  * (lib/access.ts projectLevelsOf shared), which every read of theirs
- * repeats. A read passes its cap by one task body at most, in its last
- * group check (Room), so its worst case is the cap, one row near 1 MiB and
- * those shared reads (well under 1 MiB, OWN_READS): about 9.5 MiB for a
- * task and 14.5 MiB for its links, under Convex's 16 MiB. At the 20,000-character description cap in
+ * repeats. A read checks the cap before each step of task bodies, and the
+ * caller's access to a step's tasks counts in the next check, so it passes
+ * the cap by one task body or one step's access reads at most (Room).
+ * Its worst case is the cap, about 1 MiB past it and those shared reads
+ * (up to about 1 MiB with OWN_READS's 512 KiB of the organization's
+ * teams): about 10 MiB for a task and 15 MiB for its links, under
+ * Convex's 16 MiB. At the 20,000-character description cap in
  * a three-byte script, 100 subtasks read about 6.1 MB, and fit in `bytes`
  * with the task, its text and its parent. A linked group also reads its
  * first counting subtask (groupsOf), so 100 linked groups at the cap read
@@ -161,16 +164,20 @@ async function openedTask(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
 }
 
 /** The first `most` active subtasks of the task with this id, oldest
- * first, read one at a time while `room` allows. `complete` says they are
- * all of them: the read reached the range's end, not the row past `most`
- * or the end of the room. */
-async function subtasksOf(ctx: QueryCtx, id: string, room: Room, most: number) {
-  const rows: Doc<'issues'>[] = []
+ * first, each with whether it counts toward the task (its project is live,
+ * lib/liveTasks.ts countsAsSubtask) and whether the caller is shown it. It
+ * reads them one at a time while `room` allows, and checks each as it is
+ * read, so the reads of the caller's access count before the next look at
+ * `room`. `complete` says they are all of them: the read reached the
+ * range's end, not the row past `most` or the end of the room. */
+async function subtasksOf(ctx: QueryCtx, access: Access, id: string, room: Room, most: number) {
+  const rows: { kid: Doc<'issues'>; counts: boolean; shown: boolean }[] = []
   let left = await room()
   if (left === 0) return { rows, complete: false }
   for await (const kid of activeKids(ctx, id)) {
     if (rows.length === most) return { rows, complete: false }
-    rows.push(kid)
+    const counts = await access.live(kid.project_id)
+    rows.push({ kid, counts, shown: counts && (await access.visible(kid.project_id)) })
     left -= 1
     if (left === 0) left = await room()
     if (left === 0) return { rows, complete: false }
@@ -178,17 +185,30 @@ async function subtasksOf(ctx: QueryCtx, id: string, room: Room, most: number) {
   return { rows, complete: true }
 }
 
-/** The tasks with these ids, by id and in order, null for one that is
- * gone, in steps `room` allows. `complete` says it read them all. */
-async function tasksById(ctx: QueryCtx, ids: readonly string[], room: Room) {
-  const tasks: (Doc<'issues'> | null)[] = []
-  while (tasks.length < ids.length) {
+/** The tasks with these ids that the caller is shown (Access.holds), in
+ * order, read by id in steps `room` allows. Each step checks its tasks
+ * before the next look at `room`, so the reads of the caller's access
+ * count in it. `complete` says it read them all. */
+async function shownByIds(
+  ctx: QueryCtx,
+  access: Access,
+  orgId: string,
+  ids: readonly string[],
+  room: Room,
+) {
+  const shown: Doc<'issues'>[] = []
+  for (let at = 0; at < ids.length; ) {
     const n = await room()
-    if (n === 0) return { tasks, complete: false }
-    const step = ids.slice(tasks.length, tasks.length + n)
-    tasks.push(...(await Promise.all(step.map((id) => byId(ctx, 'issues', id)))))
+    if (n === 0) return { shown, complete: false }
+    const step = ids.slice(at, at + n)
+    const tasks = await Promise.all(step.map((id) => byId(ctx, 'issues', id)))
+    const held = await Promise.all(
+      tasks.map(async (task) => task !== null && task.org_id === orgId && access.holds(task)),
+    )
+    shown.push(...tasks.filter((task, i): task is Doc<'issues'> => task !== null && held[i]))
+    at += step.length
   }
-  return { tasks, complete: true }
+  return { shown, complete: true }
 }
 
 /** Whether each of `tasks`, which the caller is shown, so active tasks in
@@ -228,9 +248,15 @@ async function groupsOf(
         next.map((kid) => (kid.done === true ? false : access.live(kid.value.project_id))),
       )
       for (const [i, at] of step.entries()) {
-        if (next[i].done === true) groups[at] = false
-        else if (counts[i]) groups[at] = true
-        else open.push(at)
+        const kid = next[i]
+        if (kid.done !== true && !counts[i]) {
+          open.push(at)
+          continue
+        }
+        groups[at] = kid.done !== true
+        // a decided task's stream closes at once, so only undecided ones stay open
+        await streams.get(at)?.return?.()
+        streams.delete(at)
       }
     }
   } finally {
@@ -286,8 +312,8 @@ async function shownParent(
  *   (model/descriptions.ts descriptionOf, as every reader takes it since
  *   the second release of the move), its parent's id only when the caller
  *   is shown the parent, has_subtasks and has_hidden_subtasks. `level` is
- *   the caller's level on its project, `labels` its label rows (at most
- *   TASK_WINDOW.rows), `follow` the caller's follow or null, and `parent`
+ *   the caller's level on its project, `labels` its label rows,
+ *   `follow` the caller's follow or null, and `parent`
  *   the parent as a short row when the caller is shown it, else null.
  *   `subtasks.rows` are its active subtasks in live projects that the
  *   caller is shown, as short rows by number and then id. A subtask in an
@@ -311,15 +337,23 @@ async function shownParent(
  * none of its subtasks, so the app must treat a remaining total or progress
  * that needs its leaves as unknown (src/store/planner.ts remainingOf and
  * progressOf walk every descendant).
+ *
+ * The labels stop at TASK_WINDOW.rows. A task carries at most
+ * LIMITS.labels.max (model/labels.ts setTaskLabel), so only rows stored
+ * against that rule could pass the stop, and those past it are left out.
  */
 export async function readWindowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
   const task = await taskByRef(ctx, me.org_id, ref)
   if (task === null) return UNAVAILABLE
+  const access = accessOf(ctx, me)
   if (task.archived_at !== undefined) {
+    // archivedTaskCore asks canSeeProject, which throws for a project whose
+    // tree is broken (a missing parent, a cycle), where Access.visible
+    // answers false, so such a task is unavailable like any other
+    if (!(await access.visible(task.project_id))) return UNAVAILABLE
     const row = await archivedTaskCore(ctx, new Map([[me.org_id, me]]), task.id)
     return row === null ? UNAVAILABLE : { state: 'archived' as const, task: row }
   }
-  const access = accessOf(ctx, me)
   if (!(await access.holds(task))) return UNAVAILABLE
   // the reads every answer needs, before the subtasks spend the rest
   const [level, labels, follow, parent, description] = await Promise.all([
@@ -337,14 +371,12 @@ export async function readWindowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: st
   ])
   if (level === null) return UNAVAILABLE
   const room = roomIn(ctx, TASK_WINDOW.bytes, access.shared)
-  const kids = await subtasksOf(ctx, task.id, room, TASK_WINDOW.rows)
-  const live = await Promise.all(kids.rows.map((kid) => access.live(kid.project_id)))
-  const counting = kids.rows.filter((_, i) => live[i])
-  const seen = await Promise.all(counting.map((kid) => access.visible(kid.project_id)))
+  const kids = await subtasksOf(ctx, access, task.id, room, TASK_WINDOW.rows)
+  const counting = kids.rows.filter((row) => row.counts)
   const shown = await shortRows(
     ctx,
     access,
-    counting.filter((_, i) => seen[i]),
+    counting.filter((row) => row.shown).map((row) => row.kid),
     room,
   )
   const complete = kids.complete && shown.complete
@@ -353,7 +385,7 @@ export async function readWindowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: st
     description,
     ...parentLink(task, () => parent !== null),
     has_subtasks: counting.length > 0,
-    has_hidden_subtasks: !complete || seen.some((visible) => !visible),
+    has_hidden_subtasks: !complete || counting.some((row) => !row.shown),
   }
   return {
     state: 'ok' as const,
@@ -402,16 +434,8 @@ export async function readWindowLinks(ctx: QueryCtx, me: Doc<'profiles'>, issueI
   const otherEnd = (link: Doc<'issue_links'>) =>
     link.source_id === task.id ? link.target_id : link.source_id
   const room = roomIn(ctx, TASK_WINDOW.linkBytes, access.shared)
-  const ends = await tasksById(ctx, [...new Set(read.map(otherEnd))], room)
-  const held = await Promise.all(
-    ends.tasks.map(async (end) => end !== null && end.org_id === me.org_id && access.holds(end)),
-  )
-  const shown = await shortRows(
-    ctx,
-    access,
-    ends.tasks.filter((end, i): end is Doc<'issues'> => end !== null && held[i]),
-    room,
-  )
+  const ends = await shownByIds(ctx, access, me.org_id, [...new Set(read.map(otherEnd))], room)
+  const shown = await shortRows(ctx, access, ends.shown, room)
   const ids = new Set([task.id, ...shown.rows.map((row) => row.id)])
   return {
     state: 'ok' as const,
@@ -434,7 +458,8 @@ export async function readWindowLinks(ctx: QueryCtx, me: Doc<'profiles'>, issueI
  * - `{ state: 'unavailable' }` otherwise, alike for every reason.
  *
  * It reads one by_issue range, and past TASK_WINDOW.attachments rows
- * answers `complete: false` with the first of them.
+ * answers `complete: false` with the first of them, `count` then counting
+ * only those.
  */
 export async function readWindowAttachments(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
   const opened = await openedTask(ctx, me, issueId)
