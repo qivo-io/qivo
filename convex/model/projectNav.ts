@@ -326,7 +326,7 @@ const BATCH_GUARD_ROWS = 100
  * transaction cannot afford. `finish` reads the rows of each kind of
  * grantee on each project, and on its top-level project, once, keeps them
  * current with what it writes, and runs `guard` before each project's
- * reads, every BATCH_GUARD_ROWS rows it reads and before it changes a row
+ * reads, after every BATCH_GUARD_ROWS rows it reads and before it changes a row
  * that exists, which Convex reads first, so a removal can refuse before it
  * passes Convex's limits. Call `finish` after the last grant or share of the
  * transaction. Every grantee is of the project's organization and now holds
@@ -367,7 +367,6 @@ export function grantBatch(ctx: MutationCtx) {
         const key = `${projectId}:${kind}`
         const cached = known.get(key)
         if (cached !== undefined) return cached
-        await guard()
         const rows = new Map<string, StoredReach>()
         const range = ctx.db
           .query('project_reach')

@@ -1017,7 +1017,9 @@ describe("deleting a team settles its members' open tasks", () => {
     await plantTeam(fx, fx.org.id, 'Design')
     // Emil's third task in FW needs the same grant on TBED as the first two
     await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, assignee_id: fx.emil.id })
-    // the transaction reads as full from the third check after his sight on
+    // the transaction reads as full from the fourth check after his sight
+    // on: the project, the grant, and the reach rows of the grants
+    // (model/projectNav.ts grantBatch)
     const sight = await sightChecks(fx)
     let checks = 0
     await fx.t.run((ctx) =>
@@ -1027,14 +1029,14 @@ describe("deleting a team settles its members' open tasks", () => {
           meta: {
             getTransactionMetrics: async () => ({
               databaseQueries:
-                ++checks > sight + 2 ? { used: 99, remaining: 1 } : { used: 0, remaining: 100 },
+                ++checks > sight + 3 ? { used: 99, remaining: 1 } : { used: 0, remaining: 100 },
             }),
           },
         } as unknown as MutationCtx,
         { me: fx.admin, team: fx.team, held: 'keep_as_viewer', now: NOW },
       ),
     )
-    expect(checks).toBe(sight + 2)
+    expect(checks).toBe(sight + 3)
     expect(await grantsOf(fx.t, fx.emil.id)).toEqual([[fx.meta.id, 'viewer']])
   })
 
