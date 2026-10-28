@@ -448,12 +448,16 @@ describe('teardowns', () => {
     const otherBefore = await usedBy(t, f.otherOrg.id)
     await deleteInSteps(t, f, before.length)
     // only the ids still named outside stay, kept for good
-    expect((await usedBy(t, f.org.id)).map((row) => [row.row_id, row.kept]).sort()).toEqual(
+    expect(
+      (await usedBy(t, f.org.id)).map((row) => [row.row_id, row.kept !== undefined]).sort(),
+    ).toEqual(
       [
         [detaching, true],
         [doubled, true],
       ].sort(),
     )
+    // and the deletion's round is gone with the rest
+    expect(await t.run((ctx) => ctx.db.query('used_id_rounds').collect())).toEqual([])
     expect(await usedBy(t, f.otherOrg.id)).toEqual(otherBefore)
     // a released id can be taken again; a kept one cannot
     await createTask(t, f.otherAdmin, sub.id, live)
@@ -487,7 +491,7 @@ describe('teardowns', () => {
         expect(calls).toBeLessThan(20)
     }
     await wipe()
-    expect(await usedOf(t, named)).toMatchObject([{ org_id: f.org.id, kept: true }])
+    expect(await usedOf(t, named)).toMatchObject([{ org_id: f.org.id, kept: expect.any(Number) }])
     expect(await usedOf(t, other)).toEqual([])
     expect(
       await t.run(async (ctx) => [
@@ -501,6 +505,47 @@ describe('teardowns', () => {
     await t.run((ctx) => ctx.db.delete(detach))
     await wipe()
     expect(await usedOf(t, named)).toEqual([])
+  })
+
+  it('a wipe in small calls looks at every kept row before it is done, past held ones at the front', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const ids = Array.from({ length: 6 }, () => uuid())
+    for (const id of ids) await createTask(t, f.user, f.sub.id, id)
+    const detaches = await t.run(async (ctx) => {
+      const made = []
+      for (const id of ids)
+        made.push(
+          await ctx.db.insert('archived_detaches', {
+            parent_id: id,
+            actor_id: f.user.id,
+            deleted_at: NOW,
+            progress_at: NOW,
+            attempts: 0,
+          }),
+        )
+      return made
+    })
+    /** Wipes in calls of `rows` budget rows until a call answers done. */
+    const wipe = async (rows: number) => {
+      for (let calls = 0; ; calls++) {
+        expect(calls).toBeLessThan(40)
+        const limit = { rows, bytes: 4 * 1024 * 1024 }
+        if (await t.run((ctx) => wipeWorkStep(ctx, f.org.id, [], limit))) return
+      }
+    }
+    await wipe(128)
+    expect(await usedBy(t, f.org.id)).toHaveLength(ids.length)
+    // the detaches of the last three end, so only the first three are held,
+    // at the front of the range
+    await t.run(async (ctx) => {
+      for (const detach of detaches.slice(3)) await ctx.db.delete(detach)
+    })
+    // two rows a call
+    await wipe(8)
+    expect((await usedBy(t, f.org.id)).map((row) => row.row_id).sort()).toEqual(
+      ids.slice(0, 3).sort(),
+    )
   })
 
   it('deleteOrgDeep lets the ids go after the organization, so the guest fixture rebuilds with its own', async () => {

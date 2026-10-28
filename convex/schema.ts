@@ -1769,8 +1769,8 @@ export default defineSchema({
    * releaseUsedIds): its deletion in steps, deleteOrgDeep, the public demo's
    * cleanup, and the Northstar wipe, which keeps the organization but none
    * of its work. A row whose id something outside the organization still
-   * names stays instead (`kept`), until a later teardown of the same
-   * organization finds the id named nowhere. The table grows by one row of
+   * names stays instead (`kept`), until a teardown of the same organization
+   * finds the id named nowhere. The table grows by one row of
    * about 170 bytes, as Convex counts a document's size, with its two index
    * entries, for every task and project an organization creates.
    *
@@ -1783,15 +1783,29 @@ export default defineSchema({
     row_id: v.string(), // the task's or project's uuid
     // the organization whose task or project held it, whose teardown deletes the row
     org_id: v.string(),
-    // set by a teardown that found the id still named outside the
-    // organization (model/usedIds.ts heldOutside); such a row stays until a
-    // later teardown of the organization finds it named nowhere
-    kept: v.optional(v.literal(true)),
+    // the round (used_id_rounds) of the last teardown that found the id
+    // still named outside the organization (model/usedIds.ts heldOutside);
+    // such a row stays until a teardown of the organization finds it named
+    // nowhere
+    kept: v.optional(v.number()),
   })
     // whether any organization, or one, holds an id
     .index('by_row', ['table', 'row_id', 'org_id'])
-    // the rows a teardown deletes, apart from those it kept
+    // the rows a teardown looks at: never kept, then kept in an earlier round
     .index('by_org_kept', ['org_id', 'kept']),
+
+  /* The round of the teardown that is letting go of an organization's
+   * used_ids rows, while it runs (model/usedIds.ts releaseUsedIds). The
+   * first step writes it, one past the last round a row was kept in. Each
+   * step looks at the rows never kept and those kept in an earlier round,
+   * deletes those nothing names and marks the others kept in this round,
+   * which takes them out of what the next step reads, so the release goes
+   * on past held rows across bounded steps. The step that finds none of
+   * those left deletes this row, and only then reports the release done. */
+  used_id_rounds: defineTable({
+    org_id: v.string(),
+    round: v.number(),
+  }).index('by_org', ['org_id']),
 
   /* One light row per stored task, written and deleted with its issues row
    * in deleted_rows: what search, counts and finding a task's item need. */

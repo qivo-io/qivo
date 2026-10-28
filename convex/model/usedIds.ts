@@ -1,18 +1,21 @@
 /* Lets go of the ids an organization's tasks and projects held (schema.ts
  * used_ids) at the end of its teardown, the one place used_ids rows are
- * deleted. Every teardown calls it once nothing else of the organization is
- * left: organization deletion in steps (model/orgDeletion.ts deleteOrgStep)
- * and deleteOrgDeep (model/cascade.ts) after the organization row, the
- * public demo's cleanup (internal/demoCleanup.ts) after it too, and the
- * Northstar wipe (model/orgDeletion.ts wipeWorkStep), which keeps the
- * organization, after its tasks and projects.
+ * deleted. Every teardown calls it once the organization's tasks and
+ * projects are gone: organization deletion in steps (model/orgDeletion.ts
+ * deleteOrgStep), deleteOrgDeep (model/cascade.ts) and the public demo's
+ * cleanup (internal/demoCleanup.ts) after the organization row and every
+ * other row of it, and the Northstar wipe (model/orgDeletion.ts
+ * wipeWorkStep), which keeps the organization, after its work.
  *
  * An id that something outside the organization still names stays retired
- * (heldOutside): the row is marked `kept`, which takes it out of the range
- * a teardown reads first, so a later step never reads it there again and
- * each step makes progress. A later teardown of the same organization, the
- * next Northstar wipe or guest fixture rebuild, looks at its kept rows again
- * once the others are gone and deletes those nothing names any more. */
+ * (heldOutside). Each teardown runs in a round (schema.ts used_id_rounds):
+ * it looks at the rows never kept and those kept in an earlier round, and
+ * marks a row still named kept in this round, which takes it out of what
+ * the next step reads, so every step makes progress and a held row never
+ * keeps the rows behind it from being looked at. It is done once no row of
+ * an earlier round is left. A later teardown of the same organization, the
+ * next Northstar wipe or guest fixture rebuild, starts a new round and
+ * looks at every kept row again. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -57,26 +60,50 @@ async function heldOutside(ctx: QueryCtx, row: Doc<'used_ids'>): Promise<object[
   return found.filter((doc) => doc !== null)
 }
 
-/** Reads the rows of organization `orgId` that are kept or not, one index
- * range in one pass, deletes each whose id nothing outside names
- * (heldOutside), and marks a row it does not delete kept, until the range
- * ends (true) or `budget` is spent (false). Each row counts as one of
- * `budget`'s rows for itself and one for each index range heldOutside
- * reads, and its bytes count with those of what heldOutside found. */
+/** The round of organization `orgId`'s running release, which its first
+ * step starts one past the last round a row was kept in. Two index
+ * ranges. */
+async function roundOf(ctx: MutationCtx, orgId: string): Promise<Doc<'used_id_rounds'>> {
+  const running = await ctx.db
+    .query('used_id_rounds')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .unique()
+  if (running !== null) return running
+  const last = await ctx.db
+    .query('used_ids')
+    .withIndex('by_org_kept', (q) => q.eq('org_id', orgId))
+    .order('desc')
+    .first()
+  const _id = await ctx.db.insert('used_id_rounds', { org_id: orgId, round: (last?.kept ?? 0) + 1 })
+  return (await ctx.db.get(_id)) as Doc<'used_id_rounds'>
+}
+
+/** Reads the rows of organization `orgId` in one range, one pass, those
+ * never kept or kept before `round`, deletes each whose id nothing outside
+ * names (heldOutside) and marks the others kept in `round`, which takes
+ * each out of the range, until the range ends (true) or `budget` is spent
+ * (false). Each row counts as one of `budget`'s rows for itself and one for
+ * each index range heldOutside reads, and its bytes count with those of
+ * what heldOutside found. */
 async function pass(
   ctx: MutationCtx,
   orgId: string,
-  kept: true | undefined,
+  round: number,
+  kept: boolean,
   budget: Teardown,
 ): Promise<boolean> {
   if (teardownSpent(budget)) return false
   const rows = ctx.db
     .query('used_ids')
-    .withIndex('by_org_kept', (q) => q.eq('org_id', orgId).eq('kept', kept))
+    .withIndex('by_org_kept', (q) =>
+      kept
+        ? q.eq('org_id', orgId).gte('kept', 0).lt('kept', round)
+        : q.eq('org_id', orgId).eq('kept', undefined),
+    )
   for await (const row of rows) {
     const holders = await heldOutside(ctx, row)
     if (holders.length === 0) await ctx.db.delete(row._id)
-    else if (kept === undefined) await ctx.db.patch(row._id, { kept: true })
+    else await ctx.db.patch(row._id, { kept: round })
     budget.left -= 1 + HOLDER_READS[row.table]
     if (budget.bytes !== undefined)
       for (const doc of [row, ...holders]) budget.bytes -= estimateDocumentBytes(doc)
@@ -85,23 +112,31 @@ async function pass(
   return true
 }
 
-/** Deletes organization `orgId`'s used_ids rows until they are gone (true)
- * or `budget` is spent (false), keeping each whose id something outside the
- * organization still names (heldOutside). A budget not yet spent handles at
- * least one row, and reads no more index ranges than the rows it spends,
- * plus one for each of its two passes. Each row
- * leaves the range it is read in, deleted or marked kept, as the next step
- * reads that range from its start again. Once the others are gone it looks
- * at the rows kept before, in what the budget has left, and deletes those
- * nothing names any more; one still named stays, so this pass never holds
- * the teardown back. The caller runs it once every other row of the
- * organization is gone, its tasks and projects in Deleted items included. */
+/** Deletes organization `orgId`'s used_ids rows, keeping each whose id
+ * something outside the organization still names (heldOutside), until it
+ * has looked at every row this teardown has not (true) or `budget` is spent
+ * (false). A budget not yet spent handles at least one row. Reading the
+ * round counts as two of `budget`'s rows, so it reads no more index ranges
+ * than the rows it spends, plus one for each of its two passes. Each row leaves the range it is read in, deleted or kept in this round, as
+ * the next step reads from the start of the range again. The rows never
+ * kept come first, then those kept in an earlier round, and once neither is
+ * left it deletes the round. The caller runs it once the organization's
+ * tasks and projects are gone, those in Deleted items included. */
 export async function releaseUsedIds(
   ctx: MutationCtx,
   orgId: string,
   budget: Teardown,
 ): Promise<boolean> {
-  if (!(await pass(ctx, orgId, undefined, budget))) return false
-  await pass(ctx, orgId, true, budget)
-  return true
+  if (teardownSpent(budget)) return false
+  const round = await roundOf(ctx, orgId)
+  let done = true
+  for (const kept of [false, true])
+    if (!(await pass(ctx, orgId, round.round, kept, budget))) {
+      done = false
+      break
+    }
+  // the round's two reads, after the first row so that one is always handled
+  budget.left -= 2
+  if (done) await ctx.db.delete(round._id)
+  return done
 }

@@ -214,8 +214,10 @@ const APP_OWNED: TableNames[] = [
   'deleted_item_parents',
   'deleted_rows',
   'deleted_tasks',
-  // the ids its tasks and projects held, deleted last (model/usedIds.ts)
+  // the ids its tasks and projects held, deleted last, and the round of the
+  // cleanup that deletes them (model/usedIds.ts)
   'used_ids',
+  'used_id_rounds',
 ]
 const APP_SHARED = [
   'webhook_workers', // shared background reservations contain no tenant data
