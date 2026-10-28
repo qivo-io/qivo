@@ -52,12 +52,18 @@ export type FieldChange = {
 }
 
 /** A refusal's data. `changes` lists the fields of a `field_changed`
- * conflict (model/expected.ts). */
+ * conflict (model/expected.ts). `retry_after` is the whole seconds to wait
+ * before the same write can pass, on a refusal that waiting clears, such as
+ * a comment past the posting rate (model/commentLimits.ts). `task_id` names
+ * the task of a refusal its caller acts on, a comment refused while the
+ * task's comments are counted (lib/limits.ts COMMENTS_COUNTING). */
 export type Refusal = {
   code: RefusalCode
   message: string
   reason?: string
   changes?: FieldChange[]
+  retry_after?: number
+  task_id?: string
 }
 
 export const notFound = (message: string): ConvexError<Refusal> =>

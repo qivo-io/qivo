@@ -1,8 +1,10 @@
 /* The comment writes the app, REST and MCP share. postComment inserts the
  * row and runs its fan-out (model/messages.ts notifyCommentInsert), so the
  * author follows the task, mentions are notified and followers read 'New
- * comment'. A thread has no length limit; every reader pages it.
- * editComment and deleteComment hold the app's rule that only a comment's
+ * comment'. It also holds the task to LIMITS.comments and the author to
+ * LIMITS.commentRate (model/commentLimits.ts), and deleteComment gives the
+ * task its slot back. Every reader pages a thread, so no read loads a whole
+ * one. editComment and deleteComment hold the app's rule that only a comment's
  * author or a lead of the task's project may change it. A comment writes no
  * activity row, because the comment is its own entry in the discussion.
  * Each caller resolves the task, which the caller must be able to see, and
@@ -20,6 +22,7 @@ import { limitedMarkdown, limitedText } from '../lib/limitRules'
 import { LIMITS } from '../lib/limits'
 import { tooManyMentions } from '../lib/mentions'
 import { issueKey } from '../lib/taskRefs'
+import { commentRoom, takeRoom, tallyComments } from './commentLimits'
 import { assertExpected, DELETES, type Fields, filledText, type Next, type View } from './expected'
 import { assertCanEdit } from './issues'
 import { notifyCommentInsert, notifyCommentUpdate } from './messages'
@@ -31,6 +34,9 @@ type NewComment = {
   author: Doc<'profiles'>
   body: string
   now: string
+  /** The comment is the reason for archiving `issue`, so a limit's
+   * refusal says the archive did not happen (postArchiveReason). */
+  archive?: boolean
 }
 
 /**
@@ -39,9 +45,12 @@ type NewComment = {
  * machine callers omit it and get a new one. Refuses an id that is not a
  * lowercase UUID (lib/db.ts assertNewRowId), an author without Edit on the
  * task's project, a blank body, a body past LIMITS.comment or mentioning
- * more people than LIMITS.mentions allows (lib/mentions.ts) and an id
+ * more people than LIMITS.mentions allows (lib/mentions.ts), then a task
+ * that holds LIMITS.comments.max comments or an author past
+ * LIMITS.commentRate there (model/commentLimits.ts commentRoom, which can
+ * also refuse for now while the task's comments are counted), and an id
  * already in use. It stores `body` trimmed, so the cap measures the
- * stored text.
+ * stored text. `now` is also the post's time for the rate.
  */
 export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<'comments'>> {
   const { issue, author, now } = a
@@ -50,6 +59,8 @@ export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<
   const body = limitedMarkdown(LIMITS.comment, a.body)
   if (body === '') throw rule('a comment cannot be empty')
   if (tooManyMentions(body)) throw rule(LIMITS.mentions.refusal)
+  const nowMs = Date.parse(now)
+  const room = await commentRoom(ctx, { issue, author, nowMs, archive: a.archive })
   const id = a.id ?? newUuid()
   const docId = await insertUnique(
     ctx,
@@ -60,8 +71,16 @@ export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<
     badRequest('a comment with this id already exists'),
   )
   const comment = (await ctx.db.get(docId)) as Doc<'comments'>
+  await takeRoom(ctx, room, { issue, author, nowMs })
   await notifyCommentInsert(ctx, { comment, issue, actor: author, now })
   return comment
+}
+
+type ArchiveReason = {
+  issue: Doc<'issues'>
+  author: Doc<'profiles'>
+  reason: string | undefined
+  now: string
 }
 
 /**
@@ -71,15 +90,38 @@ export async function postComment(ctx: MutationCtx, a: NewComment): Promise<Doc<
  * blank or missing reason posts nothing, and one past LIMITS.archiveReason
  * after trimming is refused. REST and MCP also check the reason with
  * limitedText while they parse a request, before any write, so a task
- * already archived, which posts no reason, refuses it too.
+ * already archived, which posts no reason, refuses it too. The reason
+ * takes a comment slot and a post of the author's rate like any comment,
+ * and their refusals say the task was not archived: the caller archives in
+ * the same transaction, so a refusal undoes the archive.
  */
 export async function postArchiveReason(
   ctx: MutationCtx,
-  a: { issue: Doc<'issues'>; author: Doc<'profiles'>; reason: string | undefined; now: string },
+  a: ArchiveReason,
 ): Promise<Doc<'comments'> | null> {
   const body = limitedText(LIMITS.archiveReason, a.reason ?? '')
   if (body === '') return null
-  return await postComment(ctx, { issue: a.issue, author: a.author, body, now: a.now })
+  return await postComment(ctx, {
+    issue: a.issue,
+    author: a.author,
+    body,
+    now: a.now,
+    archive: true,
+  })
+}
+
+/** Refuses an archive of `issue` whose reason the comment cap or the
+ * author's posting rate would refuse, with postArchiveReason's sentences,
+ * so the archive's callers refuse before their writes and fan-out. A blank
+ * or missing reason passes, because it posts nothing. */
+export async function assertArchiveReasonRoom(ctx: MutationCtx, a: ArchiveReason): Promise<void> {
+  if (limitedText(LIMITS.archiveReason, a.reason ?? '') === '') return
+  await commentRoom(ctx, {
+    issue: a.issue,
+    author: a.author,
+    nowMs: Date.parse(a.now),
+    archive: true,
+  })
 }
 
 /**
@@ -187,10 +229,11 @@ export async function editComment(
 
 /**
  * Deletes `comment` as `me`, its author or a project lead. The thread just
- * loses the row. Nothing is
- * narrated and nobody is notified. Deleted items cannot bring a comment
- * back, so a delete may carry `expected`, the body the caller read, and is
- * refused when someone changed it since.
+ * loses the row, and the task one comment of its count, so it has room for
+ * one more under LIMITS.comments; the author's posting rate stays as it
+ * was. Nothing is narrated and nobody is notified. Deleted items cannot
+ * bring a comment back, so a delete may carry `expected`, the body the
+ * caller read, and is refused when someone changed it since.
  */
 export async function deleteComment(
   ctx: MutationCtx,
@@ -212,6 +255,7 @@ export async function deleteComment(
     next: DELETES,
   })
   await ctx.db.delete(a.comment._id)
+  await tallyComments(ctx, [[a.comment, -1]])
 }
 
 /* -------------------------------------------------------------- reading */

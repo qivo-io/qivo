@@ -161,6 +161,14 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
         ctx.db.query('comments').withIndex('by_edited_by', (q) => q.eq('edited_by', profileId)),
       clear: (ctx, comment) => ctx.db.patch(comment._id, { edited_by: undefined }),
     }),
+    // the post logs of the comment posting rate (model/commentLimits.ts)
+    edge({
+      range: (ctx, profileId) =>
+        ctx.db
+          .query('comment_rates')
+          .withIndex('by_author_issue', (q) => q.eq('author', profileId)),
+      clear: (ctx, rate) => ctx.db.delete(rate._id),
+    }),
   ],
   sent_messages: [
     edge({

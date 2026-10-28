@@ -968,6 +968,8 @@ const EXEMPT: Record<string, string> = {
     'the upload URL takes no credential; its signed token names the ticket a write credential started',
   'machine/uploads:finish': 'the upload URL records the file of a ticket begin claimed',
   'machine/uploads:abandon': 'the upload URL frees a ticket begin claimed after a failed POST',
+  'commentLimits:begin':
+    "starts the comment count of a task after a write credential's post there passed the access checks and was refused while the count runs (machine/registry.ts runEntry); it changes nothing a person sees",
   'billingMetering:ingress':
     'counts every machine request before authentication (machine HTTP actions)',
   'billingMetering:oauthCall':

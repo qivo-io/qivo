@@ -341,6 +341,29 @@ export const LIMITS = {
     refusal: 'this task already has 20 labels, the most a task can have. Remove one first.',
     on: ALL,
   },
+  // Every comment counts, archive reasons and comments posted before the cap
+  // included, so a task that held more then keeps them but takes no new one
+  // until it has fewer (model/commentLimits.ts).
+  comments: {
+    label: 'Comments per task',
+    group: 'tasks',
+    max: 1_000,
+    unit: 'comments',
+    refusal:
+      'this task has reached 1,000 comments, the most a task can have. Ask a project lead to delete comments until it has fewer than 1,000, then post again.',
+    on: ALL,
+  },
+  // Successful posts by one person or agent on one task, in any 60 seconds
+  // of server time, archive reasons included. Deleting a comment gives no
+  // post back (model/commentLimits.ts).
+  commentRate: {
+    label: 'Comments one person or agent posts on one task',
+    group: 'tasks',
+    max: 10,
+    unit: 'comments in any 60 seconds',
+    refusal: tooManyComments(60),
+    on: ALL,
+  },
   followers: {
     label: 'Followers per task',
     group: 'tasks',
@@ -646,6 +669,25 @@ function webhookQuota(): string {
 export function tooManyRequests(seconds: number): string {
   const wait = seconds === 1 ? '1 second' : `${seconds} seconds`
   return `too many requests, at most 300 a minute for one person or agent. Try again in ${wait}.`
+}
+
+/** The refusal reason of a comment past LIMITS.commentRate
+ * (convex/model/commentLimits.ts). Its `retry_after` is the wait in
+ * seconds; REST answers it 429 with Retry-After. */
+export const COMMENT_RATE = 'comment_rate'
+
+/** The refusal reason of a comment, or an archive with a reason, on a task
+ * whose comments are still being counted (convex/model/commentLimits.ts).
+ * Its `task_id` names the task, whose count the caller then asks to start:
+ * REST and MCP through machine/registry.ts, the app through
+ * comments.countThread. REST answers it 503 with Retry-After. */
+export const COMMENTS_COUNTING = 'comments_counting'
+
+/** The refusal of a comment past LIMITS.commentRate, `seconds` before the
+ * oldest of the author's last 10 posts on the task stops counting. */
+export function tooManyComments(seconds: number): string {
+  const wait = seconds === 1 ? '1 second' : `${seconds} seconds`
+  return `too many comments on this task, at most 10 in any 60 seconds from one person or agent. Try again in ${wait}.`
 }
 
 /** The refusal of a request when every person and agent together pass

@@ -1,4 +1,5 @@
 import type { FunctionReturnType } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import type { api } from '../../../convex/_generated/api'
 import type { Workspace } from '../../../convex/lib/workspaceJoin'
 import type { Row } from '../rows'
@@ -557,6 +558,26 @@ export const recipes: Recipe[] = [
         body: 'A new comment',
         created_at: SERVER,
       }),
+  },
+  {
+    mutation: 'comments:countThread',
+    mutator: 'countAfterRefusal',
+    what: "the count a comment refused while the task's comments are counted starts",
+    pause: 'P',
+    act: (P) => P.addComment('task-a', 'Posted while the comments are counted'),
+    // the post's refusal, which a resolve with a rejected promise delivers
+    answers: {
+      'comments:create': () =>
+        Promise.reject(
+          new ConvexError({
+            code: 'rule',
+            message: "Qivo is still counting this task's comments. Try again in 60 seconds.",
+            reason: 'comments_counting',
+            retry_after: 60,
+            task_id: 'task-a',
+          }),
+        ),
+    },
   },
   {
     mutation: 'comments:update',

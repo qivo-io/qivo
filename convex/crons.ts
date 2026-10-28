@@ -113,6 +113,14 @@ crons.interval('organization removal recovery', { minutes: 10 }, internal.orgRem
 // Restarts Deleted items steps that stopped, at half the budget (deletedItems.ts).
 crons.interval('deleted item recovery', { minutes: 1 }, internal.deletedItems.recover)
 
+// Restarts the comment counts still under way, such as a restore's whose
+// step failed (commentLimits.ts).
+crons.interval('comment count recovery', { minutes: 10 }, internal.commentLimits.recover)
+
+// Deletes the comment post logs whose posts no longer count
+// (commentLimits.ts).
+crons.interval('comment rate cleanup', { hours: 1 }, internal.commentLimits.sweep)
+
 crons.interval(
   'webhook event recovery',
   { minutes: 1 },

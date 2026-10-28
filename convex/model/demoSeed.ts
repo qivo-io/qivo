@@ -22,6 +22,7 @@ import { named, nameKey } from '../lib/nameKey'
 import { issueKey } from '../lib/taskRefs'
 import { insertActivity, issueChanges, machineDetail } from './activity'
 import { markArchivedTask } from './archiveMarks'
+import { type CommentWrite, startCount, tallyComments } from './commentLimits'
 import { insertTask } from './descriptions'
 import { browserVerbDetail, cleanDescription } from './issues'
 import {
@@ -450,6 +451,7 @@ export async function writeNorthstarStep(
         created_at: times.created,
         updated_at: times.updated,
       })
+      await startCount(ctx, { id: issueIds[i.key], org_id: org.id })
       for (const label of i.labels)
         await ctx.db.insert('issue_labels', {
           org_id: org.id,
@@ -586,17 +588,19 @@ export async function writeNorthstarStep(
     const { orgProfiles, preload } = await notifyContext(ctx, org, shared)
     const comments = NORTHSTAR_COMMENTS.slice(step.from, step.to)
     await readTasks(comments.map((c) => c.issue))
+    const inserted: CommentWrite[] = []
     for (const c of comments) {
       const createdAt = new Date(
         Date.parse(`${marketingDate(anchor, c.day)}T14:00:00.000Z`) + c.minute * 60_000,
       ).toISOString()
-      await ctx.db.insert('comments', {
+      const commentDocId = await ctx.db.insert('comments', {
         id: await id(`comment:${c.key}`),
         issue_id: issueIds[c.issue],
         author: personIds[c.author],
         body: c.body,
         created_at: createdAt,
       })
+      inserted.push([{ _id: commentDocId, issue_id: issueIds[c.issue] }, 1])
       const issue = await task(c.issue)
       const actor = orgProfiles.find((p) => p.id === personIds[c.author])
       require(actor !== undefined, rule('marketing demo: sample comment references missing'))
@@ -609,6 +613,7 @@ export async function writeNorthstarStep(
         skipTaskEvent: true,
       })
     }
+    await tallyComments(ctx, inserted)
     return
   }
   // The archived tasks' labels, links and follows carry the mark the archive

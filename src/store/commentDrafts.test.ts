@@ -179,6 +179,37 @@ describe('comment drafts and a failed thread in the store', () => {
       expect(bodies()).toEqual(['#1', '#2', '#3'])
     })
 
+    it("asks the server to count the task's comments after a refusal while it counts", async () => {
+      const { P } = store
+      live().deliver({ comments: range(1, 4), earlier: false })
+      const counting = new ConvexError({
+        code: 'rule',
+        message: "Qivo is still counting this task's comments. Try again in 60 seconds.",
+        reason: 'comments_counting',
+        retry_after: 60,
+        task_id: 'task-a',
+      })
+      const saved = P.addComment('task-a', 'Posted while it counts')
+      writes[0].answer.reject(counting)
+      expect(await saved).toBe(false)
+      await settle()
+      expect(writes.map((w) => w.name)).toEqual(['comments:create', 'comments:countThread'])
+      expect(network.mutation).toHaveBeenLastCalledWith(expect.anything(), {
+        org_id: org,
+        issue_id: 'task-a',
+      })
+      expect(toast).toHaveBeenCalledWith(
+        expect.stringContaining("Qivo is still counting this task's comments"),
+        'error',
+      )
+      // another refusal asks for nothing
+      const refused = P.addComment('task-a', 'Refused for another reason')
+      writes[2].answer.reject(new ConvexError({ code: 'rule', message: RULE }))
+      expect(await refused).toBe(false)
+      await settle()
+      expect(writes).toHaveLength(3)
+    })
+
     it('drops a refused comment posted before the thread arrived', async () => {
       const { P } = store
       const saved = P.addComment('task-a', 'Posted while the thread loads')

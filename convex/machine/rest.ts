@@ -35,7 +35,9 @@
  * CALLER_DEACTIVATED race reasons map back to the caller's own 401 sentences
  * BEFORE the code map, and a write that kept conflicting or running out of
  * time (WRITE_CONFLICT, machine/registry.ts retryConflicts) is a 503 with
- * Retry-After; anything
+ * Retry-After, and so is a comment refused while its task's comments are
+ * counted (COMMENTS_COUNTING); a comment past its author's posting rate on
+ * the task (COMMENT_RATE) is a 429 with Retry-After; anything
  * else → 500 {"error": "internal error"}, with the error itself only in the
  * deployment's log (shared.ts internalError). Every mutation the handler
  * runs, before dispatch too, retries write conflicts and time outs
@@ -98,7 +100,13 @@ import {
 } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS, serviceBusy, tooManyRequests } from '../lib/limits'
+import {
+  COMMENT_RATE,
+  COMMENTS_COUNTING,
+  LIMITS,
+  serviceBusy,
+  tooManyRequests,
+} from '../lib/limits'
 import { utcToday } from '../lib/machineDelay'
 import { mcpResource } from '../lib/oauth'
 import { answerAfterBody } from '../lib/requestBody'
@@ -1096,6 +1104,8 @@ const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-api-key, content-type',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+  // a browser reads the waits of the 429s and 503s
+  'Access-Control-Expose-Headers': 'Retry-After',
 }
 
 const json = (body: unknown, status: number): Response =>
@@ -1131,6 +1141,20 @@ const writeConflict = (message: string): Response =>
       ...CORS,
       'Content-Type': 'application/json',
       'Retry-After': String(WRITE_CONFLICT_RETRY_AFTER),
+    },
+  })
+
+/* The answer to a comment that waiting can let through
+ * (model/commentLimits.ts): `status` 429 past the author's posting rate on
+ * the task, 503 while the task's comments are counted, with the refusal's
+ * sentence and its `retry_after` seconds in Retry-After. */
+const commentWait = (data: Partial<Refusal>, status: number): Response =>
+  new Response(JSON.stringify({ error: data.message }), {
+    status,
+    headers: {
+      ...CORS,
+      'Content-Type': 'application/json',
+      'Retry-After': String(data.retry_after ?? 1),
     },
   })
 
@@ -1479,9 +1503,12 @@ const STATUS_OF: Partial<Record<string, number>> = {
 
 /* The REST response for an error a route threw. A caller gone or
  * deactivated since auth gets its own 401 sentence, a write that kept
- * conflicting gets the retryable 503, a refusal whose code STATUS_OF maps
+ * conflicting gets the retryable 503, a comment that waiting can let
+ * through its 429 or 503 (commentWait), a refusal whose code STATUS_OF maps
  * gets that status and its message, and anything else is a 500 with
- * INTERNAL_ERROR, because its own text can hold a stack trace. */
+ * INTERNAL_ERROR, because its own text can hold a stack trace. A comment
+ * past the cap of comments per task is a `rule`, so a 400, as every cap of
+ * a task is. */
 function refusalResponse(e: unknown, kind: ProfileKind): Response {
   if (e instanceof ConvexError) {
     const data = e.data as Partial<Refusal>
@@ -1490,6 +1517,8 @@ function refusalResponse(e: unknown, kind: ProfileKind): Response {
     if (data.reason === CALLER_GONE) return err(CALLER[kind].gone, 401)
     if (data.reason === CALLER_DEACTIVATED) return err(CALLER[kind].deactivated, 401)
     if (data.reason === WRITE_CONFLICT) return writeConflict(data.message ?? WRITE_CONFLICT_MESSAGE)
+    if (data.reason === COMMENT_RATE) return commentWait(data, 429)
+    if (data.reason === COMMENTS_COUNTING) return commentWait(data, 503)
     const status = data.code !== undefined ? STATUS_OF[data.code] : undefined
     if (status !== undefined && data.message !== undefined) return err(data.message, status)
   }

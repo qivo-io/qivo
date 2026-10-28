@@ -108,6 +108,10 @@ sentence too. `403` means the credential is valid but the user lacks the
 required role, the credential can only read, or organization editing is
 paused for billing. Unreadable objects come back as `404`.
 
+A comment past its author's posting rate on the task is a `429`, and a
+comment on a task whose comments Qivo is still counting a `503`, each with
+`Retry-After` (see [Comments](#comments)).
+
 A request that keeps conflicting with changes other requests make to the
 same data at that moment, such as many comments posted to one task at once,
 is a `503` with `Retry-After: 1` and `{"error": "the request conflicted with
@@ -244,8 +248,10 @@ as one API call, including requests that later fail validation, routing or
 permission checks. During a paid billing period, these calls count toward the
 organization's pooled API allowance. Without a paid billing period, calls are
 counted per calendar month (UTC) and are never charged. Requests rejected for
-missing/invalid credentials or rate limiting are not counted. The separate
-curation API keeps its own limits below.
+missing/invalid credentials, or by one of these two request limits, are not
+counted. A request refused by a limit of the data, such as a comment past
+[the comment limits](#comments), passed the request limits and counts as a
+call. The separate curation API keeps its own limits below.
 
 A request body may hold at most **1 MiB** (1,048,576 bytes of UTF-8). Qivo
 checks the size after authentication, before routing, and answers a longer
@@ -332,8 +338,11 @@ and line breaks from both ends, and Qivo stores the trimmed text. A task
 description or comment keeps the spaces that start its first line, because
 Markdown reads them. Most emoji count as two. A request past a limit is refused with the sentence in the
 table and changes nothing. The refusal is a `400`, except for a request body
-over its size (`413`), a full webhook quota (`409`) and the request rate
-(`429`). A number outside its range is refused, never moved into the range.
+over its size (`413`), a full webhook quota (`409`), the request rate and the
+comment posting rate (`429`, with `Retry-After`), and a comment on a task
+whose comments Qivo is still counting (`503`, with `Retry-After`; see
+[Comments](#comments)). A number outside its range is refused, never moved
+into the range.
 
 <!-- limits:start (written by scripts/limits-docs.mjs) -->
 
@@ -369,6 +378,8 @@ over its size (`413`), a full webhook quota (`409`) and the request rate
 | Attachments per task | 100 attachments, description images included | this task already has 100 attachments, images in its description included, the most a task can have. Remove one first. |
 | Links per task | 100 links | this task already has 100 links, the most a task can have. Remove one of its links first. |
 | Labels per task | 20 labels | this task already has 20 labels, the most a task can have. Remove one first. |
+| Comments per task | 1,000 comments | this task has reached 1,000 comments, the most a task can have. Ask a project lead to delete comments until it has fewer than 1,000, then post again. |
+| Comments one person or agent posts on one task | 10 comments in any 60 seconds | too many comments on this task, at most 10 in any 60 seconds from one person or agent. Try again in 60 seconds. |
 | Followers per task | 100 followers | this task already has 100 followers, the most a task can have. Someone must unfollow it first. |
 | People mentioned in one text | 100 people | a text can mention at most 100 people. Remove some mentions and save again. |
 | Milestones per project week | 1 milestone in each calendar week, for a project and its sub-projects together | this project already has a milestone in that week, and a project can have at most 1 milestone a week. Pick another week, or move that milestone first. |
@@ -1511,7 +1522,17 @@ true`). It is at most 500 characters after trimming, counted like a
 description, the same limit as the reason the app's delete window shows in
 Deleted items. A longer one is a `400` (`an archive reason must be at most 500
 characters. Shorten it.`) and the PATCH changes nothing, also for a task that is already
-archived. Until October 2026 the limit was 20,000 characters.
+archived. Until October 2026 the limit was 20,000 characters. The reason is a
+comment, so it needs room under [the comment limits](#comments): on a task with
+1,000 comments or more, past your 10 comments in 60 seconds there, or while
+Qivo counts its comments, the PATCH archives nothing, changes no other field
+and answers as a comment `POST` would, with the sentence saying that the task
+was not archived, such as `this task has reached 1,000 comments, the most a
+task can have, so the archive reason cannot be posted and the task was not
+archived. Archive it without a reason, which the app allows once its work is
+Done, or ask a project lead to delete comments until it has fewer than
+1,000.` The same PATCH without `archive_reason` archives the task, because it
+posts nothing.
 
 Task shape of a list row from `GET /v1/tasks`:
 
@@ -1749,7 +1770,40 @@ the created comment; a blank `body` is a `400`. A comment body is at most
 20,000 characters after trimming, counted like a description, on `POST` and
 `PATCH`; a longer one is a `400` (`a comment must be at most 20,000
 characters. Formatting counts too. Shorten it.`). Comments go to Deleted items with their task and come back
-with it. A task has no limit on the number of comments.
+with it.
+
+A task holds at most **1,000 comments**, counted across every author and
+every way of posting: the app, REST, MCP and archive reasons. A `POST` to a
+task that already has 1,000 or more is a `400` (`this task has reached 1,000
+comments, the most a task can have. Ask a project lead to delete comments
+until it has fewer than 1,000, then post again.`). Only a comment's author or
+a lead of the task's project can delete it. A task that held more than 1,000
+before the limit
+keeps them all and takes no new comment until deletes bring it under 1,000.
+Each comment deleted frees one place, and editing a comment changes nothing.
+A delete that is refused, or of a comment already gone, frees nothing.
+
+One caller may post at most **10 comments on one task in any 60 seconds**
+of server time. Every key, token and OAuth connection of the same agent or
+person shares the allowance, with the app and MCP, and so do archive
+reasons. Each post stops counting 60 seconds after it was saved; a deleted
+comment still counts until then. Past the allowance a `POST` is a `429` with
+`Retry-After` set to the whole seconds until the oldest of those posts stops
+counting, and the same number in its sentence: `{"error": "too many comments
+on this task, at most 10 in any 60 seconds from one person or agent. Try
+again in 42 seconds."}`. Other authors, and your posts on other tasks, are
+not affected. Waiting does not promise that the task still has room for the
+comment then.
+
+A task stored before Qivo counted comments is counted when someone first
+posts on it. A thread too long to count in that request, more than about
+1.5 MiB of comments, is a `503` with `Retry-After: 60` and `{"error": "Qivo is
+still counting this task's comments. Try again in 60 seconds."}`, and the
+comment is not saved. That refusal starts the count in the background, which
+takes seconds for most threads, so the same request sent after the wait
+passes. Each of these refusals saves nothing, so send the same request again
+later. Every one of them still counts as an API call (see [Request
+limits](#request-limits-and-billing)).
 
 `PATCH /v1/comments/{id}` replaces a comment's body and answers the comment;
 `DELETE /v1/comments/{id}` answers `{ "deleted": true, "id": "…", "task_id":

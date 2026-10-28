@@ -47,7 +47,22 @@ your place in the thread. It disappears once the first comment is loaded. If
 loading fails, **Retry** asks again. Comments that arrive while the task is
 open add to the end, and the earlier ones stay loaded. Edits and deletions
 that other people, or your other tabs, make to comments older than the newest
-50 show the next time you open the task. A task has no limit on comments.
+50 show the next time you open the task.
+
+A task holds at most 1,000 comments, counted across everyone who comments
+and every way of posting, archive reasons included. At 1,000 Qivo refuses a
+new comment and says so. Deleting a comment makes room for one more, and
+editing one changes nothing. Only a comment's author or a lead of the task's
+project can delete it, so ask a project lead when the comments are not
+yours. A task that had more than 1,000 comments before this limit keeps them
+all, but takes no new comment until it has fewer than 1,000. You can post at
+most 10 comments on one task in any minute, wherever you post them from.
+Past that, Qivo says how many seconds to wait before you can post there
+again. Deleting a comment does not give that post back, and other people,
+and your comments on other tasks, are not affected. On a task created before
+Qivo counted comments, a very long discussion can make Qivo ask you to try
+again in a minute while it counts them; the count starts at once, so the
+next try after that usually works.
 The composer keeps your comment until Qivo saves it, and the text cannot
 change meanwhile. If Qivo refuses it, for example after you lose edit access,
 the text stays for another try. A refused edit stays open with your text too.
@@ -225,6 +240,12 @@ projects, those directly under it become top-level tasks, and restoring the
 task later does not bring them back under it.
 
 Archiving unfinished work requires a reason, which becomes a task comment.
+Because it is a comment, it follows the comment limits above. On a task with
+1,000 comments, or after you posted 10 comments there within a minute, Qivo
+archives nothing and says why, and the window keeps your reason and choices
+for another try. Archiving without a reason, where that is allowed, still
+works, so at 1,000 comments you can mark the work Done and archive it without
+a reason, or ask a project lead to delete comments.
 The reason, for an archive or a delete, holds at most 500 characters. A
 Done task with no unfinished work going with it needs none. REST and MCP
 archiving always include the subtasks. They accept the same optional reason,

@@ -36,6 +36,7 @@ import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../conv
 import type { FieldChange } from '../../convex/lib/functions'
 import { imageRefs, shownImages } from '../../convex/lib/imageRefs'
 import {
+  COMMENTS_COUNTING,
   DEFAULT_MESSAGE_RETENTION_DAYS,
   DEMO_FILE_BYTES,
   grouped,
@@ -1551,6 +1552,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
         } else {
           guarded(() => onError?.(error))
           guarded(() => settleRefused(layer))
+          guarded(() => countAfterRefusal(error))
           // a refused draft stays, unsaved, rather than reading as saved
           // and giving way to the stored text once its editor blurs
           if (o.keepUnsaved && error instanceof ConvexError) guarded(() => o.keepUnsaved?.())
@@ -1560,6 +1562,23 @@ function start<M extends FunctionReference<'mutation'>, T>(
       return refusal(error)
     },
   )
+}
+
+/** After a comment, or an archive with a reason, refused while the server
+    counts the task's comments (convex/lib/limits.ts COMMENTS_COUNTING),
+    asks it to start that count (comments.countThread), which the refusal
+    could not keep, so a later try can pass. The person's draft stays with
+    its own toast; a count that does not start is only logged. */
+function countAfterRefusal(error: unknown) {
+  const d = errData(error)
+  if (d.reason !== COMMENTS_COUNTING || d.task_id === undefined) return
+  const task = rows.issues.get(d.task_id)
+  if (!task) return
+  void send(api.comments.countThread, { org_id: task.org_id, issue_id: task.id }, 'none', {
+    about: { background: true },
+    quietPause: true,
+    onError: (e) => console.error("[qivo] a task's comment count did not start:", e),
+  })
 }
 
 /** Keeps the parts of accepted `layer` that no live delivery is known to
@@ -1946,7 +1965,13 @@ function isTaskContentWrite(name: string) {
    place the untyped `data` payload is given that shape, so every refusal
    reader below stays cast-free. A non-ConvexError answers {}: every field
    read stays undefined and the caller lands on its generic fallback. */
-type ErrData = { code?: string; message?: string; reason?: string; changes?: FieldChange[] }
+type ErrData = {
+  code?: string
+  message?: string
+  reason?: string
+  changes?: FieldChange[]
+  task_id?: string
+}
 const errData = (e: unknown): ErrData => (e instanceof ConvexError ? (e.data as ErrData) || {} : {})
 /** Refusals that mean the whole organization is read-only. Their sentences
    name the reason, and for a pending deletion its date, so they show verbatim. */
@@ -2571,8 +2596,9 @@ function slugErrorText(e: unknown): string {
 
 /* Writes the person did not make as a change: view preferences, the seat
    claim at boot, the Team sync stamp an edit leaves, the OAuth consent
-   page's read and the upload addresses an upload asks for before its real
-   write. The notice does not count them, and the crash note leaves them out. */
+   page's read, the upload addresses an upload asks for before its real
+   write and the comment count a refused comment starts. The notice does not
+   count them, and the crash note leaves them out. */
 const BACKGROUND_WRITES = new Set([
   'prefs:save',
   'identity:claimMySeats',
@@ -2582,6 +2608,7 @@ const BACKGROUND_WRITES = new Set([
   'files:avatarUploadUrl',
   'appearance:createUpload',
   'appearance:cancelUpload',
+  'comments:countThread',
 ])
 
 /* What the crash note says a task write changed, by mutation, or by field

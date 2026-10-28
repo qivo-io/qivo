@@ -329,20 +329,27 @@ async function trashRows(ctx: MutationCtx, orgId: string, budget: RemovalBudget)
   return done
 }
 
-/** Tasks with their links, labels, subscriptions, comments, messages and
- * files, then the description rows they leave (model/descriptions.ts). */
+/** Tasks with their links, labels, subscriptions, comments, messages,
+ * files, comment counts and post logs, then the description rows they leave
+ * (model/descriptions.ts) and any comment count or post log of the
+ * organization that names no task, such as one a rollback to a release
+ * before counts left. */
 const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
     () => liveTasks(ctx, orgId, budget),
-    () =>
-      drain(
-        ctx,
-        budget,
-        ctx.db.query('issue_descriptions').withIndex('by_org', (q) => q.eq('org_id', orgId)),
-      ),
+    ...(['issue_descriptions', 'task_comment_counts', 'comment_rates'] as const).map(
+      (table) => () =>
+        drain(
+          ctx,
+          budget,
+          ctx.db.query(table).withIndex('by_org', (q) => q.eq('org_id', orgId)),
+        ),
+    ),
   ])
 
-/* The tasks of taskRows. */
+/* The tasks of taskRows, with their comment counts and post logs, which go
+ * before the task row frees its id (model/commentLimits.ts
+ * deleteCommentRows). */
 const liveTasks = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
@@ -405,6 +412,14 @@ const liveTasks = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
               },
             },
           ),
+        ...(['task_comment_counts', 'comment_rates'] as const).map(
+          (table) => () =>
+            drain(
+              ctx,
+              budget,
+              ctx.db.query(table).withIndex('by_issue', (q) => q.eq('issue_id', issue.id)),
+            ),
+        ),
       ]),
     { before: (issue) => tallyRow(ctx, 'issues', issue, null) },
   )
@@ -590,6 +605,8 @@ async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<v
     'profiles',
     'labels',
     'sync_stamps',
+    'task_comment_counts',
+    'comment_rates',
   ] as const)
     require((await ctx.db
       .query(table)

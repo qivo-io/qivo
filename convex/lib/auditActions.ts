@@ -48,6 +48,7 @@ export const AUDIT_ACTION_LABELS = {
   descriptions_backfill: 'Gave tasks their description rows',
   name_keys_backfill: 'Gave people, teams and projects their name keys',
   storage_totals_backfill: 'Counted stored task files',
+  comment_counts_backfill: 'Counted the comments of tasks',
   panorama_library_image_added: 'Added Unsplash image to the library',
   panorama_manual_image_added: 'Uploaded image to the library',
   panorama_image_approved: 'Approved background image',

@@ -97,15 +97,19 @@ async function storageRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
   )
 }
 
-/** Every task with its rows, then the description rows the tasks leave
- * (model/descriptions.ts), which a visitor's payload limit keeps small, then
- * any storage totals left (storageRows). */
+/** Every task with its rows, its comment count and post logs among them,
+ * then the description rows the tasks leave (model/descriptions.ts), which
+ * a visitor's payload limit keeps small, then any storage totals left
+ * (storageRows) and any comment count or post log left naming no task
+ * (model/commentLimits.ts). */
 async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
   while (budget.left > 0) {
     const issue = await ctx.db
       .query('issues')
       .withIndex('by_org', (q) => q.eq('org_id', orgId))
       .first()
+    // then the description rows, the storage totals left, and any comment
+    // count or post log left naming no task
     if (!issue)
       return (
         (await drain(ctx, budget, (n) =>
@@ -113,7 +117,9 @@ async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
             .query('issue_descriptions')
             .withIndex('by_org', (q) => q.eq('org_id', orgId))
             .take(n),
-        )) && (await storageRows(ctx, orgId, budget))
+        )) &&
+        (await storageRows(ctx, orgId, budget)) &&
+        (await commentLimitRows(ctx, orgId, budget))
       )
     const id = issue.id
     if (
@@ -186,11 +192,37 @@ async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
       ))
     )
       return false
+    // its comment count and post logs, before the task row frees its id
+    for (const table of ['task_comment_counts', 'comment_rates'] as const)
+      if (
+        !(await drain(ctx, budget, (n) =>
+          ctx.db
+            .query(table)
+            .withIndex('by_issue', (q) => q.eq('issue_id', id))
+            .take(n),
+        ))
+      )
+        return false
     await ctx.db.delete(issue._id)
     await tallyRow(ctx, 'issues', issue, null)
     budget.left--
   }
   return false
+}
+
+/** The organization's comment counts, then its comment post logs. */
+async function commentLimitRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
+  for (const table of ['task_comment_counts', 'comment_rates'] as const)
+    if (
+      !(await drain(ctx, budget, (n) =>
+        ctx.db
+          .query(table)
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .take(n),
+      ))
+    )
+      return false
+  return true
 }
 
 async function projectRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
@@ -619,6 +651,8 @@ export const purge = internalMutation({
             'teams',
             'profiles',
             'labels',
+            'task_comment_counts',
+            'comment_rates',
           ] as const)
             require((await ctx.db
               .query(table)

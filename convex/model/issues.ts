@@ -90,6 +90,7 @@ import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { inWorkingSet } from '../lib/workingSet'
 import { excerpt, issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
+import { startCount } from './commentLimits'
 import { IMAGE_NOT_ATTACHED, settleDescriptionImages } from './descriptionImages'
 import { insertTask, patchTask, type TaskFields, type TaskPatch } from './descriptions'
 import {
@@ -1467,6 +1468,7 @@ export async function createIssueCore(
   )
   const issue = (await byId(ctx, 'issues', args.id)) as Doc<'issues'>
   await tallyRow(ctx, 'issues', null, issue)
+  await startCount(ctx, issue)
   // the attach clears the parent's hours; its dates are calculated, never
   // written. A new task is active in an active project (the arrival guard),
   // so it always makes its parent a group.
