@@ -1,6 +1,7 @@
 /* Task descriptions in issue_descriptions, the second of three releases:
  * every reader takes a task's text from its first description row in
- * creation order, and only a task without a row reads issues.description
+ * creation order that holds the task's copies, else from its first row,
+ * and only a task without a row reads issues.description
  * (model/descriptions.ts). These cases clear issues.description the way the
  * third release will, plant rows that differ from it, leave a task without
  * a row and give one a second row, and check what each reader answers and
@@ -309,6 +310,25 @@ for (const [way, reads] of [
       const pair = await plantPair(t, f, texts)
       await secondRow(t, pair.active, 'A second walrus row')
       await secondRow(t, pair.archived, 'A second narwhal row')
+      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
+      expect(searches(await readers(t, f, pair, ['walrus', 'narwhal']))).toEqual(notFound)
+    })
+
+    it("reads the same row everywhere for a duplicate whose first row's archived copy is stale", async () => {
+      const t = newT()
+      const f = await machineOrg(t)
+      const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
+      const pair = await plantPair(t, f, ['Stale walrus text', texts[1]])
+      // the first row says the task is archived, which it is not, and a
+      // second row holds the task's copies
+      await t.run(async (ctx) => {
+        const row = await ctx.db
+          .query('issue_descriptions')
+          .withIndex('by_issue', (q) => q.eq('issue_id', pair.active.id))
+          .first()
+        if (row !== null) await ctx.db.patch(row._id, { archived_at: NOW })
+      })
+      await secondRow(t, pair.active, texts[0])
       expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
       expect(searches(await readers(t, f, pair, ['walrus', 'narwhal']))).toEqual(notFound)
     })

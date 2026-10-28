@@ -10,7 +10,8 @@
  * writes theirs.
  *
  * Readers read issue_descriptions from the second release, this one: a
- * task's text is its first row's, and only a task without a row reads
+ * task's text is its first row's in creation order that holds its copies,
+ * else its first row's, and only a task without a row reads
  * issues.description (model/descriptions.ts descriptionOf). It ships to
  * production only once a dry run on every deployment (development, staging,
  * production and the demo) reports zero `missing`, `differ`, `duplicates`,

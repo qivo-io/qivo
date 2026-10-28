@@ -602,7 +602,9 @@ backfill on every hosted deployment once it serves that release, as the
 module's header says. Read its dry run first, then run it, and call it
 again with the `cursor` it answers until it answers `done`. The second
 release reads the table: every reader takes a task's text from its first
-row, and only a task without a row reads `issues.description`. It ships to
+row, or from its first row that holds the task's project and archived
+state when a rollback left more than one, and only a task without a row
+reads `issues.description`. It ships to
 production only once a dry run on development, staging, production and the
 demo reports zero `missing`, `differ`, `duplicates`, `orphans` and
 `skipped`, because from then on a row that differs from its task is what

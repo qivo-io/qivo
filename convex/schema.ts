@@ -1408,8 +1408,10 @@ export default defineSchema({
    * copies and every reader reads issues.description, the source of truth;
    * internal/descriptionsBackfill gives older tasks their rows. The second,
    * this one, reads this table: every reader takes a task's text from its
-   * first row in creation order, and only a task without a row reads
-   * issues.description (model/descriptions.ts descriptionOf). Writers still
+   * first row in creation order that holds the task's copies, which every
+   * writer keeps on the first row, else from its first row, and only a task
+   * without a row reads issues.description (model/descriptions.ts
+   * descriptionOf). Writers still
    * keep both copies, so a rollback to the first release loses nothing. It
    * ships only once a dry run of that backfill on every deployment reports
    * zero missing, differing, duplicate, orphaned and skipped rows

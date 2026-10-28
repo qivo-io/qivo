@@ -7,8 +7,9 @@
  *
  * In this release, the second of the move, readers and writers follow
  * different rules. Every reader takes a task's text from its first
- * description row in creation order (descriptionOf, withText,
- * descriptionsOf), and only a task without a row, which
+ * description row in creation order that holds the task's copies, else
+ * from its first row (descriptionOf, withText, descriptionsOf), and only a
+ * task without a row, which
  * internal/descriptionsBackfill has not reached, reads issues.description.
  * Only this file reads either copy for a reader, and
  * scripts/check-task-reads.mjs fails on any other read of
@@ -69,20 +70,38 @@ type Writer = MutationCtx['db']
  * as a write that changes or checks the description passes it on. */
 export type TaskWithText = Doc<'issues'> & { description: string }
 
-/** The text of task `task` as readers show it: the text of its first
- * description row in creation order, else issues.description for a task
- * the backfill has not given a row, else ''. One by_issue range and at most
- * one document. A second row, which a rollback can leave and the backfill's
- * repair deletes, is never read. */
-export async function descriptionOf(
-  db: Reader,
-  task: Pick<Doc<'issues'>, 'id' | 'description'>,
-): Promise<string> {
-  const row = await db
+/** A task as a reader of its text knows it: its id, the copies its rows
+ * hold, and issues.description, the text of a task without a row. */
+type TextOwner = Owner & Pick<Doc<'issues'>, 'description'>
+
+/* The description row readers take for task `task`: its first row in
+ * creation order that holds the task's copies (holdsCopies), else its first
+ * row, or null for a task without one. Every writer keeps the copies on the
+ * first row (patchTask), so that is the first row, unless a rollback left
+ * the first row's copies stale beside a second row; then this is the row
+ * the active range of the task's organization holds too (activeTextsOf), so
+ * every reader takes the same one. It reads rows until one holds the
+ * copies: one normally, two when the first's copies are stale, more only
+ * for a task with three or more rows, which repeated rollbacks leave and
+ * the backfill reports. */
+async function shownRow(db: Reader, task: Owner): Promise<Doc<'issue_descriptions'> | null> {
+  let first: Doc<'issue_descriptions'> | null = null
+  const rows = db
     .query('issue_descriptions')
     .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
-    .first()
-  return row?.description ?? task.description ?? ''
+  for await (const row of rows) {
+    if (holdsCopies(row, task)) return row
+    first ??= row
+  }
+  return first
+}
+
+/** The text of task `task` as readers show it: the text of its description
+ * row (shownRow), else issues.description for a task the backfill has not
+ * given a row, else ''. One by_issue range and one document, two when a
+ * rollback left the first row's copies stale. */
+export async function descriptionOf(db: Reader, task: TextOwner): Promise<string> {
+  return (await shownRow(db, task))?.description ?? task.description ?? ''
 }
 
 /** The text readers show for `task` (descriptionOf), and whether its task
@@ -90,16 +109,13 @@ export async function descriptionOf(
  * before the table that changed issues.description without the row. A
  * writer then takes the task row's text (patchTask), so a tool that rewrites
  * the text it read from the row would lose that edit; it leaves such a task
- * to internal/descriptionsBackfill's repair. One by_issue range and at most
- * one document. */
+ * to internal/descriptionsBackfill's repair. It reads as descriptionOf
+ * does. */
 export async function textCopiesOf(
   db: Reader,
-  task: Pick<Doc<'issues'>, 'id' | 'description'>,
+  task: TextOwner,
 ): Promise<{ text: string; differs: boolean }> {
-  const row = await db
-    .query('issue_descriptions')
-    .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
-    .first()
+  const row = await shownRow(db, task)
   return {
     text: row?.description ?? task.description ?? '',
     differs: row !== null && task.description !== undefined && task.description !== row.description,
@@ -114,31 +130,36 @@ export async function withText(db: Reader, task: Doc<'issues'>): Promise<TaskWit
   return { ...task, description: await descriptionOf(db, task) }
 }
 
-/* How many rows of one index range each, at Convex's document size limit,
- * the reads left under `limit` can hold. */
-const rowsLeft = (m: TransactionMetrics, limit: ReadCeiling): number =>
+/* The documents one task's text can read at Convex's document size limit:
+ * its first row and, when that row's copies are stale, the next (shownRow). */
+const TEXT_DOCUMENTS = 2
+
+/* How many tasks' texts, each one index range and TEXT_DOCUMENTS documents
+ * at Convex's document size limit, the reads left under `limit` can hold. */
+const textsLeft = (m: TransactionMetrics, limit: ReadCeiling): number =>
   Math.min(
     limit.ranges - m.databaseQueries.used,
-    limit.documents - m.documentsRead.used,
-    Math.floor((limit.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
+    Math.floor((limit.documents - m.documentsRead.used) / TEXT_DOCUMENTS),
+    Math.floor((limit.bytes - m.bytesRead.used) / (TEXT_DOCUMENTS * DOCUMENT_MAX_BYTES)),
   )
 
 /** The texts of `tasks` (descriptionOf) by task id, or null when `room` ran
  * out before every one was read. `room` and `steps` are the transaction's
  * totals the reads keep to (ctx.meta.getTransactionMetrics), every document
- * a caller read before counted. It reads a few rows at a time, never more
+ * a caller read before counted. It reads a few texts at a time, never more
  * than the ranges, documents and bytes left under `room` could hold with
- * every row at Convex's document size limit, and none once the reads have
- * passed `room`. By default `steps` is `room`, so the reads never pass it.
- * A caller whose budget a step may pass, as a workspace part's may, gives
- * Convex's own limits less a reserve as `steps`: while the reads are under
- * `room` a step then reads at least one row, never more than the reads left
- * under `steps` could hold, so the reads pass `room` by one row at most and
- * never pass `steps`. Each caller keeps its own answer once the room runs
- * out: a cut window, a refusal or a shorter page. */
+ * each text at TEXT_DOCUMENTS of Convex's document size limit, and none
+ * once the reads have passed `room`. By default `steps` is `room`, so the
+ * reads never pass it. A caller whose budget a step may pass, as a
+ * workspace part's may, gives Convex's own limits less a reserve as
+ * `steps`: while the reads are under `room` a step then reads at least one
+ * text, never more than the reads left under `steps` could hold, so the
+ * reads pass `room` by one task's text at most and never pass `steps`. Each
+ * caller keeps its own answer once the room runs out: a cut window, a
+ * refusal or a shorter page. */
 export async function descriptionsOf(
   ctx: QueryCtx,
-  tasks: readonly Pick<Doc<'issues'>, 'id' | 'description'>[],
+  tasks: readonly TextOwner[],
   room: ReadCeiling,
   steps: ReadCeiling = room,
 ): Promise<Map<string, string> | null> {
@@ -151,7 +172,7 @@ export async function descriptionsOf(
       m.bytesRead.used > room.bytes
     )
       return null
-    const fits = Math.min(rowsLeft(m, steps), Math.max(1, rowsLeft(m, room)))
+    const fits = Math.min(textsLeft(m, steps), Math.max(1, textsLeft(m, room)))
     if (fits <= 0) return null
     const step = tasks.slice(at, at + fits)
     const texts = await Promise.all(step.map((task) => descriptionOf(ctx.db, task)))
@@ -169,31 +190,39 @@ export async function descriptionsOf(
  * so a caller that needs a few reads them through descriptionsOf instead.
  * A task the range holds no row for, one without a row or one whose row's
  * archived copy is stale, which only a rollback leaves, then reads its
- * own. Of two rows of one task, which only a rollback leaves and the
- * backfill's repair deletes, it takes the first the range holds. It checks
+ * own. Of a task's rows it takes the first in the range that holds its
+ * copies, the one shownRow takes. It checks
  * `room` before the range and after each row, so it passes `room` by one
  * row at most. */
 export async function activeTextsOf(
   ctx: QueryCtx,
   orgId: string,
-  tasks: readonly Pick<Doc<'issues'>, 'id' | 'description'>[],
+  tasks: readonly TextOwner[],
   room: ReadCeiling,
 ): Promise<Map<string, string> | null> {
-  const wanted = new Set(tasks.map((task) => task.id))
+  const wanted = new Map(tasks.map((task) => [task.id, task]))
   const out = new Map<string, string>()
   if (wanted.size > 0) {
     // the rows the reads left under `room` hold at Convex's size limit,
     // counted down and asked again once spent
-    let allowance = rowsLeft(await ctx.meta.getTransactionMetrics(), room)
+    const rowsLeft = (m: TransactionMetrics) =>
+      Math.min(
+        room.ranges - m.databaseQueries.used,
+        room.documents - m.documentsRead.used,
+        Math.floor((room.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
+      )
+    let allowance = rowsLeft(await ctx.meta.getTransactionMetrics())
     if (allowance <= 0) return null
     const rows = ctx.db
       .query('issue_descriptions')
       .withIndex('by_org_archived', (q) => q.eq('org_id', orgId).eq('archived_at', undefined))
     for await (const row of rows) {
-      if (wanted.has(row.issue_id) && !out.has(row.issue_id)) out.set(row.issue_id, row.description)
+      const task = wanted.get(row.issue_id)
+      if (task !== undefined && !out.has(task.id) && holdsCopies(row, task))
+        out.set(task.id, row.description)
       if (out.size === wanted.size) break
       if (--allowance <= 0) {
-        allowance = rowsLeft(await ctx.meta.getTransactionMetrics(), room)
+        allowance = rowsLeft(await ctx.meta.getTransactionMetrics())
         if (allowance <= 0) return null
       }
     }
