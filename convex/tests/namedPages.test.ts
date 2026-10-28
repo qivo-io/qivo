@@ -282,6 +282,38 @@ describe('mergeNamed', () => {
 /* ------------------------------------------------------------- the batch */
 
 describe('readBatch', () => {
+  it('answers a stream that stops as stopped, never as the end', async () => {
+    const t = newT()
+    const rows: [string, number][] = [
+      ['a', 1],
+      ['b', 1],
+      ['c', 1],
+    ]
+    const read = (limit: number) =>
+      t.run((ctx) =>
+        readBatch(ctx, {
+          stream: () => memory('m', rows, {}, 2),
+          keep: async (row: Row) => row.name,
+          limit,
+          through: null,
+          ceiling: { ranges: 1e9, documents: 1e9, bytes: 1e12 },
+        }),
+      )
+    expect(await read(25)).toEqual({
+      rows: ['a', 'b'],
+      at: { key: 'b', tie: 1 },
+      ended: false,
+      stopped: true,
+    })
+    // a full batch whose peek stops is full, not stopped, and not the end
+    expect(await read(2)).toEqual({
+      rows: ['a', 'b'],
+      at: { key: 'b', tie: 1 },
+      ended: false,
+      stopped: false,
+    })
+  })
+
   const someKeys = Array.from({ length: 30 }, (_, i) => `k${String(i).padStart(2, '0')}`)
 
   it('says the end in a full batch that ends with the list, and only then', async () => {

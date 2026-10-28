@@ -597,6 +597,25 @@ describe('canWriteOrgLabels', () => {
     expect(answers.some(([, answer]) => answer === true)).toBe(true)
   })
 
+  it('gives no rights through a meta under another meta, which no writer makes', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    await t.run(async (ctx) => {
+      // createProjectCore refuses a meta with a parent; only bad data has one
+      await ctx.db.patch(f.sub._id, { type: 'meta' })
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: subject.id,
+        level: 'user',
+      })
+    })
+    // the old rule read it as a meta of the tree; the check reads top-level
+    // metas only, and fails closed
+    expect(await t.run((ctx) => oldRule(ctx, subject))).toBe(true)
+    expect(await t.run((ctx) => canWriteOrgLabels(ctx, subject))).toBe(false)
+  })
+
   it('answers null past its row cap or its read guard, and every create refuses with the sentence', async () => {
     const t = newT()
     const f = await withOrg(t)
