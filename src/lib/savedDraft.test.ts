@@ -160,6 +160,59 @@ describe('a settings field’s draft', () => {
     expect(first.conflict).toEqual({ value: 'Northstar Labs', by: 'you' })
   })
 
+  it('waits for the server’s value after a refusal of a save typed past', () => {
+    // the refusal comes while the store still paints the session's own name
+    const refused = run(
+      TRIMMED,
+      'Northstar',
+      { type: 'edit', text: 'Northstar Robotics' },
+      { type: 'send', seq: 1, value: 'Northstar Robotics' },
+      { type: 'saved', value: 'Northstar Robotics' },
+      { type: 'edit', text: 'Northstar Robotics AB' },
+      { type: 'refused', seq: 1, value: 'Northstar Robotics', seen: 'Northstar', by: LEO },
+    )
+    expect(refused.conflict).toBeNull()
+    expect(refused.base).toBe('Northstar')
+    expect(shown(refused)).toBe('Northstar Robotics AB')
+    const kept = draftReduce(refused, { key: KEY, type: 'saved', value: 'Northstar Labs' }, TRIMMED)
+    expect(kept.conflict).toEqual({ value: 'Northstar Labs', by: LEO })
+    // the paint goes before the other change arrives
+    const back = draftReduce(refused, { key: KEY, type: 'saved', value: 'Northstar' }, TRIMMED)
+    expect(back.conflict).toBeNull()
+    expect(
+      draftReduce(back, { key: KEY, type: 'saved', value: 'Northstar Labs' }, TRIMMED).conflict,
+    ).toEqual({ value: 'Northstar Labs', by: LEO })
+  })
+
+  it('goes back to the first base when two quick saves are refused', () => {
+    const s = run(
+      TRIMMED,
+      'Northstar',
+      { type: 'edit', text: 'Northstar Robotics' },
+      { type: 'send', seq: 1, value: 'Northstar Robotics' },
+      { type: 'saved', value: 'Northstar Robotics' },
+      { type: 'edit', text: 'Northstar Robotics AB' },
+      { type: 'send', seq: 2, value: 'Northstar Robotics AB' },
+      { type: 'saved', value: 'Northstar Robotics AB' },
+      { type: 'refused', seq: 1, value: 'Northstar Robotics', seen: 'Northstar', by: LEO },
+      {
+        type: 'refused',
+        seq: 2,
+        value: 'Northstar Robotics AB',
+        seen: 'Northstar Robotics',
+        by: LEO,
+      },
+      // both paints go before the other change arrives
+      { type: 'saved', value: 'Northstar' },
+    )
+    expect(s.base).toBe('Northstar')
+    expect(s.conflict).toBeNull()
+    expect(shown(s)).toBe('Northstar Robotics AB')
+    expect(
+      draftReduce(s, { key: KEY, type: 'saved', value: 'Northstar Labs' }, TRIMMED).conflict,
+    ).toEqual({ value: 'Northstar Labs', by: LEO })
+  })
+
   it('keeps a draft refused for another reason unsaved against its base', () => {
     const s = run(
       TRIMMED,

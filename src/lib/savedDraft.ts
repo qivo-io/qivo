@@ -63,6 +63,10 @@ export type DraftState<T> = {
   /** Who wrote the value a refused save found, until that value shows.
       Undefined when no refusal waits. */
   refusedBy: Writer | undefined
+  /** The base and values of older saves refused while a newer one was in
+      flight. The newer save began from their value, which the server never
+      stored, so its refusal goes back to the oldest one's base. */
+  chained: { seen: T; values: T[] } | null
 }
 
 /** What changes a field's draft. */
@@ -102,6 +106,7 @@ export const draftStart = <T>(key: string, saved: T): DraftState<T> => ({
   dropped: 0,
   conflict: null,
   refusedBy: undefined,
+  chained: null,
 })
 
 /** The text a field in state `s` shows. */
@@ -140,7 +145,13 @@ export function draftReduce<T>(
         const mine = { ...next, sending: s.sending.slice(own + 1) }
         // an older save of this session: the newer one answers for the draft
         if (own < s.sending.length - 1) return mine
-        const acked = { ...mine, base: a.value, conflict: null, refusedBy: undefined }
+        const acked = {
+          ...mine,
+          base: a.value,
+          conflict: null,
+          refusedBy: undefined,
+          chained: null,
+        }
         return s.draft !== null && reads(s.draft, a.value) ? untouched(acked) : acked
       }
       // an untouched field follows, as does a draft that reads as the new
@@ -169,7 +180,7 @@ export function draftReduce<T>(
       const sending = s.sending.filter((sent) => sent.seq !== a.seq)
       // already seen as a saved value, or an older save
       if (sending.length === s.sending.length || a.seq !== s.seq) return { ...s, sending }
-      const next = { ...s, sending, base: a.value }
+      const next = { ...s, sending, base: a.value, chained: null }
       if (s.draft === null || !reads(s.draft, a.value)) return next
       // nothing typed since: a later value shows as it comes, and until the
       // server's value arrives the field keeps showing the saved text
@@ -177,16 +188,37 @@ export function draftReduce<T>(
     }
     case 'refused': {
       const sending = s.sending.filter((sent) => sent.seq !== a.seq)
-      if (a.seq !== s.seq || a.seq <= s.dropped) return { ...s, sending }
+      if (a.seq <= s.dropped) return { ...s, sending }
+      // an older save: the newer one began from its value and answers for
+      // the draft, going back to the oldest refused save's base
+      if (a.seq !== s.seq) {
+        const chained = s.chained ?? { seen: a.seen, values: [] }
+        return { ...s, sending, chained: { ...chained, values: [...chained.values, a.value] } }
+      }
+      const seen = s.chained ? s.chained.seen : a.seen
+      const own = [a.value, ...(s.chained?.values ?? [])]
       const draft = s.draft ?? form.text(a.value)
-      const next = { ...s, sending, draft, base: a.seen, conflict: null, refusedBy: undefined }
-      // the value the server keeps may show already
-      if (!same(s.saved, a.seen) && !reads(draft, s.saved))
+      const next = {
+        ...s,
+        sending,
+        draft,
+        base: seen,
+        conflict: null,
+        refusedBy: undefined,
+        chained: null,
+      }
+      // the value the server keeps may show already; the session's own
+      // value, still painted, is not it
+      if (
+        !same(s.saved, seen) &&
+        !own.some((value) => same(s.saved, value)) &&
+        !reads(draft, s.saved)
+      )
         return { ...next, conflict: { value: s.saved, by: a.by ?? null } }
       return { ...next, refusedBy: a.by }
     }
     case 'discard':
-      return untouched({ ...s, sending: [], dropped: s.seq })
+      return untouched({ ...s, sending: [], dropped: s.seq, chained: null })
     case 'showSaved':
       return s.draft === null ? s : untouched(s)
     case 'keepMine':

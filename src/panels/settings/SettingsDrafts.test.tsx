@@ -316,6 +316,39 @@ describe('the organization name', () => {
     })
   })
 
+  it('goes back to the name it began from when two quick saves are refused', async () => {
+    await open(general)
+    const field = find('[data-org-name]')
+    await type(field, 'Testbed Robotics')
+    await blur(field)
+    await type(field, 'Testbed Robotics AB')
+    await blur(field)
+    const [first, second] = requests.filter((r) => r.name === 'orgs:update')
+    expect(second.args).toMatchObject({ expected: { name: 'Testbed Robotics' } })
+    const changed = new ConvexError({
+      code: 'conflict',
+      reason: 'field_changed',
+      message: 'name changed since you read it',
+      changes: [{ record: 'organization', id: orgId(), field: 'name', by: null, at: NOW }],
+    })
+    await act(async () => first.reject(changed))
+    await act(async () => second.reject(changed))
+    // the other change has not arrived: the name it began from is no conflict
+    expect(field.value).toBe('Testbed Robotics AB')
+    expect(conflict()).toBeNull()
+    expect(leaveGuard.hasUnsaved()).toBe(true)
+    await elsewhere((s) => {
+      s.orgs[0].name = 'Testbed Labs AB'
+    })
+    expect(conflict()?.textContent).toContain('Changed elsewhere to “Testbed Labs AB”.')
+    await click(button('Keep mine'))
+    await enter(field)
+    expect(last('orgs:update').args).toMatchObject({
+      patch: { name: 'Testbed Robotics AB' },
+      expected: { name: 'Testbed Labs AB' },
+    })
+  })
+
   it('keeps a draft when another setting of the organization changes', async () => {
     await open(general)
     const field = find('[data-org-name]')
