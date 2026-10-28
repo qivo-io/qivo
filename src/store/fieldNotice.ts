@@ -119,6 +119,14 @@ function fieldWords(changes: readonly FieldChange[]): string[] {
   return words
 }
 
+/** Who wrote the values a refusal's `changes` found: one writer for them
+    all, or null when they name none or several. */
+export function refusalWriter(changes: readonly FieldChange[], look: Lookup): Writer {
+  const people = new Set(changes.map((c) => c.by))
+  const by = people.size === 1 ? (changes[0]?.by ?? null) : null
+  return by === null ? null : look.writer(by)
+}
+
 /** The one line a notice shows for refusal `r`. */
 export function refusalLine(r: Refusal, look: Lookup): string {
   const first = r.changes[0]
@@ -130,9 +138,7 @@ export function refusalLine(r: Refusal, look: Lookup): string {
   // one record per refusal: the server refuses the first record that conflicts
   const words = fieldWords(r.changes.filter((c) => c.id === first.id && c.of === first.of))
   const whole = WHOLE.has(first.record)
-  const people = new Set(r.changes.map((c) => c.by))
-  const by = people.size === 1 ? first.by : null
-  const writer = by === null ? null : look.writer(by)
+  const writer = refusalWriter(r.changes, look)
   const what = whole ? record : `the ${listed(words)} of ${record}`
   const offline = r.offline ? ' while you were offline' : ''
   const changed =

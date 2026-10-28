@@ -82,6 +82,13 @@ describe('settings edits through the client store', () => {
         can_create_projects: true,
       },
     )
+    snap.teams.push({
+      id: 't-crew',
+      org_id: org,
+      name: 'Crew',
+      track_delay_default: false,
+      created_at: NOW,
+    })
     requests = []
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((_ref, _args, next) => {
@@ -247,6 +254,163 @@ describe('settings edits through the client store', () => {
       P.setOrg({ projectCreators: 'everyone' as unknown as 'users' })
       expect(P.org.projectCreators).toBe('users')
       expect(requests).toEqual([])
+    })
+  })
+
+  /* A settings field sends the value its draft began from as the one seen
+     (lib/savedDraft.ts), and hears of a refusal over someone else's change
+     with the value the server keeps and who wrote it. */
+  describe('the value a settings field began from', () => {
+    const latest = () => requests.at(-1) as Pending
+    const changed = (record: string, id: string, field: string, by = 'u-ana') =>
+      new ConvexError({
+        code: 'conflict',
+        reason: 'field_changed',
+        message: `${field} changed since you read it`,
+        changes: [{ record, id, field, by, at: NOW }],
+      })
+    const settle = async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve()
+    }
+
+    it('sends it as expected from setOrg, and the value on screen without it', () => {
+      P.setOrg({ name: 'Testbed Robotics' })
+      expect(latest().args.expected).toEqual({ name: 'Testbed Labs' })
+      P.setOrg({ name: 'Testbed AB' }, undefined, { seen: { name: 'Testbed Labs' } })
+      // the screen shows the first save's paint; the field began before it
+      expect(latest().args.expected).toEqual({ name: 'Testbed Labs' })
+      P.setOrg({ defaultPlannableHours: 32 }, undefined, {
+        seen: { default_plannable_hours: 36 },
+      })
+      expect(latest().args).toMatchObject({
+        patch: { default_plannable_hours: 32 },
+        expected: { default_plannable_hours: 36 },
+      })
+    })
+
+    it('sends the stored attachment limit for the default a field showed, and any other as seen', () => {
+      // the fixture's organization stores no limit; the field shows 20
+      P.setOrg({ maxAttachmentMb: 10 }, undefined, { seen: { max_attachment_mb: 20 } })
+      expect(latest().args.expected).toEqual({ max_attachment_mb: null })
+      P.setOrg({ maxAttachmentMb: 12 }, undefined, { seen: { max_attachment_mb: 15 } })
+      expect(latest().args.expected).toEqual({ max_attachment_mb: 15 })
+    })
+
+    it('sends it from updateTeam and updateProject', () => {
+      P.updateTeam('t-crew', { name: 'Bench crew' })
+      expect(latest().args.expected).toEqual({ name: 'Crew' })
+      P.updateTeam('t-crew', { name: 'Field crew' }, { seen: { name: 'Crew' } })
+      expect(latest().args.expected).toEqual({ name: 'Crew' })
+      const project = snap.projects[0].id
+      P.updateProject(project, { name: 'Sensor' })
+      expect(latest().args.expected).toEqual({ name: 'Task creation fixture' })
+      P.updateProject(project, { description: 'New text' }, { seen: { description: 'Old text' } })
+      expect(latest().args.expected).toEqual({ description: 'Old text' })
+    })
+
+    it('sends it from both writes of updateUser', () => {
+      P.updateUser('u-ana', { name: 'Ana Berg' })
+      expect(latest()).toMatchObject({
+        name: 'profiles:update',
+        args: { expected: { name: 'Ana' } },
+      })
+      P.updateUser('u-ana', { name: 'Ana B.' }, { seen: { name: 'Ana' } })
+      expect(latest().args.expected).toEqual({ name: 'Ana' })
+      P.updateUser('u-ana', { plannableHours: 30 })
+      expect(latest()).toMatchObject({
+        name: 'profiles:setPlannableHours',
+        args: { expected: { plannable_hours: null } },
+      })
+      P.updateUser('u-ana', { plannableHours: 28 }, { seen: { plannable_hours: 32 } })
+      expect(latest().args.expected).toEqual({ plannable_hours: 32 })
+    })
+
+    it('sends it from setDisplayName and setOrgSlug', () => {
+      void P.setDisplayName('Planner Prime')
+      expect(latest().args.expected).toMatchObject({ name: 'Planner' })
+      void P.setDisplayName('Planner Two', { seen: { name: 'Planner One' } })
+      expect(latest().args.expected).toMatchObject({ name: 'Planner One' })
+      void P.setOrgSlug('testbed-ab')
+      expect(latest().args.expected).toEqual({ slug: 'testbed' })
+      void P.setOrgSlug('testbed-cd', { seen: { slug: 'testbed-labs' } })
+      expect(latest().args.expected).toEqual({ slug: 'testbed-labs' })
+    })
+
+    it('runs keepDraft with the value on screen and its writer, for each kind of record', async () => {
+      const kept: unknown[] = []
+      const keepDraft = (shown: unknown, by: unknown) => {
+        kept.push([shown, by])
+        return true
+      }
+      const org = snap.orgs[0].id
+      const project = snap.projects[0].id
+      P.setOrg({ name: 'Testbed Robotics' }, undefined, { keepDraft })
+      latest().reject(changed('organization', org, 'name'))
+      P.updateTeam('t-crew', { name: 'Bench crew' }, { keepDraft })
+      latest().reject(changed('team', 't-crew', 'name', 'u-ben'))
+      P.updateProject(project, { name: 'Sensor' }, { keepDraft })
+      latest().reject(changed('project', project, 'name', P.CURRENT_USER))
+      P.updateUser('u-ana', { plannableHours: 30 }, { keepDraft })
+      latest().reject(changed('profile', 'u-ana', 'plannable_hours'))
+      await settle()
+      expect(kept).toEqual([
+        ['Testbed Labs', { name: 'Ana' }],
+        ['Crew', { name: 'Ben' }],
+        ['Task creation fixture', 'you'],
+        [undefined, { name: 'Ana' }],
+      ])
+      expect(showToast.mock.calls.at(-1)?.[0]).toContain('Your text is still in the editor.')
+    })
+
+    it('runs keepDraft for an awaited rename refused over another change, and keepUnsaved for another refusal', async () => {
+      const calls: unknown[] = []
+      const save = {
+        keepDraft: (shown: unknown, by: unknown) => {
+          calls.push(['keepDraft', shown, by])
+          return true
+        },
+        keepUnsaved: () => calls.push(['keepUnsaved']),
+      }
+      const renamed = P.setDisplayName('Planner Prime', save)
+      latest().reject(changed('profile', P.CURRENT_USER, 'name', 'u-ana'))
+      expect(await renamed).toBe(
+        'Not saved. Ana changed the name of Planner. Your text is still in the editor. Save again to replace their version.',
+      )
+      const moved = P.setOrgSlug('testbed-ab', save)
+      latest().reject(new ConvexError({ code: 'conflict', reason: 'slug_taken', message: 'taken' }))
+      await moved
+      P.setOrg({ name: 'Testbed Robotics' }, undefined, save)
+      latest().reject(new ConvexError({ code: 'rule', message: 'the server said no' }))
+      await settle()
+      expect(calls).toEqual([['keepDraft', 'Planner', { name: 'Ana' }], ['keepUnsaved']])
+    })
+
+    it('gives a late answer for the store before an account change to no field', async () => {
+      vi.resetModules()
+      vi.stubEnv('VITE_APP_MODE', 'demo')
+      requests = []
+      const store = await import('./planner')
+      P = store.P
+      await store.initStore()
+      const calls: string[] = []
+      const save = {
+        keepDraft: () => {
+          calls.push('keepDraft')
+          return true
+        },
+        keepUnsaved: () => calls.push('keepUnsaved'),
+      }
+      P.setOrg({ name: 'Testbed Robotics' }, undefined, save)
+      const painted = latest()
+      const renamed = P.setDisplayName('Planner Prime', save)
+      const awaited = latest()
+      store.disposeDemoStore()
+      painted.reject(changed('organization', snap.orgs[0].id, 'name'))
+      awaited.reject(changed('profile', snap.profiles[0].id, 'name'))
+      await renamed
+      await settle()
+      expect(calls).toEqual([])
+      vi.unstubAllEnvs()
     })
   })
 })
