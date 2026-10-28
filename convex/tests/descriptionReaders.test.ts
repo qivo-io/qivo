@@ -1032,6 +1032,37 @@ describe('real limits', () => {
     expect(got.parent_id).toBe(ids.parent)
   }, 300_000)
 
+  it('a task with many rows reads two of them at most, within the limits', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // 20 rows of 900 KiB, as repeated rollbacks could leave them: the first
+    // 19 with a stale archived copy, the last with the task's copies
+    const task = await t.run(async (ctx) => {
+      const doc = taskDoc(f, 50_000)
+      await ctx.db.insert('issues', doc)
+      return doc
+    })
+    for (let from = 0; from < 20; from += 5)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 5; i++)
+          await ctx.db.insert('issue_descriptions', {
+            issue_id: task.id,
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            ...(i < 19 ? { archived_at: NOW } : {}),
+            description: `${i} `.padEnd(900 * 1024, 'r'),
+          })
+      })
+    const got = await t.query(internal.machine.rest.getIssue, {
+      callerId: f.agent.id,
+      access: 'read',
+      today: TODAY,
+      ref: task.id,
+    })
+    // neither of the first two rows holds the copies, so the first
+    expect(got.description).toBe('0 '.padEnd(900 * 1024, 'r'))
+  }, 300_000)
+
   it('an export issues page with description rows near 1 MiB stays within the limits and goes on', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)

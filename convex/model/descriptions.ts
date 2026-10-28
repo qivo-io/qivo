@@ -74,26 +74,23 @@ export type TaskWithText = Doc<'issues'> & { description: string }
  * hold, and issues.description, the text of a task without a row. */
 type TextOwner = Owner & Pick<Doc<'issues'>, 'description'>
 
-/* The description row readers take for task `task`: its first row in
- * creation order that holds the task's copies (holdsCopies), else its first
- * row, or null for a task without one. Every writer keeps the copies on the
- * first row (patchTask), so that is the first row, unless a rollback left
- * the first row's copies stale beside a second row; then this is the row
- * the active range of the task's project holds too (projectTextsOf), so
- * every reader takes the same one. It reads rows until one holds the
- * copies: one normally, two when the first's copies are stale, more only
- * for a task with three or more rows, which repeated rollbacks leave and
- * the backfill reports. */
+/* The description row readers take for task `task`: of its first two rows
+ * in creation order, the first that holds the task's copies (holdsCopies),
+ * else its first row, or null for a task without one. Every writer keeps
+ * the copies on the first row (patchTask), so that is the first row, unless
+ * a rollback left the first row's copies stale beside a second row; then
+ * this is the row the active range of the task's project holds too
+ * (projectTextsOf), so every reader takes the same one. It reads two rows at
+ * most, so TEXT_DOCUMENTS is a true bound. A task with three or more rows,
+ * which repeated rollbacks leave and internal/descriptionsBackfill reports
+ * as a duplicate, may read differently there when only a later row holds
+ * the copies. */
 async function shownRow(db: Reader, task: Owner): Promise<Doc<'issue_descriptions'> | null> {
-  let first: Doc<'issue_descriptions'> | null = null
-  const rows = db
+  const rows = await db
     .query('issue_descriptions')
     .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
-  for await (const row of rows) {
-    if (holdsCopies(row, task)) return row
-    first ??= row
-  }
-  return first
+    .take(2)
+  return rows.find((row) => holdsCopies(row, task)) ?? rows[0] ?? null
 }
 
 /** The text of task `task` as readers show it: the text of its description
