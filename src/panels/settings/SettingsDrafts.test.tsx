@@ -276,6 +276,27 @@ describe('the organization name', () => {
     expect(leaveGuard.hasUnsaved()).toBe(false)
   })
 
+  it('keeps the typed name when a save fails with an error after its value showed', async () => {
+    await open(general)
+    const field = find('[data-org-name]')
+    await type(field, 'Testbed Robotics')
+    await blur(field)
+    // the store painted the session's own name, which the field took as saved
+    expect(field.value).toBe('Testbed Robotics')
+    expect(leaveGuard.hasUnsaved()).toBe(false)
+    await act(async () => last('orgs:update').reject(new Error('[Request ID: 1] Server Error')))
+    expect(field.value).toBe('Testbed Robotics')
+    expect(conflict()).toBeNull()
+    expect(leaveGuard.hasUnsaved()).toBe(true)
+    // blur saves it again, against the name it began from
+    await act(async () => field.focus())
+    await blur(field)
+    expect(last('orgs:update').args).toMatchObject({
+      patch: { name: 'Testbed Robotics' },
+      expected: { name: 'Testbed Labs' },
+    })
+  })
+
   it('takes its own save as no conflict, and keeps what was typed after it', async () => {
     await open(general)
     const field = find('[data-org-name]')

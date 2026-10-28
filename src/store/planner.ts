@@ -1409,9 +1409,10 @@ type SendOptions<R> = {
       and keeps nothing, and true when it keeps the draft, which the notice
       that shows after it then says. */
   keepDraft?: (shown: unknown, by: Writer) => boolean
-  /** Runs on any other refusal from the server, after its toast, for an
-      editor that then keeps the refused draft unsaved against the text it
-      began from, such as a description whose image the server refuses. */
+  /** Runs when the sent write fails for any other reason, after its toast,
+      for an editor that then keeps the draft unsaved against the text it
+      began from: a refusal from the server, such as a description whose
+      image it refuses, or an error, such as a server fault. */
   keepUnsaved?: () => void
 }
 
@@ -1561,9 +1562,9 @@ function start<M extends FunctionReference<'mutation'>, T>(
           guarded(() => onError?.(error))
           guarded(() => settleRefused(layer))
           guarded(() => countAfterRefusal(error))
-          // a refused draft stays, unsaved, rather than reading as saved
-          // and giving way to the stored text once its editor blurs
-          if (o.keepUnsaved && error instanceof ConvexError) guarded(() => o.keepUnsaved?.())
+          // a refused or failed draft stays, unsaved, rather than reading as
+          // saved and giving way to the stored text once its editor blurs
+          if (o.keepUnsaved) guarded(() => o.keepUnsaved?.())
         }
         guarded(() => o.onSettled?.())
       }
@@ -4312,8 +4313,8 @@ export type UserPatch = Partial<{
 /** What a settings field gives a save of its draft (lib/savedDraft.ts).
     `seen` holds the values the draft began from, by the row's field names,
     such as `max_attachment_mb`, which go out as the write's `expected` in
-    place of the row on screen. keepDraft and keepUnsaved run on a refusal
-    (SendOptions). Without them a save checks the values on screen. */
+    place of the row on screen. keepDraft and keepUnsaved run when a sent
+    save fails (SendOptions). Without them a save checks the values on screen. */
 export type FieldSave = {
   seen?: Record<string, unknown>
   keepDraft?: SendOptions<unknown>['keepDraft']
@@ -5798,7 +5799,7 @@ export const PLANNER = {
      the person began, by wire field, in place of the row on screen, and
      `opts.keepDraft` runs when the server refuses because someone changed
      the field first and the editor keeps the draft, and `opts.keepUnsaved`
-     when it refuses for any other reason (SendOptions.keepUnsaved). */
+     when the save fails for any other reason (SendOptions.keepUnsaved). */
   updateIssue: (
     id: string,
     patch: IssuePatch,

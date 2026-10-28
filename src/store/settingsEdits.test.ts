@@ -362,6 +362,20 @@ describe('settings edits through the client store', () => {
       expect(showToast.mock.calls.at(-1)?.[0]).toContain('Your text is still in the editor.')
     })
 
+    it('runs keepUnsaved for a painted save that fails with an error, as for a refusal', async () => {
+      const calls: string[] = []
+      const save = { keepUnsaved: () => calls.push('keepUnsaved') }
+      P.setOrg({ name: 'Testbed Robotics' }, undefined, save)
+      expect(P.org.name).toBe('Testbed Robotics')
+      // a server fault reaches the app as an Error, not a ConvexError
+      latest().reject(new Error('[Request ID: 1] Server Error'))
+      P.updateUser('u-ana', { plannableHours: 30 }, save)
+      latest().reject(new ConvexError({ code: 'rule', message: 'the server said no' }))
+      await settle()
+      expect(calls).toEqual(['keepUnsaved', 'keepUnsaved'])
+      expect(P.org.name).toBe('Testbed Labs')
+    })
+
     it('runs keepDraft for an awaited rename refused over another change, and keepUnsaved for another refusal', async () => {
       const calls: unknown[] = []
       const save = {
