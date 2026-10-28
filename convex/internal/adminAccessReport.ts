@@ -47,7 +47,10 @@
  *               live top-level project, Done tasks included, as their
  *               followers still get their notifications, in a project they
  *               would no longer see. After the split they stop getting
- *               that task's notifications.
+ *               that task's notifications. A follow of a task restored
+ *               from the archive keeps its archive mark (schema.ts
+ *               task_archived) until a background step clears it, so the
+ *               report reads the marked follows too and asks the task.
  *   webhook     an unexpired webhook subscription they own, disabled ones
  *               included, as registering one again enables it. Events are
  *               filtered by profileCanSeeProject (webhooks.ts,
@@ -81,7 +84,8 @@
  * organization's in creation order, and judges each one for every active
  * admin of its organization. The `work` phase walks the organizations
  * (by_uuid), their active admins in id order, and each admin's open
- * assigned tasks, open reviews and follows in creation order. The
+ * assigned tasks, open reviews, unmarked follows and marked follows in
+ * creation order. The
  * `machine` phase walks each organization's webhook subscriptions, then
  * each admin's personal tokens and connected apps.
  *
@@ -189,12 +193,13 @@ type Phase = (typeof PHASES)[number]
 const vPhase = v.union(...PHASES.map((phase) => v.literal(phase)))
 
 /* The parts of an organization the work and machine phases walk in turn.
- * The work phase walks each admin's open assigned tasks, open reviews and
- * follows. The machine phase walks the organization's webhook
- * subscriptions, then each admin's personal tokens and connected apps. */
+ * The work phase walks each admin's open assigned tasks, open reviews,
+ * follows without an archive mark and follows with one. The machine phase
+ * walks the organization's webhook subscriptions, then each admin's
+ * personal tokens and connected apps. */
 const PARTS = {
   projects: [],
-  work: ['assigned', 'reviewing', 'follows'],
+  work: ['assigned', 'reviewing', 'follows', 'marked_follows'],
   machine: ['webhooks', 'tokens', 'apps'],
 } as const
 type Part = (typeof PARTS)[Exclude<Phase, 'projects'>][number]
@@ -780,17 +785,15 @@ async function workPage(page: Page, at: Cursor): Promise<PageResult> {
           after: last,
         })
         const stopped =
-          part === 'follows'
+          part === 'follows' || part === 'marked_follows'
             ? await walk(
                 page,
-                ctx.db
-                  .query('issue_subscriptions')
-                  .withIndex('by_profile_task_archived', (q) =>
-                    q
-                      .eq('profile_id', admin.id)
-                      .eq('task_archived', undefined)
-                      .gt('_creationTime', after),
-                  ),
+                ctx.db.query('issue_subscriptions').withIndex('by_profile_task_archived', (q) =>
+                  q
+                    .eq('profile_id', admin.id)
+                    .eq('task_archived', part === 'marked_follows' ? true : undefined)
+                    .gt('_creationTime', after),
+                ),
                 after,
                 (follow) => judgeFollow(page, admin, follow),
                 stopAt,

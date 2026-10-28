@@ -551,6 +551,19 @@ describe('the work phase', () => {
     // a follow whose task is gone, and a standard user's in FW
     await plantSubscription(t, { issue_id: uuid(), profile_id: f.admin.id })
     await plantSubscription(t, { issue_id: open.id, profile_id: f.user.id })
+    // follows that keep their archive mark: one of a task restored since,
+    // whose followers get its notifications again, and one of a task still
+    // archived
+    const restored = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    for (const followed of [restored, archived])
+      await t.run((ctx) =>
+        ctx.db.insert('issue_subscriptions', {
+          issue_id: followed.id,
+          profile_id: f.admin.id,
+          created_at: NOW,
+          task_archived: true,
+        }),
+      )
 
     const held = (
       issue: Doc<'issues'>,
@@ -582,6 +595,7 @@ describe('the work phase', () => {
         follow(open),
         // a Done task's followers still get its notifications
         follow(done),
+        follow(restored),
       ]),
     )
   })
@@ -703,6 +717,18 @@ async function busyOrg(t: T) {
         reviewer_id: admin.id === f.admin.id ? second.id : f.admin.id,
       })
       await plantSubscription(t, { issue_id: issue.id, profile_id: admin.id })
+      // a follow of a restored task that keeps its archive mark
+      if (i < 2) {
+        const restored = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+        await t.run((ctx) =>
+          ctx.db.insert('issue_subscriptions', {
+            issue_id: restored.id,
+            profile_id: admin.id,
+            created_at: NOW,
+            task_archived: true,
+          }),
+        )
+      }
       await plantToken(t, admin)
       await plantApp(t, admin)
       await plantWebhook(t, admin, { project_id: f.sub.id })
@@ -723,7 +749,7 @@ describe('paging', () => {
       whole.set(phase, pages[0].findings)
     }
     expect(lines(whole.get('projects') ?? [])).toHaveLength(9)
-    expect(lines(whole.get('work') ?? [])).toHaveLength(18)
+    expect(lines(whole.get('work') ?? [])).toHaveLength(22)
     expect(lines(whole.get('machine') ?? [])).toHaveLength(8)
     const cursors: string[] = []
     const walk = async () => {
@@ -758,6 +784,7 @@ describe('paging', () => {
       ['work', 'assigned'],
       ['work', 'reviewing'],
       ['work', 'follows'],
+      ['work', 'marked_follows'],
       ['machine', 'webhooks'],
       ['machine', 'tokens'],
       ['machine', 'apps'],
