@@ -879,6 +879,17 @@ const measured = (
   })
 
 describe('under Convex limits', () => {
+  it('reads one milestone of a parent shown only for navigation to its last of 2,100 sub-projects', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const { milestones } = await navigationOnly(t, f, f.viewer, 1, 2100)
+    const [row] = milestones
+    expect(await as(t, f.viewer).query(api.milestones.get, { id: row.id })).toMatchObject({
+      row: rowOf(row),
+      can_write: false,
+    })
+  })
+
   it('opens every project before it asks about the past, and answers past true when the request ran out first', async () => {
     const t = newT({ transactionLimits: { databaseQueries: 100 } })
     const projects = [uuid(), uuid(), uuid()]

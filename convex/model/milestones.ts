@@ -37,7 +37,6 @@ import {
   canSeeProject,
   hasProjectLevel,
   levelRank,
-  projectLevel,
   projectLevelsOf,
   rootMetaOf,
 } from '../lib/access'
@@ -1129,7 +1128,10 @@ export async function visibleMilestone(
   if (!milestone || !project) return null
   if (project.parent_id !== undefined || project.archived_at !== undefined) return null
   const me = myProfiles.get(project.org_id)
-  const level = me === undefined ? null : await projectLevel(ctx, me, project)
+  // projectLevelsOf reads a parent's sub-projects in one range to learn
+  // whether it shows for navigation, where projectLevel asks each in turn
+  const level =
+    me === undefined ? null : await projectLevelsOf(ctx, me, [project]).level(project.id)
   if (level === null) return null
   return { milestone, project, canWrite: levelRank(level) >= levelRank('user') }
 }
