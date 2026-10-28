@@ -453,6 +453,22 @@ describe('deleteOrgDeep', () => {
       project_id: f.otherProject.id,
     })
     const foreignLabel = await plantLabel(t, f.otherOrg.id, 'Elsewhere')
+    // the comment counts and post logs of both organizations' tasks
+    await t.run(async (ctx) => {
+      for (const [org_id, task, author] of [
+        [f.org.id, issue.id, f.user.id],
+        [f.otherOrg.id, foreignIssue.id, f.otherAdmin.id],
+      ] as const) {
+        await ctx.db.insert('task_comment_counts', { org_id, issue_id: task, count: 1 })
+        await ctx.db.insert('comment_rates', {
+          org_id,
+          issue_id: task,
+          author,
+          posts: [Date.parse(NOW)],
+          until: Date.parse(NOW) + 60_000,
+        })
+      }
+    })
 
     await t.run(async (ctx) => {
       const org = (await ctx.db.get(f.org._id)) as Doc<'organizations'>
@@ -468,13 +484,15 @@ describe('deleteOrgDeep', () => {
       'labels',
       'activity_events',
       'org_counters',
+      'task_comment_counts',
+      'comment_rates',
     ] as const) {
       const rows = await t.run(async (ctx) => await ctx.db.query(table).collect())
       expect(
         rows.some((r) => r.org_id === f.org.id),
         table,
       ).toBe(false)
-      if (table === 'org_counters')
+      if (table === 'org_counters' || table === 'task_comment_counts' || table === 'comment_rates')
         expect(
           rows.map((r) => r.org_id),
           table,

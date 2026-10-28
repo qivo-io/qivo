@@ -246,6 +246,8 @@ const orgRows = (t: T, orgId: string) =>
       'billing_usage',
       'billing_usage_accounts',
       'billing_month_totals',
+      'task_comment_counts',
+      'comment_rates',
     ] as const)
       counts[table] = (await ctx.db.query(table).collect()).filter(
         (row) => (row as { org_id?: string }).org_id === orgId,
@@ -674,6 +676,9 @@ describe('deleting the organization', () => {
       billing_usage_accounts: 2,
     })
     expect(before.billing_month_totals).toBeGreaterThan(0)
+    // the comment's count and post log, and the created tasks' counts
+    expect(before.task_comment_counts).toBe(4)
+    expect(before.comment_rates).toBe(1)
     const others = await orgRows(t, f.otherOrg.id)
 
     vi.setSystemTime(Date.parse(at(30)) - 60_000)

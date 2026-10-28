@@ -128,6 +128,7 @@ import { cutText, LIMITS, TEXT_MAX } from '../lib/limits'
 import { countsAsSubtask } from '../lib/liveTasks'
 import { nameKey } from '../lib/nameKey'
 import { insertActivity, logActivity } from './activity'
+import { type CommentWrite, deleteCount, restartCount, tallyComments } from './commentLimits'
 import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleImageReap } from './descriptionImages'
 import { dropDescription, insertTask, withDescription } from './descriptions'
@@ -489,35 +490,45 @@ const tooLarge = (item: Pick<Item, 'id' | 'org_id'>, live: LiveRow, ownerId: str
   estimateDocumentBytes(wrapRow(item, live, ownerId)) > STORED_ROW_MAX_BYTES
 
 /** Deletes `live` from its table, a task or project out of its
- * organization's live counts (model/orgs.ts tallyRow). A task's
- * description row is its caller's (dropTaskDescription). */
-async function deleteLive(ctx: MutationCtx, live: LiveRow): Promise<void> {
+ * organization's live counts (model/orgs.ts tallyRow) and a comment out of
+ * its task's comment count (model/commentLimits.ts tallyComments), at the
+ * end of the transaction when `txn` collects the comments (finishTxn). A
+ * task's count row stays while the task is stored, so a restore that writes
+ * its comments back counts them in again. A task's description row is its
+ * caller's (dropTaskDescription). */
+async function deleteLive(ctx: MutationCtx, live: LiveRow, txn?: Txn): Promise<void> {
   await ctx.db.delete(live.doc._id)
   if (live.table === 'issues' || live.table === 'projects')
     await tallyRow(ctx, live.table, live.doc, null)
+  else if (live.table !== 'comments') return
+  else if (txn !== undefined) txn.comments.push([live.doc, -1])
+  else await tallyComments(ctx, [[live.doc, -1]])
 }
 
 /** Deletes a live row for good, taking an attachment out of the stored-byte
  * totals of its task, numbered `num` when the caller holds the task
  * (model/storageTotals.ts), and letting go of its file (model/fileHolds.ts
- * releaseFile). */
-async function discard(ctx: MutationCtx, live: LiveRow, num?: number): Promise<void> {
-  await deleteLive(ctx, live)
+ * releaseFile), and a task with its comment count. `txn` collects a
+ * comment's count (deleteLive). */
+async function discard(ctx: MutationCtx, live: LiveRow, num?: number, txn?: Txn): Promise<void> {
+  await deleteLive(ctx, live, txn)
   if (live.table === 'issue_attachments') {
     await uncountFile(ctx, live.doc, num)
     await releaseFile(ctx, live.doc.storage_id)
-  }
+  } else if (live.table === 'issues') await deleteCount(ctx, live.doc.id)
 }
 
 /** Moves `live` into `item`'s stored rows, travelling with `ownerId`, and
  * deletes it from its table. The only insert into deleted_rows. A row too
  * large to store (STORED_ROW_MAX_BYTES) is deleted instead, letting go of
- * an attachment's file; that is logged with the item id and returns false. */
+ * an attachment's file; that is logged with the item id and returns false.
+ * `txn` collects a comment's count (deleteLive). */
 export async function storeRow(
   ctx: MutationCtx,
   item: Pick<Item, 'id' | 'org_id'>,
   live: LiveRow,
   ownerId: string,
+  txn?: Txn,
 ): Promise<boolean> {
   const stored = wrapRow(item, live, ownerId)
   if (estimateDocumentBytes(stored) > STORED_ROW_MAX_BYTES) {
@@ -525,11 +536,11 @@ export async function storeRow(
       item_id: item.id,
       table: live.table,
     })
-    await discard(ctx, live)
+    await discard(ctx, live, undefined, txn)
     return false
   }
   await uncountedWriter(ctx.db).insert('deleted_rows', stored)
-  await deleteLive(ctx, live)
+  await deleteLive(ctx, live, txn)
   return true
 }
 
@@ -677,9 +688,13 @@ type Txn = {
   /** The person restoring, as the restore call knows them. */
   restorer?: Doc<'profiles'>
   now?: string
+  /** The comments moved out of the live tables or written back, which
+   * finishTxn counts out of or into their tasks' comment counts at once,
+   * reading each task's count once. */
+  comments: CommentWrite[]
 }
 
-const newTxn = (): Txn => ({ archived: [], revealed: undefined, failed: new Map() })
+const newTxn = (): Txn => ({ archived: [], revealed: undefined, failed: new Map(), comments: [] })
 
 /** What a running step holds. `ctx` is metered against `budget`. */
 type Run = Scope<MutationCtx> & {
@@ -720,8 +735,8 @@ async function clearRow(
   num?: number,
 ): Promise<void> {
   if (mode === 'purge' || (await storedAlready(run, live, ownerId)))
-    return await discard(run.ctx, live, num)
-  if (!(await storeRow(run.ctx, run.item, live, ownerId))) tallyOf(run).dropped_rows += 1
+    return await discard(run.ctx, live, num, run.txn)
+  if (!(await storeRow(run.ctx, run.item, live, ownerId, run.txn))) tallyOf(run).dropped_rows += 1
 }
 
 /** Whether `run`'s item already stores grant or team grant `live` of
@@ -957,7 +972,7 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
     }
     const stored = fitToStore(run.item, { ...described.task, parent_id })
     await storeTask(run.ctx, run.item, tallyOf(run), stored)
-  } else await deleteLive(run.ctx, { table: 'issues', doc: task })
+  } else await discard(run.ctx, { table: 'issues', doc: task })
   await dropTaskDescription(run.ctx, run.budget, task.id, row)
   run.budget.tasks -= 1
   charge(run.budget, task)
@@ -1262,7 +1277,7 @@ async function purgeLive(run: Run): Promise<boolean> {
       if (!(await dropDescriptions(run, task_id))) return false
       for (const relation of TASK_ROWS) {
         const drained = await drain(run.budget, relation(run.ctx, task_id), (row) =>
-          discard(run.ctx, row, num),
+          discard(run.ctx, row, num, run.txn),
         )
         if (!drained) return false
       }
@@ -1330,6 +1345,8 @@ async function purgeRows(run: Run): Promise<boolean> {
       const upTo = (await idTaken(run, task.task_id)) ? run.item.deleted_at : undefined
       if (!(await purgeHistory(run, task.task_id, upTo))) return false
       if (!(await dropFilesOf(run, { id: task.task_id, num: task.num }))) return false
+      // the comment count goes with the task, unless the id is another's now
+      if (upTo === undefined) await deleteCount(run.ctx, task.task_id)
       await run.ctx.db.delete(task._id)
       return true
     },
@@ -2093,8 +2110,8 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
   if (!(await dropDescriptions(run, task.task_id))) return false
   for (const relation of TASK_ROWS) {
     const taken = await drain(run.budget, relation(run.ctx, task.task_id), async (live) => {
-      if (into === null) await discard(run.ctx, live, task.num)
-      else if (!(await storeRow(run.ctx, into, live, task.task_id)))
+      if (into === null) await discard(run.ctx, live, task.num, run.txn)
+      else if (!(await storeRow(run.ctx, into, live, task.task_id, run.txn)))
         await droppedInto(run.ctx, into)
     })
     if (!taken) return false
@@ -2104,6 +2121,7 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
   // has done this already, and the id may be another task's by now.
   if (into === null && !(await idTaken(run, task.task_id))) {
     if (!(await purgeHistory(run, task.task_id))) return false
+    await deleteCount(run.ctx, task.task_id)
   }
   const done = await drain(
     run.budget,
@@ -2313,13 +2331,15 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
   const r = row.row
   const db = uncountedWriter(run.ctx.db)
   if (r.table === 'milestones') await db.insert('milestones', r.doc)
-  else if (r.table === 'comments')
-    await db.insert('comments', {
+  else if (r.table === 'comments') {
+    const id = await db.insert('comments', {
       ...r.doc,
       author: await keptProfile(run, r.doc.author),
       edited_by: await keptProfile(run, r.doc.edited_by),
     })
-  else if (r.table === 'issue_labels') {
+    // back in its task's comment count, which stayed while it was stored
+    run.txn.comments.push([{ _id: id, issue_id: r.doc.issue_id }, 1])
+  } else if (r.table === 'issue_labels') {
     if (sameReference(await labelOf(run, r.doc.label_id), run.item))
       await db.insert('issue_labels', {
         ...r.doc,
@@ -2539,6 +2559,8 @@ async function writeTask(
     updated_at: run.now,
   })
   await tallyRow(run.ctx, 'issues', null, doc)
+  // a task stored before comment counts starts its count
+  await restartCount(run.ctx, doc)
   await run.ctx.db.delete(t.row._id)
   if (!inReveal) {
     const light = await run.ctx.db
@@ -3598,9 +3620,11 @@ async function work(
   }
 }
 
-/** Schedules what a transaction's items left for after it: the archive
- * steps of the archived tasks it wrote back, in one call. */
+/** Finishes what a transaction's items left for its end: the comment
+ * counts of the comments it moved, and the archive steps of the archived
+ * tasks it wrote back, scheduled in one call. */
 async function finishTxn(ctx: MutationCtx, txn: Txn): Promise<void> {
+  if (txn.comments.length > 0) await tallyComments(ctx, txn.comments)
   if (txn.archived.length > 0) await scheduleArchivedReads(ctx, { issues: txn.archived })
 }
 

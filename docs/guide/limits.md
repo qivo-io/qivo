@@ -45,6 +45,8 @@ A character is one UTF-16 code unit, the count a browser's text field uses. Most
 | Attachments per task | 100 attachments, description images included | This task already has 100 attachments, images in its description included, the most a task can have. Remove one first. |
 | Links per task | 100 links | This task already has 100 links, the most a task can have. Remove one of its links first. |
 | Labels per task | 20 labels | This task already has 20 labels, the most a task can have. Remove one first. |
+| Comments per task | 1,000 comments | This task has reached 1,000 comments, the most a task can have. Delete comments until it has fewer than 1,000, then post again. |
+| Comments one person or agent posts on one task | 10 comments in any 60 seconds | Too many comments on this task, at most 10 in any 60 seconds from one person or agent. Try again in 60 seconds. |
 | Followers per task | 100 followers | This task already has 100 followers, the most a task can have. Someone must unfollow it first. |
 | People mentioned in one text | 100 people | A text can mention at most 100 people. Remove some mentions and save again. |
 | Invitation emails per organization | 50 emails per hour | This organization sent 50 invitation emails in the last hour, the most it can send. Send this one again once the hour has passed. |

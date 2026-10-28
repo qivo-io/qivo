@@ -542,6 +542,13 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
     .withIndex('by_org', (q) => q.eq('org_id', org.id))
     .collect())
     await ctx.db.delete(d._id)
+  // the comment counts and post logs of its tasks, those in Deleted items too
+  for (const table of ['task_comment_counts', 'comment_rates'] as const)
+    for (const row of await ctx.db
+      .query(table)
+      .withIndex('by_org', (q) => q.eq('org_id', org.id))
+      .collect())
+      await ctx.db.delete(row._id)
 
   for (const p of await ctx.db
     .query('projects')

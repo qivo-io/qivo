@@ -17,7 +17,7 @@
  *      every write entry is credentialAccess.test.ts. */
 /// <reference types="vite/client" />
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
@@ -545,13 +545,20 @@ describe('reading the inbox', () => {
   it(`says how many earlier unread messages an item past ${ITEM_UNREAD_CAP} dropped, until it is read`, async () => {
     const fx = await setup()
     await plantSubscription(fx.t, { issue_id: fx.task.id, profile_id: fx.agent.id })
-    const comment = () =>
-      as(fx.t, fx.user).mutation(api.comments.create, {
+    // a minute between bursts keeps the person inside the posting rate
+    vi.useFakeTimers({ toFake: ['Date'] })
+    onTestFinished(() => {
+      vi.useRealTimers()
+    })
+    const comment = async () => {
+      vi.setSystemTime(Date.now() + 60_000 / LIMITS.commentRate.max)
+      await as(fx.t, fx.user).mutation(api.comments.create, {
         org_id: fx.org.id,
         id: uuid(),
         issue_id: fx.task.id,
         body: 'news',
       })
+    }
     for (let n = 0; n < ITEM_UNREAD_CAP + 3; n++) await comment()
     const [item] = await listMcp(fx)
     expect([item.unread_count, item.dropped_count]).toEqual([ITEM_UNREAD_CAP, 3])

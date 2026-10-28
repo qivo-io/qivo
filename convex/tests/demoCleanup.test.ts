@@ -168,6 +168,8 @@ const APP_OWNED: TableNames[] = [
   'issue_labels',
   'issue_attachments',
   'comments',
+  'task_comment_counts',
+  'comment_rates',
   'agent_keys',
   'issue_subscriptions',
   'messages',

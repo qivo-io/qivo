@@ -88,6 +88,11 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'comments', field: 'issue_id', target: 'issues' },
   { table: 'comments', field: 'author', target: 'profiles' },
   { table: 'comments', field: 'edited_by', target: 'profiles' },
+  { table: 'task_comment_counts', field: 'org_id', target: 'organizations' },
+  // The count stays while its task is in Deleted items (model/commentLimits.ts).
+  { table: 'task_comment_counts', field: 'issue_id', target: 'issues', trashed: true },
+  { table: 'comment_rates', field: 'org_id', target: 'organizations' },
+  { table: 'comment_rates', field: 'author', target: 'profiles' },
   { table: 'messages', field: 'org_id', target: 'organizations' },
   { table: 'messages', field: 'recipient_id', target: 'profiles' },
   { table: 'messages', field: 'actor_id', target: 'profiles' },
@@ -280,6 +285,10 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'storage_project_totals.project_id',
   'storage_task_totals.issue_id',
   'storage_task_totals.project_id',
+  // A post log of the comment posting rate outlives its task until its
+  // posts stop counting and the hourly sweep deletes it
+  // (model/commentLimits.ts), as a task can leave meanwhile.
+  'comment_rates.issue_id',
   // the platform audit log survives its subjects on purpose
   'platform_audit_log.actor_auth_id',
   'platform_audit_log.target_org_id',

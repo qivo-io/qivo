@@ -1814,6 +1814,48 @@ export default defineSchema({
 
   comments: commentsTable,
 
+  // One comment count per task (model/commentLimits.ts), so a post checks
+  // the cap of LIMITS.comments by reading one row instead of the thread.
+  // `count` is how many of the task's rows in comments were created at or
+  // before `counted`, and with `counted` absent all of them: the exact
+  // count. While `counted` is set a count is under way, and a write moves
+  // `count` only for a comment created at or before it. A post never
+  // relies on such a row: it counts the rest of the thread first or is
+  // refused. No row means the task is not counted yet. The row stays while
+  // its task is in Deleted items: a move counts the comments out and a
+  // restore counts them back. Server-owned, never sent to clients, REST,
+  // MCP, webhooks or the export. Not named comment_counts, a table an
+  // earlier release dropped whose rows some deployments may still hold.
+  task_comment_counts: defineTable({
+    org_id: v.string(),
+    issue_id: v.string(), // one row per task, unique by mutation check
+    count: v.number(),
+    // a comment _creationTime; Number.MIN_SAFE_INTEGER before the first page
+    counted: v.optional(v.number()),
+  })
+    .index('by_issue', ['issue_id'])
+    .index('by_org', ['org_id'])
+    // the counts under way, for their recovery (commentLimits.ts recover)
+    .index('by_counted', ['counted']),
+
+  // The recent posts of one author on one task, for the posting rate
+  // (LIMITS.commentRate, model/commentLimits.ts). `posts` holds the server
+  // times, in milliseconds and oldest first, of the author's last posts
+  // there, at most LIMITS.commentRate.max. `until` is when the newest of
+  // them stops counting; the hourly sweep deletes the row after it.
+  // Deleting or editing a comment leaves the row alone, so neither gives a
+  // post back. Server-owned, like task_comment_counts.
+  comment_rates: defineTable({
+    org_id: v.string(),
+    issue_id: v.string(),
+    author: v.string(), // the posting profile; one row per author and task
+    posts: v.array(v.number()),
+    until: v.number(),
+  })
+    .index('by_author_issue', ['author', 'issue_id'])
+    .index('by_until', ['until'])
+    .index('by_org', ['org_id']),
+
   messages: defineTable({
     id: v.string(),
     org_id: v.string(),

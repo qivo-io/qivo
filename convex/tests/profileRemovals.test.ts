@@ -81,7 +81,8 @@ const stepsRun = (t: T) =>
 let nextNum = 10_000
 
 /* n rows in every range the background steps clear for `profile`: archived
- * tasks it holds in all four fields, comments it wrote and edited, messages
+ * tasks it holds in all four fields, comments it wrote and edited with the
+ * post logs of its posting rate, messages
  * it sent and received, subscriptions, attachments it uploaded, keys it
  * created for `agent`, and n OAuth connections with one replay hash each. */
 async function plantHistory(
@@ -128,6 +129,13 @@ async function plantHistory(
         edited_at: NOW,
         body: `Comment ${i}`,
         created_at: NOW,
+      })
+      await ctx.db.insert('comment_rates', {
+        org_id,
+        issue_id: task,
+        author: p,
+        posts: [Date.parse(NOW)],
+        until: Date.parse(NOW) + 60_000,
       })
       for (const [recipient_id, actor_id] of [
         [a.other.id, p],
@@ -203,6 +211,8 @@ const references = (t: T, profileId: string) =>
         if (task[field] === profileId) n++
     for (const c of await ctx.db.query('comments').collect())
       n += Number(c.author === profileId) + Number(c.edited_by === profileId)
+    for (const r of await ctx.db.query('comment_rates').collect())
+      n += Number(r.author === profileId)
     for (const m of await ctx.db.query('messages').collect())
       n += Number(m.actor_id === profileId) + Number(m.recipient_id === profileId)
     for (const s of await ctx.db.query('issue_subscriptions').collect())
@@ -324,9 +334,10 @@ describe('background steps', () => {
     await plantHistory(t, { ...history, profile: f.user }, 7)
     await remove(t, f.user)
     let left = await references(t, f.user.id)
-    // 7 tasks in four fields, 7 comments in two, 7 sent, 7 received, 7
-    // subscriptions, attachments and keys, 7 connections with one hash each
-    const total = 7 * 4 + 7 * 2 + 7 * 5 + 7 * 2
+    // 7 tasks in four fields, 7 comments in two and 7 post logs, 7 sent, 7
+    // received, 7 subscriptions, attachments and keys, 7 connections with
+    // one hash each
+    const total = 7 * 4 + 7 * 3 + 7 * 5 + 7 * 2
     expect(left).toBe(total)
     const phases = new Set<string>()
     let steps = 0
@@ -1033,7 +1044,7 @@ describe('the reserved id and its end states', () => {
     )
     expect(await jobOf(t, f.user.id)).toBeNull()
     // nothing else ran, so the rows now name the live profile
-    expect(await references(t, f.user.id)).toBe(4 + 2 + 5 + 2)
+    expect(await references(t, f.user.id)).toBe(4 + 3 + 5 + 2)
     expect(await stepsRun(t)).toBe(1)
   })
 

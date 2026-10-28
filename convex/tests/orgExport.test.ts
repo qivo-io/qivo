@@ -137,6 +137,10 @@ const EXCLUDED_TABLES = [
   'storage_org_totals',
   'storage_project_totals',
   'storage_task_totals',
+  // The comment limits' counts and post logs (model/commentLimits.ts), which
+  // the exported comments give again.
+  'task_comment_counts',
+  'comment_rates',
   // Team sync stamps, exported on the profile row (sync_at, sync_since).
   'sync_stamps',
   // Deleted items are not exported: restore an item to include its work.

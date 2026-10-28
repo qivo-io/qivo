@@ -34,6 +34,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { machineDetail } from '../model/activity'
 import { type AttachmentJson, taskAttachments } from '../model/attachments'
 import {
+  assertArchiveReasonRoom,
   commentAnchor,
   DOCUMENT_MAX_BYTES,
   latestComment,
@@ -2135,9 +2136,11 @@ export function destinationOf(
  * Writes one machine task update in a fixed order: the move to
  * `destination`, the new `parent` (null detaches), the field `patch` with
  * the `archive` toggle folded into the same write, the `labels` to add and
- * remove, then `reason` as a comment when this update archived the task. A
- * parent that is already the task's parent and an `archive` that matches
- * the task's state change nothing. Each step that changes something writes
+ * remove, then `reason` as a comment when this update archived the task.
+ * A reason the comment cap or the posting rate refuses refuses the whole
+ * update before its first write (model/comments.ts
+ * assertArchiveReasonRoom). A parent that is already the task's parent and
+ * an `archive` that matches the task's state change nothing. Each step that changes something writes
  * its own activity row signed with `provenance`, and each runs the model's
  * own rules and write gate, so a refusal at any step undoes the whole
  * update. The move and the parent are checked with the assignee and
@@ -2180,6 +2183,8 @@ export async function applyTaskUpdate(
   })
   const archives = a.archive === true && a.issue.archived_at === undefined
   const toggles = a.archive !== undefined && a.archive !== (a.issue.archived_at !== undefined)
+  if (archives)
+    await assertArchiveReasonRoom(ctx, { issue: a.issue, author: me, reason: a.reason, now })
   // the people the field patch sets, which that write checks itself
   const later: LaterPeople = {}
   if ('assignee_id' in a.patch) later.assignee_id = a.patch.assignee_id

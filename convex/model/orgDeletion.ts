@@ -330,16 +330,20 @@ async function trashRows(ctx: MutationCtx, orgId: string, budget: RemovalBudget)
 }
 
 /** Tasks with their links, labels, subscriptions, comments, messages and
- * files, then the description rows they leave (model/descriptions.ts). */
+ * files, then the description rows they leave (model/descriptions.ts) and
+ * the comment counts and post logs of the organization's tasks, which name
+ * tasks in Deleted items too. */
 const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
     () => liveTasks(ctx, orgId, budget),
-    () =>
-      drain(
-        ctx,
-        budget,
-        ctx.db.query('issue_descriptions').withIndex('by_org', (q) => q.eq('org_id', orgId)),
-      ),
+    ...(['issue_descriptions', 'task_comment_counts', 'comment_rates'] as const).map(
+      (table) => () =>
+        drain(
+          ctx,
+          budget,
+          ctx.db.query(table).withIndex('by_org', (q) => q.eq('org_id', orgId)),
+        ),
+    ),
   ])
 
 /* The tasks of taskRows. */
@@ -590,6 +594,8 @@ async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<v
     'profiles',
     'labels',
     'sync_stamps',
+    'task_comment_counts',
+    'comment_rates',
   ] as const)
     require((await ctx.db
       .query(table)

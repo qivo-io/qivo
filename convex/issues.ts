@@ -68,7 +68,7 @@ import {
 } from './lib/functions'
 import { limitedText } from './lib/limitRules'
 import { LIMITS } from './lib/limits'
-import { postArchiveReason } from './model/comments'
+import { assertArchiveReasonRoom, postArchiveReason } from './model/comments'
 import { cleanReason, moveTasksToTrash } from './model/deletedItems'
 import {
   archiveIssueCore,
@@ -472,7 +472,9 @@ export const moveCarriesSubtasks = orgQuery({
  * 'Archived' messages land at the same instant; the prune tie-break falls to
  * id). Archiving an already-archived row is a no-op and posts no reason;
  * `archived` says whether this call archived the task, so the app can keep
- * a reason that was not posted.
+ * a reason that was not posted. A reason the comment cap or the posting
+ * rate refuses refuses the archive, before it writes anything
+ * (model/comments.ts assertArchiveReasonRoom).
  * `keep_subtasks` is the archive window's choice to keep the subtasks: each
  * active direct child is detached first, exactly as a delete detaches it,
  * and becomes a top-level task; the task is archived alone and its archived
@@ -489,6 +491,7 @@ export const archive = orgMutation({
     const issue = await myIssue(ctx, id)
     await assertWritable(ctx, issue.project_id)
     const wasActive = issue.archived_at === undefined
+    if (wasActive) await assertArchiveReasonRoom(ctx, { issue, author: ctx.me, reason, now })
     const after = await archiveIssueCore(ctx, {
       me: ctx.me,
       issue,
