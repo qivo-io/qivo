@@ -2869,7 +2869,9 @@ const restoreRead =
   (run: Run, ctx: QueryCtx): ProjectRead =>
   async (id) =>
     (await byId(ctx, 'projects', id)) ??
-    (await hierarchyOf(run)).projects.find((p) => p.id === id) ??
+    // through `ctx`, so the step counts the stored rows when this reads
+    // them first
+    (await hierarchyOf({ ...run, ctx })).projects.find((p) => p.id === id) ??
     null
 
 /** Runs `write`, which brings reach rows in line, on the step's ctx with
