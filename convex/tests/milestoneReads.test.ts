@@ -543,6 +543,29 @@ describe('a section', () => {
     }
   })
 
+  it('pages past a legacy name whose name key is longer than a document', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // stored before names had a limit; NFKD turns each U+FDFA into 18
+    // characters, so its key passes DOCUMENT_MAX_BYTES characters
+    const long = '\ufdfa'.repeat(60_000)
+    expect(nameKey(long).length).toBeGreaterThan(DOCUMENT_MAX_BYTES)
+    const rows = await plantMany(t, [
+      { project: f.meta.id, week: MONDAY, name: 'First' },
+      { project: f.meta.id, week: plus(MONDAY, 7), name: long },
+      { project: f.meta.id, week: plus(MONDAY, 14), name: 'Last' },
+    ])
+    for (const side of ['upcoming', 'past'] as const) {
+      const { ids } = await walk(as(t, f.user), {
+        projects: [f.meta.id],
+        from: side === 'upcoming' ? MONDAY : plus(MONDAY, 21),
+        side,
+        limit: 1,
+      })
+      expect(ids).toEqual(side === 'upcoming' ? ascending(rows) : descending(rows))
+    }
+  })
+
   it('searches every fragment in any order, ignoring case and accents, across the whole section', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -1044,7 +1067,6 @@ describe('refusals', () => {
     for (const after of [
       { week: 'soon', key: 'x', id: uuid() },
       { week: MONDAY, key: 'x', id: 'x'.repeat(DOCUMENT_MAX_BYTES + 1) },
-      { week: MONDAY, key: 'x'.repeat(DOCUMENT_MAX_BYTES + 1), id: uuid() },
     ])
       await expectRefusal(
         user.query(api.milestones.section, { ...base, after }),
