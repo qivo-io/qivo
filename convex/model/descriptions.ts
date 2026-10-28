@@ -7,10 +7,20 @@
  *
  * In this release issues.description stays the source of truth. Readers
  * read it, and a task stored before the table, which has no row until
- * internal/descriptionsBackfill gives it one, reads as it did. Code that
- * deletes a task row, or stores it in Deleted items, also drops the task's
- * row here (dropDescription); Deleted items stores the text from the row
- * (withDescription), so its copy keeps it once issues rows no longer do.
+ * internal/descriptionsBackfill gives it one, reads as it did. A release
+ * before this one can run again after it and change issues.description
+ * without the row, so every path here takes the text from the task row
+ * while it holds one, and only then from the row.
+ *
+ * A row names its task and its organization. A create may choose the id of
+ * a task deleted for good, also in another organization, so a write that
+ * finds a row for its task resets both its text and its organization
+ * (putDescription), and an organization's teardown never takes another's
+ * row.
+ *
+ * Deleted items stores a task with this text (withDescription), and its
+ * steps delete the task's description row with its messages
+ * (model/deletedItems.ts), so the person's own delete reads no row.
  *
  * In a public demo a description row spends none of the visitor's record
  * limit (lib/demo.ts uncountedWriter), because it is part of its task,
@@ -49,14 +59,17 @@ export async function descriptionRow(
     .unique()
 }
 
-/** Sets the description row of `owner` to `description`, inserting it when
- * the task has none. Answers what it did. */
+/** Sets the description row of `owner` to `description` and the owner's
+ * organization, inserting it when the task has none. `known` is the row a
+ * caller read already, or null when it found none, so this reads no row
+ * again. Answers what it did. */
 export async function putDescription(
   db: Writer,
   owner: Owner,
   description: string,
+  known?: Doc<'issue_descriptions'> | null,
 ): Promise<'inserted' | 'updated' | 'same'> {
-  const row = await descriptionRow(db, owner.id)
+  const row = known === undefined ? await descriptionRow(db, owner.id) : known
   if (row === null) {
     await uncountedWriter(db).insert('issue_descriptions', {
       issue_id: owner.id,
@@ -65,8 +78,8 @@ export async function putDescription(
     })
     return 'inserted'
   }
-  if (row.description === description) return 'same'
-  await db.patch('issue_descriptions', row._id, { description })
+  if (row.description === description && row.org_id === owner.org_id) return 'same'
+  await db.patch('issue_descriptions', row._id, { description, org_id: owner.org_id })
   return 'updated'
 }
 
@@ -93,16 +106,27 @@ export async function patchTask(db: Writer, issue: Doc<'issues'>, fields: TaskFi
   if ('description' in fields) await putDescription(db, issue, fields.description ?? '')
 }
 
-/** Deletes the description row of task `issueId`, if it has one, for code
- * that deletes the task row or stores it in Deleted items. */
-export async function dropDescription(db: Writer, issueId: string): Promise<void> {
-  const row = await descriptionRow(db, issueId)
+/** Deletes the description row of task `issueId`, if it has one, and
+ * answers it, for the caller's budget. `known` is the row a caller read
+ * already, or null when it found none, so this reads no row again. */
+export async function dropDescription(
+  db: Writer,
+  issueId: string,
+  known?: Doc<'issue_descriptions'> | null,
+): Promise<Doc<'issue_descriptions'> | null> {
+  const row = known === undefined ? await descriptionRow(db, issueId) : known
   if (row !== null) await db.delete(row._id)
+  return row
 }
 
-/** `task` with the description its row holds, or with its own when it has
- * no row, as Deleted items stores it. */
-export async function withDescription(db: Reader, task: Doc<'issues'>): Promise<Doc<'issues'>> {
+/** `task` as Deleted items stores it: with issues.description while the
+ * task row holds one, else with the text of its description row, or ''.
+ * Reads the row only then, and answers it, for the caller's budget. */
+export async function withDescription(
+  db: Reader,
+  task: Doc<'issues'>,
+): Promise<{ task: Doc<'issues'>; row: Doc<'issue_descriptions'> | null }> {
+  if (task.description !== undefined) return { task, row: null }
   const row = await descriptionRow(db, task.id)
-  return { ...task, description: row?.description ?? task.description ?? '' }
+  return { task: { ...task, description: row?.description ?? '' }, row }
 }

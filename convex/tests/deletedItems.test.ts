@@ -33,6 +33,7 @@ import {
   whereIsTask,
 } from '../model/deletedItems'
 import { estimateDocumentBytes } from '../model/demoMetrics'
+import { insertTask } from '../model/descriptions'
 import { PARENT_BEING_DELETED, SUBTASK_BEING_DELETED } from '../model/issues'
 import { ITEM_UNREAD_CAP } from '../model/messages'
 import {
@@ -92,8 +93,8 @@ declare class Blob {
 installTrashTimers()
 
 /** The uuids of `n` subtasks of `parent` in project `projectId`, each with
- * `description`, planted 100 to a transaction so a large set stays within
- * the write limits, in the order planted. */
+ * `description` and its description row, planted 100 to a transaction so a
+ * large set stays within the write limits, in the order planted. */
 async function plantChildren(
   t: T,
   parent: Doc<'issues'>,
@@ -105,7 +106,7 @@ async function plantChildren(
   for (let from = 0; from < n; from += 100)
     await t.run(async (ctx) => {
       for (const [i, id] of ids.slice(from, from + 100).entries())
-        await ctx.db.insert('issues', {
+        await insertTask(ctx.db, {
           id,
           org_id: parent.org_id,
           project_id: projectId,
@@ -420,7 +421,9 @@ describe('moving a task to Deleted items', () => {
   }, 120_000)
 
   it("leaves the subtasks' rows to steps once the tasks it read have spent the delete's bytes", async () => {
-    const t = newT()
+    // Convex's limits, so the delete must read no description row: each of
+    // the 100 is as large as its task, and its delete reads it again
+    const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     // 100 subtasks of 20,000 three-byte characters pass the 4 MiB a step reads
@@ -437,9 +440,14 @@ describe('moving a task to Deleted items', () => {
     await deleteTask(t, f, root.id, { subtask_ids: ids })
     expect((await itemFor(t, root.id)).state).toBe('moving')
     for (const id of notes) expect(await commentStored(t, id)).toBe(false)
+    // the steps took the description rows, and each copy keeps its text
+    const rows = () => t.run((ctx) => ctx.db.query('issue_descriptions').collect())
+    expect(await rows()).toHaveLength(LIMITS.subtasks.max + 1)
     await runSteps(t)
     expect((await itemFor(t, root.id)).state).toBe('ready')
     for (const id of notes) expect(await commentStored(t, id)).toBe(true)
+    expect(await rows()).toEqual([])
+    expect((await storedIssue(t, ids[0]))?.description).toBe('中'.repeat(TEXT_MAX))
   }, 120_000)
 
   it('deletes the history a job of the release before still names in purge_history', async () => {

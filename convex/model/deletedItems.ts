@@ -482,11 +482,10 @@ const tooLarge = (item: Pick<Item, 'id' | 'org_id'>, live: LiveRow, ownerId: str
   estimateDocumentBytes(wrapRow(item, live, ownerId)) > STORED_ROW_MAX_BYTES
 
 /** Deletes `live` from its table, a task or project out of its
- * organization's live counts (model/orgs.ts tallyRow), and a task with its
- * description row (model/descriptions.ts). */
+ * organization's live counts (model/orgs.ts tallyRow). A task's
+ * description row is its caller's (dropTaskDescription). */
 async function deleteLive(ctx: MutationCtx, live: LiveRow): Promise<void> {
   await ctx.db.delete(live.doc._id)
-  if (live.table === 'issues') await dropDescription(ctx.db, live.doc.id)
   if (live.table === 'issues' || live.table === 'projects')
     await tallyRow(ctx, live.table, live.doc, null)
 }
@@ -719,17 +718,18 @@ async function storedAlready(run: Run, live: LiveRow, ownerId: string): Promise<
 }
 
 /** Stores a task row with its deleted_tasks row, and counts it. `task`
- * carries the text of its description row (model/descriptions.ts
- * withDescription), which the stored copy keeps; the live row goes. */
+ * carries its description (model/descriptions.ts withDescription), which
+ * the stored copy keeps. Answers whether it stored the task, which a row
+ * too large to store is not (storeRow). */
 async function storeTask(
   ctx: MutationCtx,
   item: Item,
   tally: Tally,
   task: Doc<'issues'>,
-): Promise<void> {
+): Promise<boolean> {
   if (!(await storeRow(ctx, item, { table: 'issues', doc: task }, task.id))) {
     tally.dropped_rows += 1
-    return
+    return false
   }
   const archived = task.archived_at !== undefined
   await uncountedWriter(ctx.db).insert('deleted_tasks', {
@@ -750,7 +750,39 @@ async function storeTask(
     project.tasks += 1
     if (archived) project.archived_tasks += 1
   }
+  return true
 }
+
+/** Deletes the description row of task `taskId` (model/descriptions.ts),
+ * or `known`, the one the caller read, and charges `budget` for reading it
+ * and for its delete, which reads it again. Its stored copy keeps the text,
+ * so a step or a teardown deletes the row with or after the task row. */
+async function dropTaskDescription(
+  ctx: MutationCtx,
+  budget: Budget,
+  taskId: string,
+  known?: Doc<'issue_descriptions'> | null,
+): Promise<void> {
+  const row = await dropDescription(ctx.db, taskId, known)
+  if (row === null) return
+  if (known === undefined) chargeRead(budget, row)
+  chargeRead(budget, row)
+}
+
+/** Deletes the description rows a task item's stored task `taskId` still
+ * has (model/descriptions.ts), in the step's budget, which counts each
+ * row's read and its delete's. The person's delete leaves them to the
+ * steps, so that it reads none (moveTasksToTrash). */
+const dropDescriptions = (run: Run, taskId: string): Promise<boolean> =>
+  drain(run.budget, descriptionRange(run.ctx, taskId), async (row) => {
+    chargeRead(run.budget, row)
+    await run.ctx.db.delete(row._id)
+  })
+
+/** The description rows of task `taskId`, one unless a release before
+ * this one wrote another. */
+const descriptionRange = (ctx: QueryCtx, taskId: string) =>
+  ctx.db.query('issue_descriptions').withIndex('by_issue', (q) => q.eq('issue_id', taskId))
 
 /** The step's NotifyPreload. A step changes no profile or team, and no
  * live project or its grants, after it starts (the grants it moves are of
@@ -866,10 +898,19 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
   // deletes the deleted_item_parents row a later step would need
   if (mode === 'purge' && !(await purgeHistory(run, task.id))) return false
   const parent_id = await takeParent(run.ctx, task, run.item)
+  // its description row goes in this transaction, once the stored copy
+  // holds the text, because no later step comes back to this task
+  let row: Doc<'issue_descriptions'> | null | undefined
   if (mode === 'keep') {
-    const stored = { ...(await withDescription(run.ctx.db, task)), parent_id }
-    await storeTask(run.ctx, run.item, tallyOf(run), fitToStore(run.item, stored))
+    const described = await withDescription(run.ctx.db, task)
+    if (described.row !== null) {
+      row = described.row
+      chargeRead(run.budget, row)
+    }
+    const stored = fitToStore(run.item, { ...described.task, parent_id })
+    await storeTask(run.ctx, run.item, tallyOf(run), stored)
   } else await deleteLive(run.ctx, { table: 'issues', doc: task })
+  await dropTaskDescription(run.ctx, run.budget, task.id, row)
   run.budget.tasks -= 1
   charge(run.budget, task)
   return true
@@ -1058,6 +1099,7 @@ const moveDrain = async (run: Run): Promise<boolean> => {
   run.state.purge_history = undefined
   return await eachStoredTask(run, async ({ task_id }) => {
     if (!(await dropMessages(run, task_id))) return false
+    if (!(await dropDescriptions(run, task_id))) return false
     for (const relation of TASK_ROWS) {
       const done = await drain(run.budget, relation(run.ctx, task_id), (row) =>
         clearRow(run, row, task_id, 'keep'),
@@ -1082,7 +1124,10 @@ async function moveLeft(run: Run): Promise<TrashPhase | null> {
   if (run.item.kind === 'task') {
     let held = false
     const done = await eachStoredTask(run, async ({ task_id }) => {
-      held = (await holdsMessages(run, task_id)) || (await holdsRows(run.ctx, TASK_ROWS, task_id))
+      held =
+        (await holdsMessages(run, task_id)) ||
+        (await descriptionRange(run.ctx, task_id).first()) !== null ||
+        (await holdsRows(run.ctx, TASK_ROWS, task_id))
       return !held
     })
     if (held) return 'move_drain'
@@ -1163,8 +1208,10 @@ async function purgeDependents(run: Run): Promise<boolean> {
 async function purgeLive(run: Run): Promise<boolean> {
   if (run.item.kind === 'task' || run.item.restore_by !== undefined) {
     const done = await eachStoredTask(run, async ({ task_id }) => {
-      // a move that got stuck can leave messages, before the id is freed
+      // a move that got stuck can leave messages and description rows,
+      // before the id is freed
       if (!(await dropMessages(run, task_id))) return false
+      if (!(await dropDescriptions(run, task_id))) return false
       for (const relation of TASK_ROWS) {
         const drained = await drain(run.budget, relation(run.ctx, task_id), (row) =>
           discard(run.ctx, row),
@@ -1973,6 +2020,8 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
     holder !== null && holder.state !== 'purging' && holder.org_id === run.item.org_id
       ? holder
       : null
+  // a description row the move left, whose text the stored copy keeps
+  if (!(await dropDescriptions(run, task.task_id))) return false
   for (const relation of TASK_ROWS) {
     const taken = await drain(run.budget, relation(run.ctx, task.task_id), async (live) => {
       if (into === null) await discard(run.ctx, live)
@@ -3776,7 +3825,7 @@ async function clearPages<Row>(
 
 /** Deletes the rows task `taskId` still has in the live tables, letting go
  * of each attachment's file (model/fileHolds.ts releaseFile), then its
- * messages. */
+ * messages and its description row. */
 async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown): Promise<boolean> {
   for (const relation of TASK_ROWS) {
     const cleared = await clearPages(budget, relation(ctx, taskId), async (row) => {
@@ -3786,7 +3835,7 @@ async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown)
     })
     if (!cleared) return false
   }
-  return await clearPages(
+  const messages = await clearPages(
     budget,
     ctx.db.query('messages').withIndex('by_issue_read', (q) => q.eq('issue_id', taskId)),
     async (message) => {
@@ -3794,6 +3843,13 @@ async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown)
       return true
     },
   )
+  if (!messages) return false
+  // clearPages charges each row's read, and this its delete's
+  return await clearPages(budget, descriptionRange(ctx, taskId), async (row) => {
+    if (budget.bytes !== undefined) budget.bytes -= estimateDocumentBytes(row)
+    await ctx.db.delete(row._id)
+    return true
+  })
 }
 
 /**
@@ -4087,11 +4143,17 @@ export async function moveTasksToTrash(
   const counted = metered(ctx, budget)
   // the caller read them, and the steps' reads come on top
   for (const task of [...a.subtasks, a.root]) chargeRead(budget, task)
-  // each task as it is stored, with the text of its description row
-  // (model/descriptions.ts withDescription)
-  const root = await withDescription(counted.db, a.root)
+  // each task as it is stored (model/descriptions.ts withDescription),
+  // which reads no description row while the task row holds the text; the
+  // steps delete the rows (moveDrain)
+  const described = async (task: Doc<'issues'>) => {
+    const { task: doc, row } = await withDescription(counted.db, task)
+    if (row !== null) chargeRead(budget, row)
+    return doc
+  }
+  const root = await described(a.root)
   const subtasks: Doc<'issues'>[] = []
-  for (const task of a.subtasks) subtasks.push(await withDescription(counted.db, task))
+  for (const task of a.subtasks) subtasks.push(await described(task))
   const tasks = [...subtasks, root]
   const doomed = new Set(tasks.map((task) => task.id))
   const id = newUuid()
@@ -4169,12 +4231,14 @@ export async function moveTasksToTrash(
       }
     }
     await emitTaskEvent(counted, { name: 'task.deleted', issue: task, actor, now })
-    await storeTask(
+    const stored = await storeTask(
       counted,
       item,
       tally,
       fitToStore(item, { ...task, parent_id: await takeParent(counted, task, item) }),
     )
+    // a task too large to store is gone for good, and no step visits it
+    if (!stored) await dropTaskDescription(counted, budget, task.id)
     await insertActivity(counted, {
       org_id: task.org_id,
       actor_id: actor.id,

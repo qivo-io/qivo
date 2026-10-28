@@ -1085,10 +1085,12 @@ export default defineSchema({
    * 1 MiB). The server owns it, with exactly one row per live issues row
    * and '' for a task without a description. Only model/descriptions.ts
    * writes it, in the transaction that writes the task
-   * (scripts/check-task-writes.mjs fails on any other writer). A task in
-   * Deleted items has no row here, because its stored copy in deleted_rows
-   * keeps the text, and a restore writes the row again
-   * (model/deletedItems.ts).
+   * (scripts/check-task-writes.mjs fails on any other writer). A row names
+   * its task's organization, and a write that finds a row resets it, since
+   * a create may take the id of a task deleted for good, also in another
+   * organization. Deleted items stores a task with its text and deletes
+   * its row in its steps, so a task in Deleted items has no row once they
+   * have run, and a restore writes the row again (model/deletedItems.ts).
    *
    * The move takes three releases. In the first, this one, every writer
    * keeps both copies and every reader still reads issues.description, the

@@ -22,6 +22,7 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
+  plantProject,
   type T,
   uuid,
   withOrg,
@@ -246,8 +247,19 @@ describe('the writers keep one equal row per task', () => {
   })
 })
 
+/** Gives the description row of task `id` the text `description`, as an
+ * earlier release that changed the task row alone leaves it. */
+const staleRow = (t: T, id: string, description: string) =>
+  t.run(async (ctx) => {
+    const [row] = await ctx.db
+      .query('issue_descriptions')
+      .withIndex('by_issue', (q) => q.eq('issue_id', id))
+      .collect()
+    await ctx.db.patch(row._id, { description })
+  })
+
 describe('Deleted items', () => {
-  it('stores the text of the row, drops the row, and a restore writes it back', async () => {
+  it("stores the task row's text, else the row's, its steps drop the row, and a restore writes it back", async () => {
     const t = newT()
     const f = await withOrg(t)
     const root = await plantIssue(t, {
@@ -281,6 +293,37 @@ describe('Deleted items', () => {
     await assertNoDanglingRefs(t, 'after a restore')
   })
 
+  it('keeps issues.description over a row an earlier release left behind, in a task and a project item', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      description: 'Task',
+    })
+    const inProject = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub2.id,
+      description: 'In the project',
+    })
+    // an earlier release edited both tasks without their rows
+    await staleRow(t, task.id, 'Stale task')
+    await staleRow(t, inProject.id, 'Stale project task')
+    await deleteTask(t, f, task.id)
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+    expect((await storedIssue(t, task.id))?.description).toBe('Task')
+    expect((await storedIssue(t, inProject.id))?.description).toBe('In the project')
+    for (const id of [task.id, inProject.id]) expect(await rowsOf(t, id)).toEqual([])
+
+    const items = [(await itemFor(t, task.id)).id, (await itemFor(t, f.sub2.id)).id]
+    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: items })
+    await runSteps(t)
+    expect((await rowsOf(t, task.id))[0].description).toBe('Task')
+    expect((await rowsOf(t, inProject.id))[0].description).toBe('In the project')
+    expect(await expectDescriptions(t, f.org.id)).toBe(2)
+  })
+
   it("takes a project's tasks with their rows and brings them back, and a purge leaves none", async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -289,18 +332,29 @@ describe('Deleted items', () => {
       project_id: f.sub.id,
       description: 'Kept',
     })
+    const ids: string[] = []
     for (const description of ['One', 'Two', 'Three'])
-      await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, description })
+      ids.push((await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, description })).id)
+    // as the third release leaves it, with the text only in the row
+    await t.run(async (ctx) => {
+      const task = await ctx.db
+        .query('issues')
+        .withIndex('by_uuid', (q) => q.eq('id', ids[0]))
+        .unique()
+      if (task !== null) await ctx.db.patch(task._id, { description: undefined })
+    })
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
     // the other project's task keeps its row
     expect(await expectDescriptions(t, f.org.id)).toBe(1)
     expect((await rowsOf(t, kept.id))[0].description).toBe('Kept')
+    expect((await storedIssue(t, ids[0]))?.description).toBe('One')
 
     const item = await itemFor(t, f.sub2.id)
     await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [item.id] })
     await runSteps(t)
     expect(await expectDescriptions(t, f.org.id)).toBe(4)
+    expect((await rowsOf(t, ids[0]))[0].description).toBe('One')
 
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
@@ -309,6 +363,52 @@ describe('Deleted items', () => {
     await runSteps(t)
     expect(await expectDescriptions(t, f.org.id)).toBe(1)
     await assertNoDanglingRefs(t, 'after a purge')
+  })
+})
+
+describe('a task id that comes back', () => {
+  it("takes over the row with its own organization, which the first one's teardown leaves alone", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const first = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      description: 'First',
+    })
+    await deleteTask(t, f, first.id)
+    await runSteps(t)
+    await as(t, f.admin).mutation(api.deletedItems.purge, {
+      org_id: f.org.id,
+      ids: [(await itemFor(t, first.id)).id],
+    })
+    await runSteps(t)
+    expect(await liveTask(t, first.id)).toBeNull()
+    // a row the purged task kept, as an earlier release leaves one
+    await t.run((ctx) =>
+      ctx.db.insert('issue_descriptions', {
+        issue_id: first.id,
+        org_id: f.org.id,
+        description: 'First',
+      }),
+    )
+    // the id is free, and the other organization's create takes it
+    const sub = await plantProject(t, {
+      org_id: f.otherOrg.id,
+      type: 'project',
+      parent_id: f.otherProject.id,
+    })
+    await as(t, f.otherAdmin).mutation(api.issues.create, {
+      org_id: f.otherOrg.id,
+      id: first.id,
+      project_id: sub.id,
+      title: 'Second',
+      description: 'Second',
+    })
+    expect(await rowsOf(t, first.id)).toMatchObject([
+      { org_id: f.otherOrg.id, description: 'Second' },
+    ])
+    await t.run((ctx) => deleteOrgDeep(ctx, f.org))
+    expect(await expectDescriptions(t, f.otherOrg.id)).toBe(1)
   })
 })
 
