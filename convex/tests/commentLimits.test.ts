@@ -29,7 +29,7 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { RECOVER } from '../commentLimits'
-import { ROW_PAGE, RUN, TASK_PAGE } from '../internal/commentCountsBackfill'
+import { ROW_PAGE, RUN, rowsAfter, TASK_PAGE } from '../internal/commentCountsBackfill'
 import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { COMMENT_RATE, COMMENTS_COUNTING, LIMITS, tooManyComments } from '../lib/limits'
@@ -1208,6 +1208,78 @@ describe('the backfill, call by call', () => {
     expect((await counter(fx.t, foreign.id))?.counted).toBeUndefined()
     // the task in Deleted items keeps its count
     expect(await stateOf(fx.t, stored.id)).toEqual({ count: 0, counting: false })
+  })
+})
+
+/* A QueryCtx over `tables` that keeps an index's order, _creationTime and
+ * then the document id, and reads equality on any field, `gt` on
+ * _creationTime and `take`, `collect`, `first` and `unique`. Convex can give
+ * two count rows one _creationTime and convex-test never does. */
+function tablesCtx(tables: Record<string, Record<string, unknown>[]>): QueryCtx {
+  type Range = { eq: [string, unknown][]; gt?: number }
+  type RowBuilder = {
+    eq(field: string, value: unknown): RowBuilder
+    gt(field: string, value: number): RowBuilder
+    range: Range
+  }
+  const builder = (range: Range): RowBuilder => ({
+    eq: (field, value) => builder({ ...range, eq: [...range.eq, [field, value]] }),
+    gt: (_, value) => builder({ ...range, gt: value }),
+    range,
+  })
+  const query = (table: string) => ({
+    withIndex: (_index: string, build: (q: RowBuilder) => RowBuilder) => {
+      const { eq, gt } = build(builder({ eq: [] })).range
+      const rows = (tables[table] ?? [])
+        .filter(
+          (row) =>
+            eq.every(([field, value]) => row[field] === value) &&
+            (gt === undefined || (row._creationTime as number) > gt),
+        )
+        .sort(
+          (a, b) =>
+            (a._creationTime as number) - (b._creationTime as number) ||
+            String(a._id).localeCompare(String(b._id)),
+        )
+      return {
+        take: async (n: number) => rows.slice(0, n),
+        collect: async () => rows,
+        first: async () => rows[0] ?? null,
+        unique: async () => rows[0] ?? null,
+      }
+    },
+  })
+  return { db: { query } } as unknown as QueryCtx
+}
+
+describe('the drift check across a page boundary', () => {
+  it('checks every row that shares the time a page ends at', async () => {
+    Object.assign(ROW_PAGE, { rows: 1 })
+    const row = (n: number, issue_id: string) => ({
+      _id: `r${n}`,
+      _creationTime: 1_000,
+      org_id: 'org',
+      issue_id,
+      count: 0,
+      revision: 0,
+    })
+    const ctx = tablesCtx({
+      task_comment_counts: [row(1, 'live'), row(2, 'gone')],
+      issues: [{ _id: 'i1', _creationTime: 1, id: 'live', org_id: 'org' }],
+      deleted_rows: [],
+    })
+    const seen: { issue_id: string; where: string }[] = []
+    let after = COUNT_START
+    for (let pages = 0; pages < 5; pages++) {
+      const page = await rowsAfter(ctx, 'org', after)
+      seen.push(...page.rows)
+      after = page.through
+      if (page.done) break
+    }
+    expect(seen).toEqual([
+      { issue_id: 'live', where: 'live' },
+      { issue_id: 'gone', where: 'orphan' },
+    ])
   })
 })
 

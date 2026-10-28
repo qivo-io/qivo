@@ -273,31 +273,49 @@ async function whereIs(
   }
 }
 
-/** One page of organization `org_id`'s count rows created after `after`,
- * each with where it stands against its task. It ends at ROW_PAGE rows or
- * once the rows and the tasks it read for them hold ROW_PAGE bytes, after
- * every row that shares the last one's _creationTime. */
+/**
+ * One page of organization `orgId`'s count rows created after `after`, each
+ * with where it stands against its task. It reads one row past ROW_PAGE
+ * rows, and when that row shares the page's last _creationTime, reads the
+ * rest of that time's rows too, because the next page starts after that
+ * time. It ends early once the rows and the tasks it read for them hold
+ * ROW_PAGE bytes, between two times.
+ */
+export async function rowsAfter(ctx: QueryCtx, orgId: string, after: number): Promise<RowPage> {
+  const read = await ctx.db
+    .query('task_comment_counts')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId).gt('_creationTime', after))
+    .take(ROW_PAGE.rows + 1)
+  const more = read.length > ROW_PAGE.rows
+  const page = read.slice(0, ROW_PAGE.rows)
+  let bytes = 0
+  for (const row of read) bytes += getDocumentSize(row)
+  const last = page.at(-1)
+  if (more && last !== undefined && read[ROW_PAGE.rows]._creationTime === last._creationTime) {
+    const group = await ctx.db
+      .query('task_comment_counts')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId).eq('_creationTime', last._creationTime))
+      .collect()
+    for (const row of group) bytes += getDocumentSize(row)
+    page.push(...group.filter((row) => !page.some((seen) => seen._id === row._id)))
+  }
+  const out: RowPage['rows'] = []
+  for (const [i, row] of page.entries()) {
+    const { where, bytes: task } = await whereIs(ctx, row)
+    bytes += task
+    out.push({ issue_id: row.issue_id, where })
+    const next = page[i + 1]
+    // a page ends between two times, so the next page starts after this one
+    if (next === undefined || next._creationTime === row._creationTime) continue
+    if (bytes >= ROW_PAGE.bytes) return { rows: out, through: row._creationTime, done: false }
+  }
+  return { rows: out, through: page.at(-1)?._creationTime ?? after, done: !more }
+}
+
+/** One page of organization `org_id`'s count rows (rowsAfter). */
 export const rowPage = internalQuery({
   args: { org_id: v.string(), after: v.number() },
-  handler: async (ctx, { org_id, after }): Promise<RowPage> => {
-    const read = await ctx.db
-      .query('task_comment_counts')
-      .withIndex('by_org', (q) => q.eq('org_id', org_id).gt('_creationTime', after))
-      .take(ROW_PAGE.rows)
-    const out: RowPage['rows'] = []
-    let bytes = 0
-    for (const [i, row] of read.entries()) {
-      const { where, bytes: more } = await whereIs(ctx, row)
-      bytes += getDocumentSize(row) + more
-      out.push({ issue_id: row.issue_id, where })
-      const next = read[i + 1]
-      // a page ends between two times, so the next page starts after this one
-      if (next !== undefined && next._creationTime === row._creationTime) continue
-      if (bytes >= ROW_PAGE.bytes || (next === undefined && read.length === ROW_PAGE.rows))
-        return { rows: out, through: row._creationTime, done: false }
-    }
-    return { rows: out, through: read.at(-1)?._creationTime ?? after, done: true }
-  },
+  handler: async (ctx, { org_id, after }): Promise<RowPage> => await rowsAfter(ctx, org_id, after),
 })
 
 /** Deletes organization `org_id`'s count row of `issue_id` while it still
