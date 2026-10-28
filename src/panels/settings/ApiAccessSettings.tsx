@@ -864,7 +864,9 @@ function PersonChoices({
               type="button"
               variant="ghost"
               className="h-control-sm text-sm"
-              onClick={() => (list.rows.length === 0 ? setAttempt((n) => n + 1) : more())}
+              // a failed Load more keeps its place, which a batch with no
+              // match before it has too; a failed first batch starts again
+              onClick={() => (list.next === null ? setAttempt((n) => n + 1) : more())}
             >
               Retry
             </Button>

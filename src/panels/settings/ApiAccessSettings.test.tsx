@@ -78,6 +78,7 @@ type Server = {
   people: ApiAccessPerson[]
   pageSize: number
   peopleBatch: number
+  peopleAnswer?: (args: Record<string, unknown>) => unknown
   page?: (args: ApiAccessPageArgs) => ApiAccessPageAnswer | undefined
 }
 let server: Server
@@ -214,6 +215,8 @@ function answer(name: string, args: Record<string, unknown>): unknown {
     return fakePage(rest as ApiAccessPageArgs)
   }
   if (name === 'apiAccess:people') {
+    const placed = server.peopleAnswer?.(args)
+    if (placed) return placed
     const search = ((args.search as string | undefined) ?? '').toLowerCase()
     const people = server.people.filter((p) => p.name.toLowerCase().includes(search))
     const from = args.cursor === undefined ? 0 : Number(args.cursor)
@@ -549,6 +552,27 @@ describe('the API access page', () => {
     expect(calls('apiAccess:people')).toHaveLength(before + 1)
     expect(calls('apiAccess:people').at(-1)?.[1]).toMatchObject({ cursor: '2' })
     expect(choices()).toEqual(['Everyone', 'Planner (you)', 'Daniel Berg', 'Release botagent'])
+  })
+
+  it('continues from its place on Retry after a failed Load more that followed batches with no match', async () => {
+    // a search that matched nothing in the first part the server read
+    server.peopleAnswer = (args) =>
+      args.cursor === undefined && args.search === 'bot'
+        ? { state: 'ready', rows: [], next: 'part-2', stopped: true }
+        : undefined
+    await render(<ui.OrgApiAccessPage />)
+    await click(find('[data-api-access-person]'))
+    await type(find<HTMLInputElement>('[data-api-access-people-search]'), 'bot')
+    await rest()
+    expect(find('[data-api-access-people]').textContent).toContain(
+      'Qivo checked part of the list. Load more continues.',
+    )
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    network.query.mockRejectedValueOnce(new Error('offline'))
+    await click(find('[data-api-access-people-more]'))
+    await click(buttonIn(find('[data-api-access-people] [role="alert"]'), 'Retry'))
+    // the failed continuation again, never the search from its start
+    expect(calls('apiAccess:people').at(-1)?.[1]).toMatchObject({ search: 'bot', cursor: 'part-2' })
   })
 
   it('reads another period on demand and refreshes from the title', async () => {
