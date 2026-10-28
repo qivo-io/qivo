@@ -179,9 +179,19 @@ try {
   const fixture = await page.evaluate(
     async ({ tasks, milestone }) => {
       const P = window.PLANNER
-      const project = P.projects.find((p) => p.name === 'Luma Sensor' && p.type === 'meta')
-      const sub = P.projects.find((p) => p.parent === project?.id && p.name === 'Electronics')
-      if (!project || !sub) throw new Error('Northstar Luma Sensor fixture is unavailable')
+      // A top-level project holds one milestone a week, so the run uses a
+      // Northstar project, Luma Sensor when it can, whose milestones leave
+      // this week and the next free for the milestones it adds and moves.
+      const free = (p) =>
+        P.milestonesIn(p.id).every((m) => m.week !== P.TODAY_WEEK && m.week !== P.TODAY_WEEK + 1)
+      const project = P.projects
+        .filter((p) => p.type === 'meta' && !p.archived_at)
+        .sort((a, b) => Number(b.name === 'Luma Sensor') - Number(a.name === 'Luma Sensor'))
+        .find(free)
+      const subs = P.projects.filter((p) => p.parent === project?.id && !p.archived_at)
+      const sub = subs.find((p) => p.name === 'Electronics') ?? subs[0]
+      if (!project || !sub)
+        throw new Error('No Northstar project has this week and the next free for milestones')
       P.saveUINow({ roadmapWin: P.DEFAULT_WIN })
       const { convex } = await import('/src/lib/convex.ts')
       window.__roadmapSmokeConnection = () => convex.connectionState()
@@ -215,7 +225,7 @@ try {
         name: milestone.name,
         week: iso(today),
       })
-      return { project: project.id, today, nora: P.CURRENT_USER }
+      return { project: project.id, name: project.name, today, nora: P.CURRENT_USER }
     },
     { tasks, milestone },
   )
@@ -227,7 +237,7 @@ try {
     (ids) => ids.map((id) => window.PLANNER.issues.find((it) => it.uuid === id).id),
     tasks.map(({ id }) => id),
   )
-  await page.locator('aside').getByText('Luma Sensor', { exact: true }).click()
+  await page.locator('aside').getByText(fixture.name, { exact: true }).click()
   await selectView('Roadmap')
   await page.locator('[data-roadmap-toolbar]').waitFor()
   await page.getByPlaceholder('Filter tasks…').fill(prefix)
@@ -314,7 +324,7 @@ try {
   await settled(1)
   await page.locator('[data-all-nav]').click()
   await settled(1)
-  await page.locator('aside').getByText('Luma Sensor', { exact: true }).click()
+  await page.locator('aside').getByText(fixture.name, { exact: true }).click()
   await settled(1)
   await readTask(child)
   await closeTask()
