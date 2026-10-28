@@ -2327,11 +2327,12 @@ function IssueDetail({
             )}
           {mark.place === 'tail' && <UnreadDivider key="unread" place="tail" note={tailNote} />}
           {/* a failed thread never passes for an empty one. The comments
-              that did load stay, and this row closes the thread. */}
+              that did load stay, and this row closes the thread. It says
+              "the latest" only while the thread shows some of them. */}
           {P.commentsFailure !== 'none' && (
             <ThreadFailure
               state={P.commentsFailure}
-              shown={comments.length > 0}
+              shown={spine.some((s) => s.kind === 'c')}
               onRetry={P.retryComments}
             />
           )}
@@ -2341,7 +2342,7 @@ function IssueDetail({
             <ThreadFailure
               state={P.historyFailure}
               what="activity"
-              shown={P.historyLoaded}
+              shown={spine.some((s) => s.kind === 'e')}
               onRetry={P.retryHistory}
             />
           )}

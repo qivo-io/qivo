@@ -260,6 +260,26 @@ describe('the task window under Comments and All', { timeout: 20_000 }, () => {
     ])
   })
 
+  it('says "the latest" only about rows the thread shows', async () => {
+    await load()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await openTask()
+    const side = (what: string) =>
+      document.querySelector(`[data-thread-side="${what}"]`)?.textContent
+    await comments({ comments: range(60, 110), earlier: true })
+    await act(async () => one('snapshot:threadComments').fail(new Error('Server Error')))
+    expect(side('comments')).toBe("Couldn't load the latest comments.Retry")
+    // under All, before the history is in, no comment shows
+    await pick('All')
+    expect(side('comments')).toBe("Couldn't load comments.Retry")
+    // a change older than every loaded comment shows only once they reach it
+    await history([change(10)])
+    expect(thread()).not.toContain('event')
+    expect(side('comments')).toBe("Couldn't load the latest comments.Retry")
+    await act(async () => one('snapshot:threadHistory').fail(new Error('Server Error')))
+    expect(side('activity')).toBe("Couldn't load activity.Retry")
+  })
+
   it('offers no earlier page under All before the history is in', async () => {
     await load()
     await openTask()
