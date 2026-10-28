@@ -32,6 +32,7 @@ import type { IndexRange } from 'convex/server'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { descriptionsOf } from '../model/descriptions'
+import { roomOf } from './archivedTasks'
 import { shownLabelColor } from '../model/labels'
 import {
   countersRow,
@@ -168,6 +169,11 @@ export const PAGE = {
   /** how many new tasks the inbox reads between checks of PAGE.hard: 32 of
    * the largest hold about 2 MiB */
   inboxCheck: 32,
+  /** what a tasks part's description reads, its last reads, keep back from
+   * Convex's own limits: they start a step only while the reads are under
+   * PAGE.hard, as a batch does, and a step stays this far inside Convex's
+   * limits, so a window may pass PAGE.hard by one step */
+  textReserve: { ranges: 16, documents: 16, bytes: 1024 * 1024 } satisfies Budget,
 }
 
 /* Reads that cost every part of the caller the same, whatever its window
@@ -587,7 +593,8 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
  * tasks the caller is not shown (orgLoad, hiddenLoadOf). Each project these
  * tasks are in is read once, with the caller's levels on it (lib/access.ts
  * accessOf). Each shown task's text is one more read, of its description
- * row, and a window whose texts do not fit in PAGE.hard answers overflow. */
+ * row, read last and by bytes, and a window whose texts do not fit answers
+ * overflow. */
 export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
   const read = await windowTasks(ctx, me, w, PAGE.tasks.most)
   if (!read.complete) return overflow(w, read.rows.at(-1)?.window_key)
@@ -708,11 +715,19 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
   if (namedShown === null || sourcesShown === null) return overflow(w)
   const isShown = new Map(named.map((id, i) => [id, namedShown[i]]))
   const sourceShown = new Map(sources.map((id, i) => [id, sourcesShown[i]]))
-  // The shown tasks' texts, from their description rows. A row can come
-  // close to Convex's document size limit, so they are read by bytes
-  // within PAGE.hard (model/descriptions.ts descriptionsOf), not in
-  // PAGE.batch batches.
-  const texts = await descriptionsOf(ctx, tasks, PAGE.hard)
+  const orgLoad = await hiddenLoadOf(ctx, me, access, read.rows, kids)
+  if (orgLoad === null) return overflow(w)
+  // The shown tasks' texts, from their description rows, read last. A row
+  // can come close to Convex's document size limit, so a step reads no
+  // more rows than Convex's limits less PAGE.textReserve could hold at
+  // that size, not a PAGE.batch batch, and starts only while the reads are
+  // under PAGE.hard (model/descriptions.ts descriptionsOf).
+  const texts = await descriptionsOf(
+    ctx,
+    tasks,
+    PAGE.hard,
+    roomOf(await ctx.meta.getTransactionMetrics(), PAGE.textReserve),
+  )
   if (texts === null) return overflow(w)
   const issues = tasks.map((task): TaskRow => {
     const {
@@ -734,8 +749,6 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
       has_hidden_subtasks: (kids.get(task.id) ?? []).some((kid) => hiddenKid.get(kid.id)),
     }
   })
-  const orgLoad = await hiddenLoadOf(ctx, me, access, read.rows, kids)
-  if (orgLoad === null) return overflow(w)
   return {
     state: 'ok' as const,
     ...chunkLists({

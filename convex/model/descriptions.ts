@@ -91,25 +91,36 @@ export async function withText(db: Reader, task: Doc<'issues'>): Promise<TaskWit
 }
 
 /** The texts of `tasks` (descriptionOf) by task id, or null when `room` ran
- * out before every one was read. `room` is the transaction's totals that
- * the reads stay within (ctx.meta.getTransactionMetrics), every document a
- * caller read before counted. It reads a few at a time, never more than
- * the ranges, documents and bytes left under `room` could hold with every
- * row at Convex's document size limit, so it never passes `room`, and each
- * caller keeps its own answer once it runs out: a cut window, a refusal or
- * a shorter page. */
+ * out before every one was read. `room` and `steps` are the transaction's
+ * totals the reads keep to (ctx.meta.getTransactionMetrics), every document
+ * a caller read before counted. No step starts once the reads have passed
+ * `room`, and each reads a few rows at a time, never more than the ranges,
+ * documents and bytes left under `steps` could hold with every row at
+ * Convex's document size limit, so the reads never pass `steps`. By
+ * default `steps` is `room`, which they then never pass either. A caller
+ * whose budget may be passed by one step, as a workspace part's is, gives
+ * Convex's own limits less a reserve as `steps`. Each caller keeps its own
+ * answer once the room runs out: a cut window, a refusal or a shorter
+ * page. */
 export async function descriptionsOf(
   ctx: QueryCtx,
   tasks: readonly Pick<Doc<'issues'>, 'id' | 'description'>[],
   room: ReadCeiling,
+  steps: ReadCeiling = room,
 ): Promise<Map<string, string> | null> {
   const out = new Map<string, string>()
   for (let at = 0; at < tasks.length; ) {
     const m = await ctx.meta.getTransactionMetrics()
+    if (
+      m.databaseQueries.used > room.ranges ||
+      m.documentsRead.used > room.documents ||
+      m.bytesRead.used > room.bytes
+    )
+      return null
     const fits = Math.min(
-      room.ranges - m.databaseQueries.used,
-      room.documents - m.documentsRead.used,
-      Math.floor((room.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
+      steps.ranges - m.databaseQueries.used,
+      steps.documents - m.documentsRead.used,
+      Math.floor((steps.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
     )
     if (fits <= 0) return null
     const step = tasks.slice(at, at + fits)

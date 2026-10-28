@@ -685,6 +685,41 @@ describe('real limits', () => {
     expect(metrics.mib).toBeLessThanOrEqual(PAGE.hard.bytes / MIB)
   }, 300_000)
 
+  it('the narrowest window answers a parent whose subtasks are legacy rows near 1 MiB, past PAGE.hard by one step', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // the narrowest window of the grid, which cannot be cut
+    const narrowest: IdWindow = { from: 'fff00000', to: null }
+    const parent = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      description: 'Bring up the board',
+      window_key: 'fff00000',
+    })
+    // eight subtasks in other windows, stored before the caps with texts of
+    // 850 KB in their task rows; the window reads each, and the first again,
+    // to tell the parent is a group, about 7.3 MiB
+    const legacy = 'l'.repeat(850 * 1024)
+    for (let from = 0; from < 8; from += 4)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 4; i++)
+          await ctx.db.insert(
+            'issues',
+            taskDoc(f, 20_000 + i, legacy, { parent_id: parent.id, window_key: '00000000' }),
+          )
+      })
+    const { answer, metrics } = await t.run(async (ctx) => ({
+      answer: await readTasks(ctx, f.admin, narrowest),
+      metrics: await used(ctx),
+    }))
+    if (answer.state !== 'ok') throw new Error(answer.state)
+    expect(answer.issues.map((row) => [row.id, row.description, row.has_subtasks])).toEqual([
+      [parent.id, 'Bring up the board', true],
+    ])
+    expect(metrics.mib).toBeGreaterThan(7)
+    expect(metrics.mib).toBeLessThan(16)
+  }, 300_000)
+
   it('a window of 200 tasks with both copies at the cap in a three-byte script answers or splits within PAGE.hard', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
