@@ -69,10 +69,9 @@
  *               `standing` is 'suspended' while Qivo refuses its owner for
  *               now, as for a banned login or a disabled app, and on the
  *               demo, which sends no events, else 'live'. `scope` is 'task'
- *               when its filters name a task,
- *               'project' when they name only a project (a sub-project, as
- *               webhooks.ts authorizeFilters refuses a top-level one), else
- *               'org'. `affected` says whether that task's or that
+ *               when its filters name a task, 'project' when they name only
+ *               a project (a sub-project, as webhooks.ts authorizeFilters
+ *               refuses a top-level one), else 'org'. `affected` says whether that task's or that
  *               project's project leaves, false also where it is gone or
  *               reaches nobody today, or where the task has moved out of
  *               the project its filters also name, as events must match
@@ -94,9 +93,8 @@
  * admin of its organization. The `work` phase walks the organizations
  * (by_uuid), their active admins in id order, and each admin's open
  * assigned tasks, open reviews, unmarked follows and marked follows in
- * creation order. The
- * `machine` phase walks each organization's webhook subscriptions, then
- * each admin's personal tokens and connected apps.
+ * creation order. The `machine` phase walks each organization's webhook
+ * subscriptions, then each admin's personal tokens and connected apps.
  *
  * The report ships in a release before the access split. The owner has
  * approved these releases and has said that no deployment holds real user
@@ -178,9 +176,10 @@ export const SUBS = { most: 1_000, bytes: 2 * MIB }
  * shares of those teams, a page reads before it asks whether the admin sees
  * a top-level project for navigation, with their bytes and the most teams.
  * lib/access.ts projectLevelsOf reads all of those rows for that with no
- * bound, the first time a page asks about the admin, so this report counts
- * them first with bounded reads and leaves the project `unchecked` past
- * any bound. In the half of the limits a page leaves past its room (ROOM),
+ * bound, the first time each of the admin's levels asks, which the projects
+ * phase makes once a part (PART), so this report counts them first with
+ * bounded reads, once a page, and leaves the project `unchecked` past any
+ * bound. In the half of the limits a page leaves past its room (ROOM),
  * the count and that read take twice 4,000 documents and twice 1 MiB, and
  * about three index ranges a team, so 1,500 for 500 teams, beside the
  * organization's teams (at most 4,000 rows) and SUBS. Tests lower them. */
