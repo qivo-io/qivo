@@ -999,6 +999,49 @@ describe('starting a count after a refusal', () => {
     expect(await counter(fx.t, hidden.id)).toBeNull()
   })
 
+  /* A caller that retries a minute after each refusal, as the refusal
+   * asks, with the recovery every ten minutes, for 30 minutes, on a thread
+   * of comments near 900 KB under `bytesRead`. Answers the task's row once
+   * the count is exact, stuck or the half hour is over. */
+  async function retryHalfHour(bytesRead: number) {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fx = await setup(newT({ transactionLimits: { bytesRead } }))
+    const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    for (let i = 0; i < 10; i++) await plantComments(fx, 1, { task, body: 'x'.repeat(900_000) })
+    const begin = () =>
+      as(fx.t, fx.user).mutation(api.comments.countThread, {
+        org_id: fx.org.id,
+        issue_id: task.id,
+      })
+    await begin()
+    await runSteps(fx.t)
+    for (let minute = 1; minute <= 30; minute++) {
+      vi.setSystemTime(START + minute * 60_000)
+      await begin()
+      if (minute % 10 === 0) await fx.t.mutation(internal.commentLimits.recover, {})
+      await runSteps(fx.t)
+      const row = await counter(fx.t, task.id)
+      if (row?.counted === undefined || row.stuck === true) return { row, minute }
+    }
+    return { row: await counter(fx.t, task.id), minute: 30 }
+  }
+
+  it('finishes a count whose step fails at full budget, however often a caller restarts it', async () => {
+    // a full step reads eight of the comments, more than 4 MiB; half reads four
+    const { row, minute } = await retryHalfHour(4 * 1024 * 1024)
+    expect(row?.count).toBe(10)
+    expect(row?.counted).toBeUndefined()
+    expect(row?.stuck).toBeUndefined()
+    expect(minute).toBeLessThan(10)
+  }, 120_000)
+
+  it('marks a count whose step always fails stuck, however often a caller restarts it', async () => {
+    // even the smallest step reads two of the comments, more than 1 MiB
+    const { row, minute } = await retryHalfHour(1024 * 1024)
+    expect(row).toMatchObject({ stuck: true, count: 0 })
+    expect(minute).toBe(10)
+  }, 120_000)
+
   it('starts the count after a REST or MCP write refused while it counts, and passes others on', async () => {
     const calls: { name: string; args: unknown }[] = []
     const runners = {

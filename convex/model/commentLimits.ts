@@ -378,12 +378,13 @@ export async function startCount(
  * Starts counting the comments of `issue` in background steps, from the
  * start of its thread when it has no row or one that names another
  * organization, and restarts a count under way that has not moved for
- * STALLED_MS. An exact count, a moving count and a stuck one are left as
- * they are, so it is safe to call again. For a post refused while its
- * task's comments are counted, in a transaction of its own because the
- * refusal undoes its own writes, and for a task Deleted items writes back
- * that was stored before counts, whose steps also count the comments the
- * restore wrote back.
+ * STALLED_MS as the recovery does (restartStalled), so callers that retry
+ * cannot keep a failing count at its full budget. An exact count, a moving
+ * count and a stuck one are left as they are, so it is safe to call again.
+ * For a post refused while its task's comments are counted, in a
+ * transaction of its own because the refusal undoes its own writes, and for
+ * a task Deleted items writes back that has no row, whose steps also count
+ * the comments the restore wrote back.
  */
 export async function beginCount(
   ctx: MutationCtx,
@@ -401,14 +402,41 @@ export async function beginCount(
     }
     if (row !== null) await ctx.db.replace(row._id, { ...fresh, revision: row.revision + 1 })
     else await uncountedWriter(ctx.db).insert('task_comment_counts', { ...fresh, revision: 0 })
-  } else if (
-    row.counted === undefined ||
-    row.stuck === true ||
-    (row.progress_at ?? 0) > now - STALLED_MS
-  )
+  } else {
+    if (row.counted === undefined || row.stuck === true) return
+    if ((row.progress_at ?? 0) > now - STALLED_MS) return
+    await restartStalled(ctx, row, now)
     return
-  else await ctx.db.patch(row._id, { progress_at: now })
+  }
   await ctx.scheduler.runAfter(0, stepRef, { issue_id: issue.id })
+}
+
+/**
+ * Restarts count `row`, under way and not moved for STALLED_MS, as one
+ * attempt more: the next step spends half the budget the last one had,
+ * down to RETRY.floor (stepScale), and a count that keeps failing there is
+ * marked stuck and logged instead. The recovery cron and beginCount both
+ * restart through it, so a failing count reaches the smallest budget, and
+ * at worst the stuck mark, whoever asks for it. Answers whether it
+ * scheduled a step.
+ */
+export async function restartStalled(
+  ctx: MutationCtx,
+  row: Doc<'task_comment_counts'>,
+  now: number,
+): Promise<boolean> {
+  const attempts = (row.attempts ?? 0) + 1
+  if (keepsFailing(attempts)) {
+    console.error('A comment count kept failing and stopped', {
+      issue_id: row.issue_id,
+      attempts: row.attempts,
+    })
+    await ctx.db.patch(row._id, { stuck: true, progress_at: undefined, attempts })
+    return false
+  }
+  await ctx.db.patch(row._id, { attempts, progress_at: now })
+  await ctx.scheduler.runAfter(0, stepRef, { issue_id: row.issue_id })
+  return true
 }
 
 /** Deletes the comment count and the post logs of task `issueId`, in the

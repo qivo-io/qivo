@@ -14,6 +14,9 @@
  * step's budget, and a count that keeps failing at the smallest one is
  * marked stuck and left for the backfill (internal/commentCountsBackfill),
  * which lists it. Its task's posts stay refused for now, as the cap needs.
+ * `begin` restarts a stalled count the same way (model/commentLimits.ts
+ * restartStalled), so a caller that retries on every refusal brings a
+ * failing count down to the smallest budget too.
  * Two steps of one count run one after the other, because both write its
  * row, and each counts on from where the last one stopped, so a repeated
  * step costs reads but never counts a comment twice.
@@ -26,7 +29,13 @@ import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import { internalMutation } from './_generated/server'
 import { byId } from './lib/db'
-import { beginCount, keepsFailing, STALLED_MS, SWEEP_BATCH, stepCount } from './model/commentLimits'
+import {
+  beginCount,
+  restartStalled,
+  STALLED_MS,
+  SWEEP_BATCH,
+  stepCount,
+} from './model/commentLimits'
 
 /** The most stalled counts one recovery restarts. Tests lower it. */
 export const RECOVER = { batch: 64 }
@@ -62,9 +71,8 @@ export const begin = internalMutation({
 
 /** Restarts the counts under way that have not moved for STALLED_MS, at
  * most RECOVER.batch of them, least recently moved first, and stamps each,
- * so a later run takes the others first. Each restart counts one attempt
- * and halves the next step's budget; a count that keeps failing at the
- * smallest budget is marked stuck instead and logged. */
+ * so a later run takes the others first (model/commentLimits.ts
+ * restartStalled: one attempt more, half the budget, stuck at the end). */
 export const recover = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
@@ -73,19 +81,7 @@ export const recover = internalMutation({
       .query('task_comment_counts')
       .withIndex('by_progress', (q) => q.gte('progress_at', 0).lt('progress_at', now - STALLED_MS))
       .take(RECOVER.batch)
-    for (const row of rows) {
-      const attempts = (row.attempts ?? 0) + 1
-      if (keepsFailing(attempts)) {
-        console.error('A comment count kept failing and stopped', {
-          issue_id: row.issue_id,
-          attempts: row.attempts,
-        })
-        await ctx.db.patch(row._id, { stuck: true, progress_at: undefined, attempts })
-        continue
-      }
-      await ctx.db.patch(row._id, { attempts, progress_at: now })
-      await ctx.scheduler.runAfter(0, stepRef, { issue_id: row.issue_id })
-    }
+    for (const row of rows) await restartStalled(ctx, row, now)
     return null
   },
 })
