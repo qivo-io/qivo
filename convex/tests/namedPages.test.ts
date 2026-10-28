@@ -4,8 +4,9 @@
  * read guard looks at the metrics only a few times a batch, and a cursor
  * opens only for the list and scope it came from. */
 
+import { compareValues, getDocumentSize, type Value } from 'convex/values'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { archiveCursorText, ceilingGuard } from '../lib/archivedTasks'
 import {
@@ -53,6 +54,83 @@ const plantKeys = (t: T, orgId: string, keys: readonly string[]) =>
       })
     }
   })
+
+/* The organization of the fake labels. */
+const ORG = 'org'
+
+/** A label of ORG as the index holds it, with the creation time given,
+ * which convex-test cannot plant: it gives every insert its own. */
+const fakeLabel = (name_lower: string, created: number, id: string): Doc<'labels'> => ({
+  _id: id as Id<'labels'>,
+  _creationTime: created,
+  id,
+  org_id: ORG,
+  name: name_lower,
+  name_lower,
+  color: '#4C9AFF',
+  created_at: NOW,
+})
+
+/** One range a fake query reads: fields equal to or past a value. */
+type Term = { field: string; op: 'eq' | 'gt'; value: Value }
+
+/** What labelIndex asks a fake index for. */
+type Range = { eq(field: string, value: Value): Range; gt(field: string, value: Value): Range }
+
+/**
+ * A query context over `rows`, which reads model/labels.ts labelIndex's
+ * ranges in the order of labels.by_org_name_lower (org_id, name_lower, then
+ * _creationTime and _id) and counts each range and document it reads in its
+ * own transaction metrics, so a read guard sees them. It answers only the
+ * reads labelIndex makes, and `ranges` holds what each range asked for.
+ */
+function labelsCtx(rows: readonly Doc<'labels'>[]) {
+  const used = { ranges: 0, documents: 0, bytes: 0 }
+  const ranges: Term[][] = []
+  const fields = (row: Doc<'labels'>) => [row.org_id, row.name_lower, row._creationTime, row._id]
+  const sorted = [...rows].sort((a, b) => compareValues(fields(a), fields(b)))
+  const query = (table: string) => ({
+    withIndex(name: string, build: (q: Range) => unknown) {
+      expect([table, name]).toEqual(['labels', 'by_org_name_lower'])
+      const terms: Term[] = []
+      const term = (op: Term['op']) => (field: string, value: Value) => {
+        terms.push({ field, op, value })
+        return q
+      }
+      const q: Range = { eq: term('eq'), gt: term('gt') }
+      build(q)
+      ranges.push(terms)
+      return {
+        async *[Symbol.asyncIterator]() {
+          used.ranges++
+          for (const row of sorted) {
+            const fieldsOf = row as unknown as Record<string, Value>
+            const holds = terms.every(({ field, op, value }) => {
+              const order = compareValues(fieldsOf[field], value)
+              return op === 'eq' ? order === 0 : order > 0
+            })
+            if (!holds) continue
+            used.documents++
+            used.bytes += getDocumentSize(row)
+            yield row
+          }
+        },
+      }
+    },
+  })
+  const metric = (n: number, limit: number) => ({ used: n, remaining: limit - n })
+  const ctx = {
+    db: { query },
+    meta: {
+      getTransactionMetrics: async () => ({
+        databaseQueries: metric(used.ranges, 4096),
+        documentsRead: metric(used.documents, 32_000),
+        bytesRead: metric(used.bytes, 16 << 20),
+      }),
+    },
+  } as unknown as QueryCtx
+  return { ctx, used, ranges }
+}
 
 /* Keys that differ only past their first character: characters past U+FFFF
  * (surrogate pairs in UTF-16) against characters in U+E000 to U+FFFF, where
@@ -157,6 +235,24 @@ describe('the order', () => {
     expect(compareNamed(at('x', 1, 'b'), at('x', 1, 'c'))).toBeLessThan(0)
     expect(compareNamed(at('x', 1, 'z'), at('x', 2, 'a'))).toBeLessThan(0)
     expect(compareNamed(at('x', 1, 'a'), at('x', 1, 'a'))).toBe(0)
+  })
+
+  it('counts the labels of a creation instant that a resume reads again', async () => {
+    // 60 labels of one name stored at one instant, which convex-test cannot plant
+    const group = Array.from({ length: 60 }, (_, i) =>
+      fakeLabel('same', 1000, `id${String(i).padStart(2, '0')}`),
+    )
+    const { ctx } = labelsCtx(group)
+    // after the 40th, under a ceiling of ten documents
+    const batch = await readBatch(ctx, {
+      stream: indexAfter(labelIndex(ctx, ORG), { key: 'same', tie: [1000, 'id39'] }),
+      keep: async (label: Doc<'labels'>) => label._id,
+      limit: 25,
+      through: null,
+      ceiling: { ranges: 1e9, documents: 10, bytes: 1e12 },
+    })
+    // the 40 read again fill the ceiling, so the batch moves on by one and stops
+    expect(batch).toMatchObject({ rows: ['id40'], ended: false, stopped: true })
   })
 
   it('resumes inside a creation instant that rows of one key share', async () => {

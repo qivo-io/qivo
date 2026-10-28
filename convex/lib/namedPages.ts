@@ -83,26 +83,36 @@ export type NamedIndex<Row, Tie extends NamedTie> = {
   at: (row: Row) => NamedAt<Tie>
 }
 
+/** What a stream tells the batch that reads it (readBatch): `open` asks
+ * whether it may start one more index range, and `skip` counts a row it read
+ * and left out, so the read budget sees it. */
+export type NamedReads = {
+  open(): Promise<boolean>
+  skip(row: GenericDocument): Promise<void>
+}
+
 /** The rows of `index` after `after`, or from its start, as a stream for
  * readBatch. It reads the index's ranges in turn, each opened only once the
- * one before it is read to its end, and only when `mayOpen` agrees; when it
- * does not, the stream hands out STOPPED and ends. A row a range holds that
- * is not past `after`, such as one created at the same instant before it,
- * is read and left out. */
-export function indexAfter<Row, Tie extends NamedTie>(
+ * one before it is read to its end, and only when `reads.open` agrees; when
+ * it does not, the stream hands out STOPPED and ends. A row a range holds
+ * that is not past `after`, such as one created at the same instant before
+ * it, is read, counted (`reads.skip`) and left out, so a resume inside a
+ * large instant fills the budget instead of passing it. */
+export function indexAfter<Row extends GenericDocument, Tie extends NamedTie>(
   index: NamedIndex<Row, Tie>,
   after: NamedAt<Tie> | null,
-): (mayOpen: () => Promise<boolean>) => NamedStream<Row> {
+): (reads: NamedReads) => NamedStream<Row> {
   const ranges = after === null ? [index.all] : index.after(after)
-  return async function* (mayOpen) {
+  return async function* (reads) {
     for (const range of ranges) {
-      if (!(await mayOpen())) {
+      if (!(await reads.open())) {
         yield STOPPED
         return
       }
       for await (const row of range()) {
         const at = index.at(row)
         if (after === null || compareNamed(at, after) > 0) yield { row, at }
+        else await reads.skip(row)
       }
     }
   }
@@ -284,7 +294,8 @@ export type NamedBatch<Out> = {
  * reads with the guard it is given. It stops once `limit` rows are kept,
  * when the next row lies past `through`, when the stream ends, or when the
  * guard on `ceiling` refuses the next read or finds the ceiling reached
- * after a row. A full batch reads one row more, so a batch that ends with
+ * after a row. The rows the stream reads and leaves out count too
+ * (NamedReads). A full batch reads one row more, so a batch that ends with
  * the list says so. `limit` is at least 1.
  *
  * It always reads its first row, and the ranges before it, whatever the
@@ -298,7 +309,7 @@ export type NamedBatch<Out> = {
 export async function readBatch<Row extends GenericDocument, Out>(
   ctx: QueryCtx,
   o: {
-    stream: (mayOpen: () => Promise<boolean>) => NamedStream<Row>
+    stream: (reads: NamedReads) => NamedStream<Row>
     keep: (row: Row, guard: ReadGuard) => Promise<Out | null>
     limit: number
     through: NamedAt | null
@@ -311,7 +322,14 @@ export async function readBatch<Row extends GenericDocument, Out>(
   let moved = false
   const rows: Out[] = []
   let at: NamedAt | null = null
-  const stream = o.stream(async () => (await guard.range()) || !moved)[Symbol.asyncIterator]()
+  const stream = o
+    .stream({
+      open: async () => (await guard.range()) || !moved,
+      skip: async (row) => {
+        await guard.document(row)
+      },
+    })
+    [Symbol.asyncIterator]()
   // whether the batch has read the row at `through`, which completes it
   const reached = (last: NamedAt) => o.through !== null && compareNamed(last, o.through) >= 0
   try {
