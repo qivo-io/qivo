@@ -1146,6 +1146,7 @@ async function moveEdges(run: Run): Promise<boolean> {
   for (; cursor.index < ids.length; cursor.index += 1, cursor.after = 0) {
     if (spent(run.budget)) return stop()
     const projectId = ids[cursor.index]
+    if (await takenAgain(run, projectId)) continue
     const tasks = run.ctx.db
       .query('issues')
       .withIndex('by_project_archived', (q) =>
@@ -1198,11 +1199,19 @@ async function isEdge(
   return false
 }
 
+/** Whether a live project holds the id of one of a moving item's projects.
+ * Only a project row the move dropped as too large to store frees its id
+ * (storeRow), and the project that took it since keeps its own rows, so
+ * the move leaves them alone, as a purge does (absentProjects). */
+const takenAgain = async (run: Run, id: string): Promise<boolean> =>
+  (await byId(run.ctx, 'projects', id)) !== null
+
 /* Each of the item's projects' milestones, grants and team grants, then
  * every task left in it. The user's transaction stored only the project
  * rows, which hide the rest. */
 async function moveProjectTasks(run: Run): Promise<boolean> {
   for (const id of itemProjectIds(run.item)) {
+    if (await takenAgain(run, id)) continue
     if (!(await clearProjectRows(run, id, 'keep'))) return false
     if (!(await clearProjectTasks(run, id, 'keep'))) return false
   }
@@ -1259,6 +1268,7 @@ async function moveLeft(run: Run): Promise<TrashPhase | null> {
     return done ? null : 'move_finish'
   }
   for (const id of itemProjectIds(run.item)) {
+    if (await takenAgain(run, id)) continue
     if (await holdsRows(run.ctx, PROJECT_ROWS, id)) return 'move_tasks'
     if ((await reachOn(run.ctx, id).first()) !== null) return 'move_tasks'
     const task = await run.ctx.db

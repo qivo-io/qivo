@@ -64,6 +64,7 @@ const RUN_DEFAULTS = { ...RUN }
 const TREE_DEFAULTS = { ...TREE_READ }
 const PASS_DEFAULTS = { ...ACCESS_FIRST_PASS }
 const REMOVAL_DEFAULTS = { ...REMOVAL_BUDGET }
+const DEFAULT_ROWS = TRASH_BUDGET.rows
 afterEach(() => {
   Object.assign(NAV_STEP, STEP_DEFAULTS)
   Object.assign(RUN, RUN_DEFAULTS)
@@ -990,6 +991,41 @@ describe('a restore and the work around it', () => {
     // where a call that missed the icon's bytes would have revealed
     expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_reveal' })
     await runSteps(t)
+    await expectAll(t, f)
+  })
+
+  it('leaves alone a live project that took the id of a project its move dropped', async () => {
+    const t = newT()
+    const f = await ready(t)
+    const org_id = f.org.id
+    // past what a stored row may hold, so the move drops it and frees its id
+    await t.run(async (ctx) => {
+      const row = await byId(ctx, 'projects', f.sub.id)
+      if (row !== null) await ctx.db.patch(row._id, { icon: 'i'.repeat(1_000_100) })
+    })
+    TRASH_BUDGET.rows = 1
+    await as(t, f.user).mutation(api.projects.deleteDeep, { org_id, id: f.meta.id })
+    const item = await itemFor(t, f.meta.id)
+    // a new sub-project takes the freed id, with a lead whose row stays.
+    // withOrg plants its projects without used_ids rows, so the create can
+    // take it, as one by a release before used_ids can after a rollback;
+    // with the row every create refuses it (the next test)
+    await as(t, f.user).mutation(api.projects.create, {
+      org_id,
+      id: f.sub.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+      key: 'NEWFW',
+      name: 'New firmware',
+      sort_order: 1,
+    })
+    TRASH_BUDGET.rows = DEFAULT_ROWS
+    for (let steps = 0; (await jobFor(t, item.id)) !== null; steps++) {
+      expect(steps).toBeLessThan(50)
+      await step(t, item.id)
+    }
+    expect(await projectOf(t, f.sub.id)).toMatchObject({ parent_id: f.hidden.id })
+    expect((await rowsOf(t, f.user.id)).some((row) => row.project_id === f.sub.id)).toBe(true)
     await expectAll(t, f)
   })
 })
