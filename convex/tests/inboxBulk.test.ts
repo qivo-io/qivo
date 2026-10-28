@@ -1,15 +1,28 @@
-/* The bulk inbox actions' planning read (convex/messages.ts bulkReach,
- * model/messages.ts readBulkReach). It says per seat whether Mark all as
- * read or Remove all read has nothing, one batch or more to do, on the
- * ranges the batches walk, and answers the cutoff a first Mark all as read
- * batch would choose. */
+/* The bulk inbox actions' planning read and their batch size
+ * (convex/messages.ts bulkReach, model/messages.ts readBulkReach,
+ * INBOX_BATCH). bulkReach says per seat whether Mark all as read or Remove
+ * all read has nothing, one batch or more to do, on the ranges the batches
+ * walk, and answers the cutoff a first Mark all as read batch would choose.
+ * One batch at INBOX_BATCH stays below a quarter of every Convex limit in
+ * the worst cases, with messages as long as the writers make them. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { BULK_REACH, INBOX_BATCH } from '../model/messages'
+import type { MutationCtx } from '../_generated/server'
+import { byId, newWindowKey } from '../lib/db'
+import { LIMITS, NAME_MAX } from '../lib/limits'
+import { insertTask } from '../model/descriptions'
+import { itemEdits } from '../model/inboxItems'
+import {
+  BULK_REACH,
+  INBOX_BATCH,
+  ITEM_UNREAD_CAP,
+  markAllMessagesRead,
+  removeReadMessages,
+} from '../model/messages'
 import { as, NOW, newT, type OrgFixture, plantSeat, type T, uuid, withOrg } from './helpers.setup'
-import { at } from './inboxItems.setup'
+import { at, drift } from './inboxItems.setup'
 
 const DEFAULT_REACH = { ...BULK_REACH }
 afterEach(() => {
@@ -159,5 +172,194 @@ describe('bulkReach', () => {
     await expect(t.query(api.messages.bulkReach, { action: 'read' })).rejects.toThrow(
       'not signed in',
     )
+  })
+})
+
+/* --------------------------------------------------------- batch size */
+
+/** A text of `n` characters in a three-byte script, the most bytes a
+ * character-counted field holds (a four-byte character counts as two). */
+const wide = (n: number) => '界'.repeat(n)
+
+/** The longest detail a change notice can carry: every fragment
+ * model/messages.ts notifyIssueUpdate writes at once, each name and title
+ * at its longest in a three-byte script. An upper bound, as one change
+ * writes fewer fragments. */
+const LONGEST_DETAIL = [
+  'Status: In progress → In review',
+  'Priority: Urgent → Medium',
+  `Title: “${wide(LIMITS.title.max)}” → “${wide(LIMITS.title.max)}”`,
+  'Description updated',
+  'Due: 30 Sep → 31 Dec',
+  'Schedule: 30 Sep – 31 Dec → 30 Nov – 31 Dec',
+  'Remaining: 1000 h → 2000 h',
+  'Paused',
+  `Moved to ${wide(NAME_MAX)}`,
+  'Attached under a task in another sub-project',
+  `Assigned to ${wide(NAME_MAX)}`,
+  `Reviewer set to ${wide(NAME_MAX)}`,
+].join('. ')
+
+/** The fixture's admin's inbox: `items` tasks with the longest title, each
+ * with `unread` unread messages and then `read` read ones, the newest, as
+ * an item keeps them (model/messages.ts pruneReadMessages), every message
+ * with the longest detail. Its inbox_items rows are complete and exact. */
+async function plantInbox(
+  t: T,
+  f: OrgFixture,
+  items: { unread: number; read: number }[],
+): Promise<Doc<'profiles'>> {
+  let minute = 0
+  for (let start = 0; start < items.length; start += 32)
+    await t.run(async (ctx) => {
+      const edits = itemEdits(ctx)
+      await edits.state(f.admin.id, 'ensure')
+      for (const item of items.slice(start, start + 32)) {
+        minute += item.unread + item.read
+        await plantItem(ctx, f, edits, item, minute)
+      }
+      await edits.flush()
+    })
+  return f.admin
+}
+
+/* One task and its item for plantInbox, its messages at the minutes before
+ * `end`. */
+async function plantItem(
+  ctx: MutationCtx,
+  f: OrgFixture,
+  edits: ReturnType<typeof itemEdits>,
+  item: { unread: number; read: number },
+  end: number,
+) {
+  const task = {
+    id: uuid(),
+    org_id: f.org.id,
+    project_id: f.sub.id,
+    num: end,
+    title: wide(LIMITS.title.max),
+    description: '',
+    status: 'todo' as const,
+    priority: 'medium' as const,
+    paused: false,
+    created_at: NOW,
+    updated_at: NOW,
+    window_key: newWindowKey(),
+  }
+  await insertTask(ctx.db, task, 'restore')
+  const count = item.unread + item.read
+  for (let i = 0; i < count; i++) {
+    const read = i >= item.unread
+    await edits.insert(
+      {
+        id: uuid(),
+        org_id: f.org.id,
+        recipient_id: f.admin.id,
+        actor_id: f.user.id,
+        issue_id: task.id,
+        issue_title: task.title,
+        kind: 'change',
+        detail: LONGEST_DETAIL,
+        created_at: at(end - count + i),
+        // a woken item's stamp and the item cap's count, which an unread
+        // message can carry too
+        woke_at: at(end),
+        ...(read ? { read_at: NOW } : { dropped: 1_000_000 }),
+      },
+      f.sub.id,
+      i === 0,
+    )
+  }
+}
+
+/* Convex's limits for one transaction (docs.convex.dev/production/state/limits). */
+const LIMIT = {
+  bytesRead: 16 * 2 ** 20,
+  documentsRead: 32_000,
+  databaseQueries: 4_096,
+  documentsWritten: 16_000,
+  bytesWritten: 16 * 2 ** 20,
+}
+
+/** Runs `batch` once in a transaction of its own and answers what it
+ * changed and the transaction's metrics. */
+async function measure(
+  t: T,
+  who: Doc<'profiles'>,
+  batch: (ctx: MutationCtx, me: Doc<'profiles'>) => Promise<number>,
+) {
+  return await t.run(async (ctx) => {
+    const me = (await byId(ctx, 'profiles', who.id)) as Doc<'profiles'>
+    const changed = await batch(ctx, me)
+    const m = await ctx.meta.getTransactionMetrics()
+    return {
+      changed,
+      used: Object.fromEntries(
+        (Object.keys(LIMIT) as (keyof typeof LIMIT)[]).map((key) => [key, m[key].used]),
+      ) as Record<keyof typeof LIMIT, number>,
+    }
+  })
+}
+
+/* Each metric below a quarter of its limit. */
+function expectQuarter(used: Record<keyof typeof LIMIT, number>) {
+  for (const key of Object.keys(LIMIT) as (keyof typeof LIMIT)[])
+    expect(used[key], key).toBeLessThan(LIMIT[key] / 4)
+}
+
+const markBatch = async (ctx: MutationCtx, me: Doc<'profiles'>) =>
+  (await markAllMessagesRead(ctx, me, undefined, at(100_000))).marked.length
+const removeBatch = async (ctx: MutationCtx, me: Doc<'profiles'>) =>
+  (await removeReadMessages(ctx, me)).removed.length
+
+describe('one batch at INBOX_BATCH', { timeout: 120_000 }, () => {
+  it('stays below a quarter of every limit when it marks one message in each of its items', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the prune then deletes the message the batch marked, as the item's
+    // newest message is the read one
+    const who = await plantInbox(
+      t,
+      f,
+      Array.from({ length: INBOX_BATCH }, () => ({ unread: 1, read: 1 })),
+    )
+    const { changed, used } = await measure(t, who, markBatch)
+    expect(changed).toBe(INBOX_BATCH)
+    console.info(`Mark all as read, ${INBOX_BATCH} items of 1 unread and 1 read:`, used)
+    expectQuarter(used)
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('stays below a quarter of every limit when it marks items of 51 messages', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // items at the cap (50 unread and the newest read), the batch's rows
+    const full = Math.floor(INBOX_BATCH / ITEM_UNREAD_CAP)
+    const rest = INBOX_BATCH - full * ITEM_UNREAD_CAP
+    const who = await plantInbox(t, f, [
+      ...Array.from({ length: full }, () => ({ unread: ITEM_UNREAD_CAP, read: 1 })),
+      ...(rest > 0 ? [{ unread: rest, read: 1 }] : []),
+    ])
+    const { changed, used } = await measure(t, who, markBatch)
+    expect(changed).toBe(INBOX_BATCH)
+    console.info('Mark all as read, items of 51 messages:', used)
+    expectQuarter(used)
+    expect(await drift(t)).toEqual([])
+  })
+
+  it("stays below a quarter of every limit when it removes each of its items' newest message", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // each item then reads its newest remaining message
+    const who = await plantInbox(
+      t,
+      f,
+      Array.from({ length: INBOX_BATCH }, () => ({ unread: 1, read: 1 })),
+    )
+    const { changed, used } = await measure(t, who, removeBatch)
+    expect(changed).toBe(INBOX_BATCH)
+    console.info(`Remove all read, ${INBOX_BATCH} items losing their newest message:`, used)
+    expectQuarter(used)
+    expect(await drift(t)).toEqual([])
   })
 })

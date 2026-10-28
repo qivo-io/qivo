@@ -2027,14 +2027,14 @@ items with `tasks`, or send `"all": true` instead:
 
 - `read` marks the named items read. Like opening an item in the app, it
   keeps only each item's latest message. With `all`, it marks every item
-  read except snoozed ones, up to 256 messages per call, and the answer
+  read except snoozed ones, up to 200 messages per call, and the answer
   adds `before`, a number. Send it back unchanged as `"before"` with each
   later call, so messages that arrive meanwhile stay unread. `before` with
   `tasks` or another action, or one that is not a number from 0 up, is a
   `400`.
 - `unread` marks the named items unread again.
 - `remove` removes the named items. With `all`, it removes every read
-  message except snoozed ones, up to 256 per call, and leaves unread
+  message except snoozed ones, up to 200 per call, and leaves unread
   messages alone.
 - `snooze` hides the named items until `until`, an ISO date-time in the
   future and at most 366 days ahead, and marks them unread so they return
