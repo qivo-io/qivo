@@ -328,8 +328,9 @@ const issueSubscriptionsTable = defineTable({
 
 // A task holds at most LIMITS.attachments.max rows (lib/limits.ts) without a
 // dropped_at, and at most DROPPED_IMAGES_MAX with one (model/descriptionImages.ts).
-// A row names no project: storage totals read it through its task
-// (model/billing.ts storagePage), so a move writes no attachment row.
+// A row names no project. The billing sample reads it through its task
+// (model/billing.ts storagePage), and the stored-byte totals through its
+// task's storage_task_totals row, so a move writes no attachment row.
 const issueAttachmentsTable = defineTable({
   org_id: v.string(),
   id: v.string(),
@@ -1350,6 +1351,93 @@ export default defineSchema({
     full_at: v.number(), // the start of the last finished full run, epoch milliseconds
   }),
 
+  /* Stored task-file totals (model/storageTotals.ts) hold the bytes and
+   * files of an organization's task attachments and description images, per
+   * organization, per project and per task. A file counts from the
+   * transaction that attaches it (model/attachments.ts attachFileCore) until
+   * the one that deletes its last row for good, live or stored in Deleted
+   * items, and counts once in between. A move to Deleted items, a restore,
+   * an archive and their retries change no total. A file whose last row is
+   * deleted counts as deleted at that commit, even while its bytes wait out
+   * the backup hold (file_holds), which no organization owns. An upload
+   * that never attaches never counts, and neither do profile pictures,
+   * personal backgrounds or their previews. Each table is kept off
+   * org_counters and the other rows every member's queries read, so the
+   * writes rerun none of them. Readers use an organization's totals only
+   * while its row exists without `counting` (storageTotalsOf).
+   *
+   * A project or task row is found by its organization, its id and its
+   * number, which the organization never gives another project or task, so
+   * one row holds one object's files for good. A new task or project that
+   * takes the id of a purged one, in any organization, gets a row of its
+   * own, and no writer ever reads or changes another's. A row a purged
+   * object leaves behind goes with a recount of its organization, and the
+   * rows of an organization that is gone with the backfill's stray check.
+   *
+   * One row per organization. No row means the organization is not counted
+   * yet. internal/storageTotalsBackfill counts it, and until then every
+   * writer leaves its totals alone. New organizations start counted
+   * (model/orgs.ts insertOrgRows). */
+  storage_org_totals: defineTable({
+    org_id: v.string(),
+    bytes: v.number(),
+    files: v.number(),
+    // Raised by every write to the organization's totals rows, its project
+    // and task rows included, so a dry run of the backfill can tell that
+    // they held still while it counted. It never goes back.
+    revision: v.number(),
+    // The backfill run that began the organization's latest count; absent
+    // for an organization counted from its start
+    run: v.optional(v.string()),
+    // While the backfill counts, the task number it has counted through. A
+    // writer moves the totals only for a task numbered at or below it, and
+    // for any task that already has its storage_task_totals row.
+    counting: v.optional(v.object({ through: v.number() })),
+  }).index('by_org', ['org_id']),
+
+  // The same totals per project (always a sub-project, as tasks name), for
+  // the Storage by project breakdown. A row exists while the project has a
+  // counted file and is deleted at none, so a project in Deleted items keeps
+  // its row until its files are purged. `name` is the project's, copied
+  // when the row is written and on each rename (model/projects.ts
+  // updateProjectCore). project_id may name a project that is gone for good
+  // while a subtask of a task item still holds files there.
+  storage_project_totals: defineTable({
+    org_id: v.string(),
+    project_id: v.string(),
+    // the project's number; absent, as `name` is, when the backfill found no
+    // copy of the project, live or stored
+    num: v.optional(v.number()),
+    name: v.optional(v.string()),
+    bytes: v.number(),
+    files: v.number(),
+  })
+    .index('by_org_project', ['org_id', 'project_id', 'num'])
+    // the breakdown, largest first, and the teardowns' drain by organization
+    .index('by_org_bytes', ['org_id', 'bytes']),
+
+  // The same totals per task, with the project the task's files count in,
+  // so a move between projects shifts a task's bytes by reading this row
+  // rather than its attachment rows (model/issues.ts moveIssueCore), and a
+  // purge finds the project of a file whose task row is already gone. A row
+  // exists while the task has a counted file, live or stored, and is
+  // deleted at none. issue_id may name a task held only in Deleted items,
+  // or one whose stored rows a purge is still deleting.
+  storage_task_totals: defineTable({
+    org_id: v.string(),
+    issue_id: v.string(),
+    // the task's number, which no other task of its organization ever has
+    num: v.number(),
+    // the project the files count in, with its number as that project's row
+    // holds it
+    project_id: v.string(),
+    project_num: v.optional(v.number()),
+    bytes: v.number(),
+    files: v.number(),
+  })
+    // one task's row, and the teardowns' drain by organization
+    .index('by_org_issue', ['org_id', 'issue_id', 'num']),
+
   milestones: milestonesTable,
 
   /* Deleted items (model/deletedItems.ts). Deleting a task or a project
@@ -1560,6 +1648,10 @@ export default defineSchema({
     .index('by_item_owner', ['item_id', 'owner_id'])
     .index('by_item_table_grantee', ['item_id', 'table', 'grantee'])
     .index('by_row', ['table', 'row_id'])
+    // one task's stored rows of a table, whichever item holds them. A
+    // project item can store them before the task, and a split moves them
+    // between items one at a time (internal/storageTotalsBackfill.ts)
+    .index('by_table_org_owner', ['table', 'org_id', 'owner_id'])
     .index('by_storage', ['storage_id'])
     .index('by_org_key', ['org_id', 'project_key'])
     .index('by_org_lead', ['org_id', 'lead_id'])

@@ -34,6 +34,7 @@ import { imageRefs, shownImages } from '../lib/imageRefs'
 import { LIMITS } from '../lib/limits'
 import { logActivity, signedDetail } from './activity'
 import { releaseFile } from './fileHolds'
+import { uncountFile } from './storageTotals'
 
 /** How long an image a save took out of the description stays, uncounted,
  * for a later save to bring back. */
@@ -69,10 +70,17 @@ export async function scheduleImageReap(
   await ctx.scheduler.runAfter(due, reapRef, { id })
 }
 
-/* Deletes a dropped image and lets go of its file, which is held for a
+/* Deletes a dropped image of the task numbered `num`, when the caller holds
+ * it, takes it out of the stored-byte totals, which count it until then
+ * (model/storageTotals.ts), and lets go of its file, which is held for a
  * restore before it is erased (model/fileHolds.ts releaseFile). */
-async function deleteImage(ctx: MutationCtx, row: Doc<'issue_attachments'>): Promise<void> {
+async function deleteImage(
+  ctx: MutationCtx,
+  row: Doc<'issue_attachments'>,
+  num?: number,
+): Promise<void> {
   await ctx.db.delete(row._id)
+  await uncountFile(ctx, row, num)
   await releaseFile(ctx, row.storage_id)
 }
 
@@ -165,7 +173,8 @@ export async function settleDescriptionImages(
     .sort((x, y) => (dropped.get(y.id) as string).localeCompare(dropped.get(x.id) as string))
   for (const [i, row] of kept.entries()) {
     const at = Date.parse(dropped.get(row.id) as string)
-    if (i >= DROPPED_IMAGES_MAX || nowMs - at >= DROPPED_KEEP_MS) await deleteImage(ctx, row)
+    if (i >= DROPPED_IMAGES_MAX || nowMs - at >= DROPPED_KEEP_MS)
+      await deleteImage(ctx, row, issue.num)
   }
 }
 

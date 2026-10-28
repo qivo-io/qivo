@@ -633,6 +633,20 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
     .collect())
     await ctx.db.delete(stamp._id)
 
+  // The task and project storage totals. Only clearOrgTrash above takes
+  // files out of them, so the rest go here, in the same transaction as the
+  // files; the organization's row goes with deleteOrgBookkeeping.
+  for (const row of await ctx.db
+    .query('storage_task_totals')
+    .withIndex('by_org_issue', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(row._id)
+  for (const row of await ctx.db
+    .query('storage_project_totals')
+    .withIndex('by_org_bytes', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(row._id)
+
   // the Northstar importer's ownership receipt names the org (one-row table)
   for (const r of await ctx.db.query('marketing_demo').collect()) {
     if (r.org_id === org.id) await ctx.db.delete(r._id)

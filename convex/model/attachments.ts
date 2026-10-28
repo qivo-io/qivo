@@ -17,8 +17,10 @@
  * Each row carries its task's organization, so the storage totals read the
  * organization's rows by index. It names no project: the storage totals
  * read each row's project through its task (model/billing.ts storagePage),
- * so moving a task writes none of its rows. A task holds at most
- * LIMITS.attachments.max rows, files and description images together
+ * so moving a task writes none of its rows. The maintained stored-byte
+ * totals (model/storageTotals.ts) count a file in the transaction that
+ * attaches it and take it out in the one that deletes it. A task holds at
+ * most LIMITS.attachments.max rows, files and description images together
  * (lib/limits.ts), less the description images a save took out
  * (model/descriptionImages.ts): an upload that would pass it is refused
  * before any bytes are sent (startAttachmentUpload, files.ts uploadUrl,
@@ -58,6 +60,7 @@ import { logActivity, signedDetail } from './activity'
 import { eraseFile, releaseFile, storageIdInUse } from './fileHolds'
 import { assertCanEdit } from './issues'
 import { attachmentLimitMb, newUuid } from './orgs'
+import { countFile, uncountFile } from './storageTotals'
 
 /* The byte fence and the file holds live in model/fileHolds.ts; other
  * modules still import storageIdInUse from here and from files.ts. */
@@ -115,8 +118,10 @@ export type AttachResult =
  * `declaredSize` is given, the stored file must have exactly that many
  * bytes, checked before the cap so that a file of another size is refused
  * and kept, never deleted. Throws before any write; only an oversize file is
- * a returned refusal, after its bytes are deleted. Does not notify and does
- * not stamp the task's updated_at, as in the app.
+ * a returned refusal, after its bytes are deleted. The attached file counts
+ * in the organization's stored-byte totals from this transaction
+ * (model/storageTotals.ts countFile); a refused one never does. Does not
+ * notify and does not stamp the task's updated_at, as in the app.
  */
 export async function attachFileCore(
   ctx: MutationCtx,
@@ -175,6 +180,7 @@ export async function attachFileCore(
     },
     badRequest('an attachment with this id already exists'),
   )
+  await countFile(ctx, issue, meta.size)
   await logActivity(ctx, {
     org_id: issue.org_id,
     actor_id: me.id,
@@ -192,10 +198,12 @@ export async function attachFileCore(
 }
 
 /**
- * Deletes `attachment` of `issue` and lets go of its file, which is held
- * for a restore before it is erased (model/fileHolds.ts releaseFile), with
- * the app's activity row ('removed an attachment from', or 'removed an image
- * from' for an inline image), signed with `provenance` for a machine caller.
+ * Deletes `attachment` of `issue`, takes it out of the stored-byte totals
+ * (model/storageTotals.ts uncountFile) and lets go of its file, which is
+ * held for a restore before it is erased (model/fileHolds.ts releaseFile),
+ * with the app's activity row ('removed an attachment from', or 'removed an
+ * image from' for an inline image), signed with `provenance` for a machine
+ * caller.
  * Any member with Edit on the task's project may remove any attachment.
  */
 export async function removeAttachmentCore(
@@ -212,6 +220,7 @@ export async function removeAttachmentCore(
   await assertCanEdit(ctx, me, issue.project_id)
   if (attachment.issue_id !== issue.id) throw notFound('attachment not found')
   await ctx.db.delete(attachment._id)
+  await uncountFile(ctx, attachment, issue.num)
   await releaseFile(ctx, attachment.storage_id)
   await logActivity(ctx, {
     org_id: issue.org_id,

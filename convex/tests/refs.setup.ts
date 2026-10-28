@@ -44,6 +44,9 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'marketing_demo', field: 'org_id', target: 'organizations' },
   { table: 'org_counters', field: 'org_id', target: 'organizations' },
   { table: 'org_ready', field: 'org_id', target: 'organizations' },
+  { table: 'storage_org_totals', field: 'org_id', target: 'organizations' },
+  { table: 'storage_project_totals', field: 'org_id', target: 'organizations' },
+  { table: 'storage_task_totals', field: 'org_id', target: 'organizations' },
   { table: 'teams', field: 'org_id', target: 'organizations' },
   { table: 'team_members', field: 'team_id', target: 'teams' },
   { table: 'team_members', field: 'profile_id', target: 'profiles' },
@@ -269,6 +272,14 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // attachParent); either may be gone or moved by then
   'deleted_item_parents.task_id',
   'deleted_item_parents.parent_id',
+  // Stored-byte totals name the project and task their files count in while
+  // those are held in Deleted items, and a project gone for good while a
+  // subtask of a task item still holds files there. Each row also names its
+  // organization and number, so an id another task or project takes later
+  // never finds it (model/storageTotals.ts).
+  'storage_project_totals.project_id',
+  'storage_task_totals.issue_id',
+  'storage_task_totals.project_id',
   // the platform audit log survives its subjects on purpose
   'platform_audit_log.actor_auth_id',
   'platform_audit_log.target_org_id',

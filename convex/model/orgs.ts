@@ -46,6 +46,7 @@ import {
 } from './expected'
 import { readyRow } from './nameKeys'
 import { assertProfileExpected } from './people'
+import { deleteOrgTotals, startOrgTotals } from './storageTotals'
 
 /* Web Crypto exists in the Convex isolate (and the edge-runtime VM), but
  * convex/tsconfig's lib is ESNext only, which does not declare the global. */
@@ -296,10 +297,11 @@ export async function setCounters(
 }
 
 /** Inserts an organization with its org_counters row, its live counts at
- * zero, and its org_ready row, ready from its creation because every writer
- * gives its rows their name keys (model/nameKeys.ts). Every path that
- * creates an organization uses it; `counters` lets a fixture start
- * numbering past rows it plants, which it tallies (tallyRow). */
+ * zero, its org_ready row, ready from its creation because every writer
+ * gives its rows their name keys (model/nameKeys.ts), and its stored-byte
+ * totals at zero (model/storageTotals.ts). Every path that creates an
+ * organization uses it; `counters` lets a fixture start numbering past rows
+ * it plants, which it tallies (tallyRow). */
 export async function insertOrgRows(
   ctx: MutationCtx,
   row: WithoutSystemFields<Doc<'organizations'>>,
@@ -313,6 +315,7 @@ export async function insertOrgRows(
     live_projects: 0,
   })
   await ctx.db.insert('org_ready', { org_id: row.id, name_keys_at: row.created_at })
+  await startOrgTotals(ctx, row.id)
   return id
 }
 
@@ -385,15 +388,17 @@ export const tallyRow = (
   after: Tallied | null,
 ): Promise<void> => tallyRows(ctx, table, [[before, after]])
 
-/** Deletes the organization's org_counters and org_ready rows, if any.
- * Every organization delete (model/cascade.ts deleteOrgDeep, the last step
- * of model/orgDeletion.ts, the demo purge) calls it before it deletes the
+/** Deletes the organization's org_counters and org_ready rows and its
+ * stored-byte totals row (model/storageTotals.ts), if any. Every
+ * organization delete (model/cascade.ts deleteOrgDeep, the last step of
+ * model/orgDeletion.ts, the demo purge) calls it before it deletes the
  * organization row. */
 export async function deleteOrgBookkeeping(ctx: MutationCtx, orgId: string): Promise<void> {
   const counters = await countersRow(ctx, orgId)
   if (counters !== null) await ctx.db.delete(counters._id)
   const ready = await readyRow(ctx, orgId)
   if (ready !== null) await ctx.db.delete(ready._id)
+  await deleteOrgTotals(ctx, orgId)
 }
 
 /* ------------------------------------------------------------------ defaults

@@ -23,6 +23,7 @@ import { recordDemoCreated } from '../model/demoMetrics'
 import { drainDemoUploads } from '../model/demoUploads'
 import { eraseFile } from '../model/fileHolds'
 import { deleteOrgBookkeeping, tallyRow } from '../model/orgs'
+import { uncountFile } from '../model/storageTotals'
 import { marketingId } from './marketingDemoData'
 
 const BATCH = 64
@@ -75,8 +76,30 @@ async function trashRows(ctx: MutationCtx, orgId: string, budget: Budget): Promi
   return done
 }
 
+/** Any task or project storage totals left once the tasks are gone. The
+ * trash and tasks phases take them out with the files
+ * (model/storageTotals.ts), and the organization's own row goes with its
+ * other bookkeeping in the finish phase. */
+async function storageRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
+  return (
+    (await drain(ctx, budget, (n) =>
+      ctx.db
+        .query('storage_task_totals')
+        .withIndex('by_org_issue', (q) => q.eq('org_id', orgId))
+        .take(n),
+    )) &&
+    (await drain(ctx, budget, (n) =>
+      ctx.db
+        .query('storage_project_totals')
+        .withIndex('by_org_bytes', (q) => q.eq('org_id', orgId))
+        .take(n),
+    ))
+  )
+}
+
 /** Every task with its rows, then the description rows the tasks leave
- * (model/descriptions.ts), which a visitor's payload limit keeps small. */
+ * (model/descriptions.ts), which a visitor's payload limit keeps small, then
+ * any storage totals left (storageRows). */
 async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
   while (budget.left > 0) {
     const issue = await ctx.db
@@ -84,11 +107,13 @@ async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
       .withIndex('by_org', (q) => q.eq('org_id', orgId))
       .first()
     if (!issue)
-      return await drain(ctx, budget, (n) =>
-        ctx.db
-          .query('issue_descriptions')
-          .withIndex('by_org', (q) => q.eq('org_id', orgId))
-          .take(n),
+      return (
+        (await drain(ctx, budget, (n) =>
+          ctx.db
+            .query('issue_descriptions')
+            .withIndex('by_org', (q) => q.eq('org_id', orgId))
+            .take(n),
+        )) && (await storageRows(ctx, orgId, budget))
       )
     const id = issue.id
     if (
@@ -154,7 +179,10 @@ async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
             .query('issue_attachments')
             .withIndex('by_issue', (q) => q.eq('issue_id', id))
             .take(n),
-        (row) => removeFile(ctx, row.storage_id),
+        async (row) => {
+          await uncountFile(ctx, row, issue.num)
+          await removeFile(ctx, row.storage_id)
+        },
       ))
     )
       return false

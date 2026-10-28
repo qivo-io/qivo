@@ -56,6 +56,7 @@ import type * as internal_nameKeysBackfill from "../internal/nameKeysBackfill.js
 import type * as internal_oauthSmoke from "../internal/oauthSmoke.js";
 import type * as internal_operator from "../internal/operator.js";
 import type * as internal_overCapRows from "../internal/overCapRows.js";
+import type * as internal_storageTotalsBackfill from "../internal/storageTotalsBackfill.js";
 import type * as internal_storedGrantees from "../internal/storedGrantees.js";
 import type * as internal_usageRanksBackfill from "../internal/usageRanksBackfill.js";
 import type * as internal_windowKeysBackfill from "../internal/windowKeysBackfill.js";
@@ -182,6 +183,7 @@ import type * as model_orgs from "../model/orgs.js";
 import type * as model_people from "../model/people.js";
 import type * as model_projectAccess from "../model/projectAccess.js";
 import type * as model_projects from "../model/projects.js";
+import type * as model_storageTotals from "../model/storageTotals.js";
 import type * as model_syncStamps from "../model/syncStamps.js";
 import type * as model_taskEvents from "../model/taskEvents.js";
 import type * as model_taskValues from "../model/taskValues.js";
@@ -272,6 +274,7 @@ declare const fullApi: ApiFromModules<{
   "internal/oauthSmoke": typeof internal_oauthSmoke;
   "internal/operator": typeof internal_operator;
   "internal/overCapRows": typeof internal_overCapRows;
+  "internal/storageTotalsBackfill": typeof internal_storageTotalsBackfill;
   "internal/storedGrantees": typeof internal_storedGrantees;
   "internal/usageRanksBackfill": typeof internal_usageRanksBackfill;
   "internal/windowKeysBackfill": typeof internal_windowKeysBackfill;
@@ -398,6 +401,7 @@ declare const fullApi: ApiFromModules<{
   "model/people": typeof model_people;
   "model/projectAccess": typeof model_projectAccess;
   "model/projects": typeof model_projects;
+  "model/storageTotals": typeof model_storageTotals;
   "model/syncStamps": typeof model_syncStamps;
   "model/taskEvents": typeof model_taskEvents;
   "model/taskValues": typeof model_taskValues;

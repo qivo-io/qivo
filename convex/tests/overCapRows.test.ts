@@ -399,6 +399,55 @@ describe('internal/overCapRows', () => {
     expect(docs[2]).toMatchObject({ table: 'milestones', doc: { name: 'n'.repeat(79) } })
   })
 
+  it('renames the stored-byte totals row of a project it cuts the name of, live or in Deleted items', async () => {
+    const t = newT()
+    const f = await setup(t)
+    const live = await plantProject(t, { org_id: f.org.id, name: POINT_NAME })
+    const project = await plantProject(t, { org_id: f.org.id })
+    const { _id, _creationTime, ...projectDoc } = project
+    const storedId = uuid()
+    await t.run(async (ctx) => {
+      await ctx.db.insert('deleted_rows', {
+        item_id: uuid(),
+        org_id: f.org.id,
+        table: 'projects',
+        owner_id: storedId,
+        row_id: storedId,
+        created_ts: 0,
+        row: { table: 'projects', doc: { ...projectDoc, id: storedId, name: POINT_NAME } },
+      })
+      for (const [id, num] of [
+        [live.id, live.num],
+        [storedId, project.num],
+      ] as const)
+        await ctx.db.insert('storage_project_totals', {
+          org_id: f.org.id,
+          project_id: id,
+          num,
+          name: POINT_NAME,
+          bytes: 3,
+          files: 1,
+        })
+      await ctx.db.insert('storage_org_totals', {
+        org_id: f.org.id,
+        bytes: 6,
+        files: 2,
+        revision: 0,
+      })
+    })
+    const names = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query('storage_project_totals').collect()).map((row) => row.name),
+      )
+    // a dry run renames nothing
+    await fix(t, true)
+    expect(await names()).toEqual([POINT_NAME, POINT_NAME])
+    await fix(t, false)
+    const cut = POINT_NAME.slice(0, NAME_MAX - 1).trimEnd()
+    expect((await t.run((ctx) => ctx.db.get(live._id)))?.name).toBe(cut)
+    expect(await names()).toEqual([cut, cut])
+  })
+
   it('walks every page of a phase', async () => {
     const t = newT()
     const f = await setup(t)

@@ -8,6 +8,7 @@ import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/del
 import { demoMonday, PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from '../model/demoSeed'
 import { lowerSweepDue } from '../model/messages'
 import { countersRow, tallyRow } from '../model/orgs'
+import { countFile } from '../model/storageTotals'
 import schema from '../schema'
 import {
   chargeFilteredReads,
@@ -97,8 +98,13 @@ async function rows(t: T, orgId: string) {
 }
 
 /** Deletes `receipt`'s demo batch by batch, as its scheduled purges would,
- * and returns the phase each batch started in. */
-async function deleteDemo(t: T, receipt: Doc<'demo_sessions'>): Promise<string[]> {
+ * running `afterBatch` after each, and returns the phase each batch started
+ * in. */
+async function deleteDemo(
+  t: T,
+  receipt: Doc<'demo_sessions'>,
+  afterBatch?: () => Promise<void>,
+): Promise<string[]> {
   await t.run((ctx) => ctx.db.patch(receipt._id, { status: 'deleting' }))
   const phases: string[] = []
   for (
@@ -114,6 +120,7 @@ async function deleteDemo(t: T, receipt: Doc<'demo_sessions'>): Promise<string[]
     const orgId = receipt.org_id
     if (orgId !== undefined && (await t.run((ctx) => countersRow(ctx, orgId))) !== null)
       await expectLiveCounts(t, orgId)
+    await afterBatch?.()
     const progress = await t.run((ctx) => ctx.db.get(receipt._id))
     if (progress?.cleanup_phase === 'uploads') {
       vi.setSystemTime(
@@ -139,6 +146,9 @@ const APP_OWNED: TableNames[] = [
   'org_counters',
   // which migrations the organization's rows finished, deleted with it
   'org_ready',
+  'storage_org_totals',
+  'storage_project_totals',
+  'storage_task_totals',
   'teams',
   'profiles',
   'projects',
@@ -715,6 +725,118 @@ describe('public Northstar provisioning and bounded deletion', () => {
     expect(await ownedSnapshot(t)).toEqual(others)
     expect(await t.run((ctx) => ctx.db.system.get(bytes))).toBeNull()
     expect((await rows(t, b.org_id!)).tasks).toHaveLength(MARKETING_DEMO.issues.length)
+  }, 60_000)
+
+  it("keeps a demo's stored-byte totals while its batches delete its files, then deletes them", async () => {
+    const t = testBackend()
+    const b = await makeDemo(t)
+    const a = await makeDemo(t)
+    const orgId = a.org_id!
+    const now = new Date(NOW).toISOString()
+    await t.run(async (ctx) => {
+      const admin = (await ctx.db
+        .query('profiles')
+        .withIndex('by_auth', (q) => q.eq('auth_user_id', a.auth_user_id))
+        .first())!
+      const all = await ctx.db
+        .query('issues')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect()
+      const tops = all.filter((task) => task.parent_id === undefined)
+      const root = tops[0]
+      const moved =
+        tops.find((task) => task.id !== root.id && task.project_id === root.project_id) ?? tops[1]
+      const stuck = (
+        await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .collect()
+      ).find((p) => p.type === 'project' && p.id !== root.project_id && p.id !== moved.project_id)!
+      const stranded = all.find((task) => task.project_id === stuck.id)!
+      for (const [i, task] of [root, moved, stranded].entries())
+        for (const size of [10 + i, 100]) {
+          // as attachFileCore stores and counts a file
+          await ctx.db.insert('issue_attachments', {
+            org_id: orgId,
+            id: uuid(),
+            issue_id: task.id,
+            name: 'counted.txt',
+            size_bytes: size,
+            storage_id: await ctx.storage.store(new Blob(['counted']) as never),
+            inline: false,
+            created_at: now,
+          })
+          await countFile(ctx, task, size)
+        }
+      // one task moves into Deleted items whole, with its files
+      await moveTasksToTrash(ctx, { actor: admin, root: moved, subtasks: [], now })
+      const left = await ctx.db
+        .query('issue_attachments')
+        .withIndex('by_issue', (q) => q.eq('issue_id', moved.id))
+        .collect()
+      expect(left).toEqual([])
+      // one task's move stops after its task row, its files still live, and
+      // a project item gets stuck with its task still live under it
+      Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
+      await moveTasksToTrash(ctx, { actor: admin, root, subtasks: [], now })
+      await moveProjectToTrash(ctx, { actor: admin, project: stuck, now })
+      const item = (await ctx.db
+        .query('deleted_items')
+        .withIndex('by_target', (q) => q.eq('target_id', stuck.id))
+        .unique())!
+      const job = await ctx.db
+        .query('deleted_item_jobs')
+        .withIndex('by_item', (q) => q.eq('item_id', item.id))
+        .unique()
+      if (job?.scheduled_id !== undefined) await ctx.scheduler.cancel(job.scheduled_id)
+      if (job !== null) await ctx.db.delete(job._id)
+      await ctx.db.patch(item._id, { state: 'stuck' })
+      expect(
+        await ctx.db
+          .query('issues')
+          .withIndex('by_uuid', (q) => q.eq('id', stranded.id))
+          .unique(),
+      ).not.toBeNull()
+    })
+    const totalsOf = (id: string) =>
+      t.run((ctx) =>
+        ctx.db
+          .query('storage_org_totals')
+          .withIndex('by_org', (q) => q.eq('org_id', id))
+          .unique(),
+      )
+    /* The bytes and files of the organization's attachment rows, live and stored. */
+    const stored = (id: string) =>
+      t.run(async (ctx) => {
+        const files = [
+          ...(await ctx.db
+            .query('issue_attachments')
+            .withIndex('by_org', (q) => q.eq('org_id', id))
+            .collect()),
+          ...(
+            await ctx.db
+              .query('deleted_rows')
+              .withIndex('by_org', (q) => q.eq('org_id', id))
+              .collect()
+          ).flatMap((row) => (row.row.table === 'issue_attachments' ? [row.row.doc] : [])),
+        ]
+        return { bytes: files.reduce((n, file) => n + file.size_bytes, 0), files: files.length }
+      })
+    expect(await totalsOf(orgId)).toMatchObject({ bytes: 333, files: 6 })
+    expect(await stored(orgId)).toEqual({ bytes: 333, files: 6 })
+    const other = await totalsOf(b.org_id!)
+
+    await deleteDemo(t, a, async () => {
+      const row = await totalsOf(orgId)
+      if (row !== null) expect(row).toMatchObject(await stored(orgId))
+    })
+    expect(await totalsOf(orgId)).toBeNull()
+    for (const table of ['storage_project_totals', 'storage_task_totals'] as const)
+      expect(
+        (await t.run((ctx) => ctx.db.query(table).collect())).filter((row) => row.org_id === orgId),
+      ).toEqual([])
+    expect(await totalsOf(b.org_id!)).toEqual(other)
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
   }, 60_000)
 
   it('deletes stored rows of about 900 KB in several batches within the real limits', async () => {
