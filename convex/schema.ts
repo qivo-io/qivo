@@ -1626,6 +1626,10 @@ export default defineSchema({
     .index('by_item_owner', ['item_id', 'owner_id'])
     .index('by_item_table_grantee', ['item_id', 'table', 'grantee'])
     .index('by_row', ['table', 'row_id'])
+    // one task's stored rows of a table, whichever item holds them. A
+    // project item can store them before the task, and a split moves them
+    // between items one at a time (internal/storageTotalsBackfill.ts)
+    .index('by_table_org_owner', ['table', 'org_id', 'owner_id'])
     .index('by_storage', ['storage_id'])
     .index('by_org_key', ['org_id', 'project_key'])
     .index('by_org_lead', ['org_id', 'lead_id'])

@@ -636,6 +636,27 @@ organization writes its `org_ready` row, so the release that added them is a
 rollback floor for the backend as soon as it deploys (see Rollback and
 hotfixes). Roll forward instead.
 
+Each organization's task files are counted in stored-byte totals per
+organization, project and task (`storage_org_totals`,
+`storage_project_totals`, `storage_task_totals`), files in Deleted items
+included. The transaction that attaches a file counts it, the one that
+deletes its last row for good takes it out, and a move between projects
+shifts it. Nothing reads the totals yet. Billing samples and the Billing
+page still scan the attachment rows. A new organization starts counted at
+zero. An organization created before the release that added them has no
+totals until the one-time `internal/storageTotalsBackfill` counts it, and a
+reader must treat it as not counted until then. Run the backfill on every
+hosted deployment once it serves that release, as the module's header says.
+Read its dry run first, then run it, and call it again with its `cursor`
+until it answers `done`. A later dry run lists any organization whose totals
+differ from its files, any whose writes kept changing it while it counted,
+and the attachment rows whose task is gone, which nothing deletes.
+`"recount": true` counts every organization again from zero. Earlier
+releases do not keep the totals. Convex keeps the rows of a table the schema
+no longer lists, as it did for `comment_counts`, so a rollback past that
+release deploys, but the attaches and deletions it serves leave the totals
+out of step. After rolling forward, run the backfill with `"recount": true`.
+
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
 deploy. Roll forward instead. Later releases no longer accept those fields,

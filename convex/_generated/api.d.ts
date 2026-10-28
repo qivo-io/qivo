@@ -56,6 +56,7 @@ import type * as internal_nameKeysBackfill from "../internal/nameKeysBackfill.js
 import type * as internal_oauthSmoke from "../internal/oauthSmoke.js";
 import type * as internal_operator from "../internal/operator.js";
 import type * as internal_overCapRows from "../internal/overCapRows.js";
+import type * as internal_storageTotalsBackfill from "../internal/storageTotalsBackfill.js";
 import type * as internal_storedGrantees from "../internal/storedGrantees.js";
 import type * as internal_usageRanksBackfill from "../internal/usageRanksBackfill.js";
 import type * as internal_windowKeysBackfill from "../internal/windowKeysBackfill.js";
@@ -273,6 +274,7 @@ declare const fullApi: ApiFromModules<{
   "internal/oauthSmoke": typeof internal_oauthSmoke;
   "internal/operator": typeof internal_operator;
   "internal/overCapRows": typeof internal_overCapRows;
+  "internal/storageTotalsBackfill": typeof internal_storageTotalsBackfill;
   "internal/storedGrantees": typeof internal_storedGrantees;
   "internal/usageRanksBackfill": typeof internal_usageRanksBackfill;
   "internal/windowKeysBackfill": typeof internal_windowKeysBackfill;
