@@ -196,6 +196,8 @@ function ApiAccessPage({
   const load = async (next: Ask, figures: boolean, again = false) => {
     const n = ++sequence.current
     attempt.current = { ask: next, figures }
+    // at once, so a second change made before the next render builds on it
+    askRef.current = next
     setAsk(next)
     setLoading(true)
     const kept = shownRef.current
@@ -210,6 +212,7 @@ function ApiAccessPage({
     if (summary === null || page === null) {
       setFailed(true)
       if (!kept) return
+      askRef.current = kept.ask
       setAsk(kept.ask)
       if (textRef.current.trim() === next.search) setText(kept.ask.search)
       return
@@ -226,6 +229,7 @@ function ApiAccessPage({
     if (page.state === 'ready' && page.person && settled.person)
       settled = { ...settled, person: { id: page.person.id, name: page.person.name } }
     setFailed(false)
+    askRef.current = settled
     setAsk(settled)
     if (again) setText(settled.search)
     setShown({ ask: settled, figures: summary, page })

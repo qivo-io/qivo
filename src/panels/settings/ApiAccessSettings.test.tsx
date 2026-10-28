@@ -598,6 +598,18 @@ describe('the API access page', () => {
     expect(listed()).toEqual(['Cursor'])
   })
 
+  it('keeps both of two filter changes made before the page renders again', async () => {
+    await render(<ui.OrgApiAccessPage />)
+    await act(async () => {
+      buttonIn(find('[aria-label="State"]'), 'Active').click()
+      buttonIn(find('[aria-label="Kind"]'), 'Agent keys').click()
+    })
+    await settle()
+    expect(pageCalls().at(-1)).toEqual({ kind: 'agent_keys', state: 'active', period: CURRENT })
+    expect(find('[aria-label="State"] [data-state="on"]').textContent).toBe('Active')
+    expect(listed()).toEqual(['GitHub Actions'])
+  })
+
   it('paints only the newest answer when an older one arrives late', async () => {
     const read = network.query.getMockImplementation()
     let late: (() => void) | undefined
