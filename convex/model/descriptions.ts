@@ -52,7 +52,7 @@
  * which counts once. */
 
 import type { TransactionMetrics, WithoutSystemFields } from 'convex/server'
-import type { ConvexError } from 'convex/values'
+import { type ConvexError, getDocumentSize } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 // a type only: lib/archivedTasks.ts imports this module, so a value import
@@ -183,6 +183,11 @@ export async function descriptionsOf(
  * (projectTextReader), so a step reads little past the rows a page needs. */
 const TEXT_RANGE_ROWS = 64
 
+/* How many bytes of new rows a step reads at most once the task the page
+ * waits on is in another project (projectTextReader): 64 rows of 4 KiB, so
+ * small rows are read ahead in one range and large ones are not. */
+const TEXT_AHEAD_BYTES = 256 * 1024
+
 /** What one step of a projectTextReader did: read a chunk of rows, found
  * the first task without a text in no range, which the caller reads on its
  * own, found every task with a text, or found no room. */
@@ -192,28 +197,35 @@ export type RangeStep = 'read' | 'missing' | 'done' | 'full'
  * the caller answers them, that the active description rows of its project
  * hold (by_project_archived). A caller that needs most of a project's rows
  * so pays a range a chunk of rows rather than one a task; one that needs a
- * few reads them through descriptionsOf instead. Each step reads the next
- * chunk of TEXT_RANGE_ROWS rows at most from the project of the first of
- * `tasks` still without a text, going on where that project's last chunk
- * ended, so the reads follow the tasks' order across projects and a caller
- * that stops once its tasks are settled reads little past them. Of a
- * task's rows the first in the range that holds its copies is the one
- * shownRow takes. A project's range starts at the creation time of the
- * first task it is read for, since a task's rows are created with it or
- * after it, so it skips the rows of the tasks before, which a caller read
- * already. A task whose project's range ends without such a row, one
- * without a row, one whose rows' copies are stale, which only a rollback
- * leaves, or one whose row is older than it, kept from a task deleted for
- * good that held its id, is `missing`, for the caller to read on its own. A
- * step is one index range, read a row at a time, and it checks `room` before
- * the range and as its rows add up, so it passes `room` by one row at
- * most. */
+ * few reads them through descriptionsOf instead. Each step reads from the
+ * project of the first of `tasks` still without a text, going on where that
+ * project's last step ended. Each time that task gets its text the step
+ * asks `enough`, the caller's test of whether its page is complete, and
+ * ends when it is, else it reads on for the next task without a text. A
+ * step ends after TEXT_RANGE_ROWS new rows at most, and once that next task
+ * is in another project, as soon as its new rows hold TEXT_AHEAD_BYTES. So
+ * the reads follow the tasks' order across projects and stop at the page,
+ * and a list whose projects alternate still reads its small rows many to a
+ * range rather than one. Of a task's rows the first in the range that holds
+ * its copies is the one shownRow takes.
+ *
+ * A project's range starts at the creation time of the first task it is
+ * read for, since a task's rows are created with it or after it, so it
+ * skips the rows of the tasks before, which a caller read already. A task
+ * whose project's range ends without such a row, one without a row, one
+ * whose rows' copies are stale, which only a rollback leaves, or one whose
+ * row is older than it, kept from a task deleted for good that held its id,
+ * is `missing`, for the caller to read on its own.
+ *
+ * A step is one index range, read a row at a time, and it checks `room`
+ * before the range and as its rows add up, so it passes `room` by one row
+ * at most. */
 export function projectTextReader(
   ctx: QueryCtx,
   tasks: readonly (TextOwner & Pick<Doc<'issues'>, '_creationTime'>)[],
   room: ReadCeiling,
   texts: Map<string, string>,
-): { step(): Promise<RangeStep> } {
+): { step(enough: () => boolean): Promise<RangeStep> } {
   const wanted = new Map(tasks.map((task) => [task.id, task]))
   // where each project's range goes on from: the creation time read
   // through, the rows of that time read already, and whether it ended
@@ -224,14 +236,16 @@ export function projectTextReader(
   // tasks before `next` have a text
   let next = 0
   return {
-    async step() {
+    async step(enough) {
       while (next < tasks.length && texts.has(tasks[next].id)) next++
-      const first = tasks[next]
+      // the task the step reads for, and the project it reads
+      let first = tasks[next]
       if (first === undefined) return 'done'
-      let range = ranges.get(first.project_id)
+      const project = first.project_id
+      let range = ranges.get(project)
       if (range === undefined) {
         range = { from: first._creationTime, seen: new Set(), done: false }
-        ranges.set(first.project_id, range)
+        ranges.set(project, range)
       }
       if (range.done) return 'missing'
       const m = await ctx.meta.getTransactionMetrics()
@@ -253,15 +267,19 @@ export function projectTextReader(
       const read = ctx.db
         .query('issue_descriptions')
         .withIndex('by_project_archived', (q) =>
-          q
-            .eq('project_id', first.project_id)
-            .eq('archived_at', undefined)
-            .gte('_creationTime', from),
+          q.eq('project_id', project).eq('archived_at', undefined).gte('_creationTime', from),
         )
       // the rows at the last new row's time, which the next step starts with
       let last: number | undefined
       let tied: Id<'issue_descriptions'>[] = []
       let fresh = 0
+      let bytes = 0
+      /* where the next step of this project goes on from */
+      const pause = () => {
+        if (last === undefined) return
+        range.seen = new Set([...(last === from ? seen : []), ...tied])
+        range.from = last
+      }
       for await (const row of read) {
         if (!seen.has(row._id)) {
           const task = wanted.get(row.issue_id)
@@ -270,13 +288,29 @@ export function projectTextReader(
           if (row._creationTime !== last) tied = []
           last = row._creationTime
           tied.push(row._id)
-          if (++fresh >= TEXT_RANGE_ROWS) {
-            range.seen = new Set([...(last === from ? seen : []), ...tied])
-            range.from = last
+          bytes += getDocumentSize(row)
+          if (texts.has(first.id)) {
+            while (next < tasks.length && texts.has(tasks[next].id)) next++
+            const following = tasks[next]
+            if (following === undefined || enough()) {
+              pause()
+              return 'read'
+            }
+            first = following
+          }
+          // past the rows the page waits on, the step reads ahead small rows
+          if (
+            ++fresh >= TEXT_RANGE_ROWS ||
+            (first.project_id !== project && bytes >= TEXT_AHEAD_BYTES)
+          ) {
+            pause()
             return 'read'
           }
         }
-        if (!(await spend())) return 'full'
+        if (!(await spend())) {
+          pause()
+          return 'full'
+        }
       }
       range.done = true
       return 'read'

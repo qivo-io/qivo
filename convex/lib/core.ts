@@ -541,12 +541,14 @@ export const DESCRIPTIONS_TOO_LARGE =
  * matches among them, and stops once the leading tasks hold `want`. The
  * first TEXT_TASK_READS it reads one range a task (model/descriptions.ts
  * descriptionsOf); past them it reads the active rows of the rest's
- * projects a chunk at a time, each from the project of the first task still
- * without a text (projectTextReader), checking after each chunk whether the
- * page is complete, and a task no range holds a row for on its own, all
- * within the request's room less `reserve`, which a step of texts read one
- * by one may pass by one task's text, within COMMENT_READS_RESERVE. A
- * search whose texts do not fit
+ * projects a step at a time, each from the project of the first task still
+ * without a text, ending once the page is complete and reading little ahead
+ * once the next task without a text is in another project
+ * (projectTextReader), checking before it refuses whether the texts read
+ * complete the page, and a task no range
+ * holds a row for on its own, all within the request's room less `reserve`,
+ * which a step of texts read one by one may pass by one task's text, within
+ * COMMENT_READS_RESERVE. A search whose texts do not fit
  * is refused with DESCRIPTIONS_TOO_LARGE, so no answer leaves a text
  * unread, and one that has no room left for the first text with the
  * sentence of what the list read before (ACTIVE_TASKS_TOO_LARGE or
@@ -594,9 +596,13 @@ async function searchedTexts(
       checked = true
     }
     if (ranges !== null) {
-      const step = await ranges.step()
-      if (step === 'full') throw badRequest(DESCRIPTIONS_TOO_LARGE)
+      const step = await ranges.step(settle)
       if (step === 'read') continue
+      // a page the texts read so far complete needs no more
+      if (step === 'full') {
+        if (settle()) break
+        throw badRequest(DESCRIPTIONS_TOO_LARGE)
+      }
       // no range holds the text of the task the page waits on
       const read = await descriptionsOf(ctx, [found[end]], room, steps)
       if (read === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)

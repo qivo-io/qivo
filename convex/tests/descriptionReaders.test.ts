@@ -920,8 +920,8 @@ describe('real limits', () => {
     expect(broad.documents).toBeLessThan(4000 + 300)
     const rare = await restMetrics(t, f, { limit: 20, search: 'QN-10001' })
     expect(rare.refused).toBeNull()
-    // one range a task for TEXT_TASK_READS, then one a chunk of 32 rows,
-    // far from one a task
+    // one range a task for TEXT_TASK_READS, then one a step of up to 64
+    // rows, far from one a task
     expect(rare.ranges).toBeLessThan(1500)
   }, 300_000)
 
@@ -1040,6 +1040,116 @@ describe('real limits', () => {
       const metrics = await restMetrics(t, f, { limit: 1, search: 'zephyr' })
       // one chunk of the first project, not its 16 MiB
       expect(metrics.mib).toBeLessThan(2)
+    } finally {
+      TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
+    }
+  }, 300_000)
+
+  it('a REST search past TEXT_TASK_READS stops a range step once the task it reads for has its text', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // the match first, then 20 tasks with rows of 900 KiB, fewer than a
+    // step's 64 rows but more than the room holds
+    const match = await t.run(async (ctx) => {
+      const doc = taskDoc(f, 81_000)
+      await ctx.db.insert('issues', doc)
+      await ctx.db.insert('issue_descriptions', {
+        issue_id: doc.id,
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        description: 'Wire the zephyr',
+      })
+      return doc
+    })
+    for (let from = 0; from < 20; from += 5)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 5; i++) {
+          const doc = taskDoc(f, 81_001 + i)
+          await ctx.db.insert('issues', doc)
+          await ctx.db.insert('issue_descriptions', {
+            issue_id: doc.id,
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            description: `${i} `.padEnd(900 * 1024, 'n'),
+          })
+        }
+      })
+    TEXT_TASK_READS.reads = 0
+    try {
+      const agent = { callerId: f.agent.id, access: 'read' as const }
+      expect(
+        (await restTasks(t, { ...agent, search: 'zephyr', limit: '1' })).map((row) => row.id),
+      ).toEqual([match.id])
+    } finally {
+      TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
+    }
+  }, 300_000)
+
+  it('a REST search past TEXT_TASK_READS reads small rows ahead in one range when its projects alternate', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // 640 tasks whose small rows alternate between the two sub-projects
+    for (let from = 0; from < 640; from += 160)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 160; i++) {
+          const project_id = i % 2 === 0 ? f.sub.id : f.sub2.id
+          const doc = taskDoc(f, 84_000 + i, undefined, { project_id })
+          await ctx.db.insert('issues', doc)
+          await ctx.db.insert('issue_descriptions', {
+            issue_id: doc.id,
+            org_id: f.org.id,
+            project_id,
+            description: `Notes ${i} on the board`,
+          })
+        }
+      })
+    TEXT_TASK_READS.reads = 0
+    try {
+      // a key reads every task's text
+      const key = await restMetrics(t, f, { limit: 20, search: 'QN-84001' })
+      expect(key.refused).toBeNull()
+      // a step of up to 64 rows a project, where a step a task reads 640
+      expect(key.ranges).toBeLessThan(100)
+    } finally {
+      TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
+    }
+  }, 300_000)
+
+  it('a REST search past TEXT_TASK_READS reads no large rows ahead while the page waits on another project', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // the page is A, then B in the other sub-project; A's project holds 20
+    // rows of 900 KiB of tasks listed after them, more than the room holds
+    const row = (doc: ReturnType<typeof taskDoc>, description: string) => ({
+      issue_id: doc.id,
+      org_id: f.org.id,
+      project_id: doc.project_id,
+      description,
+    })
+    const a = taskDoc(f, 83_000)
+    const b = taskDoc(f, 83_001, undefined, { project_id: f.sub2.id })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('issues', a)
+      await ctx.db.insert('issue_descriptions', row(a, 'Wire the zephyr'))
+    })
+    for (let from = 0; from < 20; from += 5)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 5; i++) {
+          const doc = taskDoc(f, 83_002 + i)
+          await ctx.db.insert('issues', doc)
+          await ctx.db.insert('issue_descriptions', row(doc, `${i} `.padEnd(900 * 1024, 'n')))
+        }
+      })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('issues', b)
+      await ctx.db.insert('issue_descriptions', row(b, 'Wire the zephyr'))
+    })
+    TEXT_TASK_READS.reads = 0
+    try {
+      const agent = { callerId: f.agent.id, access: 'read' as const }
+      expect(
+        (await restTasks(t, { ...agent, search: 'zephyr', limit: '2' })).map((r) => r.id),
+      ).toEqual([a.id, b.id])
     } finally {
       TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
     }
