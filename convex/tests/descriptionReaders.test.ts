@@ -42,6 +42,7 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
+  plantProject,
   restArchivedPage,
   restTasks,
   type T,
@@ -867,6 +868,81 @@ describe('real limits', () => {
     const rare = await restMetrics(t, f, { limit: 20, search: 'QN-10001' })
     expect(rare.refused).toBeNull()
     expect(rare.ranges).toBeLessThan(TEXT_TASK_READS.reads + 200)
+  }, 300_000)
+
+  it('a REST search of one row stops reading once its page is complete, before descriptions that would not fit', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // 3,000 rows of 4 KB beside task rows without text, 12 MB in all; one
+    // task says zephyr at 950, past nothing but per-task reads, and one says
+    // quokka at 1,500, past TEXT_TASK_READS
+    const ids = await plantMany(
+      t,
+      f,
+      3000,
+      (i) => `${i === 950 ? 'zephyr' : i === 1500 ? 'quokka' : 'notes'} `.padEnd(4000, 'x'),
+      () => undefined,
+      500,
+    )
+    const agent = { callerId: f.agent.id, access: 'read' as const }
+    // the first task's ID, which reads no description
+    expect(
+      (await restTasks(t, { ...agent, search: 'QN-10000', limit: '1' })).map((row) => row.id),
+    ).toEqual([ids[0]])
+    expect(
+      (await restTasks(t, { ...agent, search: 'zephyr', limit: '1' })).map((row) => row.id),
+    ).toEqual([ids[950]])
+    expect(
+      (await restTasks(t, { ...agent, search: 'quokka', limit: '1' })).map((row) => row.id),
+    ).toEqual([ids[1500]])
+    const quokka = await restMetrics(t, f, { limit: 1, search: 'quokka' })
+    expect(quokka.refused).toBeNull()
+    // TEXT_TASK_READS rows one by one, then the range again up to the page,
+    // about 11 MiB, where the range over every row passes 16 MiB
+    expect(quokka.mib).toBeLessThan(12)
+  }, 300_000)
+
+  it("a REST search past TEXT_TASK_READS reads its candidates' projects, not an archived project's history", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // first, 2,000 tasks left active in an archived sub-project, with rows
+    // of 8 KB, 16 MB in all, which no active list reads
+    const shelved = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      archived_at: NOW,
+    })
+    for (let from = 0; from < 2000; from += 250)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 250; i++) {
+          const doc = taskDoc(f, 40_000 + i, undefined, { project_id: shelved.id })
+          await ctx.db.insert('issues', doc)
+          await ctx.db.insert('issue_descriptions', {
+            issue_id: doc.id,
+            org_id: f.org.id,
+            project_id: shelved.id,
+            description: 'History '.padEnd(8000, 'h'),
+          })
+        }
+      })
+    const ids = await plantMany(
+      t,
+      f,
+      300,
+      (i) => `Notes ${i}`,
+      () => undefined,
+      300,
+    )
+    TEXT_TASK_READS.reads = 0
+    try {
+      const agent = { callerId: f.agent.id, access: 'read' as const }
+      expect((await restTasks(t, { ...agent, search: 'QN-10007' })).map((row) => row.id)).toEqual([
+        ids[7],
+      ])
+    } finally {
+      TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
+    }
   }, 300_000)
 
   it('a REST search refuses with its sentence when the descriptions do not fit, and with the list sentence when nothing does', async () => {

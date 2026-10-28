@@ -1439,10 +1439,10 @@ export default defineSchema({
   })
     .index('by_issue', ['issue_id'])
     .index('by_org', ['org_id'])
-    // an organization's active tasks' rows (archived_at absent), which a REST
-    // or MCP search that needs most of them reads in one range
-    // (model/descriptions.ts activeTextsOf)
-    .index('by_org_archived', ['org_id', 'archived_at'])
+    // a project's active tasks' rows (archived_at absent), which a REST or
+    // MCP search that needs most of them reads in one range a project
+    // (model/descriptions.ts projectTextsOf)
+    .index('by_project_archived', ['project_id', 'archived_at'])
     // main Search's description matches within an organization, narrowed to
     // a project and to active tasks (archived_at absent)
     .searchIndex('search_description', {

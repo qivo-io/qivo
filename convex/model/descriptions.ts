@@ -79,7 +79,7 @@ type TextOwner = Owner & Pick<Doc<'issues'>, 'description'>
  * row, or null for a task without one. Every writer keeps the copies on the
  * first row (patchTask), so that is the first row, unless a rollback left
  * the first row's copies stale beside a second row; then this is the row
- * the active range of the task's organization holds too (activeTextsOf), so
+ * the active range of the task's project holds too (projectTextsOf), so
  * every reader takes the same one. It reads rows until one holds the
  * copies: one normally, two when the first's copies are stale, more only
  * for a task with three or more rows, which repeated rollbacks leave and
@@ -182,59 +182,60 @@ export async function descriptionsOf(
   return out
 }
 
-/** The texts of `tasks`, active tasks of organization `orgId`, by task id
- * (descriptionOf), or null when `room` ran out first. It reads the
- * organization's active description rows in one range (by_org_archived)
- * rather than one range a task, so a caller that needs most of them pays
- * one range and each row once. That range holds every active task's row,
- * so a caller that needs a few reads them through descriptionsOf instead.
- * A task the range holds no row for, one without a row or one whose row's
- * archived copy is stale, which only a rollback leaves, then reads its
- * own. Of a task's rows it takes the first in the range that holds its
- * copies, the one shownRow takes. It checks
- * `room` before the range and after each row, so it passes `room` by one
- * row at most. */
-export async function activeTextsOf(
+/** Adds to `texts` the text of each of `tasks` (descriptionOf) that the
+ * active description rows of its project hold (by_project_archived), one
+ * range a project, the projects in the order `tasks` first names them. A
+ * caller that needs most of a project's rows so pays one range and each row
+ * once, rather than one range a task. The range holds the rows of every
+ * active task of the project, so a caller that needs a few reads them
+ * through descriptionsOf instead. Of a task's rows the first in the range
+ * that holds its copies is the one shownRow takes. A task the ranges hold
+ * no such row for, one without a row or whose rows' copies are stale, which
+ * only a rollback leaves, is left out, for the caller to read on its own.
+ * After each text it adds it asks `enough`, and it stops once that answers
+ * true. It checks `room` before each range and as its rows add up, so it
+ * passes `room` by one row at most. Answers false when `room` ran out
+ * first. */
+export async function projectTextsOf(
   ctx: QueryCtx,
-  orgId: string,
   tasks: readonly TextOwner[],
   room: ReadCeiling,
-): Promise<Map<string, string> | null> {
+  texts: Map<string, string>,
+  enough: () => boolean,
+): Promise<boolean> {
   const wanted = new Map(tasks.map((task) => [task.id, task]))
-  const out = new Map<string, string>()
-  if (wanted.size > 0) {
-    // the rows the reads left under `room` hold at Convex's size limit,
-    // counted down and asked again once spent
-    const rowsLeft = (m: TransactionMetrics) =>
-      Math.min(
-        room.ranges - m.databaseQueries.used,
-        room.documents - m.documentsRead.used,
-        Math.floor((room.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
-      )
-    let allowance = rowsLeft(await ctx.meta.getTransactionMetrics())
-    if (allowance <= 0) return null
+  const projects = [...new Set(tasks.map((task) => task.project_id))]
+  // the rows the reads left under `room` hold at Convex's size limit,
+  // counted down and asked again once spent
+  let allowance = 0
+  const spend = async (): Promise<boolean> => {
+    if (--allowance >= 0) return true
+    const m = await ctx.meta.getTransactionMetrics()
+    allowance = Math.min(
+      room.documents - m.documentsRead.used,
+      Math.floor((room.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
+    )
+    return allowance-- > 0
+  }
+  for (const projectId of projects) {
+    const m = await ctx.meta.getTransactionMetrics()
+    if (room.ranges - m.databaseQueries.used < 1) return false
+    if (!(await spend())) return false
     const rows = ctx.db
       .query('issue_descriptions')
-      .withIndex('by_org_archived', (q) => q.eq('org_id', orgId).eq('archived_at', undefined))
+      .withIndex('by_project_archived', (q) =>
+        q.eq('project_id', projectId).eq('archived_at', undefined),
+      )
     for await (const row of rows) {
       const task = wanted.get(row.issue_id)
-      if (task !== undefined && !out.has(task.id) && holdsCopies(row, task))
-        out.set(task.id, row.description)
-      if (out.size === wanted.size) break
-      if (--allowance <= 0) {
-        allowance = rowsLeft(await ctx.meta.getTransactionMetrics())
-        if (allowance <= 0) return null
+      if (task !== undefined && !texts.has(task.id) && holdsCopies(row, task)) {
+        texts.set(task.id, row.description)
+        if (enough()) return true
       }
+      if (!(await spend())) return false
     }
   }
-  const rest = await descriptionsOf(
-    ctx,
-    tasks.filter((task) => !out.has(task.id)),
-    room,
-  )
-  if (rest === null) return null
-  for (const [id, text] of rest) out.set(id, text)
-  return out
+  return true
 }
 
 /** The texts of a task write's `before` and `after` documents, '' for none.

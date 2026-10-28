@@ -42,7 +42,7 @@ import {
   postArchiveReason,
 } from '../model/comments'
 import type { Via } from '../model/deletedItems'
-import { activeTextsOf, descriptionOf, descriptionsOf } from '../model/descriptions'
+import { descriptionOf, descriptionsOf, projectTextsOf } from '../model/descriptions'
 import {
   assertLive,
   assertTaskExpected,
@@ -522,14 +522,10 @@ export const DESCRIPTION_READS_RESERVE = {
 }
 
 /** How many tasks' description rows a search reads one by one, in the
- * order the list answers, before it reads the organization's active
- * description rows in one range instead (model/descriptions.ts
- * activeTextsOf). Tests lower it. */
+ * order the list answers, before it reads the active description rows of
+ * the rest's projects, one range a project, instead (model/descriptions.ts
+ * projectTextsOf). Tests lower it. */
 export const TEXT_TASK_READS = { reads: 1000 }
-
-/* How many tasks a search looks at, in the order the list answers, between
- * two counts of the matches it has found. */
-const SEARCH_STEP = 128
 
 /** The refusal for a search whose task descriptions do not fit in one
  * request. */
@@ -540,17 +536,21 @@ export const DESCRIPTIONS_TOO_LARGE =
  * `want` tasks `plain` or `described` match, or all of `found` when fewer
  * do, with the texts read for them by task id. More text never unmatches,
  * so a task `plain` matches without its text reads none, and the tasks
- * after the leading ones cannot reach the page. It reads the rows of the
- * tasks that miss a step at a time, one range each (model/descriptions.ts
- * descriptionsOf), and once that would pass TEXT_TASK_READS the rows of the
- * rest at once (activeTextsOf), within the request's room less `reserve`.
- * A search whose texts do not fit is refused
- * with DESCRIPTIONS_TOO_LARGE, so no answer leaves a text unread, and one
- * that has no room left for the first text with the sentence of what the
- * list read before (ACTIVE_TASKS_TOO_LARGE or ACTIVE_LIST_TOO_WIDE). */
+ * after the leading ones cannot reach the page. It reads texts in list
+ * order, never more at a time than could still complete the page with the
+ * matches among them, and stops once the leading tasks hold `want`. The
+ * first TEXT_TASK_READS it reads one range a task (model/descriptions.ts
+ * descriptionsOf); past them it reads the active rows of the rest's
+ * projects (projectTextsOf), checking after each text whether the page is
+ * complete, and then the texts those ranges did not hold one by one, all
+ * within the request's room less `reserve`, which a step of texts read one
+ * by one may pass by one task's text, within COMMENT_READS_RESERVE. A search whose texts do not fit
+ * is refused with DESCRIPTIONS_TOO_LARGE, so no answer leaves a text
+ * unread, and one that has no room left for the first text with the
+ * sentence of what the list read before (ACTIVE_TASKS_TOO_LARGE or
+ * ACTIVE_LIST_TOO_WIDE). */
 async function searchedTexts(
   ctx: QueryCtx,
-  orgId: string,
   found: readonly Doc<'issues'>[],
   want: number,
   plain: (task: Doc<'issues'>) => boolean,
@@ -558,31 +558,59 @@ async function searchedTexts(
   reserve: ReadCeiling,
 ): Promise<{ leading: Doc<'issues'>[]; texts: Map<string, string> }> {
   const texts = new Map<string, string>()
-  const room = roomOf(await ctx.meta.getTransactionMetrics(), reserve)
-  const matches = (task: Doc<'issues'>) => plain(task) || described(task, texts.get(task.id) ?? '')
-  let reads = 0
+  const m = await ctx.meta.getTransactionMetrics()
+  const room = roomOf(m, reserve)
+  // a step of texts read one by one may pass `room` by one task's text,
+  // within what the page's own reads keep back (pageReads)
+  const steps = roomOf(m, COMMENT_READS_RESERVE)
+  // the tasks before `end` are settled, `matched` of them match
+  let end = 0
   let matched = 0
-  for (let at = 0; at < found.length; at += SEARCH_STEP) {
-    const step = found.slice(at, at + SEARCH_STEP)
-    const misses = step.filter((task) => !plain(task))
-    if (misses.length > 0 && reads === 0) await assertTextRoom(ctx, room)
-    if (reads + misses.length > TEXT_TASK_READS.reads) {
-      const rest = found.slice(at).filter((task) => !plain(task))
-      const read = await activeTextsOf(ctx, orgId, rest, room)
-      if (read === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)
-      for (const [id, text] of read) texts.set(id, text)
-      let end = at
-      for (; end < found.length && matched < want; end++) if (matches(found[end])) matched++
-      return { leading: found.slice(0, end), texts }
+  /* settles the tasks from `end` whose answer is known, and answers
+   * whether the page is complete or every task settled */
+  const settle = (): boolean => {
+    for (; end < found.length && matched < want; end++) {
+      const task = found[end]
+      if (plain(task)) {
+        matched++
+        continue
+      }
+      const text = texts.get(task.id)
+      if (text === undefined) break
+      if (described(task, text)) matched++
     }
-    const read = await descriptionsOf(ctx, misses, room)
-    if (read === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)
-    reads += misses.length
-    for (const [id, text] of read) texts.set(id, text)
-    matched += step.filter(matches).length
-    if (matched >= want) return { leading: found.slice(0, at + step.length), texts }
+    return end === found.length || matched >= want
   }
-  return { leading: [...found], texts }
+  let reads = 0
+  let ranged = false
+  while (!settle()) {
+    if (reads === 0) await assertTextRoom(ctx, room)
+    // the next tasks without a text, as many as could still complete the
+    // page with the matches between them
+    const next: Doc<'issues'>[] = []
+    for (
+      let at = end, between = 0;
+      at < found.length && next.length + between < want - matched;
+      at++
+    ) {
+      const task = found[at]
+      const text = texts.get(task.id)
+      if (plain(task) || (text !== undefined && described(task, text))) between++
+      else if (text === undefined) next.push(task)
+    }
+    if (!ranged && reads + next.length > TEXT_TASK_READS.reads) {
+      ranged = true
+      const rest = found.slice(end).filter((task) => !plain(task) && !texts.has(task.id))
+      if (!(await projectTextsOf(ctx, rest, room, texts, settle)))
+        throw badRequest(DESCRIPTIONS_TOO_LARGE)
+      continue
+    }
+    const read = await descriptionsOf(ctx, next, room, steps)
+    if (read === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)
+    reads += next.length
+    for (const [id, text] of read) texts.set(id, text)
+  }
+  return { leading: found.slice(0, end), texts }
 }
 
 /* Refuses a list whose reads before its first description read leave no
@@ -721,8 +749,8 @@ async function listedActiveTasks(
  * all other punctuation stays literal. Descriptions are read only for the
  * tasks the other fields miss without them and the labels, in list order,
  * and only until the tasks read hold the page (searchedTexts): one range a
- * task for the first TEXT_TASK_READS, then the organization's active
- * descriptions in one range. A search whose descriptions do not fit in one
+ * task for the first TEXT_TASK_READS, then the active descriptions of the
+ * rest's projects, one range a project. A search whose descriptions do not fit in one
  * request is refused with DESCRIPTIONS_TOO_LARGE. Label names are read only
  * for the tasks of those that still miss (activeLabelNames), and a search
  * whose label assignments do not fit in one request is refused with
@@ -787,7 +815,6 @@ export async function listActiveIssuesCore(
     const labelled = await matchingLabels(ctx, me.org_id, pieces)
     const read = await searchedTexts(
       ctx,
-      me.org_id,
       found,
       o.offset + o.limit,
       plain,
