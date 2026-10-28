@@ -1284,6 +1284,9 @@ export const ARCHIVED_READ_BATCH = 330
  * a row to mark. */
 export const ARCHIVED_READ_TASKS = 500
 
+/* The rest of a chain as a step's arguments carry it, none when it ends. */
+const chain = (rest: string[]) => (rest.length > 0 ? { rest } : {})
+
 /** The most archived projects one chain of project steps walks, one after
  * another (scheduleArchivedReads), so an archive of a project with
  * thousands of sub-projects schedules a few chains, not one step a project,
@@ -1322,7 +1325,7 @@ export async function scheduleArchivedReads(
   const projects = a.projects ?? []
   for (let i = 0; i < projects.length; i += ARCHIVED_READ_PROJECTS) {
     const [project_id, ...rest] = projects.slice(i, i + ARCHIVED_READ_PROJECTS)
-    await ctx.scheduler.runAfter(0, readArchivedProjectRef, { project_id, rest })
+    await ctx.scheduler.runAfter(0, readArchivedProjectRef, { project_id, ...chain(rest) })
   }
 }
 
@@ -1496,7 +1499,7 @@ export async function readArchivedProjectMessages(
     if (project_id !== undefined)
       await ctx.scheduler.runAfter(0, readArchivedProjectRef, {
         project_id,
-        rest: after,
+        ...chain(after),
         batch: a.batch,
         tasks: a.tasks,
       })
@@ -1534,7 +1537,7 @@ export async function readArchivedProjectMessages(
   if (!unfinished && page.isDone) return await next()
   await ctx.scheduler.runAfter(0, readArchivedProjectRef, {
     project_id: project.id,
-    rest,
+    ...chain(rest),
     cursor: unfinished ? a.cursor : page.continueCursor,
     batch: a.batch,
     tasks: a.tasks,
