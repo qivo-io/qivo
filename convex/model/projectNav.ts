@@ -24,7 +24,7 @@
  * too. */
 
 import type { WithoutSystemFields } from 'convex/server'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { inMetaTree } from '../lib/access'
 import { byId } from '../lib/db'
@@ -61,6 +61,10 @@ export type ReachProject = Pick<
 export type ProjectRead = (id: string) => Promise<ReachProject | null>
 
 type ReachRow = WithoutSystemFields<Doc<'project_reach'>>
+
+/** A reach row as stored, by its id: a row read, or one a writer just
+ * wrote. */
+type StoredReach = ReachRow & { _id: Id<'project_reach'> }
 
 /** The grantee's row on project `projectId`, if any. */
 const rowOn = (ctx: QueryCtx, g: Grantee, projectId: string) =>
@@ -128,7 +132,7 @@ const rowFor = (
 
 /** One reach row as it is (null for none) and as it should be (null for
  * none), where the two differ. */
-export type ReachChange = { row: Doc<'project_reach'> | null; want: ReachRow | null }
+export type ReachChange = { row: StoredReach | null; want: ReachRow | null }
 
 const FIELDS = [
   'org_id',
@@ -230,14 +234,25 @@ export async function syncReach(
   await applyReach(ctx, await planReach(ctx, g, projectId, read, known))
 }
 
-/** Writes the changes planReach found. */
-export async function applyReach(ctx: MutationCtx, changes: readonly ReachChange[]): Promise<void> {
+/** Writes the changes planReach found, and answers each row as it is now,
+ * null for none, in their order. */
+export async function applyReach(
+  ctx: MutationCtx,
+  changes: readonly ReachChange[],
+): Promise<(StoredReach | null)[]> {
+  const now: (StoredReach | null)[] = []
   for (const { row, want } of changes) {
     if (want === null) {
       if (row !== null) await ctx.db.delete(row._id)
-    } else if (row === null) await uncountedWriter(ctx.db).insert('project_reach', want)
-    else await ctx.db.patch(row._id, want)
+      now.push(null)
+    } else if (row === null)
+      now.push({ ...want, _id: await uncountedWriter(ctx.db).insert('project_reach', want) })
+    else {
+      await ctx.db.patch(row._id, want)
+      now.push({ ...want, _id: row._id })
+    }
   }
+  return now
 }
 
 /** The grantee of a user grant and of a team share. */
@@ -294,71 +309,102 @@ export async function deleteShare(
 const BATCH_GUARD_ROWS = 100
 
 /**
- * User grants given to many people on a few projects in one transaction,
- * with their reach rows written together once the grants are in: a removal
- * that keeps many people as Viewers (model/projectAccess.ts
- * removeAndSettle). insertGrant's recompute reads several index ranges a
- * grant, which hundreds of grants in the one transaction a removal has
- * cannot afford; `finish` reads the people's rows on each project, and on
- * its top-level project, once for all of them, and runs `guard` every
- * BATCH_GUARD_ROWS rows it reads and before it changes a row that exists,
- * which Convex reads first, so a removal can refuse before it passes
- * Convex's limits.
- * Call `finish` after the last `insert` of the transaction. Every person is
- * of the project's organization and now holds a grant on it. A person
- * without a row on the top-level project holds no source there, because one
- * would have written that row, so the row a grant on a sub-project adds
- * there is for navigation only, and an existing one keeps its on_root.
+ * User grants and team shares given to many people and teams on a few
+ * projects in one transaction, with their reach rows written together once
+ * they are all in: a removal that keeps many people as Viewers
+ * (model/projectAccess.ts removeAndSettle), and the access maps of a new
+ * project or a project update (model/projects.ts). insertGrant's recompute
+ * reads several index ranges a grant, which hundreds of grants in one
+ * transaction cannot afford. `finish` reads the rows of each kind of
+ * grantee on each project, and on its top-level project, once, keeps them
+ * current with what it writes, and runs `guard` before each project's
+ * reads, every BATCH_GUARD_ROWS rows it reads and before it changes a row
+ * that exists, which Convex reads first, so a removal can refuse before it
+ * passes Convex's limits. Call `finish` after the last grant or share of the
+ * transaction. Every grantee is of the project's organization and now holds
+ * a source on it. A grantee without a row on the top-level project holds no
+ * source there, because one would have written that row, so the row a
+ * source on a sub-project adds there is for navigation only, and an
+ * existing one keeps its on_root.
  */
 export function grantBatch(ctx: MutationCtx) {
-  const given = new Map<string, { project: Doc<'projects'>; people: Set<string> }>()
-  /* the people's rows on project `id`, by person */
-  const rowsOn = async (id: string, guard: () => Promise<void>) => {
-    const rows = new Map<string, Doc<'project_reach'>>()
-    const range = ctx.db
-      .query('project_reach')
-      .withIndex('by_project_grantee', (q) => q.eq('project_id', id).eq('grantee_kind', 'profile'))
-    for await (const row of range) {
-      if (rows.size > 0 && rows.size % BATCH_GUARD_ROWS === 0) await guard()
-      rows.set(row.grantee_id, row)
-    }
-    return rows
+  const given = new Map<string, { grantees: Map<string, Grantee> }>()
+  const add = (project: Pick<Doc<'projects'>, 'id'>, g: Grantee) => {
+    const entry = given.get(project.id) ?? { grantees: new Map<string, Grantee>() }
+    entry.grantees.set(`${g.grantee_kind}:${g.grantee_id}`, g)
+    given.set(project.id, entry)
   }
   return {
     /** Inserts user grant `row` on `project`, its rows left to `finish`. */
-    insert: async (
-      project: Doc<'projects'>,
+    grant: async (
+      project: Pick<Doc<'projects'>, 'id'>,
       row: WithoutSystemFields<Doc<'project_access'>>,
     ): Promise<void> => {
       await ctx.db.insert('project_access', row)
-      const entry = given.get(project.id) ?? { project, people: new Set<string>() }
-      entry.people.add(row.profile_id)
-      given.set(project.id, entry)
+      add(project, grantee.profile(row.profile_id))
     },
-    /** Writes the reach rows of every grant `insert` gave. */
-    finish: async (guard: () => Promise<void>): Promise<void> => {
-      for (const { project, people } of given.values()) {
+    /** Inserts team share `row` on `project`, its rows left to `finish`. */
+    share: async (
+      project: Pick<Doc<'projects'>, 'id'>,
+      row: WithoutSystemFields<Doc<'project_team_access'>>,
+    ): Promise<void> => {
+      await ctx.db.insert('project_team_access', row)
+      add(project, grantee.team(row.team_id))
+    },
+    /** Writes the reach rows of every grant and share given. */
+    finish: async (guard: () => Promise<void> = async () => {}): Promise<void> => {
+      // each project's rows of each grantee kind, by grantee id, read once
+      const known = new Map<string, Map<string, StoredReach>>()
+      const rowsOn = async (projectId: string, kind: GranteeKind) => {
+        const key = `${projectId}:${kind}`
+        const cached = known.get(key)
+        if (cached !== undefined) return cached
+        await guard()
+        const rows = new Map<string, StoredReach>()
+        const range = ctx.db
+          .query('project_reach')
+          .withIndex('by_project_grantee', (q) =>
+            q.eq('project_id', projectId).eq('grantee_kind', kind),
+          )
+        for await (const row of range) {
+          if (rows.size > 0 && rows.size % BATCH_GUARD_ROWS === 0) await guard()
+          rows.set(row.grantee_id, row)
+        }
+        known.set(key, rows)
+        return rows
+      }
+      for (const [id, { grantees }] of given) {
+        await guard()
+        // as it is now, which a rename in the same transaction may have changed
+        const project = await byId(ctx, 'projects', id)
+        if (project === null) continue
         const root =
           project.parent_id === undefined ? project : await byId(ctx, 'projects', project.parent_id)
         if (root === null || root.org_id !== project.org_id || !inMetaTree(project, root)) continue
-        const own = await rowsOn(project.id, guard)
-        const top = project.id === root.id ? own : await rowsOn(root.id, guard)
-        for (const id of people) {
-          const g = grantee.profile(id)
+        for (const g of grantees.values()) {
+          const own = await rowsOn(project.id, g.grantee_kind)
+          const top = project.id === root.id ? own : await rowsOn(root.id, g.grantee_kind)
           const changes: ReachChange[] = []
+          const above = top.get(g.grantee_id) ?? null
           if (project.id === root.id)
-            changes.push({ row: own.get(id) ?? null, want: rowFor(g, 'root', root, root, true) })
-          else {
-            const above = top.get(id) ?? null
+            changes.push({ row: above, want: rowFor(g, 'root', root, root, true) })
+          else
             changes.push(
-              { row: own.get(id) ?? null, want: rowFor(g, 'child', project, root, false) },
+              {
+                row: own.get(g.grantee_id) ?? null,
+                want: rowFor(g, 'child', project, root, false),
+              },
               { row: above, want: rowFor(g, 'root', root, root, above?.on_root ?? false) },
             )
-          }
           const writes = changes.filter(differs)
           // an insert reads nothing; Convex reads a row it patches or deletes
           if (writes.some(({ row }) => row !== null)) await guard()
-          await applyReach(ctx, writes)
+          const now = await applyReach(ctx, writes)
+          for (const [i, { want }] of writes.entries()) {
+            const map = want?.kind === 'child' ? own : top
+            const row = now[i]
+            if (row !== null) map.set(g.grantee_id, row)
+          }
         }
       }
     },

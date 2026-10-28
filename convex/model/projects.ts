@@ -57,8 +57,7 @@ import { nextProjectNum, tallyRow } from './orgs'
 import {
   archiveStateOf,
   deleteGrant,
-  insertGrant,
-  insertShare,
+  grantBatch,
   patchRows,
   syncLeads,
   treeRows,
@@ -418,24 +417,28 @@ export async function createProjectCore(
   }
   // grants and shares copy their profile's or team's name key
   // (model/nameKeys.ts), and they and the lead write their reach rows
-  // (model/projectNav.ts)
+  // (model/projectNav.ts), the grants' and shares' together
   await syncLeads(ctx, project.id, [lead_id])
+  const given = grantBatch(ctx)
   for (const [uid, level] of grants) {
     const grantee = await assertGrantee(ctx, project, uid, level)
-    await insertGrant(
-      ctx,
-      { project_id: project.id, profile_id: uid, level, name_key: nameKey(grantee.name) },
-      { org: grantee.org_id },
-    )
+    await given.grant(project, {
+      project_id: project.id,
+      profile_id: uid,
+      level,
+      name_key: nameKey(grantee.name),
+    })
   }
   for (const [sharedTeamId, level] of Object.entries(p.team_access ?? {})) {
     const team = await assertTeamGrantee(ctx, project, sharedTeamId)
-    await insertShare(
-      ctx,
-      { project_id: project.id, team_id: sharedTeamId, level, name_key: nameKey(team.name) },
-      { org: team.org_id },
-    )
+    await given.share(project, {
+      project_id: project.id,
+      team_id: sharedTeamId,
+      level,
+      name_key: nameKey(team.name),
+    })
   }
+  await given.finish()
   await logActivity(ctx, {
     org_id: me.org_id,
     actor_id: me.id,
@@ -623,6 +626,8 @@ export async function updateProjectCore(
   if (Object.keys(db).length > 0) await ctx.db.patch(project._id, db)
   await patchRows(ctx, reach, copies)
   if (leadChanged) await syncLeads(ctx, id, [prevLead, nextLead])
+  // the maps' new grants and shares write their reach rows together
+  const given = grantBatch(ctx)
   // whether a map leaves out a grant it may not remove (ACCESS_MAP_REMOVES)
   let removes = false
   if (patch.access !== undefined) {
@@ -640,12 +645,19 @@ export async function updateProjectCore(
       )
     }
     // a lead handed over in the same patch gives up their own grant
-    removes = await writeGrants(ctx, project, held, next, (uid) => leadChanged && uid === nextLead)
+    removes = await writeGrants(
+      ctx,
+      given,
+      project,
+      held,
+      next,
+      (uid) => leadChanged && uid === nextLead,
+    )
   } else if (leadChanged && nextLead !== undefined) {
     const held = await grantRows(ctx, id)
     const current: Grants = Object.fromEntries([...held].map(([uid, row]) => [uid, row.level]))
     const after = grantsAfterHandover(current, prevLead, nextLead)
-    await writeGrants(ctx, project, held, new Map(Object.entries(after)), () => true)
+    await writeGrants(ctx, given, project, held, new Map(Object.entries(after)), () => true)
   }
   if (patch.team_access !== undefined) {
     const next = new Map(Object.entries(patch.team_access))
@@ -659,11 +671,7 @@ export async function updateProjectCore(
       const row = held.get(teamId)
       const name_key = nameKey(team.name)
       if (row === undefined) {
-        await insertShare(
-          ctx,
-          { project_id: id, team_id: teamId, level, name_key },
-          { org: team.org_id },
-        )
+        await given.share(project, { project_id: id, team_id: teamId, level, name_key })
       } else if (row.level !== level) await ctx.db.patch(row._id, { level, name_key })
     }
     removes ||= prev.some((row) => !next.has(row.team_id))
@@ -671,6 +679,7 @@ export async function updateProjectCore(
   // refused once every entry of both maps was checked, so their own
   // refusals come first
   if (removes) throw rule(ACCESS_MAP_REMOVES)
+  await given.finish()
   const name = db.name ?? project.name
   const nameChanged = db.name !== undefined && db.name !== project.name
   // the Storage by project breakdown shows the project's current name
@@ -718,12 +727,14 @@ export async function updateProjectCore(
 }
 
 /* Brings a project's individual grant rows to `next`: changed levels are
- * patched, new ones checked and inserted, and missing ones deleted when
+ * patched, new ones checked and inserted through `given`, which writes
+ * their reach rows when the caller finishes it, and missing ones deleted when
  * `mayDrop` allows it. Only a lead handover drops one (updateProjectCore).
  * Returns whether `next` leaves out a grant `mayDrop` keeps, which the caller
  * refuses with ACCESS_MAP_REMOVES. */
 async function writeGrants(
   ctx: MutationCtx,
+  given: ReturnType<typeof grantBatch>,
   project: Doc<'projects'>,
   held: Map<string, Doc<'project_access'>>,
   next: Map<string, GrantLevel>,
@@ -735,12 +746,7 @@ async function writeGrants(
     const grantee = await assertGrantee(ctx, project, uid, level)
     const name_key = nameKey(grantee.name)
     if (row !== undefined) await ctx.db.patch(row._id, { level, name_key })
-    else
-      await insertGrant(
-        ctx,
-        { project_id: project.id, profile_id: uid, level, name_key },
-        { org: grantee.org_id },
-      )
+    else await given.grant(project, { project_id: project.id, profile_id: uid, level, name_key })
   }
   let removes = false
   for (const [uid, row] of held) {

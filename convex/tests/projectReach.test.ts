@@ -21,10 +21,11 @@ import { byId } from '../lib/db'
 import { LIMITS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { ACCESS_FIRST_PASS, deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
-import { clearOrgTrash, TRASH_BUDGET } from '../model/deletedItems'
+import { clearOrgTrash, meterDb, TRASH_BUDGET } from '../model/deletedItems'
 import { deleteOrgStep } from '../model/orgDeletion'
 import { insertOrgRows, newOrgDefaults } from '../model/orgs'
-import { grantee, navReady, syncReach, TREE_READ } from '../model/projectNav'
+import { grantBatch, grantee, navReady, syncReach, TREE_READ } from '../model/projectNav'
+import { createProjectCore } from '../model/projects'
 import {
   as,
   expectRefusal,
@@ -226,6 +227,116 @@ describe('projects outside every tree', () => {
       archive_state: { missing: 0, stale: 0 },
       reach: { missing: 0, extra: 0, stale: 0 },
     })
+  })
+})
+
+describe('grants given together', () => {
+  it("read each project's reach rows once, however many sub-projects they go to", async () => {
+    const t = newT()
+    const f = await ready(t)
+    const subs: Doc<'projects'>[] = []
+    for (let i = 0; i < 8; i++)
+      subs.push(await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }))
+    const people: string[] = []
+    for (let i = 0; i < 60; i++)
+      people.push(
+        (await plantSeat(t, { org_id: f.org.id, name: `G${i}`, email: `g${i}@testbed.test` })).id,
+      )
+    const read = await t.run(async (ctx) => {
+      let rows = 0
+      const counted = meterDb(ctx, {
+        range: () => {},
+        doc: (doc) => {
+          if (typeof doc === 'object' && doc !== null && 'grantee_kind' in doc) rows += 1
+        },
+      })
+      const batch = grantBatch(counted)
+      for (const sub of subs)
+        for (const id of people)
+          await batch.grant(sub, { project_id: sub.id, profile_id: id, level: 'viewer' })
+      await batch.finish()
+      return rows
+    })
+    // one read of the product's rows, which the first sub-project's grants
+    // fill, not one a sub-project
+    expect(read).toBeLessThan(people.length)
+    await expectAll(t, f)
+  })
+
+  it('keep the reach rows of a removal that keeps people as Viewers on several sub-projects exact', async () => {
+    const t = newT()
+    const f = await ready(t)
+    const org_id = f.org.id
+    const admin = as(t, f.admin)
+    const people: Doc<'profiles'>[] = []
+    for (let i = 0; i < 12; i++)
+      people.push(await plantSeat(t, { org_id, name: `K${i}`, email: `k${i}@testbed.test` }))
+    await t.run(async (ctx) => {
+      for (const p of people)
+        await ctx.db.insert('team_members', {
+          team_id: f.team.id,
+          profile_id: p.id,
+          is_leader: false,
+        })
+    })
+    for (const id of [f.sub.id, f.sub2.id])
+      await admin.mutation(api.projects.setAccess, {
+        org_id,
+        id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    for (const p of people)
+      for (const project_id of [f.sub.id, f.sub2.id])
+        await plantIssue(t, { org_id, project_id, status: 'todo', assignee_id: p.id })
+    for (const id of [f.sub.id, f.sub2.id])
+      await admin.mutation(api.projects.removeAccess, {
+        org_id,
+        id,
+        team_id: f.team.id,
+        on_held_tasks: 'keep_as_viewer',
+      })
+    for (const p of people)
+      expect((await rowsOf(t, p.id)).map((row) => row.kind).sort()).toEqual([
+        'child',
+        'child',
+        'root',
+      ])
+    await expectAll(t, f)
+  }, 60_000)
+
+  it('give a new project many grants for a few index ranges each', async () => {
+    const t = newT()
+    const f = await ready(t)
+    const people: string[] = []
+    for (let i = 0; i < 80; i++)
+      people.push(
+        (await plantSeat(t, { org_id: f.org.id, name: `C${i}`, email: `c${i}@testbed.test` })).id,
+      )
+    const ranges = await t.run(async (ctx) => {
+      let count = 0
+      const counted = meterDb(ctx, {
+        range: () => {
+          count += 1
+        },
+      })
+      const admin = await byId(ctx, 'profiles', f.admin.id)
+      await createProjectCore(counted, {
+        me: admin!,
+        now: NOW,
+        project: {
+          id: uuid(),
+          type: 'meta',
+          name: 'Many grants',
+          lead_id: f.user.id,
+          access: Object.fromEntries(people.map((id) => [id, 'viewer' as const])),
+        },
+      })
+      return count
+    })
+    // the grantee's profile a grant checks, and no recompute a grant
+    expect(ranges).toBeLessThan(people.length * 2)
+    await expectAll(t, f)
   })
 })
 

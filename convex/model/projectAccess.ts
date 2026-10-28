@@ -648,7 +648,7 @@ export async function removeAndSettle(
         if (existing === null) {
           // every holder is one of a.people (removeAndFindLost)
           const person = a.people.get(h.profile_id)
-          await grants.insert(where, {
+          await grants.grant(where, {
             project_id: where.id,
             profile_id: h.profile_id,
             level: 'viewer',
