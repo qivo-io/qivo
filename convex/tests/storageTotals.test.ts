@@ -1766,6 +1766,31 @@ describe('the backfill', () => {
       expect(await expectTotals(t, id)).toEqual({ bytes: i + 1, files: 1 })
   })
 
+  it('keeps nothing of a dry count step whose query failed, so the call that goes on invents no difference', async () => {
+    const { t, f } = await setup()
+    await countStorage(t, f.otherOrg.id)
+    for (const [project, bytes] of [
+      [f.sub, 10],
+      [f.sub2, 20],
+      [f.sub, 30],
+    ] as const)
+      await attach(t, f, await plantIssue(t, { org_id: f.org.id, project_id: project.id }), bytes)
+    COUNT_PAGE.projects = 1
+    // a second organization row of its id, which no writer leaves, fails
+    // the last query of its dry count, the read of its state
+    const { _id, _creationTime, ...doc } = f.org
+    const twin = await t.run((ctx) => ctx.db.insert('organizations', doc))
+    const failed = await backfill(t, { dry_run: true })
+    expect('error' in failed && failed.error).toBeTruthy()
+    const at = JSON.parse(failed.cursor ?? 'null')
+    expect(at.dry).toMatchObject({ before: { org_id: f.org.id }, stage: 'projects' })
+    expect(at.dry.sums).toHaveLength(1)
+    expect(at.dry.projects_differing).toBe(0)
+    await t.run((ctx) => ctx.db.delete(twin))
+    const rest = await runAll(t, { dry_run: true }, failed.cursor ?? undefined)
+    expect(total(rest, 'differing') + total(rest, 'unsettled')).toBe(0)
+  })
+
   it('lists in a dry run and deletes in a run the totals of an organization that is gone', async () => {
     const t = newT()
     const f = await withOrg(t)

@@ -54,7 +54,8 @@
  * arguments and `"cursor"` set to it until `done` is true. Each call reports
  * what it went through. A call that meets an error answers it in `error`,
  * with the cursor of the organization it failed on and what it counted
- * before.
+ * before. A dry count keeps a query's results only once every query of its
+ * step has answered, so a failed query leaves the cursor as it was.
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
@@ -821,36 +822,42 @@ type Report = Amount & {
   stray_orgs: string[]
 }
 
-/* Runs one query of dry count `d` of organization `orgId`, adding the
- * orphans it finds to `report`. Answers true once the count is done. */
+/** What one step of a dry count answers: the count as it stands after the
+ * step, whether it is done, and the orphans it found. */
+type DryStep = { next: DryCount; done: boolean; orphans: Orphan[] }
+
+/* Runs one step of dry count `d` of organization `orgId`. It changes
+ * nothing it is given and answers the count after the step, so the caller
+ * keeps it only once every query of the step has answered. */
 async function dryStep(
   ctx: Pick<ActionCtx, 'runQuery'>,
   orgId: string,
   d: DryCount,
-  report: Report,
-): Promise<boolean> {
-  if (d.stage === 'tasks') {
-    const got = await ctx.runQuery(checkRef, { org_id: orgId, after: d.after })
+): Promise<DryStep> {
+  const next: DryCount = JSON.parse(JSON.stringify(d))
+  if (next.stage === 'tasks') {
+    const got = await ctx.runQuery(checkRef, { org_id: orgId, after: next.after })
     if (got === null) {
-      d.stage = 'projects'
-      d.page = null
-      return false
+      next.stage = 'projects'
+      next.page = null
+      return { next, done: false, orphans: [] }
     }
-    const sums = new Map(d.sums.map((sum) => [projectKey(sum.project_id, sum.num), sum]))
+    const sums = new Map(next.sums.map((sum) => [projectKey(sum.project_id, sum.num), sum]))
     for (const p of got.projects) addTo(sums, p.project_id, p.num, p)
-    d.sums = [...sums.values()]
-    d.counted.bytes += got.bytes
-    d.counted.files += got.files
-    d.tasks_differing += got.differing
-    d.tasks.push(...got.differ.slice(0, Math.max(0, COUNT_PAGE.listed - d.tasks.length)))
-    d.after = got.through
-    return false
+    next.sums = [...sums.values()]
+    next.counted.bytes += got.bytes
+    next.counted.files += got.files
+    next.tasks_differing += got.differing
+    next.tasks.push(...got.differ.slice(0, Math.max(0, COUNT_PAGE.listed - next.tasks.length)))
+    next.after = got.through
+    return { next, done: false, orphans: [] }
   }
-  if (d.stage === 'projects') {
-    const page = await ctx.runQuery(projectRowsRef, { org_id: orgId, cursor: d.page })
-    const sums = new Map(d.sums.map((sum) => [projectKey(sum.project_id, sum.num), sum]))
+  if (next.stage === 'projects') {
+    const page = await ctx.runQuery(projectRowsRef, { org_id: orgId, cursor: next.page })
+    const now = page.done ? await ctx.runQuery(stateRef, { org_id: orgId }) : null
+    const sums = new Map(next.sums.map((sum) => [projectKey(sum.project_id, sum.num), sum]))
     const differ = (diff: ProjectDiff) => {
-      if (d.projects_differing++ < COUNT_PAGE.listed) d.projects.push(diff)
+      if (next.projects_differing++ < COUNT_PAGE.listed) next.projects.push(diff)
     }
     for (const row of page.rows) {
       const key = projectKey(row.project_id, row.num)
@@ -870,51 +877,43 @@ async function dryStep(
         ...(row.named ? {} : { renamed: true as const }),
       })
     }
-    d.sums = [...sums.values()]
+    next.sums = [...sums.values()]
     if (!page.done) {
-      d.page = page.cursor
-      return false
+      next.page = page.cursor
+      return { next, done: false, orphans: [] }
     }
-    for (const { project_id, num, bytes, files } of d.sums)
+    for (const { project_id, num, bytes, files } of next.sums)
       if (files > 0) differ({ project_id, num, counted: { bytes, files }, stored: null })
-    d.sums = []
-    const now = await ctx.runQuery(stateRef, { org_id: orgId })
+    next.sums = []
     // stateOf builds both, so their keys come in the same order, and the
     // revision only rises, so a change undone before the end still shows
-    d.settled = now !== null && JSON.stringify(now) === JSON.stringify(d.before)
-    if (!d.settled && now !== null && d.tries < DRY_TRIES) {
-      Object.assign(d, freshCount(now, d.tries + 1))
-      return false
-    }
-    d.now = now
-    d.stage = 'orphans'
-    d.page = null
-    return false
+    next.settled = now !== null && JSON.stringify(now) === JSON.stringify(next.before)
+    if (!next.settled && now !== null && next.tries < DRY_TRIES)
+      return { next: freshCount(now, next.tries + 1), done: false, orphans: [] }
+    next.now = now
+    next.stage = 'orphans'
+    next.page = null
+    return { next, done: false, orphans: [] }
   }
   const page = await ctx.runQuery(orphanPageRef, {
     org_id: orgId,
-    stored: d.stored,
-    cursor: d.page,
-    size: d.size,
+    stored: next.stored,
+    cursor: next.page,
+    size: next.size,
   })
   if ('split' in page) {
-    d.size = page.split
-    return false
+    next.size = page.split
+    return { next, done: false, orphans: [] }
   }
-  for (const orphan of page.orphans) {
-    report.orphan_rows += 1
-    report.orphan_bytes += orphan.size_bytes
-    if (report.orphans.length < COUNT_PAGE.listed) report.orphans.push({ org_id: orgId, ...orphan })
-  }
-  d.size = COUNT_PAGE.orphans
+  next.size = COUNT_PAGE.orphans
   if (!page.done) {
-    d.page = page.cursor
-    return false
+    next.page = page.cursor
+    return { next, done: false, orphans: page.orphans }
   }
-  if (d.stored) return true
-  d.stored = true
-  d.page = null
-  return false
+  if (next.stored) return { next, done: true, orphans: page.orphans }
+  next.stored = true
+  next.page = null
+  return { next, done: false, orphans: page.orphans }
 }
 
 /** Lists finished dry count `d` of organization `orgId` in `report`;
@@ -1038,15 +1037,23 @@ export const run = internalAction({
             } else {
               // a dry count the cursor carries is this organization's, unless
               // the one it was inside is gone
-              if (at.dry?.before.org_id !== org.org_id) at.dry = freshCount(org, 1)
+              let dry = at.dry?.before.org_id === org.org_id ? at.dry : freshCount(org, 1)
               for (;;) {
                 if (lateForStep()) break work
-                const finished = await dryStep(ctx, org.org_id, at.dry, report)
+                const result = await dryStep(ctx, org.org_id, dry)
                 stepped = true
-                if (finished) break
+                dry = result.next
+                at.dry = dry
+                for (const orphan of result.orphans) {
+                  report.orphan_rows += 1
+                  report.orphan_bytes += orphan.size_bytes
+                  if (report.orphans.length < COUNT_PAGE.listed)
+                    report.orphans.push({ org_id: org.org_id, ...orphan })
+                }
+                if (result.done) break
               }
               const due = org.row === null || org.row.counting !== null || recount
-              reportDry(report, org.org_id, at.dry, due)
+              reportDry(report, org.org_id, dry, due)
               at.dry = undefined
             }
             report.orgs++
