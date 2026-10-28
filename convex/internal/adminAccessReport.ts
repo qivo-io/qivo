@@ -192,10 +192,14 @@ export const OWN = { rows: 4_000, bytes: MIB, teams: 500 }
  * about as many projects as the page has pairs left for the organization's
  * admins, so a page mostly reads one part of an organization; each part
  * makes the admins' levels again, which then read their own rows again. A
- * part is read past the room check before it, so it sits beside one
- * navigation answer (ROOM, OWN, SUBS) in the half of the limits a page
- * leaves, which 1,000 documents and 1 MiB keep inside 16,000 documents and
- * 8 MiB. Tests lower them. */
+ * part's bytes count the parents it reads as well as its projects, and it
+ * ends once they pass PART.bytes, so it reads at most PART.bytes and one
+ * project and one parent more, each at most Convex's 1 MiB document limit.
+ * It is read past the room check before it, and the page asks its room
+ * again before it judges the part's first project, so the part and one
+ * navigation answer (ROOM, OWN, SUBS) never follow one check together past
+ * the page's first part, which starts on an empty transaction. Tests lower
+ * them. */
 export const PART = { rows: 1_000, bytes: MIB }
 
 /** The most admins of one organization a page reads, each a profile of at
@@ -706,20 +710,37 @@ const liveProjects = (ctx: QueryCtx, orgId: string, after: number) =>
     )
 
 /** The next part of organization `orgId`'s live projects created after
- * `after`, at most `most` of them and PART.bytes, and with them every other
- * project created at the last one's time, as the next part starts after
- * that time. `more` is false once the part holds the rest. */
+ * `after`, at most `most` of them, with the parents they name, which the
+ * part reads too, and with them every other project created at the last
+ * one's time, as the next part starts after that time. The part ends at
+ * PART.bytes of the projects and of the parents it read, so small
+ * sub-projects under large parents end it as soon as large projects do. A
+ * parent read already in the page, as a part's project or as a parent, is
+ * read again by neither. `more` is false once the part holds the rest. */
 async function projectPart(
-  ctx: QueryCtx,
+  page: Page,
   orgId: string,
   after: number,
   most: number,
-): Promise<{ rows: Doc<'projects'>[]; more: boolean }> {
+): Promise<{ rows: Doc<'projects'>[]; parents: Doc<'projects'>[]; more: boolean }> {
+  const { ctx } = page
   const rows: Doc<'projects'>[] = []
+  const parents = new Map<string, Doc<'projects'>>()
   let bytes = 0
-  for await (const project of liveProjects(ctx, orgId, after)) {
+  const add = async (project: Doc<'projects'>) => {
     rows.push(project)
+    page.projects.set(project.id, Promise.resolve(project))
     bytes += getDocumentSize(project)
+    const parentId = project.parent_id
+    if (parentId === undefined || parents.has(parentId)) return
+    const read = page.projects.has(parentId)
+    const parent = await projectOf(page, parentId)
+    if (parent === null) return
+    parents.set(parentId, parent)
+    if (!read) bytes += getDocumentSize(parent)
+  }
+  for await (const project of liveProjects(ctx, orgId, after)) {
+    await add(project)
     if (rows.length >= most || bytes >= PART.bytes) {
       const last = project._creationTime
       const tied = ctx.db
@@ -727,11 +748,11 @@ async function projectPart(
         .withIndex('by_archived_org', (q) =>
           q.eq('archived_at', undefined).eq('org_id', orgId).eq('_creationTime', last),
         )
-      for await (const same of tied) if (!rows.some((row) => row._id === same._id)) rows.push(same)
-      return { rows, more: true }
+      for await (const same of tied) if (!rows.some((row) => row._id === same._id)) await add(same)
+      return { rows, parents: [...parents.values()], more: true }
     }
   }
-  return { rows, more: false }
+  return { rows, parents: [...parents.values()], more: false }
 }
 
 /** The first organization after `orgId`, or the first of all without it,
@@ -767,16 +788,10 @@ async function projectsPage(page: Page, at: Cursor): Promise<PageResult> {
         PART.rows,
         Math.max(1, Math.ceil((page.size - page.checked) / admins.length)),
       )
-      const part = await projectPart(ctx, org, last, most)
+      const part = await projectPart(page, org, last, most)
       more = part.more
       // each admin's levels read neither these projects nor their parents
-      const known = [...part.rows]
-      const parents = new Set(part.rows.flatMap((p) => p.parent_id ?? []))
-      for (const row of part.rows) parents.delete(row.id)
-      for (const id of parents) {
-        const parent = await projectOf(page, id)
-        if (parent !== null) known.push(parent)
-      }
+      const known = [...part.rows, ...part.parents]
       const levels = admins.map((admin) => projectLevelsOf(ctx, ordinaryOf(admin), known))
       for (const project of part.rows) {
         // a page ends only between two creation times

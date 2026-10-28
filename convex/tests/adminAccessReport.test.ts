@@ -1210,6 +1210,70 @@ async function measuredPages(t: T, phase: Phase, size: number): Promise<Measured
 }
 
 describe('within Convex limits', () => {
+  it('ends a projects page within the limits over small sub-projects of large parents', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // 20 top-level projects with legacy icons of 900 KiB, then a small
+    // sub-project of each, created after all of them, so a page that
+    // starts at the sub-projects reads their parents anew
+    const parents: string[] = []
+    for (let batch = 0; batch < 20; batch += 10)
+      await t.run(async (ctx) => {
+        for (let n = batch; n < batch + 10; n++) {
+          const id = uuid()
+          parents.push(id)
+          await ctx.db.insert('projects', {
+            id,
+            org_id: f.org.id,
+            type: 'meta',
+            key: `L${n}`,
+            name: `Large ${n}`,
+            description: '',
+            icon: 'x'.repeat(900 * 1024),
+            sort_order: 1_000 + n,
+            num: 1_000 + n,
+            track_delay: false,
+            created_at: NOW,
+            window_key: newWindowKey(),
+          })
+        }
+      })
+    const subs = await t.run(async (ctx) => {
+      const ids: string[] = []
+      for (const [n, parent_id] of parents.entries()) {
+        const id = uuid()
+        ids.push(id)
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'project',
+          parent_id,
+          key: `S${n}`,
+          name: `Small ${n}`,
+          description: '',
+          sort_order: 2_000 + n,
+          num: 2_000 + n,
+          track_delay: false,
+          created_at: NOW,
+          window_key: newWindowKey(),
+        })
+      }
+      return ids
+    })
+    const pages = await measuredPages(t, 'projects', 4_000)
+    const left = new Set(
+      pages
+        .flatMap(({ page }) => page.findings)
+        .flatMap((found) =>
+          found.kind === 'leaves' && found.profile_id === f.admin.id ? [found.project_id] : [],
+        ),
+    )
+    for (const id of [...parents, ...subs]) expect(left.has(id)).toBe(true)
+    // the pages end at their room, the large parents' bytes counted
+    expect(pages.length).toBeGreaterThan(2)
+    for (const { metrics } of pages.slice(0, -1)) expect(usedPast(metrics, ROOM.share)).toBe(true)
+  }, 300_000)
+
   it("ends a projects page without a limit error past an admin's 33,000 team shares", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
