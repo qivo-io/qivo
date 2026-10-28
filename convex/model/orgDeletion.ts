@@ -327,8 +327,21 @@ async function trashRows(ctx: MutationCtx, orgId: string, budget: RemovalBudget)
   return done
 }
 
-/** Tasks with their links, labels, subscriptions, comments, messages and files. */
+/** Tasks with their links, labels, subscriptions, comments, messages and
+ * files, then the description rows they leave (model/descriptions.ts). */
 const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+  inOrder([
+    () => liveTasks(ctx, orgId, budget),
+    () =>
+      drain(
+        ctx,
+        budget,
+        ctx.db.query('issue_descriptions').withIndex('by_org', (q) => q.eq('org_id', orgId)),
+      ),
+  ])
+
+/* The tasks of taskRows. */
+const liveTasks = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
     budget,
@@ -528,7 +541,15 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
  * removal's removed_access rows. */
 async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<void> {
   const orgId = removal.org_id
-  for (const table of ['issues', 'projects', 'teams', 'profiles', 'labels', 'sync_stamps'] as const)
+  for (const table of [
+    'issues',
+    'issue_descriptions',
+    'projects',
+    'teams',
+    'profiles',
+    'labels',
+    'sync_stamps',
+  ] as const)
     require((await ctx.db
       .query(table)
       .withIndex('by_org', (q) => q.eq('org_id', orgId))

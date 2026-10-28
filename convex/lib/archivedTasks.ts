@@ -443,7 +443,7 @@ export const searchFields = (
 ): Omit<TaskSearchFields, 'group' | 'labelNames'> => ({
   key: issueKey(task.num),
   title: task.title,
-  description: task.description,
+  description: task.description ?? '',
   status: task.status,
   priority: task.priority,
   assigneeName: task.assignee_id === undefined ? null : names.get(task.assignee_id),

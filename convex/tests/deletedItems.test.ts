@@ -1833,7 +1833,7 @@ describe('recovery', () => {
   it('lets a step that fails at full budget finish at half, and a committed step resets the retries', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    const t = newT({ transactionLimits: { documentsWritten: 60 } })
+    const t = newT({ transactionLimits: { documentsWritten: 80 } })
     const f = await withOrg(t)
     const tasks: Doc<'issues'>[] = []
     for (let i = 0; i < 40; i++)
@@ -1841,7 +1841,8 @@ describe('recovery', () => {
     TRASH_BUDGET.rows = 4
     await deleteProject(t, f, f.sub2.id)
     const item = await itemFor(t, f.sub2.id)
-    // each moved task writes three documents, so 30 of them pass the limit
+    // each moved task writes four documents, its description row's delete
+    // included, so 30 of them pass the limit and 15 do not
     TRASH_BUDGET.rows = 30
     const seen: number[] = []
     let now = START

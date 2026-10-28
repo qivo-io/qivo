@@ -61,8 +61,9 @@
  * reported for a person to shorten or correct. A task description or comment
  * over TEXT_MAX must be shortened (over REST or MCP) before anyone edits it
  * in the app, because the app parses only up to TEXT_MAX. The fix writes no
- * activity. Running it again is safe, and a deployment that needs nothing
- * reports no rows. */
+ * activity. A task's description row (model/descriptions.ts) gets the
+ * trimmed description with its task row. Running it again is safe, and a
+ * deployment that needs nothing reports no rows. */
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -75,6 +76,7 @@ import {
 } from '../_generated/server'
 import { cleanEmail } from '../lib/email'
 import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits'
+import { patchTask, type TaskFields } from '../model/descriptions'
 
 /** Rows per page and the bytes one page may read; a page can end early.
  * `page_size` lowers the rows per page, for tests of a walk over pages. */
@@ -200,10 +202,10 @@ function storedChanges(row: StoredRow): Change[] {
       const max = LIMITS.remainingHours.max
       if (hours !== undefined && hours > max)
         changes.push({ field: 'remaining_hours', length: hours, value: max })
-      const description = trimMarkdown(row.doc.description)
+      const description = trimMarkdown(row.doc.description ?? '')
       if (description.length > TEXT_MAX)
         changes.push({ field: 'description', length: description.length })
-      else if (description !== row.doc.description)
+      else if (description !== (row.doc.description ?? ''))
         changes.push({ field: 'description', length: description.length, value: description })
       return changes
     }
@@ -334,6 +336,20 @@ async function walk(
       if (taken) continue
       given.add(`${doc.org_id}:${email}`)
       await write?.db.patch('profiles', doc._id, { email })
+    }
+    return { rows, cursor: page.continueCursor, done: page.isDone }
+  }
+  if (phase === 'issues') {
+    const page = await ctx.db.query('issues').paginate(opts)
+    for (const doc of page.page) {
+      const { _id, _creationTime, ...body } = doc
+      const found = sorted('issues', _id, storedChanges({ table: 'issues', doc: body }), write)
+      rows.push(...found.rows)
+      // the task's description row takes a trimmed description too
+      // (model/descriptions.ts). It holds what the task row holds, so these
+      // reads add at most the bytes the page read.
+      if (found.patch !== null && write !== null)
+        await patchTask(write.db, doc, found.patch as TaskFields)
     }
     return { rows, cursor: page.continueCursor, done: page.isDone }
   }

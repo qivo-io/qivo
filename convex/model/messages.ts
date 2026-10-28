@@ -1932,7 +1932,7 @@ export async function notifyIssueInsert(
   const profiles = preload?.profiles ?? new Map()
   const visibility: RecipientSight = preload?.visibility ?? new Map()
   const trims = newItemTrims()
-  const mentioned = await mentionedIn(ctx, issue.description, profiles, issue.org_id)
+  const mentioned = await mentionedIn(ctx, issue.description ?? '', profiles, issue.org_id)
   const notices = inlineRoom(ctx)
   await tellMentioned(notices.ctx, {
     issue,
@@ -2085,11 +2085,12 @@ export async function notifyIssueUpdate(
   // @mentions newly added to the description notify regardless of
   // subscribers, and subscribe the person to what they were pulled into. An
   // unchanged description adds none, so a bulk write of dates skips the scan
-  const oldMentions = after.description === before.description ? [] : mentionIds(before.description)
+  const oldMentions =
+    after.description === before.description ? [] : mentionIds(before.description ?? '')
   const newMentions =
     after.description === before.description
       ? []
-      : (await mentionedIn(ctx, after.description, profiles, after.org_id)).filter(
+      : (await mentionedIn(ctx, after.description ?? '', profiles, after.org_id)).filter(
           (p) => !oldMentions.includes(p.id),
         )
   // mentions and followers share the room the write leaves its notices

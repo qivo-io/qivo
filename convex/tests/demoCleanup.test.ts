@@ -12,6 +12,7 @@ import schema from '../schema'
 import {
   chargeFilteredReads,
   countersFor,
+  expectDescriptions,
   expectLiveCounts,
   expectRefusal,
   newT,
@@ -140,6 +141,7 @@ const APP_OWNED: TableNames[] = [
   'profiles',
   'projects',
   'issues',
+  'issue_descriptions',
   'labels',
   'activity_events',
   'webhook_events',
@@ -293,6 +295,7 @@ describe('public Northstar provisioning and bounded deletion', () => {
     expect(left.tasks).toHaveLength(MARKETING_DEMO.issues.length)
     expect(left.projects).toHaveLength(15)
     await expectLiveCounts(t, a.org_id!)
+    expect(await expectDescriptions(t, a.org_id!)).toBe(MARKETING_DEMO.issues.length)
     expect(left.profiles).toHaveLength(8)
     expect(left.profiles.filter((p) => p.auth_user_id)).toHaveLength(1)
     expect(left.profiles.find((p) => p.auth_user_id)?.name).toBe('Nora Berg')

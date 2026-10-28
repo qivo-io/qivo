@@ -43,6 +43,7 @@ import type { IssueStatus } from '../lib/enums'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
 import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
 import { deleteOrgDeep, pendingRemoval } from '../model/cascade'
+import { insertTask } from '../model/descriptions'
 import { insertOrgRows, newOrgDefaults, newTeamDefaults, tallyRow } from '../model/orgs'
 import { projectDescription } from '../model/projects'
 
@@ -224,7 +225,7 @@ export const zzGuestOrg = internalMutation({
         created_at: now,
         updated_at: now,
       } as const
-      await ctx.db.insert('issues', row)
+      await insertTask(ctx.db, row)
       await tallyRow(ctx, 'issues', null, row)
     }
     await issue(ZZ.sharedTask, 1, ZZ.sharedSub, 'ZZ shared task', 'backlog')

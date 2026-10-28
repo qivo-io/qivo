@@ -124,6 +124,7 @@ import { countsAsSubtask } from '../lib/liveTasks'
 import { insertActivity, logActivity } from './activity'
 import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleImageReap } from './descriptionImages'
+import { dropDescription, insertTask, withDescription } from './descriptions'
 import { releaseFile } from './fileHolds'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
 import { linksFullAt } from './links'
@@ -481,9 +482,11 @@ const tooLarge = (item: Pick<Item, 'id' | 'org_id'>, live: LiveRow, ownerId: str
   estimateDocumentBytes(wrapRow(item, live, ownerId)) > STORED_ROW_MAX_BYTES
 
 /** Deletes `live` from its table, a task or project out of its
- * organization's live counts (model/orgs.ts tallyRow). */
+ * organization's live counts (model/orgs.ts tallyRow), and a task with its
+ * description row (model/descriptions.ts). */
 async function deleteLive(ctx: MutationCtx, live: LiveRow): Promise<void> {
   await ctx.db.delete(live.doc._id)
+  if (live.table === 'issues') await dropDescription(ctx.db, live.doc.id)
   if (live.table === 'issues' || live.table === 'projects')
     await tallyRow(ctx, live.table, live.doc, null)
 }
@@ -715,7 +718,9 @@ async function storedAlready(run: Run, live: LiveRow, ownerId: string): Promise<
   return stored.some((row) => row.owner_id === ownerId)
 }
 
-/** Stores a task row with its deleted_tasks row, and counts it. */
+/** Stores a task row with its deleted_tasks row, and counts it. `task`
+ * carries the text of its description row (model/descriptions.ts
+ * withDescription), which the stored copy keeps; the live row goes. */
 async function storeTask(
   ctx: MutationCtx,
   item: Item,
@@ -861,9 +866,10 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
   // deletes the deleted_item_parents row a later step would need
   if (mode === 'purge' && !(await purgeHistory(run, task.id))) return false
   const parent_id = await takeParent(run.ctx, task, run.item)
-  if (mode === 'keep')
-    await storeTask(run.ctx, run.item, tallyOf(run), fitToStore(run.item, { ...task, parent_id }))
-  else await deleteLive(run.ctx, { table: 'issues', doc: task })
+  if (mode === 'keep') {
+    const stored = { ...(await withDescription(run.ctx.db, task)), parent_id }
+    await storeTask(run.ctx, run.item, tallyOf(run), fitToStore(run.item, stored))
+  } else await deleteLive(run.ctx, { table: 'issues', doc: task })
   run.budget.tasks -= 1
   charge(run.budget, task)
   return true
@@ -2394,7 +2400,9 @@ async function writeTask(
 ): Promise<Id<'issues'>> {
   const { doc } = t
   const active = doc.archived_at === undefined
-  const _id = await uncountedWriter(run.ctx.db).insert('issues', {
+  // with its description row, from the text the stored copy keeps
+  // (model/descriptions.ts)
+  const _id = await insertTask(uncountedWriter(run.ctx.db), {
     ...doc,
     // a copy stored before tasks had keys, whose relation rows gave it
     // none (storedTaskKey)
@@ -4074,19 +4082,24 @@ export async function moveTasksToTrash(
     provenance?: string
   },
 ): Promise<Item> {
-  const { actor, root, now } = a
+  const { actor, now } = a
   const budget = budgetFor(CALL.scale)
   const counted = metered(ctx, budget)
-  const tasks = [...a.subtasks, root]
   // the caller read them, and the steps' reads come on top
-  for (const task of tasks) chargeRead(budget, task)
+  for (const task of [...a.subtasks, a.root]) chargeRead(budget, task)
+  // each task as it is stored, with the text of its description row
+  // (model/descriptions.ts withDescription)
+  const root = await withDescription(counted.db, a.root)
+  const subtasks: Doc<'issues'>[] = []
+  for (const task of a.subtasks) subtasks.push(await withDescription(counted.db, task))
+  const tasks = [...subtasks, root]
   const doomed = new Set(tasks.map((task) => task.id))
   const id = newUuid()
   const project = await liveProject(counted, root.project_id)
   const top =
     project.parent_id === undefined ? null : await byId(counted, 'projects', project.parent_id)
   const projects: Item['projects'] = []
-  for (const task of [root, ...a.subtasks]) {
+  for (const task of [root, ...subtasks]) {
     if (projects.some((p) => p.id === task.project_id)) continue
     const p = task.project_id === project.id ? project : await liveProject(counted, task.project_id)
     projects.push({ id: p.id, name: p.name, key: p.key, type: p.type, tasks: 0, archived_tasks: 0 })
@@ -4108,7 +4121,7 @@ export async function moveTasksToTrash(
     counts: {
       tasks: tasks.length,
       archived_tasks: tasks.filter((task) => task.archived_at !== undefined).length,
-      subtasks: a.subtasks.length,
+      subtasks: subtasks.length,
       sub_projects: 0,
     },
   })
@@ -4204,7 +4217,7 @@ function cutToCaps(task: Doc<'issues'>): Doc<'issues'> {
   return {
     ...task,
     title: cutText(task.title, LIMITS.title.max),
-    description: cutText(task.description, TEXT_MAX),
+    description: cutText(task.description ?? '', TEXT_MAX),
   }
 }
 

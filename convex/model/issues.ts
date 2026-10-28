@@ -59,7 +59,6 @@
  * `badRequest` sentences name machine fields where useful to API callers.
  * Both surfaces call the work items tasks and their children subtasks. */
 
-import type { WithoutSystemFields } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -70,7 +69,7 @@ import {
   profileCanSeeProject,
 } from '../lib/access'
 import { HISTORY_PAGE_MAX, receivedRows } from '../lib/activityVisibility'
-import { assertNewRowId, byId, insertUnique, newWindowKey, usedMoreThan } from '../lib/db'
+import { assertNewRowId, byId, newWindowKey, usedMoreThan } from '../lib/db'
 import {
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
@@ -92,6 +91,7 @@ import { inWorkingSet } from '../lib/workingSet'
 import { excerpt, issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
 import { IMAGE_NOT_ATTACHED, settleDescriptionImages } from './descriptionImages'
+import { insertTask, patchTask, type TaskFields, type TaskPatch } from './descriptions'
 import {
   assertExpected,
   BOOLEAN,
@@ -1245,18 +1245,19 @@ export async function browserVerbDetail(
     }
   }
   if ('description' in patch) {
-    const to = after.description
+    const from = before.description ?? ''
+    const to = after.description ?? ''
     if (to === '') {
       return {
         verb: 'removed the description from',
-        detail: before.description !== '' ? `(was “${excerpt(before.description)}”)` : undefined,
+        detail: from !== '' ? `(was “${excerpt(from)}”)` : undefined,
         named: [],
       }
     }
-    if (before.description !== '') {
+    if (from !== '') {
       return {
         verb: 'updated the description of',
-        detail: `from “${excerpt(before.description)}” to “${excerpt(to)}”`,
+        detail: `from “${excerpt(from)}” to “${excerpt(to)}”`,
         named: [],
       }
     }
@@ -1431,11 +1432,8 @@ export async function createIssueCore(
     (status === 'review' ? await reviewHoursFor(ctx, project) : undefined)
   const paused = args.paused ?? false
   if (paused && !isPausable(status)) throw rule(PAUSE_RULE)
-  await insertUnique(
-    ctx,
-    'issues',
-    'by_uuid',
-    { id: args.id },
+  await insertTask(
+    ctx.db,
     {
       id: args.id,
       project_id: project.id,
@@ -1582,7 +1580,7 @@ export async function updateIssueCore(
   // Public validators omit this field; also fail explicitly at the shared
   // model boundary so trusted callers cannot accidentally alter attribution.
   if ('reporter_id' in patch) throw badRequest(REPORTER_IMMUTABLE_SENTENCE)
-  const w: Partial<WithoutSystemFields<Doc<'issues'>>> = {}
+  const w: TaskFields = {}
   // trusted archive/restore toggle (machine only — see MachineUpdate above):
   // folded into this one row write; matching the current state never toggles
   const wantArchive = a.machine?.archive
@@ -1770,8 +1768,9 @@ export async function updateIssueCore(
     w.start_week = start
     w.end_week = end
   }
-  // -- the row write: ONE patch, the folded archive toggle included
-  await ctx.db.patch(issue._id, w)
+  // -- the row write: ONE patch, the folded archive toggle included, and
+  //    the description row with it (model/descriptions.ts)
+  await patchTask(ctx.db, issue, w)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   await tallyRow(ctx, 'issues', issue, after)
   // -- cascade, then clear-on-attach
@@ -2081,7 +2080,7 @@ export async function moveIssueCore(
   if (issue.assignee_id !== undefined && !replacedLater(issue, later, 'assignee_id')) {
     await assertAssigneeRule(ctx, target, issue.assignee_id)
   }
-  const w: Partial<WithoutSystemFields<Doc<'issues'>>> = {
+  const w: TaskPatch = {
     project_id,
     updated_at: now,
     ...movedStamps(issue, now),
