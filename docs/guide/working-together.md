@@ -83,14 +83,13 @@ organization's name, address, attachment size and default plannable hours,
 address in **Organization → Users**, a team's name and its members' hours,
 and a project's name and description. If someone changes the same setting while
 you type, your text stays and a line under the field says what it was
-changed to, such as **Changed elsewhere to “Northstar Labs”.** When Qivo
-refused your save because of that change, the line also names who made it,
-such as **Leo Martins changed it to “Northstar Labs”.** The field saves
-nothing until you choose **Use saved**, which shows the saved value, or
-**Keep mine**, after which your next save replaces it. Someone else's change
-to another setting leaves your text alone. A save refused for another
-reason keeps your text too, unsaved, so you can correct it and save again.
-An invitation address Qivo cannot use goes back to the saved one instead.
+changed to, such as **Changed elsewhere to “Northstar Labs”.** It does not
+say who made the change. The field saves nothing until you choose **Use
+saved**, which shows the saved value, or **Keep mine**, after which your
+next save replaces it. Someone else's change to another setting leaves your
+text alone. A save that fails for another reason keeps your text too,
+unsaved, so you can correct it and save again. An invitation address Qivo
+cannot use goes back to the saved one instead.
 
 An edit that was waiting to save when your connection dropped is checked
 when it reaches Qivo. If someone changed the same field of a task or a
