@@ -30,6 +30,7 @@ import {
   type Holding,
   LEAD_ACCESS_RULE,
   NO_USER_MANAGEMENT,
+  REASSIGN_ROOM,
   REMOVAL_FULL,
   reassignTooLarge,
   removeProjectGrantCore,
@@ -1295,11 +1296,23 @@ describe("the removal preview inside Convex's limits", () => {
     expect(getConvexSize(m.answer as RemovalPreview)).toBeLessThan(128 * 1024)
   }, 120_000)
 
-  it('answers too_large for a member removal past the room, which its write refuses too', async () => {
+  /* withOrg under the deployment's limits, with a second team, Platform,
+   * beside Hardware, which shares TBED; Mia, a member of Hardware, holds
+   * one task in Firmware beside 320 open tasks with descriptions at the cap
+   * in a three-byte script, about 60 KB each and 19 MB in all, past the
+   * 16 MiB one request reads. */
+  async function pastTheRoom() {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const mia = await plantSeat(t, { org_id: f.org.id, name: 'Mia', accepted_at: NOW })
     await t.run(async (ctx) => {
+      await ctx.db.insert('teams', {
+        id: uuid(),
+        org_id: f.org.id,
+        name: 'Platform',
+        track_delay_default: false,
+        created_at: NOW,
+      })
       await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
         team_id: f.team.id,
@@ -1312,8 +1325,6 @@ describe("the removal preview inside Convex's limits", () => {
       })
     })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id: mia.id })
-    // 320 open tasks with descriptions at the cap in a three-byte script,
-    // about 60 KB each and 19 MB in all, past the 16 MiB one request reads
     const description = '€'.repeat(LIMITS.description.max)
     for (let from = 0; from < 320; from += 80)
       await t.run(async (ctx) => {
@@ -1333,6 +1344,11 @@ describe("the removal preview inside Convex's limits", () => {
             updated_at: NOW,
           })
       })
+    return { t, f, mia }
+  }
+
+  it('answers too_large for a member removal past the room, which its write refuses too', async () => {
+    const { t, f, mia } = await pastTheRoom()
     const change = { kind: 'team_member', team_id: f.team.id, user_id: mia.id } as const
     expect(await preview(t, f.user, change)).toEqual({ state: 'too_large', message: REMOVAL_FULL })
     console.info(
@@ -1345,6 +1361,74 @@ describe("the removal preview inside Convex's limits", () => {
         team_id: f.team.id,
         profile_id: mia.id,
         on_held_tasks: 'leave',
+      }),
+      'rule',
+    )
+    expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
+  }, 120_000)
+
+  it('answers too_large for a team deletion past the room, which still deletes the team when it leaves the tasks', async () => {
+    // a deletion that leaves the tasks reads none of them
+    const { t, f } = await pastTheRoom()
+    const change = { kind: 'delete_team', team_id: f.team.id } as const
+    expect(await preview(t, f.admin, change)).toEqual({ state: 'too_large', message: REMOVAL_FULL })
+    await as(t, f.admin).mutation(api.teams.deleteDeep, {
+      org_id: f.org.id,
+      id: f.team.id,
+      on_held_tasks: 'leave',
+    })
+    expect(await preview(t, f.admin, change)).toEqual({ state: 'unavailable' })
+  }, 120_000)
+
+  it('refuses a team deletion that keeps people as Viewers where the preview allowed it, when the deletes fill the room', async () => {
+    // Hardware, beside Platform, shares TBED; Mia, a member, holds one task,
+    // and 2,000 more memberships name people who no longer exist. The
+    // write also deletes those memberships before it reads sight again,
+    // which the preview never does.
+    const plant = async (limits: Parameters<typeof newT>[0]) => {
+      const b = await base(newT(limits))
+      await b.team('Platform')
+      await b.share(b.f.meta, b.f.team.id)
+      const mia = await b.person('Mia')
+      await b.join(b.f.team.id, mia)
+      await b.task(b.f.sub, { assignee_id: mia.id })
+      await b.t.run(async (ctx) => {
+        for (let i = 0; i < 2000; i++)
+          await ctx.db.insert('team_members', {
+            team_id: b.f.team.id,
+            profile_id: uuid(),
+            is_leader: false,
+          })
+      })
+      return { ...b, change: { kind: 'delete_team', team_id: b.f.team.id } as const }
+    }
+    const m = await plant({ transactionLimits: true })
+    const read = await measured(m.t, (ctx) => previewRemoval(ctx, m.f.admin, m.change))
+    const wrote = await measured(m.t, (ctx) =>
+      deleteTeamCore(ctx, { me: m.f.admin, team: m.f.team, held: 'keep_as_viewer', now: NOW }).then(
+        () => 'deleted',
+      ),
+    )
+    expect(wrote.answer).toBe('deleted')
+    const used = ({ ranges, documents, bytes }: Omit<typeof wrote, 'answer'>) => ({
+      ranges,
+      documents,
+      bytes,
+    })
+    console.info('a team deletion that keeps people as Viewers', {
+      preview: used(read),
+      write: used(wrote),
+    })
+    expect(wrote.documents).toBeGreaterThan(read.documents + 1500)
+    // a limit whose room the preview's reads stay inside and the write's pass
+    const documentsRead = Math.ceil((read.documents + wrote.documents) / 2 / REASSIGN_ROOM)
+    const s = await plant({ transactionLimits: { documentsRead } })
+    expect((await previewOk(s.t, s.f.admin, s.change)).keep).toMatchObject({ allowed: true })
+    const e = await expectRefusal(
+      as(s.t, s.f.admin).mutation(api.teams.deleteDeep, {
+        org_id: s.orgId,
+        id: s.f.team.id,
+        on_held_tasks: 'keep_as_viewer',
       }),
       'rule',
     )

@@ -407,7 +407,8 @@ type After = { remove: () => Promise<void> } | { without: RemovedAccess }
  * many people hold such tasks before any sight is checked (`holders`) and
  * the sight of those people before and after. A switched-off person holds
  * no work, and a group's reviewer is dormant. A removal and its preview both
- * run this, so they cannot disagree.
+ * run this, so they agree on who loses sight of which tasks, though not on
+ * the room left (model/removalPreview.ts).
  *
  * The reads are bounded by what the app's snapshot reads, never by history.
  * Only the active tasks of `projects` are read (by_project_archived). The

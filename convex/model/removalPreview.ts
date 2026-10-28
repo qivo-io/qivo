@@ -10,13 +10,26 @@
  * removeTeamMemberCore and deleteTeamCore), and the write's own reads
  * (model/projectAccess.ts findLost). Where the write deletes the rows and
  * reads sight again, the preview leaves those rows out of the same reads
- * (lib/access.ts RemovedAccess), so the preview and the write cannot
- * disagree. Each write's other changes decide no one's sight: a grant's or
- * share's reach rows (model/projectNav.ts), a membership's team count
+ * (lib/access.ts RemovedAccess), so the two agree on who loses sight of
+ * which tasks and, but for the checks of a new holder of reassigned tasks
+ * (RemovalEffect), on the rules each choice meets. Each write's other
+ * changes decide no one's sight: a grant's or share's reach rows
+ * (model/projectNav.ts), a membership's team count
  * (model/teamCounts.ts), and for a deleted team also its reach rows, its
  * count and the legacy team_id it clears on projects (model/cascade.ts
  * deleteTeamDeep). Levels come only from grants, shares, memberships, the
  * team rows and the projects' tree and leads (lib/access.ts levelsFrom).
+ *
+ * The room each uses in its one transaction can differ, both ways. The
+ * preview also reads the caller's sight and whether the caller manages each
+ * Keep target, so it can answer too_large where a 'leave' write of the same
+ * grant or member removal goes through, and a team deletion with 'leave'
+ * reads no tasks at all (model/teams.ts deleteTeamCore). Keeping people as
+ * Viewers or reassigning their tasks spends room on what the write writes,
+ * for a team deletion also on deleting its shares, reach rows and
+ * memberships before it reads sight again, none of which the preview does,
+ * so near the limit such a write can refuse with REMOVAL_FULL,
+ * KEEP_TOO_LARGE or reassignTooLarge where the preview allowed the choice.
  *
  * Reading tasks needs ordinary access to their project, so the caller gets
  * the number, title and holder of a lost task only in a project they can
@@ -346,7 +359,8 @@ async function effectOf(
   plan: Plan,
   readOnly: string | null,
 ): Promise<RemovalEffect> {
-  // a 'leave' write reads exactly this and settles nothing
+  // what a 'leave' write of a grant or member removal reads to find who
+  // loses sight; it settles nothing
   const found = await findLost(ctx, {
     projects: plan.projects,
     people: plan.people,

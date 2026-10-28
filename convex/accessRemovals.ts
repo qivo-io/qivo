@@ -33,12 +33,20 @@ import { previewRemoval, vRemovalChange } from './model/removalPreview'
  * request, or its answer would not (model/removalPreview.ts PREVIEW.bytes),
  * with model/projectAccess.ts REMOVAL_FULL. Every list is
  * bounded: each project it names appears once, and each person who can still
- * change projects names a few of them and counts the rest. A grant or
- * member removal that leaves the tasks reads the same, so it is then
- * expected to refuse with that sentence too; the preview also reads the
- * caller's sight, so it can run out slightly sooner. A team deletion that
- * leaves the tasks does not read them at all (model/teams.ts
- * deleteTeamCore), so it still goes ahead and strands them without a list.
+ * change projects names a few of them and counts the rest.
+ *
+ * The preview and the write agree on who loses sight of which tasks and,
+ * but for the checks of a new holder, on the rules each choice meets, but
+ * not always on the room one request leaves, either way
+ * (model/removalPreview.ts). A grant or member removal
+ * that leaves the tasks reads what the preview reads but the caller's
+ * sight, so after a too_large it is likely to refuse with the same
+ * sentence, though it may go through. A team deletion that leaves the
+ * tasks does not read them at all (model/teams.ts deleteTeamCore), so it
+ * goes ahead and strands them without a list. Keeping people as Viewers or
+ * reassigning their tasks also writes, and a team deletion deletes, so near
+ * the limit such a write can refuse with a room sentence where the preview
+ * allowed the choice.
  */
 export const preview = orgQuery({
   args: { change: vRemovalChange },
