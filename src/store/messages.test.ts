@@ -1049,6 +1049,77 @@ describe('bulk notification actions through the client store', () => {
     await marking
   })
 
+  it('waits for a pending read mark before it asks, so Remove all read removes that message', async () => {
+    const seat = snap.orgs[1].id
+    // the seat's only read message goes, so the server holds none read there
+    snap.messages = snap.messages.filter((m) => m.org_id !== seat || !m.read_at)
+    snap.readMessageCount = 2
+    publish(structuredClone(snap))
+    const unread = snap.messages.find((m) => m.org_id === seat && !m.read_at)!
+    P.markMessagesRead([unread.id])
+    const removal = P.deleteReadMessages()
+    await asked()
+    // bulkReach waits for the read mark, which the server has not taken yet
+    expect(reachAsked()).toBe(0)
+    expect(requests.map((r) => r.name)).toEqual(['messages:markRead'])
+    snap.messages = snap.messages.map((m) => (m.id === unread.id ? { ...m, read_at: NOW } : m))
+    requests[0].resolve(null)
+    await asked()
+    expect(reachAsked()).toBe(1)
+    expect(requests.slice(1).map((r) => [r.name, r.args.org_id])).toEqual([
+      ['messages:removeRead', snap.orgs[0].id],
+      ['messages:removeRead', seat],
+    ])
+    await answerAll(() => ({ removed: 1, hasMore: false }))
+    await removal
+  })
+
+  it('waits for a pending unread mark before it asks, so Mark all as read marks that message read', async () => {
+    const seat = snap.orgs[0].id
+    // an older unread message, and a newer read one the person reopens
+    const older = snap.messages.find((m) => m.org_id === seat && !m.read_at)!
+    const newer = {
+      ...older,
+      id: crypto.randomUUID(),
+      issue_id: crypto.randomUUID(),
+      created_at: '2026-09-14T09:00:00.000Z',
+      read_at: NOW,
+    }
+    snap.messages = [...snap.messages, newer]
+    publish(structuredClone(snap))
+    // bulkReach answers the newest unread message's time as the cutoff
+    reach = null
+    network.query.mockImplementation((ref) =>
+      getFunctionName(ref) === 'messages:bulkReach'
+        ? Promise.resolve({
+            seats: snap.orgs.map((org) => {
+              const times = snap.messages
+                .filter((m) => m.org_id === org.id && !m.read_at)
+                .map((m) => Date.parse(m.created_at))
+              return {
+                org_id: org.id,
+                reach: times.length ? 'one' : 'none',
+                before: Math.max(0, ...times),
+              }
+            }),
+          })
+        : Promise.resolve(null),
+    )
+    P.markMessagesUnread([newer.id])
+    const marking = P.markAllMessagesRead()
+    await asked()
+    expect(reachAsked()).toBe(0)
+    snap.messages = snap.messages.map((m) => (m.id === newer.id ? { ...m, read_at: undefined } : m))
+    requests[0].resolve(null)
+    await asked()
+    // the seat's cutoff includes the reopened message, which the paint marks
+    const mark = requests.find((r) => r.name === 'messages:markAllRead' && r.args.org_id === seat)
+    expect(mark?.args.before).toBe(Date.parse(newer.created_at))
+    expect(P.messages.find((m) => m.id === newer.id)?.read).toBe(true)
+    await answerAll((r) => ({ marked: 1, hasMore: false, before: r.args.before }))
+    await marking
+  })
+
   it('stops every seat at a pause with one toast, the queued one before it sends anything', async () => {
     const third = thirdSeat()
     reach = {

@@ -2869,12 +2869,18 @@ function noteScope(args: unknown): string | null {
 /** Every crash-note scope the signed-in person has now. */
 const noteScopes = () => [...myProfiles].map(([org, profile]) => `${org}:${profile}`)
 
+/* The inbox writes (messages.*) sent and not answered yet, which a bulk
+   Inbox action waits for before it asks messages.bulkReach (askReach), so
+   its plan sees them. */
+const inboxWrites = new Set<Promise<unknown>>()
+
 /* Sends one write to Convex, for send() and sendAwaited() only. They check
    the pause first; the check here is the backstop. A sent write counts as
    waiting (lib/syncStatus), and a change the person made is noted for the
-   crash note (lib/unconfirmedNote), until the server answers. A refusal
-   notes a read-only organization, the organization it named and the times
-   the socket was down while the write waited. */
+   crash note (lib/unconfirmedNote), until the server answers. An inbox
+   write is also in inboxWrites until then. A refusal notes a read-only
+   organization, the organization it named and the times the socket was
+   down while the write waited. */
 function dispatch<M extends FunctionReference<'mutation'>>(
   mutation: M,
   args: FunctionArgs<M>,
@@ -2900,6 +2906,11 @@ function dispatch<M extends FunctionReference<'mutation'>>(
     const sent: Promise<FunctionReturnType<M>> = convex.mutation(mutation, args)
     // beside the chain below, so the callers' timing stays as it was
     sent.then(answered, answered)
+    if (name.startsWith('messages:')) {
+      inboxWrites.add(sent)
+      const settled = () => inboxWrites.delete(sent)
+      sent.then(settled, settled)
+    }
     return sent
       .then((result) => {
         // Awaited uploads have their own adoption after this promise. Refuse
@@ -4283,9 +4294,9 @@ let noticeHost: NoticeHost | null = null
    later run that finishes there takes them away. */
 const stopToasts = new Set<string>()
 
-/** How long a press of a bulk Inbox action waits for messages.bulkReach,
-    so a connection that drops while it asks does not hold the buttons
-    disabled. */
+/** How long a press of a bulk Inbox action waits for the inbox writes sent
+    before it and then for messages.bulkReach, so a connection that drops
+    while it asks does not hold the buttons disabled. */
 const REACH_WAIT_MS = 10_000
 
 /** Sets P.inboxBulk and shows it in the Inbox. */
@@ -4294,14 +4305,19 @@ function setInboxBulk(next: InboxBulk | null) {
   emit('inbox')
 }
 
-/** messages.bulkReach's answer for `action`, or null when it fails or does
-    not come within REACH_WAIT_MS. */
+/** messages.bulkReach's answer for `action`, asked once every inbox write
+    sent before the press has been answered (inboxWrites), so its cutoffs
+    and counts include them, such as a message marked unread or read just
+    before. Null when the question fails, or when the writes and the answer
+    do not come within REACH_WAIT_MS of the press. */
 async function askReach(action: BulkAction) {
   let timer: ReturnType<typeof setTimeout> | undefined
   const late = new Promise<null>((resolve) => {
     timer = setTimeout(() => resolve(null), REACH_WAIT_MS)
   })
   try {
+    const earlier = Promise.allSettled(inboxWrites).then(() => true)
+    if ((await Promise.race([earlier, late])) === null) return null
     const answer = await Promise.race([convex.query(api.messages.bulkReach, { action }), late])
     return answer && Array.isArray(answer.seats) ? answer : null
   } catch (error) {
@@ -4347,8 +4363,9 @@ function dropStopToast(key: string) {
 }
 
 /* Runs bulk Inbox action `action` (Mark all as read or Remove all read)
-   with its progress in P.inboxBulk. It asks messages.bulkReach first and
-   skips the seats with nothing to do. When the answer does not come within
+   with its progress in P.inboxBulk. It waits for the inbox writes sent
+   before the press, then asks messages.bulkReach, and skips the seats with
+   nothing to do. When the writes or the answer do not come within
    REACH_WAIT_MS, or the question fails, it changes nothing and says so,
    because only bulkReach gives each seat its cutoff. With `ask`, an action
    of more than one round waits for the keep-open notice
