@@ -48,10 +48,13 @@
  * A call checks its deadline, RUN.ms, before each step and each page it
  * reads, well inside Convex's action time limit, and then answers
  * `done: false` with a `cursor`, which goes on inside an organization and
- * inside its count. Call it again with the same arguments and `"cursor"`
- * set to it until `done` is true. Each call reports what it went through.
- * A call that meets an error answers it in `error`, with the cursor of the
- * organization it failed on and what it counted before.
+ * inside its count. Organizations and totals rows are read in the order of
+ * their organization's id, which no two share, so the cursor names the last
+ * one finished and no tie can hide another. Call it again with the same
+ * arguments and `"cursor"` set to it until `done` is true. Each call reports
+ * what it went through. A call that meets an error answers it in `error`,
+ * with the cursor of the organization it failed on and what it counted
+ * before.
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
@@ -399,23 +402,20 @@ export const step = internalMutation({
   },
 })
 
-/** An organization as a run reads it: its creation time, which orders the
- * page, whether its deletion has begun, and its totals row, null before a
- * count, with `counting` while one runs. */
+/** An organization as a run reads it: whether its deletion has begun, and
+ * its totals row, null before a count, with `counting` while one runs. */
 type OrgState = {
   org_id: string
-  ct: number
   deleting: boolean
   row: (Amount & { revision: number; run: string | null; counting: number | null }) | null
 }
 
-/** The state of organization `org` (OrgState). */
-async function stateOf(ctx: QueryCtx, org: Doc<'organizations'>): Promise<OrgState> {
-  const row = await orgTotalsRow(ctx, org.id)
+/** The state of organization `orgId` (OrgState). */
+async function stateOf(ctx: QueryCtx, orgId: string): Promise<OrgState> {
+  const row = await orgTotalsRow(ctx, orgId)
   return {
-    org_id: org.id,
-    ct: org._creationTime,
-    deleting: await deletionBegun(ctx, org.id),
+    org_id: orgId,
+    deleting: await deletionBegun(ctx, orgId),
     row:
       row === null
         ? null
@@ -430,16 +430,20 @@ async function stateOf(ctx: QueryCtx, org: Doc<'organizations'>): Promise<OrgSta
 }
 
 /** A page of organizations with their states. */
-type OrgPage = { orgs: OrgState[]; cursor: string; done: boolean }
+type OrgPage = { orgs: OrgState[]; done: boolean }
 
-/** One page of organizations, in creation order, with their states. */
+/** Up to RUN.orgs organizations whose id comes after `after`, in id order,
+ * with their states. */
 export const orgPage = internalQuery({
-  args: { cursor: v.union(v.string(), v.null()) },
-  handler: async (ctx, { cursor }): Promise<OrgPage> => {
-    const page = await ctx.db.query('organizations').paginate({ cursor, numItems: RUN.orgs })
+  args: { after: v.union(v.string(), v.null()) },
+  handler: async (ctx, { after }): Promise<OrgPage> => {
+    const page = await ctx.db
+      .query('organizations')
+      .withIndex('by_uuid', (q) => (after === null ? q : q.gt('id', after)))
+      .take(RUN.orgs)
     const orgs: OrgState[] = []
-    for (const org of page.page) orgs.push(await stateOf(ctx, org))
-    return { orgs, cursor: page.continueCursor, done: page.isDone }
+    for (const org of page) orgs.push(await stateOf(ctx, org.id))
+    return { orgs, done: page.length < RUN.orgs }
   },
 })
 
@@ -447,10 +451,8 @@ export const orgPage = internalQuery({
  * once it is gone. */
 export const state = internalQuery({
   args: { org_id: v.string() },
-  handler: async (ctx, { org_id }): Promise<OrgState | null> => {
-    const org = await byId(ctx, 'organizations', org_id)
-    return org === null ? null : await stateOf(ctx, org)
-  },
+  handler: async (ctx, { org_id }): Promise<OrgState | null> =>
+    (await byId(ctx, 'organizations', org_id)) === null ? null : await stateOf(ctx, org_id),
 })
 
 /** A task whose own row does not give what its files give. */
@@ -622,25 +624,28 @@ export const orphanPage = internalQuery({
   },
 })
 
-/** A totals row of the stray check: its organization, its creation time,
- * which orders the page, and whether the organization is gone. */
-type TotalsRow = { org_id: string; ct: number; stray: boolean }
+/** An organization's totals row as the stray check reads it: its
+ * organization, and whether that organization is gone. */
+type TotalsRow = { org_id: string; stray: boolean }
 
-type TotalsPage = { rows: TotalsRow[]; cursor: string; done: boolean }
+type TotalsPage = { rows: TotalsRow[]; done: boolean }
 
-/** One page of every organization's totals row (TotalsRow). */
+/** Up to RUN.orgs organization totals rows whose organization id comes
+ * after `after`, in that order (TotalsRow). */
 export const totalsPage = internalQuery({
-  args: { cursor: v.union(v.string(), v.null()) },
-  handler: async (ctx, { cursor }): Promise<TotalsPage> => {
-    const page = await ctx.db.query('storage_org_totals').paginate({ cursor, numItems: RUN.orgs })
+  args: { after: v.union(v.string(), v.null()) },
+  handler: async (ctx, { after }): Promise<TotalsPage> => {
+    const page = await ctx.db
+      .query('storage_org_totals')
+      .withIndex('by_org', (q) => (after === null ? q : q.gt('org_id', after)))
+      .take(RUN.orgs)
     const rows: TotalsRow[] = []
-    for (const row of page.page)
+    for (const row of page)
       rows.push({
         org_id: row.org_id,
-        ct: row._creationTime,
         stray: (await byId(ctx, 'organizations', row.org_id)) === null,
       })
-    return { rows, cursor: page.continueCursor, done: page.isDone }
+    return { rows, done: page.length < RUN.orgs }
   },
 })
 
@@ -681,7 +686,7 @@ export const audit = internalMutation({
   },
 })
 
-const orgPageRef = makeFunctionReference<'query', { cursor: string | null }, OrgPage>(
+const orgPageRef = makeFunctionReference<'query', { after: string | null }, OrgPage>(
   'internal/storageTotalsBackfill:orgPage',
 )
 const stateRef = makeFunctionReference<'query', { org_id: string }, OrgState | null>(
@@ -702,7 +707,7 @@ const orphanPageRef = makeFunctionReference<
   { org_id: string; stored: boolean; cursor: string | null; size: number },
   OrphanPage
 >('internal/storageTotalsBackfill:orphanPage')
-const totalsPageRef = makeFunctionReference<'query', { cursor: string | null }, TotalsPage>(
+const totalsPageRef = makeFunctionReference<'query', { after: string | null }, TotalsPage>(
   'internal/storageTotalsBackfill:totalsPage',
 )
 const stepRef = makeFunctionReference<
@@ -776,14 +781,13 @@ const freshCount = (org: OrgState, tries: number): DryCount => ({
   now: null,
 })
 
-/** Where a call goes on: the run's id, the stage, the page it was in, by
- * the cursor that read it, the creation time of the last organization or
- * totals row of that page it finished, and a dry count it was inside. */
+/** Where a call goes on: the run's id, the stage, the id of the last
+ * organization, or of the organization of the last totals row, it
+ * finished, and a dry count it was inside. */
 type Resume = {
   run: string
   phase: 'orgs' | 'strays'
-  page: string | null
-  after: number
+  after: string | null
   dry?: DryCount
 }
 
@@ -987,7 +991,7 @@ export const run = internalAction({
     const until = Date.now() + RUN.ms
     const at: Resume =
       cursor === undefined
-        ? { run: newUuid(), phase: 'orgs', page: null, after: 0 }
+        ? { run: newUuid(), phase: 'orgs', after: null }
         : (JSON.parse(cursor) as Resume)
     const report = emptyReport()
     const skip = (orgId: string) => {
@@ -1007,10 +1011,9 @@ export const run = internalAction({
       work: for (;;) {
         if (lateForPage()) break
         if (at.phase === 'orgs') {
-          const page: OrgPage = await ctx.runQuery(orgPageRef, { cursor: at.page })
+          const page: OrgPage = await ctx.runQuery(orgPageRef, { after: at.after })
           read = true
           for (const org of page.orgs) {
-            if (org.ct <= at.after) continue
             if (org.deleting) skip(org.org_id)
             else if (!dry_run) {
               const ours = org.row?.run === at.run && org.row.counting === null
@@ -1047,16 +1050,14 @@ export const run = internalAction({
               at.dry = undefined
             }
             report.orgs++
-            at.after = org.ct
+            at.after = org.org_id
           }
-          if (page.done) Object.assign(at, { phase: 'strays', page: null, after: 0 })
-          else Object.assign(at, { page: page.cursor, after: 0 })
+          if (page.done) Object.assign(at, { phase: 'strays', after: null })
           continue
         }
-        const page: TotalsPage = await ctx.runQuery(totalsPageRef, { cursor: at.page })
+        const page: TotalsPage = await ctx.runQuery(totalsPageRef, { after: at.after })
         read = true
         for (const row of page.rows) {
-          if (row.ct <= at.after) continue
           if (row.stray) {
             // a dry run lists a stray, a run deletes it in steps
             for (let cleared = dry_run; !cleared; ) {
@@ -1066,13 +1067,12 @@ export const run = internalAction({
             }
             if (report.strays++ < COUNT_PAGE.listed) report.stray_orgs.push(row.org_id)
           }
-          at.after = row.ct
+          at.after = row.org_id
         }
         if (page.done) {
           done = true
           break
         }
-        Object.assign(at, { page: page.cursor, after: 0 })
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)

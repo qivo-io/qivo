@@ -1676,8 +1676,8 @@ describe('the backfill', () => {
   it('answers an error with what it counted before and the cursor to go on from, and records it', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // pages hold one organization each, in creation order
-    const [first, second] = [f.org, f.otherOrg]
+    // pages hold one organization each, in id order
+    const [first, second] = [f.org, f.otherOrg].sort((x, y) => (x.id < y.id ? -1 : 1))
     const project = (org: Doc<'organizations'>) => (org.id === f.org.id ? f.sub : f.otherProject)
     await plantFile(t, await plantIssue(t, { org_id: first.id, project_id: project(first).id }), 5)
     await plantFile(
@@ -1708,6 +1708,62 @@ describe('the backfill', () => {
     expect(rest).toMatchObject({ done: true, counted: 1, bytes: 6, files: 1 })
     expect(await expectTotals(t, first.id)).toEqual({ bytes: 5, files: 1 })
     expect(await expectTotals(t, second.id)).toEqual({ bytes: 6, files: 1 })
+  })
+
+  it('reads organizations and totals rows in id order, so each counts once in one call or in a call per step', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantFile(t, await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }), 1)
+    await plantFile(
+      t,
+      await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id }),
+      2,
+    )
+    // more organizations than a page holds, none counted, each with a file
+    const ids = [f.org.id, f.otherOrg.id]
+    for (let i = 3; i <= 5; i++) {
+      const id = uuid()
+      await t.run(async (ctx) => {
+        await insertOrgRows(ctx, {
+          id,
+          name: `Extra ${i}`,
+          slug: `extra-${i}`,
+          ...newOrgDefaults(NOW),
+        })
+        const row = await orgTotalsRow(ctx, id)
+        if (row !== null) await ctx.db.delete(row._id)
+      })
+      const project = await plantProject(t, { org_id: id, type: 'project' })
+      await plantFile(t, await plantIssue(t, { org_id: id, project_id: project.id }), i)
+      ids.push(id)
+    }
+    // and the totals of three organizations that are gone
+    const gone = [uuid(), uuid(), uuid()]
+    await t.run(async (ctx) => {
+      for (const org_id of gone)
+        await ctx.db.insert('storage_org_totals', { org_id, bytes: 1, files: 1, revision: 0 })
+    })
+    Object.assign(RUN, { orgs: 2, ms: 0 })
+    const dry = await runAll(t, { dry_run: true })
+    expect(dry.length).toBeGreaterThan(ids.length)
+    expect(dry.flatMap((call) => call.to_count.map((org) => org.org_id)).sort()).toEqual(
+      [...ids].sort(),
+    )
+    expect(dry.flatMap((call) => call.stray_orgs).sort()).toEqual([...gone].sort())
+    // a call per step counts each once, and deletes each stray
+    const steps = await runAll(t, { dry_run: false })
+    expect(total(steps, 'counted')).toBe(ids.length)
+    expect(steps.flatMap((call) => call.stray_orgs).sort()).toEqual([...gone].sort())
+    for (const [i, id] of ids.entries())
+      expect(await expectTotals(t, id)).toEqual({ bytes: i + 1, files: 1 })
+    for (const id of gone) expect((await rowsOf(t, id)).org).toBeNull()
+    // and so does one call
+    Object.assign(RUN, DEFAULT_RUN)
+    const once = await runAll(t, { dry_run: false, recount: true })
+    expect(once).toHaveLength(1)
+    expect(once[0]).toMatchObject({ counted: ids.length, strays: 0 })
+    for (const [i, id] of ids.entries())
+      expect(await expectTotals(t, id)).toEqual({ bytes: i + 1, files: 1 })
   })
 
   it('lists in a dry run and deletes in a run the totals of an organization that is gone', async () => {
