@@ -627,6 +627,16 @@ describe('public Northstar provisioning and bounded deletion', () => {
       })
       // the demo's write counters
       await ctx.db.insert('demo_write_counts', { demo_id: a.id, write_count: 3, insert_count: 9 })
+      // a visitor's post log on a demo task, and one a rollback left naming
+      // no task, which the finish check would refuse to leave
+      for (const issue_id of [record.id, uuid()])
+        await ctx.db.insert('comment_rates', {
+          org_id: record.org_id,
+          issue_id,
+          author: profile.id,
+          posts: [NOW],
+          until: NOW + 60_000,
+        })
       return { attachment, avatar, background, preview, shared }
     })
     expect((await deleteDemo(t, a)).length).toBeGreaterThan(1)

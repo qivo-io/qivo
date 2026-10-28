@@ -31,12 +31,19 @@
  * a failure that outlasts the retries means the request changed nothing, and its
  * WRITE_CONFLICT refusal tells the caller so. The surfaces run the mutations
  * they make before dispatch, such as the per-call stamp, through
- * conflictRetrying for the same reason. */
+ * conflictRetrying for the same reason.
+ *
+ * A write entry refused because its task's comments are still being counted
+ * (lib/limits.ts COMMENTS_COUNTING) then starts that count in a mutation of
+ * its own (commentLimits.ts begin), because the refusal undid what it
+ * wrote, so a later request can pass. */
 
 import { ConvexError } from 'convex/values'
+import { internal } from '../_generated/api'
 import type { ActionCtx } from '../_generated/server'
 import type { CredentialAccess } from '../lib/enums'
-import { conflict } from '../lib/functions'
+import { conflict, type Refusal } from '../lib/functions'
+import { COMMENTS_COUNTING } from '../lib/limits'
 import { WRITE_CONFLICT, WRITE_CONFLICT_MESSAGE, WRITE_TIMEOUT_MESSAGE } from './shared'
 
 /* convex/tsconfig's lib is ESNext only; the Convex runtime has it. */
@@ -174,18 +181,40 @@ export function conflictRetrying(ctx: Pick<ActionCtx, 'runMutation'>): ActionCtx
   return (mutation, ...args) => retryConflicts(() => run(mutation, ...args))
 }
 
+/** After `e`, a write's refusal, starts the count of the task whose
+ * comments it was refused for while they are counted (COMMENTS_COUNTING).
+ * Any other failure is left alone. A count that cannot start is logged, and
+ * the caller still answers the refusal. */
+async function beginCountAfter(ctx: Pick<ActionCtx, 'runMutation'>, e: unknown): Promise<void> {
+  if (!(e instanceof ConvexError)) return
+  const { reason, task_id } = e.data as Partial<Refusal>
+  if (reason !== COMMENTS_COUNTING || typeof task_id !== 'string') return
+  const runMutation = conflictRetrying(ctx)
+  try {
+    await runMutation(internal.commentLimits.begin, { issue_id: task_id })
+  } catch (error) {
+    console.error('A comment count did not start after a refused post', { task_id, error })
+  }
+}
+
 /**
  * Runs `entry` with the narrowest runner its access flag allows. Only an
  * exact 'write' gets the write runner, so a flag that slipped past the types
- * gets the read runner.
+ * gets the read runner. A write entry's refusal for a count under way
+ * starts that count (beginCountAfter) before it is rethrown.
  */
 export async function runEntry<Input, Output>(
   ctx: Runners,
   entry: MachineEntry<Input, Output>,
   input: Input,
 ): Promise<Output> {
-  if (entry.access === 'write') return await entry.run(writeRunner(ctx), input)
-  return await entry.run(readRunner(ctx), input)
+  if (entry.access !== 'write') return await entry.run(readRunner(ctx), input)
+  try {
+    return await entry.run(writeRunner(ctx), input)
+  } catch (e) {
+    await beginCountAfter(ctx, e)
+    throw e
+  }
 }
 
 /**

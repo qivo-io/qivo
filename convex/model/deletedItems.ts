@@ -128,7 +128,7 @@ import { cutText, LIMITS, TEXT_MAX } from '../lib/limits'
 import { countsAsSubtask } from '../lib/liveTasks'
 import { nameKey } from '../lib/nameKey'
 import { insertActivity, logActivity } from './activity'
-import { type CommentWrite, deleteCount, restartCount, tallyComments } from './commentLimits'
+import { beginCount, type CommentWrite, deleteCommentRows, tallyComments } from './commentLimits'
 import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleImageReap } from './descriptionImages'
 import { dropDescription, insertTask, withDescription } from './descriptions'
@@ -508,14 +508,15 @@ async function deleteLive(ctx: MutationCtx, live: LiveRow, txn?: Txn): Promise<v
 /** Deletes a live row for good, taking an attachment out of the stored-byte
  * totals of its task, numbered `num` when the caller holds the task
  * (model/storageTotals.ts), and letting go of its file (model/fileHolds.ts
- * releaseFile), and a task with its comment count. `txn` collects a
- * comment's count (deleteLive). */
+ * releaseFile), and a task with its comment count and post logs
+ * (model/commentLimits.ts deleteCommentRows), which a task that takes its
+ * freed id must not find. `txn` collects a comment's count (deleteLive). */
 async function discard(ctx: MutationCtx, live: LiveRow, num?: number, txn?: Txn): Promise<void> {
   await deleteLive(ctx, live, txn)
   if (live.table === 'issue_attachments') {
     await uncountFile(ctx, live.doc, num)
     await releaseFile(ctx, live.doc.storage_id)
-  } else if (live.table === 'issues') await deleteCount(ctx, live.doc.id)
+  } else if (live.table === 'issues') await deleteCommentRows(ctx, live.doc.id)
 }
 
 /** Moves `live` into `item`'s stored rows, travelling with `ownerId`, and
@@ -1345,8 +1346,10 @@ async function purgeRows(run: Run): Promise<boolean> {
       const upTo = (await idTaken(run, task.task_id)) ? run.item.deleted_at : undefined
       if (!(await purgeHistory(run, task.task_id, upTo))) return false
       if (!(await dropFilesOf(run, { id: task.task_id, num: task.num }))) return false
-      // the comment count goes with the task, unless the id is another's now
-      if (upTo === undefined) await deleteCount(run.ctx, task.task_id)
+      // the comment count and post logs go with the task, before its stored
+      // row frees the id, unless the id is another's now
+      if (upTo === undefined)
+        for (const row of await deleteCommentRows(run.ctx, task.task_id)) charge(run.budget, row)
       await run.ctx.db.delete(task._id)
       return true
     },
@@ -2121,7 +2124,7 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
   // has done this already, and the id may be another task's by now.
   if (into === null && !(await idTaken(run, task.task_id))) {
     if (!(await purgeHistory(run, task.task_id))) return false
-    await deleteCount(run.ctx, task.task_id)
+    for (const row of await deleteCommentRows(run.ctx, task.task_id)) charge(run.budget, row)
   }
   const done = await drain(
     run.budget,
@@ -2560,7 +2563,7 @@ async function writeTask(
   })
   await tallyRow(run.ctx, 'issues', null, doc)
   // a task stored before comment counts starts its count
-  await restartCount(run.ctx, doc)
+  await beginCount(run.ctx, doc)
   await run.ctx.db.delete(t.row._id)
   if (!inReveal) {
     const light = await run.ctx.db
@@ -3924,8 +3927,9 @@ async function clearPages<Row>(
 /** Deletes the rows task `task` still has in the live tables, taking each
  * attachment out of the stored-byte totals of the task and letting go of
  * its file (model/fileHolds.ts releaseFile), then the attachments the
- * organization stores of it, then its messages. The caller deletes the task
- * after, so its number is still known for each file. */
+ * organization stores of it, then its messages, comment count and post
+ * logs. The caller deletes the task after, so its number is still known for
+ * each file. */
 async function clearLiveRows(
   ctx: MutationCtx,
   orgId: string,
@@ -3958,7 +3962,7 @@ async function clearLiveRows(
     },
   )
   if (!stored) return false
-  return await clearPages(
+  const messages = await clearPages(
     budget,
     ctx.db.query('messages').withIndex('by_issue_read', (q) => q.eq('issue_id', task.id)),
     async (message) => {
@@ -3966,6 +3970,20 @@ async function clearLiveRows(
       return true
     },
   )
+  if (!messages) return false
+  // its comment count and post logs, before its stored row frees the id
+  for (const table of ['task_comment_counts', 'comment_rates'] as const) {
+    const cleared = await clearPages(
+      budget,
+      ctx.db.query(table).withIndex('by_issue', (q) => q.eq('issue_id', task.id)),
+      async (row) => {
+        await ctx.db.delete(row._id)
+        return true
+      },
+    )
+    if (!cleared) return false
+  }
+  return true
 }
 
 /** Deletes the description rows of task `taskId` (model/descriptions.ts)

@@ -459,7 +459,12 @@ describe('deleteOrgDeep', () => {
         [f.org.id, issue.id, f.user.id],
         [f.otherOrg.id, foreignIssue.id, f.otherAdmin.id],
       ] as const) {
-        await ctx.db.insert('task_comment_counts', { org_id, issue_id: task, count: 1 })
+        await ctx.db.insert('task_comment_counts', {
+          org_id,
+          issue_id: task,
+          count: 1,
+          revision: 0,
+        })
         await ctx.db.insert('comment_rates', {
           org_id,
           issue_id: task,

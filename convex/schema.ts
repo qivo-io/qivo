@@ -1823,20 +1823,36 @@ export default defineSchema({
   // relies on such a row: it counts the rest of the thread first or is
   // refused. No row means the task is not counted yet. The row stays while
   // its task is in Deleted items: a move counts the comments out and a
-  // restore counts them back. Server-owned, never sent to clients, REST,
-  // MCP, webhooks or the export. Not named comment_counts, a table an
-  // earlier release dropped whose rows some deployments may still hold.
+  // restore counts them back. It goes in the transaction that deletes its
+  // task for good, and a row naming another organization than its task's
+  // counts nothing, so a task that takes a freed id never adopts it.
+  // Server-owned, never sent to clients, REST, MCP, webhooks or the export.
+  // Not named comment_counts, a table an earlier release dropped whose rows
+  // some deployments may still hold.
   task_comment_counts: defineTable({
     org_id: v.string(),
     issue_id: v.string(), // one row per task, unique by mutation check
     count: v.number(),
     // a comment _creationTime; Number.MIN_SAFE_INTEGER before the first page
     counted: v.optional(v.number()),
+    // how many writes moved the count or the comments under it since the row
+    // was inserted, never less, so the backfill's dry run can tell a thread
+    // that changed while it counted from one that held still
+    revision: v.number(),
+    // while a count is under way, when it last moved, in server
+    // milliseconds, for its recovery; absent once it is exact or stuck
+    progress_at: v.optional(v.number()),
+    // recoveries since the count last moved; each halves a step's budget
+    attempts: v.optional(v.number()),
+    // a count whose step kept failing at the smallest budget: recovery
+    // leaves it, posts on the task stay refused for now, and the backfill
+    // lists it
+    stuck: v.optional(v.literal(true)),
   })
     .index('by_issue', ['issue_id'])
     .index('by_org', ['org_id'])
-    // the counts under way, for their recovery (commentLimits.ts recover)
-    .index('by_counted', ['counted']),
+    // the counts under way, least recently moved first (commentLimits.ts recover)
+    .index('by_progress', ['progress_at']),
 
   // The recent posts of one author on one task, for the posting rate
   // (LIMITS.commentRate, model/commentLimits.ts). `posts` holds the server
@@ -1844,7 +1860,9 @@ export default defineSchema({
   // there, at most LIMITS.commentRate.max. `until` is when the newest of
   // them stops counting; the hourly sweep deletes the row after it.
   // Deleting or editing a comment leaves the row alone, so neither gives a
-  // post back. Server-owned, like task_comment_counts.
+  // post back. The row goes with its task when the task is deleted for good,
+  // and one naming another organization counts no post. Server-owned, like
+  // task_comment_counts.
   comment_rates: defineTable({
     org_id: v.string(),
     issue_id: v.string(),
@@ -1853,6 +1871,8 @@ export default defineSchema({
     until: v.number(),
   })
     .index('by_author_issue', ['author', 'issue_id'])
+    // a task's post logs, deleted with the task
+    .index('by_issue', ['issue_id'])
     .index('by_until', ['until'])
     .index('by_org', ['org_id']),
 

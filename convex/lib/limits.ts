@@ -350,7 +350,7 @@ export const LIMITS = {
     max: 1_000,
     unit: 'comments',
     refusal:
-      'this task has reached 1,000 comments, the most a task can have. Delete comments until it has fewer than 1,000, then post again.',
+      'this task has reached 1,000 comments, the most a task can have. Ask a project lead to delete comments until it has fewer than 1,000, then post again.',
     on: ALL,
   },
   // Successful posts by one person or agent on one task, in any 60 seconds
@@ -670,6 +670,18 @@ export function tooManyRequests(seconds: number): string {
   const wait = seconds === 1 ? '1 second' : `${seconds} seconds`
   return `too many requests, at most 300 a minute for one person or agent. Try again in ${wait}.`
 }
+
+/** The refusal reason of a comment past LIMITS.commentRate
+ * (convex/model/commentLimits.ts). Its `retry_after` is the wait in
+ * seconds; REST answers it 429 with Retry-After. */
+export const COMMENT_RATE = 'comment_rate'
+
+/** The refusal reason of a comment, or an archive with a reason, on a task
+ * whose comments are still being counted (convex/model/commentLimits.ts).
+ * Its `task_id` names the task, whose count the caller then asks to start:
+ * REST and MCP through machine/registry.ts, the app through
+ * comments.countThread. REST answers it 503 with Retry-After. */
+export const COMMENTS_COUNTING = 'comments_counting'
 
 /** The refusal of a comment past LIMITS.commentRate, `seconds` before the
  * oldest of the author's last 10 posts on the task stops counting. */

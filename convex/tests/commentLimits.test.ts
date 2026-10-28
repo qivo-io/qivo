@@ -22,19 +22,20 @@
  *      the last two with Retry-After. */
 /// <reference types="vite/client" />
 
-import { getDocumentSize } from 'convex/values'
+import { type FunctionReference, type FunctionReturnType, getFunctionName } from 'convex/server'
+import { ConvexError, getDocumentSize } from 'convex/values'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { RUN, TASK_PAGE } from '../internal/commentCountsBackfill'
+import { RECOVER } from '../commentLimits'
+import { ROW_PAGE, RUN, TASK_PAGE } from '../internal/commentCountsBackfill'
 import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
-import { LIMITS, tooManyComments } from '../lib/limits'
+import { COMMENT_RATE, COMMENTS_COUNTING, LIMITS, tooManyComments } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
+import { runEntry } from '../machine/registry'
 import {
-  COMMENT_RATE,
-  COMMENTS_COUNTING,
   COUNT_BUDGET,
   START as COUNT_START,
   countPage,
@@ -42,7 +43,7 @@ import {
   SWEEP_BATCH,
   tallyComments,
 } from '../model/commentLimits'
-import { STORED_ROW_MAX_BYTES } from '../model/deletedItems'
+import { STORED_ROW_MAX_BYTES, TRASH_BUDGET } from '../model/deletedItems'
 import {
   as,
   expectRefusal,
@@ -50,12 +51,20 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
+  plantProject,
   plantSubscription,
   type T,
   uuid,
   withOrg,
 } from './helpers.setup'
-import { deleteTask, installTrashTimers, itemFor, runSteps, START } from './trash.setup'
+import {
+  deleteProject,
+  deleteTask,
+  installTrashTimers,
+  itemFor,
+  runSteps,
+  START,
+} from './trash.setup'
 
 installTrashTimers()
 
@@ -63,32 +72,45 @@ const DEFAULTS = {
   post: { ...COUNT_BUDGET.post },
   step: { ...COUNT_BUDGET.step },
   page: { ...TASK_PAGE },
+  rows: { ...ROW_PAGE },
   run: { ...RUN },
+  recover: { ...RECOVER },
 }
 afterEach(() => {
   Object.assign(COUNT_BUDGET.post, DEFAULTS.post)
   Object.assign(COUNT_BUDGET.step, DEFAULTS.step)
   Object.assign(TASK_PAGE, DEFAULTS.page)
+  Object.assign(ROW_PAGE, DEFAULTS.rows)
   Object.assign(RUN, DEFAULTS.run)
+  Object.assign(RECOVER, DEFAULTS.recover)
 })
 
 type Fx = OrgFixture & { t: T; task: Doc<'issues'> }
 
-/* A task `f.user` creates in the app, so it is counted from its start. */
-async function createTask(t: T, f: OrgFixture, title = 'Thread'): Promise<Doc<'issues'>> {
-  const id = uuid()
+/** What one call of the comment count backfill answers. */
+type RunAnswer = FunctionReturnType<typeof internal.internal.commentCountsBackfill.run>
+
+/* A task `f.user` creates in the app, so it is counted from its start, in
+ * FW unless `o` names another project, with the id `o.id` when given. */
+async function createTask(
+  t: T,
+  f: OrgFixture,
+  title = 'Thread',
+  o: { project_id?: string; id?: string; parent_id?: string } = {},
+): Promise<Doc<'issues'>> {
+  const id = o.id ?? uuid()
   await as(t, f.user).mutation(api.issues.create, {
     org_id: f.org.id,
     id,
-    project_id: f.sub.id,
+    project_id: o.project_id ?? f.sub.id,
     title,
+    ...(o.parent_id === undefined ? {} : { parent_id: o.parent_id }),
   })
   return (await t.run((ctx) => byId(ctx, 'issues', id))) as Doc<'issues'>
 }
 
 /* withOrg, with the agent holding Edit on TBED and a task in FW. */
-async function setup(): Promise<Fx> {
-  const t = newT()
+async function setup(t: T = newT()): Promise<Fx> {
   const f = await withOrg(t)
   await t.run((ctx) =>
     ctx.db.insert('project_access', {
@@ -214,7 +236,7 @@ async function refusal(post: Promise<unknown>): Promise<Refusal> {
 const later = (ms: number) => vi.setSystemTime(Date.now() + ms)
 
 const ARCHIVE_CAP =
-  'this task has reached 1,000 comments, the most a task can have, so the archive reason cannot be posted and the task was not archived. Delete comments until it has fewer than 1,000, then archive it again.'
+  'this task has reached 1,000 comments, the most a task can have, so the archive reason cannot be posted and the task was not archived. Archive it without a reason, which the app allows once its work is Done, or ask a project lead to delete comments until it has fewer than 1,000.'
 
 describe('the cap of 1,000 comments on a task', () => {
   it('takes the 1,000th comment and refuses the next from the app, REST and MCP', async () => {
@@ -438,7 +460,7 @@ describe('counting a task', () => {
     expect(await refusal(appPost(fx, fx.user, task))).toMatchObject({
       reason: COMMENTS_COUNTING,
       retry_after: 60,
-      message: "Qivo is still counting this task's comments. Try again shortly.",
+      message: "Qivo is still counting this task's comments. Try again in 60 seconds.",
     })
     expect(
       await refusal(
@@ -451,7 +473,7 @@ describe('counting a task', () => {
     ).toMatchObject({
       reason: COMMENTS_COUNTING,
       message:
-        "Qivo is still counting this task's comments, so the archive reason cannot be posted and the task was not archived. Try again shortly.",
+        "Qivo is still counting this task's comments, so the archive reason cannot be posted and the task was not archived. Try again in 60 seconds.",
     })
     expect(await counter(fx.t, task.id)).toBeNull()
     expect(await commentsOn(fx.t, task.id)).toHaveLength(20)
@@ -472,6 +494,7 @@ describe('counting a task', () => {
         issue_id: task.id,
         count: 0,
         counted: COUNT_START,
+        revision: 0,
       }),
     )
     const step = () =>
@@ -517,6 +540,7 @@ describe('counting a task', () => {
         issue_id: task.id,
         count: 2,
         counted: rows[1]._creationTime,
+        revision: 0,
       }),
     )
     await appPost(fx, fx.user, task)
@@ -540,36 +564,97 @@ describe('counting a task', () => {
     expect(await stateOf(fx.t, task.id)).toEqual({ count: 12, counting: false })
   })
 
-  it('restarts the counts left under way, those counted least far first', async () => {
+  it('restarts the stalled counts, least recently moved first, and leaves moving ones', async () => {
     const fx = await setup()
-    const tasks = [
-      await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id }),
-      await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id }),
-    ]
-    const rows = await plantComments(fx, 3, { task: tasks[0] })
-    await plantComments(fx, 2, { task: tasks[1] })
+    RECOVER.batch = 3
+    const tasks: Doc<'issues'>[] = []
+    for (let i = 0; i < 5; i++)
+      tasks.push(await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id }))
+    for (const task of tasks) await plantComments(fx, 2, { task })
+    // the fourth moved last of the stalled ones, the fifth moves now
+    const moved = [5, 1, 3, 4, 0].map((minutes) => START - (minutes + 1) * 60_000)
+    moved[4] = START
     await fx.t.run(async (ctx) => {
-      await ctx.db.insert('task_comment_counts', {
-        org_id: fx.org.id,
-        issue_id: tasks[0].id,
-        count: 1,
-        counted: rows[0]._creationTime,
-      })
-      await ctx.db.insert('task_comment_counts', {
-        org_id: fx.org.id,
-        issue_id: tasks[1].id,
-        count: 0,
-        counted: COUNT_START,
-      })
+      for (const [i, task] of tasks.entries())
+        await ctx.db.insert('task_comment_counts', {
+          org_id: fx.org.id,
+          issue_id: task.id,
+          count: 0,
+          counted: COUNT_START,
+          revision: 0,
+          progress_at: moved[i],
+        })
     })
     await fx.t.mutation(internal.commentLimits.recover, {})
+    const rows = await Promise.all(tasks.map((task) => counter(fx.t, task.id)))
+    // the three that moved least recently, 6, 5 and 4 minutes ago
+    expect(rows.map((row) => row?.attempts)).toEqual([1, undefined, 1, 1, undefined])
+    expect(rows.map((row) => row?.progress_at)).toEqual([START, moved[1], START, START, START])
     await runSteps(fx.t)
-    expect(await stateOf(fx.t, tasks[0].id)).toEqual({ count: 3, counting: false })
-    expect(await stateOf(fx.t, tasks[1].id)).toEqual({ count: 2, counting: false })
-    // an exact count is left alone
+    for (const i of [0, 2, 3])
+      expect(await stateOf(fx.t, tasks[i].id)).toEqual({ count: 2, counting: false })
+    // a later run takes the one left, and the moving one when it stalls
+    vi.setSystemTime(START + 2 * 60_000)
     await fx.t.mutation(internal.commentLimits.recover, {})
     await runSteps(fx.t)
-    expect(await countOf(fx.t, tasks[0].id)).toBe(3)
+    for (const task of tasks)
+      expect(await stateOf(fx.t, task.id)).toEqual({ count: 2, counting: false })
+    // an exact count is never restarted
+    await fx.t.mutation(internal.commentLimits.recover, {})
+    expect((await counter(fx.t, tasks[0].id))?.attempts).toBeUndefined()
+  })
+
+  it("halves a failing count's step after each restart and marks one that keeps failing stuck", async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fx = await setup()
+    const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    await plantComments(fx, 300, { task })
+    const plant = (attempts: number) =>
+      fx.t.run(async (ctx) => {
+        const row = await countRow(ctx, task.id)
+        const fields = {
+          org_id: fx.org.id,
+          issue_id: task.id,
+          count: 0,
+          counted: COUNT_START,
+          revision: 0,
+          progress_at: Date.now() - 2 * 60_000,
+          attempts,
+        }
+        if (row === null) await ctx.db.insert('task_comment_counts', fields)
+        else await ctx.db.replace(row._id, fields)
+      })
+    // a fourth restart counts a sixteenth of the step's 2,000 comments
+    await plant(3)
+    await fx.t.mutation(internal.commentLimits.recover, {})
+    expect((await counter(fx.t, task.id))?.attempts).toBe(4)
+    await fx.t.mutation(internal.commentLimits.step, { issue_id: task.id })
+    const stepped = await counter(fx.t, task.id)
+    expect(stepped?.count).toBe(125)
+    expect(stepped?.attempts).toBeUndefined()
+    // a step that commits brings the full budget back
+    await runSteps(fx.t)
+    expect(await stateOf(fx.t, task.id)).toEqual({ count: 300, counting: false })
+    // the tenth restart in a row gives up, and nothing counts on
+    await plant(9)
+    await fx.t.mutation(internal.commentLimits.recover, {})
+    expect(await counter(fx.t, task.id)).toMatchObject({ stuck: true, attempts: 10 })
+    expect((await counter(fx.t, task.id))?.progress_at).toBeUndefined()
+    expect(error).toHaveBeenCalledWith('A comment count kept failing and stopped', {
+      issue_id: task.id,
+      attempts: 9,
+    })
+    await runSteps(fx.t)
+    expect(await countOf(fx.t, task.id)).toBe(0)
+    // posts stay refused for now, and the backfill finishes the count
+    Object.assign(COUNT_BUDGET.post, { bytes: 1_000, part: 4 * 1024 * 1024 })
+    expect((await refusal(appPost(fx, fx.user, task))).reason).toBe(COMMENTS_COUNTING)
+    expect(await counter(fx.t, task.id)).toMatchObject({ stuck: true })
+    const dry = await fx.t.action(internal.internal.commentCountsBackfill.run, { dry_run: true })
+    expect(dry).toMatchObject({ stuck: 1, stuck_tasks: [task.id] })
+    await fx.t.action(internal.internal.commentCountsBackfill.run, { dry_run: false })
+    expect(await stateOf(fx.t, task.id)).toEqual({ count: 300, counting: false })
+    expect((await counter(fx.t, task.id))?.stuck).toBeUndefined()
   })
 
   it('deletes the post logs whose posts stopped counting, in legs', async () => {
@@ -840,11 +925,24 @@ describe('over HTTP', () => {
 
     for (let i = 0; i < 10; i++) expect((await post(fx.task)).status).toBe(201)
     later(20_000)
-    expect(await answer(await post(fx.task))).toEqual({
+    const limited = await post(fx.task)
+    // a browser can read the wait
+    expect(limited.headers.get('Access-Control-Expose-Headers')).toBe('Retry-After')
+    expect(await answer(limited)).toEqual({
       status: 429,
       retry: '40',
       body: { error: tooManyComments(40) },
     })
+    // an archive with a reason past the rate changes nothing, its title neither
+    const patched = await http.fetch(`/v1/tasks/QN-${fx.task.num}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Renamed', archived: true, archive_reason: 'Shipped' }),
+    })
+    expect(await answer(patched)).toMatchObject({ status: 429, retry: '40' })
+    const unchanged = await fx.t.run((ctx) => byId(ctx, 'issues', fx.task.id))
+    expect(unchanged?.archived_at).toBeUndefined()
+    expect(unchanged?.title).toBe(fx.task.title)
 
     const full = await createTask(fx.t, fx, 'Full')
     await plantComments(fx, 1000, { task: full, counted: true })
@@ -860,7 +958,466 @@ describe('over HTTP', () => {
     expect(await answer(await post(long))).toEqual({
       status: 503,
       retry: '60',
-      body: { error: "Qivo is still counting this task's comments. Try again shortly." },
+      body: { error: "Qivo is still counting this task's comments. Try again in 60 seconds." },
     })
+    // the refusal started the count, which finishes without the backfill
+    expect(await stateOf(fx.t, long.id)).toEqual({ count: 0, counting: true })
+    await runSteps(fx.t)
+    expect(await stateOf(fx.t, long.id)).toEqual({ count: 10, counting: false })
+    expect((await post(long)).status).toBe(201)
+    expect(await countOf(fx.t, long.id)).toBe(11)
+  })
+})
+
+describe('starting a count after a refusal', () => {
+  it('lets the app start the count of a task whose post it was refused for, behind its checks', async () => {
+    const fx = await setup()
+    const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    await plantComments(fx, 12, { task, body: 'x'.repeat(1000) })
+    Object.assign(COUNT_BUDGET.post, { bytes: 3_000, part: 4 * 1024 * 1024 })
+    expect(await refusal(appPost(fx, fx.user, task))).toMatchObject({
+      reason: COMMENTS_COUNTING,
+      task_id: task.id,
+    })
+    expect(await counter(fx.t, task.id)).toBeNull()
+    const count = (who: Doc<'profiles'>, issue: Doc<'issues'>) =>
+      as(fx.t, who).mutation(api.comments.countThread, { org_id: fx.org.id, issue_id: issue.id })
+    await count(fx.user, task)
+    expect(await stateOf(fx.t, task.id)).toEqual({ count: 0, counting: true })
+    // again while it moves starts no second count
+    await count(fx.user, task)
+    await runSteps(fx.t)
+    expect(await stateOf(fx.t, task.id)).toEqual({ count: 12, counting: false })
+    await appPost(fx, fx.user, task)
+    expect(await countOf(fx.t, task.id)).toBe(13)
+    // an exact count stays as it is
+    await count(fx.user, task)
+    expect(await stateOf(fx.t, task.id)).toEqual({ count: 13, counting: false })
+    // a task the caller cannot see is not found, and starts nothing
+    const hidden = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.hidden.id })
+    await expectRefusal(count(fx.guest, hidden), 'not_found')
+    expect(await counter(fx.t, hidden.id)).toBeNull()
+  })
+
+  it('starts the count after a REST or MCP write refused while it counts, and passes others on', async () => {
+    const calls: { name: string; args: unknown }[] = []
+    const runners = {
+      runQuery: async () => null,
+      runMutation: async (ref: unknown, args: unknown) => {
+        calls.push({ name: getFunctionName(ref as FunctionReference<'mutation'>), args })
+        return null
+      },
+      runAction: async () => null,
+    } as unknown as Parameters<typeof runEntry>[0]
+    const refusing = (data: Refusal) => ({
+      access: 'write' as const,
+      run: async () => {
+        throw new ConvexError(data)
+      },
+    })
+    const counting = { code: 'rule' as const, message: 'counting', reason: COMMENTS_COUNTING }
+    await expect(
+      runEntry(runners, refusing({ ...counting, task_id: 'task-1' }), null),
+    ).rejects.toThrow(ConvexError)
+    expect(calls).toEqual([{ name: 'commentLimits:begin', args: { issue_id: 'task-1' } }])
+    // another refusal, or one without its task, starts nothing
+    await expect(
+      runEntry(runners, refusing({ code: 'rule', message: 'no', reason: COMMENT_RATE }), null),
+    ).rejects.toThrow(ConvexError)
+    await expect(runEntry(runners, refusing(counting), null)).rejects.toThrow(ConvexError)
+    expect(calls).toHaveLength(1)
+  })
+})
+
+describe('the backfill, call by call', () => {
+  it('goes on inside a task and inside its count when RUN.ms has passed, in a dry run and a run', async () => {
+    const fx = await setup()
+    const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    await plantComments(fx, 40, { task })
+    Object.assign(COUNT_BUDGET.step, { rows: 7 })
+    Object.assign(RUN, { ms: 0 })
+    const calls = async (dry_run: boolean) => {
+      const cursors: string[] = []
+      let cursor: string | undefined
+      for (let i = 0; i < 100; i++) {
+        const got = await fx.t.action(internal.internal.commentCountsBackfill.run, {
+          dry_run,
+          cursor,
+        })
+        if (got.done) return { got, cursors }
+        cursor = got.cursor ?? undefined
+        if (cursor !== undefined) cursors.push(cursor)
+      }
+      throw new Error('the backfill did not finish')
+    }
+    const dry = await calls(true)
+    expect(dry.got.to_count).toEqual([])
+    // the calls reported the task's count in parts; the totals are per call
+    expect(dry.cursors.some((c) => JSON.parse(c).dry !== undefined)).toBe(true)
+    expect(await counter(fx.t, task.id)).toBeNull()
+    const wet = await calls(false)
+    expect(wet.cursors.some((c) => JSON.parse(c).task === task.id)).toBe(true)
+    expect(await stateOf(fx.t, task.id)).toEqual({ count: 40, counting: false })
+    // each call recorded its cursor
+    const audits = await fx.t.run((ctx) => ctx.db.query('platform_audit_log').collect())
+    expect(audits.filter((row) => row.action === 'comment_counts_backfill')).toHaveLength(
+      wet.cursors.length + 1,
+    )
+  })
+
+  it('counts a thread again when a delete and a post changed it between two pages', async () => {
+    const fx = await setup()
+    const task = await createTask(fx.t, fx, 'Busy thread')
+    const rows = await plantComments(fx, 20, { task, counted: true })
+    Object.assign(COUNT_BUDGET.step, { rows: 5 })
+    Object.assign(RUN, { ms: 0 })
+    let cursor: string | undefined
+    // the calls before the dry count of the task stops inside it
+    for (;;) {
+      const got = await fx.t.action(internal.internal.commentCountsBackfill.run, {
+        dry_run: true,
+        cursor,
+      })
+      cursor = got.cursor ?? undefined
+      if (cursor !== undefined && JSON.parse(cursor).task === task.id) break
+      if (got.done) throw new Error('the dry run passed the task in one call')
+    }
+    // the same total, but another thread than the pages counted
+    await appDelete(fx, fx.guest, rows[0])
+    await appPost(fx, fx.user, task)
+    expect(await countOf(fx.t, task.id)).toBe(20)
+    const totals = { differing: 0, unsettled: 0 }
+    for (;;) {
+      const got: RunAnswer = await fx.t.action(internal.internal.commentCountsBackfill.run, {
+        dry_run: true,
+        cursor,
+      })
+      totals.differing += got.differing
+      totals.unsettled += got.unsettled
+      if (got.done) break
+      cursor = got.cursor ?? undefined
+    }
+    expect(totals).toEqual({ differing: 0, unsettled: 0 })
+  })
+
+  it('records the call that failed with its cursor, after the counts it committed', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // a step that reads past 3 MiB fails
+    const fx = await setup(newT({ transactionLimits: { bytesRead: 3 * 1024 * 1024 } }))
+    const small = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const large = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    await plantComments(fx, 2, { task: small })
+    for (let i = 0; i < 5; i++)
+      await plantComments(fx, 1, { task: large, body: 'x'.repeat(900_000) })
+    await expect(
+      fx.t.action(internal.internal.commentCountsBackfill.run, { dry_run: false }),
+    ).rejects.toThrow()
+    expect(await stateOf(fx.t, small.id)).toEqual({ count: 2, counting: false })
+    const audit = await fx.t.run(async (ctx) =>
+      (await ctx.db.query('platform_audit_log').collect()).find(
+        (row) => row.action === 'comment_counts_backfill',
+      ),
+    )
+    const detail = audit?.detail as { counted: number; cursor: string; failed?: string }
+    expect(detail.counted).toBe(1)
+    expect(detail.failed).toBeDefined()
+    expect(JSON.parse(detail.cursor)).toMatchObject({
+      org: fx.org.id,
+      phase: 'tasks',
+      after: small.num,
+    })
+    expect(error).toHaveBeenCalled()
+  })
+
+  it('deletes the count rows a rollback can leave that name no task of their organization', async () => {
+    const fx = await setup()
+    const stored = await createTask(fx.t, fx, 'In Deleted items')
+    await deleteTask(fx.t, fx, stored.id)
+    await runSteps(fx.t)
+    const foreign = await plantIssue(fx.t, {
+      org_id: fx.otherOrg.id,
+      project_id: fx.otherProject.id,
+    })
+    const orphan = uuid()
+    await fx.t.run(async (ctx) => {
+      for (const issue_id of [orphan, foreign.id])
+        await ctx.db.insert('task_comment_counts', {
+          org_id: fx.org.id,
+          issue_id,
+          count: 4,
+          revision: 0,
+        })
+    })
+    Object.assign(ROW_PAGE, { rows: 1 })
+    const dry = await fx.t.action(internal.internal.commentCountsBackfill.run, { dry_run: true })
+    expect(dry).toMatchObject({ drift: 2, dropped: 0 })
+    expect(dry.drift_rows.map((row) => [row.issue_id, row.where]).sort()).toEqual(
+      [
+        [orphan, 'orphan'],
+        [foreign.id, 'other_org'],
+      ].sort(),
+    )
+    const run = await fx.t.action(internal.internal.commentCountsBackfill.run, { dry_run: false })
+    expect(run.dropped).toBeGreaterThan(0)
+    expect(await counter(fx.t, orphan)).toBeNull()
+    // the other organization's task has a count of its own, whichever came first
+    expect(await counter(fx.t, foreign.id)).toMatchObject({ org_id: fx.otherOrg.id, count: 0 })
+    expect((await counter(fx.t, foreign.id))?.counted).toBeUndefined()
+    // the task in Deleted items keeps its count
+    expect(await stateOf(fx.t, stored.id)).toEqual({ count: 0, counting: false })
+  })
+})
+
+describe('ids that come back', () => {
+  it('gives a task that takes a purged id no count and no posts of the task before', async () => {
+    const fx = await setup()
+    const id = fx.task.id
+    for (let i = 0; i < 10; i++) await appPost(fx)
+    await deleteTask(fx.t, fx, id)
+    await runSteps(fx.t)
+    await as(fx.t, fx.admin).mutation(api.deletedItems.purge, {
+      org_id: fx.org.id,
+      ids: [(await itemFor(fx.t, id)).id],
+    })
+    await runSteps(fx.t)
+    expect(await counter(fx.t, id)).toBeNull()
+    expect(await rateOf(fx.t, fx.user.id, id)).toBeNull()
+    // the id again, within the same minute
+    const again = await createTask(fx.t, fx, 'Same id', { id })
+    for (let i = 0; i < 10; i++) await appPost(fx, fx.user, again)
+    expect(await countOf(fx.t, id)).toBe(10)
+  })
+
+  it("counts nothing from rows another organization's task left under the id", async () => {
+    const fx = await setup()
+    const id = uuid()
+    await fx.t.run(async (ctx) => {
+      await ctx.db.insert('task_comment_counts', {
+        org_id: fx.otherOrg.id,
+        issue_id: id,
+        count: 999,
+        revision: 3,
+      })
+      await ctx.db.insert('comment_rates', {
+        org_id: fx.otherOrg.id,
+        issue_id: id,
+        author: fx.user.id,
+        posts: Array.from({ length: 10 }, () => Date.now()),
+        until: Date.now() + 60_000,
+      })
+    })
+    // a task inserted without a count, as an earlier release inserts one
+    const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, id })
+    await appPost(fx, fx.user, task)
+    expect(await counter(fx.t, id)).toMatchObject({ org_id: fx.org.id, count: 1 })
+    expect(await rateOf(fx.t, fx.user.id, id)).toMatchObject({
+      org_id: fx.org.id,
+      posts: [Date.now()],
+    })
+  })
+
+  it('keeps the count of a live task that took the id while a purge of the earlier one waited', async () => {
+    const fx = await setup()
+    const id = fx.task.id
+    await appPost(fx)
+    await deleteTask(fx.t, fx, id)
+    await runSteps(fx.t)
+    const item = await itemFor(fx.t, id)
+    // a purge the release before left part done deleted the stored task row
+    await fx.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('deleted_rows')
+        .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', id))
+        .unique()
+      if (row !== null) await ctx.db.delete(row._id)
+    })
+    const again = await createTask(fx.t, fx, 'Took the id', { id })
+    await appPost(fx, fx.admin, again)
+    await as(fx.t, fx.admin).mutation(api.deletedItems.purge, { org_id: fx.org.id, ids: [item.id] })
+    await runSteps(fx.t)
+    // the purge keeps the live task's count and post log, and its count
+    // holds the comments the purge left, which takes the live rows of its
+    // stored tasks (model/deletedItems.ts purgeLive)
+    const left = (await commentsOn(fx.t, id)).length
+    expect(await stateOf(fx.t, id)).toEqual({ count: left, counting: false })
+    expect(await rateOf(fx.t, fx.admin.id, id)).not.toBeNull()
+  })
+})
+
+describe('Deleted items, project items and subtasks', () => {
+  it("keeps a project's task counts through a move, a restore and a purge in small steps", async () => {
+    const fx = await setup()
+    Object.assign(TRASH_BUDGET, { rows: 4 })
+    const tasks = [
+      await createTask(fx.t, fx, 'One', { project_id: fx.sub2.id }),
+      await createTask(fx.t, fx, 'Two', { project_id: fx.sub2.id }),
+    ]
+    for (const task of tasks) await plantComments(fx, 6, { task, counted: true })
+    await appPost(fx, fx.user, tasks[0])
+    await deleteProject(fx.t, fx, fx.sub2.id)
+    await runSteps(fx.t)
+    expect(await Promise.all(tasks.map((task) => countOf(fx.t, task.id)))).toEqual([0, 0])
+    const item = await itemFor(fx.t, fx.sub2.id)
+    await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
+      org_id: fx.org.id,
+      ids: [item.id],
+    })
+    await runSteps(fx.t)
+    expect(await Promise.all(tasks.map((task) => stateOf(fx.t, task.id)))).toEqual([
+      { count: 7, counting: false },
+      { count: 6, counting: false },
+    ])
+    await deleteProject(fx.t, fx, fx.sub2.id)
+    await runSteps(fx.t)
+    const again = await itemFor(fx.t, fx.sub2.id)
+    await as(fx.t, fx.admin).mutation(api.deletedItems.purge, {
+      org_id: fx.org.id,
+      ids: [again.id],
+    })
+    await runSteps(fx.t)
+    for (const task of tasks) expect(await counter(fx.t, task.id)).toBeNull()
+    expect(await rateOf(fx.t, fx.user.id, tasks[0].id)).toBeNull()
+  })
+
+  it('keeps the count of a subtask a restore hands to its project item, and deletes it with a purged one', async () => {
+    const fx = await setup()
+    const root = await createTask(fx.t, fx, 'Root')
+    const sub = await createTask(fx.t, fx, 'Sub', { project_id: fx.sub2.id, parent_id: root.id })
+    await plantComments(fx, 3, { task: sub, counted: true })
+    await deleteTask(fx.t, fx, root.id, { subtask_ids: [sub.id] })
+    await deleteProject(fx.t, fx, fx.sub2.id)
+    await runSteps(fx.t)
+    await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
+      org_id: fx.org.id,
+      ids: [(await itemFor(fx.t, root.id)).id],
+    })
+    await runSteps(fx.t)
+    // the subtask waits in the project's item, its comments with it
+    expect(await countOf(fx.t, sub.id)).toBe(0)
+    await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
+      org_id: fx.org.id,
+      ids: [(await itemFor(fx.t, fx.sub2.id)).id],
+    })
+    await runSteps(fx.t)
+    expect(await stateOf(fx.t, sub.id)).toEqual({ count: 3, counting: false })
+
+    // a subtask whose project item is purged goes for good with its count
+    const third = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.meta.id,
+    })
+    const root2 = await createTask(fx.t, fx, 'Root 2')
+    const lost = await createTask(fx.t, fx, 'Lost', { project_id: third.id, parent_id: root2.id })
+    await appPost(fx, fx.user, lost)
+    await deleteTask(fx.t, fx, root2.id, { subtask_ids: [lost.id] })
+    await deleteProject(fx.t, fx, third.id)
+    await runSteps(fx.t)
+    await as(fx.t, fx.admin).mutation(api.deletedItems.purge, {
+      org_id: fx.org.id,
+      ids: [(await itemFor(fx.t, third.id)).id],
+    })
+    await runSteps(fx.t)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
+      org_id: fx.org.id,
+      ids: [(await itemFor(fx.t, root2.id)).id],
+    })
+    await runSteps(fx.t)
+    expect(await counter(fx.t, lost.id)).toBeNull()
+    expect(await rateOf(fx.t, fx.user.id, lost.id)).toBeNull()
+  })
+})
+
+describe('archive refusals over REST and MCP', () => {
+  it('refuses the whole update past the rate and while the count runs, its field changes too', async () => {
+    const fx = await setup()
+    for (let i = 0; i < 5; i++) await restPost(fx)
+    for (let i = 0; i < 5; i++) await mcpPost(fx)
+    const rest = (task: Doc<'issues'>) =>
+      fx.t.mutation(internal.machine.rest.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        keyName: 'drive',
+        ref: `QN-${task.num}`,
+        body: JSON.stringify({ title: 'Renamed', archived: true, archive_reason: 'Shipped' }),
+      })
+    const mcp = (task: Doc<'issues'>) =>
+      fx.t.mutation(internal.machine.mcp.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: `QN-${task.num}`,
+        title: 'Renamed',
+        archived: true,
+        archive_reason: 'Shipped',
+      })
+    for (const update of [rest(fx.task), mcp(fx.task)])
+      expect(await refusal(update)).toMatchObject({ reason: COMMENT_RATE, retry_after: 60 })
+    const counting = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    await plantComments(fx, 6, { task: counting, body: 'x'.repeat(1000) })
+    Object.assign(COUNT_BUDGET.post, { bytes: 2_000, part: 4 * 1024 * 1024 })
+    for (const update of [rest(counting), mcp(counting)])
+      expect(await refusal(update)).toMatchObject({ reason: COMMENTS_COUNTING })
+    for (const task of [fx.task, counting]) {
+      const row = await fx.t.run((ctx) => byId(ctx, 'issues', task.id))
+      expect(row?.title).toBe(task.title)
+      expect(row?.archived_at).toBeUndefined()
+    }
+  })
+})
+
+describe('reading a count in parts', () => {
+  /* The QueryCtx of threadCtx, counting its reads. */
+  function countedCtx(thread: Doc<'comments'>[]) {
+    const reads = { take: 0, collect: 0 }
+    const inner = threadCtx(thread)
+    const query = () => ({
+      withIndex: (index: string, build: (q: Builder) => Builder) => {
+        const range = inner.db.query('comments').withIndex(index as 'by_issue', build as never)
+        return {
+          take: (n: number) => {
+            reads.take++
+            return range.take(n)
+          },
+          collect: () => {
+            reads.collect++
+            return range.collect()
+          },
+        }
+      },
+    })
+    return { ctx: { db: { query } } as unknown as QueryCtx, reads }
+  }
+
+  it('reads one range a part, and a group of one time again only when a part ends inside it', async () => {
+    const budget = { ...COUNT_BUDGET.post, rows: LIMITS.comments.max }
+    const apart = countedCtx(Array.from({ length: 30 }, (_, n) => fakeComment(n, 1_000 + n)))
+    expect(await countPage(apart.ctx, 'task', COUNT_START, budget)).toMatchObject({
+      rows: 30,
+      done: true,
+    })
+    // five comments, then four, and one past them a part
+    expect(apart.reads).toEqual({ take: 8, collect: 0 })
+    const tied = countedCtx(
+      Array.from({ length: 30 }, (_, n) => fakeComment(n, 1_000 + Math.floor(n / 2))),
+    )
+    expect(await countPage(tied.ctx, 'task', COUNT_START, budget)).toMatchObject({
+      rows: 30,
+      done: true,
+    })
+    expect(tied.reads.collect).toBeGreaterThan(0)
+  })
+
+  it("counts about 1.5 MiB of short comments in a post's own transaction, and no more", async () => {
+    const fx = await setup()
+    const fits = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const long = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    for (let i = 0; i < 6; i++)
+      await plantComments(fx, 100, { task: fits, body: 'x'.repeat(2_000) })
+    for (let i = 0; i < 9; i++)
+      await plantComments(fx, 100, { task: long, body: 'x'.repeat(2_000) })
+    await appPost(fx, fx.user, fits)
+    expect(await countOf(fx.t, fits.id)).toBe(601)
+    expect((await refusal(appPost(fx, fx.user, long))).reason).toBe(COMMENTS_COUNTING)
   })
 })

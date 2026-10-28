@@ -212,9 +212,11 @@ billingSync:restartStorage mutation internal {"type":"object","value":{"period":
 billingSync:storageStep mutation internal {"type":"object","value":{"period":{"fieldType":{"type":"id","tableName":"billing_periods"},"optional":false},"run":{"fieldType":{"type":"string"},"optional":false},"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"own"},{"type":"literal","value":"unscoped"},{"type":"literal","value":"tasks"}]},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"size":{"fieldType":{"type":"number"},"optional":true},"bytes":{"fieldType":{"type":"number"},"optional":false}}}
 billingSync:sweep mutation internal {"type":"object","value":{}}
 billingSync:webhookFailed mutation internal {"type":"object","value":{"event_id":{"fieldType":{"type":"string"},"optional":false},"claim":{"fieldType":{"type":"string"},"optional":false},"error":{"fieldType":{"type":"string"},"optional":false},"refused":{"fieldType":{"type":"boolean"},"optional":true}}}
+commentLimits:begin mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false}}}
 commentLimits:recover mutation internal {"type":"object","value":{}}
 commentLimits:step mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false}}}
 commentLimits:sweep mutation internal {"type":"object","value":{}}
+comments:countThread mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:remove mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"body":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"body":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -261,9 +263,11 @@ identity:claimMySeats mutation public {"type":"object","value":{}}
 identity:claimSeatsInternal mutation internal {"type":"object","value":{"userId":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"emailVerified":{"fieldType":{"type":"boolean"},"optional":false}}}
 identity:createOrganization mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 identity:whoami query public {"type":"object","value":{}}
-internal/commentCountsBackfill:audit mutation internal {"type":"object","value":{"counted":{"fieldType":{"type":"number"},"optional":false},"comments":{"fieldType":{"type":"number"},"optional":false},"full":{"fieldType":{"type":"number"},"optional":false}}}
+internal/commentCountsBackfill:audit mutation internal {"type":"object","value":{"counted":{"fieldType":{"type":"number"},"optional":false},"comments":{"fieldType":{"type":"number"},"optional":false},"full":{"fieldType":{"type":"number"},"optional":false},"dropped":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"failed":{"fieldType":{"type":"string"},"optional":true}}}
 internal/commentCountsBackfill:check query internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"number"},"optional":false}}}
+internal/commentCountsBackfill:dropRow mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false}}}
 internal/commentCountsBackfill:orgPage query internal {"type":"object","value":{"after":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
+internal/commentCountsBackfill:rowPage query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"number"},"optional":false}}}
 internal/commentCountsBackfill:run action internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"recount":{"fieldType":{"type":"boolean"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true}}}
 internal/commentCountsBackfill:state query internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false}}}
 internal/commentCountsBackfill:step mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"restart":{"fieldType":{"type":"boolean"},"optional":false}}}
@@ -808,7 +812,13 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     cancelInvite: 'platformMutation',
     setMemberRole: 'platformMutation',
   },
-  comments: { create: 'orgMutation', update: 'orgMutation', remove: 'orgMutation' },
+  comments: {
+    create: 'orgMutation',
+    update: 'orgMutation',
+    remove: 'orgMutation',
+    // starts a task's comment count after a post was refused while it counts
+    countThread: 'orgMutation',
+  },
   // Deleted items spans organizations like Archived projects: list, item
   // and matches read every active seat and judge each item with the seat in
   // its organization. restore acts in one organization; Delete now (purge) is
@@ -1015,7 +1025,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 178
+const PUBLIC_COUNT = 179
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

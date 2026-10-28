@@ -19,6 +19,7 @@ import type { MutationCtx } from './_generated/server'
 import { canSeeProject } from './lib/access'
 import { byId } from './lib/db'
 import { notFound, orgMutation } from './lib/functions'
+import { beginCount } from './model/commentLimits'
 import { deleteComment, editComment, postComment, vCommentExpected } from './model/comments'
 import { assertCanEdit } from './model/issues'
 
@@ -58,6 +59,23 @@ export const create = orgMutation({
     const issue = await visibleIssue(ctx, issue_id, 'task not found')
     await assertCanEdit(ctx, ctx.me, issue.project_id)
     await postComment(ctx, { id, issue, author: ctx.me, body, now })
+    return null
+  },
+})
+
+/* ------------------------------------------------------------ countThread
+ * P.addComment and P.archiveIssue call it after the server refused a
+ * comment, or an archive with a reason, because the task's comments are
+ * still being counted (lib/limits.ts COMMENTS_COUNTING). The refusal undoes
+ * what it wrote, so this starts the count in a transaction of its own
+ * (model/commentLimits.ts beginCount), behind the checks a post has, and a
+ * later post can pass. Calling it again changes nothing. */
+export const countThread = orgMutation({
+  args: { issue_id: v.string() },
+  handler: async (ctx, { issue_id }) => {
+    const issue = await visibleIssue(ctx, issue_id, 'task not found')
+    await assertCanEdit(ctx, ctx.me, issue.project_id)
+    await beginCount(ctx, issue)
     return null
   },
 })

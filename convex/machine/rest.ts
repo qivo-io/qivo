@@ -100,13 +100,18 @@ import {
 } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS, serviceBusy, tooManyRequests } from '../lib/limits'
+import {
+  COMMENT_RATE,
+  COMMENTS_COUNTING,
+  LIMITS,
+  serviceBusy,
+  tooManyRequests,
+} from '../lib/limits'
 import { utcToday } from '../lib/machineDelay'
 import { mcpResource } from '../lib/oauth'
 import { answerAfterBody } from '../lib/requestBody'
 import { type EventOwner, vEventOwner } from '../lib/taskEvents'
 import { ingressShard, machineRetryAfter } from '../model/billingUsage'
-import { COMMENT_RATE, COMMENTS_COUNTING } from '../model/commentLimits'
 import { postComment } from '../model/comments'
 import { moveTasksToTrash } from '../model/deletedItems'
 import { parseExpected, refuseCreateExpected, sentKeys } from '../model/expected'
@@ -1099,6 +1104,8 @@ const CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-api-key, content-type',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+  // a browser reads the waits of the 429s and 503s
+  'Access-Control-Expose-Headers': 'Retry-After',
 }
 
 const json = (body: unknown, status: number): Response =>

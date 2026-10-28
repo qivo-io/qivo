@@ -1,15 +1,22 @@
 /* Background work for the comment limits (model/commentLimits.ts).
  *
  * `step` counts a task's comments in steps of its own, each scheduling the
- * next until the count is exact. A restore of a task stored before the
- * count starts one (restartCount). Convex drops what a failed step
- * scheduled, so `recover` (every 10 minutes, crons.ts) schedules a step for
- * each count still under way, which also finishes a count that
- * internal/commentCountsBackfill left. Two steps of one count run one after
- * the other, because both write its row, and each counts on from where the
- * last one stopped, so a repeated step costs reads but never counts a
- * comment twice. Until a count is exact, a post on its task counts the rest
- * itself or is refused for now.
+ * next until the count is exact. `begin` starts a count: REST and MCP call
+ * it after a post refused while its task's comments are counted
+ * (machine/registry.ts runEntry), because the refusal undoes what it wrote,
+ * and the app calls comments.countThread, which does the same behind the
+ * app's checks. A restore of a task stored before counts starts one too.
+ *
+ * Every step that commits stamps the count's `progress_at`. Convex drops
+ * what a failed step scheduled, so `recover` (every 10 minutes, crons.ts)
+ * restarts each count under way that has not moved for STALLED_MS, least
+ * recently moved first, and counts the attempt: each halves the next
+ * step's budget, and a count that keeps failing at the smallest one is
+ * marked stuck and left for the backfill (internal/commentCountsBackfill),
+ * which lists it. Its task's posts stay refused for now, as the cap needs.
+ * Two steps of one count run one after the other, because both write its
+ * row, and each counts on from where the last one stopped, so a repeated
+ * step costs reads but never counts a comment twice.
  *
  * `sweep` (hourly) deletes the comment_rates rows whose posts all stopped
  * counting. The rate reads only the posts of the last minute, so a row the
@@ -18,10 +25,11 @@
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import { internalMutation } from './_generated/server'
-import { START, SWEEP_BATCH, stepCount } from './model/commentLimits'
+import { byId } from './lib/db'
+import { beginCount, keepsFailing, STALLED_MS, SWEEP_BATCH, stepCount } from './model/commentLimits'
 
-/** The most counts under way one recovery restarts. */
-export const RECOVER_BATCH = 64
+/** The most stalled counts one recovery restarts. Tests lower it. */
+export const RECOVER = { batch: 64 }
 
 const stepRef = makeFunctionReference<'mutation', { issue_id: string }, null>('commentLimits:step')
 const sweepRef = makeFunctionReference<'mutation', Record<string, never>, null>(
@@ -39,16 +47,45 @@ export const step = internalMutation({
   },
 })
 
-/** Schedules a step of each count under way, at most RECOVER_BATCH of them,
- * those counted least far first. A later run takes the rest. */
+/** Starts counting live task `issue_id`'s comments
+ * (model/commentLimits.ts beginCount), after a post on it was refused while
+ * they are counted. Safe to call again; does nothing for a task that is
+ * gone. */
+export const begin = internalMutation({
+  args: { issue_id: v.string() },
+  handler: async (ctx, { issue_id }): Promise<null> => {
+    const issue = await byId(ctx, 'issues', issue_id)
+    if (issue !== null) await beginCount(ctx, issue)
+    return null
+  },
+})
+
+/** Restarts the counts under way that have not moved for STALLED_MS, at
+ * most RECOVER.batch of them, least recently moved first, and stamps each,
+ * so a later run takes the others first. Each restart counts one attempt
+ * and halves the next step's budget; a count that keeps failing at the
+ * smallest budget is marked stuck instead and logged. */
 export const recover = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {
+    const now = Date.now()
     const rows = await ctx.db
       .query('task_comment_counts')
-      .withIndex('by_counted', (q) => q.gte('counted', START))
-      .take(RECOVER_BATCH)
-    for (const row of rows) await ctx.scheduler.runAfter(0, stepRef, { issue_id: row.issue_id })
+      .withIndex('by_progress', (q) => q.gte('progress_at', 0).lt('progress_at', now - STALLED_MS))
+      .take(RECOVER.batch)
+    for (const row of rows) {
+      const attempts = (row.attempts ?? 0) + 1
+      if (keepsFailing(attempts)) {
+        console.error('A comment count kept failing and stopped', {
+          issue_id: row.issue_id,
+          attempts: row.attempts,
+        })
+        await ctx.db.patch(row._id, { stuck: true, progress_at: undefined, attempts })
+        continue
+      }
+      await ctx.db.patch(row._id, { attempts, progress_at: now })
+      await ctx.scheduler.runAfter(0, stepRef, { issue_id: row.issue_id })
+    }
     return null
   },
 })
