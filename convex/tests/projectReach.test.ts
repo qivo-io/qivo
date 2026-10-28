@@ -942,6 +942,71 @@ describe('fixtures and migrations', () => {
     expect((await projectOf(t, f.meta.id))?.name).not.toBe(long)
     await expectAll(t, f)
   })
+
+  it('leaves for a later run the project names whose reach rows a page has no room for', async () => {
+    const t = newT()
+    const f = await ready(t)
+    const long = `${'n'.repeat(79)}😀`
+    // two long names on one page whose rows fit one budget alone, and a
+    // third with more rows than any change may update
+    const [a, b, c] = [f.meta.id, f.hidden.id, f.otherProject.id]
+    const sizes = { [a]: 1_200, [b]: 1_200, [c]: LIMITS.projectTreeChange.max }
+    for (const id of [a, b, c]) {
+      const project = (await projectOf(t, id))!
+      await t.run(async (ctx) => {
+        await ctx.db.patch(project._id, { name: long, name_key: nameKey(long) })
+        const have = (
+          await ctx.db
+            .query('project_reach')
+            .withIndex('by_project_grantee', (q) => q.eq('project_id', id))
+            .collect()
+        ).length
+        for (let i = have; i < sizes[id]; i++)
+          await ctx.db.insert('project_reach', {
+            org_id: project.org_id,
+            grantee_kind: 'profile',
+            grantee_id: uuid(),
+            kind: 'root',
+            project_id: id,
+            root_id: id,
+            name_key: nameKey(long),
+            key: project.key,
+            live: true,
+            on_root: false,
+          })
+      })
+    }
+    const outcomes = (got: {
+      rows: { table: string; id: string; field: string; outcome: string }[]
+    }) =>
+      Object.fromEntries(
+        got.rows
+          .filter((row) => row.table === 'projects' && row.field === 'name')
+          .map((row) => [row.id, row.outcome]),
+      )
+    const ids = async () =>
+      Object.fromEntries(
+        await Promise.all([a, b, c].map(async (id) => [(await projectOf(t, id))!._id, id])),
+      ) as Record<string, string>
+    const byDoc = await ids()
+    const run = async () => {
+      const got = outcomes(await t.action(internal.internal.overCapRows.fix, { dry_run: false }))
+      return Object.fromEntries(Object.entries(got).map(([doc, o]) => [byDoc[doc], o]))
+    }
+    // the fix answers instead of throwing; the first name fits the page,
+    // the others wait for a run with room
+    expect(await run()).toEqual({ [a]: 'fixed', [b]: 'skipped', [c]: 'skipped' })
+    expect(await run()).toEqual({ [b]: 'fixed', [c]: 'skipped' })
+    // first on a page of its own, and still too many rows
+    expect(await run()).toEqual({ [c]: 'reported' })
+    expect((await projectOf(t, c))?.name).toBe(long)
+    for (const id of [a, b]) {
+      const project = (await projectOf(t, id))!
+      expect(project.name).not.toBe(long)
+      const rows = (await reachRows(t)).filter((row) => row.project_id === id)
+      expect(new Set(rows.map((row) => row.name_key))).toEqual(new Set([nameKey(project.name)]))
+    }
+  }, 120_000)
 })
 
 describe('teardowns', () => {

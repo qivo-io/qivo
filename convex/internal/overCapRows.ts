@@ -44,7 +44,10 @@
  *
  * Each row found carries an `outcome`: 'fixed' by this run, 'would_fix' in a
  * dry run or check, 'skipped' when the fixed value would collide with
- * another row, or 'reported' when only a person can fix it. A dry run sees
+ * another row or, for a project name, when its reach rows do not fit what
+ * its page has left (run the fix again), or 'reported' when only a person
+ * can fix it, such as a project name whose reach rows are more than one
+ * change may update (LIMITS.projectTreeChange). A dry run sees
  * a collision with a stored row or a row of the same page; two rows on
  * different pages that fix to the same value both show 'would_fix', and the
  * real run fixes the first and skips the second. `fix` answers `counts` for
@@ -85,7 +88,7 @@ import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits
 import { nameKey } from '../lib/nameKey'
 import { patchTask } from '../model/descriptions'
 import { copyNameKey, inlineBudget } from '../model/nameKeys'
-import { patchRows, treeRows } from '../model/projectNav'
+import { patchRows } from '../model/projectNav'
 import { renameProjectTotals } from '../model/storageTotals'
 
 /** Rows per page and the bytes one page may read; a page can end early.
@@ -291,8 +294,10 @@ async function walk(
     const table = phase
     const page = await ctx.db.query(table).paginate(opts)
     // a cut profile or team name's copies follow it, within one budget a
-    // page (model/nameKeys.ts)
+    // page (model/nameKeys.ts), and so do a cut project name's reach rows
+    // (model/projectNav.ts), within LIMITS.projectTreeChange.max a page
     const copies = inlineBudget()
+    let reachLeft = LIMITS.projectTreeChange.max
     for (const doc of page.page) {
       const { _id, _creationTime, ...body } = doc
       const changes =
@@ -301,6 +306,32 @@ async function walk(
           : nameChange(doc.name, NAME_MAX)
       const found = sorted(table, _id, changes, write)
       rows.push(...found.rows)
+      // A project's reach rows, which its cut name's key must reach, read
+      // in the dry run too, so it reports what the fix does. Past what the
+      // page has left the name waits for a later run ('skipped'), and past
+      // what one change may update a person must shorten it after some
+      // access goes ('reported'), as a rename in the app is refused.
+      let reach: Doc<'project_reach'>[] = []
+      if (table === 'projects' && typeof found.patch?.name === 'string') {
+        const project = await byId(ctx, 'projects', doc.id)
+        const read =
+          project === null
+            ? []
+            : await ctx.db
+                .query('project_reach')
+                .withIndex('by_project_grantee', (q) => q.eq('project_id', project.id))
+                .take(reachLeft)
+        // the query and each row it reads count, as treeRows counts them
+        const cost = 1 + read.length
+        if (cost > reachLeft) {
+          const named = found.rows.find((row) => row.field === 'name')
+          if (named !== undefined)
+            named.outcome = reachLeft === LIMITS.projectTreeChange.max ? 'reported' : 'skipped'
+          continue
+        }
+        reachLeft -= cost
+        reach = read.filter((row) => row.org_id === project?.org_id)
+      }
       if (found.patch === null || write === null) continue
       const { name } = found.patch
       const keyed =
@@ -316,16 +347,8 @@ async function walk(
       // the Storage by project breakdown shows the project's current name
       if ('num' in doc && 'org_id' in doc && typeof name === 'string')
         await renameProjectTotals(write, { id: doc.id, org_id: doc.org_id, num: doc.num, name })
-      // a cut project name's reach rows copy its key too (model/projectNav.ts),
-      // refused past LIMITS.projectTreeChange as a rename is
-      const project =
-        typeof name === 'string' && table === 'projects'
-          ? await byId(write, 'projects', doc.id)
-          : null
-      if (project !== null)
-        await patchRows(write, await treeRows(write, project.org_id, [project.id]), {
-          name_key: nameKey(project.name),
-        })
+      if (typeof name === 'string' && table === 'projects')
+        await patchRows(write, reach, { name_key: nameKey(name) })
     }
     return { rows, cursor: page.continueCursor, done: page.isDone }
   }
