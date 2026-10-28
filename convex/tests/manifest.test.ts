@@ -263,6 +263,8 @@ identity:claimMySeats mutation public {"type":"object","value":{}}
 identity:claimSeatsInternal mutation internal {"type":"object","value":{"userId":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"emailVerified":{"fieldType":{"type":"boolean"},"optional":false}}}
 identity:createOrganization mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 identity:whoami query public {"type":"object","value":{}}
+inbox:item query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+inbox:summary query public {"type":"object","value":{}}
 internal/commentCountsBackfill:audit mutation internal {"type":"object","value":{"counted":{"fieldType":{"type":"number"},"optional":false},"comments":{"fieldType":{"type":"number"},"optional":false},"full":{"fieldType":{"type":"number"},"optional":false},"dropped":{"fieldType":{"type":"number"},"optional":false},"cleared":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"failed":{"fieldType":{"type":"string"},"optional":true}}}
 internal/commentCountsBackfill:check query internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"number"},"optional":false}}}
 internal/commentCountsBackfill:clearHeld mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -876,6 +878,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     createOrganization: 'authedMutation',
     acceptInvitation: 'authedMutation',
   },
+  // The inbox reads over inbox_items, the capped unread summary across the
+  // login's own seats and one task's own item in one organization, which is
+  // null unless the caller is shown the task.
+  inbox: { summary: 'authedQuery', item: 'orgQuery' },
   // Whether the invitation emails behind pending seats went out: an org admin
   // sees every pending seat, anyone else only the sends they caused.
   invites: { deliveries: 'orgQuery', sendAgain: 'orgMutation' },
@@ -1056,7 +1062,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 179
+const PUBLIC_COUNT = 181
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

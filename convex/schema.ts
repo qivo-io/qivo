@@ -2115,9 +2115,12 @@ export default defineSchema({
   // a function of the pair's messages (model/inboxItems.ts itemOf), and
   // every message write keeps it so once the recipient's inbox_state says
   // the pair is built. The row goes when the item's last message goes, and
-  // never comes back with a restore, as messages do not. No reader uses it
-  // yet: the app, REST and MCP read the messages until every deployment
-  // has run internal/inboxItemsBackfill.
+  // never comes back with a restore, as messages do not. convex/inbox.ts
+  // reads the rows for the capped unread summary and one task's item
+  // (model/inboxReads.ts), and answers that a profile is not ready while
+  // its inbox_state is not built. The app does not show those reads yet.
+  // The app, REST and MCP read the messages until a later release switches
+  // them, once every deployment has run internal/inboxItemsBackfill.
   inbox_items: defineTable({
     recipient_id: v.string(),
     issue_id: v.string(),
