@@ -55,6 +55,38 @@ function site(expected: string): string {
 const isSampleAvatar = (key: string): key is SampleAvatar =>
   (SAMPLE_AVATARS as readonly string[]).includes(key)
 
+/** The profile of Northstar person `p` as provisioning stores it, with its
+ * reserved id and, for a person, its login `authId`. */
+async function seatRow(
+  p: (typeof MARKETING_DEMO.people)[number],
+  orgId: string,
+  now: string,
+  authId: string | undefined,
+  sampleAvatars: boolean | undefined,
+) {
+  return {
+    id: await id(`person:${p.key}`),
+    org_id: orgId,
+    ...named(p.name),
+    initials: p.initials,
+    color: p.color,
+    org_role: p.role,
+    kind: p.kind,
+    active: true,
+    created_at: now,
+    ...(sampleAvatars === true && isSampleAvatar(p.key) ? { sample_avatar: p.key } : {}),
+    ...(p.kind === 'person'
+      ? {
+          email: email(p.key),
+          auth_user_id: authId,
+          accepted_at: now,
+          plannable_hours: newOrgDefaults(now).default_plannable_hours,
+          message_retention_days: DEFAULT_MESSAGE_RETENTION_DAYS,
+        }
+      : {}),
+  }
+}
+
 /* The refusal while the demo organization has Deleted items. */
 const TRASH_LEFT = 'marketing demo: Deleted items must be empty; run the same command again'
 
@@ -96,7 +128,7 @@ async function owned(ctx: QueryCtx) {
     .withIndex('by_org', (q) => q.eq('org_id', org.id))
     .collect()
   require(profiles.length === MARKETING_DEMO.people.length, rule(
-    'marketing demo: roster changed; restore the demo roster before resetting',
+    'marketing demo: roster changed; restore a removed seat with restoreSeat before resetting',
   ))
   for (const person of MARKETING_DEMO.people) {
     const personId = await id(`person:${person.key}`)
@@ -301,29 +333,11 @@ export const provision = internalMutation({
       slug: KEY,
       ...newOrgDefaults(now),
     })
-    for (const p of MARKETING_DEMO.people) {
-      await ctx.db.insert('profiles', {
-        id: await id(`person:${p.key}`),
-        org_id: orgId,
-        ...named(p.name),
-        initials: p.initials,
-        color: p.color,
-        org_role: p.role,
-        kind: p.kind,
-        active: true,
-        created_at: now,
-        ...(args.sample_avatars === true && isSampleAvatar(p.key) ? { sample_avatar: p.key } : {}),
-        ...(p.kind === 'person'
-          ? {
-              email: email(p.key),
-              auth_user_id: authIds[p.key],
-              accepted_at: now,
-              plannable_hours: newOrgDefaults(now).default_plannable_hours,
-              message_retention_days: DEFAULT_MESSAGE_RETENTION_DAYS,
-            }
-          : {}),
-      })
-    }
+    for (const p of MARKETING_DEMO.people)
+      await ctx.db.insert(
+        'profiles',
+        await seatRow(p, orgId, now, authIds[p.key], args.sample_avatars),
+      )
     await ctx.db.insert('marketing_demo', {
       key: KEY,
       org_id: orgId,
@@ -335,6 +349,57 @@ export const provision = internalMutation({
       updated_at: now,
     })
     return await inspectCore(ctx, args.expected_site_url)
+  },
+})
+
+/* Puts back a Northstar seat that someone removed: the profile of `person`
+ * (a MARKETING_DEMO.people key) with its reserved id and, for a person, the
+ * login the receipt names, as provisioning stored it, so seed, reset and
+ * wipe accept the roster again. profiles.create cannot, because the demo's
+ * API usage names the reserved ids (model/billingUsage.ts
+ * usageNamesProfile). It refuses while the seat exists or its removal still
+ * runs, and when the login is gone or its address belongs to a seat. It
+ * answers the seat's id. The seat's teams, grants and work come back with
+ * the next reset. With the private helper, on development:
+ *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-dev" npx convex run \
+ *     internal/marketingDemo:restoreSeat '{"expected_site_url": "…", "person": "atlas"}' */
+export const restoreSeat = internalMutation({
+  args: { ...expectedSite, person: v.string(), sample_avatar: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    site(args.expected_site_url)
+    const record = await receipt(ctx)
+    require(record !== null, rule('marketing demo: provision the demo before changing it'))
+    require(record.org_id === (await id('org')), rule('marketing demo: invalid ownership receipt'))
+    const org = await byId(ctx, 'organizations', record.org_id)
+    require(org !== null && org.slug === KEY, rule(
+      'marketing demo: owned organization missing or its address changed',
+    ))
+    const person = MARKETING_DEMO.people.find((p) => p.key === args.person)
+    require(person !== undefined, badRequest('marketing demo: unknown person'))
+    const profileId = await id(`person:${person.key}`)
+    // a removed profile keeps its id until its background cleanup ends
+    require((await byId(ctx, 'profiles', profileId)) === null &&
+      (await pendingRemoval(ctx, profileId)) === null, conflict(
+      'marketing demo: that seat is in place or still being removed',
+      'demo_seat_present',
+    ))
+    const authId = person.kind === 'person' ? record.auth_ids[person.key] : undefined
+    if (person.kind === 'person') {
+      const user = (await ctx.runQuery(components.betterAuth.adapter.findOne, {
+        model: 'user',
+        where: [{ field: 'email', value: email(person.key) }],
+      })) as { _id: string } | null
+      const seat = await ctx.db
+        .query('profiles')
+        .withIndex('by_email', (q) => q.eq('email', email(person.key)))
+        .first()
+      require(authId !== undefined && user?._id === authId && seat === null, rule(
+        'marketing demo: login ownership changed',
+      ))
+    }
+    const now = new Date().toISOString()
+    await ctx.db.insert('profiles', await seatRow(person, org.id, now, authId, args.sample_avatar))
+    return { profile_id: profileId }
   },
 })
 

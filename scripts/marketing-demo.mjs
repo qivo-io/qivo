@@ -45,7 +45,7 @@ const SAFE_REFUSALS = new Set([
   'marketing demo: SITE_URL is unset',
   'marketing demo: deployment SITE_URL does not match the requested target',
   'marketing demo: an unowned organization occupies the demo address or id',
-  'marketing demo: roster changed; restore the demo roster before resetting',
+  'marketing demo: roster changed; restore a removed seat with restoreSeat before resetting',
   'marketing demo: owned organization missing or its address changed',
   'marketing demo: login ownership changed',
   'marketing demo: a demo email already belongs to an unowned account',
