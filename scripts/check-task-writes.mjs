@@ -258,7 +258,9 @@ try {
       if (tables.has('used_ids') && kind === 'insert') {
         if (key === usedKey) usedWrites++
         else
-          failures.push(`${at(call)} - this inserts a used_ids row, which only ${usedOwner} writes.`)
+          failures.push(
+            `${at(call)} - this inserts a used_ids row, which only ${usedOwner} writes.`,
+          )
         if (tables.size === 1) continue
       }
       // a task outside the owner meets the description rules below, whose
