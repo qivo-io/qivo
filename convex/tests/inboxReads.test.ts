@@ -1,21 +1,26 @@
-/* The inbox reads over inbox_items (model/inboxReads.ts, convex/inbox.ts).
- * The summary counts exactly the unread, unsnoozed items of the caller's
- * working set across their seats, up to SUMMARY.most, says when a seat is
- * not ready or a budget stopped it, and stays inside Convex's limits. The
- * item read answers one task's item. Every case that writes ends with
- * drift() empty. */
+/* The inbox reads over inbox_items (model/inboxReads.ts, convex/inbox.ts)
+ * and the item actions (convex/messages.ts readItem, unreadItem,
+ * removeItem, snoozeItem). The summary counts exactly the unread,
+ * unsnoozed items of the caller's working set across their seats, up to
+ * SUMMARY.most, says when a seat is not ready or a budget stopped it, and
+ * stays inside Convex's limits. The item read answers one task's item, and
+ * the item actions change only the caller's own item, up to the newest
+ * message the caller saw. Every case that writes ends with drift() empty. */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { BUILD } from '../internal/inboxItemsBackfill'
 import { byId, newWindowKey } from '../lib/db'
+import { LIMITS } from '../lib/limits'
 import { TRASH_BUDGET } from '../model/deletedItems'
 import { insertTask } from '../model/descriptions'
 import { REKEY } from '../model/inboxItems'
 import { readInboxItem, readInboxSummary, SUMMARY } from '../model/inboxReads'
-import { ITEM_UNREAD_CAP, postMessage } from '../model/messages'
+import { ITEM_UNREAD_CAP, itemMessages, markMessagesRead, postMessage } from '../model/messages'
 import {
   as,
+  expectRefusal,
   NOW,
   newT,
   type OrgFixture,
@@ -579,6 +584,246 @@ describe('one task’s item', () => {
       unread_count: 0,
       complete: false,
     })
+    expect(await drift(t)).toEqual([])
+  })
+})
+
+describe('the item actions', () => {
+  it('readItem reads up to the newest message the caller saw, and only the caller’s item', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const guest = as(t, f.guest)
+    const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await post(t, f, { to: f.guest, task: a, minute: 1 })
+    await post(t, f, { to: f.guest, task: a, minute: 2, kind: 'comment' })
+    await post(t, f, { to: f.user, task: a, minute: 2 })
+    const view = await itemFor(t, f, f.guest, a.id)
+    if (view.state !== 'ok' || view.item === null) throw new Error('no item')
+    // a message arrives after the caller's view
+    const later = (await post(t, f, { to: f.guest, task: a, minute: 3 }))!
+    const through = { at: view.item.latest_at, id: view.item.latest_id }
+    expect(
+      await guest.mutation(api.messages.readItem, { org_id: f.org.id, issue_id: a.id, through }),
+    ).toBeNull()
+    // the prune deleted the rows read, as the arrival is the newest
+    const left = await pairRows(t, f.guest.id, a.id)
+    expect(left.map((m) => [m.id, m.read_at ?? null])).toEqual([[later.id, null]])
+    expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({
+      unread_count: 1,
+      latest_id: later.id,
+    })
+    expect(await storedItem(t, f.user.id, a.id)).toMatchObject({ unread_count: 1 })
+    expect(await drift(t)).toEqual([])
+    // without through, all of it, the newest kept read
+    await guest.mutation(api.messages.readItem, { org_id: f.org.id, issue_id: a.id })
+    expect(await pairRows(t, f.guest.id, a.id)).toEqual([
+      expect.objectContaining({ id: later.id, read_at: expect.any(String) }),
+    ])
+    expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({ unread_count: 0 })
+    expect(await summaryOf(t, f.guest)).toMatchObject({ unread_count: 0, complete: true })
+    // a task only someone else holds an item about, and an unknown task
+    const b = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await post(t, f, { to: f.user, task: b, minute: 4 })
+    await guest.mutation(api.messages.readItem, { org_id: f.org.id, issue_id: b.id })
+    expect(
+      await guest.mutation(api.messages.readItem, { org_id: f.org.id, issue_id: uuid() }),
+    ).toBeNull()
+    expect(await storedItem(t, f.user.id, b.id)).toMatchObject({ unread_count: 1 })
+    expect(await summaryOf(t, f.user)).toMatchObject({ unread_count: 2 })
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('removeItem keeps a message that arrived after the caller’s view as the item’s only one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const guest = as(t, f.guest)
+    const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await post(t, f, { to: f.guest, task: a, minute: 1, kind: 'comment' })
+    await post(t, f, { to: f.guest, task: a, minute: 2 })
+    const view = await itemFor(t, f, f.guest, a.id)
+    if (view.state !== 'ok' || view.item === null) throw new Error('no item')
+    const later = (await post(t, f, { to: f.guest, task: a, minute: 3, kind: 'mention' }))!
+    await guest.mutation(api.messages.removeItem, {
+      org_id: f.org.id,
+      issue_id: a.id,
+      through: { at: view.item.latest_at, id: view.item.latest_id },
+    })
+    expect((await pairRows(t, f.guest.id, a.id)).map((m) => m.id)).toEqual([later.id])
+    expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({
+      latest_id: later.id,
+      unread_count: 1,
+      mentions: 1,
+      comments: 0,
+      changes: 0,
+    })
+    expect(await drift(t)).toEqual([])
+    // without through the item goes
+    await guest.mutation(api.messages.removeItem, { org_id: f.org.id, issue_id: a.id })
+    expect(await storedItem(t, f.guest.id, a.id)).toBeNull()
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('unreadItem and snoozeItem refuse an archived task as the id actions do, and skip a hidden one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const guest = as(t, f.guest)
+    const until = new Date(START + DAY).toISOString()
+    const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const row = (await post(t, f, { to: f.guest, task: a, minute: 1 }))!
+    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [row.id] })
+    // before the archive, unreadItem opens the item again
+    await guest.mutation(api.messages.unreadItem, { org_id: f.org.id, issue_id: a.id })
+    expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({ unread_count: 1 })
+    await guest.mutation(api.messages.readItem, { org_id: f.org.id, issue_id: a.id })
+    await as(t, f.user).mutation(api.issues.archive, { org_id: f.org.id, id: a.id })
+    const byIds = await expectRefusal(
+      guest.mutation(api.messages.markUnread, { org_id: f.org.id, ids: [row.id] }),
+      'rule',
+      /is archived and must be restored first$/,
+    )
+    const byItem = await expectRefusal(
+      guest.mutation(api.messages.unreadItem, { org_id: f.org.id, issue_id: a.id }),
+      'rule',
+    )
+    expect(byItem.data.message).toBe(byIds.data.message)
+    const snoozeIds = await expectRefusal(
+      guest.mutation(api.messages.snooze, { org_id: f.org.id, ids: [row.id], until }),
+      'rule',
+    )
+    const snoozeItem = await expectRefusal(
+      guest.mutation(api.messages.snoozeItem, { org_id: f.org.id, issue_id: a.id, until }),
+      'rule',
+    )
+    expect(snoozeItem.data.message).toBe(snoozeIds.data.message)
+    // an archived task the guest no longer sees changes nothing, silently
+    const lost = await plantProject(t, { org_id: f.org.id })
+    const revoke = await grant(t, f.guest, lost.id)
+    const [hidden] = await plantItems(t, f, f.guest, 1, lost.id)
+    await guest.mutation(api.messages.readItem, { org_id: f.org.id, issue_id: hidden.id })
+    await revoke()
+    await archiveRaw(t, [hidden])
+    const before = await pairRows(t, f.guest.id, hidden.id)
+    expect(
+      await guest.mutation(api.messages.unreadItem, { org_id: f.org.id, issue_id: hidden.id }),
+    ).toBeNull()
+    expect(
+      await guest.mutation(api.messages.snoozeItem, {
+        org_id: f.org.id,
+        issue_id: hidden.id,
+        until,
+      }),
+    ).toBeNull()
+    expect(await pairRows(t, f.guest.id, hidden.id)).toEqual(before)
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('snoozeItem snoozes the whole item until its wake and refuses a time past or too far ahead', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const guest = as(t, f.guest)
+    const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await post(t, f, { to: f.guest, task: a, minute: 1 })
+    await post(t, f, { to: f.guest, task: a, minute: 2 })
+    const snooze = (until: string | null) =>
+      guest.mutation(api.messages.snoozeItem, { org_id: f.org.id, issue_id: a.id, until })
+    await expectRefusal(
+      snooze(new Date(START - DAY).toISOString()),
+      'bad_request',
+      /until must be in the future/,
+    )
+    await expectRefusal(
+      snooze(new Date(START + (LIMITS.snooze.max + 1) * DAY).toISOString()),
+      'rule',
+      new RegExp(LIMITS.snooze.refusal.replace(/[.]/g, '\\.')),
+    )
+    const until = new Date(START + DAY).toISOString()
+    expect(await snooze(until)).toBeNull()
+    expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({
+      snoozed: true,
+      snoozed_until: until,
+      unread_count: 2,
+    })
+    expect(await summaryOf(t, f.guest)).toMatchObject({ unread_count: 0 })
+    const wakes = await t.run(async (ctx) =>
+      (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+        (job) => job.name.includes('wake') && job.state.kind === 'pending',
+      ),
+    )
+    expect(wakes).toEqual([
+      expect.objectContaining({
+        scheduledTime: START + DAY,
+        args: [{ recipient_id: f.guest.id, issue_id: a.id, until }],
+      }),
+    ])
+    await runSteps(t)
+    expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({
+      snoozed: false,
+      unread_count: 2,
+      woke_rows: 2,
+    })
+    expect(await summaryOf(t, f.guest)).toMatchObject({ unread_count: 1 })
+    // null lifts a snooze early
+    await snooze(new Date(START + 2 * DAY).toISOString())
+    await snooze(null)
+    expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({ snoozed: false })
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('reads a legacy item of 1,000 messages the backfill built inside Convex’s limits', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [a, b] = [
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }),
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }),
+    ]
+    // stored before the item cap and before the items, so the guest has no state
+    for (const task of [a, b])
+      for (let from = 0; from < BUILD.pair_rows; from += 500)
+        await t.run(async (ctx) => {
+          for (let i = from; i < from + 500; i++)
+            await ctx.db.insert('messages', {
+              id: uuid(),
+              org_id: f.org.id,
+              recipient_id: f.guest.id,
+              issue_id: task.id,
+              issue_title: task.title,
+              kind: i % 2 === 0 ? 'change' : 'comment',
+              // about 1 KB, a long change line
+              detail: `Legacy update ${i}: ${'a long change line '.repeat(50)}`,
+              created_at: at(i),
+            })
+        })
+    expect(await itemFor(t, f, f.guest, a.id)).toEqual({ state: 'building' })
+    for (let cursor: string | null = null, n = 0; ; n++) {
+      if (n === 100) throw new Error('the backfill did not finish')
+      const got: { done: boolean; cursor: string | null } = await t.action(
+        internal.internal.inboxItemsBackfill.run,
+        { dry_run: false, cursor },
+      )
+      if (got.done) break
+      cursor = got.cursor
+    }
+    expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({ unread_count: BUILD.pair_rows })
+    expect(await itemFor(t, f, f.guest, a.id)).toMatchObject({
+      item: { unread_count: BUILD.pair_rows, first_unread_at: at(0), unread_change: true },
+    })
+    // the handler's reads and writes, measured in one transaction
+    const used = await t.run(async (ctx) => {
+      const me = (await byId(ctx, 'profiles', f.guest.id))!
+      await markMessagesRead(ctx, me, await itemMessages(ctx, me, a.id), at(2000))
+      return await ctx.meta.getTransactionMetrics()
+    })
+    // 1,000 patches, 999 deletes by the prune, the item row and the sweep row
+    expect(used.documentsWritten.used).toBeGreaterThan(1990)
+    expect(used.documentsWritten.used).toBeLessThan(16_000 / 4)
+    expect(used.bytesWritten.used).toBeLessThan(4 * 1024 * 1024)
+    expect(used.bytesRead.used).toBeLessThan(8 * 1024 * 1024)
+    expect(used.databaseQueries.used).toBeLessThan(100)
+    expect(await pairRows(t, f.guest.id, a.id)).toHaveLength(1)
+    // and the mutation itself on the other one
+    await as(t, f.guest).mutation(api.messages.readItem, { org_id: f.org.id, issue_id: b.id })
+    expect(await pairRows(t, f.guest.id, b.id)).toHaveLength(1)
+    expect(await storedItem(t, f.guest.id, b.id)).toMatchObject({ unread_count: 0 })
     expect(await drift(t)).toEqual([])
   })
 })

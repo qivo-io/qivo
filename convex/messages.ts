@@ -1,12 +1,18 @@
 /* Inbox writes (phase 5): read_at, snoozed_until and delete, the client's
  * WHOLE message write surface. Rows are created only by model/messages'
  * notify family, and everything else is immutable by not appearing in any
- * validator.
+ * validator. The app's current Inbox names the rows by message id
+ * (markRead, markUnread, remove, snooze), the bulk actions take none
+ * (markAllRead, removeRead), and the item actions name one item by its
+ * task (readItem, unreadItem, removeItem, snoozeItem), so a row the app did
+ * not load is reached too. Open old clients keep calling the id actions.
  *
  * Own rows only, silently: the RLS filter's successor (model/messages.ts
  * ownMessages) skips non-own and unknown ids without a trace (the client
  * pre-filters anyway), so a probe learns nothing and a stale id is not an
- * error.
+ * error. An item action reads only the caller's own item
+ * (model/messages.ts itemMessages), and a task without one, or an unknown
+ * task id, changes nothing.
  *
  * Each write is a model/messages.ts function the machine inbox
  * (machine/discussion.ts) runs too. markRead then restores 0109's invariant
@@ -24,6 +30,7 @@ import { internalMutation } from './_generated/server'
 import { orgMutation } from './lib/functions'
 import { rekeyStep } from './model/inboxItems'
 import {
+  itemMessages,
   markAllMessagesRead,
   markMessagesRead,
   markMessagesUnread,
@@ -118,6 +125,67 @@ export const snooze = orgMutation({
   args: { ids: v.array(v.string()), until: v.union(v.string(), v.null()) },
   handler: async (ctx, { ids, until }) => {
     await snoozeMessages(ctx, ctx.me, await ownMessages(ctx, ctx.me, ids), until)
+    return null
+  },
+})
+
+/* The newest message of an item as the caller saw it, the item's latest_at
+ * and latest_id (inbox.item), where readItem and removeItem stop. */
+const vThrough = v.object({ at: v.string(), id: v.string() })
+
+/* Marks the caller's item about one task read. It marks the unread
+ * messages not newer than `through`, or all of them without it, so a
+ * message that arrived after the caller's view stays unread. The prune then
+ * keeps the item's newest message (model/messages.ts markMessagesRead),
+ * which is that later arrival when there is one. An item holds at most
+ * ITEM_UNREAD_CAP + 1 (51) messages, but one stored before the cap keeps
+ * more until arrivals or internal/inboxItemsBackfill trim it, at most
+ * BUILD.pair_rows (1,000) once the backfill built it. On such an item this
+ * patches up to 1,000 rows and the prune deletes up to 999, about 2,000 of
+ * Convex's 16,000 writes, and it reads each message up to four times (the
+ * item, the patch, the prune's read and its delete). With messages of about
+ * 1.3 KB that is about 1.3 MB written and 5.3 MB read
+ * (convex/tests/inboxReads.test.ts), inside 16 MiB. */
+export const readItem = orgMutation({
+  args: { issue_id: v.string(), through: v.optional(vThrough) },
+  handler: async (ctx, { issue_id, through }) => {
+    const now = new Date().toISOString()
+    await markMessagesRead(ctx, ctx.me, await itemMessages(ctx, ctx.me, issue_id, through), now)
+    return null
+  },
+})
+
+/* Marks the caller's item about one task unread, as markUnread does with
+ * all its ids, which opens again the one read message the prune keeps. A
+ * task that is archived or in an archived project refuses it with
+ * markUnread's sentences (model/messages.ts refuseArchivedItems), and one
+ * the caller can no longer see changes nothing. */
+export const unreadItem = orgMutation({
+  args: { issue_id: v.string() },
+  handler: async (ctx, { issue_id }) => {
+    await markMessagesUnread(ctx, ctx.me, await itemMessages(ctx, ctx.me, issue_id))
+    return null
+  },
+})
+
+/* Removes the caller's item about one task, the messages not newer than
+ * `through` or all of them without it, so a message that arrived after the
+ * caller's view stays as the item's only one. */
+export const removeItem = orgMutation({
+  args: { issue_id: v.string(), through: v.optional(vThrough) },
+  handler: async (ctx, { issue_id, through }) => {
+    await removeMessages(ctx, await itemMessages(ctx, ctx.me, issue_id, through))
+    return null
+  },
+})
+
+/* Snoozes the caller's item about one task until `until`, or with null
+ * lifts its snooze now, with snooze's checks, refusals and scheduled wake
+ * (model/messages.ts snoozeMessages). */
+export const snoozeItem = orgMutation({
+  args: { issue_id: v.string(), until: v.union(v.string(), v.null()) },
+  handler: async (ctx, { issue_id, until }) => {
+    await snoozeMessages(ctx, ctx.me, await itemMessages(ctx, ctx.me, issue_id), until)
     return null
   },
 })

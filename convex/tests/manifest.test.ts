@@ -520,11 +520,15 @@ messages:notifyFollowers mutation internal {"type":"object","value":{"org_id":{"
 messages:notifyMentions mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"task":{"fieldType":{"type":"id","tableName":"issues"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"actor_id":{"fieldType":{"type":"string"},"optional":true},"now":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"recipients":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 messages:readArchivedProject mutation internal {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"batch":{"fieldType":{"type":"number"},"optional":true},"tasks":{"fieldType":{"type":"number"},"optional":true}}}
 messages:readArchivedTasks mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"batch":{"fieldType":{"type":"number"},"optional":true}}}
+messages:readItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"through":{"fieldType":{"type":"object","value":{"at":{"fieldType":{"type":"string"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:rekeyItems mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 messages:remove mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+messages:removeItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"through":{"fieldType":{"type":"object","value":{"at":{"fieldType":{"type":"string"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:removeRead mutation public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:snooze mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"until":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+messages:snoozeItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"until":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:trimItems mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"recipients":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
+messages:unreadItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:wake mutation internal {"type":"object","value":{"recipient_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"until":{"fieldType":{"type":"string"},"optional":false}}}
 nameCopies:recover mutation internal {"type":"object","value":{}}
 nameCopies:step mutation internal {"type":"object","value":{"source":{"fieldType":{"type":"union","value":[{"type":"literal","value":"profiles"},{"type":"literal","value":"teams"}]},"optional":false},"source_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -933,13 +937,19 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // messages:notifyFollowers (internal) to tell the rest, and a write whose
   // notices fill its room schedules messages:notifyMentions (internal) for
   // the people it mentions past that.
+  // The item actions act on the caller's own item about one task, up to the
+  // newest message the caller saw (readItem, removeItem).
   messages: {
     markAllRead: 'orgMutation',
     markRead: 'orgMutation',
     markUnread: 'orgMutation',
+    readItem: 'orgMutation',
     remove: 'orgMutation',
+    removeItem: 'orgMutation',
     removeRead: 'orgMutation',
     snooze: 'orgMutation',
+    snoozeItem: 'orgMutation',
+    unreadItem: 'orgMutation',
   },
   // Paginated ZIP export for org admins. orgQuery authenticates the active
   // seat; the handler positively requires admin on every page.
@@ -1062,7 +1072,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 181
+const PUBLIC_COUNT = 185
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

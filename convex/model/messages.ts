@@ -43,6 +43,7 @@ import { byId } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
+import { newestFirst } from '../lib/inbox'
 import { LIMITS } from '../lib/limits'
 import { mentionIds } from '../lib/mentions'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
@@ -893,9 +894,10 @@ export async function followersOf(
  * The recipient's own writes on its inbox, shared by the app's Inbox
  * (convex/messages.ts) and the machine inbox (machine/discussion.ts). Each
  * takes rows the caller already chose as its own. The app passes the message
- * ids its list holds through ownMessages, and the machine every row of the
- * items it names through itemMessages. Each returns the ids of the tasks
- * whose items it changed. */
+ * ids its list holds through ownMessages, or for an item action the task's
+ * id through itemMessages, and the machine every row of the items it names
+ * through itemMessages. Each returns the ids of the tasks whose items it
+ * changed. */
 
 /**
  * The rows among `ids` that belong to `me`, each once. Other people's rows
@@ -915,12 +917,26 @@ export async function ownMessages(
   return out
 }
 
-/** Every row of `me`'s inbox item about one task. */
-export const itemMessages = (
+/** The newest message of an inbox item as a caller saw it, the item's
+ * latest_at and latest_id (schema.ts inbox_items), where an item action
+ * stops. */
+export type Through = { at: string; id: string }
+
+/** Every row of `me`'s inbox item about one task, or with `through` the
+ * rows not newer than it by (created_at, id) (lib/inbox.ts newestFirst), so
+ * an item action leaves out a message that arrived after the caller's
+ * view. */
+export async function itemMessages(
   ctx: MutationCtx,
   me: Doc<'profiles'>,
   issueId: string,
-): Promise<Doc<'messages'>[]> => pairRows(ctx, { recipient_id: me.id, issue_id: issueId })
+  through?: Through,
+): Promise<Doc<'messages'>[]> {
+  const rows = await pairRows(ctx, { recipient_id: me.id, issue_id: issueId })
+  if (through === undefined) return rows
+  const seen = { created_at: through.at, id: through.id }
+  return rows.filter((row) => newestFirst(row, seen) >= 0)
+}
 
 /**
  * Marks the unread rows read, stamped `now`, then keeps 0109's invariant
