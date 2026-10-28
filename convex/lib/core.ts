@@ -2148,7 +2148,9 @@ export function destinationOf(
  * the place of the current ones (model/issues.ts LaterPeople). A subtask
  * moved to another top-level project must leave its parent in the same
  * update, so the move is told the `parent` that follows it
- * (MachineMove.laterParent). Answers the task as written.
+ * (MachineMove.laterParent). A move leaves room for the caller's answer
+ * when it reads the task's active subtasks again (`answerReadsSubtasks`).
+ * Answers the task as written.
  */
 export async function applyTaskUpdate(
   ctx: MutationCtx,
@@ -2165,6 +2167,9 @@ export async function applyTaskUpdate(
     provenance: string
     /** What the caller read, as REST and MCP show it (model/expected.ts). */
     expected?: Readonly<Record<string, unknown>>
+    /** Whether the caller answers with the task's full read (taskOut),
+     * which reads its active subtasks again after a move. */
+    answerReadsSubtasks: boolean
   },
 ): Promise<Doc<'issues'>> {
   const { me, now, provenance } = a
@@ -2200,7 +2205,12 @@ export async function applyTaskUpdate(
       now,
       // a subtask may leave its parent's top-level project only when this
       // update also gives it another parent, or none
-      machine: { provenance, later, laterParent: a.parent },
+      machine: {
+        provenance,
+        later,
+        laterParent: a.parent,
+        answerReadsSubtasks: a.answerReadsSubtasks,
+      },
     })
   }
   if (a.parent !== undefined && (a.parent ?? undefined) !== task.parent_id) {

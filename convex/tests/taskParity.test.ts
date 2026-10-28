@@ -1414,6 +1414,7 @@ describe('applyTaskUpdate, the write order of REST PATCH and MCP update_task', (
           labels: { add, remove: [] },
           now: NOW,
           provenance: 'via MCP',
+          answerReadsSubtasks: false,
         })
       })
     const verbs = async () => (await activityFor(fx.t, fx.org.id)).map((e) => e.verb)

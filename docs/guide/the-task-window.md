@@ -234,7 +234,9 @@ subtasks**, selected first, archives the whole subtask tree, including
 subtasks in other sub-projects. Qivo refuses that when one of them is in a
 project you cannot edit, and an organization admin can archive the whole tree
 instead. While one of them is in a project being moved to Deleted items, Qivo
-refuses it for everyone until that move finishes. Clear the box to archive
+refuses it for everyone until that move finishes. Qivo also refuses the whole
+tree when the task and its subtasks are too large to change at once, such as
+dozens of subtasks with very long descriptions. Clear the box to archive
 only the task. Its subtasks stay in their
 projects, those directly under it become top-level tasks, and restoring the
 task later does not bring them back under it.

@@ -1,17 +1,19 @@
-/* Fails when code in convex/ writes a task row or a task description
- * anywhere but convex/model/descriptions.ts. Task descriptions are kept in
- * issue_descriptions beside the task rows (schema.ts), and that file writes
- * both in one transaction, so the copies stay equal. It reads every write
- * through Convex's database writer (`insert`, `patch` and `replace`) and
- * every call of lib/db.ts insertUnique with TypeScript's checker, outside
- * the tests, which plant rows directly, and fails on one that
+/* Fails when code in convex/ writes a task row, a task description or a
+ * task's project or archived state anywhere but
+ * convex/model/descriptions.ts. Task descriptions are kept in
+ * issue_descriptions beside the task rows (schema.ts), each row with copies
+ * of its task's project and archived state, and that file writes both in
+ * one transaction, so the copies stay equal. It reads every write through
+ * Convex's database writer (`insert`, `patch` and `replace`) and every call
+ * of lib/db.ts insertUnique with TypeScript's checker, outside the tests,
+ * which plant rows directly, and fails on one that
  *
  * - inserts a row that may be a task (insertTask) or replaces one
  *   (patchTask),
  * - patches a row that may be a task with fields that may hold its
- *   description, a `description` property or an index signature
- *   (patchTask; a write that never changes the description types its
- *   fields as TaskPatch),
+ *   description, project or archived state, a `description`, `project_id`
+ *   or `archived_at` property or an index signature (patchTask; a write
+ *   that changes none of them types its fields as TaskPatch),
  * - writes issue_descriptions,
  * - or writes a table named by a type parameter, whose table the check
  *   cannot read. Only the generic writers below may, and for insertUnique
@@ -51,6 +53,8 @@ const genericWriters = new Map([
 const unique = { file: 'lib/db.ts', name: 'insertUnique', table: 1 }
 
 const writes = new Set(['insert', 'patch', 'replace'])
+/* The task fields a description row holds or copies. */
+const copied = ['description', 'project_id', 'archived_at']
 const writerNames = new Set([...writes, unique.name])
 const convexPackage = /[/\\]node_modules[/\\]convex[/\\]/
 const skipped = /[/\\](?:node_modules|_generated|tests)[/\\]/
@@ -165,15 +169,16 @@ try {
     if (table) return tablesOf(checker.getTypeOfSymbol(table))
     return ['*']
   }
-  /** Whether fields of `type` may hold a description. */
-  const mayDescribe = (type) =>
+  /** Whether fields of `type` may hold a description, a project or an
+   * archived state. */
+  const mayCopy = (type) =>
     !type ||
     type.isTypeParameter() ||
     type.isErrorType() ||
     (type.isUnionType()
-      ? type.getTypes().some(mayDescribe)
+      ? type.getTypes().some(mayCopy)
       : (type.flags & TypeFlags.Any) !== 0 ||
-        checker.getPropertyOfType(type, 'description') !== undefined ||
+        copied.some((field) => checker.getPropertyOfType(type, field) !== undefined) ||
         checker.getIndexInfosOfType(type).length > 0)
 
   for (const file of program.getSourceFileNames()) {
@@ -237,9 +242,9 @@ try {
         failures.push(
           `${at(call)} - this replaces a task row without its description row. Use ${owner} patchTask.`,
         )
-      else if (mayDescribe(fields && checker.getTypeAtLocation(fields)))
+      else if (mayCopy(fields && checker.getTypeAtLocation(fields)))
         failures.push(
-          `${at(call)} - this patch can change a task's description without its description row. Use ${owner} patchTask, or type fields that leave the description alone as TaskPatch.`,
+          `${at(call)} - this patch can change a task's description, project or archived state without its description row. Use ${owner} patchTask, or type fields that leave them alone as TaskPatch.`,
         )
     }
   }
@@ -262,7 +267,7 @@ await closeTypeScriptAPI(api)
 if (failures.length) {
   console.error(failures.join('\n'))
   console.error(
-    `\nTask rows and their descriptions are written together, by ${owner} (schema.ts issue_descriptions).`,
+    `\nTask rows and their description rows, which copy the task's project and archived state, are written together, by ${owner} (schema.ts issue_descriptions).`,
   )
   process.exit(1)
 }

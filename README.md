@@ -99,14 +99,16 @@ function or variable it copies them from. It fails when an installed `convex`
 declares one differently, so a Convex update gets a review of the copy here
 and of the module rules in `scripts/convex-api-modules.mjs`.
 The backend check then runs `scripts/check-task-writes.mjs`. Task
-descriptions are kept in `issue_descriptions` beside the task rows, and only
+descriptions are kept in `issue_descriptions` beside the task rows, each row
+with copies of its task's project and archived state, and only
 `convex/model/descriptions.ts` writes the two together. The check reads
 every database `insert`, `patch` and `replace` and every call of
 `insertUnique` with TypeScript's checker, also through a renamed import,
 a destructured method or `db['patch']`. It fails on a task insert or
-replace, a task patch whose fields may hold a description, and a write to
-`issue_descriptions` anywhere else, and on a write whose table it cannot
-read from its type outside the two generic writers it allows.
+replace, a task patch whose fields may hold a description, a project or an
+archived state, and a write to `issue_descriptions` anywhere else, and on a
+write whose table it cannot read from its type outside the two generic
+writers it allows.
 It needs no deployment credentials and does not reset any hosted data.
 `npm run verify:static` runs every check of this gate except the tests.
 When `npm run check:dependencies` fails, as after a pull or a branch switch

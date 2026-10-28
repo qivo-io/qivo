@@ -861,6 +861,8 @@ export const updateIssue = internalMutation({
       now,
       provenance: provenanceOf(a.keyName),
       expected,
+      // the answer below is the task's full read
+      answerReadsSubtasks: true,
     })
     return await taskOut(ctx, task, {
       surface: 'rest',

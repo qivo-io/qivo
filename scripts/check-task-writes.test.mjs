@@ -39,14 +39,15 @@ function check(files) {
   return { status: result.status, output: result.stdout + result.stderr }
 }
 
-/* A schema with tasks, their descriptions and a table without them. */
+/* A schema with tasks, their descriptions and a table without them that has
+ * fields of the same names. */
 const schema = `import { defineSchema, defineTable, type DataModelFromSchemaDefinition, type GenericMutationCtx } from 'convex/server'
 import type { GenericId } from 'convex/values'
 import { v } from 'convex/values'
 const schema = defineSchema({
-  issues: defineTable({ id: v.string(), org_id: v.string(), title: v.string(), description: v.optional(v.string()) }),
-  issue_descriptions: defineTable({ issue_id: v.string(), org_id: v.string(), description: v.string() }),
-  comments: defineTable({ body: v.string(), description: v.optional(v.string()) }),
+  issues: defineTable({ id: v.string(), org_id: v.string(), project_id: v.string(), title: v.string(), description: v.optional(v.string()), archived_at: v.optional(v.string()) }),
+  issue_descriptions: defineTable({ issue_id: v.string(), org_id: v.string(), description: v.string(), project_id: v.optional(v.string()), archived_at: v.optional(v.string()) }),
+  comments: defineTable({ body: v.string(), description: v.optional(v.string()), project_id: v.optional(v.string()), archived_at: v.optional(v.string()) }),
 })
 export default schema
 export type DataModel = DataModelFromSchemaDefinition<typeof schema>
@@ -81,9 +82,10 @@ export const patchTask = (ctx: Ctx, id: Id<'issues'>, fields: Partial<Task>) => 
 
 const good = `${imports}
 export const title = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch(id, { title: 'Plan' })
-export const fields = (ctx: Ctx, id: Id<'issues'>, w: Omit<Partial<Task>, 'description'>) => ctx.db.patch('issues', id, w)
+export const fields = (ctx: Ctx, id: Id<'issues'>, w: Omit<Partial<Task>, 'description' | 'project_id' | 'archived_at'>) => ctx.db.patch('issues', id, w)
 export const comment = (ctx: Ctx) => ctx.db.insert('comments', { body: 'Hi', description: 'not a task' })
 export const edit = (ctx: Ctx, id: Id<'comments'>) => ctx.db.patch(id, { description: 'not a task' })
+export const shelve = (ctx: Ctx, id: Id<'comments'>) => ctx.db.patch(id, { project_id: 'p', archived_at: 'now' })
 export const unique = (ctx: Ctx) => insertUnique(ctx, 'comments', { body: 'Hi' })
 export const gone = (ctx: Ctx, id: Id<'issues'>) => ctx.db.delete(id)
 export const text = 'a.b'.replace('.', '')
@@ -121,6 +123,22 @@ const refused = [
   [
     "export const either = (ctx: Ctx, id: Id<'issues'> | Id<'comments'>, f: Record<string, string>) => ctx.db.patch(id, f)",
     "this patch can change a task's description",
+  ],
+  [
+    "export const move = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch(id, { project_id: 'p' })",
+    "this patch can change a task's description, project or archived state",
+  ],
+  [
+    "export const archive = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch('issues', id, { archived_at: 'now', title: 'Done' })",
+    "this patch can change a task's description, project or archived state",
+  ],
+  [
+    "export const restore = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch(id, { archived_at: undefined })",
+    "this patch can change a task's description, project or archived state",
+  ],
+  [
+    "export const keepsText = (ctx: Ctx, id: Id<'issues'>, w: Omit<Partial<Task>, 'description'>) => ctx.db.patch('issues', id, w)",
+    "this patch can change a task's description, project or archived state",
   ],
   [
     "export const row = (ctx: Ctx) => ctx.db.insert('issue_descriptions', { issue_id: 'a', org_id: 'b', description: '' })",
@@ -170,7 +188,7 @@ const refused = [
 ]
 
 describe('the task write check', { timeout: 60_000 }, () => {
-  it('fails on each write of a task row or description outside model/descriptions.ts, and passes the rest', () => {
+  it('fails on each write of a task row, description, project or archived state outside model/descriptions.ts, and passes the rest', () => {
     const bad = `${imports}\n${refused.map(([line]) => line).join('\n')}\n`
     const { status, output } = check({
       'schema.ts': schema,

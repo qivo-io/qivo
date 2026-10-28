@@ -29,6 +29,7 @@ import {
 } from '../lib/limits'
 import { ARCHIVED_DETACH, STALLED_MS } from '../model/deletedItems'
 import { DROPPED_IMAGES_MAX, DROPPED_KEEP_MS, IMAGE_NOT_ATTACHED } from '../model/descriptionImages'
+import { insertTask } from '../model/descriptions'
 import { MOVE_TOO_LARGE, PARENT_DELETED_SINCE } from '../model/issues'
 import { INLINE_TRIMS, ITEM_UNREAD_CAP, notifyCommentInsert } from '../model/messages'
 import {
@@ -307,7 +308,8 @@ async function plantSubtasks(
     const out: Doc<'issues'>[] = []
     const base = await ctx.db.query('issues').collect()
     for (let i = 0; i < n; i++) {
-      const _id = await ctx.db.insert('issues', {
+      // with its description row, as every writer stores a task
+      const _id = await insertTask(ctx.db, {
         id: uuid(),
         org_id: fx.org.id,
         project_id: fx.sub.id,
@@ -513,38 +515,102 @@ describe('a move that carries archived subtasks', () => {
     return await plantProject(fx.t, { org_id: fx.org.id, type: 'project', parent_id: other.id })
   }
 
-  /* Plants `n` subtasks of `parent` with the longest title and description,
-   * about 60 KB each, every other fifty archived, fifty per write. */
-  const plantLong = async (fx: Fx, parent: Doc<'issues'>, n: number) => {
+  /* Plants `active` and `archived` subtasks of `parent` with the longest
+   * title and description, about 60 KB each and as much again in their
+   * description rows, at most fifty per write. */
+  const plantLong = async (
+    fx: Fx,
+    parent: Doc<'issues'>,
+    count: { active: number; archived: number },
+  ) => {
     const long = { description: 'あ'.repeat(TEXT_MAX), title: 'あ'.repeat(LIMITS.title.max) }
     const kids: Doc<'issues'>[] = []
-    for (let i = 0; i < n / 50; i++) {
-      const archived = i % 2 === 0 ? { archived_at: NOW } : {}
-      kids.push(...(await plantSubtasks(fx, parent, 50, { ...long, ...archived })))
-    }
+    for (const [n, over] of [
+      [count.archived, { archived_at: NOW }],
+      [count.active, {}],
+    ] as const)
+      for (let left = n; left > 0; left -= 50)
+        kids.push(...(await plantSubtasks(fx, parent, Math.min(50, left), { ...long, ...over })))
     return kids
   }
 
-  it('moves a hundred subtasks with the longest descriptions within the real limits', async () => {
-    const fx = await setup(newT({ transactionLimits: true }))
-    const parent = await task(fx, { title: 'Long family' })
-    const kids = await plantLong(fx, parent, 100)
-    const dest = await elsewhere(fx)
-    const answer = await fx.t.mutation(internal.machine.rest.updateIssue, {
+  /* A REST move of `parent` to `dest`. */
+  const restMove = (fx: Fx, parent: Doc<'issues'>, dest: Doc<'projects'>) =>
+    fx.t.mutation(internal.machine.rest.updateIssue, {
       callerId: fx.agent.id,
       access: 'write',
       keyName: 'limits',
       ref: key(parent),
       body: JSON.stringify({ project: dest.id }),
     })
+
+  it('moves fifty subtasks with the longest descriptions over REST within the real limits, and answers in full', async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    const parent = await task(fx, { title: 'Long family' })
+    const kids = await plantLong(fx, parent, { active: 25, archived: 25 })
+    const dest = await elsewhere(fx)
+    const answer = await restMove(fx, parent, dest)
     expect(answer.project_id).toBe(dest.id)
+    // an active task's answer lists its active subtasks
+    expect(answer.subtasks).toHaveLength(25)
     for (const kid of kids) expect((await row(fx.t, kid.id)).project_id).toBe(dest.id)
+  }, 120_000)
+
+  it('refuses a move of a hundred such subtasks, which reads each one and its row twice, and changes nothing', async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    const parent = await task(fx, { title: 'Long family' })
+    const kids = await plantLong(fx, parent, { active: 50, archived: 50 })
+    const dest = await elsewhere(fx)
+    await refused(restMove(fx, parent, dest), 'rule', MOVE_TOO_LARGE)
+    await refused(
+      as(fx.t, fx.admin).mutation(api.issues.move, {
+        org_id: fx.org.id,
+        id: parent.id,
+        project_id: dest.id,
+      }),
+      'rule',
+      MOVE_TOO_LARGE,
+    )
+    for (const t of [parent, ...kids]) expect((await row(fx.t, t.id)).project_id).toBe(fx.sub.id)
+  }, 120_000)
+
+  it('refuses a REST move whose answer could not read its active subtasks again, which MCP and the app move', async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    const parent = await task(fx, { title: 'Long family' })
+    // the move fits, but REST's answer reads the 58 active subtasks again
+    // (lib/core.ts taskOut), past Convex's 16 MiB of reads
+    const kids = await plantLong(fx, parent, { active: 58, archived: 0 })
+    const dest = await elsewhere(fx)
+    const family = [parent, ...kids]
+    await refused(restMove(fx, parent, dest), 'rule', MOVE_TOO_LARGE)
+    for (const t of family) expect((await row(fx.t, t.id)).project_id).toBe(fx.sub.id)
+    // MCP's answer names the task and what changed, and reads nothing
+    const mcp = JSON.parse(
+      await fx.t.mutation(internal.machine.mcp.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: key(parent),
+        project: dest.id,
+      }),
+    ) as { id: string; updated: string[] }
+    expect(mcp).toMatchObject({ id: parent.id, updated: ['project_id'] })
+    for (const t of family) expect((await row(fx.t, t.id)).project_id).toBe(dest.id)
+    // the app's answer is the task alone, and it carries them back
+    await as(fx.t, fx.admin).mutation(api.issues.move, {
+      org_id: fx.org.id,
+      id: parent.id,
+      project_id: fx.sub.id,
+    })
+    for (const t of family) expect((await row(fx.t, t.id)).project_id).toBe(fx.sub.id)
   }, 120_000)
 
   it(`refuses a move of ${LIMITS.moveSubtree.max} such subtasks with what to do, on every surface`, async () => {
     const fx = await setup(newT({ transactionLimits: true }))
     const parent = await task(fx, { title: 'Longer family' })
-    const kids = await plantLong(fx, parent, LIMITS.moveSubtree.max)
+    const kids = await plantLong(fx, parent, {
+      active: LIMITS.moveSubtree.max / 2,
+      archived: LIMITS.moveSubtree.max / 2,
+    })
     const dest = await elsewhere(fx)
     await refused(
       as(fx.t, fx.admin).mutation(api.issues.move, {

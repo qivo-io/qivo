@@ -65,6 +65,7 @@ import { deletionBegun } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { audit } from './model/admin'
 import { scheduleMarkClears } from './model/archiveMarks'
+import { patchTask } from './model/descriptions'
 import { itemEdits } from './model/inboxItems'
 import {
   ITEM_UNREAD_CAP,
@@ -92,10 +93,12 @@ export const ARCHIVE_LIMITS = {
   /** Done candidates per leg, so at most this many task patches. */
   tasks: 500,
   /** Bytes of candidates one leg reads, and again of the children its leaf
-   * guard reads. Patching reads each archived task once more, so a leg reads
-   * about three times this at most, inside the 16 MiB a transaction may
-   * read. A dispatcher step reads at most this many bytes of projects, and
-   * this many and one task more of the tasks its checks read. */
+   * guard reads, so its reads before archiving stay near half of the
+   * 16 MiB a transaction may read. Archiving reads each task once more and
+   * its description row twice (model/descriptions.ts patchTask), which
+   * `room` bounds. A dispatcher step reads at most this many bytes of
+   * projects, and this many and one task more of the tasks its checks
+   * read. */
   bytes: 4 * 1024 * 1024,
   /** Flagged active tasks per repair leg. */
   marked: 1000,
@@ -297,17 +300,20 @@ async function archivesInto(ctx: MutationCtx, a: ArchiveLeg): Promise<boolean> {
 }
 
 /* One archive leg. It reads one page of the project's due Done tasks, keeps
- * those that pass the leaf guard, and archives them. Every read happens
- * before the first patch. Once a leg completes, the candidates the guard
- * kept lie behind the cursor and are not read again this run, which is
- * right because only this run's own stamps could change their answer. A
- * child can be as large as its parent, so when the children the guard read
- * pass ARCHIVE_LIMITS.bytes, the leg writes nothing and the next leg reads
- * the same page at half the size. Each archived task sends a task.updated
- * event, whose subscriber checks cost reads. So before each task after its
- * first, a leg stops once its archiving has used ARCHIVE_LIMITS.room of
- * what was left of any transaction limit, and the next leg reads the same
- * page again, without the tasks archived here, which have left its range.
+ * those that pass the leaf guard, and archives them. Every read of the
+ * candidates and their children happens before the first patch. Once a leg
+ * completes, the candidates the guard kept lie behind the cursor and are
+ * not read again this run, which is right because only this run's own
+ * stamps could change their answer. A child can be as large as its parent,
+ * so when the children the guard read pass ARCHIVE_LIMITS.bytes, the leg
+ * writes nothing and the next leg reads the same page at half the size.
+ * Each archived task reads and writes its description row, up to the
+ * task's own size, and sends a task.updated event, whose subscriber checks
+ * cost reads. So before each task after its first, a leg stops once its
+ * archiving has used ARCHIVE_LIMITS.room of what was left of any
+ * transaction limit, and the next leg reads the same page again, without
+ * the tasks archived here, which have left its range, so a leg of tasks
+ * with long descriptions archives fewer of them.
  * Once the project is done, or no longer takes the run's archive, the next
  * leg starts the organization's next due project. Returns the next leg, or
  * null when the chain is done. */
@@ -342,7 +348,8 @@ async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg |
       full = true
       break
     }
-    await ctx.db.patch(task._id, { archived_at: a.now })
+    // with its description row's copy (model/descriptions.ts)
+    await patchTask(ctx.db, task, { archived_at: a.now })
     await emitTaskEvent(ctx, {
       name: 'task.updated',
       issue: { ...task, archived_at: a.now },
