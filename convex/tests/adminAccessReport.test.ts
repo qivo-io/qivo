@@ -29,6 +29,7 @@ import {
   isOrgStaff,
   projectLevel,
   projectLevelsOf,
+  receivesTeamAccess,
 } from '../lib/access'
 import { byId, newWindowKey } from '../lib/db'
 import { ACCESS_LEVELS, type AccessLevel } from '../lib/enums'
@@ -450,10 +451,12 @@ describe("an admin's ordinary level", () => {
       expect(cappedLevel('admin', level)).toBe(cappedLevel('user', level))
     expect(canLeadProjects({ org_role: 'admin' })).toBe(canLeadProjects({ org_role: 'user' }))
     expect(isOrgStaff({ org_role: 'admin' })).toBe(isOrgStaff({ org_role: 'user' }))
-    // team access, which lib/access.ts decides privately, through the rows
-    // accessRowsOf reads for each role
+    // team access, by its rule and through the rows accessRowsOf reads for
+    // each role
     const t = newT()
     const f = await withOrg(t)
+    expect(receivesTeamAccess(f.admin)).toBe(true)
+    expect(receivesTeamAccess(ordinaryOf(f.admin))).toBe(true)
     await shareThroughTeam(t, f, f.meta, f.admin, 'user')
     const shares = await t.run(async (ctx) => ({
       admin: (await accessRowsOf(ctx, f.admin)).shares.length,
