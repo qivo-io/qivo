@@ -1366,11 +1366,13 @@ export default defineSchema({
    * writes rerun none of them. Readers use an organization's totals only
    * while its row exists without `counting` (storageTotalsOf).
    *
-   * A project or task row is keyed by its id, so the id stays taken while
-   * the row exists (lib/db.ts insertUnique). A new task or project, in any
-   * organization, cannot take an id whose files still count. Each row names
-   * its organization, a task row also its task's number, and every writer
-   * leaves a row alone that is not the task's or project's it writes for.
+   * A project or task row is found by its organization, its id and its
+   * number, which the organization never gives another project or task, so
+   * one row holds one object's files for good. A new task or project that
+   * takes the id of a purged one, in any organization, gets a row of its
+   * own, and no writer ever reads or changes another's. A row a purged
+   * object leaves behind goes with a recount of its organization, and the
+   * rows of an organization that is gone with the backfill's stray check.
    *
    * One row per organization. No row means the organization is not counted
    * yet. internal/storageTotalsBackfill counts it, and until then every
@@ -1398,17 +1400,19 @@ export default defineSchema({
   // counted file and is deleted at none, so a project in Deleted items keeps
   // its row until its files are purged. `name` is the project's, copied
   // when the row is written and on each rename (model/projects.ts
-  // updateProjectCore); absent when the backfill found no copy of the
-  // project, live or stored. project_id may name a project that is gone for
-  // good while a subtask of a task item still holds files there.
+  // updateProjectCore). project_id may name a project that is gone for good
+  // while a subtask of a task item still holds files there.
   storage_project_totals: defineTable({
     org_id: v.string(),
     project_id: v.string(),
+    // the project's number; absent, as `name` is, when the backfill found no
+    // copy of the project, live or stored
+    num: v.optional(v.number()),
     name: v.optional(v.string()),
     bytes: v.number(),
     files: v.number(),
   })
-    .index('by_project', ['project_id'])
+    .index('by_org_project', ['org_id', 'project_id', 'num'])
     // the breakdown, largest first, and the teardowns' drain by organization
     .index('by_org_bytes', ['org_id', 'bytes']),
 
@@ -1424,12 +1428,15 @@ export default defineSchema({
     issue_id: v.string(),
     // the task's number, which no other task of its organization ever has
     num: v.number(),
+    // the project the files count in, with its number as that project's row
+    // holds it
     project_id: v.string(),
+    project_num: v.optional(v.number()),
     bytes: v.number(),
     files: v.number(),
   })
-    .index('by_issue', ['issue_id'])
-    .index('by_org', ['org_id']),
+    // one task's row, and the teardowns' drain by organization
+    .index('by_org_issue', ['org_id', 'issue_id', 'num']),
 
   milestones: milestonesTable,
 

@@ -116,10 +116,7 @@ type EqChain = { eq: (field: string, value: Value | undefined) => EqChain }
  * field order (the runtime builder refuses out-of-order eq chains). A uuid of a
  * table that Deleted items stores (lib/enums.ts STORED_TABLES) is also taken
  * while a deleted_rows row holds it, so a restore never meets a new row with
- * its id, and a task's or project's uuid while its stored-byte totals row
- * holds it (model/storageTotals.ts), which can outlive its stored copy until
- * a purge deletes its last file, so a new task or project in any
- * organization never takes over those totals. The refusal is the same err. */
+ * its id; the refusal is the same err. */
 export async function insertUnique<T extends TableNames>(
   ctx: WriterCtx,
   table: T,
@@ -146,22 +143,6 @@ export async function insertUnique<T extends TableNames>(
       .withIndex('by_row', (q) => q.eq('table', table).eq('row_id', id))
       .first()
     if (held !== null) throw err
-  }
-  if (indexName === 'by_uuid' && typeof keyFields.id === 'string') {
-    const id = keyFields.id
-    const totals =
-      table === 'issues'
-        ? await ctx.db
-            .query('storage_task_totals')
-            .withIndex('by_issue', (q) => q.eq('issue_id', id))
-            .first()
-        : table === 'projects'
-          ? await ctx.db
-              .query('storage_project_totals')
-              .withIndex('by_project', (q) => q.eq('project_id', id))
-              .first()
-          : null
-    if (totals !== null) throw err
   }
   return await ctx.db.insert(table, doc)
 }

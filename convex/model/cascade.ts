@@ -638,7 +638,7 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
   // files; the organization's row goes with deleteOrgBookkeeping.
   for (const row of await ctx.db
     .query('storage_task_totals')
-    .withIndex('by_org', (q) => q.eq('org_id', org.id))
+    .withIndex('by_org_issue', (q) => q.eq('org_id', org.id))
     .collect())
     await ctx.db.delete(row._id)
   for (const row of await ctx.db

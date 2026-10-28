@@ -220,7 +220,7 @@ export async function removeAttachmentCore(
   await assertCanEdit(ctx, me, issue.project_id)
   if (attachment.issue_id !== issue.id) throw notFound('attachment not found')
   await ctx.db.delete(attachment._id)
-  await uncountFile(ctx, attachment)
+  await uncountFile(ctx, attachment, issue.num)
   await releaseFile(ctx, attachment.storage_id)
   await logActivity(ctx, {
     org_id: issue.org_id,

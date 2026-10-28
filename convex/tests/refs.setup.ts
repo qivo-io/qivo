@@ -274,7 +274,9 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'deleted_item_parents.parent_id',
   // Stored-byte totals name the project and task their files count in while
   // those are held in Deleted items, and a project gone for good while a
-  // subtask of a task item still holds files there (model/storageTotals.ts).
+  // subtask of a task item still holds files there. Each row also names its
+  // organization and number, so an id another task or project takes later
+  // never finds it (model/storageTotals.ts).
   'storage_project_totals.project_id',
   'storage_task_totals.issue_id',
   'storage_task_totals.project_id',

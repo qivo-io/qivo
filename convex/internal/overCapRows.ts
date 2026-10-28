@@ -312,8 +312,8 @@ async function walk(
       if (typeof name === 'string' && (table === 'teams' || table === 'profiles'))
         await copyNameKey(write, table, { ...doc, name }, copies)
       // the Storage by project breakdown shows the project's current name
-      if (table === 'projects' && 'org_id' in doc && typeof name === 'string')
-        await renameProjectTotals(write, { id: doc.id, org_id: doc.org_id, name })
+      if ('num' in doc && 'org_id' in doc && typeof name === 'string')
+        await renameProjectTotals(write, { id: doc.id, org_id: doc.org_id, num: doc.num, name })
     }
     return { rows, cursor: page.continueCursor, done: page.isDone }
   }

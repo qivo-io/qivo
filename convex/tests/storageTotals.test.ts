@@ -44,7 +44,9 @@ import {
   addToOrg,
   addToProject,
   orgTotalsRow,
+  projectTotalsRow,
   storageTotalsOf,
+  taskTotalsRow,
 } from '../model/storageTotals'
 import {
   as,
@@ -133,8 +135,8 @@ async function countStorage(
   throw new Error('the count did not finish')
 }
 
-/** The organization's totals rows as stored, the project and task rows in
- * id order. */
+/** The organization's totals rows as stored, the project rows in id order
+ * and the task rows in id and number order. */
 const rowsOf = (t: T, orgId: string) =>
   t.run(async (ctx) => ({
     org: await ctx.db
@@ -152,17 +154,15 @@ const rowsOf = (t: T, orgId: string) =>
     tasks: (
       await ctx.db
         .query('storage_task_totals')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .withIndex('by_org_issue', (q) => q.eq('org_id', orgId))
         .collect()
-    )
-      .map(({ issue_id, num, project_id, bytes, files }) => ({
-        issue_id,
-        num,
-        project_id,
-        bytes,
-        files,
-      }))
-      .sort((x, y) => x.issue_id.localeCompare(y.issue_id)),
+    ).map(({ issue_id, num, project_id, bytes, files }) => ({
+      issue_id,
+      num,
+      project_id,
+      bytes,
+      files,
+    })),
   }))
 
 /** The organization's attachment rows, live and stored in Deleted items. */
@@ -186,52 +186,78 @@ const sum = (files: readonly { size_bytes: number }[]): Amount => ({
   files: files.length,
 })
 
+type TaskTotal = { issue_id: string; num: number; project_id: string } & Amount
+
+/* The task totals the organization's files give, each file counted for the
+ * task it belongs to: a live attachment row for the live task, else the one
+ * Deleted items keeps, and a stored copy for the stored task, else for the
+ * live task a project item's move has not stored yet. A file whose task is
+ * gone counts nowhere. */
+const tasksFromFiles = (t: T, orgId: string) =>
+  t.run(async (ctx) => {
+    type Owner = Pick<Doc<'issues'>, 'num' | 'project_id'>
+    const live = new Map<string, Owner>()
+    const kept = new Map<string, Owner>()
+    for (const task of await ctx.db
+      .query('issues')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .collect())
+      live.set(task.id, task)
+    const stored = await ctx.db
+      .query('deleted_rows')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .collect()
+    for (const row of stored) if (row.row.table === 'issues') kept.set(row.row.doc.id, row.row.doc)
+    for (const task of await ctx.db
+      .query('deleted_tasks')
+      .withIndex('by_org_num', (q) => q.eq('org_id', orgId))
+      .collect())
+      kept.set(task.task_id, task)
+    const files: [Owner | undefined, { issue_id: string; size_bytes: number }][] = []
+    for (const file of await ctx.db
+      .query('issue_attachments')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .collect())
+      files.push([live.get(file.issue_id) ?? kept.get(file.issue_id), file])
+    for (const row of stored)
+      if (row.row.table === 'issue_attachments')
+        files.push([kept.get(row.row.doc.issue_id) ?? live.get(row.row.doc.issue_id), row.row.doc])
+    const tasks = new Map<string, TaskTotal>()
+    for (const [owner, file] of files) {
+      if (owner === undefined) continue
+      const key = `${file.issue_id}:${owner.num}`
+      const task = tasks.get(key) ?? {
+        issue_id: file.issue_id,
+        num: owner.num,
+        project_id: owner.project_id,
+        bytes: 0,
+        files: 0,
+      }
+      task.bytes += file.size_bytes
+      task.files += 1
+      tasks.set(key, task)
+    }
+    return [...tasks.values()]
+  })
+
+const byTask = (x: TaskTotal, y: TaskTotal) => x.issue_id.localeCompare(y.issue_id) || x.num - y.num
+
 /**
- * Expects organization `orgId` counted, with the rows its files give. Each
- * attachment row, live or stored, of a task in issues or deleted_tasks counts
- * in that task's project. Answers the organization's totals.
+ * Expects organization `orgId` counted, with the rows its files give
+ * (tasksFromFiles), each project row holding what the task rows that name
+ * it with its number hold. Answers the organization's totals.
  */
 async function expectTotals(t: T, orgId: string): Promise<Amount> {
-  const projectOf = new Map(
-    await t.run(async (ctx) => [
-      ...(
-        await ctx.db
-          .query('issues')
-          .withIndex('by_org', (q) => q.eq('org_id', orgId))
-          .collect()
-      ).map((task): [string, Pick<Doc<'issues'>, 'num' | 'project_id'>] => [task.id, task]),
-      ...(
-        await ctx.db
-          .query('deleted_tasks')
-          .withIndex('by_org_num', (q) => q.eq('org_id', orgId))
-          .collect()
-      ).map((task): [string, Pick<Doc<'issues'>, 'num' | 'project_id'>] => [task.task_id, task]),
-    ]),
-  )
-  const tasks = new Map<string, { issue_id: string; num: number; project_id: string } & Amount>()
-  for (const file of await filesOf(t, orgId)) {
-    const owner = projectOf.get(file.issue_id)
-    if (owner === undefined) continue
-    const { num, project_id } = owner
-    const task = tasks.get(file.issue_id) ?? {
-      issue_id: file.issue_id,
-      num,
-      project_id,
-      ...sum([]),
-    }
-    task.bytes += file.size_bytes
-    task.files += 1
-    tasks.set(file.issue_id, task)
-  }
+  const tasks = await tasksFromFiles(t, orgId)
   const projects = new Map<string, { project_id: string } & Amount>()
-  for (const task of tasks.values()) {
+  for (const task of tasks) {
     const project = projects.get(task.project_id) ?? { project_id: task.project_id, ...sum([]) }
     project.bytes += task.bytes
     project.files += task.files
     projects.set(task.project_id, project)
   }
   const org = { bytes: 0, files: 0 }
-  for (const task of tasks.values()) {
+  for (const task of tasks) {
     org.bytes += task.bytes
     org.files += task.files
   }
@@ -239,12 +265,39 @@ async function expectTotals(t: T, orgId: string): Promise<Amount> {
   expect(held.org, 'the organization is counted').not.toBeNull()
   expect(held.org?.counting).toBeUndefined()
   expect({ bytes: held.org?.bytes, files: held.org?.files }).toEqual(org)
-  expect(held.projects.map(({ name: _name, ...row }) => row)).toEqual(
-    [...projects.values()].sort((x, y) => x.project_id.localeCompare(y.project_id)),
-  )
-  expect(held.tasks).toEqual(
-    [...tasks.values()].sort((x, y) => x.issue_id.localeCompare(y.issue_id)),
-  )
+  const heldProjects = new Map<string, { project_id: string } & Amount>()
+  for (const row of held.projects) {
+    const project = heldProjects.get(row.project_id) ?? { project_id: row.project_id, ...sum([]) }
+    project.bytes += row.bytes
+    project.files += row.files
+    heldProjects.set(row.project_id, project)
+  }
+  const sorted = <R extends { project_id: string }>(rows: Iterable<R>) =>
+    [...rows].sort((x, y) => x.project_id.localeCompare(y.project_id))
+  expect(sorted(heldProjects.values())).toEqual(sorted(projects.values()))
+  expect([...held.tasks].sort(byTask)).toEqual([...tasks].sort(byTask))
+  // each project row holds what the task rows of its number hold
+  const consistent = await t.run(async (ctx) => {
+    const sums = new Map<string, Amount>()
+    for (const row of await ctx.db
+      .query('storage_task_totals')
+      .withIndex('by_org_issue', (q) => q.eq('org_id', orgId))
+      .collect()) {
+      const key = `${row.project_id}:${row.project_num ?? ''}`
+      const at = sums.get(key) ?? { bytes: 0, files: 0 }
+      sums.set(key, { bytes: at.bytes + row.bytes, files: at.files + row.files })
+    }
+    return (
+      await ctx.db
+        .query('storage_project_totals')
+        .withIndex('by_org_bytes', (q) => q.eq('org_id', orgId))
+        .collect()
+    ).every((row) => {
+      const at = sums.get(`${row.project_id}:${row.num ?? ''}`)
+      return at?.bytes === row.bytes && at.files === row.files
+    })
+  })
+  expect(consistent, 'project rows hold their task rows').toBe(true)
   return org
 }
 
@@ -954,68 +1007,88 @@ describe('an id that comes back', () => {
       name: 'Other sub',
     })
 
-  it("keeps a purged task's id taken until its last counted file leaves the totals, in its organization and in another", async () => {
+  it("takes a removed or purged file out of its own task's row only, never one another task of the id left", async () => {
     const { t, f } = await setup()
     await countStorage(t, f.otherOrg.id)
     const elsewhere = await otherSub(t, f)
-    const gone = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    for (let i = 1; i <= 3; i++) await attach(t, f, gone, i)
-    await deleteTask(t, f, gone.id)
-    await runSteps(t)
-    const item = await itemFor(t, gone.id)
-    TRASH_BUDGET.rows = 1
-    await as(t, f.admin).mutation(api.deletedItems.purge, { org_id: f.org.id, ids: [item.id] })
-    const create = (who: Doc<'profiles'>, projectId: string) =>
-      as(t, who).mutation(api.issues.create, {
-        org_id: who.org_id,
-        id: gone.id,
-        project_id: projectId,
-        title: 'The same id',
+    const reused = uuid()
+    const kept = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // rows a task of each id left: a purged task of this organization under
+    // the id a new task takes, and a task of the other organization under
+    // the id of a task of this one, with the same number
+    const left = { bytes: 3, files: 2 }
+    const theirs = { bytes: 50, files: 2 }
+    await t.run(async (ctx) => {
+      await ctx.db.insert('storage_task_totals', {
+        org_id: f.org.id,
+        issue_id: reused,
+        num: 900_000,
+        project_id: f.sub.id,
+        project_num: f.sub.num,
+        ...left,
       })
-    let heldByTotalsAlone = 0
-    for (let i = 0; i < 100; i++) {
-      const held = await t.run(async (ctx) => ({
-        stored:
-          (await ctx.db
-            .query('deleted_rows')
-            .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', gone.id))
-            .first()) !== null,
-        totals:
-          (await ctx.db
-            .query('storage_task_totals')
-            .withIndex('by_issue', (q) => q.eq('issue_id', gone.id))
-            .first()) !== null,
-      }))
-      if (!held.stored && !held.totals) break
-      if (!held.stored) heldByTotalsAlone++
-      // between purge steps neither organization may take the id
-      await expect(create(f.admin, f.sub.id)).rejects.toThrow('a task with this id already exists')
-      await expect(create(f.otherAdmin, elsewhere.id)).rejects.toThrow(
-        'a task with this id already exists',
-      )
-      expect((await rowsOf(t, f.org.id)).org).toMatchObject(sum(await filesOf(t, f.org.id)))
-      await trashStep(t, item.id)
-    }
-    // the purge frees the stored task before its stored files, and only the
-    // totals row kept the id then
-    expect(heldByTotalsAlone).toBeGreaterThan(0)
+      await addToProject(ctx, f.org.id, f.sub.id, f.sub.num, left)
+      const org = await orgTotalsRow(ctx, f.org.id)
+      if (org !== null) await addToOrg(ctx, org, left)
+      await ctx.db.insert('storage_task_totals', {
+        org_id: f.otherOrg.id,
+        issue_id: kept.id,
+        num: kept.num,
+        project_id: elsewhere.id,
+        project_num: elsewhere.num,
+        ...theirs,
+      })
+      await addToProject(ctx, f.otherOrg.id, elsewhere.id, elsewhere.num, theirs)
+      const other = await orgTotalsRow(ctx, f.otherOrg.id)
+      if (other !== null) await addToOrg(ctx, other, theirs)
+    })
+    const otherRows = await rowsOf(t, f.otherOrg.id)
+    const leftRow = { issue_id: reused, num: 900_000, project_id: f.sub.id, ...left }
+    // a new task takes the id: its files count in a row of its own, and
+    // removing one leaves the purged task's row as it was
+    await as(t, f.admin).mutation(api.issues.create, {
+      org_id: f.org.id,
+      id: reused,
+      project_id: f.sub2.id,
+      title: 'The same id',
+    })
+    const second = (await t.run((ctx) => byId(ctx, 'issues', reused))) as Doc<'issues'>
+    const removed = await attach(t, f, second, 40, { by: f.admin })
+    expect([...(await rowsOf(t, f.org.id)).tasks].sort(byTask)).toEqual(
+      [
+        leftRow,
+        { issue_id: reused, num: second.num, project_id: f.sub2.id, bytes: 40, files: 1 },
+      ].sort(byTask),
+    )
+    await as(t, f.admin).mutation(api.files.removeAttachment, {
+      org_id: f.org.id,
+      id: removed.id,
+    })
+    expect((await rowsOf(t, f.org.id)).tasks).toEqual([leftRow])
+    await attach(t, f, second, 50, { by: f.admin })
+    // a purge takes a task's stored files out of its own row, and leaves the
+    // other organization's row under its id alone
+    await attach(t, f, kept, 7)
+    await attach(t, f, kept, 8)
+    await deleteTask(t, f, kept.id)
     await runSteps(t)
-    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 0, files: 0 })
-
-    // once its last file is gone, a new task of the same organization takes
-    // the id and starts its own row
-    await create(f.admin, f.sub.id)
-    const reborn = (await t.run((ctx) => byId(ctx, 'issues', gone.id))) as Doc<'issues'>
-    expect(reborn.num).not.toBe(gone.num)
-    await attach(t, f, reborn, 40, { by: f.admin })
-    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 40, files: 1 })
-    expect((await rowsOf(t, f.org.id)).tasks).toEqual([
-      { issue_id: gone.id, num: reborn.num, project_id: f.sub.id, bytes: 40, files: 1 },
-    ])
-    expect(await expectTotals(t, f.otherOrg.id)).toEqual({ bytes: 0, files: 0 })
+    TRASH_BUDGET.rows = 1
+    await as(t, f.admin).mutation(api.deletedItems.purge, {
+      org_id: f.org.id,
+      ids: [(await itemFor(t, kept.id)).id],
+    })
+    await runSteps(t)
+    expect([...(await rowsOf(t, f.org.id)).tasks].sort(byTask)).toEqual(
+      [
+        leftRow,
+        { issue_id: reused, num: second.num, project_id: f.sub2.id, bytes: 50, files: 1 },
+      ].sort(byTask),
+    )
+    expect((await rowsOf(t, f.org.id)).org).toMatchObject({ bytes: 53, files: 3 })
+    expect(await rowsOf(t, f.otherOrg.id)).toEqual(otherRows)
   })
 
-  it("keeps a purged project's id taken while a stored subtask still counts there, in its organization and in another", async () => {
+  it("keeps a project of another organization that takes a purged project's id apart from the files a stored subtask keeps there, before and after a recount", async () => {
     const { t, f } = await setup()
     await countStorage(t, f.otherOrg.id)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -1027,37 +1100,22 @@ describe('an id that comes back', () => {
     const taskItem = await itemFor(t, root.id)
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
-    const projectItem = await itemFor(t, f.sub2.id)
     await as(t, f.admin).mutation(api.deletedItems.purge, {
       org_id: f.org.id,
-      ids: [projectItem.id],
+      ids: [(await itemFor(t, f.sub2.id)).id],
     })
     await runSteps(t)
-    expect(await t.run((ctx) => byId(ctx, 'projects', f.sub2.id))).toBeNull()
-    const create = (who: Doc<'profiles'>, parentId: string) =>
-      as(t, who).mutation(api.projects.create, {
-        org_id: who.org_id,
-        id: f.sub2.id,
-        type: 'project',
-        parent_id: parentId,
-        key: 'PCB2',
-        name: 'The same id',
-        sort_order: 9,
-      })
-    // the project is gone for good, but its row still holds the subtask's
-    // files, so neither organization may take its id
-    await expect(create(f.admin, f.meta.id)).rejects.toThrow(
-      'a project with this id already exists',
-    )
-    await expect(create(f.otherAdmin, f.otherProject.id)).rejects.toThrow(
-      'a project with this id already exists',
-    )
-    // the restore deletes the subtask with its files, which frees the id
-    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [taskItem.id] })
-    await runSteps(t)
-    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 10, files: 1 })
-    // a project of another organization that takes it starts its own row
-    await create(f.otherAdmin, f.otherProject.id)
+    // PCB is gone for good while the stored subtask's files still count
+    // there, and the other organization takes its id
+    await as(t, f.otherAdmin).mutation(api.projects.create, {
+      org_id: f.otherOrg.id,
+      id: f.sub2.id,
+      type: 'project',
+      parent_id: f.otherProject.id,
+      key: 'PCB2',
+      name: 'The same id',
+      sort_order: 9,
+    })
     const there = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.sub2.id })
     await attach(t, f, there, 77, { by: f.otherAdmin })
     await as(t, f.otherAdmin).mutation(api.projects.update, {
@@ -1065,55 +1123,126 @@ describe('an id that comes back', () => {
       id: f.sub2.id,
       patch: { name: 'Renamed there' },
     })
-    expect((await rowsOf(t, f.otherOrg.id)).projects).toEqual([
-      { project_id: f.sub2.id, name: 'Renamed there', bytes: 77, files: 1 },
-    ])
-    expect(await expectTotals(t, f.otherOrg.id)).toEqual({ bytes: 77, files: 1 })
+    const both = async () => {
+      expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 310, files: 2 })
+      expect((await rowsOf(t, f.org.id)).projects).toContainEqual(
+        expect.objectContaining({ project_id: f.sub2.id, bytes: 300, files: 1 }),
+      )
+      expect(await expectTotals(t, f.otherOrg.id)).toEqual({ bytes: 77, files: 1 })
+      expect((await rowsOf(t, f.otherOrg.id)).projects).toEqual([
+        { project_id: f.sub2.id, name: 'Renamed there', bytes: 77, files: 1 },
+      ])
+    }
+    await both()
+    expect((await rowsOf(t, f.org.id)).projects).toContainEqual({
+      project_id: f.sub2.id,
+      name: 'Board rev',
+      bytes: 300,
+      files: 1,
+    })
+    // a recount of each rebuilds its own rows only
+    await countStorage(t, f.org.id, true)
+    await both()
+    await countStorage(t, f.otherOrg.id, true)
+    await both()
+    // the restore deletes the subtask with its files from its own rows
+    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [taskItem.id] })
+    await runSteps(t)
     expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 10, files: 1 })
+    expect(await expectTotals(t, f.otherOrg.id)).toEqual({ bytes: 77, files: 1 })
   })
 
-  it('leaves alone a row its id holds for another organization or another task, and a recount takes it over', async () => {
-    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it("counts a project of the same organization that takes a purged project's id in a row of its own, apart from a stored subtask's files", async () => {
+    const { t, f } = await setup()
+    const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const kid = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, parent_id: root.id })
+    await attach(t, f, root, 10)
+    await attach(t, f, kid, 300)
+    await deleteTask(t, f, root.id, { subtask_ids: [kid.id] })
+    await runSteps(t)
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+    await as(t, f.admin).mutation(api.deletedItems.purge, {
+      org_id: f.org.id,
+      ids: [(await itemFor(t, f.sub2.id)).id],
+    })
+    await runSteps(t)
+    await as(t, f.admin).mutation(api.projects.create, {
+      org_id: f.org.id,
+      id: f.sub2.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      key: 'PCB2',
+      name: 'The same id',
+      sort_order: 9,
+    })
+    const reborn = (await t.run((ctx) => byId(ctx, 'projects', f.sub2.id))) as Doc<'projects'>
+    expect(reborn.num).not.toBe(f.sub2.num)
+    await attach(t, f, await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id }), 77, {
+      by: f.admin,
+    })
+    await as(t, f.admin).mutation(api.projects.update, {
+      org_id: f.org.id,
+      id: f.sub2.id,
+      patch: { name: 'Renamed' },
+    })
+    const rows = () =>
+      t.run(async (ctx) =>
+        (
+          await ctx.db
+            .query('storage_project_totals')
+            .withIndex('by_org_project', (q) =>
+              q.eq('org_id', f.org.id).eq('project_id', f.sub2.id),
+            )
+            .collect()
+        ).map(({ num, name, bytes, files }) => ({ num, name, bytes, files })),
+      )
+    expect(await rows()).toEqual([
+      { num: f.sub2.num, name: 'Board rev', bytes: 300, files: 1 },
+      { num: reborn.num, name: 'Renamed', bytes: 77, files: 1 },
+    ])
+    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 387, files: 3 })
+  })
+
+  it('leaves the rows another organization or another task number left under an id alone, and a recount deletes its own', async () => {
     const { t, f } = await setup()
     await countStorage(t, f.otherOrg.id)
+    const elsewhere = await otherSub(t, f)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const neighbour = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const renumbered = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    // rows only a release without the id rule could leave: the other
-    // organization's totals under this task's and this project's ids, and
-    // this organization's under another task number of one of its tasks
+    const theirTask = await plantIssue(t, { org_id: f.otherOrg.id, project_id: elsewhere.id })
+    await attach(t, f, theirTask, 8, { by: f.otherAdmin })
+    // rows a purged task of the same id left: one of the other
+    // organization, under its own project of this project's id, and one of
+    // this organization, under another task number
     await t.run(async (ctx) => {
-      const theirs = { bytes: 50, files: 2 }
+      const by = { bytes: 50, files: 2 }
       await ctx.db.insert('storage_task_totals', {
         org_id: f.otherOrg.id,
         issue_id: task.id,
-        num: 1,
+        num: task.num,
         project_id: f.sub.id,
-        ...theirs,
+        project_num: f.sub.num,
+        ...by,
       })
-      // their project row holds the files of another of their tasks too
-      const project = { bytes: 80, files: 3 }
-      await addToProject(ctx, f.otherOrg.id, f.sub.id, project, 'Theirs')
+      await addToProject(ctx, f.otherOrg.id, f.sub.id, f.sub.num, by, 'Theirs')
       const other = await orgTotalsRow(ctx, f.otherOrg.id)
-      if (other !== null) await addToOrg(ctx, other, project)
-      const ours = { bytes: 5, files: 1 }
+      if (other !== null) await addToOrg(ctx, other, by)
+      const stale = { bytes: 5, files: 1 }
       await ctx.db.insert('storage_task_totals', {
         org_id: f.org.id,
-        issue_id: renumbered.id,
-        num: renumbered.num + 1000,
-        project_id: f.sub2.id,
-        ...ours,
+        issue_id: task.id,
+        num: task.num + 1000,
+        project_id: f.sub.id,
+        project_num: f.sub.num,
+        ...stale,
       })
-      await addToProject(ctx, f.org.id, f.sub2.id, ours)
+      await addToProject(ctx, f.org.id, f.sub.id, f.sub.num, stale)
       const org = await orgTotalsRow(ctx, f.org.id)
-      if (org !== null) await addToOrg(ctx, org, ours)
+      if (org !== null) await addToOrg(ctx, org, stale)
     })
     const theirs = await rowsOf(t, f.otherOrg.id)
-    const renumberedRow = (await rowsOf(t, f.org.id)).tasks
-    // an attach, a move, a rename and a removal here leave their rows alone,
-    // and so does an attach to the task with the other number
+    // an attach, a move, a rename and a removal here change neither
     const file = await attach(t, f, task, 9)
-    await attach(t, f, neighbour, 4)
     await as(t, f.admin).mutation(api.issues.move, {
       org_id: f.org.id,
       id: task.id,
@@ -1125,25 +1254,23 @@ describe('an id that comes back', () => {
       patch: { name: 'Firmware 2' },
     })
     await as(t, f.user).mutation(api.files.removeAttachment, { org_id: f.org.id, id: file.id })
-    await attach(t, f, renumbered, 6)
+    await attach(t, f, task, 6)
     expect(await rowsOf(t, f.otherOrg.id)).toEqual(theirs)
-    expect((await rowsOf(t, f.org.id)).tasks).toEqual(
-      expect.arrayContaining(renumberedRow.filter((row) => row.issue_id === renumbered.id)),
-    )
-    expect(logged).toHaveBeenCalled()
-    // a recount takes their rows over. Their files leave the other
-    // organization's totals, and this one counts its own exactly
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(await countStorage(t, f.org.id, true)).toEqual({ bytes: 10, files: 2 })
-    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 10, files: 2 })
-    expect((await rowsOf(t, f.org.id)).projects).toEqual([
-      { project_id: f.sub.id, name: 'Firmware 2', bytes: 10, files: 2 },
-    ])
-    expect(await rowsOf(t, f.otherOrg.id)).toMatchObject({
-      org: { bytes: 0, files: 0 },
-      projects: [],
-      tasks: [],
+    expect((await rowsOf(t, f.org.id)).tasks).toContainEqual({
+      issue_id: task.id,
+      num: task.num + 1000,
+      project_id: f.sub.id,
+      bytes: 5,
+      files: 1,
     })
+    // a recount rebuilds this organization's rows from its files, without
+    // the stale one, and leaves the other organization's as they are
+    expect(await countStorage(t, f.org.id, true)).toEqual({ bytes: 6, files: 1 })
+    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 6, files: 1 })
+    expect(await rowsOf(t, f.otherOrg.id)).toEqual(theirs)
+    // the other organization's recount drops its stale row too
+    expect(await countStorage(t, f.otherOrg.id, true)).toEqual({ bytes: 8, files: 1 })
+    expect(await expectTotals(t, f.otherOrg.id)).toEqual({ bytes: 8, files: 1 })
   })
 })
 
@@ -1204,9 +1331,10 @@ describe('the backfill', () => {
         issue_id: tasks[4].id,
         num: tasks[4].num,
         project_id: f.sub2.id,
+        project_num: f.sub2.num,
         ...stray,
       })
-      await addToProject(ctx, f.org.id, f.sub2.id, stray)
+      await addToProject(ctx, f.org.id, f.sub2.id, f.sub2.num, stray)
       const org = await orgTotalsRow(ctx, f.org.id)
       if (org !== null) await addToOrg(ctx, org, stray)
     })
@@ -1255,15 +1383,9 @@ describe('the backfill', () => {
           },
         },
       })
-      const task = await ctx.db
-        .query('storage_task_totals')
-        .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-        .unique()
+      const task = await taskTotalsRow(ctx, f.org.id, issue.id, issue.num)
       if (task !== null) await ctx.db.patch(task._id, { bytes: 105 })
-      const project = await ctx.db
-        .query('storage_project_totals')
-        .withIndex('by_project', (q) => q.eq('project_id', f.sub2.id))
-        .unique()
+      const project = await projectTotalsRow(ctx, f.org.id, f.sub2.id, f.sub2.num)
       if (project !== null) await ctx.db.patch(project._id, { bytes: 25 })
       return id
     })
@@ -1554,25 +1676,25 @@ describe('the backfill', () => {
   it('answers an error with what it counted before and the cursor to go on from, and records it', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await plantFile(t, await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }), 5)
-    const theirs = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
-    await plantFile(t, theirs, 6)
-    // two rows under one task id, which no writer leaves, fail the count of
-    // the second organization
+    // pages hold one organization each, in creation order
+    const [first, second] = [f.org, f.otherOrg]
+    const project = (org: Doc<'organizations'>) => (org.id === f.org.id ? f.sub : f.otherProject)
+    await plantFile(t, await plantIssue(t, { org_id: first.id, project_id: project(first).id }), 5)
+    await plantFile(
+      t,
+      await plantIssue(t, { org_id: second.id, project_id: project(second).id }),
+      6,
+    )
+    // two totals rows of the second organization, which no writer leaves,
+    // fail the call that reads it
     const planted = await t.run(async (ctx) => {
-      const row = {
-        org_id: uuid(),
-        issue_id: theirs.id,
-        num: 1,
-        project_id: uuid(),
-        bytes: 1,
-        files: 1,
-      }
+      const row = { org_id: second.id, bytes: 0, files: 0, revision: 0 }
       return [
-        await ctx.db.insert('storage_task_totals', row),
-        await ctx.db.insert('storage_task_totals', row),
+        await ctx.db.insert('storage_org_totals', row),
+        await ctx.db.insert('storage_org_totals', row),
       ]
     })
+    RUN.orgs = 1
     const failed = await backfill(t, { dry_run: false })
     expect(failed).toMatchObject({ done: false, counted: 1, bytes: 5, files: 1 })
     expect('error' in failed && failed.error).toBeTruthy()
@@ -1584,8 +1706,8 @@ describe('the backfill', () => {
     })
     const rest = await backfill(t, { dry_run: false, cursor: failed.cursor ?? undefined })
     expect(rest).toMatchObject({ done: true, counted: 1, bytes: 6, files: 1 })
-    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 5, files: 1 })
-    expect(await expectTotals(t, f.otherOrg.id)).toEqual({ bytes: 6, files: 1 })
+    expect(await expectTotals(t, first.id)).toEqual({ bytes: 5, files: 1 })
+    expect(await expectTotals(t, second.id)).toEqual({ bytes: 6, files: 1 })
   })
 
   it('lists in a dry run and deletes in a run the totals of an organization that is gone', async () => {
@@ -1635,12 +1757,23 @@ describe('the backfill', () => {
     await countStorage(t, f.otherOrg.id)
     const one = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const two = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    /* Whether `cursor` is inside the dry count of this organization, past
+     * its first task. */
+    const countedOne = (cursor: string | null) => {
+      const at = cursor === null ? null : JSON.parse(cursor)
+      return (
+        at?.dry?.before?.org_id === f.org.id && at.dry.stage === 'tasks' && at.dry.after >= one.num
+      )
+    }
     const file = await attach(t, f, one, 10)
     Object.assign(RUN, { orgs: 1, ms: 0 })
     COUNT_PAGE.tasks = 1
-    // the first call counts the first task
-    const first = await backfill(t, { dry_run: true })
+    // calls until the one that counts the first task of this organization
+    let first = await backfill(t, { dry_run: true })
+    for (let i = 0; i < 20 && !countedOne(first.cursor); i++)
+      first = await backfill(t, { dry_run: true, cursor: first.cursor ?? undefined })
     expect(first.done).toBe(false)
+    expect(countedOne(first.cursor)).toBe(true)
     const totals = (await rowsOf(t, f.org.id)).org
     await as(t, f.user).mutation(api.files.removeAttachment, { org_id: f.org.id, id: file.id })
     await attach(t, f, two, 10)

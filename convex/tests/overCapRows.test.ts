@@ -416,10 +416,14 @@ describe('internal/overCapRows', () => {
         created_ts: 0,
         row: { table: 'projects', doc: { ...projectDoc, id: storedId, name: POINT_NAME } },
       })
-      for (const id of [live.id, storedId])
+      for (const [id, num] of [
+        [live.id, live.num],
+        [storedId, project.num],
+      ] as const)
         await ctx.db.insert('storage_project_totals', {
           org_id: f.org.id,
           project_id: id,
+          num,
           name: POINT_NAME,
           bytes: 3,
           files: 1,

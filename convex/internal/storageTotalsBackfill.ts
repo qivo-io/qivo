@@ -20,19 +20,17 @@
  * A writer moves the totals only for a task numbered at or below `through`
  * or one that has its row (model/storageTotals.ts), so each file counts once
  * however rows are attached, moved, restored or deleted while the count
- * runs. The step that finds no task past `through` ends the count. A task
- * or project row under the id of one of the organization's tasks or
- * projects that names another organization belongs to one that had the id
- * before and is gone, which only a release without these totals can leave.
- * The step takes it out of that organization's totals before it counts.
+ * runs. The step that finds no task past `through` ends the count. Rows
+ * are found by organization, id and number (model/storageTotals.ts), so a
+ * count writes only its own organization's rows of each task's and
+ * project's number. A row another task or project of the same id left,
+ * here or in another organization, is a row of its own that the count
+ * never reads. A recount deletes the stale rows of its organization before
+ * it counts, and the stray check those of an organization that is gone.
  *
  * A file counts in its task's project. An attachment row whose task is in
  * neither issues nor deleted_tasks counts nowhere, as in the billing sample
- * today. The dry run lists such rows, and nothing here deletes them. A
- * purge of Deleted items leaves such rows for a few steps, because it
- * deletes a task's deleted_tasks row before its stored attachments. A count
- * that passes the task's number then leaves those files out, and the purge
- * deletes them without changing the totals.
+ * today. The dry run lists such rows, and nothing here deletes them.
  *
  * Read the dry run first. It writes nothing and reports, for every
  * organization, the totals it would count, and for one counted already
@@ -90,11 +88,10 @@ import { audit as writeAudit } from '../model/admin'
 import { newUuid } from '../model/orgs'
 import {
   type Amount,
-  addToOrg,
   addToProject,
   orgTotalsRow,
-  projectNameOf,
-  projectTotalsRow,
+  type ProjectKey,
+  projectOf,
   taskTotalsRow,
 } from '../model/storageTotals'
 
@@ -122,9 +119,9 @@ export const COUNT_PAGE = {
   listed: 100,
 }
 
-/** Organizations, or totals rows of the stray check, one page reads, and
- * how long one call of run goes on before it answers where to go on from.
- * Tests lower them. */
+/** Organizations, or totals rows of the stray check, one page reads, in
+ * the order of their organization's id, and how long one call of run goes
+ * on before it answers where to go on from. Tests lower them. */
 export const RUN = { orgs: 100, ms: 5 * 60_000 }
 
 /** Where a count starts, below every task number. */
@@ -224,13 +221,13 @@ async function filesOf(
   return out
 }
 
-/** One task as a count found it, with the row its id holds. */
+/** One task as a count found it, with its own row, if it has one. */
 type Counted = { task: Task; files: Amount; row: Doc<'storage_task_totals'> | null }
 
 /* Counts the files of the tasks of `page` in number order, ending early
  * between two numbers once the rows read pass COUNT_PAGE.fileBytes or the
- * transaction passes COUNT_PAGE.room of a limit. Answers each task with
- * the row its id holds and the number counted through. */
+ * transaction passes COUNT_PAGE.room of a limit. Answers each task with its
+ * own row and the number counted through. */
 async function countTasks(
   ctx: QueryCtx,
   orgId: string,
@@ -240,7 +237,7 @@ async function countTasks(
   let read = 0
   for (const [i, task] of page.tasks.entries()) {
     const files = await filesOf(ctx, orgId, task.id)
-    const row = await taskTotalsRow(ctx, task.id)
+    const row = await taskTotalsRow(ctx, orgId, task.id, task.num)
     read += files.read + (row === null ? 0 : getDocumentSize(row))
     counted.push({ task, files, row })
     const next = page.tasks[i + 1]
@@ -254,12 +251,41 @@ async function countTasks(
 const same = (x: Amount, y: Amount): boolean => x.bytes === y.bytes && x.files === y.files
 const negated = (x: Amount): Amount => ({ bytes: -x.bytes, files: -x.files })
 
-/* Adds `by` to `projectId`'s entry of `sums`. */
-function addTo(sums: Map<string, Amount>, projectId: string, by: Amount): void {
-  const sum = sums.get(projectId) ?? { bytes: 0, files: 0 }
+/** A project's totals as a count adds them up, keyed by projectKey. */
+type ProjectSum = Amount & { project_id: string; num?: number }
+
+/* The key of project `projectId` numbered `num` in a map of ProjectSum. */
+const projectKey = (projectId: string, num: number | undefined): string =>
+  `${projectId}:${num ?? ''}`
+
+/* Adds `by` to the entry of project `projectId` numbered `num` in `sums`. */
+function addTo(
+  sums: Map<string, ProjectSum>,
+  projectId: string,
+  num: number | undefined,
+  by: Amount,
+): void {
+  const key = projectKey(projectId, num)
+  const sum = sums.get(key) ?? { project_id: projectId, num, bytes: 0, files: 0 }
   sum.bytes += by.bytes
   sum.files += by.files
-  sums.set(projectId, sum)
+  sums.set(key, sum)
+}
+
+/* Project `projectId` of organization `orgId` as projectOf finds it, read
+ * once per call through `known`. */
+async function projectIn(
+  ctx: QueryCtx,
+  known: Map<string, ProjectKey>,
+  orgId: string,
+  projectId: string,
+): Promise<ProjectKey> {
+  let project = known.get(projectId)
+  if (project === undefined) {
+    project = await projectOf(ctx, orgId, projectId)
+    known.set(projectId, project)
+  }
+  return project
 }
 
 /* Deletes up to COUNT_PAGE.drain of the organization's task and project
@@ -270,7 +296,7 @@ async function clearRows(ctx: MutationCtx, orgId: string): Promise<boolean> {
     () =>
       ctx.db
         .query('storage_task_totals')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .withIndex('by_org_issue', (q) => q.eq('org_id', orgId))
         .take(left + 1),
     () =>
       ctx.db
@@ -285,43 +311,6 @@ async function clearRows(ctx: MutationCtx, orgId: string): Promise<boolean> {
     left -= rows.length
   }
   return true
-}
-
-/* Takes task row `row` of another organization, whose task had the id
- * before and is gone, out of that organization's project and organization
- * totals, and deletes it. */
-async function dropAnothers(ctx: MutationCtx, row: Doc<'storage_task_totals'>): Promise<void> {
-  console.warn('A storage count took over a task row of another organization', {
-    issue_id: row.issue_id,
-    org_id: row.org_id,
-  })
-  await ctx.db.delete(row._id)
-  await addToProject(ctx, row.org_id, row.project_id, negated(row))
-  const other = await orgTotalsRow(ctx, row.org_id)
-  if (other !== null) await addToOrg(ctx, other, negated(row))
-}
-
-/* Takes over project `projectId`'s totals row when it names another
- * organization while the project, live or stored, is organization
- * `orgId`'s. Such a row is of a project that had the id before and is
- * gone, which only a release without these totals can leave. Its files
- * leave that organization's totals with it. */
-async function claimProject(ctx: MutationCtx, orgId: string, projectId: string): Promise<void> {
-  const row = await projectTotalsRow(ctx, projectId)
-  if (row === null || row.org_id === orgId) return
-  const live = await byId(ctx, 'projects', projectId)
-  const stored = await ctx.db
-    .query('deleted_rows')
-    .withIndex('by_row', (q) => q.eq('table', 'projects').eq('row_id', projectId))
-    .first()
-  if ((live ?? stored)?.org_id !== orgId) return
-  console.warn('A storage count took over a project row of another organization', {
-    project_id: projectId,
-    org_id: row.org_id,
-  })
-  await ctx.db.delete(row._id)
-  const other = await orgTotalsRow(ctx, row.org_id)
-  if (other !== null) await addToOrg(ctx, other, negated(row))
 }
 
 /** One step of the organization's count by run `run`, in its own
@@ -363,27 +352,24 @@ export const step = internalMutation({
       return { bytes: org.bytes, files: org.files }
     }
     const { counted, through } = await countTasks(ctx, org_id, page)
-    const projects = new Map<string, Amount>()
+    const known = new Map<string, ProjectKey>()
+    const projects = new Map<string, ProjectSum>()
     const total = { bytes: org.bytes, files: org.files }
-    for (const { task, files, row: held } of counted) {
-      let row = held
-      if (row !== null && row.org_id !== org_id) {
-        await dropAnothers(ctx, row)
-        row = null
-      }
+    for (const { task, files, row } of counted) {
       // a task's row exists only once it counts, so this is its first
       // count; a row held anyway is replaced and its files moved on
       if (row !== null) {
-        addTo(projects, row.project_id, negated(row))
+        addTo(projects, row.project_id, row.project_num, negated(row))
         total.bytes -= row.bytes
         total.files -= row.files
       }
-      addTo(projects, task.project_id, files)
+      const project = await projectIn(ctx, known, org_id, task.project_id)
+      addTo(projects, task.project_id, project.num, files)
       total.bytes += files.bytes
       total.files += files.files
       const fields = {
-        num: task.num,
         project_id: task.project_id,
+        project_num: project.num,
         bytes: files.bytes,
         files: files.files,
       }
@@ -392,13 +378,21 @@ export const step = internalMutation({
         await uncountedWriter(ctx.db).insert('storage_task_totals', {
           org_id,
           issue_id: task.id,
+          num: task.num,
           ...fields,
         })
       else if (row !== null) await ctx.db.delete(row._id)
     }
-    for (const [projectId, by] of projects) {
-      await claimProject(ctx, org_id, projectId)
-      await addToProject(ctx, org_id, projectId, by)
+    for (const { project_id, num, ...by } of projects.values()) {
+      const project = await projectIn(ctx, known, org_id, project_id)
+      await addToProject(
+        ctx,
+        org_id,
+        project_id,
+        num,
+        by,
+        project.num === num ? project.name : undefined,
+      )
     }
     await ctx.db.patch(org._id, { ...total, revision: org.revision + 1, counting: { through } })
     return null
@@ -459,65 +453,73 @@ export const state = internalQuery({
   },
 })
 
-/** A task whose id holds no row of the task that gives what its files
- * give. */
+/** A task whose own row does not give what its files give. */
 type TaskDiff = {
   task_id: string
-  counted: Amount & { project_id: string }
-  stored: (Amount & { org_id: string; num: number; project_id: string }) | null
+  num: number
+  counted: Amount & { project_id: string; project_num?: number }
+  stored: (Amount & { project_id: string; project_num?: number }) | null
 }
 
 /** One page of a dry count (check). */
 type CheckPage = Amount & {
   through: number
-  projects: (Amount & { project_id: string })[]
+  projects: ProjectSum[]
   differing: number
   differ: TaskDiff[]
 }
 
 /** Counts, without writing, the files of one page of the organization's
- * tasks numbered past `after`, per project, and the tasks whose id holds no
- * row of the task that gives them, as a step would count them. Null once
- * no task is numbered past `after`. */
+ * tasks numbered past `after`, per project and project number, and the
+ * tasks whose own row does not give them, as a step would count them. Null
+ * once no task is numbered past `after`. */
 export const check = internalQuery({
   args: { org_id: v.string(), after: v.number() },
   handler: async (ctx, { org_id, after }): Promise<CheckPage | null> => {
     const page = await taskPage(ctx, org_id, after)
     if (page === null) return null
     const { counted, through } = await countTasks(ctx, org_id, page)
-    const projects = new Map<string, Amount>()
+    const known = new Map<string, ProjectKey>()
+    const projects = new Map<string, ProjectSum>()
     const out: CheckPage = { bytes: 0, files: 0, through, projects: [], differing: 0, differ: [] }
     for (const { task, files, row } of counted) {
-      addTo(projects, task.project_id, files)
+      const project = await projectIn(ctx, known, org_id, task.project_id)
+      addTo(projects, task.project_id, project.num, files)
       out.bytes += files.bytes
       out.files += files.files
-      const held = row ?? { org_id, num: task.num, project_id: task.project_id, bytes: 0, files: 0 }
-      const its = held.org_id === org_id && held.num === task.num
-      if (its && same(held, files) && held.project_id === task.project_id) continue
+      const where = { project_id: task.project_id, project_num: project.num }
+      const held = row ?? { ...where, bytes: 0, files: 0 }
+      if (
+        same(held, files) &&
+        held.project_id === where.project_id &&
+        held.project_num === where.project_num
+      )
+        continue
       if (out.differing++ < COUNT_PAGE.listed)
         out.differ.push({
           task_id: task.id,
-          counted: { project_id: task.project_id, bytes: files.bytes, files: files.files },
+          num: task.num,
+          counted: { ...where, bytes: files.bytes, files: files.files },
           stored:
             row === null
               ? null
               : {
-                  org_id: row.org_id,
-                  num: row.num,
                   project_id: row.project_id,
+                  project_num: row.project_num,
                   bytes: row.bytes,
                   files: row.files,
                 },
         })
     }
-    out.projects = [...projects].map(([project_id, sum]) => ({ project_id, ...sum }))
+    out.projects = [...projects.values()]
     return out
   },
 })
 
 /** A project totals row as a dry run compares it, with whether it still
- * has the project's name, when a copy of the project is left to tell. */
-type ProjectRow = Amount & { project_id: string; named: boolean }
+ * has the name of the project of its number, when a copy of that project is
+ * left to tell. */
+type ProjectRow = ProjectSum & { named: boolean }
 
 type ProjectRows = { rows: ProjectRow[]; cursor: string; done: boolean }
 
@@ -529,14 +531,16 @@ export const projectRows = internalQuery({
       .query('storage_project_totals')
       .withIndex('by_org_bytes', (q) => q.eq('org_id', org_id))
       .paginate({ cursor, numItems: COUNT_PAGE.projects })
+    const known = new Map<string, ProjectKey>()
     const rows: ProjectRow[] = []
     for (const row of page.page) {
-      const name = await projectNameOf(ctx, row.project_id)
+      const project = await projectIn(ctx, known, org_id, row.project_id)
       rows.push({
         project_id: row.project_id,
+        num: row.num,
         bytes: row.bytes,
         files: row.files,
-        named: name === undefined || name === row.name,
+        named: project.num !== row.num || project.name === row.name,
       })
     }
     return { rows, cursor: page.continueCursor, done: page.isDone }
@@ -642,9 +646,10 @@ export const totalsPage = internalQuery({
 
 /** One step of deleting the totals of organization `org_id`, which no
  * longer exists. Each step deletes up to COUNT_PAGE.drain of its task and
- * project rows, and the last its own row. Answers true once all are gone. Once an organization of
- * that id exists again it leaves them, also answering true, for that
- * organization's count to delete (model/storageTotals.ts startOrgTotals). */
+ * project rows, and the last its own row. Answers true once all are gone.
+ * Once an organization of that id exists again it leaves them, also
+ * answering true, for that organization's count to delete
+ * (model/storageTotals.ts startOrgTotals). */
 export const clearStray = internalMutation({
   args: { org_id: v.string() },
   handler: async (ctx, { org_id }): Promise<boolean> => {
@@ -716,7 +721,13 @@ const auditRef = makeFunctionReference<
 
 /** A project whose totals row does not give what its tasks' files give, or
  * no longer has the project's name. */
-type ProjectDiff = { project_id: string; counted: Amount; stored: Amount | null; renamed?: true }
+type ProjectDiff = {
+  project_id: string
+  num?: number
+  counted: Amount
+  stored: Amount | null
+  renamed?: true
+}
 
 /** How many times a dry run counts an organization whose totals a write
  * changes while it counts. */
@@ -737,7 +748,7 @@ type DryCount = {
   stored: boolean
   size: number
   counted: Amount
-  sums: [project_id: string, bytes: number, files: number][]
+  sums: ProjectSum[]
   projects: ProjectDiff[]
   projects_differing: number
   tasks: TaskDiff[]
@@ -821,9 +832,9 @@ async function dryStep(
       d.page = null
       return false
     }
-    const sums = new Map(d.sums.map(([id, bytes, files]) => [id, { bytes, files }]))
-    for (const p of got.projects) addTo(sums, p.project_id, p)
-    d.sums = [...sums].map(([id, sum]) => [id, sum.bytes, sum.files])
+    const sums = new Map(d.sums.map((sum) => [projectKey(sum.project_id, sum.num), sum]))
+    for (const p of got.projects) addTo(sums, p.project_id, p.num, p)
+    d.sums = [...sums.values()]
     d.counted.bytes += got.bytes
     d.counted.files += got.files
     d.tasks_differing += got.differing
@@ -833,28 +844,35 @@ async function dryStep(
   }
   if (d.stage === 'projects') {
     const page = await ctx.runQuery(projectRowsRef, { org_id: orgId, cursor: d.page })
-    const sums = new Map(d.sums.map(([id, bytes, files]) => [id, { bytes, files }]))
+    const sums = new Map(d.sums.map((sum) => [projectKey(sum.project_id, sum.num), sum]))
     const differ = (diff: ProjectDiff) => {
       if (d.projects_differing++ < COUNT_PAGE.listed) d.projects.push(diff)
     }
     for (const row of page.rows) {
-      const counted = sums.get(row.project_id) ?? { bytes: 0, files: 0 }
-      sums.delete(row.project_id)
+      const key = projectKey(row.project_id, row.num)
+      const counted = sums.get(key) ?? {
+        project_id: row.project_id,
+        num: row.num,
+        bytes: 0,
+        files: 0,
+      }
+      sums.delete(key)
       if (same(row, counted) && row.named) continue
       differ({
         project_id: row.project_id,
-        counted,
+        num: row.num,
+        counted: { bytes: counted.bytes, files: counted.files },
         stored: { bytes: row.bytes, files: row.files },
         ...(row.named ? {} : { renamed: true as const }),
       })
     }
-    d.sums = [...sums].map(([id, sum]) => [id, sum.bytes, sum.files])
+    d.sums = [...sums.values()]
     if (!page.done) {
       d.page = page.cursor
       return false
     }
-    for (const [project_id, bytes, files] of d.sums)
-      if (files > 0) differ({ project_id, counted: { bytes, files }, stored: null })
+    for (const { project_id, num, bytes, files } of d.sums)
+      if (files > 0) differ({ project_id, num, counted: { bytes, files }, stored: null })
     d.sums = []
     const now = await ctx.runQuery(stateRef, { org_id: orgId })
     // stateOf builds both, so their keys come in the same order, and the

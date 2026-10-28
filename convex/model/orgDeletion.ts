@@ -400,7 +400,7 @@ const liveTasks = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
               .withIndex('by_issue', (q) => q.eq('issue_id', issue.id)),
             {
               after: async (row) => {
-                await uncountFile(ctx, row)
+                await uncountFile(ctx, row, issue.num)
                 await releaseFile(ctx, row.storage_id)
               },
             },
@@ -520,7 +520,7 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
       drain(
         ctx,
         budget,
-        ctx.db.query('storage_task_totals').withIndex('by_org', (q) => q.eq('org_id', orgId)),
+        ctx.db.query('storage_task_totals').withIndex('by_org_issue', (q) => q.eq('org_id', orgId)),
       ),
     () =>
       drain(

@@ -650,7 +650,7 @@ export async function updateProjectCore(
   const name = db.name ?? project.name
   const nameChanged = db.name !== undefined && db.name !== project.name
   // the Storage by project breakdown shows the project's current name
-  if (nameChanged) await renameProjectTotals(ctx, { id, org_id: project.org_id, name })
+  if (nameChanged) await renameProjectTotals(ctx, { ...project, name })
   const event = {
     org_id: me.org_id,
     actor_id: me.id,

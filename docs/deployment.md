@@ -641,9 +641,10 @@ organization, project and task (`storage_org_totals`,
 `storage_project_totals`, `storage_task_totals`), files in Deleted items
 included. The transaction that attaches a file counts it, the one that
 deletes its last row for good takes it out, and a move between projects
-shifts it. A task's or project's id stays taken while its totals row
-exists, also after a purge deleted its stored copy, so no new task or
-project, in any organization, takes over another's totals. Nothing reads
+shifts it. Each project and task row names its organization and its
+project's or task's number, which the organization never gives another, so
+a task or project that takes the id of a purged one, in any organization,
+counts in a row of its own and never changes another's. Nothing reads
 the totals yet. Billing samples and the Billing page still scan the
 attachment rows. A new organization starts counted at zero. An
 organization created before the release that added them has no totals
@@ -664,14 +665,13 @@ over any count another run began. Earlier releases do not keep the totals.
 Convex keeps the rows of a table the schema no longer lists, as it did for
 `comment_counts`, so a rollback past that release deploys, but the
 attaches, moves, renames and deletions it serves leave the totals out of
-step, an organization it deletes leaves its totals behind, and a task or
-project it creates can take an id whose totals are left. Every writer
-leaves alone a row that is not its task's or project's. After rolling
-forward, run the backfill with `"recount": true`, which also takes such
-rows over and deletes the totals of deleted organizations. An organization
-created again under the id of one deleted while an earlier release served,
-such as a fixture with a fixed id, starts not counted while rows of the
-deleted one are left, until the backfill counts it.
+step, and an organization it deletes leaves its totals behind. After
+rolling forward, run the backfill with `"recount": true`, which rebuilds
+each organization's rows from its own files and deletes the totals of
+deleted organizations. An organization created again under the id of one
+deleted while an earlier release served, such as a fixture with a fixed id,
+starts not counted while rows of the deleted one are left, until the
+backfill counts it.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to

@@ -24,12 +24,15 @@
  * row therefore exists only for a counted task, and a removal or move
  * changes the totals exactly when the file's task has one.
  *
- * Project and task rows are found by id, and an id stays taken while its
- * row exists (lib/db.ts insertUnique). Each writer still leaves alone a row
- * that is not the one of the task or project it writes for: a row of
- * another organization, or a task row with another task number or project,
- * which only a release without these rules, a fixture or a bug can leave.
- * It logs the row, and the backfill's dry run lists the difference.
+ * A project or task row is found by its organization, its id and its
+ * number, which the organization never gives another project or task. A
+ * task or project that takes the id of a purged one, in the same
+ * organization or another, therefore gets a row of its own, and no writer
+ * reads or changes the row of another object. A writer always knows the
+ * number of the task it writes for. A removal whose caller does not hold
+ * the task reads it from the task, live or as Deleted items keeps it
+ * (taskNumOf), and every path that deletes a task for good takes its stored
+ * files out first, while its number can still be read.
  *
  * Every total is a row of its own, read by none of the queries the app
  * keeps open, so the writes rerun none of them. Attaches, moves and purges
@@ -55,6 +58,10 @@ export type CountedFile = Pick<Doc<'issue_attachments'>, 'org_id' | 'issue_id' |
  * move takes to another project, before the move. */
 type CountedTask = Pick<Doc<'issues'>, 'id' | 'org_id' | 'num' | 'project_id'>
 
+/** A project as a totals row names it: its number and name, both absent
+ * when no copy of the project is left. */
+export type ProjectKey = { num?: number; name?: string }
+
 /** The organization's totals row, or null while it is not counted. */
 export const orgTotalsRow = (ctx: QueryCtx, orgId: string) =>
   ctx.db
@@ -62,18 +69,27 @@ export const orgTotalsRow = (ctx: QueryCtx, orgId: string) =>
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .unique()
 
-/** The totals row keyed by task id `issueId`, or null when none is. */
-export const taskTotalsRow = (ctx: QueryCtx, issueId: string) =>
+/** The totals row of task `issueId` numbered `num` of organization
+ * `orgId`, or null when it has none. */
+export const taskTotalsRow = (ctx: QueryCtx, orgId: string, issueId: string, num: number) =>
   ctx.db
     .query('storage_task_totals')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+    .withIndex('by_org_issue', (q) => q.eq('org_id', orgId).eq('issue_id', issueId).eq('num', num))
     .unique()
 
-/** The totals row keyed by project id `projectId`, or null when none is. */
-export const projectTotalsRow = (ctx: QueryCtx, projectId: string) =>
+/** The totals row of project `projectId` numbered `num` of organization
+ * `orgId`, or null when it has none. */
+export const projectTotalsRow = (
+  ctx: QueryCtx,
+  orgId: string,
+  projectId: string,
+  num: number | undefined,
+) =>
   ctx.db
     .query('storage_project_totals')
-    .withIndex('by_project', (q) => q.eq('project_id', projectId))
+    .withIndex('by_org_project', (q) =>
+      q.eq('org_id', orgId).eq('project_id', projectId).eq('num', num),
+    )
     .unique()
 
 /**
@@ -87,16 +103,57 @@ export async function storageTotalsOf(ctx: QueryCtx, orgId: string): Promise<Amo
   return row === null || row.counting !== undefined ? null : { bytes: row.bytes, files: row.files }
 }
 
-/** The name a project totals row copies for `projectId`: the live
- * project's, else the one Deleted items stores, else none. */
-export async function projectNameOf(ctx: QueryCtx, projectId: string): Promise<string | undefined> {
+/** Project `projectId` of organization `orgId` as a totals row names it,
+ * from the live project, else the copy Deleted items stores, else neither. */
+export async function projectOf(
+  ctx: QueryCtx,
+  orgId: string,
+  projectId: string,
+): Promise<ProjectKey> {
   const live = await byId(ctx, 'projects', projectId)
-  if (live !== null) return live.name
+  if (live?.org_id === orgId) return { num: live.num, name: live.name }
   const stored = await ctx.db
     .query('deleted_rows')
     .withIndex('by_row', (q) => q.eq('table', 'projects').eq('row_id', projectId))
     .first()
-  return stored?.row.table === 'projects' ? stored.row.doc.name : undefined
+  if (stored?.org_id === orgId && stored.row.table === 'projects')
+    return { num: stored.row.doc.num, name: stored.row.doc.name }
+  return {}
+}
+
+/**
+ * The number of the task of organization `orgId` that a file of task id
+ * `issueId` belongs to, for a removal whose caller does not hold the task,
+ * or null when no such task is left, and the file counts nowhere. A live
+ * attachment row belongs to the live task, else to the one Deleted items
+ * stores while a move or restore carries it. A stored copy belongs only to
+ * the stored task, from deleted_tasks or its stored row, never to a live
+ * task that may have taken the id since; the paths that delete a live task
+ * for good take its stored copies out first, with its number.
+ */
+export async function taskNumOf(
+  ctx: QueryCtx,
+  orgId: string,
+  issueId: string,
+  stored: boolean,
+): Promise<number | null> {
+  const live = async () => {
+    const task = await byId(ctx, 'issues', issueId)
+    return task?.org_id === orgId ? task.num : null
+  }
+  const kept = async () => {
+    const light = await ctx.db
+      .query('deleted_tasks')
+      .withIndex('by_task', (q) => q.eq('task_id', issueId))
+      .first()
+    if (light?.org_id === orgId) return light.num
+    const copy = await ctx.db
+      .query('deleted_rows')
+      .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', issueId))
+      .first()
+    return copy?.org_id === orgId && copy.row.table === 'issues' ? copy.row.doc.num : null
+  }
+  return stored ? await kept() : ((await live()) ?? (await kept()))
 }
 
 /* Logs a total that would go below its files, which only a writer that
@@ -107,63 +164,35 @@ function checkLeft(table: string, id: string, next: Amount): void {
     console.error('Storage totals went out of step', { table, id, ...next })
 }
 
-/* Whether `row`, found by the id of a task or project of organization
- * `orgId`, is another's, which a writer must leave alone. Logs it. */
-function another(
-  table: 'storage_task_totals' | 'storage_project_totals',
-  row: { org_id: string },
-  orgId: string,
-  id: string,
-): boolean {
-  if (row.org_id === orgId) return false
-  console.error('Storage totals left alone a row of another organization', {
-    table,
-    id,
-    org_id: orgId,
-  })
-  return true
-}
-
-/* Whether task row `row` is not `task`'s: of another organization, another
- * task number or, when `project` is set, another project. Logs it. */
-function notTasks(row: Doc<'storage_task_totals'>, task: CountedTask, project: boolean): boolean {
-  if (another('storage_task_totals', row, task.org_id, task.id)) return true
-  if (row.num === task.num && (!project || row.project_id === task.project_id)) return false
-  console.error("Storage totals left alone a task row that is not the task's", {
-    id: task.id,
-    num: task.num,
-    row_num: row.num,
-  })
-  return true
-}
-
 /**
- * Adds `by` to project `projectId`'s totals in organization `orgId`. A
- * project without a row gets one, named `name` or else as projectNameOf
- * finds it, and a row left with no file is deleted. A row of another
- * organization is left alone.
+ * Adds `by` to the totals of project `projectId` numbered `num` in
+ * organization `orgId`. A project without a row gets one, named `name` or
+ * else as projectOf finds it while that is still the project numbered
+ * `num`, and a row left with no file is deleted.
  */
 export async function addToProject(
   ctx: MutationCtx,
   orgId: string,
   projectId: string,
+  num: number | undefined,
   by: Amount,
   name?: string,
 ): Promise<void> {
   if (by.bytes === 0 && by.files === 0) return
-  const row = await projectTotalsRow(ctx, projectId)
+  const row = await projectTotalsRow(ctx, orgId, projectId, num)
   if (row === null) {
     checkLeft('storage_project_totals', projectId, by)
     if (by.files <= 0) return
+    const found = name === undefined ? await projectOf(ctx, orgId, projectId) : undefined
     await uncountedWriter(ctx.db).insert('storage_project_totals', {
       org_id: orgId,
       project_id: projectId,
-      name: name ?? (await projectNameOf(ctx, projectId)),
+      num,
+      name: name ?? (found?.num === num ? found?.name : undefined),
       ...by,
     })
     return
   }
-  if (another('storage_project_totals', row, orgId, projectId)) return
   const next = { bytes: row.bytes + by.bytes, files: row.files + by.files }
   checkLeft('storage_project_totals', projectId, next)
   if (next.files > 0) await ctx.db.patch(row._id, next)
@@ -200,56 +229,71 @@ async function addToTask(
   checkLeft('storage_task_totals', task.issue_id, next)
   if (next.files > 0) await ctx.db.patch(task._id, next)
   else await ctx.db.delete(task._id)
-  await addToProject(ctx, task.org_id, task.project_id, by)
+  await addToProject(ctx, task.org_id, task.project_id, task.project_num, by)
   if (org !== null) await addToOrg(ctx, org, by)
 }
 
 /**
  * Counts a file of `size` bytes that this transaction attaches to `issue`,
  * in the task's project and organization. Does nothing for an organization
- * not counted yet, for a task the backfill has not reached, which counts
- * the file when it does, or when the task's id holds a row that is not
- * this task's.
+ * not counted yet, or for a task the backfill has not reached, which counts
+ * the file when it does.
  */
 export async function countFile(ctx: MutationCtx, issue: CountedTask, size: number): Promise<void> {
   const org = await orgTotalsRow(ctx, issue.org_id)
   if (org === null) return
   const by = { bytes: size, files: 1 }
-  const task = await taskTotalsRow(ctx, issue.id)
-  if (task !== null) {
-    if (notTasks(task, issue, true)) return
-    return await addToTask(ctx, task, org, by)
-  }
+  const task = await taskTotalsRow(ctx, issue.org_id, issue.id, issue.num)
+  if (task !== null) return await addToTask(ctx, task, org, by)
   if (org.counting !== undefined && issue.num > org.counting.through) return
+  const project = await projectOf(ctx, issue.org_id, issue.project_id)
   await uncountedWriter(ctx.db).insert('storage_task_totals', {
     org_id: issue.org_id,
     issue_id: issue.id,
     num: issue.num,
     project_id: issue.project_id,
+    project_num: project.num,
     ...by,
   })
-  await addToProject(ctx, issue.org_id, issue.project_id, by)
+  await addToProject(ctx, issue.org_id, issue.project_id, project.num, by, project.name)
   await addToOrg(ctx, org, by)
 }
 
-/**
- * Takes `file` out of the totals once this transaction deleted its row for
- * good, live or stored. Call it for every such delete, whatever the file's
- * task is now. The task's totals row holds the project the file counts in,
- * and a task without one has no counted file. A row of another
- * organization's task is left alone.
- */
-export async function uncountFile(ctx: MutationCtx, file: CountedFile): Promise<void> {
-  const task = await taskTotalsRow(ctx, file.issue_id)
-  if (task === null || another('storage_task_totals', task, file.org_id, file.issue_id)) return
+/* Takes `file` out of the totals of its task numbered `num`. */
+async function takeOut(ctx: MutationCtx, file: CountedFile, num: number | null): Promise<void> {
+  if (num === null) return
+  const task = await taskTotalsRow(ctx, file.org_id, file.issue_id, num)
+  if (task === null) return
   const org = await orgTotalsRow(ctx, file.org_id)
   await addToTask(ctx, task, org, { bytes: -file.size_bytes, files: -1 })
 }
 
+/**
+ * Takes live attachment row `file` out of the totals once this transaction
+ * deleted it for good. `num` is its task's number, which the caller passes
+ * when it holds the task and taskNumOf reads otherwise. A task without a
+ * row has no counted file, and the row of another task, of another number
+ * or organization, is never touched.
+ */
+export async function uncountFile(
+  ctx: MutationCtx,
+  file: CountedFile,
+  num?: number,
+): Promise<void> {
+  await takeOut(ctx, file, num ?? (await taskNumOf(ctx, file.org_id, file.issue_id, false)))
+}
+
 /** uncountFile for stored row `row` of Deleted items, which this
- * transaction deleted for good, when it is an attachment. */
-export async function uncountStored(ctx: MutationCtx, row: Doc<'deleted_rows'>): Promise<void> {
-  if (row.row.table === 'issue_attachments') await uncountFile(ctx, row.row.doc)
+ * transaction deleted for good, when it is an attachment; `num` is its
+ * task's number when the caller holds the task. */
+export async function uncountStored(
+  ctx: MutationCtx,
+  row: Doc<'deleted_rows'>,
+  num?: number,
+): Promise<void> {
+  if (row.row.table !== 'issue_attachments') return
+  const file = row.row.doc
+  await takeOut(ctx, file, num ?? (await taskNumOf(ctx, file.org_id, file.issue_id, true)))
 }
 
 /**
@@ -264,35 +308,41 @@ export async function moveTaskFiles(
   tasks: readonly CountedTask[],
   target: Doc<'projects'>,
 ): Promise<void> {
-  const left = new Map<string, Amount>()
+  const left = new Map<string, { project_id: string; num?: number; by: Amount }>()
   const into = { bytes: 0, files: 0 }
   for (const task of tasks) {
-    const row = await taskTotalsRow(ctx, task.id)
-    if (row === null || row.project_id === target.id || notTasks(row, task, false)) continue
-    const from = left.get(row.project_id) ?? { bytes: 0, files: 0 }
-    from.bytes += row.bytes
-    from.files += row.files
-    left.set(row.project_id, from)
+    const row = await taskTotalsRow(ctx, task.org_id, task.id, task.num)
+    if (row === null || (row.project_id === target.id && row.project_num === target.num)) continue
+    const key = `${row.project_id}:${row.project_num ?? ''}`
+    const from = left.get(key) ?? {
+      project_id: row.project_id,
+      num: row.project_num,
+      by: { bytes: 0, files: 0 },
+    }
+    from.by.bytes += row.bytes
+    from.by.files += row.files
+    left.set(key, from)
     into.bytes += row.bytes
     into.files += row.files
-    await ctx.db.patch(row._id, { project_id: target.id })
+    await ctx.db.patch(row._id, { project_id: target.id, project_num: target.num })
   }
   if (left.size === 0) return
-  for (const [projectId, by] of left)
-    await addToProject(ctx, target.org_id, projectId, { bytes: -by.bytes, files: -by.files })
-  await addToProject(ctx, target.org_id, target.id, into, target.name)
+  for (const { project_id, num, by } of left.values())
+    await addToProject(ctx, target.org_id, project_id, num, {
+      bytes: -by.bytes,
+      files: -by.files,
+    })
+  await addToProject(ctx, target.org_id, target.id, target.num, into, target.name)
   await touchOrg(ctx, target.org_id)
 }
 
-/** Copies a project's new name onto its totals row, if it has one of its
- * own organization. */
+/** Copies a project's new name onto its totals row, if it has one. */
 export async function renameProjectTotals(
   ctx: MutationCtx,
-  project: Pick<Doc<'projects'>, 'id' | 'org_id' | 'name'>,
+  project: Pick<Doc<'projects'>, 'id' | 'org_id' | 'num' | 'name'>,
 ): Promise<void> {
-  const row = await projectTotalsRow(ctx, project.id)
+  const row = await projectTotalsRow(ctx, project.org_id, project.id, project.num)
   if (row === null || row.name === project.name) return
-  if (another('storage_project_totals', row, project.org_id, project.id)) return
   await ctx.db.patch(row._id, { name: project.name })
   await touchOrg(ctx, project.org_id)
 }
@@ -311,7 +361,7 @@ export async function startOrgTotals(ctx: MutationCtx, orgId: string): Promise<v
   const left =
     (await ctx.db
       .query('storage_task_totals')
-      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .withIndex('by_org_issue', (q) => q.eq('org_id', orgId))
       .first()) ??
     (await ctx.db
       .query('storage_project_totals')

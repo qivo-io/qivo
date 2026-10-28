@@ -498,12 +498,13 @@ async function deleteLive(ctx: MutationCtx, live: LiveRow): Promise<void> {
 }
 
 /** Deletes a live row for good, taking an attachment out of the stored-byte
- * totals (model/storageTotals.ts) and letting go of its file
- * (model/fileHolds.ts releaseFile). */
-async function discard(ctx: MutationCtx, live: LiveRow): Promise<void> {
+ * totals of its task, numbered `num` when the caller holds the task
+ * (model/storageTotals.ts), and letting go of its file (model/fileHolds.ts
+ * releaseFile). */
+async function discard(ctx: MutationCtx, live: LiveRow, num?: number): Promise<void> {
   await deleteLive(ctx, live)
   if (live.table === 'issue_attachments') {
-    await uncountFile(ctx, live.doc)
+    await uncountFile(ctx, live.doc, num)
     await releaseFile(ctx, live.doc.storage_id)
   }
 }
@@ -709,10 +710,17 @@ const emptyTally = (item: Pick<Item, 'projects'>): Tally => ({
 })
 
 /** Stores `live` (keep) or deletes it for good (purge). A grant or share
- * the item already stores is only deleted (storedAlready). */
-async function clearRow(run: Run, live: LiveRow, ownerId: string, mode: Mode): Promise<void> {
+ * the item already stores is only deleted (storedAlready). `num` is the
+ * number of the task a task's row travels with. */
+async function clearRow(
+  run: Run,
+  live: LiveRow,
+  ownerId: string,
+  mode: Mode,
+  num?: number,
+): Promise<void> {
   if (mode === 'purge' || (await storedAlready(run, live, ownerId)))
-    return await discard(run.ctx, live)
+    return await discard(run.ctx, live, num)
   if (!(await storeRow(run.ctx, run.item, live, ownerId))) tallyOf(run).dropped_rows += 1
 }
 
@@ -919,10 +927,13 @@ async function idTaken(run: Run, taskId: string): Promise<boolean> {
 async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boolean> {
   for (const relation of TASK_ROWS) {
     const done = await drain(run.budget, relation(run.ctx, task.id), (row) =>
-      clearRow(run, row, task.id, mode),
+      clearRow(run, row, task.id, mode, task.num),
     )
     if (!done) return false
   }
+  // a task deleted for good takes the files the move stored before it
+  // with it, while its number is still known (dropFilesOf)
+  if (mode === 'purge' && !(await dropFilesOf(run, task))) return false
   if (!(await dropMessages(run, task.id))) return false
   const preload = await preloadOf(run)
   for (const children of childrenOutside(run.ctx, task.id, itemProjectIds(run.item))) {
@@ -1244,14 +1255,14 @@ async function purgeDependents(run: Run): Promise<boolean> {
  * too. */
 async function purgeLive(run: Run): Promise<boolean> {
   if (run.item.kind === 'task' || run.item.restore_by !== undefined) {
-    const done = await eachStoredTask(run, async ({ task_id }) => {
+    const done = await eachStoredTask(run, async ({ task_id, num }) => {
       // a move that got stuck can leave messages and description rows,
       // before the id is freed
       if (!(await dropMessages(run, task_id))) return false
       if (!(await dropDescriptions(run, task_id))) return false
       for (const relation of TASK_ROWS) {
         const drained = await drain(run.budget, relation(run.ctx, task_id), (row) =>
-          discard(run.ctx, row),
+          discard(run.ctx, row, num),
         )
         if (!drained) return false
       }
@@ -1287,6 +1298,22 @@ const purgeStored = (run: Run, table: StoredTable): Promise<boolean> =>
     (row) => dropStored(run.ctx, row),
   )
 
+/* Deletes the attachments the item stores of task `task` for good, taking
+ * each out of the stored-byte totals of the task with its number, which the
+ * caller holds. Callers run it before the task's deleted_tasks row or live
+ * row goes, after which no row tells the number any more
+ * (model/storageTotals.ts). */
+const dropFilesOf = (run: Run, task: { id: string; num: number }): Promise<boolean> =>
+  drain(
+    run.budget,
+    run.ctx.db
+      .query('deleted_rows')
+      .withIndex('by_item_table_owner', (q) =>
+        q.eq('item_id', run.item.id).eq('table', 'issue_attachments').eq('owner_id', task.id),
+      ),
+    (row) => dropStored(run.ctx, row, task.num),
+  )
+
 /* Each deleted_tasks row once its task's history is gone (purgeHistory),
  * then every stored row but the project rows. A task's stored issues row
  * reserves its uuid (lib/db.ts) until its history is deleted, so a new task
@@ -1302,6 +1329,7 @@ async function purgeRows(run: Run): Promise<boolean> {
     async (task) => {
       const upTo = (await idTaken(run, task.task_id)) ? run.item.deleted_at : undefined
       if (!(await purgeHistory(run, task.task_id, upTo))) return false
+      if (!(await dropFilesOf(run, { id: task.task_id, num: task.num }))) return false
       await run.ctx.db.delete(task._id)
       return true
     },
@@ -2065,7 +2093,7 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
   if (!(await dropDescriptions(run, task.task_id))) return false
   for (const relation of TASK_ROWS) {
     const taken = await drain(run.budget, relation(run.ctx, task.task_id), async (live) => {
-      if (into === null) await discard(run.ctx, live)
+      if (into === null) await discard(run.ctx, live, task.num)
       else if (!(await storeRow(run.ctx, into, live, task.task_id)))
         await droppedInto(run.ctx, into)
     })
@@ -2083,7 +2111,9 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
       .query('deleted_rows')
       .withIndex('by_item_owner', (q) => q.eq('item_id', run.item.id).eq('owner_id', task.task_id)),
     (row) =>
-      into === null ? dropStored(run.ctx, row) : run.ctx.db.patch(row._id, { item_id: into.id }),
+      into === null
+        ? dropStored(run.ctx, row, task.num)
+        : run.ctx.db.patch(row._id, { item_id: into.id }),
   )
   if (!done) return false
   await run.ctx.db.delete(task._id)
@@ -2167,10 +2197,11 @@ async function droppedInto(ctx: MutationCtx, into: Item): Promise<void> {
 }
 
 /** Deletes a stored row for good, taking an attachment out of the
- * stored-byte totals (model/storageTotals.ts) and letting go of its file. */
-async function dropStored(ctx: MutationCtx, row: Doc<'deleted_rows'>): Promise<void> {
+ * stored-byte totals of its task, numbered `num` when the caller holds the
+ * task (model/storageTotals.ts), and letting go of its file. */
+async function dropStored(ctx: MutationCtx, row: Doc<'deleted_rows'>, num?: number): Promise<void> {
   await ctx.db.delete(row._id)
-  await uncountStored(ctx, row)
+  await uncountStored(ctx, row, num)
   await releaseFile(ctx, row.storage_id)
 }
 
@@ -3866,24 +3897,46 @@ async function clearPages<Row>(
   return true
 }
 
-/** Deletes the rows task `taskId` still has in the live tables, taking each
- * attachment out of the stored-byte totals and letting go of its file
- * (model/fileHolds.ts releaseFile), then its messages. */
-async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown): Promise<boolean> {
+/** Deletes the rows task `task` still has in the live tables, taking each
+ * attachment out of the stored-byte totals of the task and letting go of
+ * its file (model/fileHolds.ts releaseFile), then the attachments the
+ * organization stores of it, then its messages. The caller deletes the task
+ * after, so its number is still known for each file. */
+async function clearLiveRows(
+  ctx: MutationCtx,
+  orgId: string,
+  task: { id: string; num: number },
+  budget: Teardown,
+): Promise<boolean> {
   for (const relation of TASK_ROWS) {
-    const cleared = await clearPages(budget, relation(ctx, taskId), async (row) => {
+    const cleared = await clearPages(budget, relation(ctx, task.id), async (row) => {
       await ctx.db.delete(row.doc._id)
       if (row.table === 'issue_attachments') {
-        await uncountFile(ctx, row.doc)
+        await uncountFile(ctx, row.doc, task.num)
         await releaseFile(ctx, row.doc.storage_id)
       }
       return true
     })
     if (!cleared) return false
   }
+  const stored = await clearPages(
+    budget,
+    ctx.db
+      .query('deleted_rows')
+      .withIndex('by_table_org_owner', (q) =>
+        q.eq('table', 'issue_attachments').eq('org_id', orgId).eq('owner_id', task.id),
+      ),
+    async (row) => {
+      await ctx.db.delete(row._id)
+      await uncountStored(ctx, row, task.num)
+      await releaseFile(ctx, row.storage_id)
+      return true
+    },
+  )
+  if (!stored) return false
   return await clearPages(
     budget,
-    ctx.db.query('messages').withIndex('by_issue_read', (q) => q.eq('issue_id', taskId)),
+    ctx.db.query('messages').withIndex('by_issue_read', (q) => q.eq('issue_id', task.id)),
     async (message) => {
       await ctx.db.delete(message._id)
       return true
@@ -3969,7 +4022,8 @@ export async function clearOrgTrash(
     budget,
     ctx.db.query('deleted_tasks').withIndex('by_org_num', (q) => q.eq('org_id', orgId)),
     async (task) => {
-      if (!(await clearLiveRows(ctx, task.task_id, budget))) return false
+      if (!(await clearLiveRows(ctx, orgId, { id: task.task_id, num: task.num }, budget)))
+        return false
       if (!(await clearDescriptions(ctx, budget, orgId, task.task_id, false))) return false
       await ctx.db.delete(task._id)
       return true
@@ -3993,7 +4047,7 @@ export async function clearOrgTrash(
           budget,
           ctx.db.query('issues').withIndex('by_project', (q) => q.eq('project_id', row.owner_id)),
           async (task) => {
-            if (!(await clearLiveRows(ctx, task.id, budget))) return false
+            if (!(await clearLiveRows(ctx, orgId, task, budget))) return false
             if (!(await clearDescriptions(ctx, budget, orgId, task.id, true))) return false
             await deleteLive(ctx, { table: 'issues', doc: task })
             return true

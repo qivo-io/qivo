@@ -85,7 +85,7 @@ async function storageRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
     (await drain(ctx, budget, (n) =>
       ctx.db
         .query('storage_task_totals')
-        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .withIndex('by_org_issue', (q) => q.eq('org_id', orgId))
         .take(n),
     )) &&
     (await drain(ctx, budget, (n) =>
@@ -180,7 +180,7 @@ async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
             .withIndex('by_issue', (q) => q.eq('issue_id', id))
             .take(n),
         async (row) => {
-          await uncountFile(ctx, row)
+          await uncountFile(ctx, row, issue.num)
           await removeFile(ctx, row.storage_id)
         },
       ))
