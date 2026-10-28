@@ -511,7 +511,7 @@ describe('the API access page', () => {
     const search = find<HTMLInputElement>('[data-api-access-people-search]')
     search.focus()
     await type(search, 'rel')
-    const escape = async () => {
+    const pressEscape = async () => {
       await act(async () =>
         (document.activeElement ?? document.body).dispatchEvent(
           new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
@@ -519,10 +519,10 @@ describe('the API access page', () => {
       )
       await settle()
     }
-    await escape()
+    await pressEscape()
     expect(document.querySelector('[data-api-access-people]')).not.toBeNull()
     expect(find<HTMLInputElement>('[data-api-access-people-search]').value).toBe('')
-    await escape()
+    await pressEscape()
     expect(document.querySelector('[data-api-access-people]')).toBeNull()
   })
 
