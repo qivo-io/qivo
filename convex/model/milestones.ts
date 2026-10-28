@@ -950,7 +950,9 @@ type Lane = {
  * app's order by week and then name, and across projects milestones of one
  * week sort by day before name, as REST's project detail sorts them
  * (machine/projects.ts), so the order does not depend on the viewer's
- * weeks. A search matches every whitespace-separated fragment of its name
+ * weeks. REST compares names with localeCompare, so milestones of one day
+ * whose names differ in accents or in a non-Latin script can come in
+ * another order there than here. A search matches every whitespace-separated fragment of its name
  * key in the milestone's name key, in any order (lib/search.ts
  * allWordsMatcher), so it ignores case and accents. A blank one lists every
  * milestone.
