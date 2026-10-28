@@ -2197,8 +2197,10 @@ export async function moveIssueCore(
           .reduce((sum, c) => sum + getDocumentSize(c), 0)
       : 0
   const before = { ...issue }
-  // the task and its description row (model/descriptions.ts)
-  await assertStepRoom(ctx, patchCost(issue), MOVE_TOO_LARGE, answer)
+  // the task and its description row (model/descriptions.ts); a move that
+  // read the subtree to carry it asks the room first, and any other patches
+  // one task, as a single task's update does
+  if (below !== undefined) await assertStepRoom(ctx, patchCost(issue), MOVE_TOO_LARGE, answer)
   await patchTask(ctx.db, issue, w)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   // the stored-byte totals follow the task and every subtask it carries, at
