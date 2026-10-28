@@ -659,11 +659,10 @@ export async function removeMilestoneCore(
 /* ------------------------------------------------------------------ reads */
 
 /** The budget of one of the app's milestone reads (milestones.ts). A call
- * names at most `projects` projects and asks for at most `rows` rows. Its
- * reads stop once the transaction has read `ranges` index ranges,
- * `documents` documents or `bytes` bytes, counted from its start with the
- * caller's seats and access included, and never past what the request has
- * left. That is the share a workspace part reads before it asks to be cut
+ * names at most `projects` projects and asks for at most `rows` rows. The
+ * milestone reads (readMilestones) stop once they have read `ranges` index
+ * ranges, `documents` documents or `bytes` bytes, counted from their own
+ * start, and never past what the request has left. That is the share a workspace part reads before it asks to be cut
  * (lib/workspaceParts.ts PAGE.soft). These reads are subscriptions that
  * rerun whenever a row they read changes, so none costs more than the
  * projects part that carried every milestone before them. Tests lower
@@ -855,8 +854,10 @@ type Lane = {
  * 2026-02-31, comes in the span the app draws it in, at most OVERFLOW_DAYS
  * out of order, as it sorts by its text.
  *
- * The reads stop at MILESTONE_READ's ceiling on the whole transaction. The
- * rows known to be complete are then those up to the frontier, the least
+ * The reads stop once they used MILESTONE_READ's share, counted from the
+ * read's own start, so the caller's access checks before it do not spend
+ * it, and never past what the request has left. The rows known to be
+ * complete are then those up to the frontier, the least
  * advanced position among the projects not read to their end, so the batch
  * answers the matches up to it, `next` at it and `stopped` at its stored
  * day. A continuation then answers nothing again and skips nothing. Each
@@ -904,13 +905,15 @@ export async function readMilestones(
         return upper.inclusive ? low.lte('week', upper.day) : low.lt('week', upper.day)
       })
       .order(span.order)
-  // the request's own limits less the reserve, and the read's ceiling
-  const room = roomOf(await ctx.meta.getTransactionMetrics(), MILESTONE_RESERVE)
+  // the request's own limits less the reserve, and the read's ceiling,
+  // MILESTONE_READ past what the transaction read before the read began
+  const start = await ctx.meta.getTransactionMetrics()
+  const room = roomOf(start, MILESTONE_RESERVE)
   const opening = ceilingGuard(ctx, room)
   const budget = ceilingGuard(ctx, {
-    ranges: Math.min(room.ranges, MILESTONE_READ.ranges),
-    documents: Math.min(room.documents, MILESTONE_READ.documents),
-    bytes: Math.min(room.bytes, MILESTONE_READ.bytes),
+    ranges: Math.min(room.ranges, start.databaseQueries.used + MILESTONE_READ.ranges),
+    documents: Math.min(room.documents, start.documentsRead.used + MILESTONE_READ.documents),
+    bytes: Math.min(room.bytes, start.bytesRead.used + MILESTONE_READ.bytes),
   })
 
   /* Reads the next day of `lane` whole under `guard` and adds its listed

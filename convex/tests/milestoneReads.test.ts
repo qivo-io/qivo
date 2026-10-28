@@ -6,12 +6,11 @@
  * stored before the rule are. */
 /// <reference types="vite/client" />
 
-import type { FunctionArgs, FunctionReturnType } from 'convex/server'
+import type { FunctionArgs, FunctionReturnType, TransactionMetrics } from 'convex/server'
 import { getDocumentSize } from 'convex/values'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import type { QueryCtx } from '../_generated/server'
 import { LIMITS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { rowOf } from '../lib/workspaceParts'
@@ -117,6 +116,37 @@ async function walk(
     after = batch.next
   }
   throw new Error('a section did not end within 500 batches')
+}
+
+/* `count` top-level projects of the fixture's organization, each shared with
+ * `f.user` at User level, so a read asks access project by project. */
+async function shared(t: T, f: OrgFixture, count: number): Promise<string[]> {
+  return await t.run(async (ctx) => {
+    const ids: string[] = []
+    for (let i = 0; i < count; i++) {
+      const id = uuid()
+      await ctx.db.insert('projects', {
+        id,
+        org_id: f.org.id,
+        type: 'meta',
+        key: `L${i}`,
+        name: `Load ${i}`,
+        description: '',
+        sort_order: 1000 + i,
+        num: 1000 + i,
+        track_delay: false,
+        created_at: NOW,
+        window_key: uuid().slice(0, 8),
+      })
+      await ctx.db.insert('project_access', {
+        project_id: id,
+        profile_id: f.user.id,
+        level: 'user',
+      })
+      ids.push(id)
+    }
+    return ids
+  })
 }
 
 /* `f.user`'s guest seat in the other organization, with User access on its
@@ -555,6 +585,30 @@ describe('a range of days', () => {
     expect(stopped > MONDAY).toBe(true)
     expect(range.rows.map((r) => r.id)).toEqual(ascending(rows.filter((m) => m.week < stopped)))
   })
+
+  it('leaves the access checks before the read out of its budget', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // 30 projects shared with the user one by one, so checking them reads
+    // more documents than the lowered budget holds
+    const projects = await shared(t, f, 30)
+    const rows = await plantMany(t, [
+      ...[0, 1, 2].map((i) => ({
+        project: projects[0],
+        week: plus(MONDAY, 7 * i),
+        name: `A ${i}`,
+      })),
+      { project: projects[1], week: plus(MONDAY, 21), name: 'B' },
+    ])
+    MILESTONE_READ.documents = 40
+    const range = await as(t, f.user).query(api.milestones.between, {
+      projects,
+      from: MONDAY,
+      to: plus(MONDAY, 7 * 10),
+    })
+    expect(range.stopped).toBeNull()
+    expect(range.rows.map((r) => r.id)).toEqual(ascending(rows))
+  })
 })
 
 describe('one milestone by id', () => {
@@ -739,52 +793,33 @@ describe('refusals', () => {
  * public query and once inline, with the caller's seat as the only one, to
  * log what the transaction read. */
 
-/* 200 top-level projects in the fixture's organization, each shared with
- * `f.user` at User level, so the reads ask access project by project. */
-async function twoHundred(t: T, f: OrgFixture): Promise<string[]> {
-  return await t.run(async (ctx) => {
-    const ids: string[] = []
-    for (let i = 0; i < 200; i++) {
-      const id = uuid()
-      await ctx.db.insert('projects', {
-        id,
-        org_id: f.org.id,
-        type: 'meta',
-        key: `L${i}`,
-        name: `Load ${i}`,
-        description: '',
-        sort_order: 1000 + i,
-        num: 1000 + i,
-        track_delay: false,
-        created_at: NOW,
-        window_key: uuid().slice(0, 8),
-      })
-      await ctx.db.insert('project_access', {
-        project_id: id,
-        profile_id: f.user.id,
-        level: 'user',
-      })
-      ids.push(id)
-    }
-    return ids
-  })
-}
+/* What reads cost so far, from a transaction's metrics. */
+const usedOf = (m: TransactionMetrics) => ({
+  ranges: m.databaseQueries.used,
+  documents: m.documentsRead.used,
+  bytes: m.bytesRead.used,
+})
 
-/* What a read inline as `me` answers and what its transaction read. */
-const measured = <R>(
+/* A read inline as `me` over `projects` with options `o`, its answer and
+ * what it read: the whole transaction, and the milestone read alone from
+ * its start. */
+const measured = (
   t: T,
   me: Doc<'profiles'>,
-  read: (ctx: QueryCtx, mine: ReadonlyMap<string, Doc<'profiles'>>) => Promise<R>,
+  projects: string[],
+  o: Parameters<typeof readMilestones>[2],
 ) =>
   t.query(async (ctx) => {
-    const answer = await read(ctx, new Map([[me.org_id, me]]))
-    const m = await ctx.meta.getTransactionMetrics()
-    return {
-      answer,
-      ranges: m.databaseQueries.used,
-      documents: m.documentsRead.used,
-      bytes: m.bytesRead.used,
+    const ids = await milestoneProjects(ctx, new Map([[me.org_id, me]]), projects)
+    const before = usedOf(await ctx.meta.getTransactionMetrics())
+    const answer = await readMilestones(ctx, ids, o)
+    const total = usedOf(await ctx.meta.getTransactionMetrics())
+    const read = {
+      ranges: total.ranges - before.ranges,
+      documents: total.documents - before.documents,
+      bytes: total.bytes - before.bytes,
     }
+    return { answer, total, read }
   })
 
 describe('under Convex limits', () => {
@@ -797,7 +832,7 @@ describe('under Convex limits', () => {
     async ({ per, completes }, { annotate }) => {
       const t = newT({ transactionLimits: true })
       const f = await withOrg(t)
-      const projects = await twoHundred(t, f)
+      const projects = await shared(t, f, 200)
       const rows = await plantMany(
         t,
         projects.flatMap((project, p) =>
@@ -813,48 +848,44 @@ describe('under Convex limits', () => {
       expect(batch.rows).toEqual([])
       expect(batch.stopped === null).toBe(completes)
       expect(batch.next === null).toBe(completes)
-      const inline = await measured(t, f.user, async (ctx, mine) =>
-        readMilestones(ctx, await milestoneProjects(ctx, mine, projects), {
-          span: { from: MONDAY, order: 'asc' },
-          after: null,
-          search: 'pilot',
-          limit: 25,
-          pastBefore: MONDAY,
-        }),
-      )
+      const inline = await measured(t, f.user, projects, {
+        span: { from: MONDAY, order: 'asc' },
+        after: null,
+        search: 'pilot',
+        limit: 25,
+        pastBefore: MONDAY,
+      })
       expect(inline.answer.stopped).toBe(batch.stopped)
-      expect(inline.documents).toBeLessThanOrEqual(MILESTONE_READ.documents + 1)
+      expect(inline.read.documents).toBeLessThanOrEqual(MILESTONE_READ.documents + 1)
       await annotate(
-        `search over 200 projects x ${per}: stopped ${inline.answer.stopped}, ${inline.ranges} ranges, ${inline.documents} documents, ${inline.bytes} bytes; a milestone is ${getDocumentSize(rows[0])} bytes`,
+        `search over 200 projects x ${per}: stopped ${inline.answer.stopped}; the read ${JSON.stringify(inline.read)}, the transaction ${JSON.stringify(inline.total)}; a milestone is ${getDocumentSize(rows[0])} bytes`,
       )
       // the first batch without search
-      const first = await measured(t, f.user, async (ctx, mine) =>
-        readMilestones(ctx, await milestoneProjects(ctx, mine, projects), {
-          span: { from: MONDAY, order: 'asc' },
-          after: null,
-          search: '',
-          limit: 25,
-          pastBefore: MONDAY,
-        }),
-      )
+      const first = await measured(t, f.user, projects, {
+        span: { from: MONDAY, order: 'asc' },
+        after: null,
+        search: '',
+        limit: 25,
+        pastBefore: MONDAY,
+      })
       expect(first.answer.rows).toHaveLength(25)
       expect(first.answer.stopped).toBeNull()
       await annotate(
-        `first upcoming batch of 25 over 200 projects x ${per}: ${first.ranges} ranges, ${first.documents} documents, ${first.bytes} bytes`,
+        `first upcoming batch of 25 over 200 projects x ${per}: the read ${JSON.stringify(first.read)}, the transaction ${JSON.stringify(first.total)}`,
       )
     },
   )
 
   it.for([
     { dense: 20, completes: true },
-    { dense: 30, completes: false },
+    { dense: 35, completes: false },
   ])(
     'reads 260 weeks of 200 projects with a milestone every week in $dense of them',
     { timeout: 120_000 },
     async ({ dense, completes }, { annotate }) => {
       const t = newT({ transactionLimits: true })
       const f = await withOrg(t)
-      const projects = await twoHundred(t, f)
+      const projects = await shared(t, f, 200)
       const rows = await plantMany(
         t,
         projects.slice(0, dense).flatMap((project, p) =>
@@ -871,16 +902,15 @@ describe('under Convex limits', () => {
       const before = range.stopped
       const want = before === null ? rows : rows.filter((m) => m.week < before)
       expect(range.rows.map((r) => r.id)).toEqual(ascending(want))
-      const inline = await measured(t, f.user, async (ctx, mine) =>
-        readMilestones(ctx, await milestoneProjects(ctx, mine, projects), {
-          span: { from: MONDAY, to: args.to, order: 'asc' },
-          after: null,
-          search: '',
-          limit: Infinity,
-        }),
-      )
+      const inline = await measured(t, f.user, projects, {
+        span: { from: MONDAY, to: args.to, order: 'asc' },
+        after: null,
+        search: '',
+        limit: Infinity,
+      })
+      expect(inline.read.documents).toBeLessThanOrEqual(MILESTONE_READ.documents + 1)
       await annotate(
-        `260 weeks over 200 projects, ${dense} dense: stopped ${inline.answer.stopped}, ${range.rows.length} rows, ${inline.ranges} ranges, ${inline.documents} documents, ${inline.bytes} bytes`,
+        `260 weeks over 200 projects, ${dense} dense: stopped ${inline.answer.stopped}, ${range.rows.length} rows; the read ${JSON.stringify(inline.read)}, the transaction ${JSON.stringify(inline.total)}`,
       )
     },
   )
