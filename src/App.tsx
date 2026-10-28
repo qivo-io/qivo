@@ -1141,8 +1141,12 @@ function App() {
       setToasts((t) => withToast(t, { id, text, tone, sticky, key, onDismiss }))
       if (!sticky) setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)
     }
+    // a keyed toast whose news no longer holds, such as a bulk Inbox
+    // action's stop that a later run finished
+    window.dismissToast = (key) => setToasts((t) => t.filter((x) => x.key !== key))
     return () => {
       window.showToast = null
+      window.dismissToast = null
     }
   }, [])
   const dismissToast = (id: number) => {

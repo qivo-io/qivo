@@ -38,7 +38,7 @@ import {
   Seg,
 } from '../components/qivo'
 import { fmtDateTime } from '../lib/dates'
-import { closeOrAsk } from '../lib/discardQuestion'
+import { closeOrAsk, typesText } from '../lib/discardQuestion'
 import { restoreFocus } from '../lib/focusVisibility'
 import { UnsentScopeContext, useUnsentScope } from '../lib/leaveGuard'
 import { noProjectsHint, seesNoProject } from '../lib/noProjects'
@@ -732,11 +732,20 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     bulkFrom.current = null
     focusAfterBulk(from)
   }, [bulkState])
-  // An Inbox let go while its notice waits sends nothing (P.answerInboxNotice).
+  // The notice opens only in a shown Inbox (P.hostInboxNotice). A kept
+  // Inbox that hides, or one let go, ends a notice that waits or would
+  // open, and sends nothing. Before it opens, the row menu closes, and a
+  // notice that would open over a field the person types in does not: the
+  // action ends as Cancel ends it.
   useEffect(
-    () => () => {
-      if (P.inboxBulk?.state === 'notice') P.answerInboxNotice(false)
-    },
+    () =>
+      P.hostInboxNotice({
+        prepare: () => {
+          if (typesText(document.activeElement)) return false
+          setMenu(null)
+          return true
+        },
+      }),
     [],
   )
   // what a kept Inbox held before it hid (components/KeptView) moves no

@@ -14,12 +14,21 @@ export type BulkAction = FunctionArgs<typeof api.messages.bulkReach>['action']
 export const BULK_SEATS = 2
 
 /** A seat a refusal stopped: its organization's id, the rows its accepted
-    batches confirmed and the refusal's sentence. */
-export type BulkStop = Readonly<{ org: string; done: number; reason: string }>
+    batches confirmed, the refusal's sentence, and whether the refusal was
+    the pause (offline, a slow save, a lost seat or sign-in), which stops
+    every seat at once. */
+export type BulkStop = Readonly<{ org: string; done: number; reason: string; paused: boolean }>
+
+/** Why an action needs the keep-open notice: a seat has more than one
+    batch to do (`many`), more seats have work than run at once (`seats`),
+    or bulkReach did not answer, so nothing says how much there is
+    (`unknown`). */
+export type BulkWhy = 'many' | 'seats' | 'unknown'
 
 /** A bulk Inbox action (P.inboxBulk). It lives in the store, not in the
-    Inbox, so leaving the Inbox, or the kept Inbox being let go, loses
-    nothing. */
+    Inbox, so leaving the Inbox loses nothing once the action runs. A press
+    still waiting for its notice ends when no Inbox shows it
+    (P.hostInboxNotice). */
 export type InboxBulk = Readonly<{
   action: BulkAction
   /** `asking` waits for messages.bulkReach, `notice` for the person's answer
@@ -31,6 +40,8 @@ export type InboxBulk = Readonly<{
       a batch answered that more was left. Only such an action shows its
       progress and ends with a toast. */
   long: boolean
+  /** Why the plan needed the notice, or null for an action of one round. */
+  why: BulkWhy | null
   /** Rows the server confirmed, the sum of the answers' marked or removed. */
   done: number
   /** The seats with work, and how many of them answered that nothing is
@@ -52,13 +63,15 @@ const WORDS = {
     row: ['message', 'messages'],
     rest: 'The rest stay unread.',
     none: 'before it marked any message. They stay unread.',
+    covers: 'messages',
   },
   remove: {
-    name: 'Remove all read',
+    name: 'Remove all read notifications',
     running: 'Removing read notifications',
     row: ['read notification', 'read notifications'],
     rest: 'The rest stay in the Inbox.',
     none: 'before it removed any notification. They stay in the Inbox.',
+    covers: 'read notifications',
   },
 } as const
 
@@ -66,8 +79,21 @@ const WORDS = {
 const rows = (action: BulkAction, n: number) =>
   `${n.toLocaleString('en-US')} ${WORDS[action].row[n === 1 ? 0 : 1]}`
 
-/** The action's name, as its button says it. */
+/** The action's name, as its toolbar button and menu item say it. */
 export const bulkName = (action: BulkAction) => WORDS[action].name
+
+/** What the keep-open notice says about `bulk`, for the reason it needs
+    more than one round (InboxBulk.why). */
+export function bulkNoticeText(bulk: InboxBulk): string {
+  const { name, covers } = WORDS[bulk.action]
+  const why =
+    bulk.why === 'unknown'
+      ? `Qivo could not check how many ${covers} ${name} covers, so it may run in several steps.`
+      : bulk.why === 'seats'
+        ? `${name} covers ${covers} in ${bulk.seats} organizations and runs in steps.`
+        : `${name} covers many ${covers} and runs in steps.`
+  return `${why} Keep Qivo open until it finishes. Closing or reloading Qivo stops it, and the steps already done stay done.`
+}
 
 /** The Inbox's progress line while `bulk` runs, such as "Marking messages
     read, 512 done, 1 of 2 organizations finished". */
@@ -85,13 +111,25 @@ export const bulkDoneText = (bulk: InboxBulk): string =>
     ? `Marked ${rows('read', bulk.done)} as read.`
     : `Removed ${rows('remove', bulk.done)}.`
 
-/** The sticky toast of a seat a refusal stopped, in organization `orgName`:
-    what was done there, what was not, then the refusal's sentence. */
-export function bulkStopText(action: BulkAction, stop: BulkStop, orgName: string): string {
+/* "a", "a and b", "a, b and c". */
+const listed = (items: readonly string[]) =>
+  items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
+
+/** The sticky toast of the seats one refusal stopped, each with its
+    organization's name and the rows done there: what was done, what was
+    not, then the refusal's sentence. A refusal of one organization names
+    it; the pause, which stops every seat, names those where something was
+    done. */
+export function bulkStopText(
+  action: BulkAction,
+  parts: readonly { orgName: string; done: number }[],
+  reason: string,
+): string {
   const words = WORDS[action]
+  const did = parts.filter((part) => part.done > 0)
   const what =
-    stop.done === 0
-      ? `${words.name} stopped in ${orgName} ${words.none}`
-      : `${words.name} stopped after ${rows(action, stop.done)} in ${orgName}. ${words.rest}`
-  return `${what} ${stop.reason}`
+    did.length === 0
+      ? `${words.name} stopped${parts.length === 1 ? ` in ${parts[0].orgName}` : ''} ${words.none}`
+      : `${words.name} stopped after ${listed(did.map((part) => `${rows(action, part.done)} in ${part.orgName}`))}. ${words.rest}`
+  return `${what} ${reason}`
 }
