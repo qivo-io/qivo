@@ -1290,12 +1290,14 @@ export default defineSchema({
    * stops writing issues.description and clears it, after which an earlier
    * release no longer shows the descriptions, so it cannot be rolled back.
    *
-   * The project and archived copies came after the first release. A row
-   * holds them once project_id is present (stamped); a row written before
-   * them, or by an earlier release that runs again after this one, holds
-   * none or stale ones, and the same backfill reports and mends it
-   * (`differ`). Main Search reads search_description only after a dry run
-   * on every deployment reports zero (docs/deployment.md). */
+   * The project and archived copies came after the table, in the same
+   * release or a later one. A row holds them once project_id is present
+   * (stamped). A row written by code from before them, or restored from an
+   * older backup, holds none, and a release from before the table, which
+   * still deploys, leaves rows with stale ones when it moves or archives
+   * tasks. The same backfill reports and mends both (`differ`). Main Search
+   * reads search_description only after a dry run on every deployment
+   * reports zero (docs/deployment.md). */
   issue_descriptions: defineTable({
     issue_id: v.string(),
     org_id: v.string(), // the task's, for the teardowns that delete an organization's rows

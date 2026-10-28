@@ -54,13 +54,13 @@
  * deletes orphans; a task with a third row needs a second repair. None of
  * those happens while every writer keeps the copies. Rows written before
  * the project and archived copies hold none, as do rows restored from an
- * older backup, and differ until a repair stamps them. An earlier release,
- * which deploys only while no row holds the copies (docs/deployment.md),
- * writes rows without them and moves and archives tasks without their rows,
- * and one from before the table writes tasks and descriptions without rows
- * at all. A repair after the roll forward mends them. No call writes a
- * waiting row, which its step or teardown deletes. Run the dry run again
- * afterwards, until it reports zeros.
+ * older backup, and differ until a repair stamps them. Code that lists the
+ * table without the copies deploys only while no row holds them
+ * (docs/deployment.md). A release from before the table still deploys, and
+ * writes tasks without rows and changes descriptions and moves and
+ * archives tasks without them. A repair after the roll forward mends what
+ * either leaves. No call writes a waiting row, which its step or teardown
+ * deletes. Run the dry run again afterwards, until it reports zeros.
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
