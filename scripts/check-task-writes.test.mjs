@@ -274,18 +274,43 @@ describe('the task write check', { timeout: 60_000 }, () => {
     expect(output).toContain('does not hold it, though its code writes the database')
   })
 
-  it('fails on a task that model/descriptions.ts inserts without the used_ids row of its id', () => {
+  it('fails on each write in model/descriptions.ts that skips the used_ids row or names no table', () => {
+    // each line, with the start of its sentence
+    const lines = [
+      [
+        "export const raw = (ctx: Ctx, doc: Task) => ctx.db.insert('issues', doc)",
+        'this inserts a task row without the used_ids row of its id',
+      ],
+      [
+        "export const rawProject = (ctx: Ctx, doc: Project) => ctx.db.insert('projects', doc)",
+        'this inserts a project row without the used_ids row of its id',
+      ],
+      [
+        "export const swap = (ctx: Ctx, id: Id<'issues'>, doc: Task) => ctx.db.replace(id, doc)",
+        'this replaces a task row without the used_ids row of its id',
+      ],
+      [
+        "export const any = <T extends Tables>(ctx: Ctx, t: T, doc: WithoutSystemFields<DataModel[T]['document']>) => ctx.db.insert(t, doc)",
+        'this writes a table that the check cannot read',
+      ],
+    ]
+    const source = `${owner}${lines.map(([line]) => line).join('\n')}\n`
     const { status, output } = check({
       'schema.ts': schema,
       'lib/db.ts': db.slice(0, db.indexOf('export const insertAny')),
-      'model/descriptions.ts': `${owner}export const raw = (ctx: Ctx, doc: Task) => ctx.db.insert('issues', doc)\n`,
+      'model/descriptions.ts': source,
     })
     expect(status).toBe(1)
+    const rows = source.split('\n')
     const found = output.split('\n').filter((line) => line.startsWith('convex/'))
-    expect(found).toHaveLength(1)
-    expect(found[0]).toMatch(
-      /^convex\/model\/descriptions\.ts:\d+:\d+ - this inserts a task row without the used_ids row of its id/,
-    )
+    expect(found).toHaveLength(lines.length)
+    for (const [i, [line, sentence]] of lines.entries())
+      expect(
+        found[i].startsWith(
+          `convex/model/descriptions.ts:${rows.indexOf(line) + 1}:${line.lastIndexOf('=> ') + 4} - ${sentence}`,
+        ),
+        found[i],
+      ).toBe(true)
   })
 
   it('fails when it finds no insert of used_ids in lib/db.ts, which would mean it reads none', () => {
