@@ -387,20 +387,52 @@ describe('deleteOrgDeep', () => {
         created_by: f.admin.id,
         created_at: NOW,
       })
-      // calls in a paid bucket and a month, here and in the other
+      // calls in a live paid period here and in a month in the other
       // organization, with their account rows and totals
+      const day = 24 * 60 * 60_000
+      const plan = uuid()
+      await ctx.db.insert('billing_plans', {
+        id: plan,
+        name: 'Team',
+        currency: 'usd',
+        seat_price_cents: 100,
+        minimum_seats: 5,
+        storage_gb_per_seat: 1,
+        minimum_storage_gb: 5,
+        api_calls_per_seat: 25_000,
+        api_block_size: 25_000,
+        api_block_price_cents: 100,
+        storage_block_price_cents: 100,
+        archived: false,
+        created_at: NOW,
+      })
+      const sub = await ctx.db.insert('billing_subscriptions', {
+        id: uuid(),
+        org_id: f.org.id,
+        plan_id: plan,
+        status: 'active',
+        polar_subscription_id: 'provider-sub',
+        current_period_start: new Date(Date.now() - day).toISOString(),
+        current_period_end: new Date(Date.now() + 30 * day).toISOString(),
+        billed_seats: 5,
+        next_seats: 5,
+        cancel_at_period_end: false,
+        created_at: NOW,
+        updated_at: NOW,
+      })
       for (const profile of [f.user, f.agent, f.otherAdmin])
         await recordApiCall(ctx, {
           profile_id: profile.id,
           credential_id: `mcp_tokens:${profile.id}`,
           credential_name: 'planted',
         })
-      await ctx.db.insert('billing_usage_totals', {
-        org_id: f.org.id,
-        period_start: NOW,
-        calls: 1,
-        reported_api_blocks: 0,
-      })
+      const [totals] = await ctx.db.query('billing_usage_totals').collect()
+      expect(totals).toMatchObject({ org_id: f.org.id, calls: 2 })
+      expect(
+        (await ctx.db.query('billing_month_totals').collect()).map((row) => row.org_id),
+      ).toEqual([f.otherOrg.id])
+      // the provider side is resolved, as deleteOrgDeep requires
+      await ctx.db.patch(sub, { polar_subscription_id: undefined })
       await ctx.db.insert('marketing_demo', {
         key: 'planted',
         org_id: f.org.id,
