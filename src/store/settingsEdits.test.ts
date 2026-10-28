@@ -337,6 +337,8 @@ describe('settings edits through the client store', () => {
     })
 
     it('runs keepDraft with the value on screen and its writer, for each kind of record', async () => {
+      // the server's settings checks name no writer today; the store passes
+      // on whichever writer a refusal names, as it does for a task's
       const kept: unknown[] = []
       const keepDraft = (shown: unknown, by: unknown) => {
         kept.push([shown, by])

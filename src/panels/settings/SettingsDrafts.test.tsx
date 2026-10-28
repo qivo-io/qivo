@@ -206,7 +206,8 @@ const last = (name: string) => {
 }
 const accept = (name: string) => act(async () => last(name).resolve(null))
 
-/* The server refuses `name` because `by` changed `field` first. */
+/* The server refuses `name` because `change.field` changed first. Its
+   settings checks name no writer (`by` is null), unlike a task's. */
 const refuseChanged = (name: string, change: Omit<FieldChange, 'at'>) =>
   act(async () =>
     last(name).reject(
@@ -251,7 +252,7 @@ describe('the organization name', () => {
     })
   })
 
-  it('keeps the text of a save refused over another change, and names who made it', async () => {
+  it('keeps the text of a save refused over another change, and shows the change', async () => {
     await open(general)
     const field = find('[data-org-name]')
     await type(field, 'Testbed Robotics')
@@ -264,12 +265,12 @@ describe('the organization name', () => {
       record: 'organization',
       id: orgId(),
       field: 'name',
-      by: LEO,
+      by: null,
     })
     expect(field.value).toBe('Testbed Robotics')
-    expect(conflict()?.textContent).toContain('Leo Martins changed it to “Testbed Labs AB”.')
+    expect(conflict()?.textContent).toContain('Changed elsewhere to “Testbed Labs AB”.')
     expect(toasts().at(-1)).toBe(
-      'Not saved. Leo Martins changed the name of the organization. Your text is still in the field. Choose Keep mine under it to replace their version.',
+      'Not saved. The name of the organization was changed elsewhere. Your text is still in the field. Choose Keep mine under it to replace their version.',
     )
     await click(button('Use saved'))
     expect(field.value).toBe('Testbed Labs AB')
@@ -385,7 +386,7 @@ describe('the organization address', () => {
     })
   })
 
-  it('shows who changed it after a refused save, in place of the refusal line', async () => {
+  it('shows the change after a refused save, in place of the refusal line', async () => {
     await open(general)
     const field = find('[data-org-slug]')
     await type(field, 'testbed-ab')
@@ -398,10 +399,10 @@ describe('the organization address', () => {
       record: 'organization',
       id: orgId(),
       field: 'slug',
-      by: LEO,
+      by: null,
     })
     expect(field.value).toBe('testbed-ab')
-    expect(conflict()?.textContent).toContain('Leo Martins changed it to “testbed-labs”.')
+    expect(conflict()?.textContent).toContain('Changed elsewhere to “testbed-labs”.')
     expect(container.querySelector('[data-org-slug-error]')).toBeNull()
     // Use saved takes the refusal away with the draft it was about
     await click(button('Use saved'))
@@ -418,17 +419,17 @@ describe('the organization address', () => {
       record: 'organization',
       id: orgId(),
       field: 'slug',
-      by: LEO,
+      by: null,
     })
     expect(field.value).toBe('testbed-ab')
     expect(find('[data-org-slug-error]').textContent).toBe(
-      'Not saved. Leo Martins changed the address of the organization. Your text is still in the field. Choose Keep mine under it to replace their version.',
+      'Not saved. The address of the organization was changed elsewhere. Your text is still in the field. Choose Keep mine under it to replace their version.',
     )
     // the change arrives: the conflict says the same, with the way out
     await elsewhere((s) => {
       s.orgs[0].slug = 'testbed-labs'
     })
-    expect(conflict()?.textContent).toContain('Leo Martins changed it to “testbed-labs”.')
+    expect(conflict()?.textContent).toContain('Changed elsewhere to “testbed-labs”.')
     expect(container.querySelector('[data-org-slug-error]')).toBeNull()
   })
 })
@@ -534,7 +535,7 @@ describe('your name', () => {
     expect(leaveGuard.hasUnsaved()).toBe(false)
   })
 
-  it('sends the name it began from, and says You for a change from another tab', async () => {
+  it('sends the name it began from, and the one it keeps after a refusal and Keep mine', async () => {
     await open(nameField)
     const field = find('[data-account-name]')
     await type(field, 'Planner Prime')
@@ -550,10 +551,10 @@ describe('your name', () => {
       record: 'profile',
       id: me,
       field: 'name',
-      by: me,
+      by: null,
     })
     expect(field.value).toBe('Planner Prime')
-    expect(conflict()?.textContent).toContain('You changed it elsewhere to “Planner Two”.')
+    expect(conflict()?.textContent).toContain('Changed elsewhere to “Planner Two”.')
     await click(button('Keep mine'))
     await click(find<HTMLButtonElement>('[data-account-name-save]'))
     expect(last('profiles:setDisplayName').args).toMatchObject({
