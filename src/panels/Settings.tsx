@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Icon } from '../components/qivo'
 import { TasksLoadingView } from '../components/TasksLoading'
 import { WorkspacePageHeader, WorkspaceShell } from '../components/WorkspaceShell'
+import type { ApiAccessEntry } from '../lib/apiAccess'
 import { restoreFocus } from '../lib/focusVisibility'
 import { useMobile } from '../lib/useMobile'
 import { P } from '../store/planner'
@@ -115,6 +116,17 @@ function SettingsScreen({
     setHoldingProject(null)
   }, [page])
 
+  /* The account and period Billing's View credentials opens API access on,
+     as App hands Archived tasks its project. API access takes it for its
+     first read and lets it go at once, and any other page drops it, so
+     opening API access again from the menu starts unfiltered. Settings
+     keeps it in its own state: the address stays settings/org-api, and a
+     reload opens the page unfiltered. */
+  const [apiEntry, setApiEntry] = useStateS<ApiAccessEntry | null>(null)
+  useEffectS(() => {
+    if (page !== 'org-api') setApiEntry(null)
+  }, [page])
+
   // keep the page valid for the current user
   useEffectS(() => {
     if (page === 'desktop' && !desktopSettings) {
@@ -199,8 +211,18 @@ function SettingsScreen({
     content = <ArchivedTasksPage initialProject={archivedTasksProject} />
   else if (page === 'projects-deleted') content = <DeletedItemsPage />
   else if (page === 'org-general') content = <OrgGeneralPage setPage={setPage} />
-  else if (page === 'org-billing') content = <BillingSettings setPage={setPage} />
-  else if (page === 'org-api') content = <OrgApiAccessPage />
+  else if (page === 'org-billing')
+    content = (
+      <BillingSettings
+        setPage={setPage}
+        onViewCredentials={(entry) => {
+          setApiEntry(entry)
+          setPage('org-api')
+        }}
+      />
+    )
+  else if (page === 'org-api')
+    content = <OrgApiAccessPage entry={apiEntry} onEntryUsed={() => setApiEntry(null)} />
   else if (page === 'org-users' || page.startsWith('user:'))
     content = (
       <OrgUsersPage

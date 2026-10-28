@@ -101,9 +101,19 @@ export type BillingSummary = {
  * provider period, `pending` the interval after it while a renewal is
  * unconfirmed (no end yet), and `month` a UTC calendar month, used whenever
  * there is no live paid period. Month dates are UTC days; the end is the
- * month's last day. Allowances are null when no plan exists. */
+ * month's last day. `period_key` is the bucket's stored key
+ * (model/billingUsage.ts usagePeriod), which View credentials hands to API
+ * access. Allowances are null when no plan exists.
+ *
+ * `users[].keys` lists each account's credentials with their calls. The app
+ * shows each account's total only, with View credentials, and no longer
+ * reads them; they stay for one release so a tab or desktop window loaded
+ * before it, which reads `keys.length`, still opens Billing. Remove them,
+ * with their reads in model/billing.ts billingUsageHead, in the release
+ * after the one that stopped reading them. */
 export type BillingUsage = {
   period_kind: 'paid' | 'pending' | 'month'
+  period_key: string
   period_start: string
   period_end: string | null
   calls: number
