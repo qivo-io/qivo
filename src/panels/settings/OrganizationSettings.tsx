@@ -104,23 +104,35 @@ function OrgAddressField() {
   )
 }
 
+/* The week-start save in flight for each organization. It outlives the
+   field, so a field opened again before the answer stays disabled until that
+   save settles, and its next choice is sent against the saved day. */
+const weekStartSaves = new Map<string, Promise<boolean>>()
+
 // The first day of each roadmap week. The server refuses a day that would
 // put two milestones of one project in one week, or that it could not check
 // against every milestone; the setting stays as it was and the refusal shows
 // under it, long enough to read the projects and dates it names, until the
-// next choice. The select waits for each answer, so an answer always belongs
-// to the choice on screen and the next choice is sent against the saved day.
+// next choice. The select waits for each answer, also across leaving and
+// opening the page again, so an answer always belongs to the choice on screen
+// and the next choice is sent against the saved day.
 function WeekStartField() {
+  const orgId = P.org.id
   const [refusal, setRefusal] = useStateS('')
-  const [busy, setBusy] = useStateS(false)
+  const [busy, setBusy] = useStateS(() => weekStartSaves.has(orgId))
   // a refusal that comes after the page has gone is toasted instead
   const mounted = useRefS(true)
   useEffectS(() => {
     mounted.current = true
+    const pending = weekStartSaves.get(orgId)
+    setBusy(pending !== undefined)
+    void pending?.then(() => {
+      if (mounted.current) setBusy(false)
+    })
     return () => {
       mounted.current = false
     }
-  }, [])
+  }, [orgId])
   const refused = (sentence: string) => {
     if (!mounted.current) return false
     setRefusal(sentence)
@@ -141,10 +153,13 @@ function WeekStartField() {
           const d = Number(e.target.value)
           setRefusal('')
           setBusy(true)
-          void P.setOrg({ weekStart: d }, refused).then((saved) => {
+          const save = P.setOrg({ weekStart: d }, refused).then((saved) => {
+            if (weekStartSaves.get(orgId) === save) weekStartSaves.delete(orgId)
             if (mounted.current) setBusy(false)
             if (saved) window.showToast?.(`Workdays now start on ${P.WEEKDAYS[d]}`)
+            return saved
           })
+          weekStartSaves.set(orgId, save)
         }}
         className="h-control w-60 bg-surface-1 font-sans text-base"
       >

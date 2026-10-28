@@ -178,6 +178,41 @@ describe('Workdays start on', () => {
     })
   })
 
+  it('keeps the select disabled when the page is opened again before the answer', async () => {
+    await render()
+    let refuse = (_error: unknown) => {}
+    answers.push(
+      () =>
+        new Promise((_resolve, reject) => {
+          refuse = reject
+        }),
+    )
+    await choose(0)
+    await act(async () => root.render(<div />))
+    await render()
+    expect(select()?.disabled).toBe(true)
+    // a choice while the first save waits sends nothing
+    await choose(3)
+    expect(sent).toBe(1)
+    await act(async () =>
+      refuse(
+        new ConvexError({ code: 'rule', reason: WEEK_START_REFUSALS.conflicts, message: CONFLICT }),
+      ),
+    )
+    expect(select()?.disabled).toBe(false)
+    expect(select()?.value).toBe('1')
+    // the next choice goes out against the saved day, not the refused one
+    await choose(3)
+    expect(sent).toBe(2)
+    const update = network.mutation.mock.calls.filter(
+      ([ref]) => getFunctionName(ref) === 'orgs:update',
+    )
+    expect(update.at(-1)?.[1]).toMatchObject({
+      patch: { week_start: 3 },
+      expected: { week_start: 1 },
+    })
+  })
+
   it('toasts a refusal that comes after the page has gone', async () => {
     await render()
     let refuse = (_error: unknown) => {}
