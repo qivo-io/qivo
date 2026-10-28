@@ -130,7 +130,8 @@
  * Each page reads in its own transaction, so a change between two pages
  * can be missed or seen twice. Run the report again right before the
  * release with the split. A page checks its room before each organization,
- * project, admin, task, follow and row, and ends only between two creation
+ * part of projects (PART), project, admin, task, follow and row, and ends
+ * only between two creation
  * times, so its cursor can point into an organization's projects, into one
  * project's admins and into one admin's tasks, follows, tokens and apps. */
 import { makeFunctionReference } from 'convex/server'
@@ -183,6 +184,19 @@ export const SUBS = { most: 1_000, bytes: 2 * MIB }
  * about three index ranges a team, so 1,500 for 500 teams, beside the
  * organization's teams (at most 4,000 rows) and SUBS. Tests lower them. */
 export const OWN = { rows: 4_000, bytes: MIB, teams: 500 }
+
+/** The most live projects of one organization the projects phase reads at
+ * once, and their bytes, before it judges them. Each admin's ordinary levels
+ * get the part's projects and their parents (lib/access.ts projectLevelsOf
+ * `read`), so no (project, admin) pair reads its project again. A part holds
+ * about as many projects as the page has pairs left for the organization's
+ * admins, so a page mostly reads one part of an organization; each part
+ * makes the admins' levels again, which then read their own rows again. A
+ * part is read past the room check before it, so it sits beside one
+ * navigation answer (ROOM, OWN, SUBS) in the half of the limits a page
+ * leaves, which 1,000 documents and 1 MiB keep inside 16,000 documents and
+ * 8 MiB. Tests lower them. */
+export const PART = { rows: 1_000, bytes: MIB }
 
 /** The most admins of one organization a page reads, each a profile of at
  * most about 1.5 KiB (a name of at most 80 characters and an email of at
@@ -393,8 +407,9 @@ const inMetaTree = (project: Doc<'projects'>, root: Doc<'projects'>): boolean =>
 
 /** One page of a phase: its transaction, its row budget and its time, what
  * it found so far, and the reads it caches for this page only, each
- * organization's admins, each admin's ordinary levels and whether each
- * parent's sub-projects fit SUBS. */
+ * organization's admins, each admin's ordinary levels, whether each
+ * parent's sub-projects fit SUBS and each admin's own rows OWN, and the
+ * parents the projects phase reads. */
 type Page = {
   ctx: QueryCtx
   size: number
@@ -408,6 +423,7 @@ type Page = {
   levels: Map<string, Levels>
   subsFit: Map<string, Promise<boolean>>
   ownFits: Map<string, Promise<boolean>>
+  projects: Map<string, Promise<Doc<'projects'> | null>>
 }
 
 const newPage = (ctx: QueryCtx, size: number): Page => ({
@@ -422,6 +438,7 @@ const newPage = (ctx: QueryCtx, size: number): Page => ({
   levels: new Map(),
   subsFit: new Map(),
   ownFits: new Map(),
+  projects: new Map(),
 })
 
 /** Whether `page` ends before its next row: once it got further, past its
@@ -465,7 +482,20 @@ function adminsOf(page: Page, orgId: string): Promise<Doc<'profiles'>[]> {
   return known
 }
 
-/** The ordinary levels of `admin` (ordinaryOf), kept for the page. */
+/** The project with this id, of any organization, or null, read once a
+ * page. */
+function projectOf(page: Page, id: string): Promise<Doc<'projects'> | null> {
+  let known = page.projects.get(id)
+  if (known === undefined) {
+    known = byId(page.ctx, 'projects', id)
+    page.projects.set(id, known)
+  }
+  return known
+}
+
+/** The ordinary levels of `admin` (ordinaryOf), kept for the page. The
+ * projects phase makes its own for each part of projects it reads
+ * (PART). */
 function levelsOf(page: Page, admin: Doc<'profiles'>): Levels {
   let known = page.levels.get(admin.id)
   if (known === undefined) {
@@ -621,14 +651,14 @@ async function walk<R extends { _creationTime: number }>(
 }
 
 /** Judges what `admin` keeps of live project `project` under top-level
- * project `root`. */
+ * project `root`, by `levels`, their ordinary levels. */
 async function judgeProject(
   page: Page,
   admin: Doc<'profiles'>,
+  levels: Levels,
   project: Doc<'projects'>,
   root: Doc<'projects'>,
 ): Promise<void> {
-  const levels = levelsOf(page, admin)
   const where: ProjectWhere = {
     org_id: project.org_id,
     profile_id: admin.id,
@@ -675,6 +705,35 @@ const liveProjects = (ctx: QueryCtx, orgId: string, after: number) =>
       q.eq('archived_at', undefined).eq('org_id', orgId).gt('_creationTime', after),
     )
 
+/** The next part of organization `orgId`'s live projects created after
+ * `after`, at most `most` of them and PART.bytes, and with them every other
+ * project created at the last one's time, as the next part starts after
+ * that time. `more` is false once the part holds the rest. */
+async function projectPart(
+  ctx: QueryCtx,
+  orgId: string,
+  after: number,
+  most: number,
+): Promise<{ rows: Doc<'projects'>[]; more: boolean }> {
+  const rows: Doc<'projects'>[] = []
+  let bytes = 0
+  for await (const project of liveProjects(ctx, orgId, after)) {
+    rows.push(project)
+    bytes += getDocumentSize(project)
+    if (rows.length >= most || bytes >= PART.bytes) {
+      const last = project._creationTime
+      const tied = ctx.db
+        .query('projects')
+        .withIndex('by_archived_org', (q) =>
+          q.eq('archived_at', undefined).eq('org_id', orgId).eq('_creationTime', last),
+        )
+      for await (const same of tied) if (!rows.some((row) => row._id === same._id)) rows.push(same)
+      return { rows, more: true }
+    }
+  }
+  return { rows, more: false }
+}
+
 /** The first organization after `orgId`, or the first of all without it,
  * that holds a live project. */
 async function nextProjectOrg(ctx: QueryCtx, orgId?: string): Promise<string | null> {
@@ -701,32 +760,52 @@ async function projectsPage(page: Page, at: Cursor): Promise<PageResult> {
     const admins = await adminsOf(page, org)
     let last = after
     // an organization without active admins has nothing to judge
-    const projects = admins.length === 0 ? [] : liveProjects(ctx, org, after)
-    for await (const project of projects) {
-      // a page ends only between two creation times
-      const apart = project._creationTime !== last
-      if (apart && (await full(page))) return answer(page, { phase: 'projects', org, after: last })
-      const root = await treeOf(levelsOf(page, admins[0]), project, org, true)
-      // the last admin done with this project, by this page or the one before
-      let done = inside?.project === project.id ? inside.admin : null
-      if (root !== null)
-        for (const admin of admins) {
-          if (done !== null && admin.id <= done) continue
-          if (done !== null && apart && (await full(page)))
-            return answer(page, {
-              phase: 'projects',
-              org,
-              after: last,
-              project: project.id,
-              admin: done,
-            })
-          await judgeProject(page, admin, project, root)
-          page.checked += 1
-          page.moved = true
-          done = admin.id
-        }
-      page.moved = true
-      last = project._creationTime
+    for (let more = admins.length > 0; more; ) {
+      if (await full(page)) return answer(page, { phase: 'projects', org, after: last })
+      // about as many projects as the page has pairs left
+      const most = Math.min(
+        PART.rows,
+        Math.max(1, Math.ceil((page.size - page.checked) / admins.length)),
+      )
+      const part = await projectPart(ctx, org, last, most)
+      more = part.more
+      // each admin's levels read neither these projects nor their parents
+      const known = [...part.rows]
+      const parents = new Set(part.rows.flatMap((p) => p.parent_id ?? []))
+      for (const row of part.rows) parents.delete(row.id)
+      for (const id of parents) {
+        const parent = await projectOf(page, id)
+        if (parent !== null) known.push(parent)
+      }
+      const levels = admins.map((admin) => projectLevelsOf(ctx, ordinaryOf(admin), known))
+      for (const project of part.rows) {
+        // a page ends only between two creation times
+        const apart = project._creationTime !== last
+        if (apart && (await full(page)))
+          return answer(page, { phase: 'projects', org, after: last })
+        const root = await treeOf(levels[0], project, org, true)
+        // the last admin done with this project, by this page or the one
+        // before
+        let done = inside?.project === project.id ? inside.admin : null
+        if (root !== null)
+          for (const [i, admin] of admins.entries()) {
+            if (done !== null && admin.id <= done) continue
+            if (done !== null && apart && (await full(page)))
+              return answer(page, {
+                phase: 'projects',
+                org,
+                after: last,
+                project: project.id,
+                admin: done,
+              })
+            await judgeProject(page, admin, levels[i], project, root)
+            page.checked += 1
+            page.moved = true
+            done = admin.id
+          }
+        page.moved = true
+        last = project._creationTime
+      }
     }
     page.moved = true
     orgId = await nextProjectOrg(ctx, org)

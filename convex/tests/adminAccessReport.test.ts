@@ -1148,12 +1148,17 @@ describe('within Convex limits', () => {
         await ctx.db.insert('project_access', { project_id, profile_id: granted.id, level: 'user' })
     })
 
-    const pages = await measuredPages(t, 'projects', 4_000)
+    // at the default size each page holds its 4,000 pairs, and past it the
+    // room ends a page; a pair reads its project in neither
+    const sized = await measuredPages(t, 'projects', 4_000)
+    const pages = await measuredPages(t, 'projects', 1_000_000)
+    for (const { page } of sized.slice(0, -1)) expect(page.checked).toBe(4_000)
+    // a pair reads no project row: before, each read one, and full pages
+    // ended on index ranges at about half of their size
+    for (const { page, metrics } of [...sized.slice(0, -1), ...pages.slice(0, -1)])
+      expect(metrics.databaseQueries.used).toBeLessThan(page.checked / 4)
     expect(pages.length).toBeGreaterThan(1)
-    for (const { page, metrics } of pages.slice(0, -1)) {
-      expect(page.checked).toBeLessThan(4_000)
-      expect(usedPast(metrics, ROOM.share)).toBe(true)
-    }
+    for (const { metrics } of pages.slice(0, -1)) expect(usedPast(metrics, ROOM.share)).toBe(true)
     const findings = pages.flatMap(({ page }) => page.findings)
     const count = (profileId: string, kind: string) =>
       findings.filter((finding) => finding.profile_id === profileId && finding.kind === kind).length
