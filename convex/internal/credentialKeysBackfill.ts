@@ -12,7 +12,9 @@
  * An agent key or personal token whose profile is gone has no organization
  * to take. Only a profile removal leaves such rows, and its background steps
  * delete them (profileRemovals.ts), so a page leaves them alone and counts
- * them as `orphans`. A later check finds them gone.
+ * them as `orphans`. A later check finds them gone. API access lists no
+ * such row, so a few of them leave its pages ready (apiAccess.ts
+ * credentialsKeyed).
  *
  * Check a deployment before changing it. `remaining` is a query, so it
  * cannot write, and a key that may only run internal queries can run it. It

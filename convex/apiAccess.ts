@@ -374,56 +374,77 @@ export const summary = orgQuery({
 
 /* ------------------------------------------------------------ readiness */
 
+/** How many agent keys or personal tokens without an organization the
+ * readiness check of an organization's page looks at in each table. Only a
+ * row stored before credential keys existed lacks one, so after
+ * internal/credentialKeysBackfill the rows left are those of profiles a
+ * removal deleted and whose keys and tokens its background steps have not
+ * deleted yet (the backfill's orphans), a handful at most. More than this
+ * many means the backfill has not run, and every page answers not ready. */
+const UNKEYED_LOOK = 16
+
+/** Whether no agent key or personal token of a live profile of
+ * organization `orgId` lacks its organization, so by_org_name holds every
+ * row its page would list. A row without one names no organization, so the
+ * check reads up to UNKEYED_LOOK of them deployment-wide and looks up each
+ * owner. A row whose owner is gone, or in another organization, is one
+ * this page never lists, whatever its keys: it skips a credential whose
+ * owner is gone, and lists its calls from its usage rows. So another
+ * organization's leftover key or token leaves this page ready, and it
+ * fails closed past UNKEYED_LOOK rows or on a row of its own. */
+async function credentialsKeyed(
+  ctx: QueryCtx,
+  table: 'agent_keys' | 'mcp_tokens',
+  orgId: string,
+): Promise<boolean> {
+  const unkeyed = await ctx.db
+    .query(table)
+    .withIndex('by_org_name', (q) => q.eq('org_id', undefined))
+    .take(UNKEYED_LOOK + 1)
+  if (unkeyed.length > UNKEYED_LOOK) return false
+  for (const row of unkeyed)
+    if ((await byId(ctx, 'profiles', row.profile_id))?.org_id === orgId) return false
+  return true
+}
+
 /** Whether every row a page of organization `orgId` in bucket `period`
  * reads holds the keys it is ordered by, for the whole organization or for
  * profile `person`. A row stored before the keys existed has none until
  * internal/credentialKeysBackfill or internal/usageRanksBackfill gives it
  * them, and such a row sorts first in each range, so one read of each range
- * answers. Agent keys and personal tokens without an organization can only
- * be found deployment-wide (schema.ts). */
+ * answers, except for agent keys and personal tokens without an
+ * organization, which credentialsKeyed finds deployment-wide. */
 async function pageReady(
   ctx: QueryCtx,
   orgId: string,
   period: string,
   person: string | undefined,
 ): Promise<boolean> {
-  const unkeyed =
-    person === undefined
-      ? [
-          ctx.db
-            .query('agent_keys')
-            .withIndex('by_org_name', (q) => q.eq('org_id', undefined))
-            .first(),
-          ctx.db
-            .query('mcp_tokens')
-            .withIndex('by_org_name', (q) => q.eq('org_id', undefined))
-            .first(),
-          ctx.db
-            .query('oauth_connections')
-            .withIndex('by_org_name', (q) => q.eq('org_id', orgId).eq('name_key', undefined))
-            .first(),
-        ]
-      : [
-          ctx.db
-            .query('agent_keys')
-            .withIndex('by_profile_name', (q) =>
-              q.eq('profile_id', person).eq('name_key', undefined),
-            )
-            .first(),
-          ctx.db
-            .query('mcp_tokens')
-            .withIndex('by_profile_name', (q) =>
-              q.eq('profile_id', person).eq('name_key', undefined),
-            )
-            .first(),
-          ctx.db
-            .query('oauth_connections')
-            .withIndex('by_profile_name', (q) =>
-              q.eq('profile_id', person).eq('name_key', undefined),
-            )
-            .first(),
-        ]
-  for (const row of await Promise.all(unkeyed)) if (row !== null) return false
+  if (person === undefined) {
+    for (const table of ['agent_keys', 'mcp_tokens'] as const)
+      if (!(await credentialsKeyed(ctx, table, orgId))) return false
+    const app = await ctx.db
+      .query('oauth_connections')
+      .withIndex('by_org_name', (q) => q.eq('org_id', orgId).eq('name_key', undefined))
+      .first()
+    if (app !== null) return false
+  } else {
+    const unkeyed = [
+      ctx.db
+        .query('agent_keys')
+        .withIndex('by_profile_name', (q) => q.eq('profile_id', person).eq('name_key', undefined))
+        .first(),
+      ctx.db
+        .query('mcp_tokens')
+        .withIndex('by_profile_name', (q) => q.eq('profile_id', person).eq('name_key', undefined))
+        .first(),
+      ctx.db
+        .query('oauth_connections')
+        .withIndex('by_profile_name', (q) => q.eq('profile_id', person).eq('name_key', undefined))
+        .first(),
+    ]
+    for (const row of await Promise.all(unkeyed)) if (row !== null) return false
+  }
   return await usageRanked(ctx, orgId, period, person)
 }
 

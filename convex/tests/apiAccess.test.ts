@@ -939,7 +939,7 @@ describe('apiAccess.page', () => {
     const t = newT()
     const f = await fixture(t)
     expect((await page(t, f)).state).toBe('ready')
-    // an agent key stored before credential keys, in any organization
+    // an agent key stored before credential keys
     const unkeyed = await t.run((ctx) =>
       ctx.db.insert('agent_keys', {
         id: uuid(),
@@ -951,8 +951,9 @@ describe('apiAccess.page', () => {
       }),
     )
     expect(await page(t, f)).toEqual({ state: 'not_ready' })
+    // another organization's page never lists it
     const other = { admin: f.otherAdmin, org: f.otherOrg }
-    expect(await page(t, other)).toEqual({ state: 'not_ready' })
+    expect((await page(t, other)).state).toBe('ready')
     // one person's page checks only that person's rows
     expect((await page(t, f, { person: f.user.id })).state).toBe('ready')
     expect(await page(t, f, { person: f.agent.id })).toEqual({ state: 'not_ready' })
@@ -983,6 +984,37 @@ describe('apiAccess.page', () => {
     expect(await page(t, f, { period: FREE, person: f.user.id })).toEqual({ state: 'not_ready' })
     expect((await page(t, f, { period: FREE, person: f.agent.id })).state).toBe('ready')
     expect((await page(t, f)).state).toBe('ready')
+  })
+
+  it('stays ready beside another organization’s or a removed profile’s unkeyed key, and fails closed past UNKEYED_LOOK', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    const other = { admin: f.otherAdmin, org: f.otherOrg }
+    const unkeyed = (profile_id: string, n: number) =>
+      t.run((ctx) =>
+        ctx.db.insert('mcp_tokens', {
+          id: uuid(),
+          profile_id,
+          name: `Old token ${n}`,
+          token_prefix: 'qvt_0000000',
+          token_hash: `${String(n).padStart(2, '0')}`.repeat(32),
+          access: 'read',
+          created_at: CREATED,
+        }),
+      )
+    // a token of the other organization's admin, stored before credential keys
+    await unkeyed(f.otherAdmin.id, 0)
+    expect((await page(t, f)).state).toBe('ready')
+    expect(await page(t, other)).toEqual({ state: 'not_ready' })
+    // a removal's leftover, whose profile is gone: no page lists it
+    const gone = uuid()
+    await unkeyed(gone, 1)
+    expect((await page(t, f)).state).toBe('ready')
+    // more leftovers than the check looks at: it cannot tell, so not ready
+    for (let n = 2; n <= 16; n++) await unkeyed(gone, n)
+    expect(await page(t, f)).toEqual({ state: 'not_ready' })
+    // one person's page reads that person's rows alone, keyed or not
+    expect((await page(t, f, { person: f.user.id })).state).toBe('ready')
   })
 
   // The demo refusal is in demo.test.ts, which signs in a real demo login.
