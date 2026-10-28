@@ -584,6 +584,7 @@ describe('the work phase', () => {
       org_id: f.org.id,
       profile_id: f.admin.id,
       task_id: issue.id,
+      sight: 'none' as const,
     })
     expect(lines(await findingsOf(t, 'work'))).toEqual(
       lines([
@@ -598,6 +599,62 @@ describe('the work phase', () => {
         follow(restored),
       ]),
     )
+  })
+})
+
+describe('the work phase on tasks older code stored on a top-level project', () => {
+  it("judges them by the admin's level there, within what a page reads", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the second admin reaches FW, so sees TBED for navigation only
+    const navigating = await plantAdmin(t, f)
+    await grant(t, f.sub, navigating, 'user')
+    const held = new Map<string, Doc<'issues'>>()
+    for (const admin of [f.admin, navigating]) {
+      const task = await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.meta.id,
+        assignee_id: admin.id,
+      })
+      await plantSubscription(t, { issue_id: task.id, profile_id: admin.id })
+      held.set(admin.id, task)
+    }
+    const found = (
+      admin: Doc<'profiles'>,
+      sight: 'none' | 'viewer' | 'unchecked',
+      follows: 'none' | 'unchecked' | null,
+    ) => {
+      const task = held.get(admin.id)
+      if (task === undefined) throw new Error('no task planted for this admin')
+      const where = { org_id: f.org.id, profile_id: admin.id, task_id: task.id }
+      return [
+        {
+          kind: 'held_task' as const,
+          ...where,
+          num: task.num,
+          role: 'assignee' as const,
+          project_id: f.meta.id,
+          sight,
+        },
+        ...(follows === null ? [] : [{ kind: 'follow' as const, ...where, sight: follows }]),
+      ]
+    }
+    expect(lines(await findingsOf(t, 'work'))).toEqual(
+      lines([...found(f.admin, 'none', 'none'), ...found(navigating, 'viewer', null)]),
+    )
+    // past what a page reads of each admin's own rows, the navigation that
+    // tells is not read
+    try {
+      OWN.rows = 0
+      expect(lines(await findingsOf(t, 'work'))).toEqual(
+        lines([
+          ...found(f.admin, 'unchecked', 'unchecked'),
+          ...found(navigating, 'unchecked', 'unchecked'),
+        ]),
+      )
+    } finally {
+      OWN.rows = 4_000
+    }
   })
 })
 

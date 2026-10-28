@@ -38,7 +38,11 @@
  *               Done, not archived, in a live project under a live
  *               top-level project), in a project they would no longer see
  *               (`sight: 'none'`) or would see as a Viewer only
- *               (`'viewer'`), where they can no longer change it. A
+ *               (`'viewer'`), where they can no longer change it. A task
+ *               that older code stored on a top-level project, rather than
+ *               on a sub-project, is judged by the admin's level there,
+ *               'viewer' when they see that project for navigation only and
+ *               'unchecked' when SUBS or OWN keep a page from telling. A
  *               reviewer of a task with active subtasks counts too. The
  *               removal of someone's access treats such a reviewer as
  *               dormant (model/projectAccess.ts removeAndFindLost), a
@@ -47,7 +51,8 @@
  *               live top-level project, Done tasks included, as their
  *               followers still get their notifications, in a project they
  *               would no longer see. After the split they stop getting
- *               that task's notifications. A follow of a task restored
+ *               that task's notifications. `sight` is 'none', or
+ *               'unchecked' as for held_task. A follow of a task restored
  *               from the archive keeps its archive mark (schema.ts
  *               task_archived) until a background step clears it, so the
  *               report reads the marked follows too and asks the task.
@@ -70,8 +75,9 @@
  *               project's project leaves, false also where it is gone or
  *               reaches nobody today, or where the task has moved out of
  *               the project its filters also name, as events must match
- *               both. For 'org' it is null; read it with the admin's
- *               `leaves`.
+ *               both. It is null for 'org', to read with the admin's
+ *               `leaves`, and where SUBS or OWN keep a page from telling, as
+ *               for held_task.
  *   credential  the active personal tokens and approved connected apps of
  *               an admin who has any. They act as the admin over REST and
  *               MCP and lose the same projects.
@@ -133,6 +139,7 @@ import type { Doc } from '../_generated/dataModel'
 import { internalAction, internalQuery, type QueryCtx } from '../_generated/server'
 import { projectLevelsOf, tokenExpired } from '../lib/access'
 import { byId, usedMoreThan } from '../lib/db'
+import type { AccessLevel } from '../lib/enums'
 import { MIB } from '../lib/limits'
 import { ownerStandings } from '../model/webhookOwners'
 
@@ -246,9 +253,15 @@ type Finding =
       num: number
       role: 'assignee' | 'reviewer'
       project_id: string
-      sight: 'none' | 'viewer'
+      sight: 'none' | 'viewer' | 'unchecked'
     }
-  | { kind: 'follow'; org_id: string; profile_id: string; task_id: string }
+  | {
+      kind: 'follow'
+      org_id: string
+      profile_id: string
+      task_id: string
+      sight: 'none' | 'unchecked'
+    }
   | {
       kind: 'webhook'
       org_id: string
@@ -548,6 +561,24 @@ async function seesForNavigation(
   return (await levels.level(project.id)) !== null
 }
 
+/** `admin`'s ordinary level on `project`, under top-level project `root`,
+ * by `levels`, their ordinary levels, as profileCanSeeProject decides
+ * sight: 'viewer' for a top-level project they see for navigation only.
+ * 'unchecked' where that takes reads past SUBS or OWN. A task older code
+ * stored on a top-level project is judged this way. */
+async function sightOf(
+  page: Page,
+  admin: Doc<'profiles'>,
+  levels: Levels,
+  project: Doc<'projects'>,
+  root: Doc<'projects'>,
+): Promise<AccessLevel | null | 'unchecked'> {
+  const own = await levels.level(project.id, false)
+  if (own !== null || project.id !== root.id) return own
+  const navigates = await seesForNavigation(page, admin, levels, project)
+  return navigates === null ? 'unchecked' : navigates ? 'viewer' : null
+}
+
 /** The top-level project of `project` when both are in one meta tree of
  * organization `orgId`, where its admins reach it today, else null. With
  * `live`, also null when either is archived. It reads the parent through
@@ -731,9 +762,10 @@ async function judgeTask(
   if (task.status === 'done') return
   const levels = levelsOf(page, admin)
   const project = await levels.project(task.project_id)
-  if (project === null || (await treeOf(levels, project, admin.org_id, true)) === null) return
-  const level = await levels.level(project.id)
-  if (level !== null && level !== 'viewer') return
+  const root = project && (await treeOf(levels, project, admin.org_id, true))
+  if (project === null || root === null) return
+  const level = await sightOf(page, admin, levels, project, root)
+  if (level !== null && level !== 'viewer' && level !== 'unchecked') return
   page.findings.push({
     kind: 'held_task',
     org_id: admin.org_id,
@@ -742,7 +774,7 @@ async function judgeTask(
     num: task.num,
     role,
     project_id: project.id,
-    sight: level === null ? 'none' : 'viewer',
+    sight: level ?? 'none',
   })
 }
 
@@ -757,13 +789,16 @@ async function judgeFollow(
   if (task === null || task.archived_at !== undefined) return
   const levels = levelsOf(page, admin)
   const project = await levels.project(task.project_id)
-  if (project === null || (await treeOf(levels, project, admin.org_id, true)) === null) return
-  if ((await levels.level(project.id)) !== null) return
+  const root = project && (await treeOf(levels, project, admin.org_id, true))
+  if (project === null || root === null) return
+  const level = await sightOf(page, admin, levels, project, root)
+  if (level !== null && level !== 'unchecked') return
   page.findings.push({
     kind: 'follow',
     org_id: admin.org_id,
     profile_id: admin.id,
     task_id: task.id,
+    sight: level ?? 'none',
   })
 }
 
@@ -866,14 +901,13 @@ async function judgeWebhook(
   const moved = task !== null && project_id !== undefined && task.project_id !== project_id
   const project = projectId === undefined || moved ? null : await levels.project(projectId)
   // a project gone, or outside the tree, delivers nothing today either
-  const leaves =
-    project !== null &&
-    (await treeOf(levels, project, admin.org_id, false)) !== null &&
-    (await levels.level(project.id)) === null
+  const root = project && (await treeOf(levels, project, admin.org_id, false))
+  const level =
+    project === null || root === null ? 'gone' : await sightOf(page, admin, levels, project, root)
   page.findings.push({
     ...where,
     scope: task_id === undefined ? 'project' : 'task',
-    affected: leaves,
+    affected: level === 'unchecked' ? null : level === null,
   })
 }
 
