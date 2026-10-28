@@ -78,6 +78,10 @@ const rowOn = (ctx: QueryCtx, g: Grantee, projectId: string) =>
     )
     .first()
 
+/** Whether the grantee holds a reach row on project `projectId`. */
+export const hasReach = async (ctx: QueryCtx, g: Grantee, projectId: string): Promise<boolean> =>
+  (await rowOn(ctx, g, projectId)) !== null
+
 /** The organization of the grantee, or null when its profile or team is
  * gone. */
 async function granteeOrg(ctx: QueryCtx, g: Grantee): Promise<string | null> {

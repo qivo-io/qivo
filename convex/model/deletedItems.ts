@@ -151,6 +151,7 @@ import {
   archiveStateOf,
   type Grantee,
   grantee,
+  hasReach,
   insertGrant,
   insertShare,
   type ProjectRead,
@@ -2818,10 +2819,11 @@ async function restoreAccess(run: Run): Promise<boolean> {
  * restore_access wrote every one before the reveal (granted), and a grant
  * an admin removed since must stay removed. A job the release before left
  * past its reveal wrote its grants back here, so without `granted` this
- * writes back each one still missing on a live project first. For each
- * stored row it also brings the grantee's reach rows on the project, live
- * now, in line (model/projectNav.ts syncReach), so rows an earlier release
- * never wrote, or a change while the projects were absent, end exact. */
+ * writes back each one still missing on a live project first. A stored row
+ * whose grantee holds no reach row on the project, live now, gets its rows
+ * written (model/projectNav.ts syncReach), as for a job an earlier release
+ * left past restore_access, which wrote grants back without them; a row
+ * restore_access wrote costs one read. */
 async function restoreGrants(run: Run): Promise<boolean> {
   for (const table of GRANT_TABLES) {
     const done = await drain(
@@ -2830,13 +2832,18 @@ async function restoreGrants(run: Run): Promise<boolean> {
         .query('deleted_rows')
         .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table)),
       async (row) => {
-        const live = (await byId(run.ctx, 'projects', row.owner_id)) !== null
-        if (!run.state.granted && live) await writeGrantBack(run, row)
-        // the reach rows of the grantee on the project, which is live now:
-        // the rows restore_access wrote, or none where an earlier release
-        // wrote the grant back without them
+        if (!run.state.granted && (await byId(run.ctx, 'projects', row.owner_id)) !== null)
+          await writeGrantBack(run, row)
+        // the grantee's reach rows on the project, which restore_access
+        // wrote, else written now: an earlier release wrote grants back
+        // without them
         const g = granteeOfStored(row)
-        if (live && g !== null) await syncReachOf(run, (ctx) => syncReach(ctx, g, row.owner_id))
+        if (
+          g !== null &&
+          !(await hasReach(run.ctx, g, row.owner_id)) &&
+          (await byId(run.ctx, 'projects', row.owner_id)) !== null
+        )
+          await syncReachOf(run, (ctx) => syncReach(ctx, g, row.owner_id))
         await run.ctx.db.delete(row._id)
       },
     )
