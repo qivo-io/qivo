@@ -1096,9 +1096,10 @@ export default defineSchema({
    * keeps both copies and every reader still reads issues.description, the
    * source of truth; internal/descriptionsBackfill gives older tasks their
    * rows. The second reads this table, falling back to issues.description
-   * for a task without a row, and ships only once that backfill reports no
-   * missing row on every deployment (docs/deployment.md). The third stops
-   * writing issues.description and clears it, after which an earlier
+   * for a task without a row, and ships only once a dry run of that
+   * backfill on every deployment reports zero missing, differing,
+   * duplicate, orphaned and skipped rows (docs/deployment.md). The third
+   * stops writing issues.description and clears it, after which an earlier
    * release no longer shows the descriptions, so it cannot be rolled back. */
   issue_descriptions: defineTable({
     issue_id: v.string(),

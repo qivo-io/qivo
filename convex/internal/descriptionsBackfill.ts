@@ -4,22 +4,35 @@
  * issues.description, which stays the source of truth in this release.
  * Tasks created or changed since this release already have an equal row:
  * every writer keeps both copies in one transaction. Tasks in Deleted items
- * have none, and a restore writes theirs.
+ * have none once their item's steps have run, and a restore writes theirs.
  *
  * The next release reads issue_descriptions, falling back to
  * issues.description for a task without a row, and ships only once a dry
  * run on every deployment (development, staging, production and the demo)
- * reports zero `missing`, `differ`, `duplicates` and `orphans`.
+ * reports zero `missing`, `differ`, `duplicates`, `orphans` and `skipped`
+ * (docs/deployment.md).
  *
- * A run walks two phases in creation order, each page its own transaction.
- * `tasks` reads every live task and its description row. A task without
- * one is `missing`, a row whose text is not the task's `differ`s, and a
- * second row for one task is a duplicate. `rows` reads every description
- * row and its task, and a row whose task is gone is an orphan. A task row and
- * a description row can each come close to Convex's document size limit
- * (internal/overCapRows.ts keeps the descriptions it finds), so a page reads
- * no more rows at a time than its unspent bytes could hold at twice that
- * size (walk), and a page stays inside Convex's 16 MiB of reads (PAGE).
+ * A call walks two phases in creation order, each page its own
+ * transaction. `tasks` reads every live task and its description rows. A
+ * task without one is `missing`. A row whose text or organization is not
+ * its task's `differ`s. A second row for one task is a duplicate. A task
+ * without issues.description, which only the third release leaves, is
+ * `skipped`, and no call writes its row. `rows` reads every description row
+ * and its task. A row whose task is not live is `waiting` when a running
+ * step or teardown deletes it: the task's Deleted items item has not
+ * finished (model/deletedItems.ts), or its organization is being deleted
+ * (orgRemovals.ts) or is a public demo being cleaned up
+ * (internal/demoCleanup.ts). Any other such row is an orphan. The Northstar
+ * wipe deletes tasks before their rows, so a dry run during a wipe counts
+ * its rows as orphans for a moment.
+ *
+ * Every document a page reads counts toward PAGE.bytes, those a patch or a
+ * delete reads again included. A task row and a description row can each
+ * come close to Convex's document size limit (internal/overCapRows.ts
+ * keeps the descriptions it finds), so a page reads no more rows at a time
+ * than its unspent bytes could hold at that size times the documents one
+ * row can read (walk), and it stays inside Convex's 16 MiB of reads
+ * (PAGE).
  *
  * Read the dry run first. It runs in queries, so it writes nothing, and it
  * reports the counts with the first ids of each kind, never the text. A
@@ -31,11 +44,12 @@
  *   "$H" staging npx convex run internal/descriptionsBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/descriptionsBackfill:run '{"dry_run": false}'
  * A run inserts the missing rows. `"repair": true` also rewrites each
- * differing row from issues.description, deletes the second row of a
- * duplicate and deletes orphans. None of those happens while every writer
- * keeps the copies, but a rollback to an earlier release leaves them, and a
- * repair after the roll forward mends them. Run the dry run again
- * afterwards, until it reports zeros.
+ * differing row from its task, deletes the second row of a duplicate and
+ * deletes orphans; a task with a third row needs a second repair. None of
+ * those happens while every writer keeps the copies, but a rollback to an
+ * earlier release leaves them, and a repair after the roll forward mends
+ * them. No call writes a waiting row, which its step or teardown deletes.
+ * Run the dry run again afterwards, until it reports zeros.
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
@@ -45,12 +59,14 @@
  * deployment:functions:runInternalActions, and its dry run's queries
  * deployment:functions:runInternalQueries as well.
  *
- * A call that wrote adds one platform_audit_log row (action
- * 'descriptions_backfill', actor 'system') with its counts. Running it again
- * is safe, and a deployment with nothing to do reports zeros. It writes no
- * activity, sends no task event and changes nothing a person sees. */
+ * Every call that is not a dry run adds one platform_audit_log row (action
+ * 'descriptions_backfill', actor 'system') with the counts of the pages it
+ * committed and the `cursor` to go on from, also when a page fails partway
+ * through the call. Running it again is safe, and a deployment with nothing
+ * to do reports zeros. It writes no activity, sends no task event and
+ * changes nothing a person sees. */
 import { makeFunctionReference } from 'convex/server'
-import { getDocumentSize, type Infer, v } from 'convex/values'
+import { getDocumentSize, type Infer, type Value, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { internalAction, internalMutation, internalQuery } from '../_generated/server'
@@ -62,11 +78,20 @@ import { putDescription } from '../model/descriptions'
 
 /** Rows one page reads, the bytes it reads before it ends early, as Convex
  * counts a document's size, and the most ids a call lists of each kind.
- * Each read of rows stays within the unspent bytes at two documents of
- * Convex's size limit a row (walk), except a last read of one row, so a page
- * reads at most `bytes` and two such documents, 10 MiB, should no two rows
- * share a creation time. Tests lower them. */
-export const PAGE = { rows: 200, bytes: 8 * MIB, listed: 100 }
+ * Each read of rows stays within the unspent bytes at ROW_DOCUMENTS
+ * documents of Convex's size limit a row (walk), except a last read of one
+ * row, which the second read of its last row follows. A page so reads at
+ * most `bytes` and ROW_DOCUMENTS + 1 such documents, 12 MiB in a repair and
+ * 10 MiB otherwise, should no two rows share a creation time. Tests lower
+ * them. */
+export const PAGE = { rows: 200, bytes: 6 * MIB, listed: 100 }
+
+/** The documents of up to Convex's size limit one row of a page can read:
+ * a task, its two description rows, and in a repair the second row's delete
+ * and the first's patch, which each read their row again; or a description
+ * row, its task, and in a repair the row's delete. The small rows that tell
+ * whether a row waits are counted as they are read. */
+const ROW_DOCUMENTS = { check: 3, repair: 5 }
 
 /** How long one call of run goes on before it answers where to go on
  * from. Tests lower it. */
@@ -81,22 +106,16 @@ const vPhase = v.union(...PHASES.map((phase) => v.literal(phase)))
 const vCursor = v.object({ phase: vPhase, after: v.number() })
 type Cursor = Infer<typeof vCursor>
 
-/** What one page or one call found, the first ids of each kind and, for a
- * page, the creation time it read through and whether its phase is done. */
-type Found = {
-  tasks: number
-  missing: number
-  differ: number
-  duplicates: number
-  orphans: number
-  /** the tasks without a row, with a differing row and with two rows */
-  missing_ids: string[]
-  differ_ids: string[]
-  duplicate_ids: string[]
-  /** the tasks orphaned rows name */
-  orphan_ids: string[]
-}
-type PageResult = Found & { after: number; done: boolean }
+const KINDS = ['missing', 'differ', 'duplicates', 'orphans', 'waiting', 'skipped'] as const
+type Kind = (typeof KINDS)[number]
+
+/** What one page or one call found: the tasks it read, how many rows of
+ * each kind and the first ids of each, the task ids of a description row. */
+type Found = { tasks: number } & Record<Kind, number> & { ids: Record<Kind, string[]> }
+
+/** A page's findings, the bytes it read, the creation time it read through
+ * and whether its phase is done. */
+type PageResult = Found & { bytes: number; after: number; done: boolean }
 
 const empty = (): Found => ({
   tasks: 0,
@@ -104,92 +123,154 @@ const empty = (): Found => ({
   differ: 0,
   duplicates: 0,
   orphans: 0,
-  missing_ids: [],
-  differ_ids: [],
-  duplicate_ids: [],
-  orphan_ids: [],
+  waiting: 0,
+  skipped: 0,
+  ids: { missing: [], differ: [], duplicates: [], orphans: [], waiting: [], skipped: [] },
 })
+
+/** Counts one row of `kind`, for task `id`. */
+function note(found: Found, kind: Kind, id: string): void {
+  found[kind] += 1
+  if (found.ids[kind].length < PAGE.listed) found.ids[kind].push(id)
+}
 
 /** Adds `from`'s counts and ids into `into`, each list cut to PAGE.listed. */
 function add(into: Found, from: Found): void {
-  for (const kind of ['missing', 'differ', 'duplicate', 'orphan'] as const) {
-    const ids = into[`${kind}_ids`]
-    ids.push(...from[`${kind}_ids`].slice(0, Math.max(0, PAGE.listed - ids.length)))
-  }
   into.tasks += from.tasks
-  into.missing += from.missing
-  into.differ += from.differ
-  into.duplicates += from.duplicates
-  into.orphans += from.orphans
+  for (const kind of KINDS) {
+    into[kind] += from[kind]
+    const ids = into.ids[kind]
+    ids.push(...from.ids[kind].slice(0, Math.max(0, PAGE.listed - ids.length)))
+  }
 }
 
 /** How a page writes. It inserts the missing rows, and with `repair` it
  * mends the rest. */
 type Write = { ctx: MutationCtx; repair: boolean }
 
-/** Checks task `task` against its description row, and mends it with
- * `write`. Answers the bytes it read. */
+/** What one page has read so far, and whether a row of an organization
+ * waits for its teardown, read once a page. */
+type Reads = { bytes: number; tearingDown: Map<string, boolean> }
+
+/** Counts `doc` as read, when there is one, and answers it. */
+function read<D extends Record<string, Value> | null>(reads: Reads, doc: D): D {
+  if (doc !== null) reads.bytes += getDocumentSize(doc)
+  return doc
+}
+
+/** Checks task `task` against its description rows, and mends them with
+ * `write`. A task without issues.description is skipped, and nothing writes
+ * its row. A repair reuses the rows read here. */
 async function checkTask(
   ctx: QueryCtx,
   task: Doc<'issues'>,
   found: Found,
   write: Write | null,
-): Promise<number> {
+  reads: Reads,
+): Promise<void> {
   found.tasks++
-  const text = task.description ?? ''
-  const range = () =>
-    ctx.db.query('issue_descriptions').withIndex('by_issue', (q) => q.eq('issue_id', task.id))
-  const rows = await range().take(2)
-  let bytes = rows.reduce((sum, r) => sum + getDocumentSize(r), 0)
+  const rows = await ctx.db
+    .query('issue_descriptions')
+    .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+    .take(2)
+  for (const row of rows) read(reads, row)
+  if (task.description === undefined) {
+    note(found, 'skipped', task.id)
+    return
+  }
+  const text = task.description
   const [row, second] = rows
   if (row === undefined) {
-    found.missing++
-    if (found.missing_ids.length < PAGE.listed) found.missing_ids.push(task.id)
-    if (write !== null) await putDescription(write.ctx.db, task, text)
-    return bytes
+    note(found, 'missing', task.id)
+    if (write !== null) await putDescription(write.ctx.db, task, text, null)
+    return
   }
   if (second !== undefined) {
-    found.duplicates++
-    if (found.duplicate_ids.length < PAGE.listed) found.duplicate_ids.push(task.id)
-    // every row but the first; no writer makes a second, so they are few
-    if (write?.repair)
-      for (const extra of (await range().collect()).slice(1)) {
-        bytes += getDocumentSize(extra)
-        await write.ctx.db.delete(extra._id)
-      }
+    note(found, 'duplicates', task.id)
+    // a delete reads its row again
+    if (write?.repair) await write.ctx.db.delete(read(reads, second)._id)
   }
-  if (row.description !== text) {
-    found.differ++
-    if (found.differ_ids.length < PAGE.listed) found.differ_ids.push(task.id)
-    if (write?.repair) await putDescription(write.ctx.db, task, text)
+  if (row.description !== text || row.org_id !== task.org_id) {
+    note(found, 'differ', task.id)
+    // the patch reads the row again
+    if (write?.repair) await putDescription(write.ctx.db, task, text, read(reads, row))
   }
-  return bytes
 }
 
-/** Checks description row `row` against its task, and deletes it with a
- * repair when the task is gone. Answers the bytes it read. */
+/** Whether a running teardown deletes organization `orgId`'s rows: its
+ * deletion (orgRemovals.ts) or a public demo's cleanup
+ * (internal/demoCleanup.ts). */
+async function tearingDown(ctx: QueryCtx, orgId: string, reads: Reads): Promise<boolean> {
+  const known = reads.tearingDown.get(orgId)
+  if (known !== undefined) return known
+  const removal = read(
+    reads,
+    await ctx.db
+      .query('org_removals')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .first(),
+  )
+  const demo =
+    removal !== null
+      ? null
+      : read(
+          reads,
+          await ctx.db
+            .query('demo_sessions')
+            .withIndex('by_org', (q) => q.eq('org_id', orgId))
+            .first(),
+        )
+  const answer = removal !== null || demo?.status === 'deleting'
+  reads.tearingDown.set(orgId, answer)
+  return answer
+}
+
+/** Whether a Deleted items item that has not finished holds task `taskId`,
+ * whose steps delete its description rows (model/deletedItems.ts). */
+async function heldInSteps(ctx: QueryCtx, taskId: string, reads: Reads): Promise<boolean> {
+  const light = read(
+    reads,
+    await ctx.db
+      .query('deleted_tasks')
+      .withIndex('by_task', (q) => q.eq('task_id', taskId))
+      .first(),
+  )
+  if (light === null) return false
+  const item = read(reads, await byId(ctx, 'deleted_items', light.item_id))
+  return item !== null && item.state !== 'ready'
+}
+
+/** Checks description row `row` against its task: a row whose task is not
+ * live waits for its step or teardown, or is an orphan, which a repair
+ * deletes. */
 async function checkRow(
   ctx: QueryCtx,
   row: Doc<'issue_descriptions'>,
   found: Found,
   write: Write | null,
-): Promise<number> {
-  const task = await byId(ctx, 'issues', row.issue_id)
-  if (task !== null) return getDocumentSize(task)
-  found.orphans++
-  if (found.orphan_ids.length < PAGE.listed) found.orphan_ids.push(row.issue_id)
-  if (write?.repair) await write.ctx.db.delete(row._id)
-  return 0
+  reads: Reads,
+): Promise<void> {
+  if (read(reads, await byId(ctx, 'issues', row.issue_id)) !== null) return
+  if (
+    (await tearingDown(ctx, row.org_id, reads)) ||
+    (await heldInSteps(ctx, row.issue_id, reads))
+  ) {
+    note(found, 'waiting', row.issue_id)
+    return
+  }
+  note(found, 'orphans', row.issue_id)
+  // a delete reads its row again
+  if (write?.repair) await write.ctx.db.delete(read(reads, row)._id)
 }
 
 /** Reads one page of `phase` from creation time `after` and answers what
  * it found, which it mends with `write` unless that is null. The dry run
  * and the run share it, so both find the same rows. It reads rows in
- * parts, each no larger than the unspent bytes could hold at twice
- * Convex's document size limit, since each row reads one more, and the
- * page ends at PAGE.rows or PAGE.bytes. Every row with a part's last
- * creation time is in it, should two share one. A write changes no
- * creation time the page reads by, so `after` stays valid. */
+ * parts, each no larger than the unspent bytes could hold at ROW_DOCUMENTS
+ * of Convex's document size limit a row, and the page ends at PAGE.rows or
+ * PAGE.bytes. Every row with a part's last creation time is in it, read a
+ * second time, should two share one. A write changes no creation time the
+ * page reads by, so `after` stays valid. */
 async function walk(
   ctx: QueryCtx,
   phase: Phase,
@@ -197,20 +278,28 @@ async function walk(
   write: Write | null,
 ): Promise<PageResult> {
   const table = phase === 'tasks' ? 'issues' : 'issue_descriptions'
+  const perRow = (write?.repair ? ROW_DOCUMENTS.repair : ROW_DOCUMENTS.check) * DOCUMENT_MAX_BYTES
   const found = empty()
+  const reads: Reads = { bytes: 0, tearingDown: new Map() }
+  const result = (through: number, done: boolean): PageResult => ({
+    ...found,
+    bytes: reads.bytes,
+    after: through,
+    done,
+  })
   let through = after
-  let read = 0
-  let bytes = 0
+  let rowsRead = 0
   for (;;) {
-    const fits = Math.max(1, Math.floor((PAGE.bytes - bytes) / (2 * DOCUMENT_MAX_BYTES)))
-    const want = Math.min(PAGE.rows - read, fits)
+    const fits = Math.max(1, Math.floor((PAGE.bytes - reads.bytes) / perRow))
+    const want = Math.min(PAGE.rows - rowsRead, fits)
     const from = through
     const part = await ctx.db
       .query(table)
       .withIndex('by_creation_time', (q) => q.gt('_creationTime', from))
       .take(want)
+    for (const row of part) read(reads, row)
     const last = part.at(-1)?._creationTime
-    if (last === undefined) return { ...found, after: through, done: true }
+    if (last === undefined) return result(through, true)
     const tail =
       part.length < want
         ? []
@@ -218,19 +307,17 @@ async function walk(
             .query(table)
             .withIndex('by_creation_time', (q) => q.eq('_creationTime', last))
             .collect()
+    for (const row of tail) read(reads, row)
     const rows = [...part.filter((row) => row._creationTime < last || tail.length === 0), ...tail]
     for (const row of rows) {
       // a description row names its task; a task row has no issue_id
-      const more =
-        'issue_id' in row
-          ? await checkRow(ctx, row, found, write)
-          : await checkTask(ctx, row, found, write)
-      bytes += getDocumentSize(row) + more
+      if ('issue_id' in row) await checkRow(ctx, row, found, write, reads)
+      else await checkTask(ctx, row, found, write, reads)
     }
-    read += rows.length
+    rowsRead += rows.length
     through = last
-    if (part.length < want) return { ...found, after: through, done: true }
-    if (read >= PAGE.rows || bytes >= PAGE.bytes) return { ...found, after: through, done: false }
+    if (part.length < want) return result(through, true)
+    if (rowsRead >= PAGE.rows || reads.bytes >= PAGE.bytes) return result(through, false)
   }
 }
 
@@ -251,23 +338,28 @@ export const check = internalQuery({
     await walk(ctx, phase, after, null),
 })
 
-const vCounts = v.object({
+const vRecord = v.object({
   repair: v.boolean(),
   tasks: v.number(),
   missing: v.number(),
   differ: v.number(),
   duplicates: v.number(),
   orphans: v.number(),
+  waiting: v.number(),
+  skipped: v.number(),
+  done: v.boolean(),
+  cursor: v.union(vCursor, v.null()),
 })
 
-/** Records a call that wrote, with its counts. */
+/** Records a call that was not a dry run: the counts of the pages it
+ * committed, and where to go on from. */
 export const audit = internalMutation({
-  args: vCounts,
-  handler: async (ctx, counts) => {
+  args: vRecord,
+  handler: async (ctx, record) => {
     await writeAudit(ctx, {
       actor_email: 'system',
       action: 'descriptions_backfill',
-      detail: counts,
+      detail: record,
     })
     return null
   },
@@ -281,7 +373,7 @@ const pageRef = makeFunctionReference<
 const checkRef = makeFunctionReference<'query', { phase: Phase; after: number }, PageResult>(
   'internal/descriptionsBackfill:check',
 )
-const auditRef = makeFunctionReference<'mutation', Infer<typeof vCounts>, null>(
+const auditRef = makeFunctionReference<'mutation', Infer<typeof vRecord>, null>(
   'internal/descriptionsBackfill:audit',
 )
 
@@ -289,30 +381,34 @@ const auditRef = makeFunctionReference<'mutation', Infer<typeof vCounts>, null>(
  * found, the counts with the first PAGE.listed ids of each kind. A dry run
  * writes nothing; a run inserts the missing rows, and with `repair` mends
  * the rest. Past RUN.ms it stops after a page and answers the `cursor` to
- * go on from, else `done`. A call that wrote ends with its audit row. */
+ * go on from, else `done`. A call that is not a dry run ends with its audit
+ * row, also when a page fails, and then throws that page's error. */
 export const run = internalAction({
   args: { dry_run: v.boolean(), repair: v.optional(v.boolean()), cursor: v.optional(vCursor) },
   handler: async (ctx, { dry_run, repair = false, cursor: from }) => {
     const until = Date.now() + RUN.ms
     const found = empty()
     let cursor: Cursor | null = from ?? { phase: PHASES[0], after: 0 }
-    while (cursor !== null) {
-      const { phase, after }: Cursor = cursor
-      const result: PageResult = dry_run
-        ? await ctx.runQuery(checkRef, { phase, after })
-        : await ctx.runMutation(pageRef, { phase, after, repair })
-      add(found, result)
-      const next: Phase | undefined = PHASES[PHASES.indexOf(phase) + 1]
-      cursor = !result.done
-        ? { phase, after: result.after }
-        : next === undefined
-          ? null
-          : { phase: next, after: 0 }
-      if (Date.now() >= until) break
-    }
-    if (!dry_run) {
-      const { tasks, missing, differ, duplicates, orphans } = found
-      await ctx.runMutation(auditRef, { repair, tasks, missing, differ, duplicates, orphans })
+    try {
+      while (cursor !== null) {
+        const { phase, after }: Cursor = cursor
+        const result: PageResult = dry_run
+          ? await ctx.runQuery(checkRef, { phase, after })
+          : await ctx.runMutation(pageRef, { phase, after, repair })
+        add(found, result)
+        const next: Phase | undefined = PHASES[PHASES.indexOf(phase) + 1]
+        cursor = !result.done
+          ? { phase, after: result.after }
+          : next === undefined
+            ? null
+            : { phase: next, after: 0 }
+        if (Date.now() >= until) break
+      }
+    } finally {
+      if (!dry_run) {
+        const { ids: _ids, ...counts } = found
+        await ctx.runMutation(auditRef, { repair, ...counts, done: cursor === null, cursor })
+      }
     }
     return { dry_run, repair, ...found, done: cursor === null, cursor }
   },

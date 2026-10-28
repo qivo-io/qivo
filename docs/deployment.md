@@ -601,11 +601,16 @@ module's header says. Read its dry run first, then run it, and call it
 again with the `cursor` it answers until it answers `done`. The second
 release reads the table and ships only once a dry run on development,
 staging, production and the demo reports zero `missing`, `differ`,
-`duplicates` and `orphans`. A rollback past the first release deploys,
-because Convex leaves a table the schema does not list alone, but the
-earlier code writes tasks without their rows. After rolling forward again,
-run the backfill with `"repair": true`, which also rewrites differing rows
-from `issues.description` and deletes rows whose task is gone. The third
+`duplicates`, `orphans` and `skipped`. Its `waiting` rows belong to a
+Deleted items item or a teardown that is still running and deletes them.
+A rollback past the first release deploys, because Convex leaves a table
+the schema does not list alone, but the earlier code writes tasks without
+their rows and changes descriptions without them. After rolling forward
+again, run the backfill with `"repair": true`, which also rewrites
+differing rows from `issues.description`, deletes extra rows and deletes
+rows whose task is gone. Every call that is not a dry run adds an audit
+row with its counts and the `cursor` to go on from, also when it fails
+partway. The third
 release clears `issues.description`, and no earlier release can show the
 descriptions after that, so it is a rollback floor.
 
