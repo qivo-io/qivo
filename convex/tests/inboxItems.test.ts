@@ -1,13 +1,15 @@
 /* Inbox items (schema.ts inbox_items and inbox_state, model/inboxItems.ts):
  * every message write keeps a built recipient's items equal to what their
  * messages make (itemOf), the build state decides which items are kept,
- * and every teardown deletes them with the messages. Each case compares
- * every stored item with a build from the messages (drift), so a write
- * that leaves one item wrong fails. */
+ * every teardown deletes them with the messages, and
+ * internal/inboxItemsBackfill builds the items of messages stored before
+ * them. Each case compares every stored item with a build from the
+ * messages (drift), so a write that leaves one item wrong fails. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { BUILD, RUN } from '../internal/inboxItemsBackfill'
 import { byId } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import { deleteOrgDeep } from '../model/cascade'
@@ -28,14 +30,28 @@ import {
   wakeSnoozedItem,
 } from '../model/messages'
 import { wipeWorkStep } from '../model/orgDeletion'
-import { as, NOW, newT, type OrgFixture, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  NOW,
+  newT,
+  type OrgFixture,
+  plantIssue,
+  plantMessage,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import { deleteProject, deleteTask, installTrashTimers, itemFor, runSteps } from './trash.setup'
 
 installTrashTimers()
+const DEFAULT_BUILD = { ...BUILD }
+const DEFAULT_RUN = { ...RUN }
 const DEFAULT_REKEY = { ...REKEY }
 afterEach(() => {
+  Object.assign(BUILD, DEFAULT_BUILD)
+  Object.assign(RUN, DEFAULT_RUN)
   Object.assign(REKEY, DEFAULT_REKEY)
 })
 
@@ -147,6 +163,12 @@ async function post(
   })
 }
 
+const backfill = (t: T, args: { dry_run: boolean; cursor?: string }) =>
+  t.action(internal.internal.inboxItemsBackfill.run, args)
+
+const check = (t: T, profile_id: string, after?: string) =>
+  t.query(internal.internal.inboxItemsBackfill.check, { profile_id, after })
+
 /* Two tasks in the fixture's sub-project, sorted by id, which is the
  * order the backfill builds items in. */
 async function tasks(t: T, f: OrgFixture, n = 2): Promise<Doc<'issues'>[]> {
@@ -188,6 +210,11 @@ describe('the item a message makes', () => {
       await ctx.db.patch(item._id, { unread_count: 2 })
     })
     expect(await drift(t)).toEqual([expect.stringMatching(/unread_count: 2, not 3$/)])
+    const found = await check(t, f.user.id)
+    expect(found).toMatchObject({
+      checked: 1,
+      differ: [{ issue_id: task.id, fields: ['unread_count'] }],
+    })
   })
 
   it('posts nothing to a hidden task and keeps no item for it', async () => {
@@ -730,7 +757,68 @@ describe('the teardowns delete the items and the build state with the messages',
   })
 })
 
-describe('an ItemEdits', () => {
+describe('the build gate', () => {
+  it('a recipient with messages from before keeps no items until the backfill builds them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [a] = await tasks(t, f, 1)
+    await plantMessage(t, { org_id: f.org.id, recipient_id: f.user.id, issue_id: a.id })
+    await post(t, f, { to: f.user, task: a, minute: 1 })
+    expect(await stateOf(t, f.user.id)).toBeNull()
+    expect(await itemOfPair(t, f.user.id, a.id)).toBeNull()
+    expect(await t.query(internal.internal.inboxItemsBackfill.remaining, {})).toMatchObject({
+      profiles: 1,
+      listed: [{ profile_id: f.user.id, built: false, has_messages: true }],
+    })
+    await backfill(t, { dry_run: false })
+    expect(await stateOf(t, f.user.id)).toMatchObject({ built: true })
+    expect(await itemOfPair(t, f.user.id, a.id)).toMatchObject({ unread_count: 2 })
+    expect(await t.query(internal.internal.inboxItemsBackfill.remaining, {})).toMatchObject({
+      profiles: 0,
+    })
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('writes between build steps keep the built tasks and leave the rest to the later steps', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [a, b, c] = await tasks(t, f, 3)
+    for (const task of [a, b, c])
+      await plantMessage(t, { org_id: f.org.id, recipient_id: f.user.id, issue_id: task.id })
+    BUILD.pairs = 1
+    const step = () =>
+      t.mutation(internal.internal.inboxItemsBackfill.step, { profile_id: f.user.id })
+    expect(await step()).toMatchObject({ items: 1, done: false })
+    expect(await stateOf(t, f.user.id)).toMatchObject({ built: false, built_through: a.id })
+    // a write to the built task keeps its item, one to the others does not
+    await post(t, f, { to: f.user, task: a, minute: 1 })
+    await post(t, f, { to: f.user, task: c, minute: 2 })
+    await t.run(async (ctx) => {
+      const me = (await byId(ctx, 'profiles', f.user.id))!
+      const rows = await ctx.db
+        .query('messages')
+        .withIndex('by_recipient_issue', (q) => q.eq('recipient_id', me.id).eq('issue_id', b.id))
+        .collect()
+      await markMessagesRead(ctx, me, rows, at(3))
+    })
+    expect(await itemOfPair(t, f.user.id, a.id)).toMatchObject({ unread_count: 2 })
+    expect(await itemOfPair(t, f.user.id, c.id)).toBeNull()
+    expect(await drift(t)).toEqual([])
+    // a new task below the built ones is covered, and is built from its rows
+    const below = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      id: `00000000-0000-4000-8000-${'0'.repeat(12)}`,
+    })
+    await post(t, f, { to: f.user, task: below, minute: 4 })
+    expect(await itemOfPair(t, f.user.id, below.id)).toMatchObject({ unread_count: 1 })
+    while (!(await step()).done) {}
+    expect(await stateOf(t, f.user.id)).toMatchObject({ built: true })
+    expect(await itemOfPair(t, f.user.id, b.id)).toMatchObject({ unread: false })
+    expect(await itemOfPair(t, f.user.id, c.id)).toMatchObject({ unread_count: 2 })
+    expect(await drift(t)).toEqual([])
+  })
+
   it('an ItemEdits flushed several times reads each item once and stays exact', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -760,6 +848,189 @@ describe('an ItemEdits', () => {
     expect(reads).toBe(0)
     expect(await itemOfPair(t, f.user.id, a.id)).toMatchObject({ unread_count: 4 })
     expect(await drift(t)).toEqual([])
+  })
+})
+
+describe('the backfill', () => {
+  /* Planted messages from before the items: two profiles, three tasks. */
+  async function legacy(t: T, f: OrgFixture) {
+    const list = await tasks(t, f, 3)
+    for (const [i, task] of list.entries()) {
+      for (const to of [f.user, f.guest])
+        await plantMessage(t, {
+          org_id: f.org.id,
+          recipient_id: to.id,
+          issue_id: task.id,
+          kind: i === 0 ? 'mention' : 'change',
+          created_at: at(i),
+        })
+      await plantMessage(t, {
+        org_id: f.org.id,
+        recipient_id: f.user.id,
+        issue_id: task.id,
+        read_at: at(10),
+        created_at: at(5 + i),
+      })
+    }
+    return list
+  }
+
+  it('reports in a dry run without writing, builds in a run, and builds nothing again', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await legacy(t, f)
+    const dry = await backfill(t, { dry_run: true })
+    expect(dry).toMatchObject({
+      dry_run: true,
+      profiles: 2,
+      items: 6,
+      messages: 9,
+      oversized: 0,
+      done: true,
+    })
+    expect(await t.run((ctx) => ctx.db.query('inbox_items').collect())).toEqual([])
+    expect(await t.run((ctx) => ctx.db.query('inbox_state').collect())).toEqual([])
+    expect(await t.run((ctx) => ctx.db.query('platform_audit_log').collect())).toEqual([])
+    const run = await backfill(t, { dry_run: false })
+    expect(run).toMatchObject({ profiles: 2, items: 6, trimmed: 0, stuck: 0, done: true })
+    expect(await drift(t)).toEqual([])
+    const audit = await t.run((ctx) => ctx.db.query('platform_audit_log').collect())
+    expect(audit).toMatchObject([
+      { action: 'inbox_items_backfill', actor_email: 'system', detail: { profiles: 2, items: 6 } },
+    ])
+    expect(await backfill(t, { dry_run: false })).toMatchObject({ profiles: 0, items: 0 })
+    for (const p of [f.user, f.guest])
+      expect(await check(t, p.id)).toMatchObject({
+        built: true,
+        checked: 3,
+        differ: [],
+        missing: [],
+        extra: [],
+        done: true,
+      })
+  })
+
+  it('goes on from a cursor past RUN.ms and in steps of a few bytes, and still builds every item', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await legacy(t, f)
+    Object.assign(RUN, { ms: 0, profiles: 1 })
+    BUILD.bytes = 1
+    let cursor: string | undefined
+    let calls = 0
+    for (;;) {
+      const got = await backfill(t, { dry_run: false, cursor })
+      calls++
+      if (got.done) break
+      cursor = got.cursor ?? undefined
+    }
+    expect(calls).toBeGreaterThan(2)
+    expect(await drift(t)).toEqual([])
+    expect(await t.query(internal.internal.inboxItemsBackfill.remaining, {})).toMatchObject({
+      profiles: 0,
+    })
+  })
+
+  it('trims an item too large for one step toward the cap first, and lists one it cannot shrink', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [a, b] = await tasks(t, f)
+    BUILD.pair_rows = ITEM_UNREAD_CAP + 10
+    BUILD.trims = 1
+    await t.run(async (ctx) => {
+      for (let i = 0; i < ITEM_UNREAD_CAP + 80; i++)
+        await ctx.db.insert('messages', {
+          id: uuid(),
+          org_id: f.org.id,
+          recipient_id: f.user.id,
+          issue_id: a.id,
+          issue_title: a.title,
+          kind: 'change',
+          detail: `Legacy ${i}`,
+          created_at: at(i),
+        })
+    })
+    expect(await backfill(t, { dry_run: true })).toMatchObject({
+      oversized: 1,
+      oversized_items: [{ recipient_id: f.user.id, issue_id: a.id }],
+    })
+    expect(await pairRows(t, f.user.id, a.id)).toHaveLength(ITEM_UNREAD_CAP + 80)
+    const run = await backfill(t, { dry_run: false })
+    expect(run).toMatchObject({ trimmed: 80, stuck: 0, done: true })
+    expect(await itemOfPair(t, f.user.id, a.id)).toMatchObject({
+      unread_count: ITEM_UNREAD_CAP,
+      dropped: 80,
+    })
+    expect(await drift(t)).toEqual([])
+    // read rows no trim deletes, from before the prune, stop their profile
+    await t.run(async (ctx) => {
+      for (let i = 0; i < ITEM_UNREAD_CAP + 11; i++)
+        await ctx.db.insert('messages', {
+          id: uuid(),
+          org_id: f.org.id,
+          recipient_id: f.guest.id,
+          issue_id: b.id,
+          issue_title: b.title,
+          kind: 'change',
+          detail: `Read ${i}`,
+          created_at: at(i),
+          read_at: at(200),
+        })
+    })
+    expect(await backfill(t, { dry_run: false })).toMatchObject({
+      stuck: 1,
+      stuck_items: [{ recipient_id: f.guest.id, issue_id: b.id }],
+    })
+    expect(await stateOf(t, f.guest.id)).toMatchObject({ built: false })
+    expect(await t.query(internal.internal.inboxItemsBackfill.remaining, {})).toMatchObject({
+      profiles: 1,
+    })
+  })
+
+  it('the check lists rows that differ, are missing or have no messages, page by page', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [a, b, c] = await legacy(t, f)
+    await backfill(t, { dry_run: false })
+    await t.run(async (ctx) => {
+      const items = await ctx.db.query('inbox_items').collect()
+      const of = (task: Doc<'issues'>) =>
+        items.find((i) => i.recipient_id === f.user.id && i.issue_id === task.id)!
+      await ctx.db.patch(of(a)._id, { comments: 4, sort_at: at(99) })
+      await ctx.db.delete(of(b)._id)
+      // a row whose messages are gone
+      for (const m of await ctx.db
+        .query('messages')
+        .withIndex('by_recipient_issue', (q) =>
+          q.eq('recipient_id', f.user.id).eq('issue_id', c.id),
+        )
+        .collect())
+        await ctx.db.delete(m._id)
+    })
+    BUILD.pairs = 1
+    const pages = []
+    let after: string | undefined
+    for (;;) {
+      const page = await check(t, f.user.id, after)
+      pages.push(page)
+      if (page.done) break
+      after = page.next ?? undefined
+    }
+    expect(pages.flatMap((p) => p.differ)).toEqual([
+      { issue_id: a.id, fields: ['comments', 'sort_at'] },
+    ])
+    expect(pages.flatMap((p) => p.missing)).toEqual([b.id])
+    expect(pages.flatMap((p) => p.extra)).toEqual([c.id])
+    // a run leaves a built profile alone, and a rebuild mends every row
+    expect(await backfill(t, { dry_run: false })).toMatchObject({ profiles: 0 })
+    expect(await drift(t)).not.toEqual([])
+    const rebuilt = await t.action(internal.internal.inboxItemsBackfill.run, {
+      dry_run: false,
+      rebuild: true,
+    })
+    expect(rebuilt).toMatchObject({ profiles: 2, items: 5, done: true })
+    expect(await drift(t)).toEqual([])
+    expect(await check(t, f.user.id)).toMatchObject({ differ: [], missing: [], extra: [] })
   })
 })
 
