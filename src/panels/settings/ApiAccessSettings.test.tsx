@@ -617,6 +617,38 @@ describe('the API access page', () => {
     expect(listed()).toEqual(['GitHub Actions'])
   })
 
+  it('puts the search box back with the search when a search read fails, and Retry applies it again', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await render(<ui.OrgApiAccessPage />)
+    const box = () => find<HTMLInputElement>('[data-api-access-search]')
+    network.query.mockRejectedValueOnce(new Error('offline'))
+    await type(box(), 'sheets')
+    await rest()
+    expect(find('[role="alert"]').textContent).toContain("Couldn't refresh API access.")
+    // the box says what the rows on screen are filtered by
+    expect(box().value).toBe('')
+    expect(listed()).toHaveLength(7)
+    await click(buttonIn(find('[role="alert"]'), 'Retry'))
+    expect(pageCalls().at(-1)).toMatchObject({ search: 'sheets' })
+    expect(box().value).toBe('sheets')
+    expect(listed()).toEqual(['Sheets export script'])
+    // later reads use the search the box shows
+    await click(buttonIn(find('[aria-label="State"]'), 'Active'))
+    expect(pageCalls().at(-1)).toMatchObject({ state: 'active', search: 'sheets' })
+  })
+
+  it('keeps the search box with the rows after a failed search, so the next filter reads what it shows', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await render(<ui.OrgApiAccessPage />)
+    network.query.mockRejectedValueOnce(new Error('offline'))
+    await type(find<HTMLInputElement>('[data-api-access-search]'), 'sheets')
+    await rest()
+    await click(buttonIn(find('[aria-label="Kind"]'), 'Agent keys'))
+    expect(pageCalls().at(-1)).toEqual({ kind: 'agent_keys', state: 'all', period: CURRENT })
+    expect(find<HTMLInputElement>('[data-api-access-search]').value).toBe('')
+    expect(listed()).toEqual(['GitHub Actions'])
+  })
+
   it('says when the page could not be loaded, and loads it on Retry', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     network.query.mockRejectedValueOnce(new Error('offline'))

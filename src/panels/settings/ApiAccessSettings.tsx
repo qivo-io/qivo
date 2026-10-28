@@ -184,13 +184,16 @@ function ApiAccessPage({
   askRef.current = ask
   const shownRef = useRef(shown)
   shownRef.current = shown
+  const textRef = useRef(text)
+  textRef.current = text
 
   /* Reads the page for `next`, with the summary when `figures`, and also
      when the figures on screen belong to another period than `next` names,
      as when a filter changes while a period change is still on its way. A
      failed read keeps what is on screen, and the controls go back to what
-     it belongs to. */
-  const load = async (next: Ask, figures: boolean) => {
+     it belongs to, the search box too unless typing has moved on; Retry
+     (`again`) sends the failed read again and puts its search back. */
+  const load = async (next: Ask, figures: boolean, again = false) => {
     const n = ++sequence.current
     attempt.current = { ask: next, figures }
     setAsk(next)
@@ -206,7 +209,9 @@ function ApiAccessPage({
     setNow(new Date())
     if (summary === null || page === null) {
       setFailed(true)
-      if (kept) setAsk(kept.ask)
+      if (!kept) return
+      setAsk(kept.ask)
+      if (textRef.current.trim() === next.search) setText(kept.ask.search)
       return
     }
     let settled = next
@@ -222,6 +227,7 @@ function ApiAccessPage({
       settled = { ...settled, person: { id: page.person.id, name: page.person.name } }
     setFailed(false)
     setAsk(settled)
+    if (again) setText(settled.search)
     setShown({ ask: settled, figures: summary, page })
   }
 
@@ -390,7 +396,7 @@ function ApiAccessPage({
             className="h-control-sm text-sm"
             onClick={() => {
               const last = attempt.current
-              if (last) void load(last.ask, last.figures || shown === null)
+              if (last) void load(last.ask, last.figures || shown === null, true)
             }}
           >
             <Icon name="rotateCcw" size={16} />
