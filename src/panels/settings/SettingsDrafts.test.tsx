@@ -269,7 +269,7 @@ describe('the organization name', () => {
     expect(field.value).toBe('Testbed Robotics')
     expect(conflict()?.textContent).toContain('Leo Martins changed it to “Testbed Labs AB”.')
     expect(toasts().at(-1)).toBe(
-      'Not saved. Leo Martins changed the name of the organization. Your text is still in the editor. Save again to replace their version.',
+      'Not saved. Leo Martins changed the name of the organization. Your text is still in the field. Choose Keep mine under it to replace their version.',
     )
     await click(button('Use saved'))
     expect(field.value).toBe('Testbed Labs AB')
@@ -422,7 +422,7 @@ describe('the organization address', () => {
     })
     expect(field.value).toBe('testbed-ab')
     expect(find('[data-org-slug-error]').textContent).toBe(
-      'Not saved. Leo Martins changed the address of the organization. Your text is still in the editor. Save again to replace their version.',
+      'Not saved. Leo Martins changed the address of the organization. Your text is still in the field. Choose Keep mine under it to replace their version.',
     )
     // the change arrives: the conflict says the same, with the way out
     await elsewhere((s) => {

@@ -13,6 +13,9 @@ export type Refusal = {
   deletes?: boolean
   /** The draft stays in its editor, so the person can save it again. */
   kept?: boolean
+  /** The kept draft is a settings field's (lib/savedDraft.ts), which saves
+      over the other change only once the person chooses Keep mine. */
+  keepMine?: boolean
   /** How many Roadmap changes the refused batch held. */
   batch?: number
   /** How many of the person's changes this one notice line stands for,
@@ -150,7 +153,9 @@ export function refusalLine(r: Refusal, look: Lookup): string {
   const tail = r.deletes
     ? `Check it before you ${verb} it again.`
     : r.kept
-      ? 'Your text is still in the editor. Save again to replace their version.'
+      ? r.keepMine
+        ? 'Your text is still in the field. Choose Keep mine under it to replace their version.'
+        : 'Your text is still in the editor. Save again to replace their version.'
       : r.batch !== undefined && r.batch > 1
         ? `None of the ${r.batch} roadmap changes were saved.`
         : writer === 'you'

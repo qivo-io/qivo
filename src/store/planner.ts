@@ -1400,8 +1400,9 @@ type SendOptions<R> = {
       `expected` (expectedOf). */
   over?: Over
   /** How the notice of a field_changed refusal reads (store/fieldNotice.ts):
-      a delete, or a Roadmap batch of this many changes. */
-  notice?: { deletes?: boolean; batch?: number }
+      a delete, a Roadmap batch of this many changes, or a settings field's
+      kept draft, which saves again only after Keep mine. */
+  notice?: { deletes?: boolean; batch?: number; keepMine?: boolean }
   /** Runs on a field_changed refusal once the paint has gone, for an
       editor that keeps the person's draft, with the value of the write's
       first `over` field now on screen and who wrote the value the server
@@ -2314,6 +2315,7 @@ type FieldRefusalContext = {
   kept: boolean
   deletes?: boolean
   batch?: number
+  keepMine?: boolean
 }
 const fieldRefusals = new WeakMap<object, FieldRefusalContext>()
 
@@ -2405,6 +2407,7 @@ function noticeFieldChanged(e: unknown) {
           (line) =>
             line !== undefined &&
             !!line.refusal.kept === !!context?.kept &&
+            !!line.refusal.keepMine === !!context?.keepMine &&
             !!line.refusal.deletes === !!context?.deletes,
         )
     : undefined
@@ -2428,6 +2431,7 @@ function noticeFieldChanged(e: unknown) {
       count: 1,
       seenName,
       kept: context?.kept,
+      keepMine: context?.keepMine,
       deletes: context?.deletes,
       batch: context?.batch,
       offline: changedWhileOffline(e, changes),
@@ -2439,10 +2443,14 @@ function noticeFieldChanged(e: unknown) {
   showFieldNotice(box)
 }
 
-/** The sentence for field_changed refusal `e` of a field whose input keeps
-    the person's text, shown beside the field rather than as a notice. */
+/** The sentence for field_changed refusal `e` of a settings field that keeps
+    the person's text until they choose Keep mine, shown beside the field
+    rather than as a notice. */
 function keptFieldText(e: unknown): string {
-  return refusalLine({ changes: errData(e).changes ?? [], count: 1, kept: true }, fieldLookup)
+  return refusalLine(
+    { changes: errData(e).changes ?? [], count: 1, kept: true, keepMine: true },
+    fieldLookup,
+  )
 }
 
 /** Runs `save.keepDraft` for a write the store awaited without a paint
@@ -4320,6 +4328,14 @@ export type FieldSave = {
   keepDraft?: SendOptions<unknown>['keepDraft']
   keepUnsaved?: () => void
 }
+
+/** The send() options of settings field save `save`: its callbacks, and for
+    a field that keeps its draft the notice that asks for Keep mine. */
+const fieldSendOptions = (save: FieldSave) => ({
+  keepDraft: save.keepDraft,
+  keepUnsaved: save.keepUnsaved,
+  ...(save.keepDraft ? { notice: { keepMine: true } } : {}),
+})
 /** What a new personal token may do and the instant it stops working (UTC
     ISO 8601). Both are fixed when it is created; no expiresAt means never. */
 export type McpTokenChoice = {
@@ -7654,8 +7670,7 @@ export const PLANNER = {
     }
     return send(api.projects.update, { org_id: row.org_id, id, patch: wire }, view, {
       over: overOf('projects', row, Object.keys(db), save.seen),
-      keepDraft: save.keepDraft,
-      keepUnsaved: save.keepUnsaved,
+      ...fieldSendOptions(save),
     })
   },
 
@@ -7863,8 +7878,7 @@ export const PLANNER = {
       seen.max_attachment_mb = org.max_attachment_mb
     return send(api.orgs.update, { org_id: orgId, patch: wire }, view, {
       over: overOf('organizations', org, Object.keys(wire), seen),
-      keepDraft: save.keepDraft,
-      keepUnsaved: save.keepUnsaved,
+      ...fieldSendOptions(save),
       ...(weekStartRefused && {
         onError: (error: unknown) => {
           const d = errData(error)
@@ -7967,8 +7981,7 @@ export const PLANNER = {
     }
     return send(api.teams.update, { org_id: row.org_id, id, patch: wire }, view, {
       over: overOf('teams', row, Object.keys(wire), save.seen),
-      keepDraft: save.keepDraft,
-      keepUnsaved: save.keepUnsaved,
+      ...fieldSendOptions(save),
     })
   },
 
@@ -8167,8 +8180,7 @@ export const PLANNER = {
         hours,
         {
           over: overOf('profiles', row, ['plannable_hours'], save.seen),
-          keepDraft: save.keepDraft,
-          keepUnsaved: save.keepUnsaved,
+          ...fieldSendOptions(save),
         },
       )
     }
@@ -8247,8 +8259,7 @@ export const PLANNER = {
       const checked = Object.keys(wire).filter((key) => key !== 'teams')
       void send(api.profiles.update, { org_id: row.org_id, id, patch: wire }, view, {
         ...(checked.length ? { over: overOf('profiles', row, checked, save.seen) } : {}),
-        keepDraft: save.keepDraft,
-        keepUnsaved: save.keepUnsaved,
+        ...fieldSendOptions(save),
       })
     }
     return true

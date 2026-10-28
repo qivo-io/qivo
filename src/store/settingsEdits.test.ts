@@ -359,7 +359,9 @@ describe('settings edits through the client store', () => {
         ['Task creation fixture', 'you'],
         [undefined, { name: 'Ana' }],
       ])
-      expect(showToast.mock.calls.at(-1)?.[0]).toContain('Your text is still in the editor.')
+      expect(showToast.mock.calls.at(-1)?.[0]).toContain(
+        'Your text is still in the field. Choose Keep mine under it to replace their version.',
+      )
     })
 
     it('runs keepUnsaved for a painted save that fails with an error, as for a refusal', async () => {
@@ -388,7 +390,7 @@ describe('settings edits through the client store', () => {
       const renamed = P.setDisplayName('Planner Prime', save)
       latest().reject(changed('profile', P.CURRENT_USER, 'name', 'u-ana'))
       expect(await renamed).toBe(
-        'Not saved. Ana changed the name of Planner. Your text is still in the editor. Save again to replace their version.',
+        'Not saved. Ana changed the name of Planner. Your text is still in the field. Choose Keep mine under it to replace their version.',
       )
       const moved = P.setOrgSlug('testbed-ab', save)
       latest().reject(new ConvexError({ code: 'conflict', reason: 'slug_taken', message: 'taken' }))

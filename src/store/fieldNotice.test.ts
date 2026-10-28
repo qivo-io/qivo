@@ -78,6 +78,18 @@ describe('refusalLine', () => {
     )
   })
 
+  it('asks for Keep mine for a settings field that keeps the text', () => {
+    expect(
+      line({
+        kept: true,
+        keepMine: true,
+        changes: [change({ record: 'organization', field: 'name', by: null })],
+      }),
+    ).toBe(
+      'Not saved. The name of QN-12 was changed elsewhere. Your text is still in the field. Choose Keep mine under it to replace their version.',
+    )
+  })
+
   it('says a refused delete or link removal was not done', () => {
     expect(line({ deletes: true, changes: [change({ record: 'milestone', field: 'week' })] })).toBe(
       'Not deleted. Emil Berg changed the date of milestone “Beta”. Check it before you delete it again.',
