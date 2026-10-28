@@ -641,21 +641,37 @@ organization, project and task (`storage_org_totals`,
 `storage_project_totals`, `storage_task_totals`), files in Deleted items
 included. The transaction that attaches a file counts it, the one that
 deletes its last row for good takes it out, and a move between projects
-shifts it. Nothing reads the totals yet. Billing samples and the Billing
-page still scan the attachment rows. A new organization starts counted at
-zero. An organization created before the release that added them has no
-totals until the one-time `internal/storageTotalsBackfill` counts it, and a
-reader must treat it as not counted until then. Run the backfill on every
-hosted deployment once it serves that release, as the module's header says.
-Read its dry run first, then run it, and call it again with its `cursor`
-until it answers `done`. A later dry run lists any organization whose totals
-differ from its files, any whose writes kept changing it while it counted,
-and the attachment rows whose task is gone, which nothing deletes.
-`"recount": true` counts every organization again from zero. Earlier
-releases do not keep the totals. Convex keeps the rows of a table the schema
-no longer lists, as it did for `comment_counts`, so a rollback past that
-release deploys, but the attaches and deletions it serves leave the totals
-out of step. After rolling forward, run the backfill with `"recount": true`.
+shifts it. A task's or project's id stays taken while its totals row
+exists, also after a purge deleted its stored copy, so no new task or
+project, in any organization, takes over another's totals. Nothing reads
+the totals yet. Billing samples and the Billing page still scan the
+attachment rows. A new organization starts counted at zero. An
+organization created before the release that added them has no totals
+until the one-time `internal/storageTotalsBackfill` counts it, and a reader
+must treat it as not counted until then. Run the backfill on every hosted
+deployment once it serves that release, as the module's header says. Read
+its dry run first, then run it, and call it again with its `cursor` until
+it answers `done`. A call stops at its deadline between steps and answers a
+cursor that goes on inside an organization, and a call that meets an error
+answers it with the cursor of the organization it failed on and records
+what it did in its audit row. A later dry run lists any organization whose
+totals differ from its files or whose project rows have another name than
+their project, any whose writes kept changing it while it counted, the
+attachment rows whose task is gone, which nothing deletes, and the totals
+of organizations that no longer exist, which a run deletes.
+`"recount": true` counts every organization again from zero, and starts
+over any count another run began. Earlier releases do not keep the totals.
+Convex keeps the rows of a table the schema no longer lists, as it did for
+`comment_counts`, so a rollback past that release deploys, but the
+attaches, moves, renames and deletions it serves leave the totals out of
+step, an organization it deletes leaves its totals behind, and a task or
+project it creates can take an id whose totals are left. Every writer
+leaves alone a row that is not its task's or project's. After rolling
+forward, run the backfill with `"recount": true`, which also takes such
+rows over and deletes the totals of deleted organizations. An organization
+created again under the id of one deleted while an earlier release served,
+such as a fixture with a fixed id, starts not counted while rows of the
+deleted one are left, until the backfill counts it.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to

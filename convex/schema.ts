@@ -1366,6 +1366,12 @@ export default defineSchema({
    * writes rerun none of them. Readers use an organization's totals only
    * while its row exists without `counting` (storageTotalsOf).
    *
+   * A project or task row is keyed by its id, so the id stays taken while
+   * the row exists (lib/db.ts insertUnique). A new task or project, in any
+   * organization, cannot take an id whose files still count. Each row names
+   * its organization, a task row also its task's number, and every writer
+   * leaves a row alone that is not the task's or project's it writes for.
+   *
    * One row per organization. No row means the organization is not counted
    * yet. internal/storageTotalsBackfill counts it, and until then every
    * writer leaves its totals alone. New organizations start counted
@@ -1374,6 +1380,13 @@ export default defineSchema({
     org_id: v.string(),
     bytes: v.number(),
     files: v.number(),
+    // Raised by every write to the organization's totals rows, its project
+    // and task rows included, so a dry run of the backfill can tell that
+    // they held still while it counted. It never goes back.
+    revision: v.number(),
+    // The backfill run that began the organization's latest count; absent
+    // for an organization counted from its start
+    run: v.optional(v.string()),
     // While the backfill counts, the task number it has counted through. A
     // writer moves the totals only for a task numbered at or below it, and
     // for any task that already has its storage_task_totals row.
@@ -1409,6 +1422,8 @@ export default defineSchema({
   storage_task_totals: defineTable({
     org_id: v.string(),
     issue_id: v.string(),
+    // the task's number, which no other task of its organization ever has
+    num: v.number(),
     project_id: v.string(),
     bytes: v.number(),
     files: v.number(),

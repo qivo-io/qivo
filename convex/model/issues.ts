@@ -2145,7 +2145,7 @@ export async function moveIssueCore(
   // the stored-byte totals follow the task and every subtask it carries, at
   // one totals row each, however many files they hold
   // (model/storageTotals.ts), before the room checks of the carry below
-  await moveTaskFiles(ctx, [issue.id, ...carried.map((row) => row.id)], target)
+  await moveTaskFiles(ctx, [issue, ...carried], target)
   for (const row of carried) {
     await assertRoom(ctx, MOVE_TOO_LARGE)
     // a carried subtask's stamps change as the task's above; the row as it
