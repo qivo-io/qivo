@@ -2204,12 +2204,13 @@ export const setLabel = internalMutation({
       throw badRequest(createExpectedSentence('label'))
     }
     if (a.label === undefined) {
-      await assertLabelCreator(ctx, me)
+      const creator = await assertLabelCreator(ctx, me)
       if (a.name === undefined || a.color === undefined) {
         throw badRequest('a new label needs name and color')
       }
       const label = await createLabelCore(ctx, {
         me,
+        creator,
         id: newUuid(),
         name: a.name,
         color: a.color,

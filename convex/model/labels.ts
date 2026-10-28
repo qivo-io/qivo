@@ -5,28 +5,68 @@
  * putting one on a task or taking it off. Each caller resolves what it names
  * and refuses with its own sentences first. Deleting a label is app only
  * (labels.remove), and its bounded cascade, deleteLabelCore, lives here with
- * the other writes. */
+ * the other writes. The app's label lists read the organization's labels a
+ * batch at a time through labelBatch, in name order with search, under a
+ * read budget (lib/namedPages.ts). */
 
-import { makeFunctionReference } from 'convex/server'
+import { type GenericDocument, makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canManageOrgLabels, canWriteOrgLabels } from '../lib/access'
+import type { ReadCeiling } from '../lib/archivedTasks'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS } from '../lib/limits'
+import { LIMITS, LIST_BATCH } from '../lib/limits'
+import {
+  compareNamed,
+  indexAfter,
+  type NamedAt,
+  type NamedIndex,
+  namedCeiling,
+  namedCursor,
+  openNamedCursor,
+  readBatch,
+} from '../lib/namedPages'
+import { nameKey } from '../lib/nameKey'
+import { allWordsMatcher } from '../lib/search'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, DELETES, type Fields, filledText, type Next } from './expected'
 import { assertCanEdit } from './issues'
-import { deleteLabelCount, insertLabelCount, tallyAssignment } from './labelCounts'
+import {
+  deleteLabelCount,
+  insertLabelCount,
+  labelCountRow,
+  labelCountRun,
+  shownCount,
+  tallyAssignment,
+} from './labelCounts'
 
-/** Refuses a caller who may not add labels to the organization's list. */
-export async function assertLabelCreator(ctx: QueryCtx, me: Doc<'profiles'>): Promise<void> {
-  if (!(await canWriteOrgLabels(ctx, me))) {
-    throw forbidden('no label access in this organization')
-  }
+/** The refusal of a label create whose rights check could not finish in one
+ * request (lib/access.ts canWriteOrgLabels answered null). */
+export const LABEL_RIGHTS_UNCHECKED =
+  'you belong to too many projects and teams for Qivo to check in one request whether you may create labels; an organization admin can create this label'
+
+declare const checkedCreator: unique symbol
+
+/** What assertLabelCreator answers for a profile it let add labels, which a
+ * caller that checks early passes to createLabelCore, so one create reads the
+ * caller's rights once. Only assertLabelCreator makes one. */
+export type LabelCreator = { readonly profile_id: string; readonly [checkedCreator]: true }
+
+/** Refuses a caller who may not add labels to the organization's list, and
+ * one whose rights the check could not finish reading (LABEL_RIGHTS_UNCHECKED).
+ * Answers the proof that `me` may, for createLabelCore. */
+export async function assertLabelCreator(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+): Promise<LabelCreator> {
+  const may = await canWriteOrgLabels(ctx, me)
+  if (may === null) throw rule(LABEL_RIGHTS_UNCHECKED)
+  if (!may) throw forbidden('no label access in this organization')
+  return { profile_id: me.id } as LabelCreator
 }
 
 /** Refuses a caller who may not rename, recolor or delete labels. Checked
@@ -87,6 +127,219 @@ export async function listLabelsCore(ctx: QueryCtx, orgId: string): Promise<Doc<
   return rows.sort((a, b) => a.name_lower.localeCompare(b.name_lower) || a.id.localeCompare(b.id))
 }
 
+/** A label's place in name order: its time and id after its name_lower. */
+export type LabelTie = readonly [created: number, id: string]
+
+/** The labels of the organization `orgId` in the order of by_org_name_lower:
+ * name_lower, then _creationTime and _id, the index's implicit last fields.
+ * Labels stored with one name_lower before names were unique page one by
+ * one, and so would two that also share a creation time, which Convex does
+ * not promise distinct. After a position it reads the rest of its instant,
+ * leaving out the ids not past it (lib/namedPages.ts indexAfter), the rest
+ * of its name, then every greater name, as lib/archivedTasks.ts
+ * projectArchive reads the archive. */
+export function labelIndex(ctx: QueryCtx, orgId: string): NamedIndex<Doc<'labels'>, LabelTie> {
+  const labels = () => ctx.db.query('labels')
+  return {
+    all: () => labels().withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId)),
+    after: ({ key, tie: [created] }) => [
+      () =>
+        labels().withIndex('by_org_name_lower', (q) =>
+          q.eq('org_id', orgId).eq('name_lower', key).eq('_creationTime', created),
+        ),
+      () =>
+        labels().withIndex('by_org_name_lower', (q) =>
+          q.eq('org_id', orgId).eq('name_lower', key).gt('_creationTime', created),
+        ),
+      () =>
+        labels().withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId).gt('name_lower', key)),
+    ],
+    at: (label) => ({ key: label.name_lower, tie: [label._creationTime, label._id] }),
+  }
+}
+
+/** The app's label lists, which cursors name (lib/namedPages.ts): Settings >
+ * Labels (labels.settingsPage) and the task label picker (labels.picker). */
+export type LabelList = 'labels.settings' | 'labels.picker'
+
+/** The refusal of an `after` or `through` that is not a cursor of this
+ * list, organization and search. */
+const NOT_LABEL_CURSOR =
+  'after and through must be cursors from an earlier answer of this list, with the same search'
+
+/** One label list asked for: the organization, the search as stored and its
+ * name key, and the positions the batch reads between. */
+export type LabelListAsk = {
+  list: LabelList
+  orgId: string
+  /** the search, trimmed */
+  search: string
+  scope: readonly string[]
+  after: NamedAt<LabelTie> | null
+  through: NamedAt<LabelTie> | null
+}
+
+/**
+ * The arguments of a label list (labels.settingsPage and labels.picker)
+ * checked and opened. Refuses a search longer than LIMITS.search with that
+ * limit's sentence, and with badRequest a cursor that is not one this list
+ * gave for the organization `orgId` and the same search, and a `through`
+ * that does not come after `after`. Two searches with one name key
+ * (lib/nameKey.ts), such as "Café" and "cafe", share their cursors, since
+ * they match the same labels.
+ */
+export async function labelListAsk(
+  list: LabelList,
+  orgId: string,
+  a: { search?: string; after?: string; through?: string },
+): Promise<LabelListAsk> {
+  const search = limitedText(LIMITS.search, a.search ?? '')
+  const scope = [orgId, nameKey(search)]
+  const open = async (text: string | undefined): Promise<NamedAt<LabelTie> | null> => {
+    if (text === undefined) return null
+    const at = await openNamedCursor(text, list, scope)
+    const [created, id] = at?.tie ?? []
+    if (
+      at === null ||
+      at.tie.length !== 2 ||
+      typeof created !== 'number' ||
+      typeof id !== 'string'
+    ) {
+      throw badRequest(NOT_LABEL_CURSOR)
+    }
+    return { key: at.key, tie: [created, id] }
+  }
+  const after = await open(a.after)
+  const through = await open(a.through)
+  if (after !== null && through !== null && compareNamed(through, after) <= 0) {
+    throw badRequest('through must be a cursor after the one in after')
+  }
+  return { list, orgId, search, scope, after, through }
+}
+
+/** One batch of a label list (labelBatch). */
+export type LabelBatch<Row> = {
+  rows: Row[]
+  next: string | null
+  stopped: boolean
+  exact: Row | null
+}
+
+/**
+ * One batch of the labels of `ask.orgId` in name order (labelIndex), the
+ * reader of Settings > Labels and of the task label picker. With a search,
+ * the rows are the labels whose name holds every whitespace-separated
+ * fragment of it in any order, ignoring case and accents (lib/search.ts
+ * allWordsMatcher over lib/nameKey.ts nameKey of both). Without
+ * `ask.through` a batch holds at most LIST_BATCH labels after `ask.after`.
+ * With it, a batch holds every match after `ask.after` up to and including
+ * `ask.through`, so a loaded batch can stay live without its end moving as
+ * labels come and go before it, and one that would hold more than four times
+ * LIST_BATCH rows stops there as if the read budget stopped it, and the app
+ * splits it.
+ *
+ * `row` makes a label's row, counting its own reads with `lookup`. The answer
+ * holds the rows; `next`, a cursor at the position the batch reached, or
+ * null when no label follows it; `stopped`, whether the read budget
+ * (`ceiling`, lib/namedPages.ts) ended the batch before it was full or
+ * reached `through`, so the rows are every match up to `next`, possibly
+ * none; and `exact`, the label whose name_lower is the search lowercased,
+ * wherever it falls in the list, read with one lookup, or null for a blank
+ * search, so the app can tell a free name from a taken one without loading
+ * the list.
+ */
+export async function labelBatch<Row>(
+  ctx: QueryCtx,
+  ask: LabelListAsk,
+  o: { ceiling: ReadCeiling; row: (label: Doc<'labels'>, lookup: Lookup) => Promise<Row> },
+): Promise<LabelBatch<Row>> {
+  const plain: Lookup = (read) => read()
+  const named =
+    ask.search === ''
+      ? null
+      : await ctx.db
+          .query('labels')
+          .withIndex('by_org_name_lower', (q) =>
+            q.eq('org_id', ask.orgId).eq('name_lower', ask.search.toLowerCase()),
+          )
+          .first()
+  const exact = named === null ? null : await o.row(named, plain)
+  const matches = allWordsMatcher(nameKey(ask.search))
+  const batch = await readBatch(ctx, {
+    stream: indexAfter(labelIndex(ctx, ask.orgId), ask.after),
+    keep: async (label: Doc<'labels'>, guard) =>
+      matches(nameKey(label.name)) ? await o.row(label, guard.lookup) : null,
+    limit: ask.through === null ? LIST_BATCH : 4 * LIST_BATCH,
+    through: ask.through,
+    ceiling: o.ceiling,
+    after: ask.after,
+  })
+  // a batch under `through` that stopped short of it holds too many rows
+  const short = !batch.ended && ask.through !== null && compareNamed(batch.at, ask.through) < 0
+  return {
+    rows: batch.rows,
+    next: batch.ended ? null : await namedCursor(ask.list, ask.scope, batch.at),
+    stopped: batch.stopped || short,
+    exact,
+  }
+}
+
+/** A lookup of at most one document, counted when a batch reads it
+ * (lib/namedPages.ts ReadGuard lookup). */
+export type Lookup = <D extends GenericDocument>(read: () => Promise<D | null>) => Promise<D | null>
+
+/** A label as the app's label lists show it. */
+export type LabelRow = ReturnType<typeof labelJson>
+
+/** A label as Settings > Labels shows it, with its usage. */
+export type SettingsLabelRow = LabelRow & { active_tasks: number | null }
+
+/** What a label list is asked for (labels.settingsPage and labels.picker). */
+export type LabelListArgs = { search?: string; after?: string; through?: string }
+
+/** labels.settingsPage for `me`: one batch for Settings > Labels, each row
+ * with its usage (model/labelCounts.ts shownCount), read with one read of
+ * the organization's label_count_runs row, and `counting` while it exists.
+ * Refuses anyone but an active organization admin. */
+export async function settingsLabels(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: LabelListArgs,
+): Promise<LabelBatch<SettingsLabelRow> & { counting: boolean }> {
+  if (!canManageOrgLabels(me)) {
+    throw forbidden('only organization admins see the label list with its usage')
+  }
+  const ask = await labelListAsk('labels.settings', me.org_id, a)
+  const ceiling = await namedCeiling(ctx)
+  const counting = (await labelCountRun(ctx, me.org_id)) !== null
+  const batch = await labelBatch(ctx, ask, {
+    ceiling,
+    row: async (label, lookup) => ({
+      ...labelJson(label),
+      active_tasks: shownCount(await lookup(() => labelCountRow(ctx, label.id)), label, counting),
+    }),
+  })
+  return { ...batch, counting }
+}
+
+/** labels.picker for `me`: one batch for the task label picker, and in a
+ * first batch (no `after`) `can_create` from lib/access.ts
+ * canWriteOrgLabels, which runs under its own ceiling before the walk runs
+ * under one counted from after it (lib/access.ts LABEL_WRITE_READ). */
+export async function pickerLabels(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: LabelListArgs,
+): Promise<LabelBatch<LabelRow> & { can_create?: boolean | null }> {
+  const ask = await labelListAsk('labels.picker', me.org_id, a)
+  const can_create = ask.after === null ? await canWriteOrgLabels(ctx, me) : undefined
+  const batch = await labelBatch(ctx, ask, {
+    ceiling: await namedCeiling(ctx),
+    row: async (label) => labelJson(label),
+  })
+  return can_create === undefined ? batch : { ...batch, can_create }
+}
+
 /** The organization's label with this id, or with this name in any case;
  * null when none matches. */
 export async function findLabel(
@@ -110,7 +363,10 @@ export async function findLabel(
  * app's client-made id; machine callers pass a new one. Refuses an id that
  * is not a lowercase UUID (lib/db.ts assertNewRowId), a caller who may not
  * add labels, a blank or long name, a color that is not #rrggbb, a used id
- * and a name the organization already has in any case.
+ * and a name the organization already has in any case. A caller that ran
+ * assertLabelCreator for `me` first, such as REST and MCP before they read
+ * the request, passes its answer as `creator`, and the rights are not read
+ * again.
  */
 export async function createLabelCore(
   ctx: MutationCtx,
@@ -121,11 +377,13 @@ export async function createLabelCore(
     color: string
     now: string
     provenance?: string
+    creator?: LabelCreator
   },
 ): Promise<Doc<'labels'>> {
   const { me, id, now } = a
   assertNewRowId(id)
-  await assertLabelCreator(ctx, me)
+  if (a.creator === undefined) await assertLabelCreator(ctx, me)
+  else if (a.creator.profile_id !== me.id) throw new Error('a label creator is checked for itself')
   const name = labelName(a.name)
   const color = labelColor(a.color)
   // A deleted label's id stays taken until its assignments are gone, or the

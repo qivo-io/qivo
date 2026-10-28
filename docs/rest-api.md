@@ -1711,7 +1711,12 @@ color is `#` followed by six hex digits; a label stored before that rule
 reads as `#8A8F98`. Creating a label needs an organization admin,
 or a person or agent with the User role and Edit access to a top-level
 project (a sub-project alone is not enough), and answers `201`; it
-writes a `created label` activity row with the provenance. Renaming and
+writes a `created label` activity row with the provenance. Qivo checks
+that rule by reading the caller's own project access, teams and the
+projects they lead. When those are too many to read in one request, the
+create is a `400` (`you belong to too many projects and teams for Qivo to
+check in one request whether you may create labels; an organization admin
+can create this label`) and creates nothing. Renaming and
 recoloring are for organization admins only, as on the app's Labels
 settings page, and are checked before the label is looked up. `PATCH` takes
 an optional `expected` with the `name` and `color` you last read of the

@@ -116,6 +116,7 @@ import type * as lib_md from "../lib/md.js";
 import type * as lib_mentions from "../lib/mentions.js";
 import type * as lib_microsoftAccounts from "../lib/microsoftAccounts.js";
 import type * as lib_nameKey from "../lib/nameKey.js";
+import type * as lib_namedPages from "../lib/namedPages.js";
 import type * as lib_numbers from "../lib/numbers.js";
 import type * as lib_oauth from "../lib/oauth.js";
 import type * as lib_oauthAdapter from "../lib/oauthAdapter.js";
@@ -349,6 +350,7 @@ declare const fullApi: ApiFromModules<{
   "lib/mentions": typeof lib_mentions;
   "lib/microsoftAccounts": typeof lib_microsoftAccounts;
   "lib/nameKey": typeof lib_nameKey;
+  "lib/namedPages": typeof lib_namedPages;
   "lib/numbers": typeof lib_numbers;
   "lib/oauth": typeof lib_oauth;
   "lib/oauthAdapter": typeof lib_oauthAdapter;

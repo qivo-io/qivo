@@ -15,6 +15,7 @@ import {
   hasProjectLevel,
   isOrgStaff,
   isTeamLeader,
+  LABEL_WRITE_READ,
   levelRank,
   profileCanSeeProject,
   projectSightForProfiles,
@@ -517,6 +518,29 @@ describe('canWriteOrgLabels', () => {
       await ctx.db.patch(grant!._id, { level: 'user' })
     })
     expect(await t.run((ctx) => canWriteOrgLabels(ctx, f.agent))).toBe(true)
+  })
+
+  it('answers null, neither yes nor no, once the rows it reads pass LABEL_WRITE_READ', async () => {
+    await t.run(async (ctx) => {
+      for (const project_id of [f.sub.id, f.sub2.id, f.hidden.id]) {
+        await ctx.db.insert('project_access', {
+          project_id,
+          profile_id: f.agent.id,
+          level: 'viewer',
+        })
+      }
+    })
+    const before = LABEL_WRITE_READ.rows
+    LABEL_WRITE_READ.rows = 2
+    try {
+      expect(await t.run((ctx) => canWriteOrgLabels(ctx, f.agent))).toBeNull()
+      // a proof found first still answers, and non-staff never read
+      expect(await t.run((ctx) => canWriteOrgLabels(ctx, f.user))).toBe(true)
+      expect(await t.run((ctx) => canWriteOrgLabels(ctx, f.viewer))).toBe(false)
+    } finally {
+      LABEL_WRITE_READ.rows = before
+    }
+    expect(await t.run((ctx) => canWriteOrgLabels(ctx, f.agent))).toBe(false)
   })
 })
 

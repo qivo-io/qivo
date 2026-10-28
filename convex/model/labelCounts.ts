@@ -39,16 +39,26 @@ export const labelCountRun = (ctx: QueryCtx, orgId: string) =>
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .unique()
 
-/** The active tasks carrying `label` as a reader may show them, which no
- * reader does yet: null while the label is not counted or its organization
- * is being counted. */
+/** The active tasks carrying `label` as a reader may show them, from its
+ * label_counts `row` (labelCountRow) and whether its organization has a
+ * label_count_runs row (`counting`): null while the label is not counted,
+ * its row names another organization or its organization is being counted.
+ * A list reads the run once for all its labels (labels.settingsPage). */
+export const shownCount = (
+  row: Doc<'label_counts'> | null,
+  label: Pick<Doc<'labels'>, 'org_id'>,
+  counting: boolean,
+): number | null =>
+  counting || row === null || row.org_id !== label.org_id ? null : row.active_tasks
+
+/** shownCount for one label, reading its row and its organization's run. */
 export async function activeTaskCount(
   ctx: QueryCtx,
   label: Pick<Doc<'labels'>, 'id' | 'org_id'>,
 ): Promise<number | null> {
   const row = await labelCountRow(ctx, label.id)
   if (row === null || row.org_id !== label.org_id) return null
-  return (await labelCountRun(ctx, label.org_id)) === null ? row.active_tasks : null
+  return shownCount(row, label, (await labelCountRun(ctx, label.org_id)) !== null)
 }
 
 /** Adds the row of a label just created, at zero: no task can carry a

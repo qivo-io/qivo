@@ -418,8 +418,11 @@ jobs:sweepReadMessages mutation internal {"type":"object","value":{"phase":{"fie
 jobs:wakeSnoozes mutation internal {"type":"object","value":{"now":{"fieldType":{"type":"string"},"optional":false},"woken":{"fieldType":{"type":"number"},"optional":false}}}
 labelRemovals:recover mutation internal {"type":"object","value":{}}
 labelRemovals:step mutation internal {"type":"object","value":{"label_id":{"fieldType":{"type":"string"},"optional":false}}}
+labels:byIds query public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 labels:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"color":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+labels:picker query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 labels:remove mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"color":{"fieldType":{"type":"string"},"optional":true}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+labels:settingsPage query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 labels:toggle mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"label_id":{"fieldType":{"type":"string"},"optional":false},"on":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 labels:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"color":{"fieldType":{"type":"string"},"optional":true}}},"optional":false},"expected":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"color":{"fieldType":{"type":"string"},"optional":true}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 machine/auth:lookupCredential query internal {"type":"object","value":{"hash":{"fieldType":{"type":"string"},"optional":false},"isAgent":{"fieldType":{"type":"boolean"},"optional":false},"now":{"fieldType":{"type":"string"},"optional":false}}}
@@ -930,11 +933,17 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     subscribers: 'orgQuery',
     setSubscriber: 'orgMutation',
   },
+  // Settings > Labels (settingsPage, organization admins only) and the task
+  // label picker (picker, every seat) read the labels a batch at a time in
+  // name order; byIds looks up the labels a task shows that no batch holds.
   labels: {
     create: 'orgMutation',
     update: 'orgMutation',
     remove: 'orgMutation',
     toggle: 'orgMutation',
+    settingsPage: 'orgQuery',
+    picker: 'orgQuery',
+    byIds: 'orgQuery',
   },
   // removeRead clears current read rows in bounded batches beyond the Inbox display limit.
   // markAllRead reaches all own unread rows beyond the display cap and preserves later arrivals.
@@ -1085,7 +1094,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 188
+const PUBLIC_COUNT = 191
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
