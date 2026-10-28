@@ -515,7 +515,7 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     await load({ unread: 20, kind: 'change' })
     await open()
     await deliver({ comments: range(1, 10), earlier: false })
-    expect(tailNote()).toBe('New activity on this task. See All.')
+    expect(tailNote()).toBe('New activity on this task. Changes show only under All.')
   })
 
   it('does not point at All when only a deleted comment was unread', async () => {

@@ -3,6 +3,7 @@ import { getFunctionName } from 'convex/server'
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MENTION_DETAILS } from '../../convex/lib/messageDetails'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 import type { Row } from '../store/rows'
@@ -67,8 +68,10 @@ const change = (n: number): Row<'activity_events'> => ({
 })
 
 /* Loads the store with task-a, task-b and, for each of `unread`, an unread
-   message about task-a of that kind at that minute. */
-async function load(unread: { minute: number; kind: 'comment' | 'change' }[] = []) {
+   message about task-a of that kind at that minute, with its detail. */
+async function load(
+  unread: { minute: number; kind: 'comment' | 'change' | 'mention'; detail?: string }[] = [],
+) {
   vi.resetModules()
   snap = plannerFixture()
   me = snap.profiles[0].id
@@ -96,7 +99,7 @@ async function load(unread: { minute: number; kind: 'comment' | 'change' }[] = [
       issue_id: 'task-a',
       issue_title: 'Run the soak test',
       kind: m.kind,
-      detail: m.kind === 'comment' ? 'New comment' : 'To Do → In Progress',
+      detail: m.detail ?? (m.kind === 'comment' ? 'New comment' : 'To Do → In Progress'),
       created_at: at(m.minute),
     })
   subs = []
@@ -289,11 +292,24 @@ describe('the task window under Comments and All', { timeout: 20_000 }, () => {
     expect(one('snapshot:threadComments')).toBeDefined()
   })
 
+  it('points the tail note at All for a mention in the description, not in a comment', async () => {
+    await load([{ minute: 20, kind: 'mention', detail: MENTION_DETAILS.description }])
+    await openTask()
+    await comments({ comments: range(1, 10), earlier: false })
+    expect(tailNote()).toBe('New activity on this task. Changes show only under All.')
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await load([{ minute: 20, kind: 'mention', detail: MENTION_DETAILS.comment }])
+    await openTask()
+    await comments({ comments: range(1, 10), earlier: false })
+    expect(tailNote()).toBe('New activity on this task.')
+  })
+
   it('points the tail note at All only for an unread change', async () => {
     await load([{ minute: 20, kind: 'change' }])
     await openTask()
     await comments({ comments: range(1, 10), earlier: false })
-    expect(tailNote()).toBe('New activity on this task. See All.')
+    expect(tailNote()).toBe('New activity on this task. Changes show only under All.')
     expect(open('snapshot:threadHistory')).toEqual([])
     // under All the change itself carries the New line
     await pick('All')
@@ -378,7 +394,7 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
     await select()
     expect(P.messages.every((m) => m.read)).toBe(true)
     await comments({ comments: range(1, 10), earlier: false })
-    expect(tailNote(pane())).toBe('New activity on this task. See All.')
+    expect(tailNote(pane())).toBe('New activity on this task. Changes show only under All.')
   })
 
   it('does not point at All when only a deleted comment was unread', async () => {

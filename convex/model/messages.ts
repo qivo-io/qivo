@@ -45,6 +45,7 @@ import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
 import { mentionIds } from '../lib/mentions'
+import { MENTION_DETAILS } from '../lib/messageDetails'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { scheduleArchiveMarks } from './archiveMarks'
@@ -2082,7 +2083,7 @@ export async function notifyIssueInsert(
     project,
     actor_id: actor.id,
     now,
-    body: 'Mentioned you in the description',
+    body: MENTION_DETAILS.description,
     mentioned,
     visibility,
     trims,
@@ -2246,7 +2247,7 @@ export async function notifyIssueUpdate(
     project,
     actor_id: actor?.id,
     now,
-    body: 'Mentioned you in the description',
+    body: MENTION_DETAILS.description,
     mentioned: newMentions,
     visibility,
     trims,
@@ -2478,7 +2479,7 @@ export async function notifyCommentInsert(
     project,
     actor_id: actor.id,
     now,
-    body: 'Mentioned you in a comment',
+    body: MENTION_DETAILS.comment,
     mentioned,
     visibility,
     trims,
@@ -2553,7 +2554,7 @@ export async function notifyCommentUpdate(
     project,
     actor_id: actor.id,
     now,
-    body: 'Mentioned you in a comment',
+    body: MENTION_DETAILS.comment,
     mentioned: added,
     visibility: new Map(),
     trims,

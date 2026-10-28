@@ -2156,12 +2156,14 @@ function IssueDetail({
   // over "Loading comments…" and then resolve into a rule somewhere else
   const mark = loaded ? unreadMark(spine, unreadTs) : { place: 'none', index: -1 }
   // 'tail': something is unread but nothing on screen is at or after it — say
-  // so in words rather than drawing a rule with nothing under it. Point at the
-  // All filter only when flipping to it would actually show the thing: an
-  // unread change, frozen with the boundary, since Comments loads no history.
+  // so in words rather than drawing a rule with nothing under it. Under
+  // Comments, name the All filter when the unread messages tell of a change,
+  // frozen with the boundary, since Comments loads no history. It says
+  // where changes show rather than that All shows this one: whether the
+  // person may see that change's row is the server's to decide.
   const tailNote =
     it && actFilter === 'comments' && frozen.current.unread.change
-      ? 'New activity on this task. See All.'
+      ? 'New activity on this task. Changes show only under All.'
       : 'New activity on this task.'
   const canLead = !!it && P.levelOn(it.project) === 'lead'
   /* Resolves whether the server saved the comment; the composer keeps the
