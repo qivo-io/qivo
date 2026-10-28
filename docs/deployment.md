@@ -308,7 +308,9 @@ To page **Settings → Organization → API access**, add
 Northstar's agents and the rest are personal tokens of its people, each
 made through the app's own mutations, and each new one makes one to four
 `GET /v1/me` calls on the site origin, so the calls write their own usage.
-A second run adds only the credentials still missing.
+A second run adds only the credentials still missing. A credential a
+stopped run saved without all its calls is deleted and made again, and the
+calls it did make stay listed as a deleted credential's.
 
 ## Production release
 

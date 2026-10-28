@@ -39,7 +39,10 @@
  * of its people, each made as its owner (tokens:createAgentKey,
  * tokens:createMcpToken). Each new one makes 1 to 4 GET /v1/me calls on the
  * local backend's site origin, so the call path itself writes its usage and
- * aggregates. A second run adds only the credentials still missing. */
+ * aggregates. A second run adds only the credentials still missing. A
+ * credential counts as made once its usage rows hold all its calls; one a
+ * stopped run left short, whose secret is gone, is deleted and made again,
+ * and the calls it made stay as a deleted credential's. */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -250,9 +253,14 @@ async function callApi(apiUrl, secret, calls) {
   }
 }
 
+/** The calls the seed makes with seeded credential number `n`. */
+const plannedCalls = (n) => 1 + (n % 4)
+
 /** Adds the seeded credentials still missing up to `count` in organization
     `org` (see the file comment), acting as `actor` or as each token's
-    owner with the local admin key `key`, and answers how many it added. */
+    owner with the local admin key `key`, and answers how many it added. A
+    number is made when one of its credentials has all its calls in the
+    usage rows; the credentials of a number that is not are deleted first. */
 export async function seedCredentials(client, { key, org, actor, count, apiUrl, log }) {
   // the system tables answer the admin itself, not a person it acts as
   client.setAdminAuth(key)
@@ -261,12 +269,19 @@ export async function seedCredentials(client, { key, org, actor, count, apiUrl, 
   )
   const people = profiles.filter((profile) => profile.kind === 'person' && profile.auth_user_id)
   const agents = profiles.filter((profile) => profile.kind === 'agent')
-  const ids = new Set(profiles.map((profile) => profile.id))
-  const made = new Set()
+  const byId = new Map(profiles.map((profile) => [profile.id, profile]))
+  // the calls each credential made, as its usage rows record them
+  const used = new Map()
+  for (const row of await tableRows(client, 'billing_usage'))
+    if (row.org_id === org)
+      used.set(row.credential_id, (used.get(row.credential_id) ?? 0) + row.calls)
+  // each seeded number's credentials
+  const seeded = new Map()
   for (const table of ['mcp_tokens', 'agent_keys'])
     for (const row of await tableRows(client, table)) {
-      const number = CREDENTIAL_MARK.exec(row.name)?.[1]
-      if (number && ids.has(row.profile_id)) made.add(Number(number))
+      const number = Number(CREDENTIAL_MARK.exec(row.name)?.[1])
+      if (!number || !byId.has(row.profile_id)) continue
+      seeded.set(number, [...(seeded.get(number) ?? []), { table, row }])
     }
   const as = (profile) =>
     client.setAdminAuth(key, {
@@ -276,7 +291,20 @@ export async function seedCredentials(client, { key, org, actor, count, apiUrl, 
     })
   let added = 0
   for (let n = 1; n <= count; n++) {
-    if (made.has(n)) continue
+    const left = seeded.get(n) ?? []
+    const done = ({ table, row }) => (used.get(`${table}:${row.id}`) ?? 0) >= plannedCalls(n)
+    if (left.some(done)) continue
+    // a run stopped between saving these and their calls, and their secrets
+    // are gone, so they go and the number is made again
+    for (const { table, row } of left) {
+      if (table === 'agent_keys') {
+        as(actor)
+        await client.mutation(ref('tokens:deleteAgentKey'), { org_id: org, id: row.id })
+      } else {
+        as(byId.get(row.profile_id))
+        await client.mutation(ref('tokens:deleteMcpToken'), { id: row.id })
+      }
+    }
     const agent = n % 4 === 0 && agents.length ? agents[(n / 4) % agents.length] : null
     const minted = await mintCredential(agent ? 'qva' : 'qvt')
     try {
@@ -307,7 +335,7 @@ export async function seedCredentials(client, { key, org, actor, count, apiUrl, 
         `a seeded credential was refused: ${error.data?.message ?? error.message}`,
       )
     }
-    await callApi(apiUrl, minted.secret, 1 + (n % 4))
+    await callApi(apiUrl, minted.secret, plannedCalls(n))
     added++
   }
   as(actor)
