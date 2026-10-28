@@ -51,6 +51,7 @@ import { insertLabelCount } from '../model/labelCounts'
 import { insertOrgRows, newOrgDefaults, newTeamDefaults, tallyRow } from '../model/orgs'
 import { projectDescription } from '../model/projects'
 import { insertTeamCount } from '../model/teamCounts'
+import { releaseUsedIds } from '../model/usedIds'
 
 /* The seat's login: `<key>@demo.qivo.io` is the Northstar roster's address
  * pattern (internal/marketingDemo). */
@@ -110,6 +111,10 @@ export const zzGuestOrg = internalMutation({
       await deleteOrgDeep(ctx, org)
       torn_down = true
     }
+    // The fixture's used ids go again whether its organization was here or
+    // not: one deleted another way can leave an id kept while something
+    // else named it, which this looks at again (model/usedIds.ts).
+    await releaseUsedIds(ctx, ZZ.org, { left: Number.POSITIVE_INFINITY })
     // A fixture person removed in the app keeps its id until its background
     // cleanup ends; a new profile with that id would take over its keys,
     // tokens and grants that still wait for it.

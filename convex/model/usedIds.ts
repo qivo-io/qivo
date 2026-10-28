@@ -5,7 +5,10 @@
  * deleteOrgStep), deleteOrgDeep (model/cascade.ts) and the public demo's
  * cleanup (internal/demoCleanup.ts) after the organization row and every
  * other row of it, and the Northstar wipe (model/orgDeletion.ts
- * wipeWorkStep), which keeps the organization, after its work.
+ * wipeWorkStep), which keeps the organization, after its work. The guest
+ * fixture (internal/guestOrg.ts) also calls it for its organization's id
+ * once no row of that organization is left, also when another teardown
+ * deleted the organization.
  *
  * An id that something outside the organization still names stays retired
  * (heldOutside). Each teardown runs in a round (schema.ts used_id_rounds):

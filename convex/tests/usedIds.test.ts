@@ -592,6 +592,37 @@ describe('teardowns', () => {
     await t.mutation(internal.internal.guestOrg.zzGuestOrg, {})
     expect(await usedBy(t, org_id)).toHaveLength(7)
   })
+
+  it('the guest fixture rebuilds once its organization was deleted another way while one of its ids was kept', async () => {
+    const t = newT()
+    const { org_id } = await t.mutation(internal.internal.guestOrg.zzGuestOrg, {})
+    const shared = await t.run(async (ctx) =>
+      (await ctx.db.query('issues').collect()).find((task) => task.title === 'ZZ shared task'),
+    )
+    if (shared === undefined) throw new Error('the fixture has no shared task')
+    const detach = await t.run((ctx) =>
+      ctx.db.insert('archived_detaches', {
+        parent_id: shared.id,
+        actor_id: uuid(),
+        deleted_at: NOW,
+        progress_at: NOW,
+        attempts: 0,
+      }),
+    )
+    // deleted without the fixture, which keeps the shared task's id
+    await t.run(async (ctx) => {
+      const org = await ctx.db
+        .query('organizations')
+        .withIndex('by_uuid', (q) => q.eq('id', org_id))
+        .unique()
+      if (org === null) throw new Error('the fixture has no organization')
+      await deleteOrgDeep(ctx, org)
+    })
+    expect(await usedBy(t, org_id)).toMatchObject([{ row_id: shared.id }])
+    await t.run((ctx) => ctx.db.delete(detach))
+    await t.mutation(internal.internal.guestOrg.zzGuestOrg, {})
+    expect(await usedBy(t, org_id)).toHaveLength(7)
+  })
 })
 
 /** Runs the backfill, a dry run with `dry_run`, call after call from where
