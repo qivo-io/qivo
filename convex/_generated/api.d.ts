@@ -60,6 +60,7 @@ import type * as internal_marketingDemoData from "../internal/marketingDemoData.
 import type * as internal_microsoftAccounts from "../internal/microsoftAccounts.js";
 import type * as internal_milestoneWeeks from "../internal/milestoneWeeks.js";
 import type * as internal_nameKeysBackfill from "../internal/nameKeysBackfill.js";
+import type * as internal_navBackfill from "../internal/navBackfill.js";
 import type * as internal_oauthSmoke from "../internal/oauthSmoke.js";
 import type * as internal_operator from "../internal/operator.js";
 import type * as internal_overCapRows from "../internal/overCapRows.js";
@@ -296,6 +297,7 @@ declare const fullApi: ApiFromModules<{
   "internal/microsoftAccounts": typeof internal_microsoftAccounts;
   "internal/milestoneWeeks": typeof internal_milestoneWeeks;
   "internal/nameKeysBackfill": typeof internal_nameKeysBackfill;
+  "internal/navBackfill": typeof internal_navBackfill;
   "internal/oauthSmoke": typeof internal_oauthSmoke;
   "internal/operator": typeof internal_operator;
   "internal/overCapRows": typeof internal_overCapRows;

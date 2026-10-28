@@ -799,6 +799,32 @@ tasks only. Active tasks in an archived project keep theirs, which the
 summary skips with the project without reading them. Running it again is
 safe.
 
+Every project has an `archive_state` (live, archived as its own entry, or
+archived under an archived parent), and `project_reach` holds a row for each
+project every seat and team reaches through a lead, a grant or a team share,
+so navigation lists read a person's projects in name order without reading
+every grant (`convex/model/projectNav.ts`). Every write keeps them: grants,
+shares and leads bring their rows in line in their own transaction, and a
+rename, key change, archive or restore updates the rows of the projects it
+changes, refusing a tree past `LIMITS.projectTreeChange` before it writes.
+Rows and states stored before the release that added them are missing until
+the one-time `internal/navBackfill` writes them. The backfill walks the
+projects, grants, team shares and reach rows of every organization, then
+stamps each organization in `org_ready` (`nav_at`); an organization created
+since that release is stamped at its creation. A navigation list refuses an
+organization without both that stamp and the name keys stamp. Run the
+backfill on every hosted deployment once it serves that release, as the
+module's header says. Read its dry run first, then run it. A call that does
+not finish in about five minutes answers a `cursor`; call it again with the
+same arguments and that `cursor` until it answers `done`, and check that a
+second dry run reports nothing missing, extra or stale. Earlier releases do
+not accept the `archive_state` field, the `project_reach` table or the
+`nav_at` field, and every new organization writes `nav_at`, so the release
+that added them is a rollback floor for the backend as soon as it deploys
+(see Rollback and hotfixes). Roll forward instead. If a deployment runs an
+earlier release anyway, read the dry run again after rolling forward: it
+finds what that release wrote without rows, and a run mends it.
+
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
 deploy. Roll forward instead. Later releases no longer accept those fields,

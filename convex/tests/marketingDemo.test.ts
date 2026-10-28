@@ -24,6 +24,7 @@ import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/del
 import { NORTHSTAR_BATCH, NORTHSTAR_STEPS } from '../model/demoSeed'
 import { nameKeysReady } from '../model/nameKeys'
 import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
+import { navReady } from '../model/projectNav'
 import schema from '../schema'
 import {
   countersFor,
@@ -42,6 +43,7 @@ import {
   withOrg,
 } from './helpers.setup'
 import { expectExact } from './nameKeys.setup'
+import { expectReachExact, expectReachMatchesAccess } from './projectReach.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
 declare class Blob {
@@ -486,6 +488,25 @@ describe('marketing demo rebuild ownership', () => {
       buckets: 7,
     })
     vi.useRealTimers()
+  })
+
+  it('writes the reach rows of every lead and share it seeds, and again on reset', async () => {
+    const t = newAuthT()
+    const { org_id } = await seeded(t)
+    expect(await t.run((ctx) => navReady(ctx, org_id))).toBe(true)
+    await expectReachExact(t)
+    await expectReachMatchesAccess(t, org_id)
+    const states = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', org_id))
+          .collect()
+      ).map((p) => p.archive_state),
+    )
+    expect(new Set(states)).toEqual(new Set(['live']))
+    await reset(t, NEXT_ANCHOR)
+    await expectReachExact(t)
   })
 
   it('seeds two teams with separate leaders, partial membership overlap, default settings, and inherited project access', async () => {
