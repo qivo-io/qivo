@@ -125,18 +125,26 @@ export async function insertTask(
 /** Patches task row `issue` with `fields`, and its description row in the
  * same transaction. A description among them goes to the row, '' when it
  * is cleared, and a task without a row gets one. A new project or archived
- * state goes to the copies of the row the task has, with the text of
- * issues.description while the task row holds one, and a task without a
- * row gets none (the backfill inserts it). Either reads the row, which a
- * write of it reads again. */
+ * state goes to the copies of the task's first row, in creation order,
+ * with the text of issues.description while the task row holds one, and a
+ * task without a row gets none (the backfill inserts it). A second row,
+ * which no writer of this release leaves, keeps its copies until the
+ * backfill's repair deletes it, so it never stops a move, an archive or
+ * the nightly archive. Either reads the row, which a write of it reads
+ * again. */
 export async function patchTask(db: Writer, issue: Doc<'issues'>, fields: TaskFields) {
   await db.patch('issues', issue._id, fields)
-  const describes = 'description' in fields
-  if (!describes && !('project_id' in fields) && !('archived_at' in fields)) return
-  const row = await descriptionRow(db, issue.id)
   const after = { ...issue, ...fields }
-  if (describes) await putDescription(db, after, fields.description ?? '', row)
-  else if (row !== null) await putDescription(db, after, after.description ?? row.description, row)
+  if ('description' in fields) {
+    await putDescription(db, after, fields.description ?? '')
+    return
+  }
+  if (!('project_id' in fields) && !('archived_at' in fields)) return
+  const row = await db
+    .query('issue_descriptions')
+    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
+    .first()
+  if (row !== null) await putDescription(db, after, after.description ?? row.description, row)
 }
 
 /** Deletes the description row of task `issueId`, if it has one, and

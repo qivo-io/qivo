@@ -879,6 +879,50 @@ describe('the project and archived copies', () => {
     await expect(expectDescriptions(t, f.org.id)).rejects.toThrow()
   })
 
+  it('a second row of a task stops no move, archive, restore or nightly archive, and the repair deletes it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      description: 'Twice',
+      status: 'done',
+      done_at: new Date(Date.now() - 60 * 86_400_000).toISOString(),
+    })
+    // as no writer of this release leaves it
+    await t.run((ctx) =>
+      ctx.db.insert('issue_descriptions', {
+        issue_id: task.id,
+        org_id: f.org.id,
+        description: 'Twice',
+      }),
+    )
+    const first = async () => (await rowsOf(t, task.id))[0]
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    await t.mutation(internal.jobs.archiveDoneIssues, {})
+    await runSteps(t)
+    expect(errors).not.toHaveBeenCalled()
+    const archived = (await liveTask(t, task.id))?.archived_at
+    expect(archived).toBeDefined()
+    expect((await first()).archived_at).toBe(archived)
+    await as(t, f.user).mutation(api.issues.unarchive, { org_id: f.org.id, id: task.id })
+    await as(t, f.admin).mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: task.id,
+      project_id: f.sub2.id,
+    })
+    await as(t, f.user).mutation(api.issues.archive, { org_id: f.org.id, id: task.id })
+    expect(await first()).toMatchObject({
+      project_id: f.sub2.id,
+      archived_at: (await liveTask(t, task.id))?.archived_at,
+    })
+    // the first row holds the copies, and the repair deletes the second
+    expect(await backfill(t, { dry_run: true })).toMatchObject({ duplicates: 1, differ: 0 })
+    await backfill(t, { dry_run: false, repair: true })
+    expect(await expectDescriptions(t, f.org.id)).toBe(1)
+  })
+
   it('search_description filters by organization, project and archived state', async () => {
     const t = newT()
     const f = await withOrg(t)
