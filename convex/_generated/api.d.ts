@@ -161,6 +161,7 @@ import type * as machine_testing from "../machine/testing.js";
 import type * as machine_uploads from "../machine/uploads.js";
 import type * as mail from "../mail.js";
 import type * as messages from "../messages.js";
+import type * as milestones from "../milestones.js";
 import type * as model_activity from "../model/activity.js";
 import type * as model_admin from "../model/admin.js";
 import type * as model_appearance from "../model/appearance.js";
@@ -393,6 +394,7 @@ declare const fullApi: ApiFromModules<{
   "machine/uploads": typeof machine_uploads;
   mail: typeof mail;
   messages: typeof messages;
+  milestones: typeof milestones;
   "model/activity": typeof model_activity;
   "model/admin": typeof model_admin;
   "model/appearance": typeof model_appearance;

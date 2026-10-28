@@ -22,19 +22,41 @@
  * can see without User access on the project that stores the milestone is
  * forbidden. Callers resolve the caller's seat and check the billing pause
  * (orgMutation, the roadmap writer, asMachineCaller). A machine caller passes
- * its `provenance`, which signs the activity row. */
+ * its `provenance`, which signs the activity row.
+ *
+ * The app's milestone reads (milestones.ts) live at the end of this file.
+ * readMilestones merges the milestones of up to MILESTONE_READ.projects
+ * top-level projects in one order, a batch at a time and inside a read
+ * budget, and visibleMilestone answers one milestone by id. */
 
-import { ConvexError, v } from 'convex/values'
+import type { GenericDocument, TransactionMetric, TransactionMetrics } from 'convex/server'
+import { ConvexError, getDocumentSize, v } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { canSeeProject, hasProjectLevel, rootMetaOf } from '../lib/access'
+import {
+  canSeeProject,
+  hasProjectLevel,
+  levelRank,
+  projectLevelsOf,
+  receivesTeamAccess,
+  rootMetaOf,
+} from '../lib/access'
+import { type ReadCeiling, readsUnder, roomOf } from '../lib/archivedTasks'
 import { assertNewRowId, byId, insertUnique, usedMoreThan } from '../lib/db'
 import type { DeletedItemState } from '../lib/enums'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, type Refusal, require, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS, milestoneWeekTaken, WEEK_START_REFUSALS } from '../lib/limits'
+import {
+  LIMITS,
+  MILESTONE_READ_PROJECTS,
+  milestoneWeekTaken,
+  WEEK_START_REFUSALS,
+} from '../lib/limits'
+import { nameKey } from '../lib/nameKey'
+import { allWordsMatcher } from '../lib/search'
 import { logActivity, signedDetail } from './activity'
+import { DOCUMENT_MAX_BYTES } from './comments'
 import { newMemo, viewOf } from './deletedItems'
 import {
   assertExpected,
@@ -47,7 +69,15 @@ import {
   TEXT,
   type View,
 } from './expected'
-import { dayLabel, shiftDay, WEEKDAY_NAMES, weekDays, weekLabel, weekPhrase } from './orgs'
+import {
+  dayLabel,
+  shiftDay,
+  shownDay,
+  WEEKDAY_NAMES,
+  weekDays,
+  weekLabel,
+  weekPhrase,
+} from './orgs'
 import { calendarDay } from './taskValues'
 
 /* Milestone policies are User level (0078:497, member→user). */
@@ -136,13 +166,18 @@ async function orgOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Doc<'organizat
  * holds another milestone in (assertWeekFree). */
 export const MILESTONE_WEEK_TAKEN = 'milestone_week_taken'
 
-/* How many days before a week's first day its read starts. A day that does
+/** How many days before a week's first day its read starts. A day that does
  * not exist, stored before 2026-10-16, is shown on the day it overflows to,
- * 2026-02-31 on 3 March. Its text sorts at the end of its own month, at most
- * 3 days before the day it is shown on (day 31 of a 28-day February), so the
- * read reaches back that far. A day past 31 or a month past 12 can sort
- * farther away; internal/milestoneWeeks reports those. */
-const OVERFLOW_DAYS = 3
+ * 2026-02-31 on 3 March. A day 29 to 31 sorts at the end of its own month,
+ * at most 3 days before the day it is shown on (day 31 of a 28-day
+ * February), so the read reaches back that far. readMilestones starts a read
+ * with a first day this far back as well, and it also places a day 00, which
+ * sorts just after the day it is shown on. A day past 31, a month 00 or a
+ * month past 12 sorts farther from the day it is shown on, so a week's check
+ * can miss it, and the app's milestone reads can leave it out of every
+ * section and every range of days. internal/milestoneWeeks reports each day
+ * that does not exist as impossible_day. */
+export const OVERFLOW_DAYS = 3
 
 /**
  * The milestone of project `projectId`, other than `except`, in the week of
@@ -624,4 +659,707 @@ export async function removeMilestoneCore(
     project_id: milestone.project_id,
     ts: now,
   })
+}
+
+/* ------------------------------------------------------------------ reads */
+
+/** The budget of one of the app's milestone reads (milestones.ts). A call
+ * names at most `projects` projects. A section batch asks for at most
+ * `rows` rows, while a range of days (between) has no row cap and ends only
+ * at its last day or at the ceiling. The ceiling bounds readMilestones' own
+ * reads, counted from its start. It stops once they have read `ranges`
+ * index ranges, `documents` documents or `bytes` bytes, and never reads past
+ * what the request has left. The check of the projects before it has its own
+ * share (MILESTONE_SCOPE). Each project's first day past the start, and
+ * whether one holds a past milestone, are read whatever the ceiling, within
+ * the request's own limits, so that every call moves on. The share is the
+ * one a workspace part reads before it asks to be cut (lib/workspaceParts.ts
+ * PAGE.soft), because these reads are subscriptions too and rerun whenever
+ * a row they read changes. Tests lower these. */
+export const MILESTONE_READ = {
+  projects: MILESTONE_READ_PROJECTS,
+  rows: 25,
+  ranges: 2000,
+  documents: 8000,
+  bytes: 4 * 1024 * 1024,
+}
+
+/* What a read keeps back from the request's limits, as its guard
+ * (sizedGuard) can let one more document of any size through after its
+ * last look. */
+const MILESTONE_RESERVE: ReadCeiling = { ranges: 0, documents: 1, bytes: DOCUMENT_MAX_BYTES }
+
+/** The share of the request the check of a read's projects
+ * (milestoneProjects) may read, counted from the check's start, as
+ * MILESTONE_READ is for the read after it. Tests lower these. */
+export const MILESTONE_SCOPE: ReadCeiling = {
+  ranges: 2000,
+  documents: 8000,
+  bytes: 4 * 1024 * 1024,
+}
+
+/* The ceiling of a check of projects that starts at `m`: MILESTONE_SCOPE
+ * past what the transaction has read, and at most half of what the request
+ * has left, so the read after it and one navigation check past the ceiling
+ * still fit. */
+const scopeCeiling = (m: TransactionMetrics): ReadCeiling => {
+  const share = (metric: TransactionMetric, more: number) =>
+    metric.used + Math.min(more, Math.floor(metric.remaining / 2))
+  return {
+    ranges: share(m.databaseQueries, MILESTONE_SCOPE.ranges),
+    documents: share(m.documentsRead, MILESTONE_SCOPE.documents),
+    bytes: share(m.bytesRead, MILESTONE_SCOPE.bytes),
+  }
+}
+
+/* How many projects the check of a read's projects asks the level of at
+ * once, between two looks at its reads. A project's check reads its team
+ * shares one by one while projectLevelsOf cannot read the caller's own at
+ * once (lib/access.ts OWN_READS), so a batch passes the ceiling by at most
+ * the shares of this many projects. */
+const SCOPE_BATCH = 8
+
+/** The reason of the refusal of a milestone read whose projects need more
+ * reads than one request allows (milestoneProjects). */
+export const MILESTONE_READ_TOO_LARGE = 'milestone_read_too_large'
+
+/* That refusal of a read of several projects, which the caller can ask
+ * again for fewer. */
+const readTooLarge = (): ConvexError<Refusal> =>
+  new ConvexError<Refusal>({
+    code: 'rule',
+    reason: MILESTONE_READ_TOO_LARGE,
+    message:
+      'these projects need more reads than one request allows, so Qivo cannot show their milestones at once. Choose fewer projects.',
+  })
+
+/* That refusal of a read of one milestone (visibleMilestone). */
+const milestoneTooLarge = (): ConvexError<Refusal> =>
+  new ConvexError<Refusal>({
+    code: 'rule',
+    reason: MILESTONE_READ_TOO_LARGE,
+    message:
+      'checking access to the project of this milestone needs more reads than one request allows, so Qivo cannot open it. Contact support@qivo.io.',
+  })
+
+/* A read's check of the request's reads against a ceiling. The read
+ * reports each index range before it starts it and each document it read. */
+type ReadGuard = {
+  /** Whether the read may start one more index range. */
+  range(): Promise<boolean>
+  /** Whether the read may go on after `doc`, which it just read. */
+  document(doc: GenericDocument): Promise<boolean>
+  /** Forgets what the last look left, after reads the guard did not count,
+   * such as an access check's, so that its next check looks again. */
+  forget(): void
+}
+
+/* A ReadGuard for `ceiling`, transaction totals. It counts each document
+ * at its own size (getDocumentSize, Convex's measure) and looks at the
+ * transaction's metrics only once the counted reads used what its last look
+ * left, so a read looks a few times. lib/archivedTasks.ts ceilingGuard
+ * counts every document at Convex's 1 MiB limit instead, which under
+ * MILESTONE_READ's 4 MiB looks every three or four milestones, each look
+ * costing about as much as an index range. The document after the last look
+ * may pass the ceiling by its own size, at most DOCUMENT_MAX_BYTES, which
+ * MILESTONE_RESERVE keeps back from the request's limits. */
+function sizedGuard(ctx: QueryCtx, ceiling: ReadCeiling): ReadGuard {
+  // what the reads counted since the last look may still use
+  let left = { ranges: 0, documents: 0, bytes: 0 }
+  const look = async (): Promise<boolean> => {
+    const m = await ctx.meta.getTransactionMetrics()
+    left = {
+      ranges: ceiling.ranges - m.databaseQueries.used,
+      documents: ceiling.documents - m.documentsRead.used,
+      bytes: ceiling.bytes - m.bytesRead.used,
+    }
+    return left.ranges > 0 && left.documents > 0 && left.bytes > 0
+  }
+  return {
+    range: async () => {
+      if (left.ranges <= 0 && !(await look())) return false
+      left.ranges -= 1
+      return true
+    },
+    document: async (doc) => {
+      left.documents -= 1
+      left.bytes -= getDocumentSize(doc)
+      return (left.documents > 0 && left.bytes > 0) || (await look())
+    },
+    forget: () => {
+      left = { ranges: 0, documents: 0, bytes: 0 }
+    },
+  }
+}
+
+/** A place in a milestone order, just after the milestone with this stored
+ * day (`week`), name key (lib/nameKey.ts) and id. */
+export type MilestonePosition = { week: string; key: string; id: string }
+
+/** The milestones a read lists are those the app shows (shownDay) on a day
+ * in [from, to), where a missing bound is open, in day order ('asc') or
+ * newest first ('desc'). With either bound set, a row whose text names no
+ * day at all is shown nowhere and left out. */
+export type MilestoneSpan = { from?: string; to?: string; order: 'asc' | 'desc' }
+
+/** One batch of a read (readMilestones): its rows in order, the position to
+ * go on after, null once no row follows, and the stored day the read reached
+ * when its budget ran out first, else null. `past`, when asked, says whether
+ * one of the projects holds a milestone shown before the day asked about. */
+export type MilestoneBatch = {
+  rows: Doc<'milestones'>[]
+  next: MilestonePosition | null
+  stopped: string | null
+  past?: boolean
+}
+
+/* Negative when `a` comes before `b` in day order, positive after. It is
+ * the one comparison of positions, for the order of a day's rows and for
+ * the cursor alike, and compares text by UTF-16 code units, never by
+ * localeCompare, so the two cannot disagree. */
+function compared(a: MilestonePosition, b: MilestonePosition): number {
+  for (const field of ['week', 'key', 'id'] as const)
+    if (a[field] !== b[field]) return a[field] < b[field] ? -1 : 1
+  return 0
+}
+
+/* The position of `row`. */
+const positionOf = (row: Doc<'milestones'>): MilestonePosition => ({
+  week: row.week,
+  key: nameKey(row.name),
+  id: row.id,
+})
+
+/* Whether the app shows stored day `week` inside `span`. */
+function inSpan(week: string, span: MilestoneSpan): boolean {
+  if (span.from === undefined && span.to === undefined) return true
+  const shown = shownDay(week)
+  return (
+    shown !== null &&
+    (span.from === undefined || shown >= span.from) &&
+    (span.to === undefined || shown < span.to)
+  )
+}
+
+/* The stored days a read of `span` after `after` takes from by_project_week:
+ * from OVERFLOW_DAYS before its first day, before its end, and from or up to
+ * `after`'s day. */
+function dayBounds(
+  span: MilestoneSpan,
+  after: MilestonePosition | null,
+): { lower?: string; upper?: { day: string; inclusive: boolean } } {
+  let lower = span.from === undefined ? undefined : shiftDay(span.from, -OVERFLOW_DAYS)
+  let upper = span.to === undefined ? undefined : { day: span.to, inclusive: false }
+  if (after !== null && span.order === 'asc' && (lower === undefined || after.week > lower))
+    lower = after.week
+  if (after !== null && span.order === 'desc' && (upper === undefined || after.week < upper.day))
+    upper = { day: after.week, inclusive: true }
+  return { lower, upper }
+}
+
+/** How many sub-projects of a top-level project a navigation check
+ * (navigationOf) asks about one at a time. Past this many it looks among
+ * the caller's own grants, team shares and led projects instead. Tests
+ * lower it. */
+export const MILESTONE_NAV = { children: 64 }
+
+/* Whether top-level projects that `me` holds no level of their own on show
+ * to `me` for navigation, as lib/access.ts levelUnder decides it, which is
+ * when one of their sub-projects is led by `me` or gives `me` a level of
+ * their own. The access layer answers that by reading every sub-project of
+ * the project and every grant of `me`, which passes Convex's limits under a
+ * project of thousands of sub-projects or for a person with thousands of
+ * grants. This check reads a project's first MILESTONE_NAV.children
+ * sub-projects and one more. A project with no more than that asks each of
+ * them in turn. A larger one looks for its sub-projects among `me`'s own
+ * grants, team shares and led projects, read once for every project asked,
+ * the team shares only for a role that receives team access.
+ * Either way projectLevelsOf judges each sub-project it asks about (its
+ * level without navigation), so the rule stays the access layer's. Every
+ * read is counted under `ceiling` or follows a look at it, and past the
+ * ceiling the check throws `refusal()`. It passes the ceiling by at most
+ * one sub-project's own access check. That check is the access layer's,
+ * which reads every team share on the sub-project before the next look
+ * (lib/access.ts projectLevelsOf), so a sub-project shared with tens of
+ * thousands of teams passes Convex's document limit here, as it does in
+ * every access check of that sub-project. Bounding it belongs in
+ * lib/access.ts. */
+function navigationOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  ceiling: ReadCeiling,
+  refusal: () => ConvexError<Refusal>,
+): { shows(root: Doc<'projects'>): Promise<boolean> } {
+  const guard = sizedGuard(ctx, ceiling)
+  /* hands each row of `rows` to `step`, under the guard, until `step`
+   * answers false */
+  const each = async <D extends GenericDocument>(
+    rows: AsyncIterable<D>,
+    step: (row: D) => boolean,
+  ): Promise<void> => {
+    if (!(await guard.range())) throw refusal()
+    for await (const row of rows) {
+      if (!(await guard.document(row))) throw refusal()
+      if (!step(row)) return
+    }
+  }
+  /* the projects `me` holds a grant on, a team of theirs is shared on or
+   * they lead, by their parent, read once */
+  let own: Promise<Map<string, Doc<'projects'>[]>> | undefined
+  const ownByParent = () =>
+    (own ??= (async () => {
+      const ids = new Set<string>()
+      await each(
+        ctx.db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', me.id)),
+        (grant) => {
+          ids.add(grant.project_id)
+          return true
+        },
+      )
+      // a team share reaches only a role the access layer gives team
+      // access, so a guest's memberships, which can be left from before,
+      // are not read
+      const teams: string[] = []
+      if (receivesTeamAccess(me))
+        await each(
+          ctx.db.query('team_members').withIndex('by_profile', (q) => q.eq('profile_id', me.id)),
+          (membership) => {
+            teams.push(membership.team_id)
+            return true
+          },
+        )
+      for (const team of teams)
+        await each(
+          ctx.db.query('project_team_access').withIndex('by_team', (q) => q.eq('team_id', team)),
+          (share) => {
+            ids.add(share.project_id)
+            return true
+          },
+        )
+      const byParent = new Map<string, Doc<'projects'>[]>()
+      const add = (project: Doc<'projects'>) => {
+        if (project.parent_id !== undefined)
+          byParent.set(project.parent_id, [...(byParent.get(project.parent_id) ?? []), project])
+      }
+      // a project they lead is read here, so it is not read again by id
+      await each(
+        ctx.db.query('projects').withIndex('by_lead', (q) => q.eq('lead_id', me.id)),
+        (project) => {
+          ids.delete(project.id)
+          add(project)
+          return true
+        },
+      )
+      for (const id of ids) {
+        if (!(await guard.range())) throw refusal()
+        const project = await byId(ctx, 'projects', id)
+        if (project === null) continue
+        if (!(await guard.document(project))) throw refusal()
+        add(project)
+      }
+      return byParent
+    })())
+  return {
+    async shows(root) {
+      const children: Doc<'projects'>[] = []
+      await each(
+        ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', root.id)),
+        (child) => children.push(child) <= MILESTONE_NAV.children,
+      )
+      const asked =
+        children.length <= MILESTONE_NAV.children
+          ? children
+          : ((await ownByParent()).get(root.id) ?? [])
+      const levels = projectLevelsOf(ctx, me, [root, ...asked])
+      try {
+        for (const child of asked) {
+          if (!(await readsUnder(ctx, ceiling))) throw refusal()
+          if ((await levels.level(child.id, false)) !== null) return true
+        }
+        return false
+      } finally {
+        // the access checks read past the guard's count
+        guard.forget()
+      }
+    },
+  }
+}
+
+/**
+ * The top-level projects whose milestones a read of `ids` lists for the
+ * caller, whose active seats are `myProfiles` keyed by organization, each
+ * once. A sub-project stands for its top-level project, which stores its
+ * milestones (milestoneTarget). Each project is judged with the caller's
+ * seat in its own organization, through one lib/access.ts projectLevelsOf a
+ * seat, so the caller's grants and team shares in an organization are read
+ * once, not once a project. An unknown project, one of an organization the
+ * caller holds no seat in, one they cannot see, and an archived one or one
+ * under an archived top-level project add nothing and raise nothing, so the
+ * answer tells nothing about projects the caller cannot list. A top-level
+ * project the caller sees only to reach one of its sub-projects counts, as
+ * the app shows its milestones read-only.
+ *
+ * The check reads within MILESTONE_SCOPE (scopeCeiling). It first asks every
+ * project's level without navigation, SCOPE_BATCH projects at a time, and
+ * then, one project at a time, whether a top-level project the caller holds
+ * no level on shows for navigation (navigationOf). Before each batch and
+ * each navigation check it looks at the reads so far, and past the ceiling
+ * it refuses the whole read (MILESTONE_READ_TOO_LARGE) instead of answering
+ * for part of the projects, so the caller can ask for fewer. It can pass
+ * the ceiling by one batch's checks, whose team shares projectLevelsOf may
+ * read project by project, or by one sub-project's access check.
+ */
+export async function milestoneProjects(
+  ctx: QueryCtx,
+  myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
+  ids: readonly string[],
+): Promise<string[]> {
+  const ceiling = scopeCeiling(await ctx.meta.getTransactionMetrics())
+  const unique = [...new Set(ids)]
+  const named = await Promise.all(unique.map((id) => byId(ctx, 'projects', id)))
+  const bySeat = new Map<string, Doc<'projects'>[]>()
+  for (const project of named)
+    if (project !== null && myProfiles.has(project.org_id))
+      bySeat.set(project.org_id, [...(bySeat.get(project.org_id) ?? []), project])
+  const roots = new Set<string>()
+  // the top-level projects the caller holds no level on, in the order named
+  const navigation: { at: number; project: Doc<'projects'>; me: Doc<'profiles'> }[] = []
+  for (const [orgId, projects] of bySeat) {
+    const me = myProfiles.get(orgId)
+    if (me === undefined) continue
+    const levels = projectLevelsOf(ctx, me, projects)
+    for (let at = 0; at < projects.length; at += SCOPE_BATCH) {
+      if (!(await readsUnder(ctx, ceiling))) throw readTooLarge()
+      const found = await Promise.all(
+        projects.slice(at, at + SCOPE_BATCH).map(async (project) => {
+          if (project.archived_at !== undefined) return null
+          if ((await levels.level(project.id, false)) === null) {
+            if (project.parent_id === undefined)
+              navigation.push({ at: unique.indexOf(project.id), project, me })
+            return null
+          }
+          // a project the caller can see is top-level or directly under one
+          const root =
+            project.parent_id === undefined ? project : await levels.project(project.parent_id)
+          return root === null || root.archived_at !== undefined ? null : root.id
+        }),
+      )
+      for (const id of found) if (id !== null) roots.add(id)
+    }
+  }
+  // one navigation check a seat, so its own grants are read at most once
+  const checks = new Map<string, ReturnType<typeof navigationOf>>()
+  for (const { project, me } of navigation.sort((a, b) => a.at - b.at)) {
+    if (!(await readsUnder(ctx, ceiling))) throw readTooLarge()
+    let check = checks.get(me.org_id)
+    if (check === undefined) {
+      check = navigationOf(ctx, me, ceiling, readTooLarge)
+      checks.set(me.org_id, check)
+    }
+    if (await check.shows(project)) roots.add(project.id)
+  }
+  return [...roots]
+}
+
+/* Whether one of the projects `projectIds` holds a milestone the app shows
+ * before `day`, read newest first until the first, under `guard`, and
+ * whether the guard let it ask every project it had to. A probe the guard
+ * stopped answers that the projects hold one, so a project whose history
+ * went unread never reads as one without history. */
+async function holdsPast(
+  ctx: QueryCtx,
+  projectIds: readonly string[],
+  day: string,
+  guard: ReadGuard,
+): Promise<{ holds: boolean; asked: boolean }> {
+  const stopped = { holds: true, asked: false }
+  for (const projectId of projectIds) {
+    if (!(await guard.range())) return stopped
+    const rows = ctx.db
+      .query('milestones')
+      .withIndex('by_project_week', (q) => q.eq('project_id', projectId).lt('week', day))
+      .order('desc')
+    for await (const row of rows) {
+      if (!(await guard.document(row))) return stopped
+      const shown = shownDay(row.week)
+      if (shown !== null && shown < day) return { holds: true, asked: true }
+    }
+  }
+  return { holds: false, asked: true }
+}
+
+/* One project's range in a read, read a day at a time. */
+type Lane = {
+  project: string
+  /** the open range, once the read began */
+  rows: AsyncIterator<Doc<'milestones'>> | null
+  /** the first row of the day after the last day read whole */
+  peek: Doc<'milestones'> | null
+  /** the listed rows of the days read whole, not handed out yet, in order */
+  pending: { row: Doc<'milestones'>; at: MilestonePosition }[]
+  /** the last position of the last day read whole, null before the first */
+  through: MilestonePosition | null
+  /** whether the range is read to its end */
+  done: boolean
+}
+
+/**
+ * One batch of the milestones of the top-level projects `projectIds` in
+ * `span`, after `after`, that match `search`, at most `limit` of them. The
+ * order is stored day, then name key (lib/nameKey.ts), then id, ascending,
+ * or descending for span.order 'desc'. Within one project that keeps the
+ * app's order by week and then name, and across projects milestones of one
+ * week sort by day before name, as REST's project detail sorts them
+ * (machine/projects.ts), so the order does not depend on the viewer's
+ * weeks. REST compares names with localeCompare, so milestones of one day
+ * whose names differ in accents or in a non-Latin script can come in
+ * another order there than here. A search matches every whitespace-separated fragment of its name
+ * key in the milestone's name key, in any order (lib/search.ts
+ * allWordsMatcher), so it ignores case and accents. A blank one lists every
+ * milestone.
+ *
+ * by_project_week orders one project's rows by day and then by creation
+ * time, so the read takes one project a day at a time and sorts the rows of
+ * each day before it hands any out. Under LIMITS.milestonesPerWeek that is
+ * one row, but rows stored before the rule can share a day. It opens one
+ * range a project lazily, holds each project's next rows and hands out the
+ * first across projects, so a batch without search reads about two rows a
+ * project and `limit` more. Each row is placed by the day the app shows it
+ * on (shownDay). A read with a first day starts OVERFLOW_DAYS before it and
+ * drops rows shown outside the span, so a day that does not exist, such as
+ * 2026-02-31, comes in the span the app draws it in, at most OVERFLOW_DAYS
+ * out of order, as it sorts by its text. A stored day whose text sorts
+ * farther from the day it is shown on, such as a day past 31 or a month 00
+ * or past 12, can come in no span (OVERFLOW_DAYS).
+ *
+ * The reads stop once they used MILESTONE_READ's share, counted from the
+ * read's own start, so the caller's access checks before it do not spend
+ * it, and never past what the request has left. The rows known to be
+ * complete are then those up to the frontier, the least
+ * advanced position among the projects not read to their end, so the batch
+ * answers the matches up to it, `next` at it and `stopped` at its stored
+ * day. A continuation then answers nothing again and skips nothing. Each
+ * project is first read through a day past `after`, whatever the ceiling,
+ * within the request's own limits, so every call moves the frontier on; a
+ * read whose projects' first days do not fit there is refused
+ * (MILESTONE_READ_TOO_LARGE), and the caller can ask for fewer projects. A
+ * full batch answers `next` null only when no row of the span follows, so a
+ * search can answer a `next` that leads to an empty last batch. With
+ * `pastBefore`, the batch also says whether one of the projects holds a
+ * milestone shown before that day, once the projects are open and within
+ * the request's own limits, and says true when those ran out first; the
+ * read then reads nothing more and stops at its frontier.
+ *
+ * `after` is a plain position, not a sealed one, and a caller can send any
+ * position. That reveals nothing, because whatever the position, a batch
+ * reads only the milestones of the listed projects the caller can see,
+ * which the caller checks again on every call (milestoneProjects), so a
+ * position only says where to start among them.
+ */
+export async function readMilestones(
+  ctx: QueryCtx,
+  projectIds: readonly string[],
+  o: {
+    span: MilestoneSpan
+    after: MilestonePosition | null
+    search: string
+    limit: number
+    pastBefore?: string
+  },
+): Promise<MilestoneBatch> {
+  const { span, after } = o
+  // whether `a` comes before `b` in the read's order
+  const before = (a: MilestonePosition, b: MilestonePosition) =>
+    span.order === 'asc' ? compared(a, b) < 0 : compared(a, b) > 0
+  const matches = o.search === '' ? null : allWordsMatcher(nameKey(o.search))
+  const listed = (row: Doc<'milestones'>, at: MilestonePosition) =>
+    (after === null || before(after, at)) &&
+    inSpan(row.week, span) &&
+    (matches === null || matches(at.key))
+  const { lower, upper } = dayBounds(span, after)
+  const range = (projectId: string) =>
+    ctx.db
+      .query('milestones')
+      .withIndex('by_project_week', (q) => {
+        const own = q.eq('project_id', projectId)
+        const low = lower === undefined ? own : own.gte('week', lower)
+        if (upper === undefined) return low
+        return upper.inclusive ? low.lte('week', upper.day) : low.lt('week', upper.day)
+      })
+      .order(span.order)
+  // the request's own limits less the reserve, and the read's ceiling,
+  // MILESTONE_READ past what the transaction read before the read began
+  const start = await ctx.meta.getTransactionMetrics()
+  const room = roomOf(start, MILESTONE_RESERVE)
+  const opening = sizedGuard(ctx, room)
+  const budget = sizedGuard(ctx, {
+    ranges: Math.min(room.ranges, start.databaseQueries.used + MILESTONE_READ.ranges),
+    documents: Math.min(room.documents, start.documentsRead.used + MILESTONE_READ.documents),
+    bytes: Math.min(room.bytes, start.bytesRead.used + MILESTONE_READ.bytes),
+  })
+
+  /* Reads the next day of `lane` whole under `guard` and adds its listed
+   * rows to the lane's. False when the guard stops it first, which ends the
+   * read, so the rows of a day read in part are dropped. */
+  const readDay = async (lane: Lane, guard: ReadGuard): Promise<boolean> => {
+    if (lane.rows === null) {
+      if (!(await guard.range())) return false
+      lane.rows = range(lane.project)[Symbol.asyncIterator]()
+    }
+    const rows = lane.rows
+    // the next row, null at the range's end, undefined once the guard stops
+    const pull = async (): Promise<Doc<'milestones'> | null | undefined> => {
+      const step = await rows.next()
+      if (step.done === true) return null
+      return (await guard.document(step.value)) ? step.value : undefined
+    }
+    let first = lane.peek
+    lane.peek = null
+    if (first === null) {
+      const row = await pull()
+      if (row === undefined) return false
+      if (row === null) {
+        lane.done = true
+        return true
+      }
+      first = row
+    }
+    const day = [first]
+    for (;;) {
+      const row = await pull()
+      if (row === undefined) return false
+      if (row === null) {
+        lane.done = true
+        break
+      }
+      if (row.week !== first.week) {
+        lane.peek = row
+        break
+      }
+      day.push(row)
+    }
+    const read = day
+      .map((row) => ({ row, at: positionOf(row) }))
+      .sort((a, b) => (before(a.at, b.at) ? -1 : 1))
+    for (const entry of read) if (listed(entry.row, entry.at)) lane.pending.push(entry)
+    lane.through = read[read.length - 1].at
+    return true
+  }
+
+  // a project named twice is read once
+  const projects = [...new Set(projectIds)]
+  const lanes: Lane[] = projects.map((project) => ({
+    project,
+    rows: null,
+    peek: null,
+    pending: [],
+    through: null,
+    done: false,
+  }))
+  const rows: Doc<'milestones'>[] = []
+  try {
+    // every project through a day past `after`, as a continuation reads the
+    // day of `after` again for the milestones after it on that day
+    for (const lane of lanes)
+      while (
+        !lane.done &&
+        (lane.through === null || (after !== null && !before(after, lane.through)))
+      )
+        if (!(await readDay(lane, opening))) throw readTooLarge()
+    const probe =
+      o.pastBefore === undefined ? null : await holdsPast(ctx, projects, o.pastBefore, opening)
+    // A probe the guard stopped has used the request's own room, past which
+    // even one more document might not fit, so the read then reads nothing
+    // more and stops at its frontier.
+    const full = probe !== null && !probe.asked
+    const answer = (next: MilestonePosition | null, stopped: string | null): MilestoneBatch => ({
+      rows,
+      next,
+      stopped,
+      ...(probe === null ? {} : { past: probe.holds }),
+    })
+    for (;;) {
+      const last = rows.at(-1)
+      if (last !== undefined && rows.length >= o.limit) {
+        const more = lanes.some((lane) => lane.pending.length > 0 || !lane.done)
+        return answer(more ? positionOf(last) : null, null)
+      }
+      // the project with the first row to hand out, and of those without
+      // one, the one read least far that is not read to its end
+      let first: Lane | null = null
+      let lag: Lane | null = null
+      for (const lane of lanes) {
+        const head = lane.pending[0]
+        if (head !== undefined) {
+          if (first === null || before(head.at, first.pending[0].at)) first = lane
+        } else if (
+          !lane.done &&
+          (lag === null ||
+            lane.through === null ||
+            (lag.through !== null && before(lane.through, lag.through)))
+        )
+          lag = lane
+      }
+      // a row comes before everything the lagging project has not read yet
+      const head = first?.pending[0]
+      if (first !== null && head !== undefined) {
+        if (lag === null || (lag.through !== null && before(head.at, lag.through))) {
+          first.pending.shift()
+          rows.push(head.row)
+          continue
+        }
+      }
+      if (lag === null) return answer(null, null)
+      if (full || !(await readDay(lag, budget))) {
+        // every project was read through a day past `after`
+        const frontier = lag.through
+        if (frontier === null) throw new Error('a stopped read had not opened every project')
+        return answer(frontier, frontier.week)
+      }
+    }
+  } finally {
+    await Promise.all(lanes.map((lane) => lane.rows?.return?.()))
+  }
+}
+
+/**
+ * The milestone `id` as the Milestones window opens it for the caller,
+ * whose active seats are `myProfiles` keyed by organization: the milestone,
+ * the project that stores it, and whether the caller may change it, else
+ * null. It follows changeableMilestone. The caller's seat in the project's
+ * organization sees that project (canSeeProject), and changes the milestone
+ * with User access there (assertMilestoneWriter). A milestone of a
+ * sub-project, stored there before 2026-10-14, answers null, as the app and
+ * REST (machine/projects.ts milestoneOn) leave it out. So does one of an
+ * archived project, as in the app, whose workspace projects part sends the
+ * milestones of active projects only (lib/workspaceParts.ts readProjects),
+ * though REST still lists an archived project's milestones. An unknown
+ * milestone and one of a project the caller cannot see answer null alike.
+ * Whether a project the caller holds no level on shows to them for
+ * navigation is checked within MILESTONE_SCOPE (navigationOf), and a check
+ * that does not fit there is refused with MILESTONE_READ_TOO_LARGE.
+ */
+export async function visibleMilestone(
+  ctx: QueryCtx,
+  myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
+  id: string,
+): Promise<{
+  milestone: Doc<'milestones'>
+  project: Doc<'projects'>
+  canWrite: boolean
+} | null> {
+  const milestone = await byId(ctx, 'milestones', id)
+  const project = milestone && (await byId(ctx, 'projects', milestone.project_id))
+  if (!milestone || !project) return null
+  if (project.parent_id !== undefined || project.archived_at !== undefined) return null
+  const me = myProfiles.get(project.org_id)
+  if (me === undefined) return null
+  const ceiling = scopeCeiling(await ctx.meta.getTransactionMetrics())
+  // The caller's own level, or else whether the project shows to them only
+  // to reach a sub-project, which gives Viewer access and no write
+  // (lib/access.ts levelUnder), checked within bounded reads.
+  const level = await projectLevelsOf(ctx, me, [project]).level(project.id, false)
+  if (level === null && !(await navigationOf(ctx, me, ceiling, milestoneTooLarge).shows(project)))
+    return null
+  return { milestone, project, canWrite: levelRank(level) >= levelRank('user') }
 }

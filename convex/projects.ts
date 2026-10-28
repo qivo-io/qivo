@@ -1,9 +1,9 @@
 /* The project domain's public surface (phase 5): create / update /
  * setAccess / removeAccess / archive / unarchive / deleteDeep / removalSummary /
- * inviteGuest, plus the milestones CRUD (there is no milestones.ts). Thin
- * wrappers over the shared cores REST and MCP use too (model/projects.ts,
- * model/projectAccess.ts, model/milestones.ts) and over lib/access,
- * model/orgs and model/cascade —
+ * inviteGuest, plus the milestone writes (milestones.ts holds the app's
+ * milestone reads). Thin wrappers over the shared cores REST and MCP use
+ * too (model/projects.ts, model/projectAccess.ts, model/milestones.ts) and
+ * over lib/access, model/orgs and model/cascade —
  * orgMutation → resolve by uuid → core (access predicate → guards → writes →
  * narration), all under ONE `now`.
  *
