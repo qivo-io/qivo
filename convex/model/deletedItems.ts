@@ -1495,19 +1495,20 @@ async function purgeLeft(run: Run): Promise<boolean> {
 const REVEAL_RANGES_PER_TASK = 20
 
 /** The index ranges a reveal reads per project of a project item, with a
- * delete counted as one for the row it reads: the conflict check's key and
- * uuid reads, its lead and legacy team, the used_ids row of its id
- * (lib/db.ts insertUsed), the counters (tallyRow), the stored row it
- * deletes, and the reach rows of its stored lead it brings in line
- * (revealProjects), which read the projects the reveal wrote. A lead who
- * became a Viewer after restore_access wrote their rows comes back without
- * the project (cleanProject), and taking their rows costs six reads and two
- * deletes. Counted as a step's budget counts reads (meterDb), a reveal of
- * 5 and of 10 sub-projects, each with a legacy team and such a lead, spent
- * 15 a project, and 11 with each lead kept (tests/projectReach.test.ts).
- * The largest item, 201 projects, so reads about 3,000 in a step of its
- * own, inside Convex's 4,096. */
-export const REVEAL_RANGES_PER_PROJECT = 15
+ * delete or patch counted as one for the row it reads: the conflict check's
+ * key and uuid reads, its lead and legacy team, the used_ids row of its id
+ * (lib/db.ts insertUsed), the counters and, in a counted organization, their
+ * patch (tallyRow), the stored row it deletes, and the reach rows of its
+ * stored lead it brings in line (revealProjects), which read the projects
+ * the reveal wrote. A lead who became a Viewer after restore_access wrote
+ * their rows comes back without the project (cleanProject), and taking their
+ * rows costs six reads and two deletes. Counted as a step's budget counts
+ * reads (meterDb), a reveal of 5 and of 10 sub-projects in a counted
+ * organization, each with a legacy team and such a lead, spent 16 a project,
+ * and 12 with each lead kept (tests/projectReach.test.ts). The largest item,
+ * 201 projects, so reads about 3,200 in a step of its own, inside Convex's
+ * 4,096. */
+export const REVEAL_RANGES_PER_PROJECT = 16
 
 /** Why an item cannot be restored now (design 5.3). The item's state while
  * it is not ready; read_only while billing or a pending deletion makes the

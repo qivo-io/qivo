@@ -33,7 +33,7 @@ import {
 } from '../model/deletedItems'
 import { ARCHIVED_READ_PROJECTS } from '../model/messages'
 import { deleteOrgStep } from '../model/orgDeletion'
-import { insertOrgRows, newOrgDefaults } from '../model/orgs'
+import { countersRow, insertOrgRows, newOrgDefaults } from '../model/orgs'
 import {
   grantBatch,
   grantee,
@@ -45,6 +45,7 @@ import {
 import { createProjectCore } from '../model/projects'
 import {
   as,
+  expectLiveCounts,
   expectRefusal,
   NOW,
   newT,
@@ -1167,7 +1168,9 @@ describe('a restore and the work around it', () => {
    * sub-projects reads (counting). Each sub-project has a legacy team and
    * a lead of its own, whose reach rows restore_access writes back and who
    * becomes a Viewer before the reveal, so the reveal leaves them out and
-   * takes their rows. */
+   * takes their rows. The organization is counted, as every organization
+   * since live counts is (model/orgs.ts insertOrgRows), so the reveal also
+   * patches its live_projects (tallyRow). */
   async function demotedReveal(subs: number): Promise<number> {
     const t = newT()
     const f = await ready(t)
@@ -1194,6 +1197,22 @@ describe('a restore and the work around it', () => {
       })
       leads.push(lead.id)
     }
+    await t.run(async (ctx) => {
+      const counters = await countersRow(ctx, org_id)
+      if (counters === null) throw new Error(`no counters for ${org_id}`)
+      const tasks = await ctx.db
+        .query('issues')
+        .withIndex('by_org_archived', (q) => q.eq('org_id', org_id).eq('archived_at', undefined))
+        .collect()
+      const projects = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', org_id))
+        .collect()
+      await ctx.db.patch(counters._id, {
+        active_tasks: tasks.length,
+        live_projects: projects.length,
+      })
+    })
     await backfill(t, false)
     const ofLeads = async () => (await reachRows(t)).filter((row) => leads.includes(row.grantee_id))
     await as(t, f.user).mutation(api.projects.deleteDeep, { org_id, id: f.meta.id })
@@ -1228,6 +1247,7 @@ describe('a restore and the work around it', () => {
     expect(await t.run((ctx) => byId(ctx, 'deleted_items', item.id))).toBeNull()
     expect(await ofLeads()).toEqual([])
     await expectAll(t, f)
+    await expectLiveCounts(t, org_id)
     return ranges
   }
 
