@@ -1,7 +1,10 @@
-/* Uuid-key lookup, the race-free unique insert, the room check of bulk
- * writers and window keys. Serializable mutations make check-then-insert
- * safe: two concurrent insertUnique calls on the same key conflict and one
- * retries, re-running the check. */
+/* Uuid-key lookup, the race-free unique insert, the used_ids record of every
+ * task and project id, the room check of bulk writers and window keys.
+ * Serializable mutations make check-then-insert safe: two concurrent
+ * insertUnique calls on the same key conflict and one retries, re-running
+ * the check. So do two inserts of one task or project id by any path, in
+ * one organization or two, since each reads the used_ids range of the id
+ * that the other writes its row into (claimId). */
 
 import type {
   GenericDatabaseReader,
@@ -12,7 +15,8 @@ import type {
 } from 'convex/server'
 import type { ConvexError, Value } from 'convex/values'
 import type { DataModel, Doc, Id, TableNames } from '../_generated/dataModel'
-import { isStoredTable } from './enums'
+import { uncountedWriter } from './demo'
+import { isStoredTable, isUsedIdTable, type UsedIdTable } from './enums'
 import { badRequest, type Refusal } from './functions'
 
 /* Tables that declare .index('by_uuid', ['id']) — the app-key tables.
@@ -116,7 +120,9 @@ type EqChain = { eq: (field: string, value: Value | undefined) => EqChain }
  * field order (the runtime builder refuses out-of-order eq chains). A uuid of a
  * table that Deleted items stores (lib/enums.ts STORED_TABLES) is also taken
  * while a deleted_rows row holds it, so a restore never meets a new row with
- * its id; the refusal is the same err. */
+ * its id; the refusal is the same err. A task or project also writes the
+ * used_ids row of its id, and an id that used_ids holds already is refused
+ * with err too (claimId). */
 export async function insertUnique<T extends TableNames>(
   ctx: WriterCtx,
   table: T,
@@ -144,5 +150,89 @@ export async function insertUnique<T extends TableNames>(
       .first()
     if (held !== null) throw err
   }
+  // a task's and a project's row both hold its id and organization
+  if (isUsedIdTable(table)) await claimId(ctx.db, table, doc as unknown as Owner, err)
   return await ctx.db.insert(table, doc)
+}
+
+/* ------------------------------------------------------------- used ids */
+
+/** The id and organization of a task or project, which its used_ids row
+ * records. */
+type Owner = { id: string; org_id: string }
+
+/** The used_ids row (schema.ts) of the id `id` of `table` that organization
+ * `orgId` holds, or with `orgId` left out any organization's, or null. One
+ * index range. */
+export async function usedIdRow(
+  ctx: ReaderCtx,
+  table: UsedIdTable,
+  id: string,
+  orgId?: string,
+): Promise<Doc<'used_ids'> | null> {
+  return await ctx.db
+    .query('used_ids')
+    .withIndex('by_row', (q) => {
+      const row = q.eq('table', table).eq('row_id', id)
+      return orgId === undefined ? row : row.eq('org_id', orgId)
+    })
+    .first()
+}
+
+/** Writes the used_ids row of new task or project `owner`, refusing with
+ * `err` an id that any organization's row holds already. In a public demo
+ * the row spends none of the visitor's record limit (lib/demo.ts
+ * uncountedWriter), as it is part of its task or project, which counts. */
+async function claimId(
+  db: GenericDatabaseWriter<DataModel>,
+  table: UsedIdTable,
+  owner: Owner,
+  err: ConvexError<Refusal>,
+): Promise<void> {
+  if ((await usedIdRow({ db }, table, owner.id)) !== null) throw err
+  await uncountedWriter(db).insert('used_ids', {
+    table,
+    row_id: owner.id,
+    org_id: owner.org_id,
+  })
+}
+
+/** Writes the used_ids row of the id `id` of `table` for organization
+ * `orgId` unless that organization holds one, and answers whether it wrote.
+ * For a restore from Deleted items, whose task or project may have been
+ * stored before used_ids had its row, and for internal/usedIdsBackfill.
+ * Reads one index range. */
+export async function keepUsedId(
+  db: GenericDatabaseWriter<DataModel>,
+  table: UsedIdTable,
+  id: string,
+  orgId: string,
+): Promise<boolean> {
+  if ((await usedIdRow({ db }, table, id, orgId)) !== null) return false
+  await uncountedWriter(db).insert('used_ids', { table, row_id: id, org_id: orgId })
+  return true
+}
+
+/** How insertUsed takes the id of the task or project it inserts: a
+ * refusal, which meets an id that any organization's used_ids row holds,
+ * for an id the server chose; or 'restore', for a row Deleted items writes
+ * back, which keeps the row its id has or writes one (keepUsedId). */
+export type IdClaim = ConvexError<Refusal> | 'restore'
+
+/** Inserts task or project `doc` with the used_ids row of its id, in one
+ * transaction, for an id the server chose (seeds and fixtures) or a restore
+ * (`claim`). It reads one index range. Every other insert of a task or
+ * project, one whose id a caller chose, goes through insertUnique, which
+ * also refuses an id a live row or Deleted items holds. Nothing else
+ * inserts tasks or projects (scripts/check-task-writes.mjs). */
+export async function insertUsed<T extends UsedIdTable>(
+  db: GenericDatabaseWriter<DataModel>,
+  table: T,
+  doc: WithoutSystemFields<Doc<T>>,
+  claim: IdClaim,
+): Promise<Id<T>> {
+  const owner = doc as unknown as Owner
+  if (claim === 'restore') await keepUsedId(db, table, owner.id, owner.org_id)
+  else await claimId(db, table, owner, claim)
+  return await db.insert(table, doc)
 }

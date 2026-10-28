@@ -70,7 +70,7 @@ import {
   profileCanSeeProject,
 } from '../lib/access'
 import { HISTORY_PAGE_MAX, receivedRows } from '../lib/activityVisibility'
-import { assertNewRowId, byId, newWindowKey, usedMoreThan } from '../lib/db'
+import { assertNewRowId, byId, newWindowKey, usedIdRow, usedMoreThan } from '../lib/db'
 import {
   ISSUE_PRIORITIES,
   ISSUE_STATUSES,
@@ -1441,14 +1441,18 @@ export async function createIssueCore(
   if (shownImages(description).size > 0) throw rule(IMAGE_NOT_ATTACHED)
   const parent_id = args.parent_id ?? undefined
   if (parent_id !== undefined) {
-    // a used id, live or held by Deleted items, is refused first, so the
-    // subtask check below, which reads the subtasks of the id it is given,
-    // tells nothing about another task
+    // a used id, live, held by Deleted items or recorded in used_ids, is
+    // refused first, so the subtask check below, which reads the subtasks
+    // of the id it is given, tells nothing about another task
     const held = await ctx.db
       .query('deleted_rows')
       .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', args.id))
       .first()
-    if ((await byId(ctx, 'issues', args.id)) !== null || held !== null) {
+    if (
+      (await byId(ctx, 'issues', args.id)) !== null ||
+      held !== null ||
+      (await usedIdRow(ctx, 'issues', args.id)) !== null
+    ) {
       throw badRequest(DUPLICATE_TASK_ID)
     }
     const child = { id: args.id, org_id, project_id: project.id }

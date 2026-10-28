@@ -94,6 +94,11 @@ const EXCLUDED_TABLES = [
   // What a running deletion deleted of the organization's access, so its
   // calls still hear why they are refused; gone with the organization.
   'removed_access',
+  // Every id the organization's tasks and projects held, so no new task or
+  // project takes one; the tasks and projects sections carry the live ones.
+  'used_ids',
+  // The round of a teardown that is letting those ids go, while it runs.
+  'used_id_rounds',
   // Personal callback destinations and encrypted secrets are not portable work.
   'webhook_events',
   'webhook_health',

@@ -60,6 +60,7 @@ import {
 import {
   deleteProject,
   deleteTask,
+  forgetUsedId,
   installTrashTimers,
   itemFor,
   runSteps,
@@ -1338,7 +1339,9 @@ describe('ids that come back', () => {
     await runSteps(fx.t)
     expect(await counter(fx.t, id)).toBeNull()
     expect(await rateOf(fx.t, fx.user.id, id)).toBeNull()
-    // the id again, within the same minute
+    // the id again, within the same minute, one from before used_ids,
+    // which a create refuses otherwise
+    await forgetUsedId(fx.t, id)
     const again = await createTask(fx.t, fx, 'Same id', { id })
     for (let i = 0; i < 10; i++) await appPost(fx, fx.user, again)
     expect(await countOf(fx.t, id)).toBe(10)
@@ -1387,6 +1390,8 @@ describe('ids that come back', () => {
         .unique()
       if (row !== null) await ctx.db.delete(row._id)
     })
+    // and the id is one from before used_ids, which a create refuses otherwise
+    await forgetUsedId(fx.t, id)
     const again = await createTask(fx.t, fx, 'Took the id', { id })
     await appPost(fx, fx.admin, again)
     await as(fx.t, fx.admin).mutation(api.deletedItems.purge, { org_id: fx.org.id, ids: [item.id] })

@@ -715,27 +715,34 @@ export async function plantProject(
   })
 }
 
-/* An issue row with its description row (model/descriptions.ts), as every
- * task has once internal/descriptionsBackfill ran. It is unscheduled and
- * backlog-shaped unless overridden. */
+/* An issue row with its description row (model/descriptions.ts) and the
+ * used_ids row of its id, as every task has once internal/descriptionsBackfill
+ * and internal/usedIdsBackfill ran. It is unscheduled and backlog-shaped
+ * unless overridden. */
 export async function plantIssue(
   t: T,
   issue: { org_id: string; project_id: string } & Partial<WithoutSystemFields<Doc<'issues'>>>,
 ): Promise<Doc<'issues'>> {
   return await t.run(async (ctx) => {
-    const _id = await insertTask(ctx.db, {
-      id: uuid(),
-      num: plantedNum++,
-      title: 'Planted task',
-      description: '',
-      status: 'todo',
-      priority: 'medium',
-      paused: false,
-      created_at: NOW,
-      updated_at: NOW,
-      window_key: newWindowKey(),
-      ...issue,
-    })
+    const _id = await insertTask(
+      ctx.db,
+      {
+        id: uuid(),
+        num: plantedNum++,
+        title: 'Planted task',
+        description: '',
+        status: 'todo',
+        priority: 'medium',
+        paused: false,
+        created_at: NOW,
+        updated_at: NOW,
+        window_key: newWindowKey(),
+        ...issue,
+      },
+      // records the id in used_ids without refusing one used before, so a
+      // test can still plant what ids freed before used_ids allow
+      'restore',
+    )
     return (await ctx.db.get(_id)) as Doc<'issues'>
   })
 }

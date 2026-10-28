@@ -98,16 +98,28 @@ async function rows(t: T, orgId: string) {
   }))
 }
 
+/** The used_ids rows organization `orgId` holds (schema.ts). */
+const usedIds = (t: T, orgId: string) =>
+  t.run((ctx) =>
+    ctx.db
+      .query('used_ids')
+      .withIndex('by_org_kept', (q) => q.eq('org_id', orgId))
+      .collect(),
+  )
+
 /** Deletes `receipt`'s demo batch by batch, as its scheduled purges would,
  * running `afterBatch` after each, between two checks of the organization's
  * label and team counts (expectListCounts), and returns the phase each
- * batch started in. */
+ * batch started in. The used_ids rows of its organization stay until the
+ * organization row is gone, and none is left once the receipt is. */
 async function deleteDemo(
   t: T,
   receipt: Doc<'demo_sessions'>,
   afterBatch?: () => Promise<void>,
 ): Promise<string[]> {
   await t.run((ctx) => ctx.db.patch(receipt._id, { status: 'deleting' }))
+  const orgId = receipt.org_id
+  const used = orgId === undefined ? 0 : (await usedIds(t, orgId)).length
   const phases: string[] = []
   for (
     let current = await t.run((ctx) => ctx.db.get(receipt._id));
@@ -119,12 +131,13 @@ async function deleteDemo(
     phases.push(current.cleanup_phase ?? 'sessions')
     await t.mutation(purge, { demo_id: receipt.id })
     // each batch keeps the live counts while the organization lasts
-    const orgId = receipt.org_id
     if (orgId !== undefined && (await t.run((ctx) => countersRow(ctx, orgId))) !== null)
       await expectLiveCounts(t, orgId)
     if (orgId !== undefined) await expectListCounts(t, orgId)
     await afterBatch?.()
     if (orgId !== undefined) await expectListCounts(t, orgId)
+    if (orgId !== undefined && (await rows(t, orgId)).org !== null)
+      expect(await usedIds(t, orgId)).toHaveLength(used)
     const progress = await t.run((ctx) => ctx.db.get(receipt._id))
     if (progress?.cleanup_phase === 'uploads') {
       vi.setSystemTime(
@@ -136,6 +149,7 @@ async function deleteDemo(
       )
     }
   }
+  if (orgId !== undefined) expect(await usedIds(t, orgId)).toEqual([])
   return phases
 }
 
@@ -200,6 +214,10 @@ const APP_OWNED: TableNames[] = [
   'deleted_item_parents',
   'deleted_rows',
   'deleted_tasks',
+  // the ids its tasks and projects held, deleted last, and the round of the
+  // cleanup that deletes them (model/usedIds.ts)
+  'used_ids',
+  'used_id_rounds',
 ]
 const APP_SHARED = [
   'webhook_workers', // shared background reservations contain no tenant data

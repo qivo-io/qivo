@@ -9,7 +9,9 @@
  * phase, whose byte fence would otherwise keep trashed files. The trash
  * phase also stops on TRASH_BYTES, because stored rows can be large. The tasks
  * phase then sweeps every task of the organization, those a moving project
- * left under its absent projects included. */
+ * left under its absent projects included. The finish phase deletes the
+ * organization and then the used_ids rows of the ids its tasks and projects
+ * held, last (model/usedIds.ts). */
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import { components } from '../_generated/api'
@@ -27,6 +29,7 @@ import { deleteLabelCount } from '../model/labelCounts'
 import { deleteOrgBookkeeping, tallyRow } from '../model/orgs'
 import { uncountFile } from '../model/storageTotals'
 import { deleteTeamCount } from '../model/teamCounts'
+import { releaseUsedIds } from '../model/usedIds'
 import { marketingId } from './marketingDemoData'
 
 const BATCH = 64
@@ -42,7 +45,8 @@ type Budget = { left: number }
  * 4 MiB of documents, the margin an organization's deletion in steps leaves
  * under Convex's 16 MiB read limit (model/cascade.ts REMOVAL_BUDGET). A
  * stored row can hold a document of almost 1 MiB, so BATCH of them could
- * read past that limit. */
+ * read past that limit. The release of the organization's used ids in the
+ * finish phase reads within it too, since it can find such a row. */
 const TRASH_BYTES = 4 * 1024 * 1024
 
 /** A full batch is repeated from the same indexed prefix next time. No
@@ -71,7 +75,8 @@ async function removeFile(ctx: MutationCtx, id: Id<'_storage'> | undefined) {
 }
 
 /** Deleted items, within the batch's rows and TRASH_BYTES. Only this phase
- * counts bytes; the others count rows alone. */
+ * and the release in the finish phase count bytes; the others count rows
+ * alone. */
 async function trashRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
   const teardown = { left: budget.left, bytes: TRASH_BYTES }
   const done = await clearOrgTrash(ctx, orgId, teardown)
@@ -734,6 +739,13 @@ export const purge = internalMutation({
           await deleteOrgBookkeeping(ctx, orgId)
           const org = await byId(ctx, 'organizations', orgId)
           if (org) await ctx.db.delete(org._id)
+          // The ids its tasks and projects held go last, once nothing else
+          // of it is left, over as many batches as they take; a batch that
+          // stops comes back to this phase (model/usedIds.ts).
+          const ids = { left: budget.left, bytes: TRASH_BYTES }
+          const released = await releaseUsedIds(ctx, orgId, ids)
+          budget.left = ids.left
+          if (!released) break
         }
         await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
           input: { model: 'user', where: [{ field: '_id', value: receipt.auth_user_id }] },

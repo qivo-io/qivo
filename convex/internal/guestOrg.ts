@@ -37,9 +37,10 @@
  * them beyond this file. */
 
 import { internalMutation } from '../_generated/server'
-import { byId, newWindowKey } from '../lib/db'
+import { byId, insertUsed, newWindowKey } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
 import type { IssueStatus } from '../lib/enums'
+import { conflict } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
 import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
@@ -50,6 +51,7 @@ import { insertLabelCount } from '../model/labelCounts'
 import { insertOrgRows, newOrgDefaults, newTeamDefaults, tallyRow } from '../model/orgs'
 import { projectDescription } from '../model/projects'
 import { insertTeamCount } from '../model/teamCounts'
+import { releaseUsedIds } from '../model/usedIds'
 
 /* The seat's login: `<key>@demo.qivo.io` is the Northstar roster's address
  * pattern (internal/marketingDemo). */
@@ -79,6 +81,13 @@ const ZZ = {
   hiddenLoad: 'ffffffff-0000-4000-8000-0000000000cd',
 } as const
 
+/* The refusal of a fixture task or project id that used_ids holds after the
+ * teardown. Another organization holds it, or the teardown kept it because
+ * something outside the organization still names it, such as a detach of
+ * archived subtasks that has not finished (model/usedIds.ts). */
+const ID_TAKEN =
+  'A ZZ fixture task or project id is still taken; run this again once nothing else names it (schema.ts used_ids)'
+
 export const zzGuestOrg = internalMutation({
   args: {},
   handler: async (ctx): Promise<{ org_id: string; torn_down: boolean }> => {
@@ -102,6 +111,10 @@ export const zzGuestOrg = internalMutation({
       await deleteOrgDeep(ctx, org)
       torn_down = true
     }
+    // The fixture's used ids go again whether its organization was here or
+    // not: one deleted another way can leave an id kept while something
+    // else named it, which this looks at again (model/usedIds.ts).
+    await releaseUsedIds(ctx, ZZ.org, { left: Number.POSITIVE_INFINITY })
     // A fixture person removed in the app keeps its id until its background
     // cleanup ends; a new profile with that id would take over its keys,
     // tokens and grants that still wait for it.
@@ -161,7 +174,7 @@ export const zzGuestOrg = internalMutation({
         created_at: now,
         window_key: newWindowKey(),
       } as const
-      await ctx.db.insert('projects', row)
+      await insertUsed(ctx.db, 'projects', row, conflict(ID_TAKEN, 'id_taken'))
       await tallyRow(ctx, 'projects', null, row)
     }
     await project(ZZ.sharedMeta, 1, 'ZGM', 'ZZ Shared Project', 0, {})
@@ -230,7 +243,7 @@ export const zzGuestOrg = internalMutation({
         created_at: now,
         updated_at: now,
       } as const
-      await insertTask(ctx.db, row)
+      await insertTask(ctx.db, row, { server: conflict(ID_TAKEN, 'id_taken') })
       await tallyRow(ctx, 'issues', null, row)
       await startCount(ctx, row)
     }

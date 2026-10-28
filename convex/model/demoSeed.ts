@@ -13,7 +13,7 @@ import {
   northstarTaskTimes,
 } from '../internal/marketingDemoData'
 import { projectSightForProfiles } from '../lib/access'
-import { byId, newWindowKey } from '../lib/db'
+import { byId, insertUsed, newWindowKey } from '../lib/db'
 import { demoRefusal } from '../lib/demo'
 import { DEMO_UNAVAILABLE } from '../lib/demoRefusals'
 import { require, rule } from '../lib/functions'
@@ -89,12 +89,16 @@ export type NorthstarStep =
  * (model/commentLimits.ts) and the notices' inbox items
  * (model/inboxItems.ts), a range, a document read and a write for each
  * item a step touches, add to every step, so a step holds 12 tasks or 13
- * comments: in convex-test a marketing call of one task step now uses at
- * most 173 ranges and writes 123 documents, and one of a comment step at
- * most 260 ranges, 293 documents read and 87 written.
- * convex/tests/marketingDemo.test.ts holds every call to 300 index ranges,
- * 350 documents read and 150 written, so a step is a small part of
- * Convex's 1 s mutation limit. */
+ * comments. Each seeded task and project also reads and writes its
+ * used_ids row (lib/db.ts insertUsed), and a Northstar step's check of the
+ * ids it writes reads that row once more (internal/marketingDemo.ts
+ * assertReserved), two ranges and a write a task. In convex-test a
+ * marketing call of one task step now uses at most 197 ranges, reads 143
+ * documents and writes 135, one of a comment step at most 260 ranges, 293
+ * documents read and 87 written, and a part of the reserved-id check at
+ * most 243 ranges. convex/tests/marketingDemo.test.ts holds every call to
+ * 300 index ranges, 350 documents read and 150 written, so a step is a
+ * small part of Convex's 1 s mutation limit. */
 export const NORTHSTAR_BATCH = { tasks: 12, comments: 13 }
 
 /* The ranges [from, to) that cover `count` items, `size` at a time. */
@@ -164,6 +168,15 @@ export const SEED_ROW_MISSING = {
   label: 'marketing demo: a seeded label is missing; use reset to replace it',
   parent: 'marketing demo: a seeded parent task moved to another project; use reset to replace it',
 } as const
+
+/** The refusal of a seeded task or project id that used_ids holds
+ * (schema.ts). A Northstar seed's check steps refuse every row of a
+ * reserved id first, before the seed writes anything
+ * (internal/marketingDemo.ts assertReserved), so it meets only a row
+ * written between those steps and the one that writes the id. A public
+ * demo's ids are new to it. */
+export const SEED_ID_USED =
+  'marketing demo: a seeded task or project id was used before; use reset to replace it'
 
 /** What the steps of one seed share: the fixture uuids, and the rows they
  * read or wrote, so a seed run in one transaction reads each only once
@@ -373,21 +386,26 @@ async function writeStep(
       })
     }
     for (const [index, p] of data.projects.entries()) {
-      await ctx.db.insert('projects', {
-        id: projectIds[p.key],
-        window_key: newWindowKey(),
-        org_id: org.id,
-        type: p.parent ? 'project' : 'meta',
-        parent_id: p.parent ? projectIds[p.parent] : undefined,
-        key: p.code,
-        ...named(cleanProjectName(p.name)),
-        description: projectDescription(p.description),
-        lead_id: personIds[p.lead],
-        sort_order: index,
-        num: index + 1,
-        track_delay: teamDefaults.track_delay_default,
-        created_at: now,
-      })
+      await insertUsed(
+        ctx.db,
+        'projects',
+        {
+          id: projectIds[p.key],
+          window_key: newWindowKey(),
+          org_id: org.id,
+          type: p.parent ? 'project' : 'meta',
+          parent_id: p.parent ? projectIds[p.parent] : undefined,
+          key: p.code,
+          ...named(cleanProjectName(p.name)),
+          description: projectDescription(p.description),
+          lead_id: personIds[p.lead],
+          sort_order: index,
+          num: index + 1,
+          track_delay: teamDefaults.track_delay_default,
+          created_at: now,
+        },
+        rule(SEED_ID_USED),
+      )
       if (!p.parent)
         for (const team of data.teams)
           await ctx.db.insert('project_team_access', {
@@ -453,43 +471,47 @@ async function writeStep(
       // These are explicitly imported fixtures. Atlas is the import actor;
       // reporter is separate attribution, never a forged creator history.
       const windowKey = newWindowKey()
-      const issueDocId = await insertTask(ctx.db, {
-        id: issueIds[i.key],
-        window_key: windowKey,
-        org_id: org.id,
-        project_id: projectIds[i.project],
-        num: index + 1,
-        title: i.title,
-        description: cleanDescription(i.description),
-        status: i.status,
-        priority: i.priority,
-        assignee_id: i.assignee ? personIds[i.assignee] : undefined,
-        reviewer_id: i.reviewer ? personIds[i.reviewer] : undefined,
-        reporter_id:
-          personIds[
-            i.reporter ??
-              data.projects.find(
-                (project) =>
-                  project.key ===
-                  (data.projects.find((p) => p.key === i.project)?.parent ?? i.project),
-              )?.lead ??
-              'atlas'
-          ],
-        created_by: personIds.atlas,
-        parent_id: i.parent ? issueIds[i.parent] : undefined,
-        start_week: i.startWeek !== undefined ? marketingWeek(anchor, i.startWeek) : undefined,
-        end_week: i.endWeek !== undefined ? marketingWeek(anchor, i.endWeek) : undefined,
-        due_date: i.dueDay !== undefined ? marketingDate(anchor, i.dueDay) : undefined,
-        remaining_hours: i.remaining,
-        remaining_set_at: i.remaining !== undefined ? now : undefined,
-        paused: i.paused ?? false,
-        done_at: times.done,
-        review_at: times.review,
-        status_at: times.status,
-        ...(i.archived ? { archived_at: `${marketingDate(anchor, -1)}T15:00:00.000Z` } : {}),
-        created_at: times.created,
-        updated_at: times.updated,
-      })
+      const issueDocId = await insertTask(
+        ctx.db,
+        {
+          id: issueIds[i.key],
+          window_key: windowKey,
+          org_id: org.id,
+          project_id: projectIds[i.project],
+          num: index + 1,
+          title: i.title,
+          description: cleanDescription(i.description),
+          status: i.status,
+          priority: i.priority,
+          assignee_id: i.assignee ? personIds[i.assignee] : undefined,
+          reviewer_id: i.reviewer ? personIds[i.reviewer] : undefined,
+          reporter_id:
+            personIds[
+              i.reporter ??
+                data.projects.find(
+                  (project) =>
+                    project.key ===
+                    (data.projects.find((p) => p.key === i.project)?.parent ?? i.project),
+                )?.lead ??
+                'atlas'
+            ],
+          created_by: personIds.atlas,
+          parent_id: i.parent ? issueIds[i.parent] : undefined,
+          start_week: i.startWeek !== undefined ? marketingWeek(anchor, i.startWeek) : undefined,
+          end_week: i.endWeek !== undefined ? marketingWeek(anchor, i.endWeek) : undefined,
+          due_date: i.dueDay !== undefined ? marketingDate(anchor, i.dueDay) : undefined,
+          remaining_hours: i.remaining,
+          remaining_set_at: i.remaining !== undefined ? now : undefined,
+          paused: i.paused ?? false,
+          done_at: times.done,
+          review_at: times.review,
+          status_at: times.status,
+          ...(i.archived ? { archived_at: `${marketingDate(anchor, -1)}T15:00:00.000Z` } : {}),
+          created_at: times.created,
+          updated_at: times.updated,
+        },
+        { server: rule(SEED_ID_USED) },
+      )
       await startCount(ctx, { id: issueIds[i.key], org_id: org.id })
       for (const label of i.labels)
         await ctx.db.insert('issue_labels', {
@@ -676,11 +698,14 @@ async function writeStep(
  * not count database operations). In convex-test a call of five read at
  * most 513 ranges and 724 documents and wrote at most 441. Comment counts
  * (model/commentLimits.ts) and the notices' inbox items
- * (model/inboxItems.ts), kept once per call, take the work to seven calls,
- * each reading at most 530 ranges and 823 documents and writing at most
- * 531. The hosted demo's steps
- * at v0.1.86, summed for each call (the worst of three starts, less 48 ms
- * for each step past the first), put a call's JavaScript at 48 ms plus
+ * (model/inboxItems.ts), kept once per call, take the work to seven calls.
+ * The used_ids row each seeded task and project reads and writes (lib/db.ts
+ * insertUsed) adds a range and a write to each, 51 to the first call and 54
+ * to the second, which write the projects and tasks, so each call reads at
+ * most 577 ranges and 825 documents and writes at most 586. The hosted
+ * demo's steps at v0.1.86, summed for each call (the worst of three
+ * starts, less 48 ms for each step past the first), put a call's
+ * JavaScript at 48 ms plus
  * 0.38 to 0.45 ms per index range. Per document read it spreads from 0.26
  * to 0.45 ms, as the first calls write more for each document they read,
  * so the documents alone cannot bound it. convex/tests/demo.test.ts then

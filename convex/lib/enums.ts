@@ -151,6 +151,18 @@ export type StoredTable = (typeof STORED_TABLES)[number]
 export const isStoredTable = (table: string): table is StoredTable =>
   (STORED_TABLES as readonly string[]).includes(table)
 
+/* The tables whose ids used_ids records for good (schema.ts used_ids): a
+ * task's or project's id keys rows in many other tables that can outlive
+ * it, so no new task or project takes an id once used. Stored on used_ids
+ * only, never on the wire. */
+export const USED_ID_TABLES = ['issues', 'projects'] as const
+export const vUsedIdTable = literals(...USED_ID_TABLES)
+export type UsedIdTable = (typeof USED_ID_TABLES)[number]
+
+/** Whether used_ids records the ids of `table`. */
+export const isUsedIdTable = (table: string): table is UsedIdTable =>
+  (USED_ID_TABLES as readonly string[]).includes(table)
+
 export const DELETED_ITEM_KINDS = ['task', 'project'] as const
 export const vDeletedItemKind = literals(...DELETED_ITEM_KINDS)
 export type DeletedItemKind = (typeof DELETED_ITEM_KINDS)[number]

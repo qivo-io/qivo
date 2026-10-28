@@ -39,14 +39,16 @@ function check(files) {
   return { status: result.status, output: result.stdout + result.stderr }
 }
 
-/* A schema with tasks, their descriptions and a table without them that has
- * fields of the same names. */
+/* A schema with tasks, their descriptions, projects, the ids both held and
+ * a table without them that has fields of the same names. */
 const schema = `import { defineSchema, defineTable, type DataModelFromSchemaDefinition, type GenericMutationCtx } from 'convex/server'
 import type { GenericId } from 'convex/values'
 import { v } from 'convex/values'
 const schema = defineSchema({
   issues: defineTable({ id: v.string(), org_id: v.string(), project_id: v.string(), title: v.string(), description: v.optional(v.string()), archived_at: v.optional(v.string()) }),
   issue_descriptions: defineTable({ issue_id: v.string(), org_id: v.string(), description: v.string(), project_id: v.optional(v.string()), archived_at: v.optional(v.string()) }),
+  projects: defineTable({ id: v.string(), org_id: v.string(), name: v.string() }),
+  used_ids: defineTable({ table: v.string(), row_id: v.string(), org_id: v.string() }),
   comments: defineTable({ body: v.string(), description: v.optional(v.string()), project_id: v.optional(v.string()), archived_at: v.optional(v.string()) }),
 })
 export default schema
@@ -58,18 +60,29 @@ export type Id<T extends Tables> = GenericId<T>
 
 const imports = `import type { WithoutSystemFields } from 'convex/server'
 import type { Ctx, DataModel, Id, Tables } from './schema'
-import { insertUnique, insertUnique as putRow } from './lib/db'
+import { insertUnique, insertUnique as putRow, insertUsed } from './lib/db'
 type Task = WithoutSystemFields<DataModel['issues']['document']>
+type Project = WithoutSystemFields<DataModel['projects']['document']>
 `
 
-/* A generic writer the check allows, whose callers it reads, and one beside
- * it that it does not allow. */
+/* The generic writers the check allows, whose callers it reads, each with
+ * the used_ids row of a task's or project's id, and one beside them that it
+ * does not allow. */
 const db = `import type { WithoutSystemFields } from 'convex/server'
 import type { Ctx, DataModel, Tables } from '../schema'
-export const insertUnique = <T extends Tables>(ctx: Ctx, table: T, doc: WithoutSystemFields<DataModel[T]['document']>) =>
-  ctx.db.insert(table, doc)
+const used = (db: Ctx['db'], table: string) => db.insert('used_ids', { table, row_id: 'a', org_id: 'b' })
+export const insertUnique = async <T extends Tables>(ctx: Ctx, table: T, doc: WithoutSystemFields<DataModel[T]['document']>) => {
+  await used(ctx.db, table)
+  return ctx.db.insert(table, doc)
+}
+export async function insertUsed<T extends Tables>(db: Ctx['db'], table: T, doc: WithoutSystemFields<DataModel[T]['document']>) {
+  await used(db, table)
+  return db.insert(table, doc)
+}
 export const insertAny = <T extends Tables>(ctx: Ctx, table: T, doc: WithoutSystemFields<DataModel[T]['document']>) =>
   ctx.db.insert(table, doc)
+export const rawTask = (ctx: Ctx, doc: WithoutSystemFields<DataModel['issues']['document']>) =>
+  ctx.db.insert('issues', doc)
 `
 
 const owner = `${imports.replaceAll("'./", "'../")}
@@ -99,6 +112,9 @@ export const aliasComment = (ctx: Ctx) => {
   const writeAgain = write
   return writeAgain(ctx, 'comments', { body: 'Hi' })
 }
+export const project = (ctx: Ctx, doc: Project) => insertUsed(ctx.db, 'projects', doc)
+export const chosen = (ctx: Ctx, doc: Project) => insertUnique(ctx, 'projects', doc)
+export const rename = (ctx: Ctx, id: Id<'projects'>) => ctx.db.patch(id, { name: 'Plan' })
 `
 
 /* Each write the check refuses, one a line, with the start of its sentence
@@ -185,6 +201,22 @@ const refused = [
     "this patch can change a task's description",
     'writeAgain(id',
   ],
+  [
+    "export const viaUsed = (ctx: Ctx, doc: Task) => insertUsed(ctx.db, 'issues', doc)",
+    'this inserts a task row without its description row',
+  ],
+  [
+    "export const projectRow = (ctx: Ctx, doc: Project) => ctx.db.insert('projects', doc)",
+    'this inserts a project row without the used_ids row of its id',
+  ],
+  [
+    "export const projectAgain = (ctx: Ctx, id: Id<'projects'>, doc: Project) => ctx.db.replace(id, doc)",
+    'this replaces a project row without the used_ids row of its id',
+  ],
+  [
+    "export const record = (ctx: Ctx) => ctx.db.insert('used_ids', { table: 'issues', row_id: 'a', org_id: 'b' })",
+    'this inserts a used_ids row',
+  ],
 ]
 
 describe('the task write check', { timeout: 60_000 }, () => {
@@ -206,12 +238,16 @@ describe('the task write check', { timeout: 60_000 }, () => {
       return `convex/bad.ts:${line + 1}:${call + 1} - ${sentence}`
     })
     const found = output.split('\n').filter((line) => line.startsWith('convex/'))
-    // insertAny is in lib/db.ts but is not insertUnique, so it may not write
-    // a table of a type parameter
+    // insertAny is in lib/db.ts but is neither insertUnique nor insertUsed,
+    // so it may not write a table of a type parameter, and lib/db.ts, which
+    // alone writes used_ids, meets the description rules as any file does
     expect(found[0]).toMatch(
-      /^convex\/lib\/db\.ts:6:3 - this writes a table that the check cannot read/,
+      /^convex\/lib\/db\.ts:13:3 - this writes a table that the check cannot read/,
     )
-    const inBad = found.slice(1)
+    expect(found[1]).toMatch(
+      /^convex\/lib\/db\.ts:15:3 - this inserts a task row without its description row/,
+    )
+    const inBad = found.slice(2)
     expect(inBad).toHaveLength(expected.length)
     for (const [i, line] of inBad.entries()) expect(line.startsWith(expected[i]), line).toBe(true)
   })
@@ -236,6 +272,55 @@ describe('the task write check', { timeout: 60_000 }, () => {
     expect(status).toBe(1)
     expect(output).toContain('convex/model/descriptions.ts - ')
     expect(output).toContain('does not hold it, though its code writes the database')
+  })
+
+  it('fails on each write in model/descriptions.ts that skips the used_ids row or names no table', () => {
+    // each line, with the start of its sentence
+    const lines = [
+      [
+        "export const raw = (ctx: Ctx, doc: Task) => ctx.db.insert('issues', doc)",
+        'this inserts a task row without the used_ids row of its id',
+      ],
+      [
+        "export const rawProject = (ctx: Ctx, doc: Project) => ctx.db.insert('projects', doc)",
+        'this inserts a project row without the used_ids row of its id',
+      ],
+      [
+        "export const swap = (ctx: Ctx, id: Id<'issues'>, doc: Task) => ctx.db.replace(id, doc)",
+        'this replaces a task row without the used_ids row of its id',
+      ],
+      [
+        "export const any = <T extends Tables>(ctx: Ctx, t: T, doc: WithoutSystemFields<DataModel[T]['document']>) => ctx.db.insert(t, doc)",
+        'this writes a table that the check cannot read',
+      ],
+    ]
+    const source = `${owner}${lines.map(([line]) => line).join('\n')}\n`
+    const { status, output } = check({
+      'schema.ts': schema,
+      'lib/db.ts': db.slice(0, db.indexOf('export const insertAny')),
+      'model/descriptions.ts': source,
+    })
+    expect(status).toBe(1)
+    const rows = source.split('\n')
+    const found = output.split('\n').filter((line) => line.startsWith('convex/'))
+    expect(found).toHaveLength(lines.length)
+    for (const [i, [line, sentence]] of lines.entries())
+      expect(
+        found[i].startsWith(
+          `convex/model/descriptions.ts:${rows.indexOf(line) + 1}:${line.lastIndexOf('=> ') + 4} - ${sentence}`,
+        ),
+        found[i],
+      ).toBe(true)
+  })
+
+  it('fails when it finds no insert of used_ids in lib/db.ts, which would mean it reads none', () => {
+    const { status, output } = check({
+      'schema.ts': schema,
+      'lib/db.ts': `${db.slice(0, db.indexOf('const used'))}export const insertUnique = <T extends Tables>(ctx: Ctx, table: T, doc: WithoutSystemFields<DataModel[T]['document']>) => ctx.db.insert(table, doc)\nexport const insertUsed = insertUnique\n`,
+      'model/descriptions.ts': owner,
+    })
+    expect(status).toBe(1)
+    expect(output).toContain('convex/lib/db.ts - the check found no insert of used_ids in it')
   })
 
   it('fails when it finds no write in model/descriptions.ts, which would mean it reads none', () => {

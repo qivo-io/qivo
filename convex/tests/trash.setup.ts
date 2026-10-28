@@ -130,6 +130,21 @@ export const storedIssue = async (t: T, id: string) => {
 }
 export const liveTask = (t: T, id: string) => t.run((ctx) => byId(ctx, 'issues', id))
 
+/** Deletes every used_ids row of task or project id `id` (schema.ts), as
+ * for an object stored before that table, whose id internal/usedIdsBackfill
+ * has not recorded. A create refuses every recorded id, so only such an id
+ * can come back once its object is gone, and the guards some tests check
+ * cover it. */
+export const forgetUsedId = (t: T, id: string) =>
+  t.run(async (ctx) => {
+    for (const table of ['issues', 'projects'] as const)
+      for (const row of await ctx.db
+        .query('used_ids')
+        .withIndex('by_row', (q) => q.eq('table', table).eq('row_id', id))
+        .collect())
+        await ctx.db.delete(row._id)
+  })
+
 /** `listed` activity rows about `task` written as the app writes them
  * (plantActivity), then `unlisted` rows inserted raw without
  * named_task_nums, filed under the task's project at NOW. */

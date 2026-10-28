@@ -16,7 +16,9 @@
  * credentials and OAuth connections. The phase records each seat and
  * working credential it deletes (removed_access), so their calls are refused
  * with the same reason rather than as a stranger's until the organization
- * is gone. The last steps delete those rows after the organization.
+ * is gone. The last steps delete those rows after the organization, and
+ * then the used_ids rows of the ids its tasks and projects held, which let
+ * a later task or project take them (model/usedIds.ts).
  *
  * Deleted items go next, whatever state their items are in
  * (model/deletedItems.ts clearOrgTrash). The Deleted items steps, their
@@ -57,6 +59,7 @@ import { deleteLabelCount } from './labelCounts'
 import { deleteOrgBookkeeping, tallyRow } from './orgs'
 import { uncountFile } from './storageTotals'
 import { deleteTeamCount } from './teamCounts'
+import { releaseUsedIds } from './usedIds'
 
 type Row = { _id: Id<TableNames> }
 
@@ -350,6 +353,17 @@ async function guestMarking(ctx: MutationCtx, orgId: string) {
 async function trashRows(ctx: MutationCtx, orgId: string, budget: RemovalBudget) {
   const teardown = { left: budget.rows, bytes: budget.bytes }
   const done = await clearOrgTrash(ctx, orgId, teardown)
+  budget.rows = teardown.left
+  budget.bytes = teardown.bytes
+  return done
+}
+
+/** The ids the organization's tasks and projects held (model/usedIds.ts
+ * releaseUsedIds), from one budget, which it counts as clearOrgTrash
+ * does. */
+async function usedIdRows(ctx: MutationCtx, orgId: string, budget: RemovalBudget) {
+  const teardown = { left: budget.rows, bytes: budget.bytes }
+  const done = await releaseUsedIds(ctx, orgId, teardown)
   budget.rows = teardown.left
   budget.bytes = teardown.bytes
   return done
@@ -731,10 +745,11 @@ const WORK_PHASES = ['tasks', 'projects', 'teams', 'labels', 'activity'] as cons
 /** Deletes one `limit` (REMOVAL_BUDGET unless given) of an organization's
  * work: its tasks with everything under them and their files, its projects,
  * teams, labels and activity, then the view preferences, messages and inbox
- * items of `profileIds`. Returns true once all of it is gone. Like a deletion step,
- * it reads every range again from its start, so a repeated step cannot skip
- * a row. It leaves Deleted items alone, so a caller must see them empty
- * first. */
+ * items of `profileIds`, and last lets go of the ids its tasks and projects
+ * held (model/usedIds.ts), so a seed may write them again. Returns true once
+ * all of it is gone. Like a deletion step, it reads every range again from
+ * its start, so a repeated step cannot skip a row. It leaves Deleted items
+ * alone, so a caller must see them empty first. */
 export async function wipeWorkStep(
   ctx: MutationCtx,
   orgId: string,
@@ -764,6 +779,7 @@ export async function wipeWorkStep(
       // with no messages and no items
       () => drain(ctx, budget, recipientItems(ctx, profileId)),
     ]),
+    () => usedIdRows(ctx, orgId, budget),
   ])
 }
 
@@ -786,12 +802,15 @@ export async function deleteOrgStep(
       // The organization goes first, so every call through access the
       // profiles phase deleted hears that it is being deleted until it is
       // gone. What that phase recorded (removed_access) goes after, over as
-      // many steps as it takes, then the removal row.
+      // many steps as it takes, then the ids its tasks and projects held,
+      // once nothing else of it is left (model/usedIds.ts), then the
+      // removal row.
       await finish(ctx, removal)
       const recorded = ctx.db
         .query('removed_access')
         .withIndex('by_org', (q) => q.eq('org_id', removal.org_id))
       if (!(await drain(ctx, budget, recorded))) break
+      if (!(await usedIdRows(ctx, removal.org_id, budget))) break
       await ctx.db.delete(removal._id)
       return true
     }

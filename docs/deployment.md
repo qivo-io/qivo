@@ -823,6 +823,25 @@ holds them, so the release that added them is a rollback floor for the
 backend as soon as it deploys (see Rollback and hotfixes). Roll forward
 instead.
 
+Every id a task or project holds is recorded in `used_ids`, so no create
+gives it to a new task or project, also in another organization, until the
+end of that organization's teardown lets it go. Ids freed before the release
+that added the table are unknown and stay free. A task or project stored
+before that release has no row until the one-time `internal/usedIdsBackfill`
+records it; until then only its live row or Deleted items copy keeps its id.
+Run the backfill on every hosted deployment once it serves that release, as
+the module's header says. Read its dry run first, then run it. A call that
+does not finish in about five minutes answers a `source` and a `cursor`;
+call it again with the same arguments and both of those, unchanged, until it
+answers `done`. A call that answers an `error` kept what it wrote before, and
+its `cursor` reads that page again. Then check that a second dry run reports
+zero in every source. A rollback past that release deploys, because Convex
+leaves a table the schema does not list alone, but the earlier code creates
+tasks and projects without rows and can give one an id another organization
+used. After rolling forward, run the backfill again. It records the tasks
+and projects the earlier code created that still exist; ids they held and
+freed meanwhile stay unknown.
+
 An image a description save took out keeps a `dropped_at` for a day, in
 Deleted items for as long as its task stays there. Releases before the one
 that added it do not accept that field, so a rollback past it fails to

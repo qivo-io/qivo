@@ -2,7 +2,7 @@
 import { createFunctionHandle, makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, TableNames } from '../_generated/dataModel'
 import { createAuth, createAuthOptions } from '../auth'
 import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, MARKETING_DEMO_VERSION } from '../internal/marketingDemoData'
@@ -23,8 +23,10 @@ import {
   PUBLIC_DEMO_STEPS,
   stepCalls,
 } from '../model/demoSeed'
+import schema from '../schema'
 import { expectRefusal, newT, type T, uuid, workspaceOf } from './helpers.setup'
 import { NORTHSTAR, plantNorthstar } from './northstar.setup'
+import { forgetUsedId } from './trash.setup'
 
 const componentModules = import.meta.glob('../betterAuth/**/*.ts')
 let t: T
@@ -741,6 +743,94 @@ describe('demo lifetime and capabilities', () => {
     // the 'restored' activity row and the notices to the task's followers
     expect(restored.inserts - deleted.inserts).toBe(added(deleted, restored))
     expect(restored.inserts).toBeLessThanOrEqual(DEMO_INSERTS_TOTAL)
+  })
+})
+
+describe('public demo records and used ids', () => {
+  /** The number of rows in every table. */
+  const rowsByTable = () =>
+    t.run(async (ctx) => {
+      const rows: Record<string, number> = {}
+      for (const table of Object.keys(schema.tables) as TableNames[])
+        rows[table] = (await ctx.db.query(table).collect()).length
+      return rows
+    })
+
+  it('spends none of the record limit on the used_ids row of a created task or project, nor one a restore writes', async () => {
+    const a = await readyDemo()
+    const org_id = a.profile.org_id
+    const projects = await t.run((ctx) =>
+      ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', org_id))
+        .collect(),
+    )
+    const sub = projects.find((p) => p.type === 'project' && p.archived_at === undefined)
+    if (sub === undefined) throw new Error('the demo has no sub-project')
+    const task = uuid()
+    const creates = [
+      () =>
+        a.as.mutation(api.issues.create, { org_id, id: task, project_id: sub.id, title: 'Mine' }),
+      () =>
+        a.as.mutation(api.projects.create, {
+          org_id,
+          id: uuid(),
+          type: 'meta',
+          key: 'MINE',
+          name: 'Mine',
+          sort_order: 9,
+        }),
+    ]
+    for (const create of creates) {
+      const before = { counts: await countsOf(a.receipt), rows: await rowsByTable() }
+      await create()
+      const after = { counts: await countsOf(a.receipt), rows: await rowsByTable() }
+      const added = (table: string) => after.rows[table] - before.rows[table]
+      expect(added('used_ids')).toBe(1)
+      // every row the create added counts, but the used_ids row and a
+      // task's description and comment count rows, which are part of what
+      // they describe, and the counters' own row (lib/demo.ts demoCounts)
+      const counted =
+        Object.keys(after.rows).reduce((sum, table) => sum + added(table), 0) -
+        added('used_ids') -
+        added('issue_descriptions') -
+        added('task_comment_counts') -
+        added('demo_write_counts')
+      expect((after.counts?.insert_count ?? 0) - (before.counts?.insert_count ?? 0)).toBe(counted)
+    }
+
+    // a restore that writes the used_ids row again, as for a task stored
+    // before that table, spends nothing on it either
+    await a.as.mutation(api.issues.deleteDeep, { org_id, id: task })
+    await forgetUsedId(t, task)
+    const item = await t.run((ctx) =>
+      ctx.db
+        .query('deleted_items')
+        .withIndex('by_target', (q) => q.eq('target_id', task))
+        .unique(),
+    )
+    if (item === null) throw new Error('the task is not in Deleted items')
+    /* The ids of the records a restore adds besides the rows it moves. */
+    const ids = () =>
+      t.run(async (ctx) => {
+        const found: string[] = []
+        for (const table of ['deleted_items', 'activity_events', 'messages'] as const)
+          for (const row of await ctx.db.query(table).collect())
+            if (row.org_id === org_id) found.push(row._id)
+        return found
+      })
+    const before = { counts: await countsOf(a.receipt), ids: await ids() }
+    await a.as.mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
+    const after = { counts: await countsOf(a.receipt), ids: await ids() }
+    expect(await t.run((ctx) => byId(ctx, 'issues', task))).not.toBeNull()
+    expect(
+      await t.run(async (ctx) =>
+        (await ctx.db.query('used_ids').collect()).filter((row) => row.row_id === task),
+      ),
+    ).toHaveLength(1)
+    expect((after.counts?.insert_count ?? 0) - (before.counts?.insert_count ?? 0)).toBe(
+      after.ids.filter((id) => !before.ids.includes(id)).length,
+    )
   })
 })
 

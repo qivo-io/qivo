@@ -19,10 +19,10 @@
  * patchTask, which brings the copies of its row in line in the same
  * transaction. A task without a row, which the backfill has not reached,
  * gets none from such a change; the backfill inserts it with its copies. A
- * create may choose the id of a task deleted for good, also in another
- * organization, so a write that finds a row for its task resets its text
- * and every copy (putDescription), and an organization's teardown never
- * takes another's row.
+ * create may choose the id of a task deleted for good before used_ids
+ * recorded it (schema.ts), also in another organization, so a write that
+ * finds a row for its task resets its text and every copy (putDescription),
+ * and an organization's teardown never takes another's row.
  *
  * Deleted items stores a task with this text (withDescription), and its
  * steps delete the task's description row with its messages
@@ -36,7 +36,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import type { ConvexError } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { insertUnique } from '../lib/db'
+import { insertUnique, insertUsed } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { Refusal } from '../lib/functions'
 
@@ -106,18 +106,27 @@ export async function putDescription(
   return 'updated'
 }
 
-/** Inserts task row `doc` with its description row and answers the row's
- * id. With `duplicate`, an id that a live task or Deleted items holds
- * already is refused with it (lib/db.ts insertUnique). */
+/** How insertTask takes the id of the task it inserts, which every way
+ * records in used_ids (schema.ts). An id a caller chose is refused with the
+ * refusal given while a live task, Deleted items or used_ids holds it
+ * (lib/db.ts insertUnique). An id the server chose, `{ server }`, is refused
+ * with its refusal while used_ids holds it, and 'restore' writes back a
+ * task from Deleted items (lib/db.ts insertUsed). */
+export type TaskClaim = ConvexError<Refusal> | { server: ConvexError<Refusal> } | 'restore'
+
+/** Inserts task row `doc` with its description row and the used_ids row of
+ * its id, taking the id as `claim` says, and answers the row's id. */
 export async function insertTask(
   db: Writer,
   doc: WithoutSystemFields<Doc<'issues'>>,
-  duplicate?: ConvexError<Refusal>,
+  claim: TaskClaim,
 ): Promise<Id<'issues'>> {
   const _id =
-    duplicate === undefined
-      ? await db.insert('issues', doc)
-      : await insertUnique({ db }, 'issues', 'by_uuid', { id: doc.id }, doc, duplicate)
+    claim === 'restore'
+      ? await insertUsed(db, 'issues', doc, 'restore')
+      : 'server' in claim
+        ? await insertUsed(db, 'issues', doc, claim.server)
+        : await insertUnique({ db }, 'issues', 'by_uuid', { id: doc.id }, doc, claim)
   await putDescription(db, doc, doc.description ?? '')
   return _id
 }

@@ -64,6 +64,7 @@ import type * as internal_storageTotalsBackfill from "../internal/storageTotalsB
 import type * as internal_storedGrantees from "../internal/storedGrantees.js";
 import type * as internal_teamCountsBackfill from "../internal/teamCountsBackfill.js";
 import type * as internal_usageRanksBackfill from "../internal/usageRanksBackfill.js";
+import type * as internal_usedIdsBackfill from "../internal/usedIdsBackfill.js";
 import type * as internal_windowKeysBackfill from "../internal/windowKeysBackfill.js";
 import type * as invites from "../invites.js";
 import type * as issues from "../issues.js";
@@ -198,6 +199,7 @@ import type * as model_taskValues from "../model/taskValues.js";
 import type * as model_teamCounts from "../model/teamCounts.js";
 import type * as model_teams from "../model/teams.js";
 import type * as model_usage from "../model/usage.js";
+import type * as model_usedIds from "../model/usedIds.js";
 import type * as model_webhookHealth from "../model/webhookHealth.js";
 import type * as model_webhookOwners from "../model/webhookOwners.js";
 import type * as model_webhookQueue from "../model/webhookQueue.js";
@@ -291,6 +293,7 @@ declare const fullApi: ApiFromModules<{
   "internal/storedGrantees": typeof internal_storedGrantees;
   "internal/teamCountsBackfill": typeof internal_teamCountsBackfill;
   "internal/usageRanksBackfill": typeof internal_usageRanksBackfill;
+  "internal/usedIdsBackfill": typeof internal_usedIdsBackfill;
   "internal/windowKeysBackfill": typeof internal_windowKeysBackfill;
   invites: typeof invites;
   issues: typeof issues;
@@ -425,6 +428,7 @@ declare const fullApi: ApiFromModules<{
   "model/teamCounts": typeof model_teamCounts;
   "model/teams": typeof model_teams;
   "model/usage": typeof model_usage;
+  "model/usedIds": typeof model_usedIds;
   "model/webhookHealth": typeof model_webhookHealth;
   "model/webhookOwners": typeof model_webhookOwners;
   "model/webhookQueue": typeof model_webhookQueue;
