@@ -652,8 +652,13 @@ function Note({
   )
 }
 
-/** The key a credential is listed under, unique across its three tables. */
-const credentialKey = (row: ApiCredentialRow) => `${row.table}:${row.id}`
+/** The key a row is listed under, for React, data-api-credential and
+    focus. A uuid a deleted credential had can come back as another
+    profile's credential, and both can be listed, so the key names the
+    owner and the deleted state besides the table and id. Revoke sends the
+    table and id alone. */
+const credentialKey = (row: ApiCredentialRow) =>
+  `${row.table}:${row.id}:${row.profile_id}${row.state === 'deleted' ? ':deleted' : ''}`
 
 /* The person filter: a button naming the chosen account, or Everyone, that
    opens a searchable list read from the server a batch at a time. A person

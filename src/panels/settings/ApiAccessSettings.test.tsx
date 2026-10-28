@@ -338,7 +338,9 @@ const listed = () =>
   [...document.querySelectorAll('[data-api-credential]')].map(
     (row) => row.querySelector('.truncate')?.textContent,
   )
-const row = (id: string) => find(`[data-api-credential="${id}"]`)
+/* The row of credential `id` (`<table>:<uuid>`), whose key also names its
+   owner and whether it is deleted. */
+const row = (id: string) => find(`[data-api-credential^="${id}:"]`)
 const cell = (id: string, name: string) =>
   row(id).querySelector(`[data-api-credential-cell="${name}"]`)?.textContent
 /* The person cell's name, without the avatar's initials. */
@@ -822,7 +824,7 @@ describe('revoking', () => {
     await render(<ui.OrgApiAccessPage />)
     await click(find('[data-api-access-next]'))
     await click(find('[data-api-credential-revoke]', row('mcp_tokens:sheets-export-script')))
-    const dialog = find('[data-api-access-revoke="mcp_tokens:sheets-export-script"]')
+    const dialog = find('[data-api-access-revoke^="mcp_tokens:sheets-export-script:"]')
     expect(document.querySelector('[data-modal-shell]')?.textContent).toContain(
       'Revoke Sheets export script?',
     )
@@ -880,7 +882,7 @@ describe('revoking', () => {
     await click(buttonIn(find('[aria-label="State"]'), 'Active'))
     await revoke('mcp_tokens:sheets-export-script')
     expect(
-      document.querySelector('[data-api-credential="mcp_tokens:sheets-export-script"]'),
+      document.querySelector('[data-api-credential^="mcp_tokens:sheets-export-script:"]'),
     ).toBeNull()
     expect(document.activeElement).toBe(
       find('[data-api-credential-revoke]', row('agent_keys:github-actions')),
@@ -890,6 +892,36 @@ describe('revoking', () => {
     await rest()
     await revoke('agent_keys:github-actions')
     expect(document.activeElement?.textContent).toBe('No credentials match the filters.')
+  })
+
+  it('lists a deleted credential and the credential that took its uuid as two rows, and revokes the live one', async () => {
+    // the Release bot's deleted key had the uuid Daniel's new token took
+    server.rows[CURRENT] = [
+      credential('Old key', {
+        table: 'mcp_tokens',
+        id: 'reused',
+        prefix: null,
+        access: null,
+        state: 'deleted',
+        profile_id: 'relay',
+        person: 'Release bot',
+        calls: 9,
+      }),
+      credential('New token', { id: 'reused' }),
+    ]
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await render(<ui.OrgApiAccessPage />)
+    const keys = [...document.querySelectorAll('[data-api-credential]')].map((r) =>
+      r.getAttribute('data-api-credential'),
+    )
+    expect(keys).toEqual(['mcp_tokens:reused:relay:deleted', 'mcp_tokens:reused:daniel'])
+    expect(listed()).toEqual(['Old key', 'New token'])
+    expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key/)
+    const live = find('[data-api-credential="mcp_tokens:reused:daniel"]')
+    live.querySelector<HTMLElement>('[data-api-credential-revoke]')?.focus()
+    await click(find('[data-api-credential-revoke]', live))
+    await click(buttonIn(find('[data-modal-shell]'), 'Revoke'))
+    expect(revokeCalls().at(-1)?.[1]).toMatchObject({ table: 'mcp_tokens', id: 'reused' })
   })
 
   it('moves nothing when a credential whose window was cancelled ends later', async () => {
