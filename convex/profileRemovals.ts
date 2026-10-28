@@ -6,7 +6,10 @@
  * row and schedules `step`. Each step clears a bounded part of the
  * remaining rows that name the removed id, phase by phase
  * (REMOVAL_PHASES), and schedules the next step until nothing names the
- * id. Then it deletes the row, which also frees the id for profiles.create.
+ * id. Then it deletes the row, which also frees the id for profiles.create,
+ * unless the organization's API usage names it. Usage rows outlive the
+ * profile, so profiles.create keeps refusing the id in that organization
+ * for good (model/billingUsage.ts usageNamesProfile).
  *
  * Every step reads each range again from its start, in one pass
  * (model/cascade.ts sweep). Clearing a row moves it out of that range, so

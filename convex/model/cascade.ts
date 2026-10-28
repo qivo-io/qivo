@@ -197,7 +197,9 @@ export async function sweep<Row>(
 }
 
 /** The unfinished background removal of `profileId`, or null. While it
- * exists, the id stays reserved (profiles.create). */
+ * exists, the id stays reserved (profiles.create). Once it is gone, the id
+ * stays taken in its organization if that organization's API usage names it
+ * (model/billingUsage.ts usageNamesProfile). */
 export function pendingRemoval(ctx: QueryCtx, profileId: string) {
   return ctx.db
     .query('profile_removals')
