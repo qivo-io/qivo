@@ -53,7 +53,9 @@ import type { TransactionMetrics, WithoutSystemFields } from 'convex/server'
 import type { ConvexError } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { ceilingGuard, type ReadCeiling } from '../lib/archivedTasks'
+// a type only: lib/archivedTasks.ts imports this module, so a value import
+// would make a cycle that leaves its constants unset while it loads
+import type { ReadCeiling } from '../lib/archivedTasks'
 import { insertUnique, insertUsed } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { Refusal } from '../lib/functions'
@@ -111,6 +113,15 @@ export async function withText(db: Reader, task: Doc<'issues'>): Promise<TaskWit
   return { ...task, description: await descriptionOf(db, task) }
 }
 
+/* How many rows of one index range each, at Convex's document size limit,
+ * the reads left under `limit` can hold. */
+const rowsLeft = (m: TransactionMetrics, limit: ReadCeiling): number =>
+  Math.min(
+    limit.ranges - m.databaseQueries.used,
+    limit.documents - m.documentsRead.used,
+    Math.floor((limit.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
+  )
+
 /** The texts of `tasks` (descriptionOf) by task id, or null when `room` ran
  * out before every one was read. `room` and `steps` are the transaction's
  * totals the reads keep to (ctx.meta.getTransactionMetrics), every document
@@ -131,14 +142,6 @@ export async function descriptionsOf(
   steps: ReadCeiling = room,
 ): Promise<Map<string, string> | null> {
   const out = new Map<string, string>()
-  /* how many rows at Convex's document size limit the reads left under
-   * `limit` can hold */
-  const left = (m: TransactionMetrics, limit: ReadCeiling) =>
-    Math.min(
-      limit.ranges - m.databaseQueries.used,
-      limit.documents - m.documentsRead.used,
-      Math.floor((limit.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
-    )
   for (let at = 0; at < tasks.length; ) {
     const m = await ctx.meta.getTransactionMetrics()
     if (
@@ -147,7 +150,7 @@ export async function descriptionsOf(
       m.bytesRead.used > room.bytes
     )
       return null
-    const fits = Math.min(left(m, steps), Math.max(1, left(m, room)))
+    const fits = Math.min(rowsLeft(m, steps), Math.max(1, rowsLeft(m, room)))
     if (fits <= 0) return null
     const step = tasks.slice(at, at + fits)
     const texts = await Promise.all(step.map((task) => descriptionOf(ctx.db, task)))
@@ -178,15 +181,20 @@ export async function activeTextsOf(
   const wanted = new Set(tasks.map((task) => task.id))
   const out = new Map<string, string>()
   if (wanted.size > 0) {
-    const guard = ceilingGuard(ctx, room)
-    if (!(await guard.range())) return null
+    // the rows the reads left under `room` hold at Convex's size limit,
+    // counted down and asked again once spent
+    let allowance = rowsLeft(await ctx.meta.getTransactionMetrics(), room)
+    if (allowance <= 0) return null
     const rows = ctx.db
       .query('issue_descriptions')
       .withIndex('by_org_archived', (q) => q.eq('org_id', orgId).eq('archived_at', undefined))
     for await (const row of rows) {
       if (wanted.has(row.issue_id) && !out.has(row.issue_id)) out.set(row.issue_id, row.description)
       if (out.size === wanted.size) break
-      if (!(await guard.document())) return null
+      if (--allowance <= 0) {
+        allowance = rowsLeft(await ctx.meta.getTransactionMetrics(), room)
+        if (allowance <= 0) return null
+      }
     }
   }
   const rest = await descriptionsOf(
