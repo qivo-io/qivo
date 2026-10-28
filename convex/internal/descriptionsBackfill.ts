@@ -1,30 +1,36 @@
 /* One-time migration that gives every live task stored before
  * issue_descriptions existed its description row (schema.ts
  * issue_descriptions, model/descriptions.ts), copied from
- * issues.description, which stays the source of truth in this release.
- * Tasks created or changed since this release already have an equal row:
- * every writer keeps both copies in one transaction. Tasks in Deleted items
- * have none once their item's steps have run, and a restore writes theirs.
+ * issues.description, which stays the source of truth in this release,
+ * and gives every row the copies of its task's project and archived state,
+ * which rows written before those copies lack. Tasks created or changed
+ * since this release already have an equal row: every writer keeps both
+ * copies in one transaction. Tasks in Deleted items have none once their
+ * item's steps have run, and a restore writes theirs.
  *
  * The next release reads issue_descriptions, falling back to
- * issues.description for a task without a row, and ships only once a dry
- * run on every deployment (development, staging, production and the demo)
- * reports zero `missing`, `differ`, `duplicates`, `orphans` and `skipped`
+ * issues.description for a task without a row, and main Search reads its
+ * search_description index. Each ships only once a dry run on every
+ * deployment (development, staging, production and the demo) reports zero
+ * `missing`, `differ`, `duplicates`, `orphans` and `skipped`
  * (docs/deployment.md).
  *
  * A call walks two phases in creation order, each page its own
  * transaction. `tasks` reads every live task and its description rows. A
- * task without one is `missing`. A row whose text or organization is not
- * its task's `differ`s. A second row for one task is a duplicate. A task
- * without issues.description, which only the third release leaves, is
- * `skipped`, and no call writes its row. `rows` reads every description row
- * and its task. A row whose task is not live is `waiting` when a running
- * step or teardown deletes it, because the task's Deleted items item has
- * not finished (model/deletedItems.ts), or its organization is being
- * deleted (orgRemovals.ts) or is a public demo being cleaned up
- * (internal/demoCleanup.ts). Any other such row is an orphan. The Northstar
- * wipe deletes tasks before their rows, so a dry run during a wipe counts
- * its rows as orphans for a moment.
+ * task without one is `missing`. A row whose text, organization, project or
+ * archived state is not its task's `differ`s, one without the project and
+ * archived copies included. A second row for one task is a duplicate. A
+ * task without issues.description, which only the third release leaves, is
+ * `skipped`: no call checks or writes its row's text, but its first row's
+ * copies are checked and repaired from the task, so they stay repairable
+ * once the third release has cleared issues.description. `rows` reads
+ * every description row and its task. A row whose task is not live is
+ * `waiting` when a running step or teardown deletes it, because the task's
+ * Deleted items item has not finished (model/deletedItems.ts), or its
+ * organization is being deleted (orgRemovals.ts) or is a public demo being
+ * cleaned up (internal/demoCleanup.ts). Any other such row is an orphan.
+ * The Northstar wipe deletes tasks before their rows, so a dry run during a
+ * wipe counts its rows as orphans for a moment.
  *
  * Every document a page reads counts toward PAGE.bytes, those a patch or a
  * delete reads again included. A task row and a description row can each
@@ -46,10 +52,15 @@
  * A run inserts the missing rows. `"repair": true` also rewrites each
  * differing row from its task, deletes the second row of a duplicate and
  * deletes orphans; a task with a third row needs a second repair. None of
- * those happens while every writer keeps the copies, but a rollback to an
- * earlier release leaves them, and a repair after the roll forward mends
- * them. No call writes a waiting row, which its step or teardown deletes.
- * Run the dry run again afterwards, until it reports zeros.
+ * those happens while every writer keeps the copies. Rows written before
+ * the project and archived copies hold none, as do rows restored from an
+ * older backup, and differ until a repair stamps them. An earlier release,
+ * which deploys only while no row holds the copies (docs/deployment.md),
+ * writes rows without them and moves and archives tasks without their rows,
+ * and one from before the table writes tasks and descriptions without rows
+ * at all. A repair after the roll forward mends them. No call writes a
+ * waiting row, which its step or teardown deletes. Run the dry run again
+ * afterwards, until it reports zeros.
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
@@ -74,7 +85,7 @@ import { byId } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { audit as writeAudit } from '../model/admin'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
-import { putDescription } from '../model/descriptions'
+import { holdsCopies, putDescription } from '../model/descriptions'
 
 /** Rows one page reads, the bytes it reads before it ends early, as Convex
  * counts a document's size, and the most ids a call lists of each kind.
@@ -159,8 +170,9 @@ function read<D extends Record<string, Value> | null>(reads: Reads, doc: D): D {
 }
 
 /** Checks task `task` against its description rows, and mends them with
- * `write`. A task without issues.description is skipped, and nothing writes
- * its row. A repair reuses the rows read here. */
+ * `write`. A task without issues.description is skipped: nothing checks or
+ * writes its row's text, but a repair gives its first row the task's
+ * copies. A repair reuses the rows read here. */
 async function checkTask(
   ctx: QueryCtx,
   task: Doc<'issues'>,
@@ -174,12 +186,17 @@ async function checkTask(
     .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
     .take(2)
   for (const row of rows) read(reads, row)
+  const [row, second] = rows
   if (task.description === undefined) {
     note(found, 'skipped', task.id)
+    if (row !== undefined && !holdsCopies(row, task)) {
+      note(found, 'differ', task.id)
+      // the patch reads the row again
+      if (write?.repair) await putDescription(write.ctx.db, task, row.description, read(reads, row))
+    }
     return
   }
   const text = task.description
-  const [row, second] = rows
   if (row === undefined) {
     note(found, 'missing', task.id)
     if (write !== null) await putDescription(write.ctx.db, task, text, null)
@@ -190,7 +207,7 @@ async function checkTask(
     // a delete reads its row again
     if (write?.repair) await write.ctx.db.delete(read(reads, second)._id)
   }
-  if (row.description !== text || row.org_id !== task.org_id) {
+  if (row.description !== text || !holdsCopies(row, task)) {
     note(found, 'differ', task.id)
     // the patch reads the row again
     if (write?.repair) await putDescription(write.ctx.db, task, text, read(reads, row))

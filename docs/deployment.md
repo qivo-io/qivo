@@ -615,6 +615,28 @@ row with its counts and the `cursor` to go on from, also when it fails
 partway. The third
 release clears `issues.description`, and no earlier release can show the
 descriptions after that, so it is a rollback floor.
+
+A later release gave each description row copies of its task's project and
+archived state (`project_id`, `archived_at`) and the `search_description`
+index, so main Search can match descriptions within a project and leave
+archived tasks out. Every write of a row, and every move, archive and
+restore of a task, the nightly archive included, writes the copies in the
+same transaction. A row written before that release holds none, and the
+same backfill counts it as `differ`. Once a deployment serves that release,
+read the dry run, then run the backfill with `"repair": true`, which writes
+the copies from each task, and call it again with the `cursor` it answers
+until it answers `done`. A task without a row gets none from a move or an
+archive, and the backfill inserts its row with the copies. Main Search's
+description matching ships only once a dry run on development, staging,
+production and the demo reports zero `missing`, `differ`, `duplicates`,
+`orphans` and `skipped`. Data restored from a backup taken before that
+release, or written by an earlier release, leaves rows without the copies
+or with stale ones, and a dry run lists them as `differ` until a repair
+mends them. Earlier releases do not accept the copies, so once a
+description row holds them, a rollback past that release fails to deploy.
+It is a rollback floor for the backend (see Rollback and hotfixes). Roll
+forward instead.
+
 Every person, team and project has a `name_key`, the form of its name that
 lists in name order sort and search by (`convex/lib/nameKey.ts`), and every
 team membership, project grant and team share holds a copy of its person's

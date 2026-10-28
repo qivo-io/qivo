@@ -1198,6 +1198,62 @@ describe('the backfill', () => {
     expect(await backfill(t, { dry_run: true })).toMatchObject({ waiting: 1 })
   })
 
+  it('reports rows without the copies or with stale ones as differ, and only repair stamps them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = async () => (await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id
+    const fine = await task()
+    const unstamped = await task()
+    const archived = await task()
+    const moved = await task()
+    // the third release's state, whose row keeps the text
+    const skipped = await task()
+    await t.run(async (ctx) => {
+      const rowOf = async (id: string) =>
+        (await ctx.db
+          .query('issue_descriptions')
+          .withIndex('by_issue', (q) => q.eq('issue_id', id))
+          .unique())!
+      const taskOf = async (id: string) =>
+        (await ctx.db
+          .query('issues')
+          .withIndex('by_uuid', (q) => q.eq('id', id))
+          .unique())!
+      // a row written before the copies
+      await ctx.db.patch((await rowOf(unstamped))._id, { project_id: undefined })
+      // an earlier release archived and moved these tasks without their rows
+      await ctx.db.patch((await taskOf(archived))._id, { archived_at: NOW })
+      await ctx.db.patch((await taskOf(moved))._id, { project_id: f.sub2.id })
+      await ctx.db.patch((await taskOf(skipped))._id, {
+        description: undefined,
+        archived_at: NOW,
+      })
+      await ctx.db.patch((await rowOf(skipped))._id, { description: 'Kept' })
+    })
+    const before = await snapshot(t)
+    expect(await backfill(t, { dry_run: true })).toMatchObject({
+      tasks: 5,
+      missing: 0,
+      differ: 4,
+      skipped: 1,
+      ids: { differ: [unstamped, archived, moved, skipped], skipped: [skipped] },
+    })
+    expect(await snapshot(t)).toEqual(before)
+    // a run without repair writes no differing row
+    expect(await backfill(t, { dry_run: false })).toMatchObject({ differ: 4 })
+    expect(await snapshot(t)).toEqual(before)
+
+    await backfill(t, { dry_run: false, repair: true })
+    expect(await rowOf(t, unstamped)).toMatchObject({ project_id: f.sub.id })
+    expect(await rowOf(t, archived)).toMatchObject({ project_id: f.sub.id, archived_at: NOW })
+    expect(await rowOf(t, moved)).toMatchObject({ project_id: f.sub2.id })
+    expect(await rowOf(t, moved)).not.toHaveProperty('archived_at')
+    // the skipped task's row keeps its text and takes the copies
+    expect(await rowOf(t, skipped)).toMatchObject({ description: 'Kept', archived_at: NOW })
+    expect((await rowsOf(t, fine))[0]).toEqual(before.rows.find((row) => row.issue_id === fine))
+    expect(await backfill(t, { dry_run: true })).toMatchObject({ differ: 0, skipped: 1 })
+  })
+
   it('counts every document a page reads, near-1 MiB rows and repair pages included', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
