@@ -121,6 +121,7 @@ import { notFound, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { cutText, LIMITS, TEXT_MAX } from '../lib/limits'
 import { countsAsSubtask } from '../lib/liveTasks'
+import { nameKey } from '../lib/nameKey'
 import { insertActivity, logActivity } from './activity'
 import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleImageReap } from './descriptionImages'
@@ -1467,13 +1468,15 @@ function docOf<T extends StoredTable>(row: Doc<'deleted_rows'>, table: T): Store
 
 /** A stored project as its reveal writes it back: its lead only while that
  * profile passes the reference predicate and may lead (design 6.1), its
- * legacy team only while the team passes the predicate. */
+ * legacy team only while the team passes the predicate, and the name key of
+ * its name, which a copy stored before keys lacks. */
 async function cleanProject(s: Scope, p: Stored<'projects'>): Promise<Stored<'projects'>> {
   const lead = p.lead_id === undefined ? null : await profileOf(s, p.lead_id)
   const team = p.team_id === undefined ? null : await teamOf(s, p.team_id)
   return {
     ...p,
     window_key: p.window_key ?? newWindowKey(),
+    name_key: nameKey(p.name),
     lead_id: sameReference(lead, s.item) && canLeadProjects(lead) ? p.lead_id : undefined,
     team_id: sameReference(team, s.item) ? p.team_id : undefined,
   }
@@ -1481,23 +1484,27 @@ async function cleanProject(s: Scope, p: Stored<'projects'>): Promise<Stored<'pr
 
 /** A stored grant as the restore writes it back: none when its profile fails
  * the reference predicate, a viewer grant for someone who is a viewer now
- * (model/projects.ts assertGrantee). */
+ * (model/projects.ts assertGrantee), with the key of the person's name now,
+ * which a rename while the grant was stored changed (model/nameKeys.ts). */
 async function cleanGrant(
   s: Scope,
   g: Stored<'project_access'>,
 ): Promise<Stored<'project_access'> | null> {
   const profile = await profileOf(s, g.profile_id)
   if (!sameReference(profile, s.item)) return null
-  return profile.org_role === 'viewer' ? { ...g, level: 'viewer' } : g
+  const grant = { ...g, name_key: nameKey(profile.name) }
+  return profile.org_role === 'viewer' ? { ...grant, level: 'viewer' } : grant
 }
 
-/** A stored team share as the restore writes it back, or none when its team
- * fails the reference predicate. */
+/** A stored team share as the restore writes it back, with the key of the
+ * team's name now, as cleanGrant, or none when its team fails the reference
+ * predicate. */
 async function cleanShare(
   s: Scope,
   g: Stored<'project_team_access'>,
 ): Promise<Stored<'project_team_access'> | null> {
-  return sameReference(await teamOf(s, g.team_id), s.item) ? g : null
+  const team = await teamOf(s, g.team_id)
+  return sameReference(team, s.item) ? { ...g, name_key: nameKey(team.name) } : null
 }
 
 /** A project item's projects as its reveal writes them back, and a

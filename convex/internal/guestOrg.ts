@@ -41,6 +41,7 @@ import { byId, newWindowKey } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
 import type { IssueStatus } from '../lib/enums'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
+import { named, nameKey } from '../lib/nameKey'
 import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
 import { deleteOrgDeep, pendingRemoval } from '../model/cascade'
 import { insertTask } from '../model/descriptions'
@@ -126,7 +127,7 @@ export const zzGuestOrg = internalMutation({
     await ctx.db.insert('teams', {
       id: ZZ.team,
       org_id: ZZ.org,
-      name: 'ZZ Guest Team',
+      ...named('ZZ Guest Team'),
       ...newTeamDefaults(now),
     })
 
@@ -148,7 +149,7 @@ export const zzGuestOrg = internalMutation({
         type: shape.parent_id === undefined ? 'meta' : 'project',
         parent_id: shape.parent_id,
         key,
-        name,
+        ...named(name),
         description: projectDescription(''),
         sort_order,
         num,
@@ -180,7 +181,7 @@ export const zzGuestOrg = internalMutation({
         id,
         org_id: ZZ.org,
         email,
-        name,
+        ...named(name),
         initials,
         color: '#888888',
         org_role,
@@ -255,6 +256,7 @@ export const zzGuestOrg = internalMutation({
       project_id: ZZ.sharedMeta,
       profile_id: ZZ.guestSeat,
       level: 'user',
+      name_key: nameKey(GUEST.name),
     })
 
     /* The shared task must be QN-1, or the collision the browser half proves

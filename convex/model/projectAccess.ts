@@ -40,6 +40,7 @@ import { GRANT_LEVELS, type GrantLevel, vGrantLevel } from '../lib/enums'
 import { badRequest, forbidden, type Refusal, rule } from '../lib/functions'
 import { grouped, LIMITS } from '../lib/limits'
 import { liveIn } from '../lib/liveTasks'
+import { nameKey } from '../lib/nameKey'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, exact, type Fields, oneOf } from './expected'
 import { assertAssigneeRule, hasSubtasks, holderKey, updateIssueCore } from './issues'
@@ -235,8 +236,12 @@ export async function setProjectGrantCore(
   const { project, subject, level } = a
   await assertManagesAccess(ctx, a.me, project, subject)
   await assertNotLead(ctx, project, subject)
-  if ('team' in subject) await assertTeamGrantee(ctx, project, subject.team.id)
-  else await assertGrantee(ctx, project, subject.profile.id, level)
+  // the grant copies its grantee's name key (model/nameKeys.ts)
+  const name_key = nameKey(
+    'team' in subject
+      ? (await assertTeamGrantee(ctx, project, subject.team.id)).name
+      : (await assertGrantee(ctx, project, subject.profile.id, level)).name,
+  )
   const row = await grantOf(ctx, project, subject)
   await assertGrantExpected(ctx, {
     me: a.me,
@@ -247,18 +252,20 @@ export async function setProjectGrantCore(
     next: level,
   })
   if (row?.level === level) return { changed: false }
-  if (row !== null) await ctx.db.patch(row._id, { level })
+  if (row !== null) await ctx.db.patch(row._id, { level, name_key })
   else if ('team' in subject) {
     await ctx.db.insert('project_team_access', {
       project_id: project.id,
       team_id: subject.team.id,
       level,
+      name_key,
     })
   } else {
     await ctx.db.insert('project_access', {
       project_id: project.id,
       profile_id: subject.profile.id,
       level,
+      name_key,
     })
   }
   await narrateAccess(ctx, a)
@@ -635,10 +642,14 @@ export async function removeAndSettle(
           )
           .unique()
         if (existing === null) {
+          // every holder is one of a.people (removeAndFindLost)
+          const person = a.people.get(h.profile_id)
           await ctx.db.insert('project_access', {
             project_id: where.id,
             profile_id: h.profile_id,
             level: 'viewer',
+            // the grant copies the person's name key (model/nameKeys.ts)
+            name_key: person && nameKey(person.name),
           })
         }
       }

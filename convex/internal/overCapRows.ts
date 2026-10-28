@@ -51,7 +51,9 @@
  * every row and lists the first 2,000, so a large run still answers.
  *
  * The fix trims each over-long name and cuts it to its limit without
- * splitting an emoji (cutText); a file name keeps its extension. It lowers
+ * splitting an emoji (cutText); a file name keeps its extension. A cut
+ * profile, team or project name gets the name key of its new form, and the
+ * copies of a profile's or team's follow it (model/nameKeys.ts). It lowers
  * remaining hours to the cap, stores each task description trimmed, and
  * rewrites an address to its punycode form (asciiEmail). A label or address
  * whose fixed form another row of its organization already has is skipped,
@@ -78,7 +80,9 @@ import {
 } from '../_generated/server'
 import { cleanEmail } from '../lib/email'
 import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits'
+import { nameKey } from '../lib/nameKey'
 import { patchTask } from '../model/descriptions'
+import { copyNameKey, inlineBudget } from '../model/nameKeys'
 
 /** Rows per page and the bytes one page may read; a page can end early.
  * `page_size` lowers the rows per page, for tests of a walk over pages. */
@@ -277,6 +281,9 @@ async function walk(
   if (isNamed(phase)) {
     const table = phase
     const page = await ctx.db.query(table).paginate(opts)
+    // a cut profile or team name's copies follow it, within one budget a
+    // page (model/nameKeys.ts)
+    const copies = inlineBudget()
     for (const doc of page.page) {
       const { _id, _creationTime, ...body } = doc
       const changes =
@@ -285,7 +292,13 @@ async function walk(
           : nameChange(doc.name, NAME_MAX)
       const found = sorted(table, _id, changes, write)
       rows.push(...found.rows)
-      if (found.patch !== null) await write?.db.patch(table, _id, found.patch)
+      if (found.patch === null || write === null) continue
+      const { name } = found.patch
+      const keyed = table === 'projects' || table === 'teams' || table === 'profiles'
+      if (typeof name === 'string' && keyed) found.patch.name_key = nameKey(name)
+      await write.db.patch(table, _id, found.patch)
+      if (typeof name === 'string' && (table === 'teams' || table === 'profiles'))
+        await copyNameKey(write, table, { ...doc, name }, copies)
     }
     return { rows, cursor: page.continueCursor, done: page.isDone }
   }

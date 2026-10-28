@@ -41,6 +41,7 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'removed_access', field: 'org_id', target: 'organizations' },
   { table: 'marketing_demo', field: 'org_id', target: 'organizations' },
   { table: 'org_counters', field: 'org_id', target: 'organizations' },
+  { table: 'org_ready', field: 'org_id', target: 'organizations' },
   { table: 'teams', field: 'org_id', target: 'organizations' },
   { table: 'team_members', field: 'team_id', target: 'teams' },
   { table: 'team_members', field: 'profile_id', target: 'profiles' },
@@ -183,6 +184,11 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // background cleanup deletes the row (labelRemovals.ts).
   'label_removals.label_id',
   'label_removals.scheduled_id',
+  // A pending name key copy job names its profile or team, by `source`, and
+  // its next step; a step that finds the source gone deletes the row
+  // (nameCopies.ts).
+  'name_copies.source_id',
+  'name_copies.scheduled_id',
   // A pending detach names the deleted task, which is in Deleted items or
   // back, and who deleted it, until its last step deletes the row
   // (model/deletedItems.ts detachArchivedChildren).

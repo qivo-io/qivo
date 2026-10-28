@@ -74,6 +74,15 @@ function iconFree<
   return row
 }
 
+/* A row without its name key, which only serves name-ordered index reads
+ * (schema.ts name_key). */
+type KeyFree<R> = Omit<R, 'name_key'>
+
+function keyFree<R extends { name_key?: string }>(row: R): KeyFree<R> {
+  const { name_key: _key, ...rest } = row
+  return rest
+}
+
 /** A relation row as the app receives it, without the organization id,
  * the archive mark and the task's window key, which only serve index
  * reads. */
@@ -108,9 +117,9 @@ const orgRowFor = (
   return isAdmin && billing !== undefined ? { ...row, billing } : row
 }
 
-/* A person as the app receives it, with their Team sync stamp
- * (model/syncStamps.ts) as sync_at and sync_since. */
-type ProfileRow = AppRow<'profiles'> & { sync_at?: string; sync_since?: string }
+/* A person as the app receives it, without the name key, with their Team
+ * sync stamp (model/syncStamps.ts) as sync_at and sync_since. */
+type ProfileRow = KeyFree<AppRow<'profiles'>> & { sync_at?: string; sync_since?: string }
 
 /* A task as the app receives it. The parent id goes out only when the
  * reader is shown the parent (lib/workingSet.ts parentLink). */
@@ -341,7 +350,7 @@ export async function readCatalog(ctx: QueryCtx, me: Doc<'profiles'>) {
   return {
     state: 'ok' as const,
     ...chunkLists({
-      teams: teams.map((team): IconFree<'teams'> => iconFree(team)),
+      teams: teams.map((team): KeyFree<IconFree<'teams'>> => keyFree(iconFree(team))),
       labels: labels.map(
         (l): AppRow<'labels'> => ({ ...rowOf(l), color: shownLabelColor(l.color) }),
       ),
@@ -382,7 +391,7 @@ export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow
   const profiles = people.map((p): ProfileRow => {
     const stamp = stamps.get(p.id)
     return {
-      ...rowOf(p),
+      ...keyFree(rowOf(p)),
       color: shownAvatarColor(p.color),
       ...(stamp === undefined
         ? {}
@@ -393,7 +402,10 @@ export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow
   })
   return {
     state: 'ok' as const,
-    ...chunkLists({ profiles, teamMembers: memberships.flat().map(rowOf) }),
+    ...chunkLists({
+      profiles,
+      teamMembers: memberships.flat().map((m) => keyFree(rowOf(m))),
+    }),
     ...(await softSplit(ctx, w, read.split || people.length > PAGE.people.split)),
   }
 }
@@ -489,16 +501,16 @@ export async function readProjects(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWind
   return {
     state: 'ok' as const,
     ...chunkLists({
-      projects: shown.map((p): Omit<IconFree<'projects'>, 'window_key'> => {
-        const { window_key: _window, ...row } = iconFree(p)
+      projects: shown.map((p): Omit<IconFree<'projects'>, 'window_key' | 'name_key'> => {
+        const { window_key: _window, name_key: _key, ...row } = iconFree(p)
         return row
       }),
       // Every grant on a shown project, other members' too. The app shows
       // only those of people it holds (lib/workspaceJoin.ts), as a removed
       // person's grants can outlive their profile for a moment
       // (model/cascade.ts removeProfile).
-      access: access.flat().map(rowOf),
-      teamAccess: teamAccess.flat().map(rowOf),
+      access: access.flat().map((g) => keyFree(rowOf(g))),
+      teamAccess: teamAccess.flat().map((g) => keyFree(rowOf(g))),
       milestones: milestones.flat().map(rowOf),
     }),
     ...(await softSplit(ctx, w, read.split || shown.length > PAGE.projects.split, caller.shared)),

@@ -14,6 +14,7 @@ import type { Doc } from '../_generated/dataModel'
 import { projectLevel } from '../lib/access'
 import { byId, strayRows } from '../lib/db'
 import { LIMITS, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
+import { nameKey } from '../lib/nameKey'
 import type { EventOwner } from '../lib/taskEvents'
 import { storageUsage } from '../model/billing'
 import { deleteOrgDeep } from '../model/cascade'
@@ -2089,15 +2090,18 @@ describe('restoring a project item', () => {
     await patch(t, 'projects', f.sub2.id, { lead_id: f.admin.id })
     const sub2 = (await liveProject(t, f.sub2.id)) as Doc<'projects'>
     const own = await t.run(async (ctx) => {
+      // keyed as their writers key them, which a restore keeps
       await ctx.db.insert('project_access', {
         project_id: f.sub2.id,
         profile_id: f.viewer.id,
         level: 'viewer',
+        name_key: nameKey(f.viewer.name),
       })
       await ctx.db.insert('project_team_access', {
         project_id: f.sub2.id,
         team_id: f.team.id,
         level: 'user',
+        name_key: nameKey(f.team.name),
       })
       await ctx.db.insert('milestones', {
         id: uuid(),

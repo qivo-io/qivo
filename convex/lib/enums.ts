@@ -110,6 +110,13 @@ export const ORG_REMOVAL_PHASES = [
 export const vOrgRemovalPhase = literals(...ORG_REMOVAL_PHASES)
 export type OrgRemovalPhase = (typeof ORG_REMOVAL_PHASES)[number]
 
+/* The tables whose name key other rows copy (name_copies). Memberships and
+ * grants copy a profile's key, project shares a team's. Stored on
+ * name_copies only, never on the wire. */
+export const NAME_SOURCES = ['profiles', 'teams'] as const
+export const vNameSource = literals(...NAME_SOURCES)
+export type NameSource = (typeof NAME_SOURCES)[number]
+
 /* What a running organization deletion records of the access it has
  * deleted (removed_access): a login's seat, a profile, or a credential by
  * its table. */

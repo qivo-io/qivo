@@ -21,6 +21,7 @@ import { MCP_PROVENANCE } from '../machine/shared'
 import { logActivity, machineDetail } from '../model/activity'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { NORTHSTAR_BATCH, NORTHSTAR_STEPS } from '../model/demoSeed'
+import { nameKeysReady } from '../model/nameKeys'
 import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import schema from '../schema'
 import {
@@ -39,6 +40,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { expectExact } from './nameKeys.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
 declare class Blob {
@@ -429,6 +431,18 @@ describe('marketing demo rebuild ownership', () => {
     expect(await t.run(async (ctx) => ctx.db.query('issues').collect())).toEqual(before)
     expect(await t.run(async (ctx) => ctx.db.get(manual._id))).not.toBeNull()
     await expectRefusal(apply(t, 'seed', NEXT_ANCHOR), 'rule', /use reset to change dates/)
+  })
+
+  it('gives every row its name key and puts a renamed person back on reset', async () => {
+    const t = newAuthT()
+    const { org_id } = await seeded(t)
+    expect(await t.run((ctx) => nameKeysReady(ctx, org_id))).toBe(true)
+    await expectExact(t, org_id)
+    const [person] = await profiles(t, org_id)
+    await t.run((ctx) => ctx.db.patch(person._id, { name: 'Renamed', name_key: 'renamed' }))
+    await reset(t, NEXT_ANCHOR)
+    expect((await t.run((ctx) => ctx.db.get(person._id)))?.name_key).toBe(person.name_key)
+    await expectExact(t, org_id)
   })
 
   it('seeds two teams with separate leaders, partial membership overlap, default settings, and inherited project access', async () => {

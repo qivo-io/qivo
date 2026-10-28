@@ -81,6 +81,8 @@ const EXCLUDED_TABLES = [
   'profile_removals',
   // Cleanup progress of a label that is already deleted.
   'label_removals',
+  // Progress of the steps that bring a rename's name key copies in line.
+  'name_copies',
   // Progress of the steps that detach a deleted task's archived subtasks.
   'archived_detaches',
   // An organization's deletion schedule and progress are operational state.
@@ -126,6 +128,8 @@ const EXCLUDED_TABLES = [
   'usage_sign_ins',
   // Internal counters, exported on the organization row (next_issue_num).
   'org_counters',
+  // Which migrations the organization's rows finished, operational state.
+  'org_ready',
   // Team sync stamps, exported on the profile row (sync_at, sync_since).
   'sync_stamps',
   // Deleted items are not exported: restore an item to include its work.

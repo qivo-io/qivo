@@ -61,10 +61,12 @@ import {
 } from './lib/functions'
 import { limitedEmail, limitedWhole } from './lib/limitRules'
 import { LIMITS, overText } from './lib/limits'
+import { named, nameKey } from './lib/nameKey'
 import { projectRightAfterUpdate } from './lib/projectCreators'
 import { logActivity } from './model/activity'
 import { pendingRemoval, removeProfile } from './model/cascade'
 import { lowerSweepDue } from './model/messages'
+import { copyNameKey, inlineBudget } from './model/nameKeys'
 import { assertNotLastAdmin, nameInitials, setPlannableHoursCore } from './model/orgs'
 import {
   assertNameShape,
@@ -177,7 +179,7 @@ export const create = adminMutation({
         id: args.id,
         org_id: org.id,
         email,
-        name,
+        ...named(name),
         initials: nameInitials(name),
         color,
         org_role: args.org_role,
@@ -196,6 +198,7 @@ export const create = adminMutation({
         team_id: team.id,
         profile_id: args.id,
         is_leader: false,
+        name_key: nameKey(name),
       })
     }
     await logActivity(ctx, {
@@ -296,7 +299,7 @@ async function updateProfile(
     const name = cleanName(patch.name)
     assertNameShape(name)
     if (name !== row.name) {
-      upd.name = name
+      Object.assign(upd, named(name))
       upd.initials = nameInitials(name)
       renamedFrom = row.name
     }
@@ -402,8 +405,12 @@ async function updateProfile(
       team_id: team.id,
       profile_id: row.id,
       is_leader: false,
+      name_key: nameKey(effectiveName),
     })
   }
+  // the memberships and grants copy the name key (model/nameKeys.ts)
+  if (renamedFrom !== undefined)
+    await copyNameKey(ctx, 'profiles', { ...row, name: effectiveName }, inlineBudget())
   if (upd.active !== undefined || upd.org_role !== undefined || upd.email !== undefined) {
     await markBillingMembershipChanged(
       ctx,
@@ -525,9 +532,13 @@ export const setDisplayName = authedMutation({
       })
     }
     const initials = nameInitials(name)
+    // every seat's memberships and grants copy its name key, within one
+    // budget for the whole rename (model/nameKeys.ts)
+    const copies = inlineBudget()
     for (const p of matched) {
       if (p.name === name) continue
-      await ctx.db.patch(p._id, { name, initials })
+      await ctx.db.patch(p._id, { ...named(name), initials })
+      await copyNameKey(ctx, 'profiles', { ...p, name }, copies)
       await logActivity(ctx, {
         org_id: p.org_id,
         actor_id: ctx.myProfiles.get(p.org_id)?.id,

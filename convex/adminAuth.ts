@@ -46,6 +46,7 @@ import {
 } from './lib/functions'
 import { limitedEmail } from './lib/limitRules'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from './lib/limits'
+import { named } from './lib/nameKey'
 import { audit } from './model/admin'
 import { newUuid } from './model/orgs'
 import { assertNameShape, cleanName } from './model/people'
@@ -331,7 +332,7 @@ export const insertBreakGlass = internalMutation({
       id,
       org_id: org.id,
       email: a.email,
-      name: a.name,
+      ...named(a.name),
       initials: 'RA',
       color: '#DC2626',
       org_role: 'admin',

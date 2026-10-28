@@ -35,6 +35,7 @@ import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { LIMITS } from '../lib/limits'
+import { named, nameKey } from '../lib/nameKey'
 import { logActivity, signedDetail } from './activity'
 import { deleteTeamDeep } from './cascade'
 import {
@@ -46,6 +47,7 @@ import {
   filledText,
   type Next,
 } from './expected'
+import { copyNameKey, inlineBudget } from './nameKeys'
 import { assertNotLastTeam, newTeamDefaults } from './orgs'
 import {
   type AccessRemoval,
@@ -202,7 +204,12 @@ export async function createTeamCore(
     'teams',
     'by_uuid',
     { id: a.id },
-    { id: a.id, org_id: a.me.org_id, name: cleanTeamName(a.name), ...newTeamDefaults(a.now) },
+    {
+      id: a.id,
+      org_id: a.me.org_id,
+      ...named(cleanTeamName(a.name)),
+      ...newTeamDefaults(a.now),
+    },
     badRequest('a team with this id already exists'),
   )
   const team = await ctx.db.get(_id)
@@ -281,7 +288,7 @@ export async function updateTeamCore(
   const upd: Partial<WithoutSystemFields<Doc<'teams'>>> = {}
   if (patch.name !== undefined) {
     const name = cleanTeamName(patch.name)
-    if (name !== team.name) upd.name = name
+    if (name !== team.name) Object.assign(upd, named(name))
   }
   if (
     patch.track_delay_default !== undefined &&
@@ -291,6 +298,9 @@ export async function updateTeamCore(
   }
   if (Object.keys(upd).length === 0) return team
   await ctx.db.patch(team._id, upd)
+  // the team's project shares copy its name key (model/nameKeys.ts)
+  if (upd.name !== undefined)
+    await copyNameKey(ctx, 'teams', { ...team, name: upd.name }, inlineBudget())
   return (await ctx.db.get(team._id)) ?? team
 }
 
@@ -316,7 +326,12 @@ export async function addTeamMemberCore(
   if (member === null || member.org_id !== team.org_id) throw notFound('user not found')
   if (member.org_role === 'guest') throw forbidden('a guest is never a team member')
   if ((await membershipOf(ctx, team.id, member.id)) !== null) return { changed: false }
-  await ctx.db.insert('team_members', { team_id: team.id, profile_id: member.id, is_leader: false })
+  await ctx.db.insert('team_members', {
+    team_id: team.id,
+    profile_id: member.id,
+    is_leader: false,
+    name_key: nameKey(member.name),
+  })
   await logActivity(ctx, {
     org_id: team.org_id,
     actor_id: me.id,

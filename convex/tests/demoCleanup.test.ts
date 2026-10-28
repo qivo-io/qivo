@@ -137,6 +137,8 @@ const APP_OWNED: TableNames[] = [
   'roadmap_history',
   'organizations',
   'org_counters',
+  // which migrations the organization's rows finished, deleted with it
+  'org_ready',
   'teams',
   'profiles',
   'projects',
@@ -201,6 +203,9 @@ const APP_SHARED = [
   // Keyed by an already deleted label; its own steps delete it, also after
   // the demo organization is gone (labelRemovals.ts).
   'label_removals',
+  // Keyed by a renamed profile or team; its own steps delete it, also after
+  // the demo organization is gone (nameCopies.ts).
+  'name_copies',
   // Keyed by a deleted task; its own steps find no subtasks once the demo
   // organization is gone and delete it (model/deletedItems.ts).
   'archived_detaches',
