@@ -24,6 +24,7 @@ import { ConvexError } from 'convex/values'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
+import { HISTORY_PAGE_MAX, WINDOW_HISTORY_PAGE } from '../lib/activityVisibility'
 import { verifyFileToken } from '../lib/fileTokens'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { attachmentTooLarge, LIMITS } from '../lib/limits'
@@ -1619,6 +1620,44 @@ describe('task activity', () => {
       `task "QN-${hidden.num}" not found (or not visible to you)`,
     )
     expect((await rest(fx, 'GET', `/v1/tasks/QN-${hidden.num}/activity`)).status).toBe(404)
+  })
+  it("answers pages of 500 rows over HTTP, ten times the task window's", async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    await fx.t.run(async (ctx) => {
+      const base = Date.parse(NOW)
+      for (let i = 0; i < 520; i++)
+        await ctx.db.insert('activity_events', {
+          id: uuid(),
+          org_id: fx.org.id,
+          ts: new Date(base + i * 1000).toISOString(),
+          actor_id: fx.user.id,
+          verb: 'changed',
+          target_type: 'issue',
+          target_id: issue.id,
+          label: issue.title,
+          project_id: issue.project_id,
+          named_task_nums: [],
+        })
+    })
+    expect(HISTORY_PAGE_MAX).toBe(10 * WINDOW_HISTORY_PAGE)
+    const viaRest = await rest(fx, 'GET', `/v1/tasks/QN-${issue.num}/activity`)
+    expect(viaRest.status).toBe(200)
+    const restRows = JSON.parse(viaRest.text) as { id: string }[]
+    expect(restRows).toHaveLength(HISTORY_PAGE_MAX)
+    const viaMcp = await mcpTool(fx.t, fx.agentKey, 'list_task_activity', {
+      ref: `QN-${issue.num}`,
+    })
+    expect(viaMcp.isError).toBe(false)
+    expect((JSON.parse(viaMcp.text) as { id: string }[]).map((r) => r.id)).toEqual(
+      restRows.map((r) => r.id),
+    )
+    const older = await rest(
+      fx,
+      'GET',
+      `/v1/tasks/QN-${issue.num}/activity?before=${restRows[0].id}`,
+    )
+    expect(JSON.parse(older.text)).toHaveLength(20)
   })
 })
 

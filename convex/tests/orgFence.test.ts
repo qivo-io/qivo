@@ -647,6 +647,20 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
       answer: { code: 'not_found', message: 'task not found' },
     },
     {
+      name: 'snapshot.threadComments',
+      ref: () => otherIssue.id,
+      call: (ref) =>
+        as(t, f.admin).query(api.snapshot.threadComments, { org_id: f.org.id, issue_id: ref }),
+      answer: { code: 'not_found', message: 'task not found' },
+    },
+    {
+      name: 'snapshot.threadHistory',
+      ref: () => otherIssue.id,
+      call: (ref) =>
+        as(t, f.admin).query(api.snapshot.threadHistory, { org_id: f.org.id, issue_id: ref }),
+      answer: { code: 'not_found', message: 'task not found' },
+    },
+    {
       name: 'snapshot.commentsBefore',
       ref: () => otherIssue.id,
       call: (ref) =>
@@ -1062,6 +1076,10 @@ describe('0056 §D — guest write-probes into the hidden pair of their own org'
     const threads = [
       (issue_id: string) =>
         as(t, f.guest).query(api.snapshot.commentThread, { org_id: f.org.id, issue_id }),
+      (issue_id: string) =>
+        as(t, f.guest).query(api.snapshot.threadComments, { org_id: f.org.id, issue_id }),
+      (issue_id: string) =>
+        as(t, f.guest).query(api.snapshot.threadHistory, { org_id: f.org.id, issue_id }),
       (issue_id: string) =>
         as(t, f.guest).query(api.snapshot.commentsBefore, {
           org_id: f.org.id,

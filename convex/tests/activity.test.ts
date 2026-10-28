@@ -27,6 +27,7 @@ import {
   NAMED_TASK_ROOM,
   olderRows,
   taskHistoryPage,
+  WINDOW_HISTORY_PAGE,
 } from '../lib/activityVisibility'
 import { LIMITS } from '../lib/limits'
 import { type ActivityEntry, insertActivity, issueChanges, logActivity } from '../model/activity'
@@ -356,6 +357,12 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     expect(first.rows.map((row) => row.ts)).toEqual(times(0, 200))
     expect(first.rows.every((row) => row.target_id === task.id)).toBe(true)
     expect(await page(first.rows[0].id)).toEqual({ rows: [], earlier: false })
+    // the task window's smaller page reads the same history 50 rows at a time
+    const window = await t.run((ctx) =>
+      taskHistoryPage(ctx, f.admin, task, undefined, WINDOW_HISTORY_PAGE),
+    )
+    expect(window.rows.map((row) => row.ts)).toEqual(times(1_150, 50))
+    expect(window.next?.id).toBe(window.rows[0].id)
     // a row of another task, or no row, is no place in this history
     const elsewhere = (await stored(t, f.org.id, other.id))[0]
     for (const before of [elsewhere.id, uuid()]) {
@@ -892,7 +899,7 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
 
 describe('which task rows a member receives, in the task window and over REST', () => {
   /* The task, a task the guest may read, one it may not, and a reader that
-   * asks commentThread and REST for the task's history and checks they agree.
+   * asks threadHistory and REST for the task's history and checks they agree.
    * The guest holds User on TBED (FW and PCB) and nothing on SKNK. */
   async function setup() {
     const t = newT()
@@ -901,7 +908,7 @@ describe('which task rows a member receives, in the task window and over REST', 
     const visible = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     const hidden = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
     const seen = async (p: Doc<'profiles'>): Promise<string[]> => {
-      const thread = await as(t, p).query(api.snapshot.commentThread, {
+      const thread = await as(t, p).query(api.snapshot.threadHistory, {
         org_id: f.org.id,
         issue_id: task.id,
       })

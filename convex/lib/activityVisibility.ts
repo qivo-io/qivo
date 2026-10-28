@@ -1,7 +1,8 @@
 /* Which task activity rows a member receives, the app's rule, and the pages
  * of one task's history it reads them in. The task window (snapshot.ts
- * commentThread and historyBefore), REST and MCP read the same pages
- * (taskHistoryPage below). Organization admins receive every task row;
+ * threadHistory and historyBefore), REST and MCP read the same pages
+ * (taskHistoryPage below), the window WINDOW_HISTORY_PAGE rows a page and
+ * REST and MCP HISTORY_PAGE_MAX. Organization admins receive every task row;
  * memberSeesActivity decides for everyone else. Rows about anything but a
  * task reach no client; admins read them in the organization export. */
 
@@ -81,24 +82,32 @@ const UNCHECKED = Symbol('unchecked')
  * task, and a row can name two. Past `room`, a row naming a task not yet
  * looked up is not checked: a page ends before it, so the next page checks
  * it with room of its own, and taskWriters leaves it out. The read so fails
- * closed instead of failing on Convex's limits. The rest serves the caller: commentThread has read its
- * comments already, and REST and MCP read one profile per actor next
- * (machine/records.ts activityOut). Tests may lower it. */
+ * closed instead of failing on Convex's limits. The rest serves the caller:
+ * the deprecated commentThread has read its comments already, and REST and
+ * MCP read one profile per actor next (machine/records.ts activityOut).
+ * Tests may lower it. */
 export const NAMED_TASK_ROOM = { room: 0.8 }
 
-/** The most rows one page of a task's history holds. The task window shows
- * the newest page beside its comments and loads earlier pages on request,
- * and REST and MCP answer one page a call. */
+/** The most rows one page of a task's history holds over REST and MCP,
+ * which answer one page a call, and the most rows taskWriters reads. The
+ * task window reads smaller pages (WINDOW_HISTORY_PAGE). */
 export const HISTORY_PAGE_MAX = 500
+
+/** The most rows one page of a task's history holds in the task window:
+ * the newest page it shows under All (snapshot.ts threadHistory) and each
+ * earlier page Show earlier activity loads (historyBefore). It is the
+ * specification's batch of 50 history events, counted apart from the
+ * comments beside them. */
+export const WINDOW_HISTORY_PAGE = 50
 
 /** How full a member's history page may get before it stops reading on
  * (lib/db.ts usedMoreThan). Rows a member does not receive are read and
- * left out, so a page reads on until it holds HISTORY_PAGE_MAX rows, the
- * history ends or the read passes `room`. Tests may lower it. */
+ * left out, so a page reads on until it holds a page of rows, the history
+ * ends or the read passes `room`. Tests may lower it. */
 export const HISTORY_ROOM = { room: 0.7 }
 
 /* The fewest rows one read of a page asks for, so a page a few rows short of
- * HISTORY_PAGE_MAX reads on past rows it leaves out in batches. */
+ * its size reads on past rows it leaves out in batches. */
 const HISTORY_BATCH_MIN = 100
 
 /** The refusal of a REST or MCP page that ended before it found a row the
@@ -207,10 +216,10 @@ export type HistoryPage = {
 
 /**
  * One page of the history of `issue` that `me` receives, the history the
- * task window shows beside its comments. It holds the newest
- * HISTORY_PAGE_MAX rows `me` receives, or with `before` the newest ones
- * before that row (historyAnchor), oldest first in insertion order, which
- * follows time. The caller has already resolved a task `me` can read
+ * task window shows beside its comments under All. It holds the newest
+ * `size` rows `me` receives, HISTORY_PAGE_MAX unless the caller names
+ * another size, or with `before` the newest ones before that row
+ * (historyAnchor), oldest first in insertion order, which follows time. The caller has already resolved a task `me` can read
  * (lib/core.ts findIssue), which counts as the task being shown, as every
  * machine read counts the tasks it can read, archived ones included.
  * Organization admins receive every row; other members get the rows
@@ -229,6 +238,7 @@ export async function taskHistoryPage(
   me: Doc<'profiles'>,
   issue: Doc<'issues'>,
   before?: Doc<'activity_events'>,
+  size = HISTORY_PAGE_MAX,
 ): Promise<HistoryPage> {
   const read = await olderRows(ctx, issue, before)
   const admin = me.org_role === 'admin'
@@ -243,10 +253,10 @@ export async function taskHistoryPage(
   for (;;) {
     // One row past the page tells whether the history goes on. A page short
     // of a few rows still reads in batches, so rows it leaves out cost few reads.
-    const n = Math.max(HISTORY_PAGE_MAX - newest.length + 1, HISTORY_BATCH_MIN)
+    const n = Math.max(size - newest.length + 1, HISTORY_BATCH_MIN)
     const rows = await read(n)
     for (const ev of rows) {
-      if (newest.length === HISTORY_PAGE_MAX) return page(true)
+      if (newest.length === size) return page(true)
       sees ??= admin ? async () => 'yes' : await memberSight(ctx, me, issue)
       // The first row is checked whatever the room, so every page moves on.
       // A later one the read has no room to check ends the page, and the

@@ -1,9 +1,10 @@
 /* Paged comment reads (model/comments.ts newestComments). REST
  * GET /v1/tasks/{ref}/comments and MCP list_comments answer the newest
  * comments, oldest first, with `limit` and `before`. The app's task window
- * subscribes to snapshot.commentThread, the newest COMMENT_PAGE_MAX and
+ * subscribes to snapshot.threadComments, the newest COMMENT_PAGE_MAX and
  * whether earlier ones exist, and reads earlier pages with
- * snapshot.commentsBefore (model/comments.ts threadPage).
+ * snapshot.commentsBefore (model/comments.ts threadPage). The deprecated
+ * snapshot.commentThread answers the same comment page.
  *
  *   1. Paging: a long thread walks back page by page to an empty page on
  *      both surfaces, a short one answers whole, and the input rules. The
@@ -106,7 +107,7 @@ const mcpPage = async (fx: Fx, page: { limit?: number; before?: string } = {}) =
 async function appPage(fx: Fx, before?: string) {
   const page =
     before === undefined
-      ? await as(fx.t, fx.guest).query(api.snapshot.commentThread, {
+      ? await as(fx.t, fx.guest).query(api.snapshot.threadComments, {
           org_id: fx.org.id,
           issue_id: fx.task.id,
         })
@@ -210,6 +211,16 @@ describe('paging a thread', () => {
     expect(rest).toMatchObject({ bodies: ['#0'], earlier: false })
     const empty = await setup()
     expect(await appPage(empty)).toMatchObject({ comments: [], earlier: false })
+  })
+
+  it('answers the comment page the deprecated commentThread answers, and no history', async () => {
+    const fx = await setup()
+    await plantThread(fx, 70)
+    const args = { org_id: fx.org.id, issue_id: fx.task.id }
+    const live = await as(fx.t, fx.guest).query(api.snapshot.threadComments, args)
+    expect(Object.keys(live).sort()).toEqual(['comments', 'earlier'])
+    const old = await as(fx.t, fx.guest).query(api.snapshot.commentThread, args)
+    expect(live).toEqual({ comments: old.comments, earlier: old.earlier })
   })
 
   it("the app's pages keep the thread's order, so the first comment is the next before", async () => {

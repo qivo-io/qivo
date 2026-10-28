@@ -651,6 +651,8 @@ roadmap:undo mutation public {"type":"object","value":{"session_id":{"fieldType"
 snapshot:commentThread query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:commentsBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:historyBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+snapshot:threadComments query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+snapshot:threadHistory query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:lastComments query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:stamp mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"first_since":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:addMember mutation public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1056,12 +1058,15 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     updateMilestone: 'orgMutation',
     removeMilestone: 'orgMutation',
   },
-  // The task window's thread and its earlier pages of comments and of
-  // history.
+  // The task window's live comment page, its live history page (only
+  // while it shows All) and the earlier pages of each. commentThread is the
+  // deprecated thread of both, kept one release for older clients.
   snapshot: {
     commentThread: 'orgQuery',
     commentsBefore: 'orgQuery',
     historyBefore: 'orgQuery',
+    threadComments: 'orgQuery',
+    threadHistory: 'orgQuery',
   },
   // Team sync: staff stamp the person a change was made on (often not
   // themselves); any member reads the latest comment per visible open task.
@@ -1102,7 +1107,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 191
+const PUBLIC_COUNT = 193
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
