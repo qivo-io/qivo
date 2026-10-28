@@ -381,8 +381,10 @@ const milestonesTable = defineTable({
   .index('by_uuid', ['id'])
   .index('by_project', ['project_id'])
   // one project's milestones in day order: a write reads the days of one
-  // week (model/milestones.ts assertWeekFree), and a change of the first
-  // day of the week reads each project's whole range (assertWeekStartFits)
+  // week (model/milestones.ts assertWeekFree), a change of the first day of
+  // the week reads each project's whole range (assertWeekStartFits), and
+  // the app's milestone reads (milestones.ts section and between) merge the
+  // ranges of the projects they list a day at a time (readMilestones)
   .index('by_project_week', ['project_id', 'week'])
 
 const commentsTable = defineTable({

@@ -535,6 +535,9 @@ messages:snoozeItem mutation public {"type":"object","value":{"issue_id":{"field
 messages:trimItems mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"recipients":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 messages:unreadItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:wake mutation internal {"type":"object","value":{"recipient_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"until":{"fieldType":{"type":"string"},"optional":false}}}
+milestones:between query public {"type":"object","value":{"projects":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"string"},"optional":false}}}
+milestones:get query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
+milestones:section query public {"type":"object","value":{"projects":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"from":{"fieldType":{"type":"string"},"optional":false},"side":{"fieldType":{"type":"union","value":[{"type":"literal","value":"upcoming"},{"type":"literal","value":"past"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"object","value":{"week":{"fieldType":{"type":"string"},"optional":false},"key":{"fieldType":{"type":"string"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"limit":{"fieldType":{"type":"number"},"optional":false}}}
 nameCopies:recover mutation internal {"type":"object","value":{}}
 nameCopies:step mutation internal {"type":"object","value":{"source":{"fieldType":{"type":"union","value":[{"type":"literal","value":"profiles"},{"type":"literal","value":"teams"}]},"optional":false},"source_id":{"fieldType":{"type":"string"},"optional":false}}}
 oauthAccess:lookupAccess query internal {"type":"object","value":{"tokenHash":{"fieldType":{"type":"string"},"optional":false},"resource":{"fieldType":{"type":"string"},"optional":false}}}
@@ -956,6 +959,11 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     snoozeItem: 'orgMutation',
     unreadItem: 'orgMutation',
   },
+  // The app's bounded milestone reads span organizations like Deleted
+  // items. Each named project is judged with the seat in its own
+  // organization, and an unknown or invisible project or milestone reads as
+  // absent, never refused.
+  milestones: { between: 'authedQuery', get: 'authedQuery', section: 'authedQuery' },
   // Paginated ZIP export for org admins. orgQuery authenticates the active
   // seat; the handler positively requires admin on every page.
   orgExport: { page: 'orgQuery' },
@@ -1077,7 +1085,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 185
+const PUBLIC_COUNT = 188
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

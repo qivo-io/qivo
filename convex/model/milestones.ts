@@ -22,19 +22,40 @@
  * can see without User access on the project that stores the milestone is
  * forbidden. Callers resolve the caller's seat and check the billing pause
  * (orgMutation, the roadmap writer, asMachineCaller). A machine caller passes
- * its `provenance`, which signs the activity row. */
+ * its `provenance`, which signs the activity row.
+ *
+ * The app's milestone reads (milestones.ts) live at the end of this file.
+ * readMilestones merges the milestones of up to MILESTONE_READ.projects
+ * top-level projects in one order, a batch at a time and inside a read
+ * budget, and visibleMilestone answers one milestone by id. */
 
 import { ConvexError, v } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { canSeeProject, hasProjectLevel, rootMetaOf } from '../lib/access'
+import {
+  canSeeProject,
+  hasProjectLevel,
+  levelRank,
+  projectLevel,
+  projectLevelsOf,
+  rootMetaOf,
+} from '../lib/access'
+import { type CeilingGuard, ceilingGuard, type ReadCeiling, roomOf } from '../lib/archivedTasks'
 import { assertNewRowId, byId, insertUnique, usedMoreThan } from '../lib/db'
 import type { DeletedItemState } from '../lib/enums'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, type Refusal, require, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS, milestoneWeekTaken, WEEK_START_REFUSALS } from '../lib/limits'
+import {
+  LIMITS,
+  MILESTONE_READ_PROJECTS,
+  milestoneWeekTaken,
+  WEEK_START_REFUSALS,
+} from '../lib/limits'
+import { nameKey } from '../lib/nameKey'
+import { allWordsMatcher } from '../lib/search'
 import { logActivity, signedDetail } from './activity'
+import { DOCUMENT_MAX_BYTES } from './comments'
 import { newMemo, viewOf } from './deletedItems'
 import {
   assertExpected,
@@ -47,7 +68,15 @@ import {
   TEXT,
   type View,
 } from './expected'
-import { dayLabel, shiftDay, WEEKDAY_NAMES, weekDays, weekLabel, weekPhrase } from './orgs'
+import {
+  dayLabel,
+  shiftDay,
+  shownDay,
+  WEEKDAY_NAMES,
+  weekDays,
+  weekLabel,
+  weekPhrase,
+} from './orgs'
 import { calendarDay } from './taskValues'
 
 /* Milestone policies are User level (0078:497, member→user). */
@@ -136,13 +165,14 @@ async function orgOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Doc<'organizat
  * holds another milestone in (assertWeekFree). */
 export const MILESTONE_WEEK_TAKEN = 'milestone_week_taken'
 
-/* How many days before a week's first day its read starts. A day that does
+/** How many days before a week's first day its read starts. A day that does
  * not exist, stored before 2026-10-16, is shown on the day it overflows to,
  * 2026-02-31 on 3 March. Its text sorts at the end of its own month, at most
  * 3 days before the day it is shown on (day 31 of a 28-day February), so the
  * read reaches back that far. A day past 31 or a month past 12 can sort
- * farther away; internal/milestoneWeeks reports those. */
-const OVERFLOW_DAYS = 3
+ * farther away; internal/milestoneWeeks reports those. readMilestones starts
+ * a read with a first day this far back too. */
+export const OVERFLOW_DAYS = 3
 
 /**
  * The milestone of project `projectId`, other than `except`, in the week of
@@ -624,4 +654,412 @@ export async function removeMilestoneCore(
     project_id: milestone.project_id,
     ts: now,
   })
+}
+
+/* ------------------------------------------------------------------ reads */
+
+/** The budget of one of the app's milestone reads (milestones.ts). A call
+ * names at most `projects` projects and asks for at most `rows` rows. Its
+ * reads stop once the transaction has read `ranges` index ranges,
+ * `documents` documents or `bytes` bytes, counted from its start with the
+ * caller's seats and access included, and never past what the request has
+ * left. That is the share a workspace part reads before it asks to be cut
+ * (lib/workspaceParts.ts PAGE.soft). These reads are subscriptions that
+ * rerun whenever a row they read changes, so none costs more than the
+ * projects part that carried every milestone before them. Tests lower
+ * these. */
+export const MILESTONE_READ = {
+  projects: MILESTONE_READ_PROJECTS,
+  rows: 25,
+  ranges: 2000,
+  documents: 8000,
+  bytes: 4 * 1024 * 1024,
+}
+
+/* What a read keeps back from the request's limits, as a ceilingGuard can
+ * let one more document of any size through after its last look. */
+const MILESTONE_RESERVE: ReadCeiling = { ranges: 0, documents: 1, bytes: DOCUMENT_MAX_BYTES }
+
+/* Why a read failed that could not read every project through its first
+ * day past the read's start within the request's own limits. The two days
+ * that takes at most for each of 200 projects fit unless their names hold
+ * megabytes. */
+const FIRST_DAYS_TOO_LARGE = 'the first milestones of these projects do not fit in one read'
+
+/** A place in a milestone order, just after the milestone with this stored
+ * day (`week`), name key (lib/nameKey.ts) and id. */
+export type MilestonePosition = { week: string; key: string; id: string }
+
+/** The milestones a read lists are those the app shows (shownDay) on a day
+ * in [from, to), where a missing bound is open, in day order ('asc') or
+ * newest first ('desc'). With either bound set, a row whose text names no
+ * day at all is shown nowhere and left out. */
+export type MilestoneSpan = { from?: string; to?: string; order: 'asc' | 'desc' }
+
+/** One batch of a read (readMilestones): its rows in order, the position to
+ * go on after, null once no row follows, and the stored day the read reached
+ * when its budget ran out first, else null. `past`, when asked, says whether
+ * one of the projects holds a milestone shown before the day asked about. */
+export type MilestoneBatch = {
+  rows: Doc<'milestones'>[]
+  next: MilestonePosition | null
+  stopped: string | null
+  past?: boolean
+}
+
+/* Negative when `a` comes before `b` in day order, positive after. */
+function compared(a: MilestonePosition, b: MilestonePosition): number {
+  for (const field of ['week', 'key', 'id'] as const)
+    if (a[field] !== b[field]) return a[field] < b[field] ? -1 : 1
+  return 0
+}
+
+/* The position of `row`. */
+const positionOf = (row: Doc<'milestones'>): MilestonePosition => ({
+  week: row.week,
+  key: nameKey(row.name),
+  id: row.id,
+})
+
+/* Whether the app shows stored day `week` inside `span`. */
+function inSpan(week: string, span: MilestoneSpan): boolean {
+  if (span.from === undefined && span.to === undefined) return true
+  const shown = shownDay(week)
+  return (
+    shown !== null &&
+    (span.from === undefined || shown >= span.from) &&
+    (span.to === undefined || shown < span.to)
+  )
+}
+
+/* The stored days a read of `span` after `after` takes from by_project_week:
+ * from OVERFLOW_DAYS before its first day, before its end, and from or up to
+ * `after`'s day. */
+function dayBounds(
+  span: MilestoneSpan,
+  after: MilestonePosition | null,
+): { lower?: string; upper?: { day: string; inclusive: boolean } } {
+  let lower = span.from === undefined ? undefined : shiftDay(span.from, -OVERFLOW_DAYS)
+  let upper = span.to === undefined ? undefined : { day: span.to, inclusive: false }
+  if (after !== null && span.order === 'asc' && (lower === undefined || after.week > lower))
+    lower = after.week
+  if (after !== null && span.order === 'desc' && (upper === undefined || after.week < upper.day))
+    upper = { day: after.week, inclusive: true }
+  return { lower, upper }
+}
+
+/**
+ * The top-level projects whose milestones a read of `ids` lists for the
+ * caller, whose active seats are `myProfiles` keyed by organization, each
+ * once. A sub-project stands for its top-level project, which stores its
+ * milestones (milestoneTarget). Each project is judged with the caller's
+ * seat in its own organization, through one lib/access.ts projectLevelsOf a
+ * seat, so the caller's grants and team shares in an organization are read
+ * once, not once a project. An unknown project, one of an organization the
+ * caller holds no seat in, one they cannot see, and an archived one or one
+ * under an archived top-level project add nothing and raise nothing, so the
+ * answer tells nothing about projects the caller cannot list. A top-level
+ * project the caller sees only to reach one of its sub-projects counts, as
+ * the app shows its milestones read-only.
+ */
+export async function milestoneProjects(
+  ctx: QueryCtx,
+  myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
+  ids: readonly string[],
+): Promise<string[]> {
+  const named = await Promise.all([...new Set(ids)].map((id) => byId(ctx, 'projects', id)))
+  const bySeat = new Map<string, Doc<'projects'>[]>()
+  for (const project of named)
+    if (project !== null && myProfiles.has(project.org_id))
+      bySeat.set(project.org_id, [...(bySeat.get(project.org_id) ?? []), project])
+  const roots = new Set<string>()
+  for (const [orgId, projects] of bySeat) {
+    const me = myProfiles.get(orgId)
+    if (me === undefined) continue
+    const levels = projectLevelsOf(ctx, me, projects)
+    const found = await Promise.all(
+      projects.map(async (project) => {
+        if (project.archived_at !== undefined || (await levels.level(project.id)) === null)
+          return null
+        // a project the caller can see is top-level or directly under one
+        const root =
+          project.parent_id === undefined ? project : await levels.project(project.parent_id)
+        return root === null || root.archived_at !== undefined ? null : root.id
+      }),
+    )
+    for (const id of found) if (id !== null) roots.add(id)
+  }
+  return [...roots]
+}
+
+/* Whether one of the projects `projectIds` holds a milestone the app shows
+ * before `day`, read newest first until the first, under `guard`. */
+async function holdsPast(
+  ctx: QueryCtx,
+  projectIds: readonly string[],
+  day: string,
+  guard: CeilingGuard,
+): Promise<boolean> {
+  for (const projectId of projectIds) {
+    if (!(await guard.range())) throw new Error(FIRST_DAYS_TOO_LARGE)
+    const rows = ctx.db
+      .query('milestones')
+      .withIndex('by_project_week', (q) => q.eq('project_id', projectId).lt('week', day))
+      .order('desc')
+    for await (const row of rows) {
+      if (!(await guard.document())) throw new Error(FIRST_DAYS_TOO_LARGE)
+      const shown = shownDay(row.week)
+      if (shown !== null && shown < day) return true
+    }
+  }
+  return false
+}
+
+/* One project's range in a read, read a day at a time. */
+type Lane = {
+  project: string
+  /** the open range, once the read began */
+  rows: AsyncIterator<Doc<'milestones'>> | null
+  /** the first row of the day after the last day read whole */
+  peek: Doc<'milestones'> | null
+  /** the listed rows of the days read whole, not handed out yet, in order */
+  pending: { row: Doc<'milestones'>; at: MilestonePosition }[]
+  /** the last position of the last day read whole, null before the first */
+  through: MilestonePosition | null
+  /** whether the range is read to its end */
+  done: boolean
+}
+
+/**
+ * One batch of the milestones of the top-level projects `projectIds` in
+ * `span`, after `after`, that match `search`, at most `limit` of them. The
+ * order is stored day, then name key (lib/nameKey.ts), then id, ascending,
+ * or descending for span.order 'desc'. Within one project that keeps the
+ * app's order by week and then name, and across projects milestones of one
+ * week sort by day before name, as REST's project detail sorts them
+ * (machine/projects.ts), so the order does not depend on the viewer's
+ * weeks. A search matches every whitespace-separated fragment of its name
+ * key in the milestone's name key, in any order (lib/search.ts
+ * allWordsMatcher), so it ignores case and accents. A blank one lists every
+ * milestone.
+ *
+ * by_project_week orders one project's rows by day and then by creation
+ * time, so the read takes one project a day at a time and sorts the rows of
+ * each day before it hands any out. Under LIMITS.milestonesPerWeek that is
+ * one row, but rows stored before the rule can share a day. It opens one
+ * range a project lazily, holds each project's next rows and hands out the
+ * first across projects, so a batch without search reads about two rows a
+ * project and `limit` more. Each row is placed by the day the app shows it
+ * on (shownDay). A read with a first day starts OVERFLOW_DAYS before it and
+ * drops rows shown outside the span, so a day that does not exist, such as
+ * 2026-02-31, comes in the span the app draws it in, at most OVERFLOW_DAYS
+ * out of order, as it sorts by its text.
+ *
+ * The reads stop at MILESTONE_READ's ceiling on the whole transaction. The
+ * rows known to be complete are then those up to the frontier, the least
+ * advanced position among the projects not read to their end, so the batch
+ * answers the matches up to it, `next` at it and `stopped` at its stored
+ * day. A continuation then answers nothing again and skips nothing. Each
+ * project is first read through a day past `after`, whatever the ceiling,
+ * within the request's own limits, so every call moves the frontier on. A
+ * full batch answers `next` null only when no row of the span follows, so a
+ * search can answer a `next` that leads to an empty last batch. With
+ * `pastBefore`, the batch also says whether one of the projects holds a
+ * milestone shown before that day.
+ *
+ * `after` is a plain position, not a sealed one. Every position a batch
+ * answers is a milestone of a project the caller may list, or the frontier
+ * between two, and the caller checks access to every project again on each
+ * call, so a chosen position only says where to start among the milestones
+ * the caller may list.
+ */
+export async function readMilestones(
+  ctx: QueryCtx,
+  projectIds: readonly string[],
+  o: {
+    span: MilestoneSpan
+    after: MilestonePosition | null
+    search: string
+    limit: number
+    pastBefore?: string
+  },
+): Promise<MilestoneBatch> {
+  const { span, after } = o
+  // whether `a` comes before `b` in the read's order
+  const before = (a: MilestonePosition, b: MilestonePosition) =>
+    span.order === 'asc' ? compared(a, b) < 0 : compared(a, b) > 0
+  const matches = o.search === '' ? null : allWordsMatcher(nameKey(o.search))
+  const listed = (row: Doc<'milestones'>, at: MilestonePosition) =>
+    (after === null || before(after, at)) &&
+    inSpan(row.week, span) &&
+    (matches === null || matches(at.key))
+  const { lower, upper } = dayBounds(span, after)
+  const range = (projectId: string) =>
+    ctx.db
+      .query('milestones')
+      .withIndex('by_project_week', (q) => {
+        const own = q.eq('project_id', projectId)
+        const low = lower === undefined ? own : own.gte('week', lower)
+        if (upper === undefined) return low
+        return upper.inclusive ? low.lte('week', upper.day) : low.lt('week', upper.day)
+      })
+      .order(span.order)
+  // the request's own limits less the reserve, and the read's ceiling
+  const room = roomOf(await ctx.meta.getTransactionMetrics(), MILESTONE_RESERVE)
+  const opening = ceilingGuard(ctx, room)
+  const budget = ceilingGuard(ctx, {
+    ranges: Math.min(room.ranges, MILESTONE_READ.ranges),
+    documents: Math.min(room.documents, MILESTONE_READ.documents),
+    bytes: Math.min(room.bytes, MILESTONE_READ.bytes),
+  })
+
+  /* Reads the next day of `lane` whole under `guard` and adds its listed
+   * rows to the lane's. False when the guard stops it first, which ends the
+   * read, so the rows of a day read in part are dropped. */
+  const readDay = async (lane: Lane, guard: CeilingGuard): Promise<boolean> => {
+    if (lane.rows === null) {
+      if (!(await guard.range())) return false
+      lane.rows = range(lane.project)[Symbol.asyncIterator]()
+    }
+    const rows = lane.rows
+    // the next row, null at the range's end, undefined once the guard stops
+    const pull = async (): Promise<Doc<'milestones'> | null | undefined> => {
+      const step = await rows.next()
+      if (step.done === true) return null
+      return (await guard.document()) ? step.value : undefined
+    }
+    let first = lane.peek
+    lane.peek = null
+    if (first === null) {
+      const row = await pull()
+      if (row === undefined) return false
+      if (row === null) {
+        lane.done = true
+        return true
+      }
+      first = row
+    }
+    const day = [first]
+    for (;;) {
+      const row = await pull()
+      if (row === undefined) return false
+      if (row === null) {
+        lane.done = true
+        break
+      }
+      if (row.week !== first.week) {
+        lane.peek = row
+        break
+      }
+      day.push(row)
+    }
+    const read = day
+      .map((row) => ({ row, at: positionOf(row) }))
+      .sort((a, b) => (before(a.at, b.at) ? -1 : 1))
+    for (const entry of read) if (listed(entry.row, entry.at)) lane.pending.push(entry)
+    lane.through = read[read.length - 1].at
+    return true
+  }
+
+  // a project named twice is read once
+  const projects = [...new Set(projectIds)]
+  const lanes: Lane[] = projects.map((project) => ({
+    project,
+    rows: null,
+    peek: null,
+    pending: [],
+    through: null,
+    done: false,
+  }))
+  const rows: Doc<'milestones'>[] = []
+  try {
+    const past =
+      o.pastBefore === undefined ? undefined : await holdsPast(ctx, projects, o.pastBefore, opening)
+    const answer = (next: MilestonePosition | null, stopped: string | null): MilestoneBatch => ({
+      rows,
+      next,
+      stopped,
+      ...(past === undefined ? {} : { past }),
+    })
+    // every project through a day past `after`, as a continuation reads the
+    // day of `after` again for the milestones after it on that day
+    for (const lane of lanes)
+      while (
+        !lane.done &&
+        (lane.through === null || (after !== null && !before(after, lane.through)))
+      )
+        if (!(await readDay(lane, opening))) throw new Error(FIRST_DAYS_TOO_LARGE)
+    for (;;) {
+      const last = rows.at(-1)
+      if (last !== undefined && rows.length >= o.limit) {
+        const more = lanes.some((lane) => lane.pending.length > 0 || !lane.done)
+        return answer(more ? positionOf(last) : null, null)
+      }
+      // the project with the first row to hand out, and of those without
+      // one, the one read least far that is not read to its end
+      let first: Lane | null = null
+      let lag: Lane | null = null
+      for (const lane of lanes) {
+        const head = lane.pending[0]
+        if (head !== undefined) {
+          if (first === null || before(head.at, first.pending[0].at)) first = lane
+        } else if (
+          !lane.done &&
+          (lag === null ||
+            lane.through === null ||
+            (lag.through !== null && before(lane.through, lag.through)))
+        )
+          lag = lane
+      }
+      // a row comes before everything the lagging project has not read yet
+      const head = first?.pending[0]
+      if (first !== null && head !== undefined) {
+        if (lag === null || (lag.through !== null && before(head.at, lag.through))) {
+          first.pending.shift()
+          rows.push(head.row)
+          continue
+        }
+      }
+      if (lag === null) return answer(null, null)
+      if (!(await readDay(lag, budget))) {
+        // every project was read through a day past `after`
+        const frontier = lag.through
+        if (frontier === null) throw new Error(FIRST_DAYS_TOO_LARGE)
+        return answer(frontier, frontier.week)
+      }
+    }
+  } finally {
+    await Promise.all(lanes.map((lane) => lane.rows?.return?.()))
+  }
+}
+
+/**
+ * The milestone `id` as the Milestones window opens it for the caller,
+ * whose active seats are `myProfiles` keyed by organization: the milestone,
+ * the project that stores it, and whether the caller may change it, else
+ * null. It follows changeableMilestone. The caller's seat in the project's
+ * organization sees that project (canSeeProject), and changes the milestone
+ * with User access there (assertMilestoneWriter). A milestone of a
+ * sub-project, stored there before 2026-10-14, or of an archived project
+ * answers null, as the app and REST (machine/projects.ts milestoneOn) leave
+ * those out. An unknown milestone and one of a project the caller cannot see
+ * answer null alike.
+ */
+export async function visibleMilestone(
+  ctx: QueryCtx,
+  myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
+  id: string,
+): Promise<{
+  milestone: Doc<'milestones'>
+  project: Doc<'projects'>
+  canWrite: boolean
+} | null> {
+  const milestone = await byId(ctx, 'milestones', id)
+  const project = milestone && (await byId(ctx, 'projects', milestone.project_id))
+  if (!milestone || !project) return null
+  if (project.parent_id !== undefined || project.archived_at !== undefined) return null
+  const me = myProfiles.get(project.org_id)
+  const level = me === undefined ? null : await projectLevel(ctx, me, project)
+  if (level === null) return null
+  return { milestone, project, canWrite: levelRank(level) >= levelRank('user') }
 }
