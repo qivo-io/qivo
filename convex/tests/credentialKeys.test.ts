@@ -35,6 +35,7 @@ afterEach(() => {
 
 const hex = (): string => uuid().replace(/-/g, '').padEnd(64, '0')
 
+/** An agent key of the fixture's agent, created by its admin. */
 const createKey = (t: T, f: OrgFixture, name: string, id = uuid()) =>
   as(t, f.admin).mutation(api.tokens.createAgentKey, {
     org_id: f.org.id,
@@ -45,6 +46,7 @@ const createKey = (t: T, f: OrgFixture, name: string, id = uuid()) =>
     key_hash: hex(),
   })
 
+/** A personal token of `owner` on their seat `profile_id`, created by them. */
 const createToken = (
   t: T,
   owner: Doc<'profiles'>,
@@ -61,6 +63,7 @@ const createToken = (
     access: 'write',
   })
 
+/** The names in organization `orgId`'s name index of `table`, in its order. */
 const byOrgName = (t: T, table: 'agent_keys' | 'mcp_tokens' | 'oauth_connections', orgId: string) =>
   t.run(async (ctx) =>
     (

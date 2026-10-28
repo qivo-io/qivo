@@ -147,6 +147,7 @@ async function paidPeriod(t: T, f: OrgFixture) {
   })
 }
 
+/** A personal token of `owner` on their seat `profile_id`, created by them. */
 const createToken = (
   t: T,
   owner: Doc<'profiles'>,
