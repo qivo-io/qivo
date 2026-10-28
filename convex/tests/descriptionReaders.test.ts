@@ -854,6 +854,56 @@ describe('real limits', () => {
     }
   }, 300_000)
 
+  it("a single-task read of an archived task with large legacy rows reads its text before its walk, within Convex's limits", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    const big = (c: string) => c.repeat(1000 * 1000)
+    // an archived task with a description row and a newest comment near
+    // 1 MiB, a parent stored before the caps with a text near 1 MiB, and
+    // archived subtasks of 900 KB that fill the walk's room. The reads after
+    // the walk fit the reserve only without the description row, and only
+    // when it counts the subtasks read again
+    const ids = await t.run(async (ctx) => {
+      const parent = taskDoc(f, 30_000, big('p'), { archived_at: NOW })
+      await ctx.db.insert('issues', parent)
+      const task = taskDoc(f, 30_001, undefined, { archived_at: NOW, parent_id: parent.id })
+      await ctx.db.insert('issues', task)
+      await ctx.db.insert('issue_descriptions', {
+        issue_id: task.id,
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        archived_at: NOW,
+        description: big('d'),
+      })
+      await ctx.db.insert('comments', {
+        id: uuid(),
+        issue_id: task.id,
+        body: big('c'),
+        created_at: NOW,
+      })
+      return { parent: parent.id, task: task.id }
+    })
+    for (let from = 0; from < 20; from += 5)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 5; i++)
+          await ctx.db.insert(
+            'issues',
+            taskDoc(f, 30_100 + i, 's'.repeat(900 * 1024), {
+              archived_at: NOW,
+              parent_id: ids.task,
+            }),
+          )
+      })
+    const got = await t.query(internal.machine.rest.getIssue, {
+      callerId: f.agent.id,
+      access: 'read',
+      today: TODAY,
+      ref: ids.task,
+    })
+    expect(got.description).toBe(big('d'))
+    expect(got.parent_id).toBe(ids.parent)
+  }, 300_000)
+
   it('an export issues page with description rows near 1 MiB stays within the limits and goes on', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)

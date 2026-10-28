@@ -1519,14 +1519,19 @@ export const SUBTREE_WALK = { reads: 1000 }
 
 /** What a single-task read of an archived task keeps back from the
  * request's limits for the reads after its subtree walk, which stops short
- * of them. They are the task's parent, people and newest comment. What has
- * no fixed count is read before the walk: the access to every project of
- * the organization, answered at once (orgReach), and the task's links,
- * labels, followers and attachments (taskRelations). Tests lower these. */
+ * of them. Each can come close to Convex's document size limit: the
+ * document the walk read last, which may pass its ceiling, the last subtask
+ * listed read again with the one after it, which tell whether a subtask is
+ * left out (taskSubtree), the task's parent and its newest comment, and the
+ * task's people besides. What has no fixed count is read before the walk:
+ * the access to every project of the organization, answered at once
+ * (orgReach), and the task's links, labels, followers and attachments
+ * (taskRelations). So is the task's text (model/descriptions.ts
+ * descriptionOf). Tests lower these. */
 export const TASK_READ_RESERVE = {
   ranges: 1024,
   documents: 4096,
-  bytes: 4 * DOCUMENT_MAX_BYTES,
+  bytes: 6 * DOCUMENT_MAX_BYTES,
 }
 
 /* A subtree index, whether the walk read all of it, and whether it read
@@ -2183,6 +2188,7 @@ export async function taskOut(
   // task's walk takes only the room those reads leave (taskSubtree)
   const relations = await taskRelations(ctx, opts.me, issue, readable)
   const attachments = await taskAttachments(ctx, opts.me, issue)
+  const texts = new Map([[issue.id, await descriptionOf(ctx.db, issue)]])
   // one walk of the subtree serves the row's group facts and the detail,
   // and one counter its pruning and both totals
   const counts = groupCounter(ctx, opts.me, issue, project, readable, projectOf)
@@ -2194,6 +2200,7 @@ export async function taskOut(
     ...subtree,
     orgSlug: opts.orgSlug ?? org?.slug,
     forecast: taskForecaster(ctx, opts.me, delayClock(org, opts.today)),
+    texts,
   }
   const row =
     opts.surface === 'rest'
