@@ -16,6 +16,7 @@ import { rule } from '../lib/functions'
 import { deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
 import { insertTask } from '../model/descriptions'
 import { wipeWorkStep } from '../model/orgDeletion'
+import { countFile, startOrgTotals } from '../model/storageTotals'
 import {
   as,
   expectRefusal,
@@ -29,6 +30,7 @@ import {
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import {
+  attach,
   deleteTask,
   forgetUsedId,
   installTrashTimers,
@@ -314,8 +316,8 @@ describe('a used task or project id', () => {
 
 /** Deletes `f`'s organization step by step as orgRemovals does, a few rows
  * a step, and checks after each step that its used_ids rows (`count` of
- * them) stay until the organization row and every row the deletion checks
- * are gone. */
+ * them) stay until the organization row, its stored-byte totals and every
+ * row the deletion checks are gone. */
 async function deleteInSteps(t: T, f: OrgFixture, count: number) {
   Object.assign(REMOVAL_BUDGET, { rows: 4 })
   await as(t, f.admin).mutation(api.orgRemovals.recordExport, { org_id: f.org.id })
@@ -341,15 +343,33 @@ async function deleteInSteps(t: T, f: OrgFixture, count: number) {
         .query('organizations')
         .withIndex('by_uuid', (q) => q.eq('id', f.org.id))
         .unique(),
-      rows: await Promise.all(
-        (['issues', 'projects', 'profiles', 'deleted_rows', 'removed_access'] as const).map(
-          (table) =>
+      rows: [
+        ...(await Promise.all(
+          (
+            [
+              'issues',
+              'projects',
+              'profiles',
+              'deleted_rows',
+              'removed_access',
+              'storage_org_totals',
+            ] as const
+          ).map((table) =>
             ctx.db
               .query(table)
               .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
               .first(),
-        ),
-      ),
+          ),
+        )),
+        await ctx.db
+          .query('storage_task_totals')
+          .withIndex('by_org_issue', (q) => q.eq('org_id', f.org.id))
+          .first(),
+        await ctx.db
+          .query('storage_project_totals')
+          .withIndex('by_org_bytes', (q) => q.eq('org_id', f.org.id))
+          .first(),
+      ],
     }))
     const unkept = (await usedBy(t, f.org.id)).filter((row) => row.kept === undefined)
     if (left.org !== null || left.rows.some((row) => row !== null))
@@ -368,8 +388,24 @@ describe('teardowns', () => {
     const purged = uuid()
     const detaching = uuid()
     const doubled = uuid()
+    // counted stored-byte totals, which the deletion takes out before the ids
+    await t.run((ctx) => startOrgTotals(ctx, f.org.id))
     for (const id of [live, stored, purged, detaching, doubled])
       await createTask(t, f.user, f.sub.id, id)
+    for (const id of [live, stored]) {
+      const task = await liveTask(t, id)
+      if (task === null) throw new Error('the task was not created')
+      await attach(t, task, 9)
+      await t.run((ctx) => countFile(ctx, task, 9))
+    }
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query('storage_task_totals')
+          .withIndex('by_org_issue', (q) => q.eq('org_id', f.org.id))
+          .collect(),
+      ),
+    ).toHaveLength(2)
     await deleteTask(t, f, stored)
     await runSteps(t)
     for (const id of [purged, detaching, doubled]) await purge(t, f, id, 'task')
@@ -425,12 +461,18 @@ describe('teardowns', () => {
     await expectRefusal(createTask(t, f.otherAdmin, sub.id, detaching), 'bad_request', ALREADY)
   })
 
-  it('the Northstar wipe keeps an id a pending detach names, and lets it go at the next wipe once it ended', async () => {
+  it('the Northstar wipe takes out the totals, keeps an id a pending detach names, and lets it go at the next wipe once it ended', async () => {
     const t = newT()
     const f = await withOrg(t)
     const named = uuid()
     const other = uuid()
+    await t.run((ctx) => startOrgTotals(ctx, f.org.id))
     for (const id of [named, other]) await createTask(t, f.user, f.sub.id, id)
+    // a counted file, whose totals rows the wipe takes out with its task
+    const task = await liveTask(t, other)
+    if (task === null) throw new Error('the task was not created')
+    await attach(t, task, 9)
+    await t.run((ctx) => countFile(ctx, task, 9))
     const detach = await t.run((ctx) =>
       ctx.db.insert('archived_detaches', {
         parent_id: named,
@@ -447,6 +489,12 @@ describe('teardowns', () => {
     await wipe()
     expect(await usedOf(t, named)).toMatchObject([{ org_id: f.org.id, kept: true }])
     expect(await usedOf(t, other)).toEqual([])
+    expect(
+      await t.run(async (ctx) => [
+        ...(await ctx.db.query('storage_task_totals').collect()),
+        ...(await ctx.db.query('storage_project_totals').collect()),
+      ]),
+    ).toEqual([])
     // a wipe while the detach still runs keeps the row
     await wipe()
     expect(await usedOf(t, named)).toHaveLength(1)
