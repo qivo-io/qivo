@@ -537,8 +537,8 @@ describe('internal/usedIdsBackfill', () => {
     const other = uuid()
     await createTask(t, f.otherAdmin, (await otherSub(t, f)).id, other)
     await t.run(async (ctx) => {
-      // a purge that stopped after the stored copies went: the task's
-      // deleted_tasks row and the project item still name them
+      // a purge that stopped after the stored copies went leaves the task's
+      // deleted_tasks row and the project item, which still name them
       for (const [table, id] of [
         ['issues', halfPurged],
         ['projects', itemProject],

@@ -81,7 +81,7 @@ const ZZ = {
 } as const
 
 /* The refusal of a fixture task or project id that used_ids holds after the
- * teardown: another organization's, or one the teardown kept because
+ * teardown. Another organization holds it, or the teardown kept it because
  * something outside the organization still names it, such as a detach of
  * archived subtasks that has not finished (model/usedIds.ts). */
 const ID_TAKEN =

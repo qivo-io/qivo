@@ -539,8 +539,8 @@ async function assertReserved(
     }
     if (item.kind === 'project' || item.kind === 'issue') {
       // an id a task or project held before keeps a used_ids row (schema.ts),
-      // one per organization: another's refuses for good, the demo's own
-      // only once the wipe that lets it go has run
+      // one per organization. Another organization's refuses for good, and
+      // the demo's own refuses only a work step, since a wipe lets it go
       const used = await ctx.db
         .query('used_ids')
         .withIndex('by_row', (q) =>

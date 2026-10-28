@@ -1682,8 +1682,8 @@ describe('marketing demo Deleted items', () => {
     )
     expect(refusal.data.reason).toBe('demo_id_collision')
     // a task the demo itself created with the id since the wipe and deleted
-    // for good: the check before a wipe passes, as the wipe lets it go, but
-    // a seed step refuses it
+    // for good passes the check before a wipe, which lets it go, but a seed
+    // step refuses it
     await t.run(async (ctx) => {
       await ctx.db.delete(used)
       await ctx.db.insert('used_ids', { table: 'issues', row_id: reserved, org_id })
