@@ -19,7 +19,7 @@ import {
   projectLevel,
   projectLevelsOf,
 } from '../lib/access'
-import { newWindowKey } from '../lib/db'
+import { byId, newWindowKey } from '../lib/db'
 import { ACCESS_LEVELS, type AccessLevel } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
 import { insertTask } from '../model/descriptions'
@@ -29,9 +29,11 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
+  plantLogin,
   plantProject,
   plantSeat,
   plantSubscription,
+  runInAuth,
   type T,
   uuid,
   withOrg,
@@ -108,14 +110,27 @@ const shareThroughTeam = (
     await ctx.db.insert('project_team_access', { project_id: project.id, team_id, level })
   })
 
-/* A webhook subscription of `f`'s organization owned by `owner`. */
+/* A webhook subscription of `owner`'s organization, owned through a new
+ * personal token of theirs, live unless `token` says otherwise. */
 const plantWebhook = (
   t: T,
   owner: Doc<'profiles'>,
   filters: { task_id?: string; project_id?: string },
   extra: Partial<Doc<'webhook_subscriptions'>> = {},
+  token: Partial<Doc<'mcp_tokens'>> = {},
 ) =>
   t.run(async (ctx) => {
+    const credential_id = uuid()
+    const credential_row_id = await ctx.db.insert('mcp_tokens', {
+      id: credential_id,
+      profile_id: owner.id,
+      name: 'Hook',
+      token_prefix: 'qvt_hook',
+      token_hash: uuid(),
+      access: 'write',
+      created_at: NOW,
+      ...token,
+    })
     const id = uuid()
     await ctx.db.insert('webhook_subscriptions', {
       id,
@@ -123,8 +138,8 @@ const plantWebhook = (
       owner: {
         profile_id: owner.id,
         credential_table: 'mcp_tokens',
-        credential_id: uuid(),
-        credential_row_id: 'row',
+        credential_id,
+        credential_row_id,
       },
       name: 'task.updated',
       filters,
@@ -182,10 +197,10 @@ async function expectedKinds(
   asUser: Doc<'profiles'>,
   projects: readonly Doc<'projects'>[],
 ): Promise<Record<string, string>> {
-  const byId = new Map(projects.map((p) => [p.id, p]))
+  const byUuid = new Map(projects.map((p) => [p.id, p]))
   const out: Record<string, string> = {}
   for (const p of projects) {
-    const root = p.parent_id === undefined ? p : byId.get(p.parent_id)
+    const root = p.parent_id === undefined ? p : byUuid.get(p.parent_id)
     const inTree =
       root !== undefined &&
       root.parent_id === undefined &&
@@ -556,10 +571,12 @@ describe('the machine phase', () => {
       org_id: f.org.id,
       profile_id: f.admin.id,
       subscription_id: id,
+      standing: 'live' as const,
       scope,
       affected,
     })
-    expect(lines(await findingsOf(t, 'machine'))).toEqual(
+    const webhooks = (await findingsOf(t, 'machine')).filter((found) => found.kind === 'webhook')
+    expect(lines(webhooks)).toEqual(
       lines([
         webhook(ids.leavingTask, 'task', true),
         webhook(ids.stayingTask, 'task', false),
@@ -570,6 +587,46 @@ describe('the machine phase', () => {
         webhook(ids.disabled, 'org', null),
       ]),
     )
+  })
+
+  it('leaves out a webhook whose owner can never authorize it again, and marks a suspended one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const filters = { project_id: f.sub.id }
+    // a revoked token, an expired one, and one replaced by a new row with
+    // its id, none of which delivers anything today
+    await plantWebhook(t, f.admin, filters, {}, { revoked_at: NOW })
+    await plantWebhook(t, f.admin, filters, {}, { expires_at: '2020-01-01T00:00:00.000Z' })
+    const replaced = await plantWebhook(t, f.admin, filters)
+    await t.run(async (ctx) => {
+      const subscription = await byId(ctx, 'webhook_subscriptions', replaced)
+      const token =
+        subscription && (await byId(ctx, 'mcp_tokens', subscription.owner.credential_id))
+      if (token === null) throw new Error('the planted token is gone')
+      const { _id, _creationTime, ...row } = token
+      await ctx.db.delete(_id)
+      await ctx.db.insert('mcp_tokens', row)
+    })
+    // a second admin whose login is banned, which can be lifted
+    const banned = await plantLogin(t, await plantAdmin(t, f))
+    const suspended = await plantWebhook(t, banned, filters)
+    await runInAuth(t, async (ctx) => {
+      const login = ctx.db.normalizeId('user', banned.auth_user_id ?? '')
+      if (login === null) throw new Error('the planted login is gone')
+      await ctx.db.patch(login, { banned: true })
+    })
+    const webhooks = (await findingsOf(t, 'machine')).filter((found) => found.kind === 'webhook')
+    expect(webhooks).toEqual([
+      {
+        kind: 'webhook',
+        org_id: f.org.id,
+        profile_id: banned.id,
+        subscription_id: suspended,
+        standing: 'suspended',
+        scope: 'project',
+        affected: true,
+      },
+    ])
   })
 
   it("counts an admin's active personal tokens and approved connected apps only", async () => {
@@ -596,7 +653,8 @@ describe('the machine phase', () => {
  * webhooks, and another organization's admin. */
 async function busyOrg(t: T) {
   const f = await withOrg(t)
-  const second = await plantAdmin(t, f)
+  // a login, so the webhooks this admin owns stand
+  const second = await plantLogin(t, await plantAdmin(t, f))
   for (const admin of [f.admin, second]) {
     for (let i = 0; i < 3; i++) {
       const issue = await plantIssue(t, {
@@ -669,8 +727,9 @@ describe('paging', () => {
         expect.objectContaining({ phase, part, after: expect.any(Number) }),
       )
     expect(
+      // each admin's three tokens and the three their webhooks belong to
       parsed.some(
-        (cursor) => cursor.phase === 'machine' && cursor.part === 'apps' && cursor.tokens === 3,
+        (cursor) => cursor.phase === 'machine' && cursor.part === 'apps' && cursor.tokens === 6,
       ),
     ).toBe(true)
   })
@@ -923,7 +982,12 @@ describe('within Convex limits', () => {
   it('reads a machine page over 100 subscriptions on full tasks, tokens and apps', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const admins = [f.admin, await plantAdmin(t, f), await plantAdmin(t, f)]
+    // logins, so the webhooks they own stand
+    const admins = [
+      f.admin,
+      await plantLogin(t, await plantAdmin(t, f)),
+      await plantLogin(t, await plantAdmin(t, f)),
+    ]
     const description = '語'.repeat(LIMITS.description.max)
     // the organization's most unexpired subscriptions (LIMITS.webhooksPerOrg),
     // each on a task with a description at the cap
@@ -950,14 +1014,24 @@ describe('within Convex limits', () => {
             'restore',
           )
           const owner = admins[i % admins.length]
+          const credential_id = uuid()
+          const credential_row_id = await ctx.db.insert('mcp_tokens', {
+            id: credential_id,
+            profile_id: owner.id,
+            name: 'Hook',
+            token_prefix: 'qvt_hook',
+            token_hash: uuid(),
+            access: 'write',
+            created_at: NOW,
+          })
           await ctx.db.insert('webhook_subscriptions', {
             id: uuid(),
             org_id: f.org.id,
             owner: {
               profile_id: owner.id,
               credential_table: 'mcp_tokens',
-              credential_id: uuid(),
-              credential_row_id: 'row',
+              credential_id,
+              credential_row_id,
             },
             name: 'task.updated',
             filters: { task_id: id },
@@ -973,16 +1047,19 @@ describe('within Convex limits', () => {
     }
     const pages = await measuredPages(t, 'machine', 2_000)
     const findings = pages.flatMap(({ page }) => page.findings)
-    expect(findings.filter((finding) => finding.kind === 'webhook')).toHaveLength(100)
+    expect(
+      findings.filter((finding) => finding.kind === 'webhook' && finding.standing === 'live'),
+    ).toHaveLength(100)
     const credentials = findings.filter((finding) => finding.kind === 'credential')
     expect(credentials).toHaveLength(3)
+    // each admin's 50 tokens and those of the webhooks they own
     expect(credentials).toEqual(
       expect.arrayContaining(
-        admins.map((admin) => ({
+        admins.map((admin, at) => ({
           kind: 'credential',
           org_id: f.org.id,
           profile_id: admin.id,
-          tokens: 50,
+          tokens: 50 + (at === 0 ? 34 : 33),
           apps: 20,
         })),
       ),

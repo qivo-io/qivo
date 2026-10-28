@@ -46,7 +46,14 @@
  *               filtered by profileCanSeeProject (webhooks.ts,
  *               model/taskEvents.ts), so after the split it stops
  *               delivering the events of the projects that leave, without
- *               a word. `scope` is 'task' when its filters name a task,
+ *               a word. A subscription whose owner can never authorize it
+ *               again, as its credential was revoked, expired or replaced
+ *               or its login or app is gone (model/webhookOwners.ts
+ *               ownerStandings), delivers nothing today and is left out.
+ *               `standing` is 'suspended' while Qivo refuses its owner for
+ *               now, as for a banned login or a disabled app, and on the
+ *               demo, which sends no events, else 'live'. `scope` is 'task'
+ *               when its filters name a task,
  *               'project' when they name only a project (a sub-project, as
  *               webhooks.ts authorizeFilters refuses a top-level one), else
  *               'org'. `affected` says whether that task's or that
@@ -111,6 +118,7 @@ import { internalAction, internalQuery, type QueryCtx } from '../_generated/serv
 import { projectLevelsOf, tokenExpired } from '../lib/access'
 import { byId, usedMoreThan } from '../lib/db'
 import { MIB } from '../lib/limits'
+import { ownerStandings } from '../model/webhookOwners'
 
 /** The most rows a page judges in each phase: (project, admin) pairs,
  * tasks and follows, or subscriptions, tokens and apps. Each row gives at
@@ -214,6 +222,7 @@ type Finding =
       org_id: string
       profile_id: string
       subscription_id: string
+      standing: 'live' | 'suspended'
       scope: 'task' | 'project' | 'org'
       affected: boolean | null
     }
@@ -728,7 +737,8 @@ async function workPage(page: Page, at: Cursor): Promise<PageResult> {
 }
 
 /** Reports `subscription` when an active admin of its organization in
- * `admins` owns it and it has not expired. */
+ * `admins` owns it, it has not expired and its owner can still authorize
+ * it (model/webhookOwners.ts ownerStandings). */
 async function judgeWebhook(
   page: Page,
   admins: ReadonlyMap<string, Doc<'profiles'>>,
@@ -737,12 +747,15 @@ async function judgeWebhook(
   const admin = admins.get(subscription.owner.profile_id)
   const expired = subscription.expires_at !== undefined && subscription.expires_at <= page.now
   if (admin === undefined || expired) return
+  const [standing] = await ownerStandings(page.ctx, [subscription])
+  if (standing === 'removed') return
   const { task_id, project_id } = subscription.filters
   const where = {
     kind: 'webhook' as const,
     org_id: subscription.org_id,
     profile_id: admin.id,
     subscription_id: subscription.id,
+    standing,
   }
   if (task_id === undefined && project_id === undefined) {
     page.findings.push({ ...where, scope: 'org', affected: null })
