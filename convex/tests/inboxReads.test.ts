@@ -382,6 +382,64 @@ describe('the unread summary', () => {
     expect(await drift(t)).toEqual([])
   })
 
+  it('skips hidden projects on both sides of a counted one, and reads the tasks of items without a project', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // fixed ids, so the walk meets a hidden project, the counted one and
+    // another hidden one, in that order
+    const [low, mid, high] = [
+      await plantProject(t, { org_id: f.org.id, id: '00000000-0000-4000-8000-000000000001' }),
+      await plantProject(t, { org_id: f.org.id, id: '80000000-0000-4000-8000-000000000001' }),
+      await plantProject(t, { org_id: f.org.id, id: 'ffffffff-0000-4000-8000-000000000001' }),
+    ]
+    await grant(t, f.guest, mid.id)
+    await plantItems(t, f, f.guest, 2, mid.id)
+    const before = await measured(t, f.guest)
+    expect(before.answer).toMatchObject({ unread_count: 2, complete: true })
+    const revokes = [await grant(t, f.guest, low.id), await grant(t, f.guest, high.id)]
+    await plantItems(t, f, f.guest, 30, low.id)
+    await plantItems(t, f, f.guest, 30, high.id)
+    expect(await summaryOf(t, f.guest)).toMatchObject({ unread_count: 62, unread_more: false })
+    for (const revoke of revokes) await revoke()
+    const after = await measured(t, f.guest)
+    expect(after.answer).toMatchObject({ unread_count: 2, unread_more: false, complete: true })
+    // two skips: each project's first item, its check and one seek, none
+    // of the 60 tasks
+    expect(after.documents - before.documents).toBeLessThan(12)
+    expect(after.ranges - before.ranges).toBeLessThan(12)
+    // Rows without a project sort first and have their tasks read: a row a
+    // build made while its task was in Deleted items, which a restore
+    // before the drain leaves so, counts once the task is shown, and one
+    // whose task is gone does not.
+    const [restored, gone] = await plantItems(t, f, f.guest, 2, mid.id)
+    const unkey = (task: Doc<'issues'>) =>
+      t.run(async (ctx) => {
+        const item = await ctx.db
+          .query('inbox_items')
+          .withIndex('by_recipient_issue', (q) =>
+            q.eq('recipient_id', f.guest.id).eq('issue_id', task.id),
+          )
+          .unique()
+        await ctx.db.patch(item!._id, { project_id: undefined })
+      })
+    await unkey(restored)
+    await unkey(gone)
+    await t.run((ctx) => ctx.db.delete(gone._id))
+    expect(await summaryOf(t, f.guest)).toMatchObject({ unread_count: 3, complete: true })
+    // a rebuild gives the restored task's row its project again
+    await t.run(async (ctx) => {
+      const item = await ctx.db
+        .query('inbox_items')
+        .withIndex('by_recipient_issue', (q) =>
+          q.eq('recipient_id', f.guest.id).eq('issue_id', restored.id),
+        )
+        .unique()
+      await ctx.db.patch(item!._id, { project_id: mid.id })
+    })
+    expect(await summaryOf(t, f.guest)).toMatchObject({ unread_count: 3, complete: true })
+    expect(await drift(t)).toEqual([])
+  })
+
   it('answers a lower bound with complete false when the budget stops it, never a false zero', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -494,6 +552,46 @@ describe('the unread summary', () => {
     // built again, its items were kept exact all along
     await t.run((ctx) => ctx.db.insert('inbox_state', { profile_id: elsewhere.id, built: true }))
     expect(await summaryOf(t, f.guest)).toMatchObject({ unread_count: 5, complete: true })
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('shares the cap across seats and lists only the seats the budget reached', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const elsewhere = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      auth_user_id: f.guest.auth_user_id,
+      org_role: 'guest',
+      name: 'guest',
+    })
+    await grant(t, elsewhere, f.otherProject.id)
+    await plantItems(t, f, f.guest, 3, f.sub.id)
+    await plantItems(t, { org: f.otherOrg, admin: f.otherAdmin }, elsewhere, 3, f.otherProject.id)
+    SUMMARY.most = 4
+    expect(await summaryOf(t, f.guest)).toMatchObject({
+      seats: [{ ready: true }, { ready: true }],
+      unread_count: 4,
+      unread_more: true,
+      complete: true,
+    })
+    // a budget with room for one seat's line and no more: checked before
+    // every step, it lets the first seat in and stops before the second
+    const first = [f.org.id, f.otherOrg.id].sort()[0]
+    const cut = await t.run(async (ctx) => {
+      const seats = await ctx.db
+        .query('profiles')
+        .withIndex('by_auth', (q) => q.eq('auth_user_id', f.guest.auth_user_id))
+        .collect()
+      const used = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+      Object.assign(SUMMARY, { batch: 1, room: (used + 2) / 4096 })
+      return await readInboxSummary(ctx, seats)
+    })
+    expect(cut).toEqual({
+      seats: [expect.objectContaining({ org_id: first, ready: true })],
+      unread_count: 0,
+      unread_more: false,
+      complete: false,
+    })
     expect(await drift(t)).toEqual([])
   })
 
