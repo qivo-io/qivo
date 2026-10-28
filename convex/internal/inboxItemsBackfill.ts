@@ -702,6 +702,9 @@ export const run = internalAction({
     const orphans: string[] = []
     let oversizedCount = 0
     let stuckCount = 0
+    // set once the call got on: a step, or a profile, page or orphan step it
+    // passed, so a call always gets on and stops at RUN.ms however little
+    // it finds to do
     let worked = false
     let wrote = false
     const late = () => worked && Date.now() >= until
@@ -779,8 +782,10 @@ export const run = internalAction({
             if (late()) break phases
             if (wanted(profile) && !(await visit(profile))) break phases
             pos = { phase: 'profiles', after: profile.profile_id }
+            worked = true
           }
           if (page.done) pos = { phase: 'inbox_items', after: null }
+          worked = true
           continue
         }
         const args = { table: pos.phase, after: pos.after, at: pos.at ?? null }

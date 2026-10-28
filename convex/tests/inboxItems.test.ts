@@ -1403,9 +1403,15 @@ describe('the backfill', () => {
     expect(sum(dry, 'orphan_rows')).toBe(4)
     // a run that stops inside the gone profile, which someone then creates
     // again, leaves the rows to the new profile's own build
-    const first = await backfill(t, { dry_run: false })
-    expect(first).toMatchObject({ done: false, orphan_rows: 1 })
-    expect(first.cursor).toContain(gone)
+    let cursor: string | null = null
+    let deleted = 0
+    for (let n = 0; n < 50; n++) {
+      const got = await backfill(t, { dry_run: false, cursor })
+      deleted += got.orphan_rows
+      cursor = got.cursor
+      if (cursor !== null && JSON.parse(cursor).at?.id === gone) break
+    }
+    expect(deleted).toBe(1)
     await t.run(async (ctx) => {
       await ctx.db.insert('profiles', {
         id: gone,
@@ -1419,7 +1425,7 @@ describe('the backfill', () => {
         created_at: NOW,
       })
     })
-    const rest = await backfill(t, { dry_run: false, cursor: first.cursor })
+    const rest = await backfill(t, { dry_run: false, cursor })
     expect(rest).toMatchObject({ orphan_rows: 0 })
     expect(
       (await t.run((ctx) => ctx.db.query('inbox_items').collect())).filter(
@@ -1464,6 +1470,20 @@ describe('the backfill', () => {
       drifted: [],
     })
     expect(await drift(t)).toEqual([])
+  })
+
+  it('stops at RUN.ms on pages of profiles it only skips', async () => {
+    const t = newT()
+    await withOrg(t)
+    const profiles = (await t.run((ctx) => ctx.db.query('profiles').collect())).length
+    Object.assign(RUN, { ms: 0, profiles: 1 })
+    for (const dry_run of [false, true]) {
+      // no profile has messages or a state, so a call finds nothing to do
+      const first = await backfill(t, { dry_run })
+      expect(first).toMatchObject({ done: false, profiles: 0 })
+      expect(first.cursor).not.toBeNull()
+      expect((await backfillAll(t, { dry_run })).length).toBeGreaterThanOrEqual(profiles)
+    }
   })
 
   it('a check counts every row no message makes, however many there are', async () => {
