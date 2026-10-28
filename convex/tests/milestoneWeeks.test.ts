@@ -1,7 +1,9 @@
 /* One milestone a week for each top-level project (LIMITS.milestonesPerWeek,
  * model/milestones.ts): every writer refuses a second milestone in a week of
- * the organization's calendar, and a change of the first day of the week is
- * refused when it would put two milestones of one project in one week.
+ * the organization's calendar, a change of the first day of the week is
+ * refused when it would put two milestones of one project in one week, and
+ * the read-only activation audit (internal/milestoneWeeks.ts) reports the
+ * rows stored before the rule that break it.
  *
  * convex-test runs one transaction at a time, so these tests cannot show
  * two concurrent claims of one week conflicting. That rests on each write
@@ -12,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { MARKETING_DEMO, marketingWeek } from '../internal/marketingDemoData'
+import { PROJECT_MOST } from '../internal/milestoneWeeks'
 import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { milestoneWeekTaken, WEEK_START_REFUSALS } from '../lib/limits'
@@ -621,6 +624,173 @@ describe('changing the first day of the week with projects in Deleted items', ()
     await setWeekStart(t, f, 0)
     expect((await orgOf(t, f)).week_start).toBe(0)
   })
+})
+
+/* The audit's whole report. */
+const audit = (t: T, page_size?: number) =>
+  t.action(internal.internal.milestoneWeeks.run, { page_size })
+
+describe('the activation audit', () => {
+  installTrashTimers()
+
+  it('reports duplicate weeks, impossible days, sub-project rows and orphans, and writes nothing', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // 2026-02-31 is shown on Tuesday 3 March, in the week of Monday 2 March
+    const monday = await plant(t, f.meta.id, '2026-03-02')
+    const impossible = await plant(t, f.meta.id, '2026-02-31')
+    const fine = await plant(t, f.meta.id, '2026-03-09')
+    const sunday = await plant(t, f.hidden.id, '2026-04-12')
+    const monday2 = await plant(t, f.hidden.id, '2026-04-06')
+    const onSub = await plant(t, f.sub.id, '2026-05-04')
+    const lost = uuid()
+    const orphan = await plant(t, lost, '2026-05-04')
+    // another organization, one milestone a week
+    await plant(t, f.otherProject.id, '2026-05-04')
+    await plant(t, f.otherProject.id, '2026-05-11')
+    const before = await t.run((ctx) => ctx.db.query('milestones').collect())
+    const report = await audit(t)
+    expect(report.counts).toEqual({
+      duplicate_week: 2,
+      impossible_day: 1,
+      sub_project: 1,
+      orphan: 1,
+      unchecked: 0,
+    })
+    expect(report.checked).toBe(9)
+    expect(report.listed_all).toBe(true)
+    const byKind = (kind: string) => report.findings.filter((x) => x.kind === kind)
+    expect(byKind('impossible_day')).toEqual([
+      {
+        kind: 'impossible_day',
+        org_id: f.org.id,
+        project_id: f.meta.id,
+        milestones: [{ id: impossible, day: '2026-02-31', shown: '2026-03-03' }],
+      },
+    ])
+    expect(byKind('duplicate_week')).toEqual(
+      expect.arrayContaining([
+        {
+          kind: 'duplicate_week',
+          org_id: f.org.id,
+          project_id: f.meta.id,
+          week: '2026-03-02',
+          milestones: expect.arrayContaining([
+            { id: monday, day: '2026-03-02' },
+            { id: impossible, day: '2026-02-31' },
+          ]),
+        },
+        {
+          kind: 'duplicate_week',
+          org_id: f.org.id,
+          project_id: f.hidden.id,
+          week: '2026-04-06',
+          milestones: expect.arrayContaining([
+            { id: sunday, day: '2026-04-12' },
+            { id: monday2, day: '2026-04-06' },
+          ]),
+        },
+      ]),
+    )
+    expect(byKind('sub_project')).toEqual([
+      {
+        kind: 'sub_project',
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        milestones: [{ id: onSub, day: '2026-05-04' }],
+      },
+    ])
+    expect(byKind('orphan')).toEqual([
+      {
+        kind: 'orphan',
+        org_id: null,
+        project_id: lost,
+        milestones: [{ id: orphan, day: '2026-05-04' }],
+      },
+    ])
+    expect(JSON.stringify(report)).not.toContain(fine)
+    // one project a page finds the same
+    const paged = await audit(t, 1)
+    expect(paged.counts).toEqual(report.counts)
+    expect(paged.findings).toEqual(expect.arrayContaining(report.findings))
+    expect(await t.run((ctx) => ctx.db.query('milestones').collect())).toEqual(before)
+  })
+
+  it('reports the copies of a deleted project, and leaves a stuck one out', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const a = await plant(t, f.meta.id, '2026-05-10')
+    const b = await plant(t, f.meta.id, '2026-05-04')
+    const onSub = await plant(t, f.sub2.id, '2026-05-04')
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    expect(await milestonesOf(t, f.meta.id)).toEqual([])
+    const report = await audit(t)
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        {
+          kind: 'duplicate_week',
+          org_id: f.org.id,
+          project_id: f.meta.id,
+          item_id: item.id,
+          week: '2026-05-04',
+          milestones: expect.arrayContaining([
+            { id: a, day: '2026-05-10' },
+            { id: b, day: '2026-05-04' },
+          ]),
+        },
+        {
+          kind: 'sub_project',
+          org_id: f.org.id,
+          project_id: f.sub2.id,
+          item_id: item.id,
+          milestones: [{ id: onSub, day: '2026-05-04' }],
+        },
+      ]),
+    )
+    expect(report.counts.duplicate_week + report.counts.sub_project).toBe(2)
+    await t.run((ctx) => ctx.db.patch(item._id, { state: 'stuck' }))
+    expect((await audit(t)).findings).toEqual([])
+  })
+
+  it('reports nothing for milestones the rule allows', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await add(t, f, f.user, f.meta.id, 'Alpha', '2026-05-04')
+    await add(t, f, f.user, f.meta.id, 'Beta', '2026-05-11')
+    await add(t, f, f.user, f.hidden.id, 'Gamma', '2026-05-05')
+    const report = await audit(t)
+    expect(report).toMatchObject({ checked: 3, findings: [], listed_all: true })
+  })
+
+  it('reports a project with more milestones than a page reads, and goes on after it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const crowded = await plantProject(t, {
+      org_id: f.org.id,
+      id: '00000000-0000-4000-8000-000000000000',
+    })
+    const last = await plantProject(t, {
+      org_id: f.org.id,
+      id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    })
+    await t.run(async (ctx) => {
+      for (let i = 0; i <= PROJECT_MOST; i++)
+        await ctx.db.insert('milestones', {
+          id: uuid(),
+          project_id: crowded.id,
+          name: `Week ${i}`,
+          week: plus('2000-01-03', 7 * i),
+          created_at: NOW,
+        })
+    })
+    await plant(t, last.id, '2026-05-04')
+    await plant(t, last.id, '2026-05-05')
+    const report = await audit(t)
+    expect(report.counts).toMatchObject({ unchecked: 1, duplicate_week: 1 })
+    expect(report.findings.find((x) => x.kind === 'unchecked')?.project_id).toBe(crowded.id)
+  }, 60_000)
 })
 
 describe('the Northstar data under every first day of the week', () => {
