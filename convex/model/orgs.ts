@@ -647,6 +647,12 @@ const isoDay = (d: Date): string =>
       ? '9999-12-31'
       : d.toISOString().slice(0, 10)
 
+/** Real calendar day `day` moved by `days`, cut to 0000-01-01 and
+ * 9999-12-31. */
+export function shiftDay(day: string, days: number): string {
+  return isoDay(new Date(parseISODate(day).getTime() + days * DAY))
+}
+
 /** The YYYY-MM-DD day the app shows stored text `day` on: the day itself,
  * or for a day that does not exist the day it overflows to (2026-02-31 is
  * 2026-03-03). Null for text that names no day at all. */

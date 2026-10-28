@@ -47,7 +47,7 @@ import {
   TEXT,
   type View,
 } from './expected'
-import { dayLabel, WEEKDAY_NAMES, weekDays, weekLabel, weekPhrase } from './orgs'
+import { dayLabel, shiftDay, WEEKDAY_NAMES, weekDays, weekLabel, weekPhrase } from './orgs'
 import { calendarDay } from './taskValues'
 
 /* Milestone policies are User level (0078:497, member→user). */
@@ -136,12 +136,22 @@ async function orgOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Doc<'organizat
  * holds another milestone in (assertWeekFree). */
 export const MILESTONE_WEEK_TAKEN = 'milestone_week_taken'
 
-/* The milestone of project `projectId`, other than `except`, in the week of
+/* How many days before a week's first day its read starts. A day that does
+ * not exist, stored before 2026-10-16, is shown on the day it overflows to,
+ * 2026-02-31 on 3 March. Its text sorts at the end of its own month, at most
+ * 3 days before the day it is shown on (day 31 of a 28-day February), so the
+ * read reaches back that far. A day past 31 or a month past 12 can sort
+ * farther away; internal/milestoneWeeks reports those. */
+const OVERFLOW_DAYS = 3
+
+/**
+ * The milestone of project `projectId`, other than `except`, in the week of
  * `day` under `org`'s week start, or null. One range holds the days of that
- * week. It can also hold a day that does not exist, stored before
- * 2026-10-16, which belongs to the week the app shows it in (weekDays), so
- * each row's own week decides. */
-async function weekHolder(
+ * week and the OVERFLOW_DAYS before it, and each row's own week, as the app
+ * shows it (weekDays), decides. LIMITS.milestonesPerWeek allows one
+ * milestone a week, so any other one there holds the week.
+ */
+export async function weekHolder(
   ctx: QueryCtx,
   a: {
     org: Doc<'organizations'>
@@ -152,24 +162,38 @@ async function weekHolder(
 ): Promise<Doc<'milestones'> | null> {
   const week = weekDays(a.day, a.org)
   if (week === null) return null
+  const from = shiftDay(week.first, -OVERFLOW_DAYS)
   const rows = ctx.db
     .query('milestones')
     .withIndex('by_project_week', (q) =>
-      q.eq('project_id', a.projectId).gte('week', week.first).lte('week', week.last),
+      q.eq('project_id', a.projectId).gte('week', from).lte('week', week.last),
     )
   for await (const row of rows)
     if (row._id !== a.except && weekDays(row.week, a.org)?.first === week.first) return row
   return null
 }
 
+/** The refusal of a milestone in the week `holder` holds, which names the
+ * week in `org`'s calendar and `holder`, and `next`, the step past it,
+ * picking another week unless the caller says otherwise. */
+export function weekTaken(
+  holder: Pick<Doc<'milestones'>, 'name' | 'week'>,
+  org: Doc<'organizations'>,
+  next?: string,
+): ConvexError<Refusal> {
+  return new ConvexError<Refusal>({
+    code: 'rule',
+    reason: MILESTONE_WEEK_TAKEN,
+    message: milestoneWeekTaken(weekPhrase(holder.week, org), holder.name, next),
+  })
+}
+
 /**
  * Refuses a milestone on `day` in project `projectId` when another milestone
  * of the project, not `except`, is in that week of `org`'s calendar
- * (LIMITS.milestonesPerWeek). `org` is the project's organization, read in
- * this transaction. The refusal names the week and the milestone there, and
- * `next` says what to do, picking another week unless the caller says
- * otherwise. Call it after the write it checks, or before an insert, in the
- * same transaction.
+ * (LIMITS.milestonesPerWeek, weekHolder). `org` is the project's
+ * organization, read in this transaction. Call it after the write it
+ * checks, or before an insert, in the same transaction.
  */
 export async function assertWeekFree(
   ctx: QueryCtx,
@@ -182,12 +206,7 @@ export async function assertWeekFree(
   },
 ): Promise<void> {
   const holder = await weekHolder(ctx, a)
-  if (holder === null) return
-  throw new ConvexError<Refusal>({
-    code: 'rule',
-    reason: MILESTONE_WEEK_TAKEN,
-    message: milestoneWeekTaken(weekPhrase(holder.week, a.org), holder.name, a.next),
-  })
+  if (holder !== null) throw weekTaken(holder, a.org, a.next)
 }
 
 /** The share of Convex's limits for one transaction a check of a new first

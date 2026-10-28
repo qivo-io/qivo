@@ -240,11 +240,19 @@ describe('one milestone a week in the app', () => {
     const org = await orgOf(t, f)
     // 2026-02-31 is shown on Tuesday 3 March; text order puts it in February
     await plant(t, f.meta.id, '2026-02-31', 'Impossible')
-    await add(t, f, f.user, f.meta.id, 'Late February', '2026-02-26')
-    // the write's range of the week of 2 March cannot see it, which the
-    // activation audit reports instead
-    await add(t, f, f.user, f.meta.id, 'Early March', '2026-03-02')
     expect(weekDays('2026-02-31', org)).toEqual({ first: '2026-03-02', last: '2026-03-08' })
+    // the week it sorts into by text is free
+    await add(t, f, f.user, f.meta.id, 'Late February', '2026-02-26')
+    // the week it is shown in is not, as the read reaches back three days
+    for (const day of ['2026-03-02', '2026-03-08'])
+      await expectTaken(add(t, f, f.user, f.meta.id, 'Early March', day), org, {
+        name: 'Impossible',
+        week: '2026-02-31',
+      })
+    expect((await milestonesOf(t, f.meta.id)).map((m) => m.name)).toEqual([
+      'Late February',
+      'Impossible',
+    ])
   })
 })
 
