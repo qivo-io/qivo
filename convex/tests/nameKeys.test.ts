@@ -1123,6 +1123,21 @@ describe('the backfill', () => {
       const dry = await drain(t, true)
       expect(summed(dry)).toEqual(whole.keys)
       expect(dry.length).toBeGreaterThan(5)
+      // every organization with keys to fix is reported, also by the calls
+      // that stopped inside it, and its counts add up to one call's
+      const reported = new Map<string, { missing: number; stale: number }>()
+      for (const call of dry)
+        for (const o of call.to_fix) {
+          const was = reported.get(o.org_id) ?? { missing: 0, stale: 0 }
+          reported.set(o.org_id, { missing: was.missing + o.missing, stale: was.stale + o.stale })
+        }
+      expect(whole.to_fix.length).toBeGreaterThan(0)
+      expect(Object.fromEntries(reported)).toEqual(
+        Object.fromEntries(
+          whole.to_fix.map((o) => [o.org_id, { missing: o.missing, stale: o.stale }]),
+        ),
+      )
+      expect(dry.some((call) => call.to_fix.some((o) => o.partial === true))).toBe(true)
       const [first] = dry
       expect(first).toMatchObject({ done: false, orgs: 0, cursor: { dry_run: true } })
       const inside = dry.flatMap((call) =>

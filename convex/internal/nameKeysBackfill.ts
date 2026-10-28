@@ -27,7 +27,8 @@
  *
  * Read the dry run first. It writes nothing and reports, by table, how many
  * keys are missing or stale (`keys`), and lists the organizations with any
- * (`to_fix`) and those without a stamp (`unstamped`). It counts one chunk
+ * (`to_fix`, where `partial` marks one a call stopped inside, whose later
+ * call reports the rest) and those without a stamp (`unstamped`). It counts one chunk
  * of a source's copies in each table (model/nameKeys.ts NAME_COPIES.chunk)
  * and at most KEY_PAGE.copies a page; past that, `at_least` is true and the
  * copy counts are lower bounds. With the private helper:
@@ -296,13 +297,16 @@ const auditRef = makeFunctionReference<'mutation', Totals, null>('internal/nameK
 
 /** One organization as a run lists it, with the keys it found missing or
  * stale. */
-type OrgReport = { org_id: string; missing: number; stale: number }
+/* An organization's missing and stale keys. `partial` marks the report of
+ * the organization a call stopped inside; a later call reports the rest. */
+type OrgReport = { org_id: string; missing: number; stale: number; partial?: true }
 
 /** Walks every organization by id, from `cursor` on, gives the keys it
  * finds missing or stale and stamps each organization it finished. A dry
  * run writes nothing. Answers the keys by table, how many organizations it
  * finished and stamped, the first KEY_PAGE.listed organizations with keys to
- * fix and, in a dry run, those without a stamp. Past RUN.ms it stops after
+ * fix, the one it stopped inside marked `partial`, and, in a dry run, those
+ * without a stamp. Past RUN.ms it stops after
  * the step it is in, inside an organization or between two, and answers the
  * `cursor` to go on from, else `done`. A step that throws stops the call
  * too, with `error` and the cursor of that step. A call that wrote ends
@@ -324,6 +328,8 @@ export const run = internalAction({
     let next: RunCursor | null = from ?? null
     let done = false
     let error: string | undefined
+    // the report of the organization the walk is inside, until it finishes
+    let open: OrgReport | null = null
     const due = () => stepped && Date.now() >= until
     try {
       let read =
@@ -343,6 +349,7 @@ export const run = internalAction({
           if (dry_run && !org.stamped && unstamped.length < KEY_PAGE.listed)
             unstamped.push(org.org_id)
           const report: OrgReport = { org_id: org.org_id, missing: 0, stale: 0 }
+          open = report
           for (let at = first; at < PHASES.length; at++) {
             const table = PHASES[at]
             let cursor = at === first ? (resume?.page ?? null) : null
@@ -365,6 +372,7 @@ export const run = internalAction({
               cursor = got.cursor
             }
           }
+          open = null
           if (report.missing + report.stale > 0 && toFix.length < KEY_PAGE.listed)
             toFix.push(report)
           if (!dry_run && (await ctx.runMutation(stampRef, { org_id: org.org_id }))) stamped++
@@ -380,6 +388,11 @@ export const run = internalAction({
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
     }
+    // An organization the call stopped inside keeps what its finished steps
+    // found, so no call loses an organization from `to_fix`.
+    const stopped: OrgReport | null = open
+    if (stopped !== null && stopped.missing + stopped.stale > 0 && toFix.length < KEY_PAGE.listed)
+      toFix.push({ ...stopped, partial: true })
     const missing = TABLES.reduce((sum, table) => sum + keys[table].missing, 0)
     const stale = TABLES.reduce((sum, table) => sum + keys[table].stale, 0)
     const cursor = done ? null : next
