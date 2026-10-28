@@ -219,11 +219,24 @@ describe('nameKey', () => {
     // no decomposition folds them, and no locale rule applies
     expect(nameKey('Straße')).toBe('straße')
     expect(nameKey('Øystein')).not.toBe(nameKey('Oystein'))
+    // marks that make another letter are no accents: a Devanagari vowel
+    // sign, the kana voicing marks, Hebrew points
+    expect(nameKey('किरण')).not.toBe(nameKey('करण'))
+    expect(nameKey('が')).not.toBe(nameKey('か'))
+    expect(new Set(['ハ', 'バ', 'パ'].map(nameKey)).size).toBe(3)
+    expect(nameKey('שָׁלוֹם')).not.toBe(nameKey('שלום'))
   })
 
-  it('gives a key its own key', () => {
-    for (const name of ['Ångström', 'ﷺ', 'Ǆemal', 'ΟΔΟΣ', ' a  b ', 'K'])
+  it('gives a key its own key, for every code point', () => {
+    for (const name of ['Ångström', 'ﷺ', 'Ǆemal', 'ΟΔΟΣ', ' a  b ', 'K', 'が', 'किरण'])
       expect(nameKey(nameKey(name))).toBe(nameKey(name))
+    const changed: number[] = []
+    for (let point = 0; point <= 0x10ffff; point++) {
+      if (point >= 0xd800 && point <= 0xdfff) continue
+      const key = nameKey(`x${String.fromCodePoint(point)}y`)
+      if (nameKey(key) !== key) changed.push(point)
+    }
+    expect(changed).toEqual([])
   })
 })
 
