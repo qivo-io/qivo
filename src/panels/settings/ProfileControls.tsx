@@ -198,7 +198,8 @@ export function NameField({ me }: { me: Pick<UserVM, 'id' | 'name'> }) {
           {busy ? 'Saving…' : 'Save'}
         </Button>
       </div>
-      <DraftConflictLine draft={draft} text={(name) => name} />
+      {/* a choice ends the refusal the conflict answered */}
+      <DraftConflictLine draft={draft} text={(name) => name} onChoose={() => setErr('')} />
       {/* a refusal is about the draft it kept, and the conflict line says
           what it would, with Use saved and Keep mine */}
       {err && draft.unsaved && !draft.conflict && (

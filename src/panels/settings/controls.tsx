@@ -52,17 +52,21 @@ const QUOTED_MAX = 80
     field is, so screen readers hear a conflict as it comes; the field's
     input names it with aria-describedby (SavedDraft.conflictId). Either
     choice puts focus back in that input, so Enter saves after Keep mine.
+    `onChoose` runs after either choice, for a field that holds words of
+    its own about the conflict, such as a refusal, which the choice ends.
     `compact` is for a field in a roster row: the sentence over the
     buttons, both wrapping in the room the row gives them, and `end` puts
     them under the right edge of a field that sits there. */
 export function DraftConflictLine<T>({
   draft,
   text,
+  onChoose,
   compact = false,
   end = false,
 }: {
   draft: SavedDraft<T>
   text: (value: T) => string
+  onChoose?: () => void
   compact?: boolean
   end?: boolean
 }) {
@@ -90,6 +94,7 @@ export function DraftConflictLine<T>({
       el.getAttribute('aria-describedby')?.split(' ').includes(draft.conflictId),
     )
     choice()
+    onChoose?.()
     input?.focus()
   }
   return (

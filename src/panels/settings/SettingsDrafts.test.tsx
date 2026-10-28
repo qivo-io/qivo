@@ -422,6 +422,33 @@ describe('the organization address', () => {
     })
   })
 
+  it('ends a refused save’s line with Keep mine, before the next save', async () => {
+    await open(general)
+    const field = find('[data-org-slug]')
+    await type(field, 'testbed-ab')
+    await click(find<HTMLButtonElement>('[data-org-slug-save]'))
+    await elsewhere((s) => {
+      s.orgs[0].slug = 'testbed-labs'
+    })
+    await refuseChanged('orgs:setSlug', {
+      record: 'organization',
+      id: orgId(),
+      field: 'slug',
+      by: null,
+    })
+    expect(conflict()?.textContent).toContain('Changed elsewhere to “testbed-labs”.')
+    await click(button('Keep mine'))
+    expect(conflict()).toBeNull()
+    expect(field.value).toBe('testbed-ab')
+    expect(container.querySelector('[data-org-slug-error]')).toBeNull()
+    expect(find<HTMLButtonElement>('[data-org-slug-save]').disabled).toBe(false)
+    await click(find<HTMLButtonElement>('[data-org-slug-save]'))
+    expect(last('orgs:setSlug').args).toMatchObject({
+      slug: 'testbed-ab',
+      expected: { slug: 'testbed-labs' },
+    })
+  })
+
   it('shows the change after a refused save, in place of the refusal line', async () => {
     await open(general)
     const field = find('[data-org-slug]')
@@ -592,6 +619,10 @@ describe('your name', () => {
     expect(field.value).toBe('Planner Prime')
     expect(conflict()?.textContent).toContain('Changed elsewhere to “Planner Two”.')
     await click(button('Keep mine'))
+    // Keep mine ends the refusal, which no longer shows under the field
+    expect(conflict()).toBeNull()
+    expect(container.querySelector('[data-account-name-error]')).toBeNull()
+    expect(find<HTMLButtonElement>('[data-account-name-save]').disabled).toBe(false)
     await click(find<HTMLButtonElement>('[data-account-name-save]'))
     expect(last('profiles:setDisplayName').args).toMatchObject({
       expected: { profile_id: me, name: 'Planner Two' },
