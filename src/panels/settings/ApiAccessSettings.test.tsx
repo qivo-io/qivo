@@ -519,6 +519,32 @@ describe('the API access page', () => {
     expect(pageCalls().at(-1)).toEqual({ kind: 'all', state: 'all', period: PREVIOUS })
   })
 
+  it('reads the summary again when a filter changes while a period change is on its way', async () => {
+    const read = network.query.getMockImplementation()
+    const held: (() => void)[] = []
+    // the period change's reads wait until the test lets them through
+    network.query.mockImplementation((ref, args) => {
+      if (args.period === PREVIOUS && args.kind !== 'mcp_tokens' && held.length < 2)
+        return new Promise((resolve) => held.push(() => resolve(read?.(ref, args))))
+      return read?.(ref, args)
+    })
+    await render(<ui.OrgApiAccessPage />)
+    await choose(find<HTMLSelectElement>('[data-api-access-period]'), PREVIOUS)
+    await click(buttonIn(find('[aria-label="Kind"]'), 'Personal tokens'))
+    expect(summaryCalls().at(-1)?.[1]).toMatchObject({ period: PREVIOUS })
+    // the period's own figures, never the period before's over its rows
+    expect(find('[data-api-access-summary] p').textContent).toBe('640 API calls')
+    expect(listed()).toEqual(['Cursor'])
+    expect(find<HTMLSelectElement>('[data-api-access-period]').value).toBe(PREVIOUS)
+    // the period change's late answers change nothing
+    await act(async () => {
+      for (const go of held) go()
+    })
+    await settle()
+    expect(find('[data-api-access-summary] p').textContent).toBe('640 API calls')
+    expect(listed()).toEqual(['Cursor'])
+  })
+
   it('paints only the newest answer when an older one arrives late', async () => {
     const read = network.query.getMockImplementation()
     let late: (() => void) | undefined
@@ -691,6 +717,29 @@ describe('arriving from Billing', () => {
     expect(pageCalls().at(-1)).toEqual({ kind: 'all', state: 'all', person: 'daniel' })
     expect(period.value).toBe(CURRENT)
     expect(listed()).toEqual(['Cursor', 'Sheets export script', 'Cursor, old', 'Raycast'])
+  })
+
+  it('reads the current period’s figures when a filter changes while Show the current period is on its way', async () => {
+    await render(<ui.OrgApiAccessPage entry={entry({ period_key: 'month:2025-01' })} />)
+    const read = network.query.getMockImplementation()
+    const held: (() => void)[] = []
+    network.query.mockImplementation((ref, args) => {
+      if (args.period === undefined && args.kind !== 'mcp_tokens' && held.length < 2)
+        return new Promise((resolve) => held.push(() => resolve(read?.(ref, args))))
+      return read?.(ref, args)
+    })
+    await click(buttonIn(find('[data-api-access-note]'), 'Show the current period'))
+    await click(buttonIn(find('[aria-label="Kind"]'), 'Personal tokens'))
+    expect(summaryCalls().at(-1)?.[1].period).toBeUndefined()
+    expect(document.querySelector('[data-api-access-note="period-unavailable"]')).toBeNull()
+    expect(find('[data-api-access-summary]').textContent).toContain('43,230')
+    expect(find<HTMLSelectElement>('[data-api-access-period]').value).toBe(CURRENT)
+    expect(listed()).toEqual(['Cursor', 'Sheets export script', 'Cursor, old', 'Raycast'])
+    await act(async () => {
+      for (const go of held) go()
+    })
+    await settle()
+    expect(find('[data-api-access-summary]').textContent).toContain('43,230')
   })
 
   it('reads nothing for another organization’s entry until asked, and then unfiltered', async () => {

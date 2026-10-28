@@ -185,17 +185,20 @@ function ApiAccessPage({
   const shownRef = useRef(shown)
   shownRef.current = shown
 
-  /* Reads the page for `next`, with the summary when `figures` or when
-     nothing is shown yet. A failed read keeps what is on screen, and the
-     controls go back to what it belongs to. */
+  /* Reads the page for `next`, with the summary when `figures`, and also
+     when the figures on screen belong to another period than `next` names,
+     as when a filter changes while a period change is still on its way. A
+     failed read keeps what is on screen, and the controls go back to what
+     it belongs to. */
   const load = async (next: Ask, figures: boolean) => {
     const n = ++sequence.current
     attempt.current = { ask: next, figures }
     setAsk(next)
     setLoading(true)
     const kept = shownRef.current
+    const reuse = !figures && kept !== null && kept.ask.period === next.period
     const [summary, page] = await Promise.all([
-      figures || kept === null ? P.apiAccessSummary(next.period) : kept.figures,
+      reuse ? kept.figures : P.apiAccessSummary(next.period),
       P.apiAccessPage(pageArgs(next)),
     ])
     if (n !== sequence.current) return
