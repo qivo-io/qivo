@@ -77,6 +77,7 @@ type Server = {
   rows: Record<string, ApiCredentialRow[]>
   people: ApiAccessPerson[]
   pageSize: number
+  peopleBatch: number
   page?: (args: ApiAccessPageArgs) => ApiAccessPageAnswer | undefined
 }
 let server: Server
@@ -152,6 +153,7 @@ function fixtureServer(): Server {
       { id: 'relay', name: 'Release bot', agent: true, removed: false },
     ],
     pageSize: 25,
+    peopleBatch: 25,
   }
 }
 
@@ -213,10 +215,13 @@ function answer(name: string, args: Record<string, unknown>): unknown {
   }
   if (name === 'apiAccess:people') {
     const search = ((args.search as string | undefined) ?? '').toLowerCase()
+    const people = server.people.filter((p) => p.name.toLowerCase().includes(search))
+    const from = args.cursor === undefined ? 0 : Number(args.cursor)
+    const to = from + server.peopleBatch
     return {
       state: 'ready',
-      rows: server.people.filter((p) => p.name.toLowerCase().includes(search)),
-      next: null,
+      rows: people.slice(from, to),
+      next: to < people.length ? String(to) : null,
       stopped: false,
     }
   }
@@ -496,6 +501,31 @@ describe('the API access page', () => {
     await choose(find<HTMLSelectElement>('[data-api-access-period]'), PREVIOUS)
     expect(find('[data-api-access-person]').textContent).toBe('Release bot')
     expect(note()).toBe('No credentials for Release bot in this period.')
+  })
+
+  it('loads the next batch of people on Retry after a failed Load more, one read at a time', async () => {
+    server.peopleBatch = 2
+    await render(<ui.OrgApiAccessPage />)
+    await click(find('[data-api-access-person]'))
+    const choices = () =>
+      [...find('[data-api-access-people]').querySelectorAll('button')].map((b) => b.textContent)
+    expect(choices()).toEqual(['Everyone', 'Planner (you)', 'Daniel Berg', 'Load more'])
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    network.query.mockRejectedValueOnce(new Error('offline'))
+    await click(find('[data-api-access-people-more]'))
+    const alert = find('[data-api-access-people] [role="alert"]')
+    expect(alert.textContent).toContain("Couldn't load people.")
+    const before = calls('apiAccess:people').length
+    // two presses send one read
+    const retry = buttonIn(alert, 'Retry')
+    await act(async () => {
+      retry.click()
+      retry.click()
+    })
+    await settle()
+    expect(calls('apiAccess:people')).toHaveLength(before + 1)
+    expect(calls('apiAccess:people').at(-1)?.[1]).toMatchObject({ cursor: '2' })
+    expect(choices()).toEqual(['Everyone', 'Planner (you)', 'Daniel Berg', 'Release botagent'])
   })
 
   it('reads another period on demand and refreshes from the title', async () => {

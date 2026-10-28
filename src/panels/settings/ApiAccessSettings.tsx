@@ -721,6 +721,9 @@ function PersonChoices({
   const [list, setList] = useState<People>(NO_PEOPLE)
   const [attempt, setAttempt] = useState(0)
   const sequence = useRef(0)
+  // the list, by its sequence, whose Load more is on its way, so a second
+  // press or a Retry starts no second read of it
+  const reading = useRef<number | null>(null)
   const typed = text.trim()
   const tooLong = overLimit(LIMITS.search, typed)
   useEffect(() => {
@@ -746,11 +749,16 @@ function PersonChoices({
       sequence.current++
     }
   }, [query, attempt])
+  /* The next batch, after the rows listed: Load more, or Retry once a
+     Load more failed. */
   const more = () => {
-    if (list.next === null || list.phase !== 'ready') return
     const n = sequence.current
+    if (list.next === null || reading.current === n) return
+    if (list.phase !== 'ready' && list.phase !== 'failed') return
+    reading.current = n
     setList((current) => ({ ...current, phase: 'more' }))
     void P.apiAccessPeople(query, list.next).then((answer) => {
+      if (reading.current === n) reading.current = null
       if (n !== sequence.current) return
       setList((current) =>
         answer === null || answer.state !== 'ready'
