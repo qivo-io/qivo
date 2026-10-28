@@ -57,7 +57,7 @@ import { releaseFile } from './fileHolds'
 import { recipientItems, stateRows, taskItems } from './inboxItems'
 import { deleteLabelCount } from './labelCounts'
 import { deleteOrgBookkeeping, tallyRow } from './orgs'
-import { reachOfOrg } from './projectNav'
+import { grantee, reachOfGrantee, reachOfOrg } from './projectNav'
 import { uncountFile } from './storageTotals'
 import { deleteTeamCount } from './teamCounts'
 import { releaseUsedIds } from './usedIds'
@@ -230,6 +230,9 @@ const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: Removal
               .query('project_access')
               .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
           ),
+        // the profile's reach rows go before it frees its id
+        // (model/projectNav.ts)
+        () => drain(ctx, budget, reachOfGrantee(ctx, grantee.profile(profile.id))),
         () =>
           drain(
             ctx,

@@ -4168,7 +4168,8 @@ async function clearDescriptions(
  * their restores wait to attach, so a step still scheduled finds nothing to
  * do. Then each stored task goes with the rows a move or restore left of it
  * in the live tables, and each stored row, a project after the milestones,
- * grants and tasks still live under it. An attachment leaves the
+ * grants, reach rows and tasks still live under it, so no live row is left
+ * to a project that takes its id later. An attachment leaves the
  * stored-byte totals with its row (model/storageTotals.ts), and its file is
  * let go unless another row, live or stored, still names it, and is held
  * for a restore before it is erased (model/fileHolds.ts releaseFile).
@@ -4231,6 +4232,13 @@ export async function clearOrgTrash(
           })
           if (!cleared) return false
         }
+        // and its reach rows, which go before the stored row frees its id
+        // (model/projectNav.ts)
+        const reached = await clearPages(budget, reachOn(ctx, row.owner_id), async (reach) => {
+          await ctx.db.delete(reach._id)
+          return true
+        })
+        if (!reached) return false
         const stranded = await clearPages(
           budget,
           ctx.db.query('issues').withIndex('by_project', (q) => q.eq('project_id', row.owner_id)),

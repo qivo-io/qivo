@@ -20,8 +20,8 @@ import { NAV_STEP, RUN } from '../internal/navBackfill'
 import { byId } from '../lib/db'
 import { LIMITS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
-import { ACCESS_FIRST_PASS, deleteOrgDeep } from '../model/cascade'
-import { TRASH_BUDGET } from '../model/deletedItems'
+import { ACCESS_FIRST_PASS, deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
+import { clearOrgTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { deleteOrgStep } from '../model/orgDeletion'
 import { insertOrgRows, newOrgDefaults } from '../model/orgs'
 import { grantee, navReady, syncReach, TREE_READ } from '../model/projectNav'
@@ -53,11 +53,13 @@ const STEP_DEFAULTS = { ...NAV_STEP }
 const RUN_DEFAULTS = { ...RUN }
 const TREE_DEFAULTS = { ...TREE_READ }
 const PASS_DEFAULTS = { ...ACCESS_FIRST_PASS }
+const REMOVAL_DEFAULTS = { ...REMOVAL_BUDGET }
 afterEach(() => {
   Object.assign(NAV_STEP, STEP_DEFAULTS)
   Object.assign(RUN, RUN_DEFAULTS)
   Object.assign(TREE_READ, TREE_DEFAULTS)
   Object.assign(ACCESS_FIRST_PASS, PASS_DEFAULTS)
+  Object.assign(REMOVAL_BUDGET, REMOVAL_DEFAULTS)
 })
 
 /** Where a call of the backfill goes on, as the last call answered it. */
@@ -623,6 +625,47 @@ describe('Deleted items', () => {
     ])
     await expectAll(t, f)
   })
+
+  it('leaves nothing for a sub-project that takes a purged id in the same organization', async () => {
+    const t = newT()
+    const f = await ready(t)
+    const org_id = f.org.id
+    await as(t, f.admin).mutation(api.projects.setAccess, {
+      org_id,
+      id: f.sub.id,
+      user_id: f.pia.id,
+      level: 'user',
+    })
+    await as(t, f.user).mutation(api.projects.deleteDeep, { org_id, id: f.sub.id })
+    await runSteps(t)
+    const item = await itemFor(t, f.sub.id)
+    await as(t, f.admin).mutation(api.deletedItems.purge, { org_id, ids: [item.id] })
+    await runSteps(t)
+    await as(t, f.user).mutation(api.projects.create, {
+      org_id,
+      id: f.sub.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      key: 'FW2',
+      name: 'Firmware again',
+      sort_order: 5,
+    })
+    // Pia's grant went with the purged sub-project, and her rows with it
+    expect(await rowsOf(t, f.pia.id)).toEqual([])
+    await expectAll(t, f)
+  })
+
+  it('deletes the rows of a project a teardown takes from Deleted items before its move drained them', async () => {
+    const t = newT()
+    const f = await ready(t)
+    // the delete hides the tree and, with one row of budget, leaves the rows
+    // to its steps, which wait
+    TRASH_BUDGET.rows = 1
+    await as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.meta.id })
+    expect((await reachRows(t)).some((row) => row.root_id === f.meta.id)).toBe(true)
+    await t.run((ctx) => clearOrgTrash(ctx, f.org.id, { left: Number.POSITIVE_INFINITY }))
+    expect((await reachRows(t)).filter((row) => row.root_id === f.meta.id)).toEqual([])
+  })
 })
 
 describe('fixtures and migrations', () => {
@@ -751,6 +794,8 @@ describe('teardowns', () => {
         phase: 'profiles',
       }),
     )
+    // a few rows a step, so the phases spread over many steps
+    REMOVAL_BUDGET.rows = 3
     let steps = 0
     for (;;) {
       const done = await t.run(async (ctx) => {
@@ -760,8 +805,20 @@ describe('teardowns', () => {
           .unique()
         return removal === null ? true : await deleteOrgStep(ctx, removal)
       })
+      // no step leaves a row of a person whose id it freed
+      const orphans = await t.run(async (ctx) => {
+        const out: string[] = []
+        for (const row of await ctx.db.query('project_reach').collect())
+          if (
+            row.grantee_kind === 'profile' &&
+            (await byId(ctx, 'profiles', row.grantee_id)) === null
+          )
+            out.push(row.grantee_id)
+        return out
+      })
+      expect(orphans).toEqual([])
       if (done) break
-      expect(++steps).toBeLessThan(100)
+      expect(++steps).toBeLessThan(400)
     }
     expect(await t.run((ctx) => byId(ctx, 'organizations', f.org.id))).toBeNull()
     expect((await reachRows(t)).filter((row) => row.org_id === f.org.id)).toEqual([])
