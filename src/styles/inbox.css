@@ -134,7 +134,7 @@ html[data-appearance] .inbox-detail-frame [data-issue-layout="embedded"] {
     min-height: 44px;
     padding-inline: 8px;
   }
-  .inbox-list-controls > .inbox-bulk-actions {
+  .inbox-list-controls > :is(.inbox-bulk-actions, .inbox-bulk-progress) {
     grid-column: 1 / -1;
     justify-self: end;
   }

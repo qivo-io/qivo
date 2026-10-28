@@ -46,6 +46,9 @@ import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
+/* The most rows one bulk inbox batch changes, convex/model/messages.ts
+   INBOX_BATCH, which this worker cannot import with the server code. */
+const INBOX_BATCH = 200
 const parameters = new URLSearchParams(self.name)
 const option = (name, fallback) => {
   const value = parameters.get(name)
@@ -583,6 +586,25 @@ const read = (name, args = {}) => {
       return { rows: [], complete: true }
     case 'admin:isOperator':
       return false
+    case 'messages:bulkReach':
+      // as convex/model/messages.ts readBulkReach does, per seat
+      return {
+        seats: snapshot.orgs.map((org) => {
+          const mine = snapshot.messages.filter((m) => m.org_id === org.id)
+          const unread = mine.filter((m) => !m.read_at)
+          const walked = mine.filter(
+            (m) => !m.snoozed_until && !!m.read_at === (args.action === 'remove'),
+          )
+          const reach = walked.length === 0 ? 'none' : walked.length > INBOX_BATCH ? 'many' : 'one'
+          return args.action === 'remove'
+            ? { org_id: org.id, reach }
+            : {
+                org_id: org.id,
+                reach,
+                before: Math.max(0, ...unread.map((m) => Date.parse(m.created_at))),
+              }
+        }),
+      }
     default:
       throw new Error(`Unimplemented benchmark query: ${name}`)
   }
@@ -701,15 +723,15 @@ async function mutate(name, args) {
     return null
   }
   if (name === 'messages:markAllRead') {
-    // as convex/model/messages.ts markAllMessagesRead does: at most 256
-    // unsnoozed unread rows a batch, created no later than the first
-    // batch's cutoff, the newest unread row's creation, then the prune
+    // as convex/model/messages.ts markAllMessagesRead does: at most
+    // INBOX_BATCH unsnoozed unread rows a batch, created no later than the
+    // first batch's cutoff, the newest unread row's creation, then the prune
     const unread = snapshot.messages.filter(
       (m) => !m.read_at && !m.snoozed_until && m.org_id === args.org_id,
     )
     const before = args.before ?? Math.max(0, ...unread.map((m) => Date.parse(m.created_at)))
     const due = unread.filter((m) => Date.parse(m.created_at) <= before)
-    const batch = due.slice(0, 256)
+    const batch = due.slice(0, INBOX_BATCH)
     const at = new Date().toISOString()
     markRead(batch, at)
     for (const issue of new Set(batch.map((m) => m.issue_id))) pruneItem(issue)

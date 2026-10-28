@@ -32,6 +32,9 @@ let container: HTMLDivElement
 let root: Root
 let snap: Snapshot
 let onClose: ReturnType<typeof vi.fn<() => void>>
+/* What messages.bulkReach answers the seat: `one` batch when it holds a
+   row the action walks, unless a test sets `reach`. */
+let reach: 'one' | 'many' | null
 
 /* Renders the Inbox as App holds it with `count` tasks, one item each,
    listed task-0 first (the newest), and the pane on task `shown`, if any.
@@ -78,7 +81,17 @@ async function openInbox(count: number, shown: number | null = null, read: numbe
     return () => {}
   })
   network.query.mockReset()
-  network.query.mockResolvedValue(null)
+  network.query.mockImplementation(async (ref, args) => {
+    if (getFunctionName(ref) !== 'messages:bulkReach') return null
+    const walked = snap.messages.some((m) => !!m.read_at === (args.action === 'remove'))
+    return {
+      seats: snap.orgs.map((org) => ({
+        org_id: org.id,
+        reach: reach ?? (walked ? 'one' : 'none'),
+        before: 1,
+      })),
+    }
+  })
   network.mutation.mockReset()
   network.mutation.mockResolvedValue(null)
   const store = await import('../store/planner')
@@ -218,6 +231,7 @@ beforeEach(() => {
     },
   )
   window.showToast = vi.fn()
+  reach = null
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -354,5 +368,113 @@ describe('Inbox focus when a row leaves', { timeout: 20_000 }, () => {
     await settle()
     expect(rowOpen(uuids[2])).toBeNull()
     expect(focused()).toBe(`row ${uuids[1]}`)
+  })
+})
+
+/** The writes of Mark all as read the test holds, in the order sent. */
+function holdMarkAllRead() {
+  const held: Held[] = []
+  network.mutation.mockImplementation((ref) =>
+    getFunctionName(ref) === 'messages:markAllRead'
+      ? new Promise((answer, refuse) => held.push({ answer, refuse }))
+      : Promise.resolve(null),
+  )
+  return held
+}
+
+const markAllButton = () => document.querySelector<HTMLButtonElement>('[data-inbox-mark-all-read]')
+const notice = () => document.querySelector<HTMLElement>('[data-inbox-notice]')
+const progress = () => document.querySelector<HTMLElement>('[data-inbox-progress]')
+const sentMarks = () =>
+  network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'messages:markAllRead')
+
+describe('Inbox bulk actions that take more than one round', { timeout: 20_000 }, () => {
+  it('asks first, sends nothing on Cancel and gives focus back to the button', async () => {
+    await openInbox(3)
+    reach = 'many'
+    holdMarkAllRead()
+    await press(markAllButton())
+    await settle()
+    expect(notice()?.textContent).toContain('Keep Qivo open')
+    expect(notice()?.textContent).toContain(
+      'Mark all as read covers many messages and runs in steps. Keep Qivo open until it finishes. Closing or reloading Qivo stops it, and the steps already done stay done.',
+    )
+    // the buttons wait for the answer, and nothing is sent or painted
+    expect(markAllButton()?.disabled).toBe(true)
+    expect(sentMarks()).toEqual([])
+    expect(document.querySelectorAll('[data-message][data-unread]').length).toBe(
+      document.querySelectorAll('[data-message]').length,
+    )
+    await press(document.querySelector<HTMLElement>('[data-inbox-notice-cancel]'))
+    await settle()
+    expect(notice()).toBeNull()
+    expect(sentMarks()).toEqual([])
+    expect(markAllButton()?.disabled).toBe(false)
+    expect(document.activeElement).toBe(markAllButton())
+  })
+
+  it('gives focus to the first row after Cancel when the row menu opened the notice', async () => {
+    const uuids = await openInbox(3)
+    reach = 'many'
+    await openRowMenu(uuids[2])
+    await press(document.querySelector<HTMLElement>('[data-msg-menu-mark-all-read]'))
+    await settle()
+    expect(notice()).not.toBeNull()
+    await press(document.querySelector<HTMLElement>('[data-inbox-notice-cancel]'))
+    await settle()
+    expect(sentMarks()).toEqual([])
+    expect(focused()).toBe(`row ${uuids[0]}`)
+  })
+
+  it('shows its progress with every action disabled once confirmed, also in an Inbox mounted again', async () => {
+    const uuids = await openInbox(3)
+    reach = 'many'
+    const held = holdMarkAllRead()
+    await press(markAllButton())
+    await settle()
+    expect(progress()?.textContent).toBe('')
+    await press(document.querySelector<HTMLElement>('[data-inbox-notice-confirm]'))
+    await settle()
+    expect(notice()).toBeNull()
+    expect(sentMarks()).toHaveLength(1)
+    expect(progress()?.getAttribute('aria-live')).toBe('polite')
+    expect(progress()?.textContent).toBe('Marking messages read, 0 done')
+    await act(async () =>
+      held[0].answer({ marked: 2, ids: ['message-0', 'message-1'], hasMore: true, before: 1 }),
+    )
+    await settle()
+    expect(progress()?.textContent).toBe('Marking messages read, 2 done')
+    expect(markAllButton()?.disabled).toBe(true)
+    expect(document.querySelector<HTMLButtonElement>('[data-inbox-remove-read]')?.disabled).toBe(
+      true,
+    )
+    await openRowMenu(uuids[2])
+    for (const item of ['[data-msg-menu-mark-all-read]', '[data-msg-menu-remove-read]'])
+      expect(document.querySelector<HTMLButtonElement>(item)?.disabled).toBe(true)
+    // leaving the Inbox and coming back keeps the action and its progress
+    const { Inbox } = await import('./Inbox')
+    await act(async () => root.render(<TooltipProvider>{null}</TooltipProvider>))
+    expect(progress()).toBeNull()
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <Inbox
+            showOnBoard={vi.fn()}
+            onExit={vi.fn()}
+            openTask={vi.fn()}
+            openIssue={null}
+            onPlanOnRoadmap={vi.fn()}
+          />
+        </TooltipProvider>,
+      ),
+    )
+    expect(progress()?.textContent).toBe('Marking messages read, 2 done')
+    await vi.waitFor(() => expect(held).toHaveLength(2))
+    await act(async () =>
+      held[1].answer({ marked: 1, ids: ['message-2'], hasMore: false, before: 1 }),
+    )
+    await settle()
+    expect(progress()?.textContent).toBe('')
+    expect(window.showToast).toHaveBeenCalledWith('Marked 3 messages as read.', 'success')
   })
 })

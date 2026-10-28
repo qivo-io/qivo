@@ -1,7 +1,8 @@
 /* The store's observable sections. `health` says whether the live snapshot is
    current (components/SnapshotNotice), so the notice can re-render without
-   re-rendering every view. */
-const SECTIONS = ['workspace', 'comments', 'teamSync', 'health'] as const
+   re-rendering every view. `inbox` carries the Inbox's own state, such as a
+   bulk action's progress (P.inboxBulk), so it repaints the Inbox alone. */
+const SECTIONS = ['workspace', 'comments', 'teamSync', 'health', 'inbox'] as const
 export type PlannerSection = (typeof SECTIONS)[number]
 export type StoreVersion = Readonly<{ revision: number }>
 type Listener = () => void
@@ -21,6 +22,7 @@ export function createPlannerUpdates() {
     comments: new Set(),
     teamSync: new Set(),
     health: new Set(),
+    inbox: new Set(),
   }
   const legacy = new Set<Listener>()
   const initial = Object.freeze({ revision })
@@ -29,6 +31,7 @@ export function createPlannerUpdates() {
     comments: initial,
     teamSync: initial,
     health: initial,
+    inbox: initial,
   }
   const subscribe = (list: Set<Listener>, listener: Listener) => {
     list.add(listener)
@@ -46,6 +49,7 @@ export function createPlannerUpdates() {
     comments: channel('comments'),
     teamSync: channel('teamSync'),
     health: channel('health'),
+    inbox: channel('inbox'),
   })
   return {
     channels,

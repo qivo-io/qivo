@@ -158,6 +158,15 @@ import { createTaskIndex, type TaskChanges, type TaskSources } from './taskIndex
 export type { UIPrefs } from './preferences'
 
 import type { Seatless, Workspace } from '../../convex/lib/workspaceJoin'
+import {
+  BULK_SEATS,
+  type BulkAction,
+  type BulkStop,
+  bulkBusy,
+  bulkDoneText,
+  bulkStopText,
+  type InboxBulk,
+} from './inboxBulk'
 import type { Row } from './rows'
 import { createPlannerUpdates, type StoreVersion } from './updates'
 import {
@@ -2370,18 +2379,21 @@ function toastWriteError(e: unknown, reverted = true) {
     return
   }
   // a write that painted nothing has nothing to revert
-  const after = reverted ? ' Change reverted.' : ''
+  toast(`${refusalSentence(e)}${reverted ? ' Change reverted.' : ''}`)
+}
+
+/** The sentence of refusal `e` that toastWriteError shows, without what it
+    says about the paint: the pause's, a rule's or read-only sentence in its
+    own words, or a generic one. */
+function refusalSentence(e: unknown): string {
+  const d = errData(e)
+  if (refusedAsPaused(e)) return refusalPauseText(e)
   // the organization's deletion, to someone who keeps another one, says so
-  if ((readOnly(d) || d.code === 'rule' || orgDeleting(d)) && d.message) {
-    toast(`${asSentence(String(d.message))}${after}`)
-    return
-  }
-  if (d.code === 'forbidden') {
-    toast(`You don't have permission for that.${after}`)
-    return
-  }
+  if ((readOnly(d) || d.code === 'rule' || orgDeleting(d)) && d.message)
+    return asSentence(String(d.message))
+  if (d.code === 'forbidden') return "You don't have permission for that."
   // not_found, bad_request, conflict, transport — all generic
-  toast(`Couldn't save.${after}`)
+  return "Couldn't save."
 }
 
 /** Reads older comment `id` of the watched thread again from the server
@@ -4243,58 +4255,183 @@ function newTaskPaint(row: Row<'issues'>, created: { num: number | null }): Pain
   }
 }
 
-/* Runs a bulk inbox action on every seat. The loaded `messages` it reaches
-   show `paint` at once under one umbrella layer per seat, and the `flags`
-   it clears under one more. Each seat sends `batch` until an answer has no
-   more, and each batch keeps a layer, `named`, for the rows its answer
-   names (`keep`).
+/* The person's answer the keep-open notice waits for
+   (P.answerInboxNotice), while a bulk Inbox action shows it. */
+let noticeAnswer: ((go: boolean) => void) | null = null
+
+/** How long a press of a bulk Inbox action waits for messages.bulkReach
+    before it plans without the answer, so a connection that drops while it
+    asks does not hold the buttons disabled. */
+const REACH_WAIT_MS = 10_000
+
+/** Sets P.inboxBulk and shows it in the Inbox. */
+function setInboxBulk(next: InboxBulk | null) {
+  PLANNER.inboxBulk = next
+  emit('inbox')
+}
+
+/** messages.bulkReach's answer for `action`, or null when it fails or does
+    not come within REACH_WAIT_MS. */
+async function askReach(action: BulkAction) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const answer = await Promise.race([
+      convex.query(api.messages.bulkReach, { action }),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), REACH_WAIT_MS)
+      }),
+    ])
+    return answer && Array.isArray(answer.seats) ? answer : null
+  } catch (error) {
+    console.error('[qivo] could not ask how much an Inbox action has to do:', error)
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** One seat a bulk Inbox action sends batches to, with the cutoff its first
+    Mark all as read batch passes, when bulkReach answered one. */
+type BulkSeat = { org: string; before?: number }
+
+/** The seats a bulk Inbox action has work in, in seat order, and whether
+    it needs more than one round: a seat with more than one batch, or more
+    seats with work than BULK_SEATS. Without `reach` every seat goes, and
+    the action counts as long, because nothing says which seats have work. */
+function planBulk(reach: Awaited<ReturnType<typeof askReach>>) {
+  if (reach === null)
+    return { seats: [...myProfiles.keys()].map((org): BulkSeat => ({ org })), long: true }
+  const answered = new Map(reach.seats.map((seat) => [seat.org_id, seat]))
+  // a seat the server did not list holds no active seat there
+  const seats = [...myProfiles.keys()].flatMap((org): BulkSeat[] => {
+    const seat = answered.get(org)
+    return seat === undefined || seat.reach === 'none' ? [] : [{ org, before: seat.before }]
+  })
+  const many = seats.some(({ org }) => answered.get(org)?.reach === 'many')
+  return { seats, long: many || seats.length > BULK_SEATS }
+}
+
+/* Runs bulk Inbox action `action` (Mark all as read or Remove all read)
+   with its progress in P.inboxBulk. It asks messages.bulkReach first and
+   skips the seats with nothing to do. With `ask`, an action of more than
+   one round waits for the keep-open notice (P.answerInboxNotice) and sends
+   nothing when the person cancels it. Then the loaded `messages` it reaches
+   show `paint` at once, under one umbrella layer per seat, and the `flags`
+   it clears under one more. At most BULK_SEATS seats send `batch` at once,
+   each until an answer has no more, and each batch keeps a layer, `named`,
+   for the rows its answer names (`keep`).
    A seat's umbrella goes when its batches end, so a refused or paused batch
-   takes back only the rows no accepted batch named. The first refusal is
-   toasted once and takes the flags back; with every seat done they stay
-   until the next delivery. The last seat's umbrella and the flags end in one
-   repaint. */
-async function bulkInbox<R extends { ids: string[]; hasMore: boolean }>(
-  name: string,
-  messages: MessageVM[],
-  paint: (ids: string[]) => View,
-  named: (ids: string[]) => View,
-  flags: View,
-  batch: (org: string, previous: R | null, keep: (answer: R) => View) => Promise<R>,
+   takes back only the rows no accepted batch named, and the seat stops
+   while the others go on. The first refusal takes the flags back; with
+   every seat done they stay until the next delivery. The last seat's
+   umbrella and the flags end in one repaint. A long action ends with a
+   toast of what it did, a stopped seat with a sticky toast of what was done
+   there and what was not, and a short one that finished with nothing, as
+   its rows show it.
+   Every batch's outcome is known in this session: the Convex client sends
+   a write in flight again after a reconnect and answers it, so nothing
+   here stops waiting for an answer that could still commit. A reload or a
+   disposed store ends the action, and the next press asks bulkReach again
+   for a new cutoff. */
+async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
+  action: BulkAction,
+  ask: boolean,
+  a: {
+    ref: FunctionReference<'mutation'>
+    messages: () => MessageVM[]
+    paint: (ids: string[]) => View
+    named: (ids: string[]) => View
+    flags: View
+    count: (answer: R) => number
+  },
+  batch: (seat: BulkSeat, previous: R | null, keep: (answer: R) => View) => Promise<R>,
 ): Promise<void> {
+  if (bulkBusy(PLANNER.inboxBulk) || refusePausedWrite(a.ref)) return
   const epoch = storeEpoch
-  const loaded = messagesByOrg(messages.map((message) => message.id))
-  const flag = openUmbrella(name, flags)
-  let refused = false
-  let running = myProfiles.size
+  let bulk: InboxBulk = {
+    action,
+    state: 'asking',
+    long: false,
+    done: 0,
+    seats: 0,
+    seatsDone: 0,
+    stops: [],
+  }
+  setInboxBulk(bulk)
+  const plan = planBulk(await askReach(action))
+  if (epoch !== storeEpoch) return
+  if (plan.seats.length === 0) return setInboxBulk(null)
+  bulk = { ...bulk, long: plan.long, seats: plan.seats.length }
+  if (plan.long && ask) {
+    setInboxBulk({ ...bulk, state: 'notice' })
+    const go = await new Promise<boolean>((resolve) => {
+      noticeAnswer = resolve
+    })
+    if (epoch !== storeEpoch) return
+    // the pause may have begun while the notice showed
+    if (!go || refusePausedWrite(a.ref)) return setInboxBulk(null)
+  }
+  const name = getFunctionName(a.ref)
+  const loaded = messagesByOrg(a.messages().map((message) => message.id))
+  const flag = openUmbrella(name, a.flags)
+  const umbrellas = new Map(
+    plan.seats.map(({ org }) => [org, openUmbrella(name, a.paint(loaded.get(org) ?? []))]),
+  )
+  bulk = { ...bulk, state: 'running' }
+  setInboxBulk(bulk)
+  const stops: BulkStop[] = []
+  let running = plan.seats.length
   let last: Layer | null = null
-  const seats = [...myProfiles.keys()].map(async (org) => {
-    const umbrella = openUmbrella(name, paint(loaded.get(org) ?? []))
+  const runSeat = async (seat: BulkSeat) => {
     let previous: R | null = null
+    let done = 0
     try {
       while (epoch === storeEpoch) {
-        previous = await batch(org, previous, (answer) => named(answer.ids))
-        if (!previous.hasMore) return true
+        previous = await batch(seat, previous, (answer) => a.named(answer.ids))
+        if (epoch !== storeEpoch) return
+        done += a.count(previous)
+        bulk = {
+          ...bulk,
+          long: bulk.long || previous.hasMore,
+          done: bulk.done + a.count(previous),
+          seatsDone: bulk.seatsDone + (previous.hasMore ? 0 : 1),
+        }
+        setInboxBulk(bulk)
+        if (!previous.hasMore) return
       }
-      return false
     } catch (error) {
-      if (epoch === storeEpoch && !refused) {
-        refused = true
-        toastWriteError(error)
-        endUmbrella(flag, false)
-      }
-      return false
+      if (epoch !== storeEpoch) return
+      if (stops.length === 0) endUmbrella(flag, false)
+      stops.push({ org: seat.org, done, reason: refusalSentence(error) })
+      bulk = { ...bulk, stops: [...stops] }
+      setInboxBulk(bulk)
     } finally {
+      const umbrella = umbrellas.get(seat.org)
       if (--running > 0) {
-        if (epoch === storeEpoch) endUmbrella(umbrella, false)
-      } else last = umbrella
+        if (epoch === storeEpoch && umbrella) endUmbrella(umbrella, false)
+      } else last = umbrella ?? null
     }
-  })
-  const done = await Promise.all(seats)
+  }
+  const queue = [...plan.seats]
+  const worker = async () => {
+    for (let seat = queue.shift(); seat && epoch === storeEpoch; seat = queue.shift())
+      await runSeat(seat)
+  }
+  await Promise.all(Array.from({ length: Math.min(BULK_SEATS, queue.length) }, worker))
   if (epoch !== storeEpoch) return
   together(() => {
     if (last) endUmbrella(last, false)
-    endUmbrella(flag, done.every(Boolean))
+    endUmbrella(flag, stops.length === 0)
   })
+  bulk = { ...bulk, state: stops.length ? 'stopped' : 'finished' }
+  setInboxBulk(bulk)
+  for (const stop of stops)
+    window.showToast?.(
+      bulkStopText(action, stop, rows.orgs.get(stop.org)?.name ?? 'an organization'),
+      'error',
+      { sticky: true, key: `inbox-bulk:${stop.org}` },
+    )
+  if (stops.length === 0 && bulk.long) toast(bulkDoneText(bulk), 'success')
 }
 
 /* The paint of removing messages `ids`. With `onlyRead` it removes, as the
@@ -4659,6 +4796,8 @@ export const PLANNER = {
   // whether the Inbox's Mark all as read and Remove all read have rows to act on
   canMarkAllRead: false,
   canRemoveRead: false,
+  // the bulk action running or last run, with its progress (store/inboxBulk.ts)
+  inboxBulk: null as InboxBulk | null,
   // whether older messages exist than the Inbox lists (the snapshot's 500),
   // and which of Mark all as read and Remove all read reach some of them
   inboxCut: false,
@@ -7263,25 +7402,36 @@ export const PLANNER = {
     return true
   },
   /* Mark every current notification read, including messages hidden by the
-     snapshot cap and notifications in other organization seats. The server
-     returns a fixed cutoff per seat, so new arrivals stay unread (bulkInbox). */
-  markAllMessagesRead: async (): Promise<void> => {
-    if (!PLANNER.canMarkAllRead || refusePausedWrite(api.messages.markAllRead)) return
+     snapshot cap and notifications in other organization seats. Each seat
+     keeps the cutoff bulkReach answered at the press, so new arrivals stay
+     unread (bulkInboxAction). The Inbox passes `ask`, so a long action
+     waits for the keep-open notice. */
+  markAllMessagesRead: async (ask = false): Promise<void> => {
+    if (!PLANNER.canMarkAllRead) return
     const at = new Date().toISOString()
-    await bulkInbox<FunctionReturnType<typeof api.messages.markAllRead>>(
-      'messages:markAllRead',
-      PLANNER.messages.filter((message) => !message.read && message.snoozedUntil === null),
-      (ids) => ({ workspace: () => markLoadedMessagesRead(ids, at, true) }),
-      (ids) => ({ workspace: () => markLoadedMessagesRead(ids, at, true) }),
+    await bulkInboxAction<FunctionReturnType<typeof api.messages.markAllRead>>(
+      'read',
+      ask,
       {
-        workspace: () => {
-          unexaminedUnread = false
+        ref: api.messages.markAllRead,
+        messages: () =>
+          PLANNER.messages.filter((message) => !message.read && message.snoozedUntil === null),
+        paint: (ids) => ({ workspace: () => markLoadedMessagesRead(ids, at, true) }),
+        named: (ids) => ({ workspace: () => markLoadedMessagesRead(ids, at, true) }),
+        flags: {
+          workspace: () => {
+            unexaminedUnread = false
+          },
         },
+        count: (answer) => answer.marked,
       },
-      (org, previous, keep) =>
-        sendAwaited(api.messages.markAllRead, { org_id: org, before: previous?.before }, 'none', {
-          keep,
-        }),
+      (seat, previous, keep) =>
+        sendAwaited(
+          api.messages.markAllRead,
+          { org_id: seat.org, before: previous?.before ?? seat.before },
+          'none',
+          { keep },
+        ),
     )
   },
   /* Back to unread — the same column, the other way. Nothing is pruned by
@@ -7316,24 +7466,42 @@ export const PLANNER = {
   /* Inbox cleanup spans every seat and the full server inbox, beyond the
      snapshot's display cap. Each bounded batch selects current read rows,
      so unread arrivals and messages reopened on another device survive
-     (bulkInbox). Completion means all writes settled. */
-  deleteReadMessages: async (): Promise<void> => {
-    if (!PLANNER.canRemoveRead || refusePausedWrite(api.messages.removeRead)) return
-    await bulkInbox<FunctionReturnType<typeof api.messages.removeRead>>(
-      'messages:removeRead',
-      PLANNER.messages.filter((message) => message.read && message.snoozedUntil === null),
-      (ids) => removeMessagesPaint(ids, true),
-      // the rows each batch's answer names, which the server removed
-      (ids) => removeMessagesPaint(ids),
+     (bulkInboxAction). Completion means all writes settled. The Inbox
+     passes `ask`, as for markAllMessagesRead. */
+  deleteReadMessages: async (ask = false): Promise<void> => {
+    if (!PLANNER.canRemoveRead) return
+    await bulkInboxAction<FunctionReturnType<typeof api.messages.removeRead>>(
+      'remove',
+      ask,
       {
-        workspace: () => {
-          hiddenReadMessages = 0
-          unexaminedRead = false
+        ref: api.messages.removeRead,
+        messages: () =>
+          PLANNER.messages.filter((message) => message.read && message.snoozedUntil === null),
+        paint: (ids) => removeMessagesPaint(ids, true),
+        // the rows each batch's answer names, which the server removed
+        named: (ids) => removeMessagesPaint(ids),
+        flags: {
+          workspace: () => {
+            hiddenReadMessages = 0
+            unexaminedRead = false
+          },
         },
+        count: (answer) => answer.removed,
       },
-      (org, _previous, keep) =>
-        sendAwaited(api.messages.removeRead, { org_id: org }, 'none', { keep }),
+      (seat, _previous, keep) =>
+        sendAwaited(api.messages.removeRead, { org_id: seat.org }, 'none', { keep }),
     )
+  },
+  /* The person's answer to the keep-open notice of the bulk action that
+     waits for it (bulkInboxAction): true starts it, false sends nothing. A
+     cancel ends the action's state at once, so the Inbox's buttons are back
+     as the notice closes. */
+  answerInboxNotice: (go: boolean) => {
+    const answer = noticeAnswer
+    noticeAnswer = null
+    if (!answer) return
+    if (!go) setInboxBulk(null)
+    answer(go)
   },
   markMessageRead: (id: string) => {
     void PLANNER.markMessagesRead([id])
@@ -9333,6 +9501,10 @@ export function disposeDemoStore() {
   if (!DEMO_MODE) return
   storeEpoch++
   demoDisposed = true
+  // a bulk Inbox action, and the notice it waits on, end with the store
+  noticeAnswer?.(false)
+  noticeAnswer = null
+  PLANNER.inboxBulk = null
   stopDayWatch?.()
   stopDayWatch = null
   cancelDemoBoot?.()
