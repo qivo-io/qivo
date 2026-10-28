@@ -106,8 +106,10 @@ export const WINDOW_HISTORY_PAGE = 50
  * ends or the read passes `room`. Tests may lower it. */
 export const HISTORY_ROOM = { room: 0.7 }
 
-/* The fewest rows one read of a page asks for, so a page a few rows short of
- * its size reads on past rows it leaves out in batches. */
+/* The fewest rows a later read of a page asks for, so a page a few rows
+ * short of its size reads on past rows it leaves out in batches. The first
+ * read asks for one row past the page alone, which is all an admin's page or
+ * a member's that leaves nothing out needs. */
 const HISTORY_BATCH_MIN = 100
 
 /** The refusal of a REST or MCP page that ended before it found a row the
@@ -250,10 +252,11 @@ export async function taskHistoryPage(
     earlier
       ? { rows: newest.reverse(), earlier, next: passed }
       : { rows: newest.reverse(), earlier }
-  for (;;) {
-    // One row past the page tells whether the history goes on. A page short
-    // of a few rows still reads in batches, so rows it leaves out cost few reads.
-    const n = Math.max(size - newest.length + 1, HISTORY_BATCH_MIN)
+  for (let reads = 0; ; reads++) {
+    // One row past the page tells whether the history goes on. After the
+    // first read, a page short of a few rows still reads in batches, so rows
+    // it leaves out cost few reads.
+    const n = reads === 0 ? size + 1 : Math.max(size - newest.length + 1, HISTORY_BATCH_MIN)
     const rows = await read(n)
     for (const ev of rows) {
       if (newest.length === size) return page(true)

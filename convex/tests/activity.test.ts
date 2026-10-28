@@ -371,6 +371,26 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     }
   })
 
+  it('reads one row past the page in its first read, whatever the page size', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 600; i++)
+        await insertActivity(ctx, entry(f.org.id, task.id, at(START - 3_600_000 + i)))
+    })
+    /* The documents a page of `size` reads, and how many rows it holds. */
+    const reads = (size: number) =>
+      t.run(async (ctx) => {
+        const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        const page = await taskHistoryPage(ctx, f.admin, task, undefined, size)
+        const after = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        return { read: after - before, rows: page.rows.length }
+      })
+    expect(await reads(WINDOW_HISTORY_PAGE)).toEqual({ read: WINDOW_HISTORY_PAGE + 1, rows: 50 })
+    expect(await reads(HISTORY_PAGE_MAX)).toEqual({ read: HISTORY_PAGE_MAX + 1, rows: 500 })
+  })
+
   it('reads on past rows a member does not receive, and pages on where it stopped', async () => {
     const t = newT()
     const f = await withOrg(t)
