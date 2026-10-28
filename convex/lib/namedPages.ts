@@ -17,7 +17,12 @@
  * a row created, renamed or deleted between batches lands where its name puts
  * it. Each list names the index ranges that hold everything past a position
  * (NamedIndex), and indexAfter leaves out any row they hold that is not past
- * it. Callers get positions sealed together with the list and its scope
+ * it. Convex offers no range on _id inside one creation instant, so a list
+ * that ties on _creationTime and _id reads its cursor's instant before the
+ * cursor again, and an instant with more rows before a cursor than one
+ * read's budget cannot be passed: a batch there answers stopped at that
+ * cursor, with its reads bounded. Callers get positions sealed together with
+ * the list and its scope
  * (namedCursor, lib/archiveCursorSeal.ts), so a cursor is opaque and opens
  * only for the list and scope it came from.
  *
@@ -85,10 +90,11 @@ export type NamedIndex<Row, Tie extends NamedTie> = {
 
 /** What a stream tells the batch that reads it (readBatch): `open` asks
  * whether it may start one more index range, and `skip` counts a row it read
- * and left out, so the read budget sees it. */
+ * and left out, so the read budget sees it, and answers whether the budget
+ * has room left. */
 export type NamedReads = {
   open(): Promise<boolean>
-  skip(row: GenericDocument): Promise<void>
+  skip(row: GenericDocument): Promise<boolean>
 }
 
 /** The rows of `index` after `after`, or from its start, as a stream for
@@ -96,8 +102,14 @@ export type NamedReads = {
  * one before it is read to its end, and only when `reads.open` agrees; when
  * it does not, the stream hands out STOPPED and ends. A row a range holds
  * that is not past `after`, such as one created at the same instant before
- * it, is read, counted (`reads.skip`) and left out, so a resume inside a
- * large instant fills the budget instead of passing it. */
+ * it, is read, counted (`reads.skip`) and left out. Once those rows fill the
+ * budget, the stream hands out STOPPED before it reads a row past `after`.
+ * Convex offers no range on _id inside an instant, so a resume reads every
+ * row of the cursor's instant before the cursor again, and an instant whose
+ * rows before a cursor are more than one read's budget cannot be passed: a
+ * batch there answers stopped at its cursor every time, with its reads
+ * bounded. Only rows stored with one name key before a list's names were
+ * unique, and at one creation time, can make such an instant. */
 export function indexAfter<Row extends GenericDocument, Tie extends NamedTie>(
   index: NamedIndex<Row, Tie>,
   after: NamedAt<Tie> | null,
@@ -111,8 +123,14 @@ export function indexAfter<Row extends GenericDocument, Tie extends NamedTie>(
       }
       for await (const row of range()) {
         const at = index.at(row)
-        if (after === null || compareNamed(at, after) > 0) yield { row, at }
-        else await reads.skip(row)
+        const order = after === null ? 1 : compareNamed(at, after)
+        if (order > 0) yield { row, at }
+        // the row at the cursor itself is one row, and passes whatever the
+        // budget says; rows before it stop the stream once it is full
+        else if (!(await reads.skip(row)) && order < 0) {
+          yield STOPPED
+          return
+        }
       }
     }
   }
@@ -305,7 +323,10 @@ export type NamedBatch<Out> = {
  *
  * It always reads its first row, and the ranges before it, whatever the
  * guard says, so a caller that follows `at` always moves forward, also in a
- * request that has almost no room left. It never answers `ended` for a batch
+ * request that has almost no room left. The one exception is a cursor inside
+ * an instant whose rows before it fill the budget (indexAfter): the batch
+ * then answers stopped with `after` as `at`, without moving, and its reads
+ * stay bounded. It never answers `ended` for a batch
  * the guard stopped. A position past `through` answers `through` as `at`, so
  * a batch kept live between two cursors ends at its own, and a batch that
  * read the row at `through` is complete, never stopped, also when the guard
@@ -319,6 +340,8 @@ export async function readBatch<Row extends GenericDocument, Out>(
     limit: number
     through: NamedAt | null
     ceiling: ReadCeiling
+    /** the position `stream` reads after, if any */
+    after?: NamedAt | null
   },
 ): Promise<NamedBatch<Out>> {
   if (o.limit < 1) throw new Error('a batch holds at least one row')
@@ -330,9 +353,7 @@ export async function readBatch<Row extends GenericDocument, Out>(
   const stream = o
     .stream({
       open: async () => (await guard.range()) || !moved,
-      skip: async (row) => {
-        await guard.document(row)
-      },
+      skip: (row) => guard.document(row),
     })
     [Symbol.asyncIterator]()
   // whether the batch has read the row at `through`, which completes it
@@ -343,8 +364,10 @@ export async function readBatch<Row extends GenericDocument, Out>(
       const full = rows.length >= o.limit
       if (step.done === true) return { rows, at, ended: true, stopped: false }
       if (step.value === STOPPED) {
-        if (at === null) throw new Error('a batch reads its first row whatever the guard says')
-        return { rows, at, ended: false, stopped: !full && !reached(at) }
+        // only rows before the cursor, read again, stop a batch before its first row
+        const last = at ?? o.after ?? null
+        if (last === null) throw new Error('a batch reads its first row whatever the guard says')
+        return { rows, at: last, ended: false, stopped: !full && !reached(last) }
       }
       await guard.document(step.value.row)
       if (o.through !== null && compareNamed(step.value.at, o.through) > 0) {

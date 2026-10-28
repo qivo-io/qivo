@@ -19,6 +19,7 @@ import {
   type NamedBatch,
   type NamedStream,
   type NamedTie,
+  namedCeiling,
   namedCursor,
   openNamedCursor,
   readBatch,
@@ -241,17 +242,58 @@ describe('the order', () => {
     const group = Array.from({ length: 60 }, (_, i) =>
       fakeLabel('same', 1000, `id${String(i).padStart(2, '0')}`),
     )
-    const { ctx } = labelsCtx(group)
-    // after the 40th, under a ceiling of ten documents
-    const batch = await readBatch(ctx, {
-      stream: indexAfter(labelIndex(ctx, ORG), { key: 'same', tie: [1000, 'id39'] }),
-      keep: async (label: Doc<'labels'>) => label._id,
-      limit: 25,
-      through: null,
-      ceiling: { ranges: 1e9, documents: 10, bytes: 1e12 },
+    const read = async (cursor: NamedAt<LabelTie>, documents: number) => {
+      const { ctx, used } = labelsCtx(group)
+      const batch = await readBatch(ctx, {
+        stream: indexAfter(labelIndex(ctx, ORG), cursor),
+        keep: async (label: Doc<'labels'>) => label._id,
+        limit: 25,
+        through: null,
+        ceiling: { ranges: 1e9, documents, bytes: 1e12 },
+        after: cursor,
+      })
+      return { batch, read: used.documents }
+    }
+    // after the 40th, the 39 before it fill a ceiling of ten documents, so
+    // the batch stops at its cursor having read ten
+    const deep: NamedAt<LabelTie> = { key: 'same', tie: [1000, 'id39'] }
+    expect(await read(deep, 10)).toEqual({
+      batch: { rows: [], at: deep, ended: false, stopped: true },
+      read: 10,
     })
-    // the 40 read again fill the ceiling, so the batch moves on by one and stops
-    expect(batch).toMatchObject({ rows: ['id40'], ended: false, stopped: true })
+    // with room for them, it reads past them to the end of the list
+    const roomy = (await read(deep, 100)).batch
+    expect(roomy).toMatchObject({ stopped: false, ended: true })
+    expect(roomy.rows).toHaveLength(20)
+    // the cursor's own label alone never stops it, even with no room at all
+    const first: NamedAt<LabelTie> = { key: 'same', tie: [1000, 'id00'] }
+    expect((await read(first, 0)).batch).toMatchObject({
+      rows: ['id01'],
+      ended: false,
+      stopped: true,
+    })
+  })
+
+  it('stays inside its budget at a cursor in an instant larger than one call may read', async () => {
+    // more labels of one name and one instant than Convex lets one call read
+    const group = Array.from({ length: 33_000 }, (_, i) =>
+      fakeLabel('same', 1000, `id${String(i).padStart(5, '0')}`),
+    )
+    const cursor: NamedAt<LabelTie> = { key: 'same', tie: [1000, 'id32000'] }
+    for (let call = 0; call < 2; call++) {
+      const { ctx, used } = labelsCtx(group)
+      const batch = await readBatch(ctx, {
+        stream: indexAfter(labelIndex(ctx, ORG), cursor),
+        keep: async (label: Doc<'labels'>) => label._id,
+        limit: 25,
+        through: null,
+        ceiling: await namedCeiling(ctx),
+        after: cursor,
+      })
+      // such an instant cannot be passed, but each call answers within NAMED_READ
+      expect(batch).toEqual({ rows: [], at: cursor, ended: false, stopped: true })
+      expect(used.documents).toBeLessThanOrEqual(NAMED_READ.documents)
+    }
   })
 
   it('resumes inside a creation instant that labels of one name share, through labelIndex', async () => {

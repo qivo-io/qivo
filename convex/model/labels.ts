@@ -272,6 +272,7 @@ export async function labelBatch<Row>(
     limit: ask.through === null ? LIST_BATCH : 4 * LIST_BATCH,
     through: ask.through,
     ceiling: o.ceiling,
+    after: ask.after,
   })
   // a batch under `through` that stopped short of it holds too many rows
   const short = !batch.ended && ask.through !== null && compareNamed(batch.at, ask.through) < 0
