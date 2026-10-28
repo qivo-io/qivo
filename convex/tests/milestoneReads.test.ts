@@ -254,6 +254,47 @@ async function guestElsewhere(t: T, f: OrgFixture): Promise<Doc<'profiles'>> {
   return seat
 }
 
+/* What reads cost so far, from a transaction's metrics. */
+const usedOf = (m: TransactionMetrics) => ({
+  ranges: m.databaseQueries.used,
+  documents: m.documentsRead.used,
+  bytes: m.bytesRead.used,
+})
+
+/* A read inline as `me` over `projects` with options `o`, its answer, what
+ * it read (the whole transaction, and the milestone read alone from its
+ * start) and how often the milestone read looked at the metrics. */
+const measured = (
+  t: T,
+  me: Doc<'profiles'>,
+  projects: string[],
+  o: Parameters<typeof readMilestones>[2],
+) =>
+  t.query(async (ctx) => {
+    const ids = await milestoneProjects(ctx, new Map([[me.org_id, me]]), projects)
+    const metrics = ctx.meta.getTransactionMetrics.bind(ctx.meta)
+    let looks = 0
+    const counted = {
+      ...ctx,
+      meta: {
+        ...ctx.meta,
+        getTransactionMetrics: () => {
+          looks += 1
+          return metrics()
+        },
+      },
+    }
+    const before = usedOf(await metrics())
+    const answer = await readMilestones(counted, ids, o)
+    const total = usedOf(await metrics())
+    const read = {
+      ranges: total.ranges - before.ranges,
+      documents: total.documents - before.documents,
+      bytes: total.bytes - before.bytes,
+    }
+    return { answer, total, read, looks }
+  })
+
 describe('a section', () => {
   it('starts upcoming at `from`, nearest first, and lists past newest first', async () => {
     const t = newT()
@@ -561,6 +602,29 @@ describe('a section', () => {
     }
     // some batches stopped on a day both projects hold a milestone on
     expect(shared.some((day) => stoppedOn.has(day))).toBe(true)
+  })
+
+  it('counts each milestone at its size, so a read looks at the metrics a few times', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantMany(
+      t,
+      Array.from({ length: 300 }, (_, i) => ({
+        project: f.meta.id,
+        week: plus(MONDAY, 7 * i),
+        name: `Routine ${i}`,
+      })),
+    )
+    const { answer, read, looks } = await measured(t, f.user, [f.meta.id], {
+      span: { from: MONDAY, order: 'asc' },
+      after: null,
+      search: 'pilot',
+      limit: 25,
+    })
+    expect(answer).toEqual({ rows: [], next: null, stopped: null })
+    expect(read.documents).toBe(300)
+    // one look before the first range and one before the first document
+    expect(looks).toBeLessThanOrEqual(3)
   })
 
   it('says on a first upcoming batch whether a project holds past milestones', async () => {
@@ -906,39 +970,11 @@ describe('refusals', () => {
 })
 
 /* ------------------------------------------------------------- real limits
- * newT({ transactionLimits: true }) enforces Convex's own limits per
- * transaction, the plants' writes included. Each read runs once through its
- * public query and once inline, with the caller's seat as the only one, to
- * log what the transaction read. */
-
-/* What reads cost so far, from a transaction's metrics. */
-const usedOf = (m: TransactionMetrics) => ({
-  ranges: m.databaseQueries.used,
-  documents: m.documentsRead.used,
-  bytes: m.bytesRead.used,
-})
-
-/* A read inline as `me` over `projects` with options `o`, its answer and
- * what it read: the whole transaction, and the milestone read alone from
- * its start. */
-const measured = (
-  t: T,
-  me: Doc<'profiles'>,
-  projects: string[],
-  o: Parameters<typeof readMilestones>[2],
-) =>
-  t.query(async (ctx) => {
-    const ids = await milestoneProjects(ctx, new Map([[me.org_id, me]]), projects)
-    const before = usedOf(await ctx.meta.getTransactionMetrics())
-    const answer = await readMilestones(ctx, ids, o)
-    const total = usedOf(await ctx.meta.getTransactionMetrics())
-    const read = {
-      ranges: total.ranges - before.ranges,
-      documents: total.documents - before.documents,
-      bytes: total.bytes - before.bytes,
-    }
-    return { answer, total, read }
-  })
+ * newT({ transactionLimits }) enforces Convex's own limits per transaction,
+ * or lower ones, the plants' writes included. The large reads run once
+ * through their public query and once inline (measured), with the caller's
+ * seat as the only one, and record what they read as test annotations,
+ * which `--reporter=verbose` prints. */
 
 describe('under Convex limits', () => {
   it('reads one milestone of a parent shown only for navigation to its last of 2,100 sub-projects', async () => {
@@ -1037,8 +1073,9 @@ describe('under Convex limits', () => {
       })
       expect(inline.answer.stopped).toBe(batch.stopped)
       expect(inline.read.documents).toBeLessThanOrEqual(MILESTONE_READ.documents + 1)
+      expect(inline.looks).toBeLessThanOrEqual(8)
       await annotate(
-        `search over 200 projects x ${per}: stopped ${inline.answer.stopped}; the read ${JSON.stringify(inline.read)}, the transaction ${JSON.stringify(inline.total)}; a milestone is ${getDocumentSize(rows[0])} bytes`,
+        `search over 200 projects x ${per}: stopped ${inline.answer.stopped}; the read ${JSON.stringify(inline.read)} with ${inline.looks} looks, the transaction ${JSON.stringify(inline.total)}; a milestone is ${getDocumentSize(rows[0])} bytes`,
       )
       // the first batch without search
       const first = await measured(t, f.user, projects, {
@@ -1050,8 +1087,9 @@ describe('under Convex limits', () => {
       })
       expect(first.answer.rows).toHaveLength(25)
       expect(first.answer.stopped).toBeNull()
+      expect(first.looks).toBeLessThanOrEqual(8)
       await annotate(
-        `first upcoming batch of 25 over 200 projects x ${per}: the read ${JSON.stringify(first.read)}, the transaction ${JSON.stringify(first.total)}`,
+        `first upcoming batch of 25 over 200 projects x ${per}: the read ${JSON.stringify(first.read)} with ${first.looks} looks, the transaction ${JSON.stringify(first.total)}`,
       )
     },
   )
@@ -1089,8 +1127,9 @@ describe('under Convex limits', () => {
         limit: Infinity,
       })
       expect(inline.read.documents).toBeLessThanOrEqual(MILESTONE_READ.documents + 1)
+      expect(inline.looks).toBeLessThanOrEqual(8)
       await annotate(
-        `260 weeks over 200 projects, ${dense} dense: stopped ${inline.answer.stopped}, ${range.rows.length} rows; the read ${JSON.stringify(inline.read)}, the transaction ${JSON.stringify(inline.total)}`,
+        `260 weeks over 200 projects, ${dense} dense: stopped ${inline.answer.stopped}, ${range.rows.length} rows; the read ${JSON.stringify(inline.read)} with ${inline.looks} looks, the transaction ${JSON.stringify(inline.total)}`,
       )
     },
   )

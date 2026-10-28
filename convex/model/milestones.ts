@@ -30,7 +30,7 @@
  * budget, and visibleMilestone answers one milestone by id. */
 
 import type { TransactionMetric, TransactionMetrics } from 'convex/server'
-import { ConvexError, v } from 'convex/values'
+import { ConvexError, getDocumentSize, v } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
@@ -40,13 +40,7 @@ import {
   projectLevelsOf,
   rootMetaOf,
 } from '../lib/access'
-import {
-  type CeilingGuard,
-  ceilingGuard,
-  type ReadCeiling,
-  readsUnder,
-  roomOf,
-} from '../lib/archivedTasks'
+import { type ReadCeiling, readsUnder, roomOf } from '../lib/archivedTasks'
 import { assertNewRowId, byId, insertUnique, usedMoreThan } from '../lib/db'
 import type { DeletedItemState } from '../lib/enums'
 import { trimmedForm } from '../lib/fieldPrints'
@@ -681,8 +675,9 @@ export const MILESTONE_READ = {
   bytes: 4 * 1024 * 1024,
 }
 
-/* What a read keeps back from the request's limits, as a ceilingGuard can
- * let one more document of any size through after its last look. */
+/* What a read keeps back from the request's limits, as its guard
+ * (sizedGuard) can let one more document of any size through after its
+ * last look. */
 const MILESTONE_RESERVE: ReadCeiling = { ranges: 0, documents: 1, bytes: DOCUMENT_MAX_BYTES }
 
 /** The share of the request the check of a read's projects
@@ -720,6 +715,50 @@ const readTooLarge = (): ConvexError<Refusal> =>
     message:
       'these projects need more reads than one request allows, so Qivo cannot show their milestones at once. Choose fewer projects.',
   })
+
+/* A read's check of the request's reads against a ceiling. The read
+ * reports each index range before it starts it and each milestone it read. */
+type ReadGuard = {
+  /** Whether the read may start one more index range. */
+  range(): Promise<boolean>
+  /** Whether the read may go on after `doc`, which it just read. */
+  document(doc: Doc<'milestones'>): Promise<boolean>
+}
+
+/* A ReadGuard for `ceiling`, transaction totals. It counts each milestone
+ * at its own size (getDocumentSize, Convex's measure) and looks at the
+ * transaction's metrics only once the counted reads used what its last look
+ * left, so a read looks a few times. lib/archivedTasks.ts ceilingGuard
+ * counts every document at Convex's 1 MiB limit instead, which under
+ * MILESTONE_READ's 4 MiB looks every three or four milestones, each look
+ * costing about as much as an index range. The document after the last look
+ * may pass the ceiling by its own size, at most DOCUMENT_MAX_BYTES, which
+ * MILESTONE_RESERVE keeps back from the request's limits. */
+function sizedGuard(ctx: QueryCtx, ceiling: ReadCeiling): ReadGuard {
+  // what the reads counted since the last look may still use
+  let left = { ranges: 0, documents: 0, bytes: 0 }
+  const look = async (): Promise<boolean> => {
+    const m = await ctx.meta.getTransactionMetrics()
+    left = {
+      ranges: ceiling.ranges - m.databaseQueries.used,
+      documents: ceiling.documents - m.documentsRead.used,
+      bytes: ceiling.bytes - m.bytesRead.used,
+    }
+    return left.ranges > 0 && left.documents > 0 && left.bytes > 0
+  }
+  return {
+    range: async () => {
+      if (left.ranges <= 0 && !(await look())) return false
+      left.ranges -= 1
+      return true
+    },
+    document: async (doc) => {
+      left.documents -= 1
+      left.bytes -= getDocumentSize(doc)
+      return (left.documents > 0 && left.bytes > 0) || (await look())
+    },
+  }
+}
 
 /** A place in a milestone order, just after the milestone with this stored
  * day (`week`), name key (lib/nameKey.ts) and id. */
@@ -860,7 +899,7 @@ async function holdsPast(
   ctx: QueryCtx,
   projectIds: readonly string[],
   day: string,
-  guard: CeilingGuard,
+  guard: ReadGuard,
 ): Promise<boolean> {
   for (const projectId of projectIds) {
     if (!(await guard.range())) return true
@@ -869,7 +908,7 @@ async function holdsPast(
       .withIndex('by_project_week', (q) => q.eq('project_id', projectId).lt('week', day))
       .order('desc')
     for await (const row of rows) {
-      if (!(await guard.document())) return true
+      if (!(await guard.document(row))) return true
       const shown = shownDay(row.week)
       if (shown !== null && shown < day) return true
     }
@@ -975,8 +1014,8 @@ export async function readMilestones(
   // MILESTONE_READ past what the transaction read before the read began
   const start = await ctx.meta.getTransactionMetrics()
   const room = roomOf(start, MILESTONE_RESERVE)
-  const opening = ceilingGuard(ctx, room)
-  const budget = ceilingGuard(ctx, {
+  const opening = sizedGuard(ctx, room)
+  const budget = sizedGuard(ctx, {
     ranges: Math.min(room.ranges, start.databaseQueries.used + MILESTONE_READ.ranges),
     documents: Math.min(room.documents, start.documentsRead.used + MILESTONE_READ.documents),
     bytes: Math.min(room.bytes, start.bytesRead.used + MILESTONE_READ.bytes),
@@ -985,7 +1024,7 @@ export async function readMilestones(
   /* Reads the next day of `lane` whole under `guard` and adds its listed
    * rows to the lane's. False when the guard stops it first, which ends the
    * read, so the rows of a day read in part are dropped. */
-  const readDay = async (lane: Lane, guard: CeilingGuard): Promise<boolean> => {
+  const readDay = async (lane: Lane, guard: ReadGuard): Promise<boolean> => {
     if (lane.rows === null) {
       if (!(await guard.range())) return false
       lane.rows = range(lane.project)[Symbol.asyncIterator]()
@@ -995,7 +1034,7 @@ export async function readMilestones(
     const pull = async (): Promise<Doc<'milestones'> | null | undefined> => {
       const step = await rows.next()
       if (step.done === true) return null
-      return (await guard.document()) ? step.value : undefined
+      return (await guard.document(step.value)) ? step.value : undefined
     }
     let first = lane.peek
     lane.peek = null
