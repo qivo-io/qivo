@@ -10,13 +10,16 @@
  * changed by handing over the lead (model/projects.ts updateProjectCore), not
  * here.
  *
- * Removing access can hide open tasks from the people working on them. As in
- * the app's removal window (src/store/planner.ts accessRemoval), those are
- * the open tasks of the project and its sub-projects, in projects that are
- * not archived, whose active assignee, or whose reviewer when the task has no
- * subtasks, could see them before and cannot after. The caller chooses what
- * happens to them, and the removal and that choice land in one transaction or
- * not at all (removeAndSettle). Removing a team member and deleting a team
+ * Removing access can hide open tasks from the people working on them.
+ * Those are the open tasks of the project and its sub-projects, in projects
+ * that are not archived, whose active assignee, or whose reviewer when the
+ * task has no subtasks, could see them before and cannot after (findLost).
+ * accessRemovals.preview (model/removalPreview.ts) works them out through
+ * findLost too, without writing, for the app's removal window, which still
+ * works them out from its loaded tasks (src/store/planner.ts accessRemoval)
+ * until it asks the preview instead. The caller chooses what happens to
+ * them, and the removal and that choice land in one transaction or not at
+ * all (removeAndSettle). Removing a team member and deleting a team
  * (model/teams.ts) settle the members' tasks through the same function. While billing or a
  * pending deletion makes the organization read-only, an organization admin
  * can still remove access, in the app and over REST and MCP, but only by
@@ -32,6 +35,7 @@ import {
   canManageProjectUsers,
   type OrgProjectLevels,
   projectLevelsForPeople,
+  type RemovedAccess,
   rootMetaOf,
 } from '../lib/access'
 import { assertOrgWritable } from '../lib/billingAccess'
@@ -109,9 +113,17 @@ export type AccessRemoval = {
 
 export const LEAD_ACCESS_RULE = 'that user leads this project; hand the lead to someone else first'
 
-/* Refuses a caller who may not change this project's access for the
+/** The refusal of a caller who may not manage a project's users or teams. */
+export const NO_USER_MANAGEMENT = 'no permission to manage users on this project'
+
+/** The refusal of 'keep_as_viewer' when the person's removed grant was
+ * already Viewer. */
+export const VIEWER_NOT_KEPT =
+  'a Viewer grant cannot be kept as Viewer; leave the tasks or reassign them'
+
+/** Refuses a caller who may not change this project's access for the
  * subject's kind of grant. */
-async function assertManagesAccess(
+export async function assertManagesAccess(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   project: Doc<'projects'>,
@@ -122,12 +134,12 @@ async function assertManagesAccess(
     'team' in subject
       ? await canManageProjectTeams(ctx, me, project)
       : await canManageProjectUsers(ctx, me, project)
-  if (!allowed) throw forbidden('no permission to manage users on this project')
+  if (!allowed) throw forbidden(NO_USER_MANAGEMENT)
 }
 
-/* The lead's access is the lead role; a sub-project without its own lead
- * (legacy rows) is led by its parent's. */
-async function assertNotLead(
+/** Refuses a change to the lead's own access, which is the lead role; a
+ * sub-project without its own lead (legacy rows) is led by its parent's. */
+export async function assertNotLead(
   ctx: QueryCtx,
   project: Doc<'projects'>,
   subject: AccessSubject,
@@ -137,8 +149,8 @@ async function assertNotLead(
   if (lead === subject.profile.id) throw rule(LEAD_ACCESS_RULE)
 }
 
-/* The subject's grant row on the project, if any. */
-async function grantOf(ctx: QueryCtx, project: Doc<'projects'>, subject: AccessSubject) {
+/** The subject's grant row on the project, if any. */
+export async function grantOf(ctx: QueryCtx, project: Doc<'projects'>, subject: AccessSubject) {
   return 'team' in subject
     ? await ctx.db
         .query('project_team_access')
@@ -291,9 +303,9 @@ export async function reachedProjects(
   return out
 }
 
-/* One person's role on an open task a removal takes out of their sight, with
- * the task's project. */
-type Lost = Holding & { project: Doc<'projects'> }
+/** One person's role on an open task a removal takes out of their sight,
+ * with the task's project. */
+export type Lost = Holding & { project: Doc<'projects'> }
 
 /** The share of each of Convex's limits for one transaction that a removal
  * may have used before it reads another holder's sight, gives another Viewer
@@ -350,7 +362,7 @@ export const REMOVAL_FULL =
 /* Thrown by a removal's guard once the transaction has used more than
  * REASSIGN_ROOM of a limit (lib/db.ts usedMoreThan), and turned into
  * REMOVAL_FULL, reassignTooLarge or KEEP_TOO_LARGE by removeAndSettle
- * and removeAndFindLost. It is no ConvexError, so settling passes it on
+ * and findLost. It is no ConvexError, so settling passes it on
  * without HELD_TASKS_REFUSED. */
 class RemovalFull extends Error {}
 
@@ -382,11 +394,20 @@ const TASK_GUARD_ROWS = 10
  * between two room checks. */
 const ROW_GUARD_ROWS = 500
 
+/** How findLost works out the holders' sight after the removal: by running
+ * `remove`, the write's own deletes, and reading again, or by leaving the
+ * rows `without` names out of the same reads, which writes nothing (the
+ * preview, model/removalPreview.ts). */
+type After = { remove: () => Promise<void> } | { without: RemovedAccess }
+
 /**
- * Runs `remove` and answers the open tasks in `projects` that someone in
- * `people` works on and could see before and cannot see after, with the
- * organization's projects it read (none when nobody holds such a task). A
- * switched-off person holds no work, and a group's reviewer is dormant.
+ * Answers the open tasks in `projects` that someone in `people` works on and
+ * could see before the removal and cannot see after (`after`), with the
+ * organization's projects it read (none when nobody holds such a task), how
+ * many people hold such tasks before any sight is checked (`holders`) and
+ * the sight of those people before and after. A switched-off person holds
+ * no work, and a group's reviewer is dormant. A removal and its preview both
+ * run this, so they cannot disagree.
  *
  * The reads are bounded by what the app's snapshot reads, never by history.
  * Only the active tasks of `projects` are read (by_project_archived). The
@@ -402,15 +423,21 @@ const ROW_GUARD_ROWS = 500
  * one request is refused with REMOVAL_FULL before a read passes Convex's
  * limits.
  */
-async function removeAndFindLost(
-  ctx: MutationCtx,
+export async function findLost(
+  ctx: QueryCtx,
   a: {
     projects: readonly Doc<'projects'>[]
     people: ReadonlyMap<string, Doc<'profiles'>>
-    remove: () => Promise<void>
     held: HeldTasks
+    after: After
   },
-): Promise<{ lost: Lost[]; orgProjects: Doc<'projects'>[] }> {
+): Promise<{
+  lost: Lost[]
+  orgProjects: Doc<'projects'>[]
+  holders: number
+  before: Map<string, OrgProjectLevels>
+  after: Map<string, OrgProjectLevels>
+}> {
   return withinRoom(async () => {
     const candidates: Lost[] = []
     let read = 0
@@ -447,12 +474,15 @@ async function removeAndFindLost(
       }
     }
     const holding = holders.flatMap((id) => a.people.get(id) ?? [])
-    const sight = (): Promise<Map<string, OrgProjectLevels>> =>
-      projectLevelsForPeople(ctx, holding, orgProjects, () => assertRoom(ctx))
+    const sight = (without?: RemovedAccess): Promise<Map<string, OrgProjectLevels>> =>
+      projectLevelsForPeople(ctx, holding, orgProjects, () => assertRoom(ctx), without)
     const before = await sight()
-    await a.remove()
-    // Convex reads this transaction's own writes, so sight is now as it will be
-    const after = await sight()
+    let after: Map<string, OrgProjectLevels>
+    if ('remove' in a.after) {
+      await a.after.remove()
+      // Convex reads this transaction's own writes, so sight is now as it will be
+      after = await sight()
+    } else after = await sight(a.after.without)
     const sees = (levels: Map<string, OrgProjectLevels>, h: Lost) =>
       (levels.get(h.profile_id)?.levelOf(h.project) ?? null) !== null
     const lost: Lost[] = []
@@ -465,7 +495,7 @@ async function removeAndFindLost(
       }
       lost.push(h)
     }
-    return { lost, orgProjects }
+    return { lost, orgProjects, holders: holders.length, before, after }
   })
 }
 
@@ -520,10 +550,10 @@ async function assertCanTakeOver(
   }
 }
 
-/* Whether the removal in `a` would accept 'keep_as_viewer' for `lost`: it
+/** Whether the removal in `a` would accept 'keep_as_viewer' for `lost`: it
  * has no keepRefusal, and `a.me` may manage the users of each project the
  * Viewer grants would go to, as the keep branch of removeAndSettle checks. */
-async function canKeepAsViewers(
+export async function canKeepAsViewers(
   ctx: QueryCtx,
   a: {
     me: Doc<'profiles'>
@@ -580,7 +610,7 @@ export type Settlement = Omit<AccessRemoval, 'removed'> & { viewer_grants: Doc<'
  * grants that fill REASSIGN_ROOM before the last one is saved are refused
  * the same way with KEEP_TOO_LARGE. A removal whose people are too many to
  * work out who loses sight is refused with LIMITS.removalHolders' sentence
- * or REMOVAL_FULL before it reads past Convex's limits (removeAndFindLost). Any refusal
+ * or REMOVAL_FULL before it reads past Convex's limits (findLost). Any refusal
  * throws, so the removal and its settlement land together or not at all, and
  * one while settling the tasks carries HELD_TASKS_REFUSED. Project grant
  * removal, team member removal and team deletion (model/teams.ts) all run
@@ -608,7 +638,12 @@ export async function removeAndSettle(
   },
 ): Promise<Settlement> {
   const { me, held, now } = a
-  const { lost, orgProjects } = await removeAndFindLost(ctx, a)
+  const { lost, orgProjects } = await findLost(ctx, {
+    projects: a.projects,
+    people: a.people,
+    held,
+    after: { remove: a.remove },
+  })
   const stranded = lost.map(({ project: _where, ...h }) => h)
   const result: Settlement = { stranded, kept_as_viewer: [], reassigned: [], viewer_grants: [] }
   // Each Viewer grant and each reassigned task first checks the room left
@@ -635,7 +670,7 @@ export async function removeAndSettle(
         await full()
         if (!result.viewer_grants.some((p) => p.id === where.id)) {
           if (!(await canManageProjectUsers(ctx, me, where))) {
-            throw forbidden('no permission to manage users on this project')
+            throw forbidden(NO_USER_MANAGEMENT)
           }
           result.viewer_grants.push(where)
         }
@@ -646,7 +681,7 @@ export async function removeAndSettle(
           )
           .unique()
         if (existing === null) {
-          // every holder is one of a.people (removeAndFindLost)
+          // every holder is one of a.people (findLost)
           const person = a.people.get(h.profile_id)
           await grants.grant(where, {
             project_id: where.id,
@@ -713,6 +748,14 @@ export async function removeAndSettle(
   return result
 }
 
+/** The keepRefusal of removing `row`, the subject's grant on a project: a
+ * person whose removed grant was Viewer cannot be kept as Viewer. */
+export const grantKeepRefusal = (
+  subject: AccessSubject,
+  row: Doc<'project_access'> | Doc<'project_team_access'>,
+): string | undefined =>
+  'profile' in subject && row.level === 'viewer' ? VIEWER_NOT_KEPT : undefined
+
 /**
  * Removes one person's or one team's grant from the project and settles the
  * open tasks that leave their holders' sight by `held` (removeAndSettle).
@@ -749,10 +792,7 @@ export async function removeProjectGrantCore(
     remove: () => ('team_id' in row ? deleteShare(ctx, row) : deleteGrant(ctx, row)),
     held: a.held,
     viewerOn: async () => project,
-    keepRefusal:
-      'profile' in subject && row.level === 'viewer'
-        ? 'a Viewer grant cannot be kept as Viewer; leave the tasks or reassign them'
-        : undefined,
+    keepRefusal: grantKeepRefusal(subject, row),
     now: a.now,
     provenance: a.provenance,
   })

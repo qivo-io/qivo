@@ -68,7 +68,7 @@ import {
   insertTeamCount,
 } from './teamCounts'
 
-/* Refuses with LIMITS.teamDeleteRows' sentence a team deletion that changes
+/** Refuses with LIMITS.teamDeleteRows' sentence a team deletion that changes
  * more than LIMITS.teamDeleteRows.max memberships, project shares, their
  * reach rows (model/projectNav.ts, at most two a share) and legacy owned
  * projects (model/cascade.ts deleteTeamDeep), read before anything else so
@@ -76,7 +76,10 @@ import {
  * Convex's 4,096 reads: a local backend read 3,062 ranges deleting a team
  * with 3,000 memberships, and refused one with 5,000. Answers the team's
  * legacy owned projects it read, for deleteTeamDeep. */
-async function assertTeamFits(ctx: QueryCtx, team: Doc<'teams'>): Promise<Doc<'projects'>[]> {
+export async function assertTeamFits(
+  ctx: QueryCtx,
+  team: Doc<'teams'>,
+): Promise<Doc<'projects'>[]> {
   const over = LIMITS.teamDeleteRows.max + 1
   const memberships = await ctx.db
     .query('team_members')
@@ -119,9 +122,9 @@ export async function assertRunsTeam(
   throw forbidden(TEAM_RUNS_RULE)
 }
 
-/* A membership change also changes who sees the team's projects, so it needs
- * a person who runs the team. */
-async function assertManagesMembers(
+/** Refuses a membership change by anyone but a person who runs the team,
+ * because it also changes who sees the team's projects. */
+export async function assertManagesMembers(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   team: Doc<'teams'>,
@@ -412,11 +415,11 @@ export async function setTeamLeaderCore(
   return { changed: true }
 }
 
-/* The projects whose tasks the team's grants reach, each project shared with
- * the team and, for a top-level one, its sub-projects, without archived ones
- * and each once, with the ids of the projects the team shares. It checks the
- * room before each share, so call it within withinRoom. */
-async function teamReach(
+/** The projects whose tasks the team's grants reach, each project shared
+ * with the team and, for a top-level one, its sub-projects, without archived
+ * ones and each once, with the ids of the projects the team shares. It
+ * checks the room before each share, so call it within withinRoom. */
+export async function teamReach(
   ctx: QueryCtx,
   team: Doc<'teams'>,
 ): Promise<{ projects: Doc<'projects'>[]; shared: Set<string> }> {
@@ -435,12 +438,13 @@ async function teamReach(
   return { projects: [...out.values()], shared }
 }
 
-/* Where keeping a member as Viewer puts the grant for a task in `project`:
+/** Where keeping a member as Viewer puts the grant for a task in `project`:
  * the project the team shared that showed the task, the task's own
  * sub-project first, then its parent. `shared` holds the ids of the projects
  * the team shared before the removal (teamReach). The app's removal window
- * lists the same projects. */
-async function viewerProjectFor(
+ * and the removal preview (model/removalPreview.ts) list the same
+ * projects. */
+export async function viewerProjectFor(
   ctx: QueryCtx,
   shared: ReadonlySet<string>,
   project: Doc<'projects'>,
@@ -518,6 +522,17 @@ export async function removeTeamMemberCore(
   return { removed: true, ...settlement }
 }
 
+/** Refuses a team deletion by anyone but an organization admin, and the
+ * deletion of the organization's last team. */
+export async function assertDeletesTeam(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  team: Doc<'teams'>,
+): Promise<void> {
+  if (me.org_role !== 'admin') throw rule('only organization admins can delete teams')
+  await assertNotLastTeam(ctx, team)
+}
+
 /**
  * Deletes the team (model/cascade.ts deleteTeamDeep) and settles, by `held`,
  * the open tasks its members can no longer see once its grants are gone
@@ -547,8 +562,7 @@ export async function deleteTeamCore(
   },
 ): Promise<void> {
   const { me, team, now } = a
-  if (me.org_role !== 'admin') throw rule('only organization admins can delete teams')
-  await assertNotLastTeam(ctx, team)
+  await assertDeletesTeam(ctx, me, team)
   await assertTeamExpected(ctx, me, team, a.expected, DELETES)
   const owned = await assertTeamFits(ctx, team)
   if (a.held === 'leave') return deleteTeamDeep(ctx, { team, actor: me, now, owned })
