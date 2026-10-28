@@ -664,7 +664,65 @@ describe('changing the first day of the week with projects in Deleted items', ()
     await setWeekStart(t, f, 0)
     expect((await orgOf(t, f)).week_start).toBe(0)
   })
+
+  it('reads a project a restore has revealed once, as a live one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await add(t, f, f.user, f.meta.id, 'Alpha', '2026-05-10')
+    await add(t, f, f.user, f.meta.id, 'Beta', '2026-05-11')
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    await revealed(t, (await itemFor(t, f.meta.id))._id)
+    const e = await expectRefusal(setWeekStart(t, f, 0), 'rule')
+    const message = (e.data as Refusal).message
+    expect(message.match(/would have/g)).toHaveLength(1)
+    expect(message).toContain('Testbed platform (TBED) would have “Alpha”')
+    expect(message).not.toContain('Deleted items')
+  })
+
+  it('names the step that works for an archived project and a deleted one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const archived = await plantProject(t, {
+      org_id: f.org.id,
+      key: 'OLD',
+      name: 'Old line',
+      archived_at: '2026-02-01T00:00:00.000Z',
+    })
+    await plant(t, archived.id, '2026-03-01', 'Old Sunday')
+    await plant(t, archived.id, '2026-03-02', 'Old Monday')
+    await add(t, f, f.user, f.meta.id, 'Alpha', '2026-05-10')
+    await add(t, f, f.user, f.meta.id, 'Beta', '2026-05-11')
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const e = await expectRefusal(setWeekStart(t, f, 0), 'rule')
+    const message = (e.data as Refusal).message
+    expect(message).toContain('Old line (OLD, archived) would have')
+    expect(message).toContain('Testbed platform (TBED, in Deleted items) would have')
+    expect(message).toMatch(
+      /then change the first day again\. Restore an archived project first to change its milestones\. Restore a project in Deleted items to change its milestones, or delete it for good\.$/,
+    )
+  })
 })
+
+/* Brings the projects and milestones of Deleted items item `_id` back as a
+ * restore does before it ends, leaving the item restoring with its project
+ * live again. */
+const revealed = (t: T, _id: Doc<'deleted_items'>['_id']) =>
+  t.run(async (ctx) => {
+    const item = await ctx.db.get(_id)
+    if (item === null) throw new Error('no item')
+    for (const copy of await ctx.db
+      .query('deleted_rows')
+      .withIndex('by_item_owner', (q) => q.eq('item_id', item.id))
+      .collect()) {
+      if (copy.row.table === 'projects') await ctx.db.insert('projects', copy.row.doc)
+      else if (copy.row.table === 'milestones') await ctx.db.insert('milestones', copy.row.doc)
+      else continue
+      await ctx.db.delete(copy._id)
+    }
+    await ctx.db.patch(_id, { state: 'restoring' })
+  })
 
 /* The audit's whole report. */
 const audit = (t: T, page_size?: number) =>

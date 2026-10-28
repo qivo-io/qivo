@@ -270,10 +270,13 @@ const listed = (items: string[]): string =>
  * (LIMITS.milestonesPerWeek). It reads the milestones of every top-level
  * project of the organization, archived ones included, and of each top-level
  * project in Deleted items that can still be restored, in this transaction,
- * so a concurrent milestone write conflicts with the change. The refusal
- * names the projects, the days and the weeks, and the milestones of a
- * project only to a caller who can see it. Past WEEK_START_ROOM it stops: it
- * names the clashes it found, and says that there may be more, or with none
+ * so a concurrent milestone write conflicts with the change. A project in
+ * Deleted items that a restore has already revealed is read once, as a live
+ * one. The refusal names the projects, the days and the weeks, and the
+ * milestones of a project only to a caller who can see it, and gives the
+ * step that works for an archived project or one in Deleted items, whose
+ * milestones the app shows only once it is back. Past WEEK_START_ROOM it
+ * stops. It then names the clashes it found, and says that there may be more, or with none
  * found refuses with the sentence that it could not check every milestone,
  * never with a clash it did not find. A milestone stored on a sub-project
  * before 2026-10-14 is left out; internal/milestoneWeeks reports those.
@@ -332,6 +335,9 @@ export async function assertWeekStartFits(
     if (!(await room(true))) break
     for await (const item of items) {
       if (!(await counted())) break
+      // a restore that has revealed the project goes on as restoring a
+      // while, and the live projects above read its milestones already
+      if ((await byId(ctx, 'projects', item.target_id)) !== null) continue
       // the rows a move has not taken yet or a restore has written back,
       // then the stored ones
       const rows = new Map<string, Pick<Doc<'milestones'>, 'name' | 'week'>>()
@@ -374,7 +380,8 @@ export async function assertWeekStartFits(
       clash.live !== null
         ? await canSeeProject(ctx, me, clash.live)
         : clash.item !== null && (await viewOf(ctx, memo, me, clash.item)) !== null
-    const where = clash.live === null ? ', in Deleted items' : ''
+    const where =
+      clash.live === null ? ', in Deleted items' : clash.live.archived_at ? ', archived' : ''
     const days = clash.milestones.map((m) =>
       sees ? `“${m.name}” on ${dayLabel(m.week, next)}` : dayLabel(m.week, next),
     )
@@ -387,13 +394,23 @@ export async function assertWeekStartFits(
     more === 0
       ? ''
       : `; and ${more} more ${more === 1 ? 'week' : 'weeks'} would hold two milestones of one project`
+  // the app shows the milestones of an archived project or one in Deleted
+  // items only once it is back
+  const shown = clashes.slice(0, NAMED_CLASHES)
+  const steps = [
+    'Move or delete milestones so that no project has two in one week, then change the first day again.',
+    ...(shown.some((c) => c.live?.archived_at !== undefined)
+      ? ['Restore an archived project first to change its milestones.']
+      : []),
+    ...(shown.some((c) => c.live === null)
+      ? ['Restore a project in Deleted items to change its milestones, or delete it for good.']
+      : []),
+    ...(stopped ? ['Qivo could not check every project, so there may be more.'] : []),
+  ]
   throw new ConvexError<Refusal>({
     code: 'rule',
     reason: WEEK_START_REFUSALS.conflicts,
-    message:
-      `workdays cannot start on ${WEEKDAY_NAMES[a.weekStart]}, because a project can have at most 1 milestone a week, and then ${named.join('; ')}${rest}. ` +
-      'Move or delete milestones so that no project has two in one week, then change the first day again.' +
-      (stopped ? ' Qivo could not check every project, so there may be more.' : ''),
+    message: `workdays cannot start on ${WEEKDAY_NAMES[a.weekStart]}, because a project can have at most 1 milestone a week, and then ${named.join('; ')}${rest}. ${steps.join(' ')}`,
   })
 }
 
