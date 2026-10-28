@@ -163,6 +163,46 @@ async function plantItems(
   return out
 }
 
+/* Runs internal/inboxItemsBackfill until it answers done. */
+async function backfillAll(t: T) {
+  for (let cursor: string | null = null, n = 0; ; n++) {
+    if (n === 100) throw new Error('the backfill did not finish')
+    const got: { done: boolean; cursor: string | null } = await t.action(
+      internal.internal.inboxItemsBackfill.run,
+      { dry_run: false, cursor },
+    )
+    if (got.done) return
+    cursor = got.cursor
+  }
+}
+
+/* Stores `n` messages of `kind` for `to` about `task` raw, as releases
+ * before the item cap and the items stored them, so `to` has no build
+ * state. Each is about 1 KB, a long change line. */
+async function plantLegacy(
+  t: T,
+  f: OrgFixture,
+  to: Doc<'profiles'>,
+  task: Doc<'issues'>,
+  n: number,
+  kind: (i: number) => 'change' | 'comment',
+) {
+  for (let from = 0; from < n; from += 500)
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(n, from + 500); i++)
+        await ctx.db.insert('messages', {
+          id: uuid(),
+          org_id: f.org.id,
+          recipient_id: to.id,
+          issue_id: task.id,
+          issue_title: task.title,
+          kind: kind(i),
+          detail: `Legacy update ${i}: ${'a long change line '.repeat(50)}`,
+          created_at: at(i),
+        })
+    })
+}
+
 /* Archives the tasks without the archive's read steps, as a task archived
  * before its step ran is, so their messages stay unread. */
 const archiveRaw = (t: T, tasks: readonly Doc<'issues'>[]) =>
@@ -545,7 +585,8 @@ describe('one task’s item', () => {
     expect(await itemFor(t, f, f.guest, seen.id)).toMatchObject({
       item: { unread_count: 5, first_unread_at: at(100), unread_change: false },
     })
-    // with no change at all, the first unread message only, not all five
+    // neither walks the five unread messages: with no change it reads the
+    // first unread one, and with a read change that read one besides
     const quiet = await task()
     for (let i = 0; i < 5; i++)
       await post(t, f, { to: f.guest, task: quiet, minute: 200 + i, kind: 'comment' })
@@ -559,14 +600,47 @@ describe('one task’s item', () => {
           read: (await ctx.meta.getTransactionMetrics()).documentsRead.used - before,
         }
       })
-    const [all, one] = [await documents(seen.id), await documents(quiet.id)]
+    const [withRead, one] = [await documents(seen.id), await documents(quiet.id)]
     expect(one.answer).toMatchObject({ item: { first_unread_at: at(200), unread_change: false } })
-    expect(all.read - one.read).toBe(4)
+    expect(withRead.read - one.read).toBe(1)
     // a snoozed item says until when
     const until = new Date(START + DAY).toISOString()
     const ids = (await pairRows(t, f.guest.id, quiet.id)).map((m) => m.id)
     await guest.mutation(api.messages.snooze, { org_id: f.org.id, ids, until })
     expect(await itemFor(t, f, f.guest, quiet.id)).toMatchObject({ item: { snoozed_until: until } })
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('says whether a change is unread from the item’s counts, without walking a large item', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await plantLegacy(t, f, f.guest, task, BUILD.pair_rows, () => 'comment')
+    await backfillAll(t)
+    // a change arrives last, trimming the oldest comments toward the cap
+    const change = (await post(t, f, { to: f.guest, task, minute: 2000, kind: 'change' }))!
+    const read = () =>
+      t.run(async (ctx) => {
+        const me = (await byId(ctx, 'profiles', f.guest.id))!
+        const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        const answer = await readInboxItem(ctx, me, task.id)
+        if (answer.state !== 'ok' || answer.item === null) throw new Error('no item')
+        const after = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        return {
+          change: answer.item.unread_change,
+          unread: answer.item.unread_count,
+          documents: after - before,
+        }
+      })
+    const unread = await read()
+    expect(unread.change).toBe(true)
+    expect(unread.unread).toBeGreaterThan(900)
+    // the item row, the task and the access reads, and three messages at most
+    expect(unread.documents).toBeLessThan(20)
+    await as(t, f.guest).mutation(api.messages.markRead, { org_id: f.org.id, ids: [change.id] })
+    const seen = await read()
+    expect(seen.change).toBe(false)
+    expect(seen.documents).toBeLessThan(20)
     expect(await drift(t)).toEqual([])
   })
 
@@ -854,33 +928,12 @@ describe('the item actions', () => {
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }),
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }),
     ]
-    // stored before the item cap and before the items, so the guest has no state
     for (const task of [a, b])
-      for (let from = 0; from < BUILD.pair_rows; from += 500)
-        await t.run(async (ctx) => {
-          for (let i = from; i < from + 500; i++)
-            await ctx.db.insert('messages', {
-              id: uuid(),
-              org_id: f.org.id,
-              recipient_id: f.guest.id,
-              issue_id: task.id,
-              issue_title: task.title,
-              kind: i % 2 === 0 ? 'change' : 'comment',
-              // about 1 KB, a long change line
-              detail: `Legacy update ${i}: ${'a long change line '.repeat(50)}`,
-              created_at: at(i),
-            })
-        })
-    expect(await itemFor(t, f, f.guest, a.id)).toEqual({ state: 'building' })
-    for (let cursor: string | null = null, n = 0; ; n++) {
-      if (n === 100) throw new Error('the backfill did not finish')
-      const got: { done: boolean; cursor: string | null } = await t.action(
-        internal.internal.inboxItemsBackfill.run,
-        { dry_run: false, cursor },
+      await plantLegacy(t, f, f.guest, task, BUILD.pair_rows, (i) =>
+        i % 2 === 0 ? 'change' : 'comment',
       )
-      if (got.done) break
-      cursor = got.cursor
-    }
+    expect(await itemFor(t, f, f.guest, a.id)).toEqual({ state: 'building' })
+    await backfillAll(t)
     expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({ unread_count: BUILD.pair_rows })
     expect(await itemFor(t, f, f.guest, a.id)).toMatchObject({
       item: { unread_count: BUILD.pair_rows, first_unread_at: at(0), unread_change: true },

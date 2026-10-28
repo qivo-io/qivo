@@ -222,6 +222,34 @@ export async function readInboxSummary(ctx: QueryCtx, seats: readonly Doc<'profi
   }
 }
 
+/** How many read messages of one item the item read takes to count its
+ * read changes. The prune keeps at most one per item (model/messages.ts
+ * pruneReadMessages), so more means an item kept from before that rule. */
+const READ_PEEK = 8
+
+/* Whether one of the item's unread messages is a change. The item counts
+ * its changes read or not (`changes`), so the unread ones are those beyond
+ * the read changes, which the prune keeps to at most one: the answer reads
+ * the item's read messages, one normally. An item with more than READ_PEEK
+ * read messages is walked unread first instead, up to its first change. */
+async function unreadChange(
+  ctx: QueryCtx,
+  pair: { recipient_id: string; issue_id: string },
+  row: Pick<Doc<'inbox_items'>, 'changes' | 'unread_count'>,
+): Promise<boolean> {
+  if (row.changes === 0 || row.unread_count === 0) return false
+  const messages = (read: boolean) =>
+    ctx.db.query('messages').withIndex('by_recipient_issue_read_order', (q) => {
+      const item = q.eq('recipient_id', pair.recipient_id).eq('issue_id', pair.issue_id)
+      return read ? item.gt('read_at', undefined) : item.eq('read_at', undefined)
+    })
+  const read = await messages(true).take(READ_PEEK + 1)
+  if (read.length <= READ_PEEK)
+    return row.changes > read.filter((message) => message.kind === 'change').length
+  for await (const message of messages(false)) if (message.kind === 'change') return true
+  return false
+}
+
 /**
  * Seat `me`'s item about task `issueId`, for the task window. `building`
  * while the seat is not ready (seatReady). Otherwise `item` is null when the
@@ -236,14 +264,14 @@ export async function readInboxSummary(ctx: QueryCtx, seats: readonly Doc<'profi
  *
  * It reads the item row, the seat's readiness (two ranges), the task with
  * its project and the seat's access rows, the newest message by insertion,
- * and the item's unread messages
- * oldest first, only the first when the item holds no change and otherwise
- * up to the first unread change, at most ITEM_UNREAD_CAP + 1 (51) for an
- * item kept at the cap.
+ * the oldest unread message, and for an item with an unread message and a
+ * change its read messages (unreadChange), one normally, so its cost does
+ * not grow with the item.
  */
 export async function readInboxItem(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
   if (!(await seatReady(ctx, me.id))) return { state: 'building' as const }
-  const row = await itemRow(ctx, { recipient_id: me.id, issue_id: issueId })
+  const pair = { recipient_id: me.id, issue_id: issueId }
+  const row = await itemRow(ctx, pair)
   if (row === null || (await inboxScope(ctx, me).shownTask(issueId)) === null)
     return { state: 'ok' as const, item: null }
   // the newest message by insertion, which a later one, backdated or not,
@@ -254,30 +282,22 @@ export async function readInboxItem(ctx: QueryCtx, me: Doc<'profiles'>, issueId:
     .order('desc')
     .first()
   if (newest === null) return { state: 'ok' as const, item: null }
-  let firstUnreadAt: string | null = null
-  let unreadChange = false
-  if (row.unread_count > 0) {
-    const unread = ctx.db
-      .query('messages')
-      .withIndex('by_recipient_issue_read_order', (q) =>
-        q.eq('recipient_id', me.id).eq('issue_id', issueId).eq('read_at', undefined),
-      )
-    for await (const message of unread) {
-      firstUnreadAt ??= message.created_at
-      if (message.kind === 'change') {
-        unreadChange = true
-        break
-      }
-      if (row.changes === 0) break
-    }
-  }
+  const firstUnread =
+    row.unread_count === 0
+      ? null
+      : await ctx.db
+          .query('messages')
+          .withIndex('by_recipient_issue_read_order', (q) =>
+            q.eq('recipient_id', me.id).eq('issue_id', issueId).eq('read_at', undefined),
+          )
+          .first()
   return {
     state: 'ok' as const,
     item: {
       unread_count: row.unread_count,
       dropped: row.dropped,
-      first_unread_at: firstUnreadAt,
-      unread_change: unreadChange,
+      first_unread_at: firstUnread?.created_at ?? null,
+      unread_change: await unreadChange(ctx, pair, row),
       latest_id: row.latest_id,
       latest_at: row.latest_at,
       snoozed_until: row.snoozed_until ?? null,
