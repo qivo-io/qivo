@@ -409,18 +409,21 @@ describe('the one way to write a grant, a share or a lead', () => {
     expect(others).toEqual([])
   })
 
-  /* A grant or share read and deleted in one declaration, the shape a
-   * direct delete takes; the declaration ends at the next one that starts
-   * a line. Only the helpers and the teardowns, which delete the reach rows
-   * themselves, may. */
+  /* A grant or share read, or taken as a row, and deleted from the
+   * database in one declaration, the shape a direct delete takes; the
+   * declaration ends at the next one that starts a line. A delete from a Set
+   * or Map of ids is not one. Only the helpers and the teardowns, which
+   * delete the reach rows themselves, may. */
   const READ =
-    /\.query\(\s*['"]project_(team_)?access['"]|tagged\(\s*['"]project_(team_)?access['"]/g
+    /\.query\(\s*['"]project_(team_)?access['"]|tagged\(\s*['"]project_(team_)?access['"]|Doc<\s*['"]project_(team_)?access['"]\s*>/g
+  // ctx.db.delete( and a wrapped writer's, such as uncountedWriter(ctx.db)
+  const DELETE = /\bdb\)?\.delete\(/
   const NEXT = /^(\}|export |async function |function |const |type |\/\*)/m
   const deletesGrants = (source: string) =>
     [...source.matchAll(READ)].some((read) => {
       const rest = source.slice((read.index ?? 0) + read[0].length)
       const end = NEXT.exec(rest)
-      return rest.slice(0, end?.index ?? rest.length).includes('.delete(')
+      return DELETE.test(rest.slice(0, end?.index ?? rest.length))
     })
   const TEARDOWNS = new Set([
     '../model/projectNav.ts',
@@ -432,7 +435,21 @@ describe('the one way to write a grant, a share or a lead', () => {
   ])
 
   it('deletes grants and shares only through the helpers or in a teardown', () => {
-    expect(deletesGrants(sources['../model/cascade.ts'])).toBe(true)
+    // the scan sees the deletes it allows, so its silence means something
+    for (const path of [
+      '../model/projectNav.ts',
+      '../model/cascade.ts',
+      '../internal/demoCleanup.ts',
+    ])
+      expect(deletesGrants(sources[path])).toBe(true)
+    const read = "for (const row of await ctx.db.query('project_access').collect())"
+    expect(deletesGrants(`${read} await ctx.db.delete(row._id)`)).toBe(true)
+    expect(deletesGrants(`${read} await uncountedWriter(ctx.db).delete(row._id)`)).toBe(true)
+    expect(deletesGrants("async (row: Doc<'project_team_access'>) => db.delete(row._id)")).toBe(
+      true,
+    )
+    // a set of the ids it read, as a milestone read's navigation check keeps
+    expect(deletesGrants(`${read} ids.delete(row.project_id)`)).toBe(false)
     const others = Object.entries(sources)
       .filter(([path, source]) => !TEARDOWNS.has(path) && deletesGrants(source))
       .map(([path]) => path)
