@@ -1,12 +1,19 @@
 /* Inbox writes (phase 5): read_at, snoozed_until and delete, the client's
  * WHOLE message write surface. Rows are created only by model/messages'
  * notify family, and everything else is immutable by not appearing in any
- * validator.
+ * validator. The app's current Inbox names the rows by message id
+ * (markRead, markUnread, remove, snooze), the bulk actions take none
+ * (markAllRead, removeRead), and the item actions name one item by its
+ * task (readItem, unreadItem, removeItem, snoozeItem), so a row the app did
+ * not load is reached too. Open old clients keep calling the id actions.
  *
  * Own rows only, silently: the RLS filter's successor (model/messages.ts
  * ownMessages) skips non-own and unknown ids without a trace (the client
  * pre-filters anyway), so a probe learns nothing and a stale id is not an
- * error.
+ * error. An item action reads only the caller's own item
+ * (model/messages.ts itemMessages), and a task without one, or an unknown
+ * task id, changes nothing and raises nothing, except that snoozeItem
+ * still refuses an `until` that snooze refuses.
  *
  * Each write is a model/messages.ts function the machine inbox
  * (machine/discussion.ts) runs too. markRead then restores 0109's invariant
@@ -24,6 +31,7 @@ import { internalMutation } from './_generated/server'
 import { orgMutation } from './lib/functions'
 import { rekeyStep } from './model/inboxItems'
 import {
+  itemMessages,
   markAllMessagesRead,
   markMessagesRead,
   markMessagesUnread,
@@ -118,6 +126,92 @@ export const snooze = orgMutation({
   args: { ids: v.array(v.string()), until: v.union(v.string(), v.null()) },
   handler: async (ctx, { ids, until }) => {
     await snoozeMessages(ctx, ctx.me, await ownMessages(ctx, ctx.me, ids), until)
+    return null
+  },
+})
+
+/* Where readItem and removeItem stop: the item's newest _creationTime as
+ * the caller saw it (inbox.item `through`). The cutoff is not exact;
+ * model/messages.ts itemMessages says what it leaves out and what it can
+ * still take. */
+const vThrough = v.number()
+
+/* Marks the caller's item about one task read. It marks the unread
+ * messages whose _creationTime is at most `through`, or all of them without
+ * it, so a message stored after the caller's view by more than one
+ * mutation's run time stays unread, a backdated follower or mention notice
+ * included. A message from a mutation that started before the view and
+ * committed after it can carry an earlier or equal _creationTime and is
+ * then marked read with the rest, until messages carry the planned commit
+ * timestamp (model/messages.ts itemMessages). The prune then keeps the
+ * item's newest message
+ * (model/messages.ts markMessagesRead), which is that later message when
+ * there is one. That message keeps the dropped count the item cap moved
+ * onto it (schema.ts messages.dropped), as markRead leaves it: a trim after
+ * the caller's view can also have dropped messages stored after it, which
+ * the count cannot tell apart, so the count stays until that message is
+ * read.
+ *
+ * An item kept at the cap holds at most ITEM_UNREAD_CAP + 1 (51) messages.
+ * One stored before the cap holds more. The backfill builds an item of up
+ * to BUILD.pair_rows (1,000) messages as it is and trims only larger ones,
+ * an arrival trims at most ITEM_TRIM_STEP (50), and on a seat not built yet
+ * the item can be larger still, as it is for markRead's prune and for
+ * snooze, which read the whole item too. A 1,000-message item costs about
+ * 2,000 of Convex's 16,000 writes (1,000 patches and 999 deletes by the
+ * prune), and each message is read up to four times (the item, the patch,
+ * the prune's read and its delete): about 1.3 MB written and 5.3 MB read
+ * at about 1.3 KB a message (convex/tests/inboxReads.test.ts), so an item
+ * of about 3,000 such messages would pass Convex's 16 MiB read. */
+export const readItem = orgMutation({
+  args: { issue_id: v.string(), through: v.optional(vThrough) },
+  handler: async (ctx, { issue_id, through }) => {
+    const now = new Date().toISOString()
+    await markMessagesRead(ctx, ctx.me, await itemMessages(ctx, ctx.me, issue_id, through), now)
+    return null
+  },
+})
+
+/* Marks the caller's item about one task unread, as markUnread does with
+ * all its ids, which opens again the one read message the prune keeps. A
+ * task that is archived or in an archived project refuses it with
+ * markUnread's sentences (model/messages.ts refuseArchivedItems), and one
+ * the caller can no longer see changes nothing. */
+export const unreadItem = orgMutation({
+  args: { issue_id: v.string() },
+  handler: async (ctx, { issue_id }) => {
+    await markMessagesUnread(ctx, ctx.me, await itemMessages(ctx, ctx.me, issue_id))
+    return null
+  },
+})
+
+/* Removes the caller's item about one task, the messages whose
+ * _creationTime is at most `through` or all of them without it, so a
+ * message stored after the caller's view by more than one mutation's run
+ * time stays as the item's only one, a backdated notice included. A message
+ * from a mutation that started before the view and committed after it can
+ * carry an earlier or equal _creationTime and is then removed with the
+ * rest, until messages carry the planned commit timestamp
+ * (model/messages.ts itemMessages). That message keeps the
+ * dropped count the item cap moved onto it, as for readItem. Its size
+ * bounds are readItem's. */
+export const removeItem = orgMutation({
+  args: { issue_id: v.string(), through: v.optional(vThrough) },
+  handler: async (ctx, { issue_id, through }) => {
+    await removeMessages(ctx, await itemMessages(ctx, ctx.me, issue_id, through))
+    return null
+  },
+})
+
+/* Snoozes the caller's item about one task until `until`, or with null
+ * lifts its snooze now, with snooze's checks, refusals and scheduled wake
+ * (model/messages.ts snoozeMessages). An `until` that snooze refuses, in
+ * the past or past LIMITS.snooze, is refused also when the caller holds no
+ * item about the task, as snooze refuses it with no ids. */
+export const snoozeItem = orgMutation({
+  args: { issue_id: v.string(), until: v.union(v.string(), v.null()) },
+  handler: async (ctx, { issue_id, until }) => {
+    await snoozeMessages(ctx, ctx.me, await itemMessages(ctx, ctx.me, issue_id), until)
     return null
   },
 })

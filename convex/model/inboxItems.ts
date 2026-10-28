@@ -201,25 +201,44 @@ export const covers = (state: BuildState | null, issueId: string): boolean =>
   state !== null &&
   (state.built || (state.built_through !== undefined && issueId <= state.built_through))
 
+/* The profile's inbox_state row, and whether all its rows are complete,
+ * which they are when the row says built or when there is neither a row
+ * nor a message, so no row can be missing. Two index ranges at most. */
+async function readiness(
+  ctx: QueryCtx,
+  profileId: string,
+): Promise<{ state: BuildState | null; ready: boolean }> {
+  const state = await inboxState(ctx, profileId)
+  if (state !== null) return { state, ready: state.built }
+  const any = await ctx.db
+    .query('messages')
+    .withIndex('by_recipient', (q) => q.eq('recipient_id', profileId))
+    .first()
+  return { state: null, ready: any === null }
+}
+
+/** Whether every inbox_items row of profile `profileId` is complete, so a
+ * reader may count and list its items. They are when its inbox_state says
+ * built, or when it has no inbox_state and no message, the rule
+ * ensureInboxState writes by. A profile still being built, or with messages
+ * from before the items and no state, is not ready. It writes nothing. */
+export const seatReady = async (ctx: QueryCtx, profileId: string): Promise<boolean> =>
+  (await readiness(ctx, profileId)).ready
+
 /** The recipient's inbox_state row, adding one, built, when it has none and
- * no message either: such a recipient's rows are complete, as it has none.
- * postMessage calls it before it inserts, so a profile created after the
- * backfill keeps its items from its first message. A recipient without a
- * row whose messages came before stays unbuilt until the backfill reaches
- * it. `added` says this call added the row, so the recipient has no
+ * no message either: such a recipient's rows are complete, as it has none
+ * (seatReady). postMessage calls it before it inserts, so a profile created
+ * after the backfill keeps its items from its first message. A recipient
+ * without a row whose messages came before stays unbuilt until the backfill
+ * reaches it. `added` says this call added the row, so the recipient has no
  * inbox_items row yet. The demo's record limit does not count the row
  * (lib/demo.ts uncountedWriter), as for message_sweeps. */
 export async function ensureInboxState(
   ctx: MutationCtx,
   profileId: string,
 ): Promise<{ state: BuildState | null; added: boolean }> {
-  const state = await inboxState(ctx, profileId)
-  if (state !== null) return { state, added: false }
-  const any = await ctx.db
-    .query('messages')
-    .withIndex('by_recipient', (q) => q.eq('recipient_id', profileId))
-    .first()
-  if (any !== null) return { state: null, added: false }
+  const { state, ready } = await readiness(ctx, profileId)
+  if (state !== null || !ready) return { state, added: false }
   const built = { profile_id: profileId, built: true }
   await uncountedWriter(ctx.db).insert('inbox_state', built)
   return { state: built, added: true }

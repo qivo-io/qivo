@@ -263,6 +263,13 @@ identity:claimMySeats mutation public {"type":"object","value":{}}
 identity:claimSeatsInternal mutation internal {"type":"object","value":{"userId":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"emailVerified":{"fieldType":{"type":"boolean"},"optional":false}}}
 identity:createOrganization mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 identity:whoami query public {"type":"object","value":{}}
+inbox:item query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+inbox:summary query public {"type":"object","value":{}}
+internal/archivedReadsBackfill:audit mutation internal {"type":"object","value":{"tasks":{"fieldType":{"type":"number"},"optional":false},"scheduled":{"fieldType":{"type":"number"},"optional":false},"pages":{"fieldType":{"type":"number"},"optional":false},"done":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"error":{"fieldType":{"type":"string"},"optional":true}}}
+internal/archivedReadsBackfill:mark mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
+internal/archivedReadsBackfill:remaining query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}}
+internal/archivedReadsBackfill:run action internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}}
+internal/archivedReadsBackfill:scan query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}}
 internal/commentCountsBackfill:audit mutation internal {"type":"object","value":{"counted":{"fieldType":{"type":"number"},"optional":false},"comments":{"fieldType":{"type":"number"},"optional":false},"full":{"fieldType":{"type":"number"},"optional":false},"dropped":{"fieldType":{"type":"number"},"optional":false},"cleared":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"failed":{"fieldType":{"type":"string"},"optional":true}}}
 internal/commentCountsBackfill:check query internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"number"},"optional":false}}}
 internal/commentCountsBackfill:clearHeld mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -518,11 +525,15 @@ messages:notifyFollowers mutation internal {"type":"object","value":{"org_id":{"
 messages:notifyMentions mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"task":{"fieldType":{"type":"id","tableName":"issues"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"actor_id":{"fieldType":{"type":"string"},"optional":true},"now":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"recipients":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 messages:readArchivedProject mutation internal {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"batch":{"fieldType":{"type":"number"},"optional":true},"tasks":{"fieldType":{"type":"number"},"optional":true}}}
 messages:readArchivedTasks mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"batch":{"fieldType":{"type":"number"},"optional":true}}}
+messages:readItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"through":{"fieldType":{"type":"number"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:rekeyItems mutation internal {"type":"object","value":{"issues":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 messages:remove mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+messages:removeItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"through":{"fieldType":{"type":"number"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:removeRead mutation public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:snooze mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"until":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+messages:snoozeItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"until":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:trimItems mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"recipients":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
+messages:unreadItem mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:wake mutation internal {"type":"object","value":{"recipient_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"until":{"fieldType":{"type":"string"},"optional":false}}}
 nameCopies:recover mutation internal {"type":"object","value":{}}
 nameCopies:step mutation internal {"type":"object","value":{"source":{"fieldType":{"type":"union","value":[{"type":"literal","value":"profiles"},{"type":"literal","value":"teams"}]},"optional":false},"source_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -876,6 +887,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     createOrganization: 'authedMutation',
     acceptInvitation: 'authedMutation',
   },
+  // The inbox reads over inbox_items, the capped unread summary across the
+  // login's own seats and one task's own item in one organization, which is
+  // null unless the caller is shown the task.
+  inbox: { summary: 'authedQuery', item: 'orgQuery' },
   // Whether the invitation emails behind pending seats went out: an org admin
   // sees every pending seat, anyone else only the sends they caused.
   invites: { deliveries: 'orgQuery', sendAgain: 'orgMutation' },
@@ -927,13 +942,19 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // messages:notifyFollowers (internal) to tell the rest, and a write whose
   // notices fill its room schedules messages:notifyMentions (internal) for
   // the people it mentions past that.
+  // The item actions act on the caller's own item about one task, up to the
+  // newest message the caller saw (readItem, removeItem).
   messages: {
     markAllRead: 'orgMutation',
     markRead: 'orgMutation',
     markUnread: 'orgMutation',
+    readItem: 'orgMutation',
     remove: 'orgMutation',
+    removeItem: 'orgMutation',
     removeRead: 'orgMutation',
     snooze: 'orgMutation',
+    snoozeItem: 'orgMutation',
+    unreadItem: 'orgMutation',
   },
   // Paginated ZIP export for org admins. orgQuery authenticates the active
   // seat; the handler positively requires admin on every page.
@@ -1056,7 +1077,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 179
+const PUBLIC_COUNT = 185
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

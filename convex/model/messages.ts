@@ -893,9 +893,10 @@ export async function followersOf(
  * The recipient's own writes on its inbox, shared by the app's Inbox
  * (convex/messages.ts) and the machine inbox (machine/discussion.ts). Each
  * takes rows the caller already chose as its own. The app passes the message
- * ids its list holds through ownMessages, and the machine every row of the
- * items it names through itemMessages. Each returns the ids of the tasks
- * whose items it changed. */
+ * ids its list holds through ownMessages, or for an item action the task's
+ * id through itemMessages, and the machine every row of the items it names
+ * through itemMessages. Each returns the ids of the tasks whose items it
+ * changed. */
 
 /**
  * The rows among `ids` that belong to `me`, each once. Other people's rows
@@ -915,12 +916,35 @@ export async function ownMessages(
   return out
 }
 
-/** Every row of `me`'s inbox item about one task. */
-export const itemMessages = (
+/**
+ * Every row of `me`'s inbox item about one task, or with `through` the rows
+ * whose _creationTime is at most `through`, the item's newest _creationTime
+ * as inbox.item answered it, so an item action leaves out what was stored
+ * after the caller's view.
+ *
+ * The cutoff leaves out every message stored after the view by more than
+ * one mutation's run time, also the follower and mention notices that
+ * background steps store with their write's earlier created_at, for which
+ * it was built: a cut by (created_at, id) took those. It is not exact.
+ * Convex bases _creationTime on the time the storing mutation started, not
+ * on commit order (docs.convex.dev/database/advanced/commit-timestamp), so
+ * a message from a mutation that started before the view and committed
+ * after it can carry an earlier or equal _creationTime, a tie included,
+ * and is then taken with the rest, as markAllMessagesRead's cutoff takes
+ * it. The exact fix is a planned follow-up: a server-owned
+ * `commit_ts: v.commitTs()` on messages with an index, strictly increasing
+ * in commit order, which would make markAllMessagesRead's cutoff exact
+ * too.
+ */
+export async function itemMessages(
   ctx: MutationCtx,
   me: Doc<'profiles'>,
   issueId: string,
-): Promise<Doc<'messages'>[]> => pairRows(ctx, { recipient_id: me.id, issue_id: issueId })
+  through?: number,
+): Promise<Doc<'messages'>[]> {
+  const rows = await pairRows(ctx, { recipient_id: me.id, issue_id: issueId })
+  return through === undefined ? rows : rows.filter((row) => row._creationTime <= through)
+}
 
 /**
  * Marks the unread rows read, stamped `now`, then keeps 0109's invariant
@@ -1254,7 +1278,7 @@ export async function snoozeMessages(
  * about 3,000 (convex/tests/inboxItems.test.ts measures both). */
 export const ARCHIVED_READ_BATCH = 330
 
-/** The most tasks one archived-read step visits. scheduleArchivedReads gives
+/** The most tasks one archived-read step visits. scheduleTaskReads gives
  * each step at most this many task ids, and a project walk stops after this
  * many tasks, because each task costs index ranges whether or not it holds
  * a row to mark. */
@@ -1287,14 +1311,25 @@ export async function scheduleArchivedReads(
   a: { issues?: readonly string[]; projects?: readonly string[] },
 ): Promise<void> {
   const issues = a.issues ?? []
+  await scheduleTaskReads(ctx, issues)
+  await scheduleArchiveMarks(ctx, issues)
+  for (const project_id of a.projects ?? []) {
+    await ctx.scheduler.runAfter(0, readArchivedProjectRef, { project_id })
+  }
+}
+
+/** Schedules readArchivedTaskMessages over the tasks `issues`,
+ * ARCHIVED_READ_TASKS of them a step, without the archive marks that
+ * scheduleArchivedReads adds. internal/archivedReadsBackfill calls it for
+ * tasks archived before the archive paths marked their messages read. */
+export async function scheduleTaskReads(
+  ctx: MutationCtx,
+  issues: readonly string[],
+): Promise<void> {
   for (let i = 0; i < issues.length; i += ARCHIVED_READ_TASKS) {
     await ctx.scheduler.runAfter(0, readArchivedTasksRef, {
       issues: issues.slice(i, i + ARCHIVED_READ_TASKS),
     })
-  }
-  await scheduleArchiveMarks(ctx, issues)
-  for (const project_id of a.projects ?? []) {
-    await ctx.scheduler.runAfter(0, readArchivedProjectRef, { project_id })
   }
 }
 

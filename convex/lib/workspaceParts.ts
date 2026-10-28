@@ -41,7 +41,7 @@ import {
 } from '../model/orgs'
 import { shownAvatarColor } from '../model/people'
 import { stampOfRow } from '../model/syncStamps'
-import { isOrgStaff, projectLevelsOf } from './access'
+import { type Access, accessOf, isOrgStaff } from './access'
 import { chunkLists } from './arrayLimit'
 import { orgCreateFor, seatlessState } from './billingAccess'
 import { byId } from './db'
@@ -50,7 +50,7 @@ import { loadInbox, newestFirst, recentlyReadFirst } from './inbox'
 import { INBOX_LIMIT } from './limits'
 import { loadRowFor, type OrgLoadRow } from './loadRows'
 import { taskOwnerId } from './review'
-import { inWorkingSet, parentLink } from './workingSet'
+import { parentLink } from './workingSet'
 
 type AppRow<T extends TableNames> = Omit<Doc<T>, '_id' | '_creationTime'>
 
@@ -410,50 +410,6 @@ export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow
   }
 }
 
-// --- access -------------------------------------------------------------------
-
-/** The caller's access as one part asks it, project by project, each
- * project and its levels read once (lib/access.ts projectLevelsOf). A part
- * reads only the projects its rows name, not every project of the
- * organization, so thousands of projects cost each part only its own, and a
- * change to a project re-runs only the parts that read it. A part that asks
- * about many projects reads the caller's own grants, memberships and team
- * shares once instead of once a project (lib/access.ts OWN_READS), so tasks
- * spread over thousands of projects do not cost a window two more ranges a
- * project. `read` holds projects the part already read. */
-function accessOf(ctx: QueryCtx, me: Doc<'profiles'>, read: readonly Doc<'projects'>[] = []) {
-  const levels = projectLevelsOf(ctx, me, read)
-  /* the project of the caller's organization with this id */
-  const projectOf = async (id: string) => {
-    const p = await levels.project(id)
-    return p !== null && p.org_id === me.org_id ? p : undefined
-  }
-  const visible = async (id: string) => (await levels.level(id)) !== null
-  return {
-    /** What the caller's own grants and team shares cost to read so far,
-     * alike in every part (softSplit). */
-    shared: levels.shared,
-    /** Whether the caller can see the project with this id
-     * (canSeeProject). */
-    visible,
-    /** Whether the project with this id is one of the organization's and
-     * is not archived (lib/liveTasks.ts liveIn). */
-    live: async (id: string) => {
-      const p = await projectOf(id)
-      return p !== undefined && p.archived_at === undefined
-    },
-    /** Whether `task` is in the caller's working set (lib/workingSet.ts). */
-    holds: async (task: Doc<'issues'>) => {
-      const p = await projectOf(task.project_id)
-      if (p === undefined || p.archived_at !== undefined) return false
-      return inWorkingSet(task, p, await visible(p.id))
-    },
-  }
-}
-
-/* What accessOf answers. */
-type Access = ReturnType<typeof accessOf>
-
 // --- projects -----------------------------------------------------------------
 
 /** The projects of window `w` (by window key) the caller can see, archived
@@ -624,7 +580,8 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
  * give has_subtasks, which tells a group before its subtasks in other
  * windows arrive, has_hidden_subtasks and the load rows of the window's
  * tasks the caller is not shown (orgLoad, hiddenLoadOf). Each project these
- * tasks are in is read once, with the caller's levels on it (accessOf). */
+ * tasks are in is read once, with the caller's levels on it (lib/access.ts
+ * accessOf). */
 export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
   const read = await windowTasks(ctx, me, w, PAGE.tasks.most)
   if (!read.complete) return overflow(w, read.rows.at(-1)?.window_key)

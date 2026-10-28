@@ -11,6 +11,7 @@ import { byId } from './db'
 import { type AccessLevel, type CredentialAccess, LEVEL_RANK, type OrgRole } from './enums'
 import { badRequest, forbidden, notFound, type Refusal } from './functions'
 import type { EventOwner } from './taskEvents'
+import { inWorkingSet } from './workingSet'
 
 export function levelRank(l: AccessLevel | null): number {
   // No grant ranks below every permission level.
@@ -559,6 +560,54 @@ export function projectLevelsOf(
       }),
   }
 }
+
+/** The caller's access as one read asks it, project by project, each
+ * project and its levels read once (projectLevelsOf). A read asks only
+ * about the projects its rows name, not every project of the organization,
+ * so thousands of projects cost each read only its own, and a change to a
+ * project reruns only the reads that read it. A read that asks about many
+ * projects reads the caller's own grants, memberships and team shares once
+ * instead of once a project (OWN_READS), so tasks spread over thousands of
+ * projects do not cost a window two more ranges a project. `read` holds
+ * projects the read already read. The workspace parts
+ * (lib/workspaceParts.ts) and the inbox reads (model/inboxReads.ts) apply
+ * this one rule. */
+export function accessOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  read: readonly Doc<'projects'>[] = [],
+) {
+  const levels = projectLevelsOf(ctx, me, read)
+  /* the project of the caller's organization with this id */
+  const projectOf = async (id: string) => {
+    const p = await levels.project(id)
+    return p !== null && p.org_id === me.org_id ? p : undefined
+  }
+  const visible = async (id: string) => (await levels.level(id)) !== null
+  return {
+    /** What the caller's own grants and team shares cost to read so far,
+     * alike in every part (lib/workspaceParts.ts softSplit). */
+    shared: levels.shared,
+    /** Whether the caller can see the project with this id
+     * (canSeeProject). */
+    visible,
+    /** Whether the project with this id is one of the organization's and
+     * is not archived (lib/liveTasks.ts liveIn). */
+    live: async (id: string) => {
+      const p = await projectOf(id)
+      return p !== undefined && p.archived_at === undefined
+    },
+    /** Whether `task` is in the caller's working set (lib/workingSet.ts). */
+    holds: async (task: Doc<'issues'>) => {
+      const p = await projectOf(task.project_id)
+      if (p === undefined || p.archived_at !== undefined) return false
+      return inWorkingSet(task, p, await visible(p.id))
+    },
+  }
+}
+
+/** What accessOf answers. */
+export type Access = ReturnType<typeof accessOf>
 
 /* `rows` by their project_id. */
 function byProjectId<R extends { project_id: string }>(rows: readonly R[]): Map<string, R[]> {
