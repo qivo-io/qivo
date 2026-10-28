@@ -686,6 +686,29 @@ describe('bulk notification actions through the client store', () => {
     expect(requests).toEqual([])
   })
 
+  it('lets a press in the next demo ask at once though a write of the ended demo never answered', async () => {
+    vi.resetModules()
+    vi.stubEnv('VITE_APP_MODE', 'demo')
+    vi.stubGlobal('window', { showToast, clearTimeout })
+    requests = []
+    const store = await import('./planner')
+    P = store.P
+    await store.initStore()
+    const unread = snap.messages.find((m) => !m.read_at)!
+    P.markMessagesRead([unread.id])
+    await asked()
+    // the read mark goes out and is never answered
+    expect(requests.map((r) => r.name)).toEqual(['messages:markRead'])
+    store.disposeDemoStore()
+    await store.initStore()
+    const asks = reachAsked()
+    const removal = P.deleteReadMessages()
+    await asked()
+    expect(reachAsked()).toBe(asks + 1)
+    await answerAll(() => ({ removed: 1, hasMore: false }))
+    await removal
+  })
+
   it('removes read messages from mixed groups across seats and waits for every write', async () => {
     const unread = snap.messages.filter((message) => !message.read_at)
     const mixedTask = snap.messages[0].issue_id

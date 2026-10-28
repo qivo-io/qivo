@@ -9657,11 +9657,13 @@ export function disposeDemoStore() {
   if (!DEMO_MODE) return
   storeEpoch++
   demoDisposed = true
-  // a bulk Inbox action, and the notice it waits on, end with the store
+  // a bulk Inbox action, and the notice it waits on, end with the store,
+  // and a press in the next demo waits on none of this demo's writes
   asking = null
   noticeAnswer?.(false)
   noticeAnswer = null
   PLANNER.inboxBulk = null
+  inboxWrites.clear()
   stopToasts.clear()
   stopDayWatch?.()
   stopDayWatch = null
