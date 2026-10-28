@@ -130,15 +130,21 @@ export const snooze = orgMutation({
   },
 })
 
-/* Where readItem and removeItem stop: the _creationTime of the item's
- * newest message by insertion as the caller saw it (inbox.item `through`,
- * model/messages.ts itemMessages). */
+/* Where readItem and removeItem stop: the item's newest _creationTime as
+ * the caller saw it (inbox.item `through`). The cutoff is not exact;
+ * model/messages.ts itemMessages says what it leaves out and what it can
+ * still take. */
 const vThrough = v.number()
 
 /* Marks the caller's item about one task read. It marks the unread
- * messages stored up to `through`, or all of them without it, so a message
- * stored after the caller's view stays unread, a notice that carries an
- * earlier time included. The prune then keeps the item's newest message
+ * messages whose _creationTime is at most `through`, or all of them without
+ * it, so a message stored after the caller's view by more than one
+ * mutation's run time stays unread, a backdated follower or mention notice
+ * included. A message from a mutation that started before the view and
+ * committed after it can carry an earlier or equal _creationTime and is
+ * then marked read with the rest, until messages carry the planned commit
+ * timestamp (model/messages.ts itemMessages). The prune then keeps the
+ * item's newest message
  * (model/messages.ts markMessagesRead), which is that later message when
  * there is one. That message keeps the dropped count the item cap moved
  * onto it (schema.ts messages.dropped), as markRead leaves it: a trim after
@@ -179,9 +185,14 @@ export const unreadItem = orgMutation({
   },
 })
 
-/* Removes the caller's item about one task, the messages stored up to
- * `through` or all of them without it, so a message stored after the
- * caller's view stays as the item's only one. That message keeps the
+/* Removes the caller's item about one task, the messages whose
+ * _creationTime is at most `through` or all of them without it, so a
+ * message stored after the caller's view by more than one mutation's run
+ * time stays as the item's only one, a backdated notice included. A message
+ * from a mutation that started before the view and committed after it can
+ * carry an earlier or equal _creationTime and is then removed with the
+ * rest, until messages carry the planned commit timestamp
+ * (model/messages.ts itemMessages). That message keeps the
  * dropped count the item cap moved onto it, as for readItem. Its size
  * bounds are readItem's. */
 export const removeItem = orgMutation({

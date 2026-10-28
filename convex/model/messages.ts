@@ -916,14 +916,26 @@ export async function ownMessages(
   return out
 }
 
-/** Every row of `me`'s inbox item about one task, or with `through` the
- * rows stored no later than it, a _creationTime that inbox.item answered as
- * the item's newest by insertion, so an item action leaves out a message
- * stored after the caller's view. Insertion order, as markAllMessagesRead's
- * cutoff uses, because created_at does not order arrivals: a follower or
- * mention notice that a background step stores carries its write's earlier
- * time, and two notices of one instant are ordered only by their random
- * ids. */
+/**
+ * Every row of `me`'s inbox item about one task, or with `through` the rows
+ * whose _creationTime is at most `through`, the item's newest _creationTime
+ * as inbox.item answered it, so an item action leaves out what was stored
+ * after the caller's view.
+ *
+ * The cutoff leaves out every message stored after the view by more than
+ * one mutation's run time, also the follower and mention notices that
+ * background steps store with their write's earlier created_at, for which
+ * it was built: a cut by (created_at, id) took those. It is not exact.
+ * Convex bases _creationTime on the time the storing mutation started, not
+ * on commit order (docs.convex.dev/database/advanced/commit-timestamp), so
+ * a message from a mutation that started before the view and committed
+ * after it can carry an earlier or equal _creationTime, a tie included,
+ * and is then taken with the rest, as markAllMessagesRead's cutoff takes
+ * it. The exact fix is a planned follow-up: a server-owned
+ * `commit_ts: v.commitTs()` on messages with an index, strictly increasing
+ * in commit order, which would make markAllMessagesRead's cutoff exact
+ * too.
+ */
 export async function itemMessages(
   ctx: MutationCtx,
   me: Doc<'profiles'>,

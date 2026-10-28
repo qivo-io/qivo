@@ -260,16 +260,19 @@ async function unreadChange(
  * holds the item's counts, the oldest unread message's created_at
  * (`first_unread_at`, null when all are read), whether an unread message is
  * a change (`unread_change`), the newest message by (created_at, id) for
- * the row's second line, the item's snooze, and `through`, the
- * _creationTime of its newest message by insertion, which readItem and
- * removeItem take so that they leave out what was stored after this answer
- * (model/messages.ts itemMessages).
+ * the row's second line, the item's snooze, and `through`, the item's
+ * newest _creationTime, which readItem and removeItem take so that they
+ * leave out what was stored after this answer by more than one mutation's
+ * run time, backdated notices included. A message from a mutation that
+ * started before this read and committed after it can carry an earlier or
+ * equal _creationTime and is then taken too, until messages carry the
+ * planned commit timestamp (model/messages.ts itemMessages).
  *
  * It reads the item row, the seat's readiness (two ranges), the task with
- * its project and the seat's access rows, the newest message by insertion,
- * the oldest unread message, and for an item with an unread message and a
- * change its read messages (unreadChange), one normally, so its cost does
- * not grow with the item.
+ * its project and the seat's access rows, the newest message by
+ * _creationTime, the oldest unread message, and for an item with an unread
+ * message and a change its read messages (unreadChange), one normally, so
+ * its cost does not grow with the item.
  */
 export async function readInboxItem(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
   if (!(await seatReady(ctx, me.id))) return { state: 'building' as const }
@@ -277,8 +280,8 @@ export async function readInboxItem(ctx: QueryCtx, me: Doc<'profiles'>, issueId:
   const row = await itemRow(ctx, pair)
   if (row === null || (await inboxScope(ctx, me).shownTask(issueId)) === null)
     return { state: 'ok' as const, item: null }
-  // the newest message by insertion, which a later one, backdated or not,
-  // always follows
+  // the newest message by _creationTime, the cutoff the item actions take
+  // (model/messages.ts itemMessages)
   const newest = await ctx.db
     .query('messages')
     .withIndex('by_recipient_issue', (q) => q.eq('recipient_id', me.id).eq('issue_id', issueId))

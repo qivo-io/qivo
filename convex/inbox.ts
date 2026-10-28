@@ -25,12 +25,17 @@
  *   unread or read message changes.
  * - item (per organization): the caller's item about one task, for the
  *   task window, or `building` while the seat is not ready. Its `through`
- *   is the newest message's _creationTime, which readItem and removeItem
- *   take so that they leave out what was stored after it. It reads the
+ *   is the item's newest _creationTime, which readItem and removeItem take
+ *   so that they leave out what was stored after it by more than one
+ *   mutation's run time. A message from a mutation that started before the
+ *   read and committed after it can carry an earlier or equal
+ *   _creationTime and is then taken too, until messages carry the planned
+ *   commit timestamp (model/messages.ts itemMessages). It reads the
  *   item row, the task, its project and the caller's levels on it, the
- *   newest message by insertion, and the item's unread messages oldest
- *   first, as far as the first unread change (only the first when the item
- *   holds no change). It reruns when any of those change.
+ *   newest message by _creationTime, the oldest unread message, and for an
+ *   item with an unread message and a change its read messages, one
+ *   normally (model/inboxReads.ts unreadChange). It reruns when any of
+ *   those change.
  *
  * Both show the working set as the workspace parts do (lib/access.ts
  * accessOf). Nothing here writes. The item actions are in messages.ts. */
