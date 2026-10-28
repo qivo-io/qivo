@@ -545,6 +545,72 @@ describe('every message write keeps the items exact', () => {
     ).toEqual([])
   }, 120_000)
 
+  it('a nightly wake leg over hundreds of people stays inside the real limits', async () => {
+    // about 2,100 ranges a leg (jobs.ts SWEEP_LIMITS.wakeItems)
+    const t = newT({ transactionLimits: { databaseQueries: 2400 } })
+    const f = await withOrg(t)
+    // one snoozed message each, on a task each, archived since, so each
+    // wake also notes the row's sweep: the most ranges a woken item costs
+    const until = new Date(Date.now() + 3_600_000).toISOString()
+    for (let i = 0; i < 500; i += 100)
+      await t.run(async (ctx) => {
+        for (let j = i; j < i + 100; j++) {
+          const id = uuid()
+          const _id = await ctx.db.insert('profiles', {
+            id,
+            org_id: f.org.id,
+            name: `Sleeper ${j}`,
+            initials: 'SL',
+            color: '#7a7ad0',
+            org_role: 'admin',
+            active: true,
+            kind: 'person',
+            created_at: NOW,
+            message_retention_days: 30,
+          })
+          const issue = await ctx.db.insert('issues', {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            num: 20_000 + j,
+            title: `Task ${j}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+          })
+          const task = (await ctx.db.get(issue))!
+          await postMessage(ctx, {
+            org_id: f.org.id,
+            recipient_id: id,
+            issue_id: task.id,
+            kind: 'change',
+            body: 'Update',
+            actor_id: f.admin.id,
+            now: at(1),
+          })
+          const me = (await ctx.db.get(_id))!
+          const rows = await ctx.db
+            .query('messages')
+            .withIndex('by_recipient', (q) => q.eq('recipient_id', id))
+            .collect()
+          await snoozeMessages(ctx, me, rows, until)
+          await ctx.db.patch(issue, { archived_at: at(2) })
+        }
+      })
+    await t.mutation(internal.jobs.wakeSnoozes, {
+      now: new Date(Date.parse(until) + 1).toISOString(),
+      woken: 0,
+    })
+    await runSteps(t)
+    expect(
+      (await t.run((ctx) => ctx.db.query('inbox_items').collect())).filter((i) => i.snoozed),
+    ).toEqual([])
+    expect(await drift(t)).toEqual([])
+  }, 120_000)
+
   it('the retention sweep deletes read rows, the newest included, and the items follow', async () => {
     const t = newT()
     const f = await withOrg(t)
