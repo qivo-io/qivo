@@ -14,6 +14,7 @@
  * pinned where the rest of their rows are (orgRemovals.test.ts,
  * cascade.test.ts, demoCleanup.test.ts). */
 
+import type { FunctionReturnType } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -34,6 +35,8 @@ afterEach(() => {
 })
 
 const hex = (): string => uuid().replace(/-/g, '').padEnd(64, '0')
+
+type RunAnswer = FunctionReturnType<typeof internal.internal.credentialKeysBackfill.run>
 
 /** An agent key of the fixture's agent, created by its admin. */
 const createKey = (t: T, f: OrgFixture, name: string, id = uuid()) =>
@@ -410,6 +413,44 @@ describe('internal/credentialKeysBackfill', () => {
         cursor: null,
       }),
     ).toMatchObject({ agent_keys: 1, table: 'agent_keys' })
+  })
+
+  it('counts an orphan once when a call stops between the batches of its page', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // one page of tokens: three without keys and one whose profile is gone
+    await t.run(async (ctx) => {
+      for (const profile_id of [f.user.id, f.user.id, uuid(), f.viewer.id])
+        await ctx.db.insert('mcp_tokens', {
+          id: uuid(),
+          profile_id,
+          name: 'Legacy token',
+          token_prefix: 'qvt_0123456',
+          token_hash: hex(),
+          created_at: NOW,
+        })
+    })
+    credentialKeys.BACKFILL_PAGE.batch = 1
+    credentialKeys.RUN.ms = 0
+    const answers: RunAnswer[] = []
+    for (
+      let from: Pick<RunAnswer, 'table' | 'cursor'> = { table: 'mcp_tokens', cursor: null };
+      ;
+    ) {
+      const got = await t.action(internal.internal.credentialKeysBackfill.run, {
+        dry_run: false,
+        ...from,
+      })
+      answers.push(got)
+      if (got.done) break
+      from = { table: got.table, cursor: got.cursor }
+    }
+    // the first call stopped after one batch and gave the same page back
+    expect(answers[0]).toMatchObject({ mcp_tokens: 1, orphans: 0, table: 'mcp_tokens' })
+    const sum = (key: 'mcp_tokens' | 'orphans') => answers.reduce((n, got) => n + got[key], 0)
+    expect([sum('mcp_tokens'), sum('orphans')]).toEqual([3, 1])
+    const audited = (await audits(t)).map((row) => (row.detail as { orphans: number }).orphans)
+    expect(audited.reduce((n, orphans) => n + orphans, 0)).toBe(1)
   })
 
   it('records what committed and answers the page to read again when a step fails', async () => {

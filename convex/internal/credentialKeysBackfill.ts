@@ -235,7 +235,6 @@ export const run = internalAction({
         }
         try {
           const page: PageResult = await ctx.runQuery(scanRef, { table, cursor })
-          counts.orphans += page.orphans
           if (dry_run) counts[table] += page.rows
           for (let i = 0; !dry_run && i < page.stale.length; i += BACKFILL_PAGE.batch) {
             if (late()) {
@@ -246,6 +245,9 @@ export const run = internalAction({
             counts[table] += await ctx.runMutation(fixRef, { ids })
             progressed = true
           }
+          // counted once the page is through, as a stop before that reads
+          // the page again
+          counts.orphans += page.orphans
           progressed = true
           if (page.done) break
           cursor = page.cursor
