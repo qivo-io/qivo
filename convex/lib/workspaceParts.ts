@@ -170,9 +170,9 @@ export const PAGE = {
    * the largest hold about 2 MiB */
   inboxCheck: 32,
   /** what a tasks part's description reads, its last reads, keep back from
-   * Convex's own limits: they start a step only while the reads are under
-   * PAGE.hard, as a batch does, and a step stays this far inside Convex's
-   * limits, so a window may pass PAGE.hard by one step */
+   * Convex's own limits: they read a step only while the reads are under
+   * PAGE.hard, at least one row, and a step stays this far inside Convex's
+   * limits, so a window may pass PAGE.hard by one row */
   textReserve: { ranges: 16, documents: 16, bytes: 1024 * 1024 } satisfies Budget,
 }
 
@@ -719,9 +719,10 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
   if (orgLoad === null) return overflow(w)
   // The shown tasks' texts, from their description rows, read last. A row
   // can come close to Convex's document size limit, so a step reads no
-  // more rows than Convex's limits less PAGE.textReserve could hold at
-  // that size, not a PAGE.batch batch, and starts only while the reads are
-  // under PAGE.hard (model/descriptions.ts descriptionsOf).
+  // more rows than PAGE.hard could hold at that size, not a PAGE.batch
+  // batch, and at least one while the reads are under PAGE.hard, within
+  // Convex's limits less PAGE.textReserve (model/descriptions.ts
+  // descriptionsOf).
   const texts = await descriptionsOf(
     ctx,
     tasks,

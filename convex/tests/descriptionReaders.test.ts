@@ -649,7 +649,7 @@ const restMetrics = (t: T, f: OrgFixture, o: { limit: number; search?: string })
 const wide = (chars: number, word = '') => `${'中'.repeat(chars - word.length)}${word}`
 
 describe('real limits', () => {
-  it('a window of 200 tasks whose rows are near 900 KB overflows, and the cut that fits answers within PAGE.hard', async () => {
+  it('a window of 200 tasks whose rows are near 900 KB overflows, and the cut that fits answers, past PAGE.hard by one row at most', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const text = 'n'.repeat(900 * 1024)
@@ -668,7 +668,8 @@ describe('real limits', () => {
       })
     const first = await read(whole)
     expect(first.answer.state).toBe('overflow')
-    expect(first.metrics.mib).toBeLessThanOrEqual(PAGE.hard.bytes / MIB)
+    // past PAGE.hard by one row at most
+    expect(first.metrics.mib).toBeLessThanOrEqual(PAGE.hard.bytes / MIB + 1)
     // the app cuts the window, and goes on into the piece that holds the
     // first task, until it answers
     let w = whole
@@ -682,10 +683,10 @@ describe('real limits', () => {
     if (answer.state !== 'ok') throw new Error(answer.state)
     expect(answer.issues.length).toBeGreaterThan(0)
     for (const row of answer.issues) expect(row.description).toBe(text)
-    expect(metrics.mib).toBeLessThanOrEqual(PAGE.hard.bytes / MIB)
+    expect(metrics.mib).toBeLessThanOrEqual(PAGE.hard.bytes / MIB + 1)
   }, 300_000)
 
-  it('the narrowest window answers a parent whose subtasks are legacy rows near 1 MiB, past PAGE.hard by one step', async () => {
+  it('the narrowest window answers a parent whose subtasks are legacy rows near 1 MiB, its text one row past PAGE.hard at most', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     // the narrowest window of the grid, which cannot be cut

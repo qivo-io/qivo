@@ -49,7 +49,7 @@
  * limit (lib/demo.ts uncountedWriter), because it is part of its task,
  * which counts once. */
 
-import type { WithoutSystemFields } from 'convex/server'
+import type { TransactionMetrics, WithoutSystemFields } from 'convex/server'
 import type { ConvexError } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -93,15 +93,16 @@ export async function withText(db: Reader, task: Doc<'issues'>): Promise<TaskWit
 /** The texts of `tasks` (descriptionOf) by task id, or null when `room` ran
  * out before every one was read. `room` and `steps` are the transaction's
  * totals the reads keep to (ctx.meta.getTransactionMetrics), every document
- * a caller read before counted. No step starts once the reads have passed
- * `room`, and each reads a few rows at a time, never more than the ranges,
- * documents and bytes left under `steps` could hold with every row at
- * Convex's document size limit, so the reads never pass `steps`. By
- * default `steps` is `room`, which they then never pass either. A caller
- * whose budget may be passed by one step, as a workspace part's is, gives
- * Convex's own limits less a reserve as `steps`. Each caller keeps its own
- * answer once the room runs out: a cut window, a refusal or a shorter
- * page. */
+ * a caller read before counted. It reads a few rows at a time, never more
+ * than the ranges, documents and bytes left under `room` could hold with
+ * every row at Convex's document size limit, and none once the reads have
+ * passed `room`. By default `steps` is `room`, so the reads never pass it.
+ * A caller whose budget a step may pass, as a workspace part's may, gives
+ * Convex's own limits less a reserve as `steps`: while the reads are under
+ * `room` a step then reads at least one row, never more than the reads left
+ * under `steps` could hold, so the reads pass `room` by one row at most and
+ * never pass `steps`. Each caller keeps its own answer once the room runs
+ * out: a cut window, a refusal or a shorter page. */
 export async function descriptionsOf(
   ctx: QueryCtx,
   tasks: readonly Pick<Doc<'issues'>, 'id' | 'description'>[],
@@ -109,6 +110,14 @@ export async function descriptionsOf(
   steps: ReadCeiling = room,
 ): Promise<Map<string, string> | null> {
   const out = new Map<string, string>()
+  /* how many rows at Convex's document size limit the reads left under
+   * `limit` can hold */
+  const left = (m: TransactionMetrics, limit: ReadCeiling) =>
+    Math.min(
+      limit.ranges - m.databaseQueries.used,
+      limit.documents - m.documentsRead.used,
+      Math.floor((limit.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
+    )
   for (let at = 0; at < tasks.length; ) {
     const m = await ctx.meta.getTransactionMetrics()
     if (
@@ -117,11 +126,7 @@ export async function descriptionsOf(
       m.bytesRead.used > room.bytes
     )
       return null
-    const fits = Math.min(
-      steps.ranges - m.databaseQueries.used,
-      steps.documents - m.documentsRead.used,
-      Math.floor((steps.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
-    )
+    const fits = Math.min(left(m, steps), Math.max(1, left(m, room)))
     if (fits <= 0) return null
     const step = tasks.slice(at, at + fits)
     const texts = await Promise.all(step.map((task) => descriptionOf(ctx.db, task)))
