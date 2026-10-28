@@ -92,6 +92,11 @@ export const tidy = (ctx: Ctx, id: Id<'comments'>) => {
   return patch(id, { body: 'Tidy', description: 'not a task' })
 }
 export const uniqueComment = (ctx: Ctx) => putRow(ctx, 'comments', { body: 'Hi' })
+export const aliasComment = (ctx: Ctx) => {
+  const write = insertUnique
+  const writeAgain = write
+  return writeAgain(ctx, 'comments', { body: 'Hi' })
+}
 `
 
 /* Each write the check refuses, one a line, with the start of its sentence
@@ -151,6 +156,16 @@ const refused = [
     "export const assigned = (ctx: Ctx, id: Id<'issues'>, doc: Task) => { const r = ctx.db.replace; return r(id, doc) }",
     'this replaces a task row',
     'r(id',
+  ],
+  [
+    "export const aliasedInsert = (ctx: Ctx, doc: Task) => { const write = insertUnique; return write(ctx, 'issues', doc) }",
+    'this inserts a task row',
+    'write(ctx',
+  ],
+  [
+    "export const aliasedPatch = (ctx: Ctx, id: Id<'issues'>) => { const { patch: patchAlias } = ctx.db; const writeAgain = patchAlias; return writeAgain(id, { description: 'x' }) }",
+    "this patch can change a task's description",
+    'writeAgain(id',
   ],
 ]
 

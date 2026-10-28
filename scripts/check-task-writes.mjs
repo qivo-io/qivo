@@ -19,8 +19,9 @@
  *
  * It finds a write by the function it calls, whatever its name at the call:
  * `ctx.db.patch(...)`, `ctx.db['patch'](...)`, a writer method taken out
- * of the database by destructuring or assignment, and insertUnique under
- * another name. The checker reads a table from the type of the argument
+ * of the database by destructuring or assignment, insertUnique under
+ * another name, and a constant that holds any of these, however many
+ * constants deep. The checker reads a table from the type of the argument
  * that names it, a table name or an id, whose type carries its table. A
  * union counts every table it may be. Deleting rows is left to the tests of
  * every teardown.
@@ -71,10 +72,13 @@ function calleeName(callee) {
 }
 
 /** The local names `sourceFile` gives a writer or insertUnique: an import
- * under another name, a destructured property and a variable assigned a
- * property of that name. */
+ * under another name, a destructured property, a variable assigned a
+ * property of that name, and a variable assigned any of these names, how
+ * many aliases deep it goes. */
 function localWriters(sourceFile) {
   const names = new Set(writerNames)
+  // `const alias = name` pairs, followed once every pair is read
+  const aliases = []
   const visit = (node) => {
     if (ts.isImportSpecifier(node)) {
       if (writerNames.has((node.propertyName ?? node.name).text)) names.add(node.name.text)
@@ -88,6 +92,7 @@ function localWriters(sourceFile) {
       node.initializer
     ) {
       const init = node.initializer
+      if (ts.isIdentifier(init)) aliases.push([node.name.text, init.text])
       const name =
         ts.isPropertyAccessExpression(init) || ts.isElementAccessExpression(init)
           ? calleeName(init)
@@ -97,6 +102,14 @@ function localWriters(sourceFile) {
     node.forEachChild(visit)
   }
   sourceFile.forEachChild(visit)
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const [alias, name] of aliases)
+      if (names.has(name) && !names.has(alias)) {
+        names.add(alias)
+        grew = true
+      }
+  }
   return names
 }
 
