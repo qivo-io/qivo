@@ -1,15 +1,19 @@
 /* The app's milestone reads, bounded on the server (model/milestones.ts
- * readMilestones, visibleMilestone). Overview, the Milestones window, the
- * Roadmap and Team sync read their milestones here, a batch or a range of
- * days at a time, instead of every milestone of every project the
- * workspace's projects part sends. The writes are in projects.ts.
+ * readMilestones, visibleMilestone). They are meant for Overview, the
+ * Milestones window, the Roadmap and Team sync, to read their milestones a
+ * batch or a range of days at a time instead of every milestone of every
+ * project the workspace's projects part sends. Until those views move here,
+ * no app code calls them and the projects part still sends every milestone.
+ * The writes are in projects.ts.
  *
  * Each read names projects of any of the caller's organizations and judges
  * each with the caller's seat in its own organization. An unknown, foreign,
  * invisible, archived or deleted project or milestone reads as absent and
  * raises nothing, so an answer tells nothing about what the caller cannot
- * list. Only arguments out of shape are refused, with `bad_request`, and a
- * search past LIMITS.search with that limit's sentence. */
+ * list. Arguments out of shape are refused with `bad_request`, a search
+ * past LIMITS.search with that limit's sentence, and a read whose projects
+ * need more reads than one request allows with MILESTONE_READ_TOO_LARGE,
+ * which asks for fewer projects. */
 
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
@@ -65,15 +69,18 @@ function afterArg(after: MilestonePosition): MilestonePosition {
 }
 
 /**
- * One batch of one section of the milestones of `projects`, as Overview,
- * the Milestones window and Team sync list them. 'upcoming' holds those
- * shown on `from` or later, nearest first, and 'past' those shown before
- * it, newest first.
- * `from` is the first day of the caller's current week in the app's week
- * grid, so a milestone is upcoming exactly when the app draws it in the
- * current week or later, a guest project of an organization whose weeks
- * start on another day included. A sub-project stands for its top-level
- * project, and a project is listed once however often it is named.
+ * One batch of one section of the milestones of `projects`, for Overview,
+ * the Milestones window and Team sync to list. 'upcoming' holds those shown
+ * on `from` or later, nearest first, and 'past' those shown before it,
+ * newest first. The app is to pass as `from` the first day of the caller's
+ * current week in its week grid, so a milestone is upcoming exactly when the
+ * app draws it in the current week or later, a guest project of an
+ * organization whose weeks start on another day included. A day stored
+ * before 2026-10-16 that does not exist counts on the day it is shown on,
+ * except one whose text sorts too far from it (model/milestones.ts
+ * OVERFLOW_DAYS), which can be in neither section. A sub-project stands for
+ * its top-level project, and a project is listed once however often it is
+ * named.
  *
  * `search`, at most LIMITS.search long, keeps the milestones whose name
  * holds every word of it, in any order, ignoring case and accents. `after`
@@ -132,15 +139,16 @@ export const section = authedQuery({
 
 /**
  * The milestones of `projects` the app shows on a day in [from, to), in
- * upcoming order, as the Roadmap draws its window (from its first week's
- * first day to the day after its last week) and Team sync this week and
- * next. `to` comes after `from`, at most LIMITS.roadmapWeeks.max weeks
- * later. Projects are read as `section` reads them. `next` and `stopped` are
- * null when every milestone in the range is there. When the read's budget
- * ran out first, the rows are every milestone up to the position `next`
- * names, `stopped` is its stored day, and a call with `after: next` and the
- * same projects and days goes on from there, without answering a milestone
- * twice or skipping one.
+ * upcoming order, for the Roadmap's window (from its first week's first day
+ * to the day after its last week) and Team sync's this week and next. `to`
+ * comes after `from`, at most LIMITS.roadmapWeeks.max weeks later. Projects
+ * are read as `section` reads them, and a stored day that does not exist
+ * counts as it does there. `next` and `stopped` are null when every
+ * milestone in the range is there. When the read's budget ran out first,
+ * the rows are every milestone up to the position `next` names, `stopped`
+ * is its stored day, and a call with `after: next` and the same projects
+ * and days goes on from there, without answering a milestone twice or
+ * skipping one.
  */
 export const between = authedQuery({
   args: {

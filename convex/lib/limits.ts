@@ -110,8 +110,9 @@ export const NAME_MAX = 80
 export const DEFAULT_PAGE_SIZE = 50
 
 /** The most projects one of the app's milestone reads names (milestones.ts
- * section and between). The app cuts the projects of a view to this many
- * and says when it holds more. */
+ * section and between). It is exported for the app, which is to cut the
+ * projects of a view to this many and say when the view holds more once
+ * its views read their milestones there. */
 export const MILESTONE_READ_PROJECTS = 200
 
 /** The most messages one seat's bounded inbox walk examines in each of its

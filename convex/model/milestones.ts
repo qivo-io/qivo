@@ -167,11 +167,15 @@ export const MILESTONE_WEEK_TAKEN = 'milestone_week_taken'
 
 /** How many days before a week's first day its read starts. A day that does
  * not exist, stored before 2026-10-16, is shown on the day it overflows to,
- * 2026-02-31 on 3 March. Its text sorts at the end of its own month, at most
- * 3 days before the day it is shown on (day 31 of a 28-day February), so the
- * read reaches back that far. A day past 31 or a month past 12 can sort
- * farther away; internal/milestoneWeeks reports those. readMilestones starts
- * a read with a first day this far back too. */
+ * 2026-02-31 on 3 March. A day 29 to 31 sorts at the end of its own month,
+ * at most 3 days before the day it is shown on (day 31 of a 28-day
+ * February), so the read reaches back that far. readMilestones starts a read
+ * with a first day this far back as well, and it also places a day 00, which
+ * sorts just after the day it is shown on. A day past 31, a month 00 or a
+ * month past 12 sorts farther from the day it is shown on, so a week's check
+ * can miss it, and the app's milestone reads can leave it out of every
+ * section and every range of days. internal/milestoneWeeks reports each day
+ * that does not exist as impossible_day. */
 export const OVERFLOW_DAYS = 3
 
 /**
@@ -659,14 +663,18 @@ export async function removeMilestoneCore(
 /* ------------------------------------------------------------------ reads */
 
 /** The budget of one of the app's milestone reads (milestones.ts). A call
- * names at most `projects` projects and asks for at most `rows` rows. The
- * milestone reads (readMilestones) stop once they have read `ranges` index
- * ranges, `documents` documents or `bytes` bytes, counted from their own
- * start, and never past what the request has left. That is the share a workspace part reads before it asks to be cut
- * (lib/workspaceParts.ts PAGE.soft). These reads are subscriptions that
- * rerun whenever a row they read changes, so none costs more than the
- * projects part that carried every milestone before them. Tests lower
- * these. */
+ * names at most `projects` projects. A section batch asks for at most
+ * `rows` rows, while a range of days (between) has no row cap and ends only
+ * at its last day or at the ceiling. The ceiling bounds readMilestones' own
+ * reads, counted from its start. It stops once they have read `ranges`
+ * index ranges, `documents` documents or `bytes` bytes, and never reads past
+ * what the request has left. The check of the projects before it has its own
+ * share (MILESTONE_SCOPE). Each project's first day past the start, and
+ * whether one holds a past milestone, are read whatever the ceiling, within
+ * the request's own limits, so that every call moves on. The share is the
+ * one a workspace part reads before it asks to be cut (lib/workspaceParts.ts
+ * PAGE.soft), because these reads are subscriptions too and rerun whenever
+ * a row they read changes. Tests lower these. */
 export const MILESTONE_READ = {
   projects: MILESTONE_READ_PROJECTS,
   rows: 25,
@@ -781,7 +789,10 @@ export type MilestoneBatch = {
   past?: boolean
 }
 
-/* Negative when `a` comes before `b` in day order, positive after. */
+/* Negative when `a` comes before `b` in day order, positive after. It is
+ * the one comparison of positions, for the order of a day's rows and for
+ * the cursor alike, and compares text by UTF-16 code units, never by
+ * localeCompare, so the two cannot disagree. */
 function compared(a: MilestonePosition, b: MilestonePosition): number {
   for (const field of ['week', 'key', 'id'] as const)
     if (a[field] !== b[field]) return a[field] < b[field] ? -1 : 1
@@ -954,7 +965,9 @@ type Lane = {
  * on (shownDay). A read with a first day starts OVERFLOW_DAYS before it and
  * drops rows shown outside the span, so a day that does not exist, such as
  * 2026-02-31, comes in the span the app draws it in, at most OVERFLOW_DAYS
- * out of order, as it sorts by its text.
+ * out of order, as it sorts by its text. A stored day whose text sorts
+ * farther from the day it is shown on, such as a day past 31 or a month 00
+ * or past 12, can come in no span (OVERFLOW_DAYS).
  *
  * The reads stop once they used MILESTONE_READ's share, counted from the
  * read's own start, so the caller's access checks before it do not spend
@@ -973,11 +986,11 @@ type Lane = {
  * milestone shown before that day, once the projects are open and within
  * the request's own limits, and says true when those ran out first.
  *
- * `after` is a plain position, not a sealed one. Every position a batch
- * answers is a milestone of a project the caller may list, or the frontier
- * between two, and the caller checks access to every project again on each
- * call, so a chosen position only says where to start among the milestones
- * the caller may list.
+ * `after` is a plain position, not a sealed one, and a caller can send any
+ * position. That reveals nothing, because whatever the position, a batch
+ * reads only the milestones of the listed projects the caller can see,
+ * which the caller checks again on every call (milestoneProjects), so a
+ * position only says where to start among them.
  */
 export async function readMilestones(
   ctx: QueryCtx,
@@ -1148,10 +1161,12 @@ export async function readMilestones(
  * null. It follows changeableMilestone. The caller's seat in the project's
  * organization sees that project (canSeeProject), and changes the milestone
  * with User access there (assertMilestoneWriter). A milestone of a
- * sub-project, stored there before 2026-10-14, or of an archived project
- * answers null, as the app and REST (machine/projects.ts milestoneOn) leave
- * those out. An unknown milestone and one of a project the caller cannot see
- * answer null alike.
+ * sub-project, stored there before 2026-10-14, answers null, as the app and
+ * REST (machine/projects.ts milestoneOn) leave it out. So does one of an
+ * archived project, as in the app, whose workspace projects part sends the
+ * milestones of active projects only (lib/workspaceParts.ts readProjects),
+ * though REST still lists an archived project's milestones. An unknown
+ * milestone and one of a project the caller cannot see answer null alike.
  */
 export async function visibleMilestone(
   ctx: QueryCtx,
