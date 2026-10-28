@@ -26,9 +26,17 @@
  *
  * It cannot see a task row whose fields go on whole: a spread into another
  * object, `Object.keys` or `JSON.stringify` of one, a key of a union type
- * such as the activity diff's fields, or a value cast to another type. The
- * readers' tests clear issues.description and check what those paths send
- * (convex/tests/descriptionReaders.test.ts).
+ * such as the activity diff's fields, or a value cast to another type. Nor
+ * can it see a type built from a task row without its `_id`, whose
+ * description still comes from issues.description: a `Pick`, `Omit` or
+ * `WithoutSystemFields` of `Doc<'issues'>`, a row as the app receives it
+ * (lib/workspaceParts.ts AppRow), or a task Deleted items stores. TypeScript
+ * keeps no declaration on a property the schema's validators infer, so the
+ * check cannot tell such a type from any other with a `description`, and a
+ * test for the task's other fields would also catch a write's fields
+ * (model/descriptions.ts TaskFields), which hold the text the write sets.
+ * The readers' tests clear issues.description and check what those paths
+ * send (convex/tests/descriptionReaders.test.ts).
  *
  * It prints nothing when it passes. It fails when it finds no read in
  * model/descriptions.ts, which would mean it reads none. Pass the path of a
