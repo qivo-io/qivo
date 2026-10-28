@@ -119,7 +119,7 @@ export async function dropDescription(
   return row
 }
 
-/** `task` as Deleted items stores it: with issues.description while the
+/** `task` as Deleted items stores it, with issues.description while the
  * task row holds one, else with the text of its description row, or ''.
  * Reads the row only then, and answers it, for the caller's budget. */
 export async function withDescription(

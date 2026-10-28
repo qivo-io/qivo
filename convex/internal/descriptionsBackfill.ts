@@ -19,9 +19,9 @@
  * without issues.description, which only the third release leaves, is
  * `skipped`, and no call writes its row. `rows` reads every description row
  * and its task. A row whose task is not live is `waiting` when a running
- * step or teardown deletes it: the task's Deleted items item has not
- * finished (model/deletedItems.ts), or its organization is being deleted
- * (orgRemovals.ts) or is a public demo being cleaned up
+ * step or teardown deletes it, because the task's Deleted items item has
+ * not finished (model/deletedItems.ts), or its organization is being
+ * deleted (orgRemovals.ts) or is a public demo being cleaned up
  * (internal/demoCleanup.ts). Any other such row is an orphan. The Northstar
  * wipe deletes tasks before their rows, so a dry run during a wipe counts
  * its rows as orphans for a moment.
@@ -240,7 +240,7 @@ async function heldInSteps(ctx: QueryCtx, taskId: string, reads: Reads): Promise
   return item !== null && item.state !== 'ready'
 }
 
-/** Checks description row `row` against its task: a row whose task is not
+/** Checks description row `row` against its task. A row whose task is not
  * live waits for its step or teardown, or is an orphan, which a repair
  * deletes. */
 async function checkRow(

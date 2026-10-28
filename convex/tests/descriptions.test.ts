@@ -251,7 +251,7 @@ describe('the writers keep one equal row per task', () => {
   it("the over-cap fix's pages read no description row, within Convex's limits", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // 80 untrimmed descriptions of 20,000 three-byte characters: a page
+    // 80 untrimmed descriptions of 20,000 three-byte characters. A page
     // reads 4 MiB of them, and their rows, read and patched there, would
     // take it past 16 MiB
     const text = '中'.repeat(LIMITS.description.max)
@@ -565,7 +565,8 @@ async function plantKinds(t: T, f: OrgFixture) {
   const doubled = await task('Twice')
   // a duplicate whose first row is the stale one
   const staleFirst = await task('Truth')
-  // the third release's state: no issues.description, the text in the row
+  // the third release's state, with no issues.description and the text in
+  // the row
   const skipped = await task('Kept')
   // a task item whose steps have not run yet keeps its row
   const moving = await task('Moving')

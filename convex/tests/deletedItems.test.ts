@@ -421,8 +421,8 @@ describe('moving a task to Deleted items', () => {
   }, 120_000)
 
   it("leaves the subtasks' rows to steps once the tasks it read have spent the delete's bytes", async () => {
-    // Convex's limits, so the delete must read no description row: each of
-    // the 100 is as large as its task, and its delete reads it again
+    // Convex's limits, so the delete must read no description row, because
+    // each of the 100 is as large as its task and its delete reads it again
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })

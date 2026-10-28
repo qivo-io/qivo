@@ -135,8 +135,8 @@ try {
   let ownerWrites = 0
   let allWrites = 0
   /** Whether `symbol`, the symbol of a callee's type declared in lib/db.ts,
-   * is insertUnique's: a function declaration's carries its name, and an
-   * arrow function's is named by the constant that holds it. */
+   * is insertUnique's. A function declaration's carries its name, and an
+   * arrow function's takes the name of the constant that holds it. */
   const isUnique = (symbol) =>
     symbol.name === unique.name ||
     enclosingNames(symbol.declarations[0].resolve(project) ?? { parent: undefined })[0] ===
