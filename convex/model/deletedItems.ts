@@ -1498,8 +1498,11 @@ const REVEAL_RANGES_PER_TASK = 20
  * conflict check's key and uuid reads, its lead and legacy team, the
  * used_ids row of its id (lib/db.ts insertUsed), the stored row it
  * deletes, and the reach rows of its lead it brings in line
- * (revealProjects), about eight. */
-const REVEAL_RANGES_PER_PROJECT = 14
+ * (revealProjects), three more, as they read the projects the reveal
+ * wrote. In convex-test, which counts no range for a delete, a reveal of
+ * 10 and of 20 sub-projects read 4 ranges a project without a lead and 8
+ * with a lead of its own, with a legacy team or without. */
+const REVEAL_RANGES_PER_PROJECT = 9
 
 /** Why an item cannot be restored now (design 5.3). The item's state while
  * it is not ready; read_only while billing or a pending deletion makes the
