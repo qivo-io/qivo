@@ -29,8 +29,10 @@
  *   unchecked   a top-level project they would see only through one of
  *               its sub-projects, if at all, when its sub-projects (SUBS)
  *               or the admin's own grants, team memberships and team
- *               shares (OWN) are more than a page reads to tell. Check it
- *               by hand. Also, without an admin or project, an organization
+ *               shares (OWN) are more than a page reads to tell, and any
+ *               project shared with more teams than a page reads, or under
+ *               a top-level project that is (SHARES). Check it by hand.
+ *               Also, without an admin or project, an organization
  *               with more than ADMINS.most admins, active or not, which the
  *               report leaves out. The projects phase reports it once if
  *               the organization holds a live project, and the work and
@@ -42,12 +44,12 @@
  *               (`'viewer'`), where they can no longer change it. A task
  *               that older code stored on a top-level project, rather than
  *               on a sub-project, is judged by the admin's level there,
- *               'viewer' when they see that project for navigation only and
- *               'unchecked' when SUBS or OWN keep a page from telling. A
- *               reviewer of a task with active subtasks counts too. The
- *               removal of someone's access treats such a reviewer as
- *               dormant (model/projectAccess.ts removeAndFindLost), a
- *               precision this report does not need.
+ *               'viewer' when they see that project for navigation only. A
+ *               held task's sight is 'unchecked' when SHARES, SUBS or OWN
+ *               keep a page from telling. A reviewer of a task with active
+ *               subtasks counts too. The removal of someone's access treats
+ *               such a reviewer as dormant (model/projectAccess.ts
+ *               removeAndFindLost), a precision this report does not need.
  *   follow      a follow of an unarchived task in a live project under a
  *               live top-level project, Done tasks included, as their
  *               followers still get their notifications, in a project they
@@ -76,8 +78,8 @@
  *               reaches nobody today, or where the task has moved out of
  *               the project its filters also name, as events must match
  *               both. It is null for 'org', to read with the admin's
- *               `leaves`, and where SUBS or OWN keep a page from telling, as
- *               for held_task.
+ *               `leaves`, and where SHARES, SUBS or OWN keep a page from
+ *               telling, as for held_task.
  *   credential  the active personal tokens and approved connected apps of
  *               an admin who has any. They act as the admin over REST and
  *               MCP and lose the same projects.
@@ -190,6 +192,17 @@ export const SUBS = { most: 1_000, bytes: 2 * MIB }
  * about three index ranges a team, so 1,500 for 500 teams, beside the
  * organization's teams (at most 4,000 rows) and SUBS. Tests lower them. */
 export const OWN = { rows: 4_000, bytes: MIB, teams: 500 }
+
+/** The most team shares of one project a page reads before it asks an
+ * admin's level there. lib/access.ts projectLevelsOf reads every share of
+ * the project and of its top-level project the first times it asks, before
+ * it has read the admin's own rows, and then asks of each sharing team
+ * whether the admin is a member and whether it is the organization's, about
+ * two index ranges a team. 250 shares on each of the two cost at most about
+ * 1,000 ranges and 500 documents, inside the half of the limits a page
+ * leaves past its room (ROOM). A project with more, or under a top-level
+ * project with more, is `unchecked`. Tests lower it. */
+export const SHARES = { most: 250 }
 
 /** The most live projects of one organization the projects phase reads at
  * once, and their bytes, before it judges them. Each admin's ordinary levels
@@ -438,6 +451,7 @@ type Page = {
   levels: Map<string, Levels>
   subsFit: Map<string, Promise<boolean>>
   ownFits: Map<string, Promise<boolean>>
+  sharesFit: Map<string, Promise<boolean>>
   projects: Map<string, Promise<Doc<'projects'> | null>>
 }
 
@@ -453,6 +467,7 @@ const newPage = (ctx: QueryCtx, size: number): Page => ({
   levels: new Map(),
   subsFit: new Map(),
   ownFits: new Map(),
+  sharesFit: new Map(),
   projects: new Map(),
 })
 
@@ -594,6 +609,30 @@ function ownFits(page: Page, admin: Doc<'profiles'>): Promise<boolean> {
   return known
 }
 
+/** Whether the team shares of `project` and of its top-level project
+ * `root`, which lib/access.ts projectLevelsOf may read all of to tell an
+ * admin's level there, are at most SHARES.most on each. Each project's are
+ * counted once a page, with one bounded read. */
+async function sharesFit(
+  page: Page,
+  project: Doc<'projects'>,
+  root: Doc<'projects'>,
+): Promise<boolean> {
+  const fits = (id: string) => {
+    let known = page.sharesFit.get(id)
+    if (known === undefined) {
+      known = page.ctx.db
+        .query('project_team_access')
+        .withIndex('by_project', (q) => q.eq('project_id', id))
+        .take(SHARES.most + 1)
+        .then((shares) => shares.length <= SHARES.most)
+      page.sharesFit.set(id, known)
+    }
+    return known
+  }
+  return (await fits(project.id)) && (project.id === root.id || (await fits(root.id)))
+}
+
 /** Whether `admin` sees top-level project `project`, on which they hold no
  * level of their own, for navigation to one of its sub-projects, by
  * `levels`, their ordinary levels, or null when the reads that tell would
@@ -611,8 +650,8 @@ async function seesForNavigation(
 /** `admin`'s ordinary level on `project`, under top-level project `root`,
  * by `levels`, their ordinary levels, as profileCanSeeProject decides
  * sight: 'viewer' for a top-level project they see for navigation only.
- * 'unchecked' where that takes reads past SUBS or OWN. A task older code
- * stored on a top-level project is judged this way. */
+ * 'unchecked' where that takes reads past SHARES, SUBS or OWN. A task older
+ * code stored on a top-level project is judged this way. */
 async function sightOf(
   page: Page,
   admin: Doc<'profiles'>,
@@ -620,6 +659,7 @@ async function sightOf(
   project: Doc<'projects'>,
   root: Doc<'projects'>,
 ): Promise<AccessLevel | null | 'unchecked'> {
+  if (!(await sharesFit(page, project, root))) return 'unchecked'
   const own = await levels.level(project.id, false)
   if (own !== null || project.id !== root.id) return own
   const navigates = await seesForNavigation(page, admin, levels, project)
@@ -708,6 +748,17 @@ async function judgeProject(
     key: project.key,
     top_level_id: root.id,
   }
+  const unchecked = {
+    kind: 'unchecked' as const,
+    org_id: project.org_id,
+    profile_id: admin.id,
+    project_id: project.id,
+    key: project.key,
+  }
+  if (!(await sharesFit(page, project, root))) {
+    page.findings.push(unchecked)
+    return
+  }
   const own = await levels.level(project.id, false)
   if (own === 'viewer') {
     page.findings.push({ kind: 'read_only', ...where })
@@ -721,13 +772,7 @@ async function judgeProject(
   if (project.id === root.id) {
     const navigates = await seesForNavigation(page, admin, levels, project)
     if (navigates === null) {
-      page.findings.push({
-        kind: 'unchecked',
-        org_id: project.org_id,
-        profile_id: admin.id,
-        project_id: project.id,
-        key: project.key,
-      })
+      page.findings.push(unchecked)
       return
     }
     if (navigates) {

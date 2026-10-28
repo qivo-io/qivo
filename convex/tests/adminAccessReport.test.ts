@@ -12,7 +12,16 @@ import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { ADMINS, OWN, ordinaryOf, ROOM, RUN, reportPage, SUBS } from '../internal/adminAccessReport'
+import {
+  ADMINS,
+  OWN,
+  ordinaryOf,
+  ROOM,
+  RUN,
+  reportPage,
+  SHARES,
+  SUBS,
+} from '../internal/adminAccessReport'
 import {
   accessRowsOf,
   canLeadProjects,
@@ -661,6 +670,80 @@ describe('the work phase on tasks older code stored on a top-level project', () 
   })
 })
 
+describe('a project shared with more teams than a page reads', () => {
+  it('is unchecked in every phase, and so is every project under such a top-level project', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the fixture's admin holds a task in FW and follows it, and owns
+    // webhooks on FW and PCB, none of which they reach
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      assignee_id: f.admin.id,
+    })
+    await plantSubscription(t, { issue_id: task.id, profile_id: f.admin.id })
+    const onSub = await plantWebhook(t, f.admin, { project_id: f.sub.id })
+    const onSub2 = await plantWebhook(t, f.admin, { project_id: f.sub2.id })
+    const share = (project: Doc<'projects'>) =>
+      t.run(async (ctx) => {
+        for (let n = 0; n < 2; n++)
+          await ctx.db.insert('project_team_access', {
+            project_id: project.id,
+            team_id: await newTeam(ctx, f.org.id),
+            level: 'viewer',
+          })
+      })
+    const judged = async () => {
+      const work = await findingsOf(t, 'work')
+      const machine = await findingsOf(t, 'machine')
+      const affected = (id: string) =>
+        machine.find((found) => found.kind === 'webhook' && found.subscription_id === id)
+      return {
+        projects: await projectKinds(t, f.admin.id),
+        held: work.flatMap((found) => (found.kind === 'held_task' ? [found.sight] : [])),
+        follows: work.flatMap((found) => (found.kind === 'follow' ? [found.sight] : [])),
+        webhooks: [onSub, onSub2].map((id) => {
+          const found = affected(id)
+          return found?.kind === 'webhook' ? found.affected : undefined
+        }),
+      }
+    }
+    try {
+      SHARES.most = 1
+      // two shares on FW pass the bound: FW is unchecked, its siblings not
+      await share(f.sub)
+      expect(await judged()).toEqual({
+        projects: {
+          [f.meta.id]: 'leaves',
+          [f.sub.id]: 'unchecked',
+          [f.sub2.id]: 'leaves',
+          [f.hidden.id]: 'leaves',
+        },
+        held: ['unchecked'],
+        follows: ['unchecked'],
+        webhooks: [null, true],
+      })
+      // two on TBED make it and everything under it unchecked
+      await share(f.meta)
+      expect(await judged()).toEqual({
+        projects: {
+          [f.meta.id]: 'unchecked',
+          [f.sub.id]: 'unchecked',
+          [f.sub2.id]: 'unchecked',
+          [f.hidden.id]: 'leaves',
+        },
+        held: ['unchecked'],
+        follows: ['unchecked'],
+        webhooks: [null, null],
+      })
+    } finally {
+      SHARES.most = 250
+    }
+    // within the bound they are judged as before
+    expect((await judged()).projects[f.sub.id]).toBe('leaves')
+  })
+})
+
 describe('the machine phase', () => {
   it('reports each webhook an admin owns with its scope and whether its project leaves', async () => {
     const t = newT()
@@ -1299,6 +1382,44 @@ async function measuredPages(t: T, phase: Phase, size: number): Promise<Measured
 }
 
 describe('within Convex limits', () => {
+  it('finishes a run past a project shared with 4,200 teams the admin is in', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      assignee_id: f.admin.id,
+    })
+    await plantWebhook(t, f.admin, { project_id: f.sub.id })
+    // asking the admin's level on FW would ask of each team whether it is
+    // the organization's, one index range a team
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 4_200; n++) {
+        const team_id = await newTeam(ctx, f.org.id)
+        await ctx.db.insert('team_members', { team_id, profile_id: f.admin.id, is_leader: false })
+        await ctx.db.insert('project_team_access', {
+          project_id: f.sub.id,
+          team_id,
+          level: 'user',
+        })
+      }
+    })
+    const result = await t.action(report.run, {})
+    expect(result.failed).toBeNull()
+    expect(result.cursor).toBeNull()
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'unchecked',
+          profile_id: f.admin.id,
+          project_id: f.sub.id,
+        }),
+        expect.objectContaining({ kind: 'held_task', task_id: task.id, sight: 'unchecked' }),
+        expect.objectContaining({ kind: 'webhook', profile_id: f.admin.id, affected: null }),
+      ]),
+    )
+  }, 300_000)
+
   it('ends a projects page within the limits over small sub-projects of large parents', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
@@ -1491,9 +1612,10 @@ describe('within Convex limits', () => {
     const pages = await measuredPages(t, 'projects', 1_000_000)
     for (const { page } of sized.slice(0, -1)) expect(page.checked).toBe(4_000)
     // a pair reads no project row: before, each read one, and full pages
-    // ended on index ranges at about half of their size
+    // ended on index ranges at about half of their size. A project costs
+    // about one range, the count of its team shares (SHARES).
     for (const { page, metrics } of [...sized.slice(0, -1), ...pages.slice(0, -1)])
-      expect(metrics.databaseQueries.used).toBeLessThan(page.checked / 4)
+      expect(metrics.databaseQueries.used).toBeLessThan((page.checked / 3) * 1.5)
     expect(pages.length).toBeGreaterThan(1)
     for (const { metrics } of pages.slice(0, -1)) expect(usedPast(metrics, ROOM.share)).toBe(true)
     const findings = pages.flatMap(({ page }) => page.findings)
