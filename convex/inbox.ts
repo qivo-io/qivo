@@ -18,11 +18,13 @@
  *   when a seat's inbox_state changes, and when a seat's first unsnoozed
  *   unread or read message changes.
  * - item (per organization): the caller's item about one task, for the
- *   task window, or `building` while the seat is not ready. It reads the
- *   item row, the task, its project and the caller's levels on it, and the
- *   item's unread messages oldest first, as far as the first unread change
- *   (only the first when the item holds no change). It reruns when any of
- *   those change.
+ *   task window, or `building` while the seat is not ready. Its `through`
+ *   is the newest message's _creationTime, which readItem and removeItem
+ *   take so that they leave out what was stored after it. It reads the
+ *   item row, the task, its project and the caller's levels on it, the
+ *   newest message by insertion, and the item's unread messages oldest
+ *   first, as far as the first unread change (only the first when the item
+ *   holds no change). It reruns when any of those change.
  *
  * Both show the working set as the workspace parts do (lib/access.ts
  * accessOf). Nothing here writes. The item actions are in messages.ts. */

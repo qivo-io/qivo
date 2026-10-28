@@ -15,7 +15,7 @@ import { byId, newWindowKey } from '../lib/db'
 import { LIMITS } from '../lib/limits'
 import { TRASH_BUDGET } from '../model/deletedItems'
 import { insertTask } from '../model/descriptions'
-import { REKEY } from '../model/inboxItems'
+import { itemEdits, REKEY } from '../model/inboxItems'
 import { readInboxItem, readInboxSummary, SUMMARY } from '../model/inboxReads'
 import { ITEM_UNREAD_CAP, itemMessages, markMessagesRead, postMessage } from '../model/messages'
 import {
@@ -519,6 +519,7 @@ describe('one task’s item', () => {
         latest_id: newest.id,
         latest_at: at(3),
         snoozed_until: null,
+        through: newest._creationTime,
       },
     })
     // the item cap's dropped updates; the cap keeps the oldest unread
@@ -611,7 +612,7 @@ describe('the item actions', () => {
     if (view.state !== 'ok' || view.item === null) throw new Error('no item')
     // a message arrives after the caller's view
     const later = (await post(t, f, { to: f.guest, task: a, minute: 3 }))!
-    const through = { at: view.item.latest_at, id: view.item.latest_id }
+    const { through } = view.item
     expect(
       await guest.mutation(api.messages.readItem, { org_id: f.org.id, issue_id: a.id, through }),
     ).toBeNull()
@@ -656,7 +657,7 @@ describe('the item actions', () => {
     await guest.mutation(api.messages.removeItem, {
       org_id: f.org.id,
       issue_id: a.id,
-      through: { at: view.item.latest_at, id: view.item.latest_id },
+      through: view.item.through,
     })
     expect((await pairRows(t, f.guest.id, a.id)).map((m) => m.id)).toEqual([later.id])
     expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({
@@ -670,6 +671,73 @@ describe('the item actions', () => {
     // without through the item goes
     await guest.mutation(api.messages.removeItem, { org_id: f.org.id, issue_id: a.id })
     expect(await storedItem(t, f.guest.id, a.id)).toBeNull()
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('readItem and removeItem leave out a later notice that carries an earlier time or a lower id', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const guest = as(t, f.guest)
+    const view = async (task: Doc<'issues'>) => {
+      const got = await itemFor(t, f, f.guest, task.id)
+      if (got.state !== 'ok' || got.item === null) throw new Error('no item')
+      return got.item
+    }
+    // what a background step stores after the caller's view: a follower
+    // notice with its write's earlier time, and one of the same instant
+    // whose id sorts below the newest one's
+    const lateNotices = async (task: Doc<'issues'>, seen: { latest_at: string }) => {
+      const earlier = (await post(t, f, { to: f.guest, task, minute: 0, kind: 'comment' }))!
+      const tied = await t.run(async (ctx) => {
+        const edits = itemEdits(ctx)
+        const row = {
+          id: '00000000-0000-4000-8000-000000000000',
+          org_id: f.org.id,
+          recipient_id: f.guest.id,
+          actor_id: f.admin.id,
+          issue_id: task.id,
+          issue_title: task.title,
+          kind: 'comment' as const,
+          detail: 'Tied',
+          created_at: seen.latest_at,
+        }
+        await edits.insert(row, task.project_id)
+        await edits.flush()
+        return row
+      })
+      return [earlier.id, tied.id]
+    }
+    const unreadIds = async (task: Doc<'issues'>) =>
+      (await pairRows(t, f.guest.id, task.id))
+        .filter((m) => m.read_at === undefined)
+        .map((m) => m.id)
+        .sort()
+    const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await post(t, f, { to: f.guest, task: a, minute: 1 })
+    await post(t, f, { to: f.guest, task: a, minute: 2 })
+    const seenA = await view(a)
+    const lateA = await lateNotices(a, seenA)
+    // they sort at or below the newest message the caller saw
+    expect((await view(a)).latest_id).toBe(seenA.latest_id)
+    await guest.mutation(api.messages.readItem, {
+      org_id: f.org.id,
+      issue_id: a.id,
+      through: seenA.through,
+    })
+    expect(await unreadIds(a)).toEqual([...lateA].sort())
+    expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({ unread_count: 2 })
+    expect(await drift(t)).toEqual([])
+    const b = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await post(t, f, { to: f.guest, task: b, minute: 1 })
+    await post(t, f, { to: f.guest, task: b, minute: 2 })
+    const seenB = await view(b)
+    const lateB = await lateNotices(b, seenB)
+    await guest.mutation(api.messages.removeItem, {
+      org_id: f.org.id,
+      issue_id: b.id,
+      through: seenB.through,
+    })
+    expect((await pairRows(t, f.guest.id, b.id)).map((m) => m.id).sort()).toEqual([...lateB].sort())
     expect(await drift(t)).toEqual([])
   })
 

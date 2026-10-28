@@ -129,13 +129,15 @@ export const snooze = orgMutation({
   },
 })
 
-/* The newest message of an item as the caller saw it, the item's latest_at
- * and latest_id (inbox.item), where readItem and removeItem stop. */
-const vThrough = v.object({ at: v.string(), id: v.string() })
+/* Where readItem and removeItem stop: the _creationTime of the item's
+ * newest message by insertion as the caller saw it (inbox.item `through`,
+ * model/messages.ts itemMessages). */
+const vThrough = v.number()
 
 /* Marks the caller's item about one task read. It marks the unread
- * messages not newer than `through`, or all of them without it, so a
- * message that arrived after the caller's view stays unread. The prune then
+ * messages stored up to `through`, or all of them without it, so a message
+ * stored after the caller's view stays unread, a notice that carries an
+ * earlier time included. The prune then
  * keeps the item's newest message (model/messages.ts markMessagesRead),
  * which is that later arrival when there is one. An item holds at most
  * ITEM_UNREAD_CAP + 1 (51) messages, but one stored before the cap keeps
@@ -168,8 +170,8 @@ export const unreadItem = orgMutation({
   },
 })
 
-/* Removes the caller's item about one task, the messages not newer than
- * `through` or all of them without it, so a message that arrived after the
+/* Removes the caller's item about one task, the messages stored up to
+ * `through` or all of them without it, so a message stored after the
  * caller's view stays as the item's only one. */
 export const removeItem = orgMutation({
   args: { issue_id: v.string(), through: v.optional(vThrough) },

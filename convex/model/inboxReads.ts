@@ -228,11 +228,15 @@ export async function readInboxSummary(ctx: QueryCtx, seats: readonly Doc<'profi
  * seat holds no item about the task or is not shown the task, and else
  * holds the item's counts, the oldest unread message's created_at
  * (`first_unread_at`, null when all are read), whether an unread message is
- * a change (`unread_change`), the newest message, which the item actions
- * take as their `through`, and the item's snooze.
+ * a change (`unread_change`), the newest message by (created_at, id) for
+ * the row's second line, the item's snooze, and `through`, the
+ * _creationTime of its newest message by insertion, which readItem and
+ * removeItem take so that they leave out what was stored after this answer
+ * (model/messages.ts itemMessages).
  *
  * It reads the item row, the seat's readiness (two ranges), the task with
- * its project and the seat's access rows, and the item's unread messages
+ * its project and the seat's access rows, the newest message by insertion,
+ * and the item's unread messages
  * oldest first, only the first when the item holds no change and otherwise
  * up to the first unread change, at most ITEM_UNREAD_CAP + 1 (51) for an
  * item kept at the cap.
@@ -242,6 +246,14 @@ export async function readInboxItem(ctx: QueryCtx, me: Doc<'profiles'>, issueId:
   const row = await itemRow(ctx, { recipient_id: me.id, issue_id: issueId })
   if (row === null || (await inboxScope(ctx, me).shownTask(issueId)) === null)
     return { state: 'ok' as const, item: null }
+  // the newest message by insertion, which a later one, backdated or not,
+  // always follows
+  const newest = await ctx.db
+    .query('messages')
+    .withIndex('by_recipient_issue', (q) => q.eq('recipient_id', me.id).eq('issue_id', issueId))
+    .order('desc')
+    .first()
+  if (newest === null) return { state: 'ok' as const, item: null }
   let firstUnreadAt: string | null = null
   let unreadChange = false
   if (row.unread_count > 0) {
@@ -269,6 +281,7 @@ export async function readInboxItem(ctx: QueryCtx, me: Doc<'profiles'>, issueId:
       latest_id: row.latest_id,
       latest_at: row.latest_at,
       snoozed_until: row.snoozed_until ?? null,
+      through: newest._creationTime,
     },
   }
 }

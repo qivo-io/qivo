@@ -43,7 +43,6 @@ import { byId } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
-import { newestFirst } from '../lib/inbox'
 import { LIMITS } from '../lib/limits'
 import { mentionIds } from '../lib/mentions'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
@@ -917,25 +916,22 @@ export async function ownMessages(
   return out
 }
 
-/** The newest message of an inbox item as a caller saw it, the item's
- * latest_at and latest_id (schema.ts inbox_items), where an item action
- * stops. */
-export type Through = { at: string; id: string }
-
 /** Every row of `me`'s inbox item about one task, or with `through` the
- * rows not newer than it by (created_at, id) (lib/inbox.ts newestFirst), so
- * an item action leaves out a message that arrived after the caller's
- * view. */
+ * rows stored no later than it, a _creationTime that inbox.item answered as
+ * the item's newest by insertion, so an item action leaves out a message
+ * stored after the caller's view. Insertion order, as markAllMessagesRead's
+ * cutoff uses, because created_at does not order arrivals: a follower or
+ * mention notice that a background step stores carries its write's earlier
+ * time, and two notices of one instant are ordered only by their random
+ * ids. */
 export async function itemMessages(
   ctx: MutationCtx,
   me: Doc<'profiles'>,
   issueId: string,
-  through?: Through,
+  through?: number,
 ): Promise<Doc<'messages'>[]> {
   const rows = await pairRows(ctx, { recipient_id: me.id, issue_id: issueId })
-  if (through === undefined) return rows
-  const seen = { created_at: through.at, id: through.id }
-  return rows.filter((row) => newestFirst(row, seen) >= 0)
+  return through === undefined ? rows : rows.filter((row) => row._creationTime <= through)
 }
 
 /**
