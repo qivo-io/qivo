@@ -18,6 +18,7 @@ import { demoRefusal } from '../lib/demo'
 import { DEMO_UNAVAILABLE } from '../lib/demoRefusals'
 import { require, rule } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
+import { named, nameKey } from '../lib/nameKey'
 import { issueKey } from '../lib/taskRefs'
 import { insertActivity, issueChanges, machineDetail } from './activity'
 import { markArchivedTask } from './archiveMarks'
@@ -289,11 +290,19 @@ export async function writeNorthstarStep(
       next_issue_num: data.issues.length,
       next_project_num: data.projects.length,
     })
+    // A membership and a team share copy their person's or team's name key
+    // (model/nameKeys.ts), here the keys of the names the loop below gives
+    // the people. Seeding needs an organization without teams and projects
+    // (holdsNoWork), so no other copy of a person's key is left to follow.
+    const personKeys = new Map(data.people.map((p) => [p.key, nameKey(p.name)]))
+    const teamKeys = new Map<string, string>()
     for (const team of data.teams) {
+      const teamName = named(cleanTeamName(team.name))
+      teamKeys.set(team.key, teamName.name_key)
       await ctx.db.insert('teams', {
         id: teamIds[team.key],
         org_id: org.id,
-        name: cleanTeamName(team.name),
+        ...teamName,
         ...teamDefaults,
       })
       for (const member of team.members)
@@ -301,6 +310,7 @@ export async function writeNorthstarStep(
           team_id: teamIds[team.key],
           profile_id: personIds[member],
           is_leader: member === team.lead,
+          name_key: personKeys.get(member),
         })
     }
     for (const p of data.people) {
@@ -314,7 +324,7 @@ export async function writeNorthstarStep(
           at: marketingInstant(anchor, p.syncDay, DEMO_SYNC_TIME),
         })
       await ctx.db.patch(profile._id, {
-        name: p.name,
+        ...named(p.name),
         initials: p.initials,
         color: p.color,
         org_role: p.role,
@@ -333,7 +343,7 @@ export async function writeNorthstarStep(
         type: p.parent ? 'project' : 'meta',
         parent_id: p.parent ? projectIds[p.parent] : undefined,
         key: p.code,
-        name: cleanProjectName(p.name),
+        ...named(cleanProjectName(p.name)),
         description: projectDescription(p.description),
         lead_id: personIds[p.lead],
         sort_order: index,
@@ -347,6 +357,7 @@ export async function writeNorthstarStep(
             project_id: projectIds[p.key],
             team_id: teamIds[team.key],
             level: team.key === p.team ? 'user' : 'viewer',
+            name_key: teamKeys.get(team.key),
           })
     }
     // one read of the counters for every project, not one per project
@@ -715,7 +726,7 @@ async function createPublicDemoOrg(
     await ctx.db.insert('profiles', {
       id: await id(`person:${person.key}`),
       org_id: orgId,
-      name: person.name,
+      ...named(person.name),
       initials: person.initials,
       color: person.color,
       org_role: person.role,

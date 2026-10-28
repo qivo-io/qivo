@@ -14,6 +14,7 @@ import { refuseProduction } from '../lib/deployment'
 import type { StoredTable } from '../lib/enums'
 import { badRequest, conflict, require, rule } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS, MIB } from '../lib/limits'
+import { named } from '../lib/nameKey'
 import { monthOf } from '../lib/usage'
 import { pendingRemoval } from '../model/cascade'
 import {
@@ -303,7 +304,7 @@ export const provision = internalMutation({
       await ctx.db.insert('profiles', {
         id: await id(`person:${p.key}`),
         org_id: orgId,
-        name: p.name,
+        ...named(p.name),
         initials: p.initials,
         color: p.color,
         org_role: p.role,

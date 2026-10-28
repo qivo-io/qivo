@@ -445,6 +445,8 @@ messages:removeRead mutation public {"type":"object","value":{"org_id":{"fieldTy
 messages:snooze mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"until":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:trimItems mutation internal {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"recipients":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false}}}
 messages:wake mutation internal {"type":"object","value":{"recipient_id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"until":{"fieldType":{"type":"string"},"optional":false}}}
+nameCopies:recover mutation internal {"type":"object","value":{}}
+nameCopies:step mutation internal {"type":"object","value":{"source":{"fieldType":{"type":"union","value":[{"type":"literal","value":"profiles"},{"type":"literal","value":"teams"}]},"optional":false},"source_id":{"fieldType":{"type":"string"},"optional":false}}}
 oauthAccess:lookupAccess query internal {"type":"object","value":{"tokenHash":{"fieldType":{"type":"string"},"optional":false},"resource":{"fieldType":{"type":"string"},"optional":false}}}
 oauthAccess:refusedForDeletion query internal {"type":"object","value":{"tokenHash":{"fieldType":{"type":"string"},"optional":false},"resource":{"fieldType":{"type":"string"},"optional":false}}}
 oauthAccess:touch mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}

@@ -32,6 +32,7 @@ import { descriptionForm, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
 import { limitedNumber, limitedText } from '../lib/limitRules'
 import { grouped, LIMITS } from '../lib/limits'
+import { named, nameKey } from '../lib/nameKey'
 import { canCreateProjects, projectCreationRefusal } from '../lib/projectCreators'
 import { creatorGrant, type Grants, grantsAfterHandover } from '../lib/projectGrants'
 import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from '../lib/projectKeys'
@@ -200,13 +201,14 @@ async function assertLeadAllowed(
 /** pa_insert/pa_update's WITH CHECK (0081:275-283 + 0102:365-384): the
  * grantee holds a profile in the project's org (a guest qualifies — that is
  * the whole point), and a viewer-role grantee only ever receives a 'viewer'
- * grant. Refusing silently was the RLS behavior — surfaced as forbidden. */
+ * grant. Refusing silently was the RLS behavior — surfaced as forbidden.
+ * Answers the grantee's profile. */
 export async function assertGrantee(
   ctx: QueryCtx,
   project: Doc<'projects'>,
   profileId: string,
   level: GrantLevel,
-): Promise<void> {
+): Promise<Doc<'profiles'>> {
   const p = await byId(ctx, 'profiles', profileId)
   if (p === null || p.org_id !== project.org_id) {
     throw forbidden('the grantee must hold a profile in this organization')
@@ -214,18 +216,21 @@ export async function assertGrantee(
   if (level !== 'viewer' && p.org_role === 'viewer') {
     throw forbidden('a viewer can only receive a viewer grant')
   }
+  return p
 }
 
-/** A team share's team must belong to the project's organization. */
+/** A team share's team must belong to the project's organization. Answers
+ * the team. */
 export async function assertTeamGrantee(
   ctx: QueryCtx,
   project: Doc<'projects'>,
   teamId: string,
-): Promise<void> {
+): Promise<Doc<'teams'>> {
   const team = await byId(ctx, 'teams', teamId)
   if (team === null || team.org_id !== project.org_id) {
     throw forbidden('the team must belong to this organization')
   }
+  return team
 }
 
 /* Access-map entries that store a grant row: 'lead' is carried by lead_id
@@ -366,7 +371,7 @@ export async function createProjectCore(
       type: p.type,
       parent_id,
       key,
-      name,
+      ...named(name),
       lead_id,
       description,
       sort_order,
@@ -398,16 +403,23 @@ export async function createProjectCore(
     if (mine === null) grants.delete(me.id)
     else grants.set(me.id, mine)
   }
+  // grants and shares copy their profile's or team's name key (model/nameKeys.ts)
   for (const [uid, level] of grants) {
-    await assertGrantee(ctx, project, uid, level)
-    await ctx.db.insert('project_access', { project_id: project.id, profile_id: uid, level })
+    const grantee = await assertGrantee(ctx, project, uid, level)
+    await ctx.db.insert('project_access', {
+      project_id: project.id,
+      profile_id: uid,
+      level,
+      name_key: nameKey(grantee.name),
+    })
   }
   for (const [sharedTeamId, level] of Object.entries(p.team_access ?? {})) {
-    await assertTeamGrantee(ctx, project, sharedTeamId)
+    const team = await assertTeamGrantee(ctx, project, sharedTeamId)
     await ctx.db.insert('project_team_access', {
       project_id: project.id,
       team_id: sharedTeamId,
       level,
+      name_key: nameKey(team.name),
     })
   }
   await logActivity(ctx, {
@@ -564,7 +576,7 @@ export async function updateProjectCore(
     next: fields,
   })
   const db: Partial<Doc<'projects'>> = {}
-  if (patch.name !== undefined) db.name = cleanProjectName(patch.name)
+  if (patch.name !== undefined) Object.assign(db, named(cleanProjectName(patch.name)))
   if (patch.description !== undefined) db.description = projectDescription(patch.description)
   if (patch.track_delay !== undefined) db.track_delay = patch.track_delay
   // null clears: undefined unsets the column through ctx.db.patch
@@ -616,11 +628,17 @@ export async function updateProjectCore(
       .collect()
     const held = new Map(prev.map((row) => [row.team_id, row]))
     for (const [teamId, level] of next) {
-      await assertTeamGrantee(ctx, project, teamId)
+      const team = await assertTeamGrantee(ctx, project, teamId)
       const row = held.get(teamId)
+      const name_key = nameKey(team.name)
       if (row === undefined) {
-        await ctx.db.insert('project_team_access', { project_id: id, team_id: teamId, level })
-      } else if (row.level !== level) await ctx.db.patch(row._id, { level })
+        await ctx.db.insert('project_team_access', {
+          project_id: id,
+          team_id: teamId,
+          level,
+          name_key,
+        })
+      } else if (row.level !== level) await ctx.db.patch(row._id, { level, name_key })
     }
     removes ||= prev.some((row) => !next.has(row.team_id))
   }
@@ -687,9 +705,16 @@ async function writeGrants(
   for (const [uid, level] of next) {
     const row = held.get(uid)
     if (row !== undefined && row.level === level) continue
-    await assertGrantee(ctx, project, uid, level)
-    if (row !== undefined) await ctx.db.patch(row._id, { level })
-    else await ctx.db.insert('project_access', { project_id: project.id, profile_id: uid, level })
+    const grantee = await assertGrantee(ctx, project, uid, level)
+    const name_key = nameKey(grantee.name)
+    if (row !== undefined) await ctx.db.patch(row._id, { level, name_key })
+    else
+      await ctx.db.insert('project_access', {
+        project_id: project.id,
+        profile_id: uid,
+        level,
+        name_key,
+      })
   }
   let removes = false
   for (const [uid, row] of held) {

@@ -26,6 +26,7 @@ import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
 import { asciiEmail } from './lib/email'
 import { authedMutation, authedQuery, require, rule } from './lib/functions'
 import { cutText, DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS } from './lib/limits'
+import { named } from './lib/nameKey'
 import { enrollOrganization } from './model/billing'
 import {
   cleanOrgName,
@@ -236,7 +237,7 @@ export const createOrganization = authedMutation({
       auth_user_id: ctx.authUserId,
       org_id: orgId,
       email: em,
-      name: who,
+      ...named(who),
       initials: nameInitials(who),
       color: '#6D7BF2',
       org_role: 'admin',
@@ -246,7 +247,12 @@ export const createOrganization = authedMutation({
       accepted_at: now,
       created_at: now,
     })
-    await createStarterTeam(ctx, { org_id: orgId, name: nm, leader_id: profileId, now })
+    await createStarterTeam(ctx, {
+      org_id: orgId,
+      name: nm,
+      leader: { id: profileId, name: who },
+      now,
+    })
     await createStarterLabels(ctx, { org_id: orgId, now })
     await enrollOrganization(ctx, orgId)
     await markBillingMembershipChanged(ctx, orgId, [em])

@@ -65,9 +65,11 @@ import {
 } from './lib/functions'
 import { limitedEmail } from './lib/limitRules'
 import { LIMITS } from './lib/limits'
+import { named } from './lib/nameKey'
 import { audit, operatorEmail } from './model/admin'
 import { enrollOrganization, grantComplimentaryMonths } from './model/billing'
 import { removeProfile } from './model/cascade'
+import { copyNameKey, inlineBudget } from './model/nameKeys'
 import {
   assertNotLastAdmin,
   assertSlugAvailable,
@@ -163,7 +165,7 @@ async function addPeople(
       id,
       org_id: org.id,
       email: row.email,
-      name: row.name,
+      ...named(row.name),
       initials: nameInitials(row.name),
       color: AVATAR_COLORS[(existing.length + i) % AVATAR_COLORS.length],
       org_role: row.role,
@@ -231,7 +233,8 @@ export const insertOrganization = internalMutation({
     await createStarterLabels(ctx, { org_id: orgId, now })
     const profileIds = await addPeople(ctx, org, a.people, a.actor)
     const firstAdmin = profileIds.find((_, i) => a.people[i].role === 'admin')
-    await createStarterTeam(ctx, { org_id: orgId, name, leader_id: firstAdmin, now })
+    const leader = firstAdmin === undefined ? null : await byId(ctx, 'profiles', firstAdmin)
+    await createStarterTeam(ctx, { org_id: orgId, name, leader: leader ?? undefined, now })
 
     await enrollOrganization(ctx, orgId, a.plan_id)
     let complimentaryUntil: string | null = null
@@ -350,9 +353,9 @@ export const updateInvite = internalMutation({
       asciiEmail(typed) === seat.email
         ? seat.email
         : limitedEmail(typed, `${typed} is not an email address.`)
-    const patch: { name?: string; initials?: string; email?: string } = {}
+    const patch: { name?: string; name_key?: string; initials?: string; email?: string } = {}
     if (name !== seat.name) {
-      patch.name = name
+      Object.assign(patch, named(name))
       patch.initials = nameInitials(name)
     }
     const emailChanged = email !== seat.email
@@ -368,6 +371,9 @@ export const updateInvite = internalMutation({
     }
     if (Object.keys(patch).length === 0) return { email_changed: false }
     await ctx.db.patch(seat._id, patch)
+    // a pending seat can hold memberships and project grants already
+    if (patch.name !== undefined)
+      await copyNameKey(ctx, 'profiles', { id: seat.id, name }, inlineBudget())
     await audit(ctx, {
       actor_auth_id: a.actor.auth_user_id,
       actor_email: a.actor.email,

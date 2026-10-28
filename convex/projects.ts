@@ -56,6 +56,7 @@ import {
 } from './lib/functions'
 import { limitedEmail } from './lib/limitRules'
 import { cutText, DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS } from './lib/limits'
+import { named, nameKey } from './lib/nameKey'
 import { logActivity } from './model/activity'
 import { cleanReason, moveProjectToTrash } from './model/deletedItems'
 import {
@@ -399,6 +400,8 @@ export const inviteGuest = orgMutation({
       })
     }
     let pid: string
+    // the grant copies the person's name key (model/nameKeys.ts)
+    let grantee: string
     if (existing !== null) {
       await assertGrantee(ctx, project, existing.id, level)
       if (existing.id === ctx.me.id && !(await canManageOwnProjectAccess(ctx, ctx.me, project))) {
@@ -407,6 +410,7 @@ export const inviteGuest = orgMutation({
         )
       }
       pid = existing.id
+      grantee = existing.name
     } else {
       pid = newUuid()
       // the address's local part, cut to a name's length rather than
@@ -431,7 +435,7 @@ export const inviteGuest = orgMutation({
         id: pid,
         org_id: ctx.me.org_id,
         email: em,
-        name: nm,
+        ...named(nm),
         initials,
         color: '#8A8F98',
         org_role: 'guest',
@@ -441,6 +445,7 @@ export const inviteGuest = orgMutation({
         message_retention_days: retention,
         created_at: now,
       })
+      grantee = nm
     }
     const grant = await ctx.db
       .query('project_access')
@@ -456,8 +461,15 @@ export const inviteGuest = orgMutation({
         next: level,
       })
     }
-    if (grant !== null) await ctx.db.patch(grant._id, { level })
-    else await ctx.db.insert('project_access', { project_id: project.id, profile_id: pid, level })
+    const name_key = nameKey(grantee)
+    if (grant !== null) await ctx.db.patch(grant._id, { level, name_key })
+    else
+      await ctx.db.insert('project_access', {
+        project_id: project.id,
+        profile_id: pid,
+        level,
+        name_key,
+      })
     if (existing === null) {
       await markBillingMembershipChanged(ctx, ctx.me.org_id, [em])
       // A new guest seat is an invitation; email it once this mutation commits.

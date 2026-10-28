@@ -7,7 +7,7 @@
  *                    list (the reserved word is `qivo`)
  *   counters         the per-org issue and project numbers (org_counters),
  *                    and the helpers that insert an organization with its
- *                    org_counters row and delete that row
+ *                    org_counters and org_ready rows and delete them
  *   live counts      the active tasks and live projects the app's windows
  *                    read (org_counters), kept by tallyRow
  *   column defaults  including the organization-wide upload cap
@@ -31,6 +31,7 @@ import { trimmedForm } from '../lib/fieldPrints'
 import { conflict, notFound, require, rule } from '../lib/functions'
 import { limitedText, limitedWhole } from '../lib/limitRules'
 import { LIMITS, SLUG_SHAPE } from '../lib/limits'
+import { named, nameKey } from '../lib/nameKey'
 import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
 import { logActivity } from './activity'
 import {
@@ -43,6 +44,7 @@ import {
   TEXT,
   TEXT_OR_NULL,
 } from './expected'
+import { readyRow } from './nameKeys'
 import { assertProfileExpected } from './people'
 
 /* Web Crypto exists in the Convex isolate (and the edge-runtime VM), but
@@ -294,8 +296,10 @@ export async function setCounters(
 }
 
 /** Inserts an organization with its org_counters row, its live counts at
- * zero. Every path that creates an organization uses it; `counters` lets a
- * fixture start numbering past rows it plants, which it tallies (tallyRow). */
+ * zero, and its org_ready row, ready from its creation because every writer
+ * gives its rows their name keys (model/nameKeys.ts). Every path that
+ * creates an organization uses it; `counters` lets a fixture start
+ * numbering past rows it plants, which it tallies (tallyRow). */
 export async function insertOrgRows(
   ctx: MutationCtx,
   row: WithoutSystemFields<Doc<'organizations'>>,
@@ -308,6 +312,7 @@ export async function insertOrgRows(
     active_tasks: 0,
     live_projects: 0,
   })
+  await ctx.db.insert('org_ready', { org_id: row.id, name_keys_at: row.created_at })
   return id
 }
 
@@ -380,13 +385,15 @@ export const tallyRow = (
   after: Tallied | null,
 ): Promise<void> => tallyRows(ctx, table, [[before, after]])
 
-/** Deletes the organization's org_counters row, if any. Every organization
- * delete (model/cascade.ts deleteOrgDeep, the last step of
- * model/orgDeletion.ts, the demo purge) calls it before it deletes the
+/** Deletes the organization's org_counters and org_ready rows, if any.
+ * Every organization delete (model/cascade.ts deleteOrgDeep, the last step
+ * of model/orgDeletion.ts, the demo purge) calls it before it deletes the
  * organization row. */
 export async function deleteOrgBookkeeping(ctx: MutationCtx, orgId: string): Promise<void> {
   const counters = await countersRow(ctx, orgId)
   if (counters !== null) await ctx.db.delete(counters._id)
+  const ready = await readyRow(ctx, orgId)
+  if (ready !== null) await ctx.db.delete(ready._id)
 }
 
 /* ------------------------------------------------------------------ defaults
@@ -455,14 +462,24 @@ export async function createStarterTeam(
   {
     org_id,
     name,
-    leader_id,
+    leader,
     now,
-  }: { org_id: string; name: string; leader_id: string | undefined; now: string },
+  }: {
+    org_id: string
+    name: string
+    leader: Pick<Doc<'profiles'>, 'id' | 'name'> | undefined
+    now: string
+  },
 ): Promise<string> {
   const teamId = newUuid()
-  await ctx.db.insert('teams', { id: teamId, org_id, name, ...newTeamDefaults(now) })
-  if (leader_id !== undefined) {
-    await ctx.db.insert('team_members', { team_id: teamId, profile_id: leader_id, is_leader: true })
+  await ctx.db.insert('teams', { id: teamId, org_id, ...named(name), ...newTeamDefaults(now) })
+  if (leader !== undefined) {
+    await ctx.db.insert('team_members', {
+      team_id: teamId,
+      profile_id: leader.id,
+      is_leader: true,
+      name_key: nameKey(leader.name),
+    })
   }
   return teamId
 }

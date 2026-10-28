@@ -45,6 +45,7 @@ import {
   vIssueStatus,
   vLinkType,
   vMessageKind,
+  vNameSource,
   vOrgRemovalPhase,
   vOrgRemovalReason,
   vOrgRole,
@@ -119,6 +120,13 @@ const projectsTable = defineTable({
   // webhooks or the export. A project stored before it had one sorts first,
   // in the first window, until internal/windowKeysBackfill gives it one.
   window_key: v.optional(v.string()),
+  // The name as name-ordered lists sort and search it (lib/nameKey.ts),
+  // server-owned and written with the name. Never sent to clients, REST,
+  // MCP, webhooks or the export. A project stored before it had one has none
+  // until internal/nameKeysBackfill gives it one, and a restore from Deleted
+  // items computes it again from the name (model/deletedItems.ts
+  // cleanProject).
+  name_key: v.optional(v.string()),
 })
   .index('by_uuid', ['id'])
   .index('by_org', ['org_id'])
@@ -132,23 +140,45 @@ const projectsTable = defineTable({
   // The nightly archive pages the live projects (archived_at absent).
   .index('by_archived_org', ['archived_at', 'org_id'])
 
+/* `name_key` on a membership, a grant or a team share is a server-owned copy
+ * of its profile's or team's name_key, so a team's members and a project's
+ * grants read in name order from one range. The writer of the row copies it,
+ * and a rename brings the copies in line, the first NAME_COPIES.inline in
+ * its own transaction and the rest in bounded background steps
+ * (model/nameKeys.ts, nameCopies.ts), so a copy can trail a rename for a
+ * moment but never goes missing. A restore from Deleted items computes it
+ * again (model/deletedItems.ts cleanGrant, cleanShare). Never sent to
+ * clients, REST, MCP, webhooks or the export. */
+const nameCopy = v.optional(v.string())
+
 const projectAccessTable = defineTable({
   project_id: v.string(), // explicit grants may target a project or sub-project
   profile_id: v.string(),
   level: vGrantLevel, // the validator IS project_access_level_ck
+  name_key: nameCopy, // the profile's
 })
   .index('by_project', ['project_id'])
   .index('by_profile', ['profile_id'])
   .index('by_project_profile', ['project_id', 'profile_id'])
+  // a project's user grants in name order
+  .index('by_project_name', ['project_id', 'name_key', 'profile_id'])
+  // the grants whose copy differs from the person's current key, which a
+  // rename brings in line (model/nameKeys.ts staleCopies)
+  .index('by_profile_name', ['profile_id', 'name_key'])
 
 const projectTeamAccessTable = defineTable({
   project_id: v.string(), // explicit shares may target a project or sub-project
   team_id: v.string(), // same organization as the project
   level: vGrantLevel,
+  name_key: nameCopy, // the team's
 })
   .index('by_project', ['project_id'])
   .index('by_team', ['team_id'])
   .index('by_project_team', ['project_id', 'team_id'])
+  // a project's team shares in name order
+  .index('by_project_name', ['project_id', 'name_key', 'team_id'])
+  // the shares a team rename brings in line, as project_access by_profile_name
+  .index('by_team_name', ['team_id', 'name_key'])
 
 const issuesTable = defineTable({
   id: v.string(),
@@ -972,6 +1002,19 @@ export default defineSchema({
     counted: v.optional(v.object({ tasks: v.number(), projects: v.number() })),
   }).index('by_org', ['org_id']),
 
+  // Which one-time migrations an organization's rows have finished, one row
+  // per organization (model/orgs.ts insertOrgRows, deleteOrgBookkeeping). A
+  // reader that depends on one refuses while its stamp is absent. Kept off
+  // org_counters and the organization row, which every member's workspace
+  // reads. `name_keys_at` says from when every profile, team, project,
+  // membership, grant and team share of the organization holds its name key
+  // (internal/nameKeysBackfill.ts). An organization created since every
+  // writer keeps them gets it at its creation.
+  org_ready: defineTable({
+    org_id: v.string(),
+    name_keys_at: v.optional(v.string()),
+  }).index('by_org', ['org_id']),
+
   // Team sync stamps (model/syncStamps.ts, lib/teamSync.ts), one row per
   // stamped person: the latest change made on them through the sync page
   // (server clock), and the reading point of the sitting that change belongs
@@ -998,18 +1041,28 @@ export default defineSchema({
     icon_color: v.optional(v.string()),
     track_delay_default: v.boolean(),
     created_at: v.string(),
+    // The name as name-ordered lists sort and search it, server-owned as on
+    // projects. project_team_access copies it.
+    name_key: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
-    .index('by_org', ['org_id']),
+    .index('by_org', ['org_id'])
+    // the organization's teams in name order
+    .index('by_org_name', ['org_id', 'name_key', 'id']),
 
   team_members: defineTable({
     team_id: v.string(),
     profile_id: v.string(),
     is_leader: v.boolean(),
+    name_key: nameCopy, // the profile's
   })
     .index('by_team', ['team_id'])
     .index('by_profile', ['profile_id'])
-    .index('by_team_profile', ['team_id', 'profile_id']),
+    .index('by_team_profile', ['team_id', 'profile_id'])
+    // a team's members in name order
+    .index('by_team_name', ['team_id', 'name_key', 'profile_id'])
+    // the memberships a rename brings in line, as project_access by_profile_name
+    .index('by_profile_name', ['profile_id', 'name_key']),
 
   profiles: defineTable({
     id: v.string(),
@@ -1044,11 +1097,17 @@ export default defineSchema({
     // off.
     can_create_projects: v.optional(v.boolean()),
     created_at: v.string(),
+    // The name as name-ordered lists sort and search it, server-owned as on
+    // projects. team_members and project_access copy it.
+    name_key: v.optional(v.string()),
     // uniqueness (mutation-checked): (org_id, email), (org_id, auth_user_id),
     // and at most one accepted non-guest seat per login across all orgs
   })
     .index('by_uuid', ['id'])
     .index('by_org', ['org_id'])
+    // the organization's people in name order, all of them or one role
+    .index('by_org_name', ['org_id', 'name_key', 'id'])
+    .index('by_org_role_name', ['org_id', 'org_role', 'name_key', 'id'])
     // the app's people windows: a range of profile ids (lib/workspaceParts.ts)
     .index('by_org_id', ['org_id', 'id'])
     .index('by_auth', ['auth_user_id'])
@@ -1072,6 +1131,22 @@ export default defineSchema({
     scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
   })
     .index('by_profile', ['profile_id'])
+    .index('by_progress', ['progress_at']),
+
+  // A renamed profile or team whose name key copies (schema `nameCopy` above)
+  // bounded background steps still bring in line (nameCopies.ts). The rename
+  // brings the first ones in line in its own transaction and writes this row
+  // only when more are left (model/nameKeys.ts copyNameKey). Each step reads
+  // the source's current name, so the last rename wins. It has no org_id,
+  // because a step also ends after its organization is deleted, as
+  // label_removals do.
+  name_copies: defineTable({
+    source: vNameSource,
+    source_id: v.string(),
+    progress_at: v.string(), // the last committed step; recovery restarts a stalled row
+    scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
+  })
+    .index('by_source', ['source', 'source_id'])
     .index('by_progress', ['progress_at']),
 
   projects: projectsTable,
