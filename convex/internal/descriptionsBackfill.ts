@@ -94,7 +94,7 @@ import { byId } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { audit as writeAudit } from '../model/admin'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
-import { holdsCopies, putDescription } from '../model/descriptions'
+import { holdsCopies, putDescription, shownText } from '../model/descriptions'
 
 /** Rows one page reads, the bytes it reads before it ends early, as Convex
  * counts a document's size, and the most ids a call lists of each kind.
@@ -179,9 +179,11 @@ function read<D extends Record<string, Value> | null>(reads: Reads, doc: D): D {
 }
 
 /** Checks task `task` against its description rows, and mends them with
- * `write`. A task without issues.description is skipped: nothing checks or
- * writes its row's text, but a repair gives its first row the task's
- * copies. A repair reuses the rows read here. */
+ * `write`. A task without issues.description is skipped: nothing checks its
+ * row's text, but a repair gives its first row the task's copies, with the
+ * text readers showed before (model/descriptions.ts shownText), so a second
+ * row that held the copies leaves its text shown. A repair reuses the rows
+ * read here. */
 async function checkTask(
   ctx: QueryCtx,
   task: Doc<'issues'>,
@@ -201,7 +203,8 @@ async function checkTask(
     if (row !== undefined && !holdsCopies(row, task)) {
       note(found, 'differ', task.id)
       // the patch reads the row again
-      if (write?.repair) await putDescription(write.ctx.db, task, row.description, read(reads, row))
+      if (write?.repair)
+        await putDescription(write.ctx.db, task, shownText(rows, task), read(reads, row))
     }
     return
   }

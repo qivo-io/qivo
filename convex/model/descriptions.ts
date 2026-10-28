@@ -340,10 +340,13 @@ export async function insertTask(
  * is cleared, and a task without a row gets one. A new project or archived
  * state goes to the copies of the task's first row, in creation order,
  * with the text of issues.description while the task row holds one, and a
- * task without a row gets none (the backfill inserts it). A second row,
- * which no writer of this release leaves, keeps its copies until the
- * backfill's repair deletes it, so it never stops a move, an archive or
- * the nightly archive. Either reads the row, which a write of it reads
+ * task without a row gets none (the backfill inserts it). Without
+ * issues.description the row gets the text readers showed before the
+ * change (shownText), which a second row holding the copies may hold, so
+ * the change never shows another text. A second row, which no writer of
+ * this release leaves, keeps its copies until the backfill's repair deletes
+ * it, so it never stops a move, an archive or the nightly archive. Either
+ * reads the task's first two rows, which a write of the first reads
  * again. */
 export async function patchTask(db: Writer, issue: Doc<'issues'>, fields: TaskFields) {
   await db.patch('issues', issue._id, fields)
@@ -353,12 +356,22 @@ export async function patchTask(db: Writer, issue: Doc<'issues'>, fields: TaskFi
     return
   }
   if (!('project_id' in fields) && !('archived_at' in fields)) return
-  const row = await db
+  const rows = await db
     .query('issue_descriptions')
     .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-    .first()
-  if (row !== null) await putDescription(db, after, after.description ?? row.description, row)
+    .take(2)
+  const [row] = rows
+  if (row !== undefined)
+    await putDescription(db, after, after.description ?? shownText(rows, issue), row)
 }
+
+/** The text readers show for task `task` (shownRow) from its first two
+ * description rows, `rows`, which a caller read already: of them the first
+ * that holds the task's copies, else the first. A writer that stamps new
+ * copies on the first row without issues.description gives it this text,
+ * so the change keeps the text readers showed. */
+export const shownText = (rows: readonly Doc<'issue_descriptions'>[], task: Owner): string =>
+  (rows.find((row) => holdsCopies(row, task)) ?? rows[0])?.description ?? ''
 
 /** Deletes the description row of task `issueId`, if it has one, and
  * answers it, for the caller's budget. `known` is the row a caller read

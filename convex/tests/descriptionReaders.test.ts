@@ -439,6 +439,59 @@ describe('an active page whose own reads fill the request', () => {
   })
 })
 
+describe('a write that stamps new copies without issues.description', () => {
+  /** A task whose first row has a stale archived copy and the text "Old
+   * text", and whose second row holds its copies and "Current text", with
+   * issues.description cleared, so readers show "Current text". */
+  async function duplicate(t: T, f: OrgFixture) {
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      description: 'Old text',
+    })
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('issue_descriptions')
+        .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+        .first()
+      if (row !== null) await ctx.db.patch(row._id, { archived_at: NOW })
+    })
+    await secondRow(t, task, 'Current text')
+    await clearTaskText(t, f.org.id)
+    return task
+  }
+  const shown = (t: T, f: OrgFixture, id: string) =>
+    t
+      .query(internal.machine.rest.getIssue, {
+        callerId: f.agent.id,
+        access: 'read',
+        today: TODAY,
+        ref: id,
+      })
+      .then((task) => task.description)
+
+  it('keeps the shown text through a move', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const task = await duplicate(t, f)
+    expect(await shown(t, f, task.id)).toBe('Current text')
+    await as(t, f.user).mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: task.id,
+      project_id: f.sub2.id,
+    })
+    expect(await shown(t, f, task.id)).toBe('Current text')
+  })
+
+  it("keeps the shown text through the backfill's copy repair", async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const task = await duplicate(t, f)
+    await t.action(internal.internal.descriptionsBackfill.run, { dry_run: false, repair: true })
+    expect(await shown(t, f, task.id)).toBe('Current text')
+  })
+})
+
 describe('the writers compare the text of the description row', () => {
   /** The fixture with a webhook subscription on its sub-project, so each
    * write of a task there records its task event. */
