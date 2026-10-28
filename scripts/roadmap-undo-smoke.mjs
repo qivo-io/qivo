@@ -184,11 +184,12 @@ try {
       // this week and the next free for the milestones it adds and moves.
       const free = (p) =>
         P.milestonesIn(p.id).every((m) => m.week !== P.TODAY_WEEK && m.week !== P.TODAY_WEEK + 1)
+      // P.projects holds only active projects; the demo organization's own
       const project = P.projects
-        .filter((p) => p.type === 'meta' && !p.archived_at)
+        .filter((p) => p.type === 'meta' && p.org === P.org.id)
         .sort((a, b) => Number(b.name === 'Luma Sensor') - Number(a.name === 'Luma Sensor'))
         .find(free)
-      const subs = P.projects.filter((p) => p.parent === project?.id && !p.archived_at)
+      const subs = P.projects.filter((p) => p.parent === project?.id)
       const sub = subs.find((p) => p.name === 'Electronics') ?? subs[0]
       if (!project || !sub)
         throw new Error('No Northstar project has this week and the next free for milestones')

@@ -118,8 +118,9 @@ try {
      week and the week two ahead free for the milestone it adds and moves. */
   const fixture = await page.evaluate(() => {
     const P = window.PLANNER
+    // P.projects holds only active projects; the demo organization's own
     const metas = P.projects
-      .filter((p) => p.type === 'meta' && !p.archived_at)
+      .filter((p) => p.type === 'meta' && p.org === P.org.id)
       .sort((a, b) => Number(b.name === 'Luma Sensor') - Number(a.name === 'Luma Sensor'))
     const free = (p) =>
       P.milestonesIn(p.id).every((m) => m.week !== P.TODAY_WEEK && m.week !== P.TODAY_WEEK + 2)
