@@ -309,8 +309,9 @@ Northstar's agents and the rest are personal tokens of its people, each
 made through the app's own mutations, and each new one makes one to four
 `GET /v1/me` calls on the site origin, so the calls write their own usage.
 A second run adds only the credentials still missing. A credential a
-stopped run saved without all its calls is deleted and made again, and the
-calls it did make stay listed as a deleted credential's.
+stopped run saved without all its calls stays as it is, and its number gets
+a new credential named with the next try, such as `(scale 7, try 2)`, with
+all its calls. The seed deletes and changes no credential.
 
 ## Production release
 

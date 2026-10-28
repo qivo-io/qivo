@@ -13,15 +13,17 @@ import {
 
 /* A local backend the seed talks to: Nora and the people in `fake.people`,
    Northstar with one sub-project, the tasks `fake.issues` holds, in the
-   workspace parts, the personal tokens `fake.tokens` holds, the usage rows
-   `fake.usage` holds, and every mutation it receives, with the login it
-   came as. A comment whose id `fake.comments` holds is refused as taken. */
+   workspace parts, the personal tokens, agent keys and usage rows
+   `fake.tokens`, `fake.keys` and `fake.usage` hold, and every mutation it
+   receives, with the login it came as. A comment whose id `fake.comments`
+   holds is refused as taken. */
 const fake = vi.hoisted(() => ({
   issues: [],
   calls: [],
   people: [],
   comments: new Set(),
   tokens: [],
+  keys: [],
   usage: [],
 }))
 vi.mock('convex/browser', () => ({
@@ -50,7 +52,7 @@ vi.mock('convex/browser', () => ({
               ...fake.people,
             ],
             mcp_tokens: fake.tokens,
-            agent_keys: [],
+            agent_keys: fake.keys,
             billing_usage: fake.usage,
           }[args.table],
           isDone: true,
@@ -493,18 +495,10 @@ describe('board-scale-seed credentials', () => {
     expect(new Set(fetched.map(([url]) => url))).toEqual(new Set(['http://127.0.0.1:3215/v1/me']))
   })
 
-  it('deletes a credential a stopped run left without all its calls, and makes its number again', async () => {
+  /* Runs the credentials seed for `count` numbers against the fake backend,
+     and answers the URLs it called. */
+  async function seedCalls(count) {
     fake.calls = []
-    // number 2 was saved but made one of its three calls, number 3 none
-    fake.tokens = [
-      { id: 'short', name: 'Zed (scale 2)', profile_id: 'nora' },
-      { id: 'bare', name: 'Sheets sync (scale 3)', profile_id: 'leo' },
-    ]
-    fake.usage = [
-      { org_id: 'org', credential_id: 'mcp_tokens:short', calls: 1 },
-      // another organization's calls of the same id count for nothing here
-      { org_id: 'elsewhere', credential_id: 'mcp_tokens:bare', calls: 9 },
-    ]
     const fetched = []
     vi.stubGlobal(
       'fetch',
@@ -513,24 +507,88 @@ describe('board-scale-seed credentials', () => {
         return { ok: true, status: 200, headers: new Headers() }
       }),
     )
-    await runBoardScaleSeed(
-      [...local, '--tasks', '0', '--credentials', '3', '--api-url', 'http://127.0.0.1:3215'],
-      { env, log: () => {} },
-    )
-    vi.unstubAllGlobals()
-    expect(fake.calls.map(([name, fields, as]) => [name, fields.id ?? fields.name, as])).toEqual([
-      ['tokens:createMcpToken', fake.calls[0][1].id, 'leo-login'],
-      ['tokens:deleteMcpToken', 'short', 'nora-login'],
-      ['tokens:createMcpToken', fake.calls[2][1].id, 'nora-login'],
-      ['tokens:deleteMcpToken', 'bare', 'leo-login'],
-      ['tokens:createMcpToken', fake.calls[4][1].id, 'leo-login'],
+    try {
+      await runBoardScaleSeed(
+        [
+          ...local,
+          '--tasks',
+          '0',
+          '--credentials',
+          String(count),
+          '--api-url',
+          'http://127.0.0.1:3215',
+        ],
+        { env, log: () => {} },
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    return fetched
+  }
+
+  it('gives a number a stopped run left short a new credential under its next try, and leaves the short one', async () => {
+    // number 2 was saved but made one of its three calls; number 3 has made
+    // none in two tries
+    fake.tokens = [
+      { id: 'short', name: 'Zed (scale 2)', profile_id: 'nora' },
+      { id: 'bare', name: 'Sheets sync (scale 3)', profile_id: 'leo' },
+      { id: 'bare-again', name: 'Sheets sync (scale 3, try 2)', profile_id: 'leo' },
+    ]
+    fake.usage = [
+      { org_id: 'org', credential_id: 'mcp_tokens:short', calls: 1 },
+      // another organization's calls of the same id count for nothing here
+      { org_id: 'elsewhere', credential_id: 'mcp_tokens:bare', calls: 9 },
+    ]
+    const fetched = await seedCalls(3)
+    // nothing is deleted or changed, only made
+    expect(fake.calls.map(([name]) => name)).toEqual([
+      'tokens:createMcpToken',
+      'tokens:createMcpToken',
+      'tokens:createMcpToken',
     ])
-    expect(
-      fake.calls.filter(([name]) => name === 'tokens:createMcpToken').map(([, f]) => f.name),
-    ).toEqual(['Raycast (scale 1)', 'Zed (scale 2)', 'Sheets sync (scale 3)'])
+    expect(fake.calls.map(([, f, as]) => [f.name, as])).toEqual([
+      ['Raycast (scale 1)', 'leo-login'],
+      ['Zed (scale 2, try 2)', 'nora-login'],
+      ['Sheets sync (scale 3, try 3)', 'leo-login'],
+    ])
     // every new credential makes all its calls: 2, 3 and 4
     expect(fetched).toHaveLength(9)
+    // a later run finds them made
+    fake.tokens.push(
+      ...fake.calls.map(([, f]) => ({ id: f.id, name: f.name, profile_id: f.profile_id })),
+    )
+    fake.usage.push(
+      ...fake.calls.map(([, f], i) => ({
+        org_id: 'org',
+        credential_id: `mcp_tokens:${f.id}`,
+        calls: [2, 3, 4][i],
+      })),
+    )
+    expect(await seedCalls(3)).toEqual([])
+    expect(fake.calls).toEqual([])
     fake.tokens = []
     fake.usage = []
+  })
+
+  it('leaves a token and an agent key a person named like the seed’s alone', async () => {
+    // made by hand in the app, with no calls
+    fake.tokens = [{ id: 'by-hand', name: 'Cursor (scale 1)', profile_id: 'nora' }]
+    fake.keys = [{ id: 'key-by-hand', name: 'Nightly build (scale 4)', profile_id: 'atlas' }]
+    await seedCalls(4)
+    expect(fake.calls.map(([name]) => name)).not.toContain('tokens:deleteMcpToken')
+    expect(fake.calls.map(([name]) => name)).not.toContain('tokens:deleteAgentKey')
+    // no call names them; their numbers get credentials of their own
+    for (const [, fields] of fake.calls) {
+      expect(fields.id).not.toBe('by-hand')
+      expect(fields.id).not.toBe('key-by-hand')
+    }
+    expect(fake.calls.map(([name, f]) => [name, f.name])).toEqual([
+      ['tokens:createMcpToken', 'Raycast (scale 1, try 2)'],
+      ['tokens:createMcpToken', 'Zed (scale 2)'],
+      ['tokens:createMcpToken', 'Sheets sync (scale 3)'],
+      ['tokens:createAgentKey', 'Nightly build (scale 4, try 2)'],
+    ])
+    fake.tokens = []
+    fake.keys = []
   })
 })

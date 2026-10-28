@@ -40,9 +40,12 @@
  * tokens:createMcpToken). Each new one makes 1 to 4 GET /v1/me calls on the
  * local backend's site origin, so the call path itself writes its usage and
  * aggregates. A second run adds only the credentials still missing. A
- * credential counts as made once its usage rows hold all its calls; one a
- * stopped run left short, whose secret is gone, is deleted and made again,
- * and the calls it made stay as a deleted credential's. */
+ * number counts as made once one of its credentials has all its calls in
+ * the usage rows. A stopped run can leave one short, and its secret is
+ * gone, so the number gets a new credential under a name no run used before
+ * ("(scale N, try 2)", then 3), with all its calls. The seed deletes and
+ * changes no credential, so the short one, and any credential a person
+ * named the same way, stay as they are. */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -139,8 +142,9 @@ const MOST_CREDENTIALS = 500
 /* Seeded credential names, by what each one is for, then its number. */
 const TOOLS = ['Cursor', 'Raycast', 'Zed', 'Sheets sync', 'Claude Code', 'Notion export']
 const JOBS = ['Nightly build', 'Release notes', 'Telemetry import', 'Backup check']
-/* What ends a seeded credential's name, with its number. */
-const CREDENTIAL_MARK = /\(scale (\d+)\)$/
+/* What ends a seeded credential's name: its number, and from the second
+   credential the seed makes for that number on, which try it is. */
+const CREDENTIAL_MARK = /\(scale (\d+)(?:, try (\d+))?\)$/
 
 const ref = (name) => makeFunctionReference(name)
 
@@ -260,7 +264,7 @@ const plannedCalls = (n) => 1 + (n % 4)
     `org` (see the file comment), acting as `actor` or as each token's
     owner with the local admin key `key`, and answers how many it added. A
     number is made when one of its credentials has all its calls in the
-    usage rows; the credentials of a number that is not are deleted first. */
+    usage rows; one that is not gets a credential named with its next try. */
 export async function seedCredentials(client, { key, org, actor, count, apiUrl, log }) {
   // the system tables answer the admin itself, not a person it acts as
   client.setAdminAuth(key)
@@ -269,19 +273,24 @@ export async function seedCredentials(client, { key, org, actor, count, apiUrl, 
   )
   const people = profiles.filter((profile) => profile.kind === 'person' && profile.auth_user_id)
   const agents = profiles.filter((profile) => profile.kind === 'agent')
-  const byId = new Map(profiles.map((profile) => [profile.id, profile]))
+  const members = new Set(profiles.map((profile) => profile.id))
   // the calls each credential made, as its usage rows record them
   const used = new Map()
   for (const row of await tableRows(client, 'billing_usage'))
     if (row.org_id === org)
       used.set(row.credential_id, (used.get(row.credential_id) ?? 0) + row.calls)
-  // each seeded number's credentials
+  // each number's highest try so far, and whether one of them made all its calls
   const seeded = new Map()
   for (const table of ['mcp_tokens', 'agent_keys'])
     for (const row of await tableRows(client, table)) {
-      const number = Number(CREDENTIAL_MARK.exec(row.name)?.[1])
-      if (!number || !byId.has(row.profile_id)) continue
-      seeded.set(number, [...(seeded.get(number) ?? []), { table, row }])
+      const mark = CREDENTIAL_MARK.exec(row.name)
+      const number = Number(mark?.[1])
+      if (!mark || !number || !members.has(row.profile_id)) continue
+      const known = seeded.get(number) ?? { tries: 0, done: false }
+      seeded.set(number, {
+        tries: Math.max(known.tries, Number(mark[2] ?? 1)),
+        done: known.done || (used.get(`${table}:${row.id}`) ?? 0) >= plannedCalls(number),
+      })
     }
   const as = (profile) =>
     client.setAdminAuth(key, {
@@ -291,20 +300,12 @@ export async function seedCredentials(client, { key, org, actor, count, apiUrl, 
     })
   let added = 0
   for (let n = 1; n <= count; n++) {
-    const left = seeded.get(n) ?? []
-    const done = ({ table, row }) => (used.get(`${table}:${row.id}`) ?? 0) >= plannedCalls(n)
-    if (left.some(done)) continue
-    // a run stopped between saving these and their calls, and their secrets
-    // are gone, so they go and the number is made again
-    for (const { table, row } of left) {
-      if (table === 'agent_keys') {
-        as(actor)
-        await client.mutation(ref('tokens:deleteAgentKey'), { org_id: org, id: row.id })
-      } else {
-        as(byId.get(row.profile_id))
-        await client.mutation(ref('tokens:deleteMcpToken'), { id: row.id })
-      }
-    }
+    const known = seeded.get(n) ?? { tries: 0, done: false }
+    if (known.done) continue
+    // a credential of this number without all its calls keeps its name and
+    // its calls; the new one is named with the next try
+    const attempt = known.tries + 1
+    const mark = attempt === 1 ? `(scale ${n})` : `(scale ${n}, try ${attempt})`
     const agent = n % 4 === 0 && agents.length ? agents[(n / 4) % agents.length] : null
     const minted = await mintCredential(agent ? 'qva' : 'qvt')
     try {
@@ -314,7 +315,7 @@ export async function seedCredentials(client, { key, org, actor, count, apiUrl, 
           org_id: org,
           id: minted.id,
           agent_id: agent.id,
-          name: `${JOBS[n % JOBS.length]} (scale ${n})`,
+          name: `${JOBS[n % JOBS.length]} ${mark}`,
           key_prefix: `${minted.secret.slice(0, 7)}...${minted.secret.slice(-5)}`,
           key_hash: minted.hash,
         })
@@ -324,7 +325,7 @@ export async function seedCredentials(client, { key, org, actor, count, apiUrl, 
         await client.mutation(ref('tokens:createMcpToken'), {
           id: minted.id,
           profile_id: owner.id,
-          name: `${TOOLS[n % TOOLS.length]} (scale ${n})`,
+          name: `${TOOLS[n % TOOLS.length]} ${mark}`,
           token_prefix: minted.secret.slice(0, 11),
           token_hash: minted.hash,
           access: n % 3 ? 'read' : 'write',
