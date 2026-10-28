@@ -1167,6 +1167,8 @@ describe('an id that comes back', () => {
       ids: [(await itemFor(t, f.sub2.id)).id],
     })
     await runSteps(t)
+    // a minute after the purge, a new project takes the id
+    vi.advanceTimersByTime(60_000)
     await as(t, f.admin).mutation(api.projects.create, {
       org_id: f.org.id,
       id: f.sub2.id,
@@ -1202,6 +1204,17 @@ describe('an id that comes back', () => {
       { num: reborn.num, name: 'Renamed', bytes: 77, files: 1 },
     ])
     expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 387, files: 3 })
+    // a dry count finds the rows as the writers keep them
+    expect(await backfill(t, { dry_run: true })).toMatchObject({ differing: 0, unsettled: 0 })
+    // a recount keeps the stored subtask's files apart from the new
+    // project's, under the id without a number, as a project gone for good
+    expect(await countStorage(t, f.org.id, true)).toEqual({ bytes: 387, files: 3 })
+    expect(await rows()).toEqual([
+      { num: undefined, name: undefined, bytes: 300, files: 1 },
+      { num: reborn.num, name: 'Renamed', bytes: 77, files: 1 },
+    ])
+    expect(await expectTotals(t, f.org.id)).toEqual({ bytes: 387, files: 3 })
+    expect(await backfill(t, { dry_run: true })).toMatchObject({ differing: 0, unsettled: 0 })
   })
 
   it('leaves the rows another organization or another task number left under an id alone, and a recount deletes its own', async () => {

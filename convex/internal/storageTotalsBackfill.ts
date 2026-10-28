@@ -28,9 +28,12 @@
  * never reads. A recount deletes the stale rows of its organization before
  * it counts, and the stray check those of an organization that is gone.
  *
- * A file counts in its task's project. An attachment row whose task is in
- * neither issues nor deleted_tasks counts nowhere, as in the billing sample
- * today. The dry run lists such rows, and nothing here deletes them.
+ * A file counts in its task's project. A task in Deleted items counts in
+ * the project its own totals row names, or else in the project of its id
+ * that existed when it was deleted (projectFor), never in one that took the
+ * id after a purge. An attachment row whose task is in neither issues nor
+ * deleted_tasks counts nowhere, as in the billing sample today. The dry run
+ * lists such rows, and nothing here deletes them.
  *
  * Read the dry run first. It writes nothing and reports, for every
  * organization, the totals it would count, and for one counted already
@@ -94,6 +97,7 @@ import {
   type Amount,
   addToProject,
   orgTotalsRow,
+  type ProjectFound,
   type ProjectKey,
   projectOf,
   taskTotalsRow,
@@ -131,8 +135,9 @@ export const RUN = { orgs: 100, ms: 5 * 60_000 }
 /** Where a count starts, below every task number. */
 const START = Number.MIN_SAFE_INTEGER
 
-/** A task as a count reads it, from issues or from deleted_tasks. */
-type Task = { id: string; num: number; project_id: string }
+/** A task as a count reads it, from issues, or from deleted_tasks with the
+ * item that stores it. */
+type Task = { id: string; num: number; project_id: string; item_id?: string }
 
 /** Reads the organization's rows of one table past a task number. */
 type ByNum<R> = { past: (after: number) => AsyncIterable<R>; task: (row: R) => Task }
@@ -148,7 +153,12 @@ const storedTasks = (ctx: QueryCtx, orgId: string): ByNum<Doc<'deleted_tasks'>> 
     ctx.db
       .query('deleted_tasks')
       .withIndex('by_org_num', (q) => q.eq('org_id', orgId).gt('num', after)),
-  task: (row) => ({ id: row.task_id, num: row.num, project_id: row.project_id }),
+  task: (row) => ({
+    id: row.task_id,
+    num: row.num,
+    project_id: row.project_id,
+    item_id: row.item_id,
+  }),
 })
 
 /* The tasks one table numbers past `after`, read once each, in number
@@ -276,20 +286,60 @@ function addTo(
   sums.set(key, sum)
 }
 
+/** What one call reads once: projects as projectOf finds them, and when
+ * each item of Deleted items was deleted. */
+type Known = { projects: Map<string, ProjectFound>; items: Map<string, string | null> }
+
+const newKnown = (): Known => ({ projects: new Map(), items: new Map() })
+
 /* Project `projectId` of organization `orgId` as projectOf finds it, read
- * once per call through `known`. */
+ * once per call. */
 async function projectIn(
   ctx: QueryCtx,
-  known: Map<string, ProjectKey>,
+  known: Known,
   orgId: string,
   projectId: string,
-): Promise<ProjectKey> {
-  let project = known.get(projectId)
+): Promise<ProjectFound> {
+  let project = known.projects.get(projectId)
   if (project === undefined) {
     project = await projectOf(ctx, orgId, projectId)
-    known.set(projectId, project)
+    known.projects.set(projectId, project)
   }
   return project
+}
+
+/* When item `itemId` of Deleted items was deleted, or null once it is gone,
+ * read once per call. */
+async function deletedAtOf(ctx: QueryCtx, known: Known, itemId: string): Promise<string | null> {
+  let at = known.items.get(itemId)
+  if (at === undefined) {
+    at = (await byId(ctx, 'deleted_items', itemId))?.deleted_at ?? null
+    known.items.set(itemId, at)
+  }
+  return at
+}
+
+/* The project task `task` counts in, with the number its project row is
+ * found by. A live task counts in its live project. A stored task counts in
+ * the project its own totals row names when it has one, and otherwise in
+ * the project of its id that was created by the time its item was
+ * deleted, live or in Deleted items. A project that took the id after a
+ * purge is never the stored task's, which then counts under the id without
+ * a number, as a project gone for good. */
+async function projectFor(
+  ctx: QueryCtx,
+  known: Known,
+  orgId: string,
+  task: Task,
+  row: Doc<'storage_task_totals'> | null,
+): Promise<ProjectKey> {
+  const found = await projectIn(ctx, known, orgId, task.project_id)
+  if (task.item_id === undefined) return found
+  if (row !== null && row.project_id === task.project_id)
+    return { num: row.project_num, name: found.num === row.project_num ? found.name : undefined }
+  if (found.created_at === undefined) return found
+  const deletedAt = await deletedAtOf(ctx, known, task.item_id)
+  return deletedAt === null || found.created_at <= deletedAt ? found : {}
 }
 
 /* Deletes up to COUNT_PAGE.drain of the organization's task and project
@@ -356,7 +406,7 @@ export const step = internalMutation({
       return { bytes: org.bytes, files: org.files }
     }
     const { counted, through } = await countTasks(ctx, org_id, page)
-    const known = new Map<string, ProjectKey>()
+    const known = newKnown()
     const projects = new Map<string, ProjectSum>()
     const total = { bytes: org.bytes, files: org.files }
     for (const { task, files, row } of counted) {
@@ -367,7 +417,7 @@ export const step = internalMutation({
         total.bytes -= row.bytes
         total.files -= row.files
       }
-      const project = await projectIn(ctx, known, org_id, task.project_id)
+      const project = await projectFor(ctx, known, org_id, task, row)
       addTo(projects, task.project_id, project.num, files)
       total.bytes += files.bytes
       total.files += files.files
@@ -482,11 +532,11 @@ export const check = internalQuery({
     const page = await taskPage(ctx, org_id, after)
     if (page === null) return null
     const { counted, through } = await countTasks(ctx, org_id, page)
-    const known = new Map<string, ProjectKey>()
+    const known = newKnown()
     const projects = new Map<string, ProjectSum>()
     const out: CheckPage = { bytes: 0, files: 0, through, projects: [], differing: 0, differ: [] }
     for (const { task, files, row } of counted) {
-      const project = await projectIn(ctx, known, org_id, task.project_id)
+      const project = await projectFor(ctx, known, org_id, task, row)
       addTo(projects, task.project_id, project.num, files)
       out.bytes += files.bytes
       out.files += files.files
@@ -534,7 +584,7 @@ export const projectRows = internalQuery({
       .query('storage_project_totals')
       .withIndex('by_org_bytes', (q) => q.eq('org_id', org_id))
       .paginate({ cursor, numItems: COUNT_PAGE.projects })
-    const known = new Map<string, ProjectKey>()
+    const known = newKnown()
     const rows: ProjectRow[] = []
     for (const row of page.page) {
       const project = await projectIn(ctx, known, org_id, row.project_id)

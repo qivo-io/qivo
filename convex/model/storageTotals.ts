@@ -62,6 +62,10 @@ type CountedTask = Pick<Doc<'issues'>, 'id' | 'org_id' | 'num' | 'project_id'>
  * when no copy of the project is left. */
 export type ProjectKey = { num?: number; name?: string }
 
+/** A project as projectOf finds it, with when it was created, which tells
+ * a project from a later one that took its id after a purge. */
+export type ProjectFound = ProjectKey & { created_at?: string }
+
 /** The organization's totals row, or null while it is not counted. */
 export const orgTotalsRow = (ctx: QueryCtx, orgId: string) =>
   ctx.db
@@ -104,20 +108,24 @@ export async function storageTotalsOf(ctx: QueryCtx, orgId: string): Promise<Amo
 }
 
 /** Project `projectId` of organization `orgId` as a totals row names it,
- * from the live project, else the copy Deleted items stores, else neither. */
+ * from the live project, else the copy Deleted items stores, else neither.
+ * It is the project that holds the id now, which may have taken it after a
+ * purge. */
 export async function projectOf(
   ctx: QueryCtx,
   orgId: string,
   projectId: string,
-): Promise<ProjectKey> {
+): Promise<ProjectFound> {
   const live = await byId(ctx, 'projects', projectId)
-  if (live?.org_id === orgId) return { num: live.num, name: live.name }
+  if (live?.org_id === orgId) return { num: live.num, name: live.name, created_at: live.created_at }
   const stored = await ctx.db
     .query('deleted_rows')
     .withIndex('by_row', (q) => q.eq('table', 'projects').eq('row_id', projectId))
     .first()
-  if (stored?.org_id === orgId && stored.row.table === 'projects')
-    return { num: stored.row.doc.num, name: stored.row.doc.name }
+  if (stored?.org_id === orgId && stored.row.table === 'projects') {
+    const { num, name, created_at } = stored.row.doc
+    return { num, name, created_at }
+  }
   return {}
 }
 
