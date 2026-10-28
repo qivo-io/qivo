@@ -587,3 +587,41 @@ describe('the team name', () => {
     expect(leaveGuard.hasUnsaved()).toBe(false)
   })
 })
+
+describe('pages without their saved values', () => {
+  it('say they are loading until the store has loaded', async () => {
+    await render(() => (
+      <>
+        <pages.account.AccountPage narrow section="profile" setPage={vi.fn()} />
+        <pages.general.OrgGeneralPage setPage={vi.fn()} />
+      </>
+    ))
+    expect(find<HTMLElement>('[data-account-profile]').textContent).toBe('Loading your profile…')
+    expect(find<HTMLElement>('[data-org-state]').textContent).toBe('Loading the organization…')
+    expect(container.querySelector('[data-account-name]')).toBeNull()
+    expect(container.querySelector('[data-account-email]')).toBeNull()
+    expect(container.querySelector('[data-org-name]')).toBeNull()
+  })
+
+  it('say the profile and the organization could not be loaded when the store has none', async () => {
+    // the seat the server names is not in the roster this store holds
+    snap.myProfileIds = ['gone']
+    await open(() => (
+      <>
+        <pages.account.AccountPage narrow section="profile" setPage={vi.fn()} />
+        <pages.general.OrgGeneralPage setPage={vi.fn()} />
+      </>
+    ))
+    expect(store.P.loaded).toBe(true)
+    expect(find<HTMLElement>('[data-account-profile]').textContent).toBe(
+      'Your profile could not be loaded.',
+    )
+    expect(find<HTMLElement>('[data-org-state]').textContent).toBe(
+      'The organization could not be loaded.',
+    )
+    expect(container.textContent).not.toContain('no email address')
+    expect(container.querySelector('[data-org-name]')).toBeNull()
+    // signing out stays possible
+    expect(button('Sign out')).toBeDefined()
+  })
+})

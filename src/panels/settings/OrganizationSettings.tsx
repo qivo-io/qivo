@@ -350,6 +350,17 @@ function OrgNumberField({
 
 export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void }) {
   const canManage = P.isAdmin()
+  // the store mounts the app once it has loaded (AuthGate), so neither state
+  // shows today; neither shows defaults as the saved settings
+  if (!P.loaded || !P.org.id)
+    return (
+      <>
+        <PageTitle>Organization</PageTitle>
+        <p data-org-state={P.loaded ? 'unavailable' : 'loading'} className="text-base text-text-2">
+          {P.loaded ? 'The organization could not be loaded.' : 'Loading the organization…'}
+        </p>
+      </>
+    )
   return (
     <>
       <PageTitle>Organization</PageTitle>

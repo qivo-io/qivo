@@ -32,13 +32,10 @@ export function AccountPage({
   onBackPage?: (page: string) => void
 }) {
   const [signingOut, setSigningOut] = useState(false)
-  const profile = P.user(P.CURRENT_USER)
-  const me: Pick<UserVM, 'id' | 'name' | 'email' | 'orgRole'> = profile ?? {
-    id: '',
-    name: '',
-    email: null,
-    orgRole: 'user',
-  }
+  // the person's seat once the store has loaded. AuthGate mounts the app
+  // only then, so it is there today; a missing one says so rather than
+  // showing an empty name as the saved one
+  const profile = P.loaded ? P.user(P.CURRENT_USER) : undefined
   const sections = [
     { id: 'profile', label: 'Profile', icon: 'user', hint: 'Name, picture and sign out' },
     { id: 'appearance', label: 'Appearance', icon: 'cog', hint: 'Theme and background' },
@@ -83,19 +80,30 @@ export function AccountPage({
         <SettingsSection title={heading('Profile')}>
           <SettingsField label="Signed in as" width={400}>
             <div className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]">
-              <Avatar id={me.id} size={40} />
-              <div className="[flex:1] [min-width:0]">
-                <div className="[font-size:var(--fs-base)] [font-weight:600] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                  {me.name}
-                </div>
+              {profile ? (
+                <>
+                  <Avatar id={profile.id} size={40} />
+                  <div className="[flex:1] [min-width:0]">
+                    <div className="[font-size:var(--fs-base)] [font-weight:600] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
+                      {profile.name}
+                    </div>
+                    <div
+                      data-account-email
+                      className="[font-size:var(--fs-xs)] [color:var(--text-2)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]"
+                    >
+                      {DEMO_MODE ? 'Private demo' : profile.email || 'no email address'}
+                      {profile.orgRole === 'admin' ? ', Admin' : ''}
+                    </div>
+                  </div>
+                </>
+              ) : (
                 <div
-                  data-account-email
-                  className="[font-size:var(--fs-xs)] [color:var(--text-2)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]"
+                  data-account-profile={P.loaded ? 'unavailable' : 'loading'}
+                  className="[flex:1] [min-width:0] [font-size:var(--fs-base)] [color:var(--text-2)]"
                 >
-                  {DEMO_MODE ? 'Private demo' : me.email || 'no email address'}
-                  {me.orgRole === 'admin' ? ', Admin' : ''}
+                  {P.loaded ? 'Your profile could not be loaded.' : 'Loading your profile…'}
                 </div>
-              </div>
+              )}
               <Button
                 type="button"
                 disabled={signingOut}
@@ -110,7 +118,7 @@ export function AccountPage({
               </Button>
             </div>
           </SettingsField>
-          {profile?.id && (
+          {profile && (
             <div className="settings-profile-fields grid w-full max-w-[470px] grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-6 [&>.settings-field]:mb-0">
               <AvatarField user={profile} />
               <NameField me={profile} />
@@ -118,12 +126,12 @@ export function AccountPage({
           )}
         </SettingsSection>
       )}
-      {profile?.id && (!narrow || section === 'appearance') && (
+      {profile && (!narrow || section === 'appearance') && (
         <SettingsSection title={heading('Appearance')}>
           <AppearanceSettings key={profile.id} />
         </SettingsSection>
       )}
-      {profile?.id && (!narrow || section === 'inbox') && (
+      {profile && (!narrow || section === 'inbox') && (
         <SettingsSection title={heading('Inbox')}>
           <RetentionField me={profile} />
         </SettingsSection>
