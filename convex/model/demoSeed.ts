@@ -89,12 +89,16 @@ export type NorthstarStep =
  * (model/commentLimits.ts) and the notices' inbox items
  * (model/inboxItems.ts), a range, a document read and a write for each
  * item a step touches, add to every step, so a step holds 12 tasks or 13
- * comments: in convex-test a marketing call of one task step now uses at
- * most 173 ranges and writes 123 documents, and one of a comment step at
- * most 260 ranges, 293 documents read and 87 written.
- * convex/tests/marketingDemo.test.ts holds every call to 300 index ranges,
- * 350 documents read and 150 written, so a step is a small part of
- * Convex's 1 s mutation limit. */
+ * comments. Each seeded task and project also reads and writes its
+ * used_ids row (lib/db.ts insertUsed), and a Northstar step's check of the
+ * ids it writes reads that row once more (internal/marketingDemo.ts
+ * assertReserved), two ranges and a write a task. In convex-test a
+ * marketing call of one task step now uses at most 197 ranges, reads 143
+ * documents and writes 135, one of a comment step at most 260 ranges, 293
+ * documents read and 87 written, and a part of the reserved-id check at
+ * most 243 ranges. convex/tests/marketingDemo.test.ts holds every call to
+ * 300 index ranges, 350 documents read and 150 written, so a step is a
+ * small part of Convex's 1 s mutation limit. */
 export const NORTHSTAR_BATCH = { tasks: 12, comments: 13 }
 
 /* The ranges [from, to) that cover `count` items, `size` at a time. */
@@ -694,11 +698,14 @@ async function writeStep(
  * not count database operations). In convex-test a call of five read at
  * most 513 ranges and 724 documents and wrote at most 441. Comment counts
  * (model/commentLimits.ts) and the notices' inbox items
- * (model/inboxItems.ts), kept once per call, take the work to seven calls,
- * each reading at most 530 ranges and 823 documents and writing at most
- * 531. The hosted demo's steps
- * at v0.1.86, summed for each call (the worst of three starts, less 48 ms
- * for each step past the first), put a call's JavaScript at 48 ms plus
+ * (model/inboxItems.ts), kept once per call, take the work to seven calls.
+ * The used_ids row each seeded task and project reads and writes (lib/db.ts
+ * insertUsed) adds a range and a write to each, 51 to the first call and 54
+ * to the second, which write the projects and tasks, so each call reads at
+ * most 577 ranges and 825 documents and writes at most 586. The hosted
+ * demo's steps at v0.1.86, summed for each call (the worst of three
+ * starts, less 48 ms for each step past the first), put a call's
+ * JavaScript at 48 ms plus
  * 0.38 to 0.45 ms per index range. Per document read it spreads from 0.26
  * to 0.45 ms, as the first calls write more for each document they read,
  * so the documents alone cannot bound it. convex/tests/demo.test.ts then
