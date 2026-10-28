@@ -84,6 +84,7 @@ import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits
 import { nameKey } from '../lib/nameKey'
 import { patchTask } from '../model/descriptions'
 import { copyNameKey, inlineBudget } from '../model/nameKeys'
+import { renameProjectTotals } from '../model/storageTotals'
 
 /** Rows per page and the bytes one page may read; a page can end early.
  * `page_size` lowers the rows per page, for tests of a walk over pages. */
@@ -272,10 +273,15 @@ async function walk(
       const { row } = stored
       const found = sorted('deleted_rows', stored._id, storedChanges(row), write, `${table}.`)
       rows.push(...found.rows)
-      if (found.patch !== null)
-        await write?.db.patch('deleted_rows', stored._id, {
+      if (found.patch !== null && write !== null) {
+        await write.db.patch('deleted_rows', stored._id, {
           row: { table: row.table, doc: { ...row.doc, ...found.patch } } as StoredRow,
         })
+        // the Storage by project breakdown names a project in Deleted items
+        // by its stored copy (model/storageTotals.ts)
+        if (row.table === 'projects' && typeof found.patch.name === 'string')
+          await renameProjectTotals(write, { ...row.doc, name: found.patch.name })
+      }
     }
     return { rows, cursor: page.continueCursor, done: page.isDone }
   }
@@ -305,6 +311,9 @@ async function walk(
       await write.db.patch(table, _id, found.patch)
       if (typeof name === 'string' && (table === 'teams' || table === 'profiles'))
         await copyNameKey(write, table, { ...doc, name }, copies)
+      // the Storage by project breakdown shows the project's current name
+      if (table === 'projects' && 'org_id' in doc && typeof name === 'string')
+        await renameProjectTotals(write, { id: doc.id, org_id: doc.org_id, name })
     }
     return { rows, cursor: page.continueCursor, done: page.isDone }
   }
