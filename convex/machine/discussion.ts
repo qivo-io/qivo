@@ -286,18 +286,21 @@ async function inboxItems(
  * inside Convex's transaction limits. An item holds at most
  * ITEM_UNREAD_CAP + 1 = 51 rows (model/messages.ts). Mark read patches up
  * to 51 of them and its prune then deletes up to 50, which Convex counts
- * as more writes, so 100 items write at most 100 * 101 = 10,100 of the
- * 16,000 allowed. Unread, remove and snooze write at most 51 rows per item.
- * Resolving a ref (lib/core.ts findIssue) reads the task, its project, the
- * root project and the caller's grant and team grants on both, 7 index
- * ranges plus 2 per team granted either project. The item read and the
- * prune's or snooze's second read add 2, so 100 refs use about 900 of the
- * 4,096 index ranges and stay inside with up to 15 such teams. Unread and
- * snooze also read each task and its project twice to refuse an archived
- * one (model/messages.ts refuseArchivedItems), once for the refs and once
- * for the rows, so they use about 1,300 and stay inside with up to 13 such
- * teams. Snooze schedules one wake per item, 100 of the 1,000 allowed.
- * Duplicate refs count too. The value is the registry's (lib/limits.ts).
+ * as more writes, and the item's inbox_items row is written once more
+ * (model/inboxItems.ts), so 100 items write at most 100 * 102 = 10,200 of
+ * the 16,000 allowed. Unread, remove and snooze write at most 52 rows per
+ * item. Resolving a ref (lib/core.ts findIssue) reads the task, its
+ * project, the root project and the caller's grant and team grants on
+ * both, 7 index ranges plus 2 per team granted either project. The item
+ * read, the prune's or snooze's second read and the item's inbox_items row
+ * add 3, and the caller's build state one for the call, so 100 refs use
+ * about 1,000 of the 4,096 index ranges and stay inside with up to 15 such
+ * teams. Unread and snooze also read each task and its project twice to
+ * refuse an archived one (model/messages.ts refuseArchivedItems), once for
+ * the refs and once for the rows, so they use about 1,400 and stay inside
+ * with up to 13 such teams. Snooze schedules one wake per item, 100 of the
+ * 1,000 allowed. Duplicate refs count too. The value is the registry's
+ * (lib/limits.ts).
  */
 export const INBOX_TASKS_MAX = LIMITS.inboxTasks.max
 

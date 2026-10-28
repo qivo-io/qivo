@@ -111,6 +111,7 @@ import {
   type View,
   type Writers,
 } from './expected'
+import { rekeyItems } from './inboxItems'
 import {
   type NotifyPreload,
   newNotifyPreload,
@@ -2161,6 +2162,10 @@ export async function moveIssueCore(
   }
   // a group stays with its assignee: clearing its reviewer hands nothing over
   await notifyIssueUpdate(ctx, { before, after, actor: me, now, isGroup })
+  // the inbox items of the task and its carried subtasks follow them
+  // (model/inboxItems.ts), after the notices above, whose arrivals give
+  // their own items the new project already
+  await rekeyItems(ctx, [issue.id, ...carried.map((row) => row.id)], project_id)
   // A task that leaves an archived project counts for its parent again
   // (countsAsSubtask), so a parent it makes a group loses its own hours, as
   // on an attach. That is the task's parent, unless the task leaves it or a

@@ -24,6 +24,7 @@ import { insertActivity, issueChanges, machineDetail } from './activity'
 import { markArchivedTask } from './archiveMarks'
 import { type CommentWrite, startCount, tallyComments } from './commentLimits'
 import { insertTask } from './descriptions'
+import { itemEdits } from './inboxItems'
 import { browserVerbDetail, cleanDescription } from './issues'
 import { insertLabelCount } from './labelCounts'
 import {
@@ -81,13 +82,20 @@ export type NorthstarStep =
   | { kind: 'archive' }
 
 /** The tasks and the comments one step writes at most. Measured on the
- * dataset, a task step writes at most 93 documents and a comment step
- * reads at most 268 and writes at most 57, each with at most 224 index
+ * dataset, a task step of 15 wrote at most 93 documents and a comment step
+ * of 15 read at most 268 and wrote at most 57, each with at most 224 index
  * ranges; the whole work in one transaction wrote about 1,400 documents
- * and took up to 2 s on a loaded machine. convex/tests/marketingDemo.test.ts
- * holds every call to 300 index ranges, 350 documents read and 150 written,
- * so a step is a small part of Convex's 1 s mutation limit. */
-export const NORTHSTAR_BATCH = { tasks: 15, comments: 15 }
+ * and took up to 2 s on a loaded machine. Comment counts
+ * (model/commentLimits.ts) and the notices' inbox items
+ * (model/inboxItems.ts), a range, a document read and a write for each
+ * item a step touches, add to every step, so a step holds 12 tasks or 13
+ * comments: in convex-test a marketing call of one task step now uses at
+ * most 173 ranges and writes 123 documents, and one of a comment step at
+ * most 260 ranges, 293 documents read and 87 written.
+ * convex/tests/marketingDemo.test.ts holds every call to 300 index ranges,
+ * 350 documents read and 150 written, so a step is a small part of
+ * Convex's 1 s mutation limit. */
+export const NORTHSTAR_BATCH = { tasks: 12, comments: 13 }
 
 /* The ranges [from, to) that cover `count` items, `size` at a time. */
 const batches = (count: number, size: number) =>
@@ -230,6 +238,8 @@ async function notifyContext(ctx: MutationCtx, org: Doc<'organizations'>, run: N
       profiles: profileCacheOf(orgProfiles),
       projects: new Map(projects.map((project) => [project.id, project])),
       visibility,
+      // the seed writes messages only through its notices
+      items: itemEdits(ctx),
     },
   }
   return run.notify
@@ -242,20 +252,41 @@ async function notifyContext(ctx: MutationCtx, org: Doc<'organizations'>, run: N
 export async function writeNorthstarWork(ctx: MutationCtx, target: NorthstarTarget): Promise<void> {
   const run = await newNorthstarRun(target.namespace)
   for (const step of NORTHSTAR_STEPS) await writeNorthstarStep(ctx, target, step, run)
+  await finishNorthstarRun(run)
+}
+
+/** Brings the inbox items of the run's notices in step (notifyContext), once
+ * its steps are written. A caller that shares a run between steps calls it
+ * after the last; a step run alone does so itself. */
+export async function finishNorthstarRun(run: NorthstarRun): Promise<void> {
+  await run.notify?.preload.items?.flush()
 }
 
 /** Writes one step of the Northstar work (NorthstarStep). The steps before
  * it must have run, in this or earlier transactions, and nothing else may
  * have changed the organization's teams, grants, roles or projects since;
  * a step refuses (SEED_ROW_MISSING) when a task, project or label it builds
- * on is gone. `run` is shared by the steps of one transaction. */
+ * on is gone. `run` is shared by the steps of one transaction, whose caller
+ * then finishes it (finishNorthstarRun); without one the step finishes its
+ * own. */
 export async function writeNorthstarStep(
   ctx: MutationCtx,
-  { org, profiles, namespace, anchor, now }: NorthstarTarget,
+  target: NorthstarTarget,
   step: NorthstarStep,
   run?: NorthstarRun,
 ): Promise<void> {
-  const shared = run ?? (await newNorthstarRun(namespace))
+  const shared = run ?? (await newNorthstarRun(target.namespace))
+  await writeStep(ctx, target, step, shared)
+  if (run === undefined) await finishNorthstarRun(shared)
+}
+
+/* The writes of writeNorthstarStep. */
+async function writeStep(
+  ctx: MutationCtx,
+  { org, profiles, namespace, anchor, now }: NorthstarTarget,
+  step: NorthstarStep,
+  shared: NorthstarRun,
+): Promise<void> {
   const id = (key: string) => marketingId(namespace, key)
   const data = MARKETING_DEMO
   const {
@@ -642,8 +673,12 @@ export async function writeNorthstarStep(
  * Each call stays inside a third of Convex's limits for one mutation:
  * 1,365 index ranges, 10,666 documents read, 5,333 written, 5.3 MiB read
  * or written, and 333 ms of the function's own JavaScript (the limit does
- * not count database operations). In convex-test a call reads at most 513
- * ranges and 724 documents and writes at most 441. The hosted demo's steps
+ * not count database operations). In convex-test a call of five read at
+ * most 513 ranges and 724 documents and wrote at most 441. Comment counts
+ * (model/commentLimits.ts) and the notices' inbox items
+ * (model/inboxItems.ts), kept once per call, take the work to seven calls,
+ * each reading at most 530 ranges and 823 documents and writing at most
+ * 531. The hosted demo's steps
  * at v0.1.86, summed for each call (the worst of three starts, less 48 ms
  * for each step past the first), put a call's JavaScript at 48 ms plus
  * 0.38 to 0.45 ms per index range. Per document read it spreads from 0.26
@@ -655,7 +690,7 @@ export async function writeNorthstarStep(
  * 1.5 and 0.4 to 1.4 of the calls those costs come from. A call with fewer
  * ranges stays inside 332 ms too, as a document past those costs about
  * 0.13 ms read and 0.06 ms written (the slopes over the hosted steps). */
-export const PUBLIC_DEMO_CALL_SIZES: readonly number[] = [5, 6, 6, 5, 4]
+export const PUBLIC_DEMO_CALL_SIZES: readonly number[] = [4, 5, 6, 4, 4, 4, 4]
 
 /** `steps` in calls of `sizes` steps each, in order, then each step past
  * them in a call of its own: a dataset that grows adds bounded calls
@@ -834,6 +869,7 @@ export async function provisionPublicDemoStep(
     // keep the tighter cap, which their tracked receiver also enforces.
     if (work.kind === 'setup') await ctx.db.patch(target.org._id, { max_attachment_mb: 5 })
   }
+  await finishNorthstarRun(run)
   const next = step + 1
   if (next < PUBLIC_DEMO_STEPS) {
     await ctx.db.patch(receipt._id, {

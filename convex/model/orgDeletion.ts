@@ -52,6 +52,7 @@ import { budgetSpent, REMOVAL_BUDGET, type RemovalBudget, sweep } from './cascad
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import { releaseFile } from './fileHolds'
+import { recipientItems, stateRows, taskItems } from './inboxItems'
 import { deleteLabelCount } from './labelCounts'
 import { deleteOrgBookkeeping, tallyRow } from './orgs'
 import { uncountFile } from './storageTotals'
@@ -181,6 +182,10 @@ const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: Removal
               .query('messages')
               .withIndex('by_recipient', (q) => q.eq('recipient_id', profile.id)),
           ),
+        // the inbox items and their build state after the messages
+        // (model/inboxItems.ts)
+        () => drain(ctx, budget, recipientItems(ctx, profile.id)),
+        () => drain(ctx, budget, stateRows(ctx, profile.id)),
         () =>
           drain(
             ctx,
@@ -419,6 +424,7 @@ const liveTasks = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
 
             ctx.db.query('messages').withIndex('by_issue_read', (q) => q.eq('issue_id', issue.id)),
           ),
+        () => drain(ctx, budget, taskItems(ctx, issue.id)),
         () =>
           drain(
             ctx,
@@ -724,8 +730,8 @@ const WORK_PHASES = ['tasks', 'projects', 'teams', 'labels', 'activity'] as cons
 
 /** Deletes one `limit` (REMOVAL_BUDGET unless given) of an organization's
  * work: its tasks with everything under them and their files, its projects,
- * teams, labels and activity, then the view preferences and messages of
- * `profileIds`. Returns true once all of it is gone. Like a deletion step,
+ * teams, labels and activity, then the view preferences, messages and inbox
+ * items of `profileIds`. Returns true once all of it is gone. Like a deletion step,
  * it reads every range again from its start, so a repeated step cannot skip
  * a row. It leaves Deleted items alone, so a caller must see them empty
  * first. */
@@ -754,6 +760,9 @@ export async function wipeWorkStep(
             .query('messages')
             .withIndex('by_recipient', (q) => q.eq('recipient_id', profileId)),
         ),
+      // the profile stays, so its inbox_state stays as it is: still right,
+      // with no messages and no items
+      () => drain(ctx, budget, recipientItems(ctx, profileId)),
     ]),
   ])
 }

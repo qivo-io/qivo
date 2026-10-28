@@ -22,6 +22,7 @@
 import { v } from 'convex/values'
 import { internalMutation } from './_generated/server'
 import { orgMutation } from './lib/functions'
+import { rekeyStep } from './model/inboxItems'
 import {
   markAllMessagesRead,
   markMessagesRead,
@@ -141,6 +142,17 @@ export const trimItems = internalMutation({
     for (const recipient_id of a.recipients) {
       await trimUnreadMessages(ctx, { recipient_id, issue_id: a.issue_id })
     }
+    return null
+  },
+})
+
+/* One background step that gives the inbox items of moved tasks their
+ * tasks' projects, scheduled by name from a move and from itself
+ * (model/inboxItems.ts rekeyItems, rekeyStep). */
+export const rekeyItems = internalMutation({
+  args: { issues: v.array(v.string()) },
+  handler: async (ctx, a) => {
+    await rekeyStep(ctx, a.issues)
     return null
   },
 })

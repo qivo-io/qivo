@@ -133,6 +133,7 @@ import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleImageReap } from './descriptionImages'
 import { dropDescription, insertTask, withDescription } from './descriptions'
 import { releaseFile } from './fileHolds'
+import { taskItems } from './inboxItems'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
 import { tallyAssignment } from './labelCounts'
 import { linksFullAt } from './links'
@@ -923,24 +924,26 @@ const purgeHistory = (run: Run, taskId: string, upTo?: string): Promise<boolean>
   )
 
 /** Deletes the inbox messages about task `taskId` within the step's
- * budget. True once none is left. Messages are not stored, so a restore
- * never brings them back. Nothing posts about a task while it is absent
- * (notifyFollowersStep reads the task first) and a stored task keeps its id
- * reserved, so the range only shrinks. Until it is empty the inbox hides
- * what is left, because the task is absent (lib/inbox.ts). */
-const dropMessages = (run: Run, taskId: string): Promise<boolean> =>
-  drain(
+ * budget, then their inbox items (model/inboxItems.ts). True once none is
+ * left. Messages are not stored, so a restore never brings them back.
+ * Nothing posts about a task while it is absent (notifyFollowersStep reads
+ * the task first) and a stored task keeps its id reserved, so the range
+ * only shrinks. Until it is empty the inbox hides what is left, because the
+ * task is absent (lib/inbox.ts). The items go last, so a write to a message
+ * still waiting cannot build one again. */
+const dropMessages = async (run: Run, taskId: string): Promise<boolean> =>
+  (await drain(
     run.budget,
     run.ctx.db.query('messages').withIndex('by_issue_read', (q) => q.eq('issue_id', taskId)),
     (message) => run.ctx.db.delete(message._id),
-  )
+  )) && (await drain(run.budget, taskItems(run.ctx, taskId), (item) => run.ctx.db.delete(item._id)))
 
-/** Whether any message about task `taskId` is left. */
+/** Whether any message about task `taskId`, or its inbox item, is left. */
 const holdsMessages = async (run: Run, taskId: string): Promise<boolean> =>
   (await run.ctx.db
     .query('messages')
     .withIndex('by_issue_read', (q) => q.eq('issue_id', taskId))
-    .first()) !== null
+    .first()) !== null || (await taskItems(run.ctx, taskId).first()) !== null
 
 /** Whether another task now holds the id of task `taskId` of this item: a
  * live task, or one another item stores. Only a purge the release before
@@ -3958,8 +3961,8 @@ async function clearPages<Row>(
 /** Deletes the rows task `task` still has in the live tables, taking each
  * attachment out of the stored-byte totals of the task and letting go of
  * its file (model/fileHolds.ts releaseFile), then the attachments the
- * organization stores of it, then its messages, comment count and post
- * logs. The caller deletes the task after, so its number is still known for
+ * organization stores of it, then its messages, their inbox items
+ * (model/inboxItems.ts), its comment count and post logs. The caller deletes the task after, so its number is still known for
  * each file. `live` is the task when the caller holds it live, such as one
  * a moving project left behind, whose labels still count it; without it a
  * label assignment's count reads the task (model/labelCounts.ts). */
@@ -4006,6 +4009,12 @@ async function clearLiveRows(
     },
   )
   if (!messages) return false
+  // the inbox items after their messages
+  const items = await clearPages(budget, taskItems(ctx, task.id), async (item) => {
+    await ctx.db.delete(item._id)
+    return true
+  })
+  if (!items) return false
   // its comment count and post logs, before its stored row frees the id
   for (const table of ['task_comment_counts', 'comment_rates'] as const) {
     const cleared = await clearPages(

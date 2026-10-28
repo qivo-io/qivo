@@ -75,6 +75,10 @@ const EXCLUDED_TABLES = [
   // checked every profile: maintenance state, not workspace content.
   'message_sweeps',
   'message_sweep_seeds',
+  // An inbox's items and their build state, made from its messages, which
+  // are not exported either.
+  'inbox_items',
+  'inbox_state',
   'user_prefs',
   'mcp_tokens',
   // Cleanup progress of a profile that is already removed.

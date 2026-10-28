@@ -48,6 +48,7 @@ import {
   TASK_HOLDERS,
 } from './model/cascade'
 import { estimateDocumentBytes } from './model/demoMetrics'
+import { recipientItems, stateRows } from './model/inboxItems'
 import { countingOrgOf } from './model/teamCounts'
 
 /** A row whose last step committed longer ago than this is restarted. */
@@ -125,7 +126,10 @@ const oauthEdge: Edge = {
 }
 
 /* The ranges each phase clears, in order. The SET NULLs keep their rows;
- * the access rows, inbox, subscriptions and connections are deleted. */
+ * the access rows, inbox, subscriptions and connections are deleted. The
+ * inbox goes with its items and build state after the messages
+ * (model/inboxItems.ts), so no write to a message still waiting can build
+ * an item again. */
 const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
   // the keys, tokens, memberships, grants and preferences the removal
   // transaction left
@@ -185,6 +189,14 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
       range: (ctx, profileId) =>
         ctx.db.query('messages').withIndex('by_recipient', (q) => q.eq('recipient_id', profileId)),
       clear: (ctx, message) => ctx.db.delete(message._id),
+    }),
+    edge({
+      range: recipientItems,
+      clear: (ctx, item) => ctx.db.delete(item._id),
+    }),
+    edge({
+      range: stateRows,
+      clear: (ctx, state) => ctx.db.delete(state._id),
     }),
   ],
   subscriptions: [

@@ -65,6 +65,7 @@ import { deletionBegun } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { audit } from './model/admin'
 import { scheduleMarkClears } from './model/archiveMarks'
+import { itemEdits } from './model/inboxItems'
 import {
   ITEM_UNREAD_CAP,
   lowerSweepDue,
@@ -581,6 +582,11 @@ export const SWEEP_LIMITS = {
    * larger backlog continues in the next leg of the same chain. It must be
    * at least WAKE_ROWS, or a leg could never wake an item. */
   rows: 500,
+  /** Items one leg of the snooze fallback wakes at most. An item can cost
+   * seven index ranges: its rows, its task and project, its recipient's
+   * profile and sweep row, its inbox item and its build state
+   * (model/inboxItems.ts), so a leg stays near 2,100 of Convex's 4,096. */
+  wakeItems: 300,
 }
 
 /* The most rows one wake writes (model/messages.ts wakeSnoozedItem), a full
@@ -705,10 +711,12 @@ async function sweepProfile(
           .lte('read_at', cutoff),
       )
       .take(budget + 1)
+    const edits = itemEdits(ctx)
     for (const m of expired.slice(0, budget)) {
-      await ctx.db.delete(m._id)
+      await edits.delete(m)
       deleted += 1
     }
+    await edits.flush()
     if (expired.length > budget) return { deleted, more: true }
     due = await oldestDue(ctx, profileId, days)
   }
@@ -845,8 +853,9 @@ export const sweepDueProfiles = internalMutation({
  * by index, at most SWEEP_LIMITS.rows and a row more, and wakes their items
  * (model/messages.ts wakeSnoozedItem). A wake writes every row of its item,
  * so it starts only while WAKE_ROWS of the leg's SWEEP_LIMITS.rows are
- * left. A woken item leaves the range, so the next leg, scheduled while
- * rows remain, reads the rest. The last leg logs how many items woke. */
+ * left, and a leg wakes at most SWEEP_LIMITS.wakeItems items. A woken item
+ * leaves the range, so the next leg, scheduled while rows remain, reads the
+ * rest. The last leg logs how many items woke. */
 export const wakeSnoozes = internalMutation({
   args: wakeSnoozesArgs,
   handler: async (ctx, a): Promise<null> => {
@@ -860,12 +869,14 @@ export const wakeSnoozes = internalMutation({
     )
     let { woken } = a
     let used = 0
+    let visited = 0
     let more = overdue.length > budget
     for (const item of items.values()) {
-      if (budget - used < WAKE_ROWS) {
+      if (budget - used < WAKE_ROWS || visited === SWEEP_LIMITS.wakeItems) {
         more = true
         break
       }
+      visited += 1
       const written = await wakeSnoozedItem(ctx, item, a.now)
       if (written > 0) woken += 1
       used += written

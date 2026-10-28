@@ -10,6 +10,7 @@ import { sha256hex, touchCredential } from '../machine/auth'
 import { enrollOrganization } from '../model/billing'
 import { recordApiCall } from '../model/billingUsage'
 import { REMOVAL_BUDGET } from '../model/cascade'
+import { postMessage } from '../model/messages'
 import { noCheckoutDue, retentionDue, serviceEndedAt } from '../model/orgRetention'
 import { STALLED_MS, SWEEP_PAGES } from '../orgRemovals'
 import {
@@ -657,6 +658,18 @@ describe('deleting the organization', () => {
       // read-message sweep rows, one of the other organization's
       for (const profile_id of [f.admin.id, f.user.id, f.otherAdmin.id])
         await ctx.db.insert('message_sweeps', { profile_id, due_at: NOW })
+      // inbox messages, with their items and the build states their first
+      // message adds (model/inboxItems.ts)
+      for (const recipient of [f.user, f.guest])
+        await postMessage(ctx, {
+          org_id: f.org.id,
+          recipient_id: recipient.id,
+          issue_id: issue.id,
+          kind: 'change',
+          body: 'Assigned to you',
+          actor_id: f.admin.id,
+          now: NOW,
+        })
       return storage_id
     })
     await exportNow(t, f)
@@ -668,6 +681,7 @@ describe('deleting the organization', () => {
     const { t, f, storage } = await filled()
     const before = await orgRows(t, f.org.id)
     expect(before.issues).toBeGreaterThan(0)
+    expect(await t.run((ctx) => ctx.db.query('inbox_items').collect())).toHaveLength(2)
     expect(before.activity_events).toBeGreaterThan(0)
     expect(before).toMatchObject({
       agent_keys: 1,
@@ -713,6 +727,8 @@ describe('deleting the organization', () => {
     expect(await orgRows(t, f.otherOrg.id)).toEqual(others)
     const sweeps = await t.run((ctx) => ctx.db.query('message_sweeps').collect())
     expect(sweeps.map((row) => row.profile_id)).toEqual([f.otherAdmin.id])
+    expect(await t.run((ctx) => ctx.db.query('inbox_items').collect())).toEqual([])
+    expect(await t.run((ctx) => ctx.db.query('inbox_state').collect())).toEqual([])
     await assertNoDanglingRefs(t, 'organization deletion')
   })
 
