@@ -338,14 +338,14 @@ async function drain(stream: NamedStream<Row>, most = Number.POSITIVE_INFINITY) 
 }
 
 describe('mergeNamed', () => {
-  it('merges by key, then tie, then the order of the streams', async () => {
+  it('merges by key, then tie', async () => {
     const pulled: Record<string, number> = {}
     const merged = mergeNamed([
       memory(
         'admins',
         [
           ['ann', 'id3'],
-          ['bo', 'id1'],
+          ['bo', 'id2'],
           ['zed', 'id9'],
         ],
         pulled,
@@ -366,12 +366,32 @@ describe('mergeNamed', () => {
       'ann/id1@users',
       'ann/id3@admins',
       'bo/id0@viewers',
-      // equal positions in two streams come in stream order
-      'bo/id1@admins',
       'bo/id1@users',
+      'bo/id2@admins',
       'cy/id2@users',
       'zed/id9@admins',
     ])
+  })
+
+  it('refuses two streams that hand out one position', async () => {
+    // a batch that ended at the first of them would start after both
+    const merged = mergeNamed([
+      memory('admins', [['bo', 'id1']], {}),
+      memory('users', [['bo', 'id1']], {}),
+    ])
+    await expect(drain(merged)).rejects.toThrow(/one position/)
+    const later = mergeNamed([
+      memory(
+        'admins',
+        [
+          ['ann', 'id1'],
+          ['bo', 'id1'],
+        ],
+        {},
+      ),
+      memory('users', [['bo', 'id1']], {}),
+    ])
+    await expect(drain(later)).rejects.toThrow(/one position/)
   })
 
   it('reads a stream only when its next row may come next', async () => {

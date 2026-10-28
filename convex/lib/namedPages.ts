@@ -119,7 +119,10 @@ export function indexAfter<Row extends GenericDocument, Tie extends NamedTie>(
 }
 
 /** The rows of `streams`, each in name order, as one stream in name order.
- * Rows at equal positions come in the order of their streams. It reads every
+ * A position names one row, so no two streams may hand out the same one: a
+ * batch that ended at the first would start after both and skip the other.
+ * Equal positions mean the merged ranges overlap, and the merge throws when
+ * two streams' next rows have one, before it hands out either. It reads every
  * stream's first row before it hands out one, and after that reads a
  * stream's next row only when the next row asked for may be it, so a batch
  * reads at most one row past its last from each stream. Once a stream hands
@@ -148,7 +151,9 @@ export async function* mergeNamed<Row>(
       let best = -1
       heads.forEach((head, i) => {
         const leader = best < 0 ? null : heads[best]
-        if (head !== null && (leader === null || compareNamed(head.at, leader.at) < 0)) best = i
+        const order = head === null || leader === null ? -1 : compareNamed(head.at, leader.at)
+        if (order === 0) throw new Error('two merged streams hand out one position')
+        if (head !== null && order < 0) best = i
       })
       const head = best < 0 ? null : heads[best]
       if (head === null) return
