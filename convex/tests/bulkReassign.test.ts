@@ -53,6 +53,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { manyHolders } from './holders.setup'
 
 /* The people the crowd adds to withOrg's five, for an organization of 100. */
 const CROWD = 93
@@ -669,83 +670,6 @@ describe('reassigning the tasks of an access removal', () => {
     expect(follows).toEqual([fx.emil.id, fx.leo.id, ...[1, 2, 3].map((k) => fx.crowd[k].id)].sort())
   })
 })
-
-/* withOrg with `n` more members of Hardware, which shares TBED at User, each
- * assigned to one open task in Firmware, beside a second team, Platform.
- * Under `limits` the deployment's limits apply. */
-async function manyHolders(n: number, limits: Parameters<typeof newT>[0] = {}) {
-  const t = newT({ transactionLimits: true, ...limits })
-  const f = await withOrg(t)
-  for (let from = 0; from < n; from += 100) {
-    await t.run(async (ctx) => {
-      if (from === 0) {
-        await ctx.db.insert('teams', {
-          id: uuid(),
-          org_id: f.org.id,
-          name: 'Platform',
-          track_delay_default: false,
-          created_at: NOW,
-        })
-        await ctx.db.insert('project_team_access', {
-          project_id: f.meta.id,
-          team_id: f.team.id,
-          level: 'user',
-        })
-      }
-      for (let i = from; i < Math.min(n, from + 100); i++) {
-        const id = uuid()
-        await ctx.db.insert('profiles', {
-          id,
-          org_id: f.org.id,
-          name: `m${i}`,
-          initials: 'MM',
-          color: '#7a7ad0',
-          org_role: 'user',
-          active: true,
-          kind: 'person',
-          plannable_hours: 40,
-          accepted_at: NOW,
-          created_at: NOW,
-        })
-        await ctx.db.insert('team_members', {
-          team_id: f.team.id,
-          profile_id: id,
-          is_leader: false,
-        })
-        await ctx.db.insert('issues', {
-          id: uuid(),
-          org_id: f.org.id,
-          project_id: f.sub.id,
-          num: 2000 + i,
-          title: `Task ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          assignee_id: id,
-          created_at: NOW,
-          updated_at: NOW,
-        })
-      }
-    })
-  }
-  const admin = { callerId: f.admin.id, access: 'write' as const }
-  const state = () =>
-    t.run(async (ctx) => ({
-      share: await ctx.db
-        .query('project_team_access')
-        .withIndex('by_project_team', (q) => q.eq('project_id', f.meta.id).eq('team_id', f.team.id))
-        .unique(),
-      viewers: (
-        await ctx.db
-          .query('project_access')
-          .withIndex('by_project', (q) => q.eq('project_id', f.meta.id))
-          .collect()
-      ).filter((g) => g.level === 'viewer').length,
-      team: await byId(ctx, 'teams', f.team.id),
-    }))
-  return { t, f, admin, state }
-}
 
 describe('a removal of many people', () => {
   it(`takes access from ${LIMITS.removalHolders.max} people with open tasks inside one transaction's limits, the costliest way`, async () => {

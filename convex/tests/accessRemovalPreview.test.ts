@@ -56,6 +56,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { manyHolders } from './holders.setup'
 import { northstarId, plantNorthstar } from './northstar.setup'
 
 type Ok = Extract<RemovalPreview, { state: 'ok' }>
@@ -620,6 +621,24 @@ describe('the removal preview and the write it previews', () => {
       refusal: reassignTooLarge(false),
     })
   })
+
+  it(`refuses to settle the tasks of ${LIMITS.removalHolders.max + 1} people with the write's sentence, and leaves them`, async () => {
+    const { p } = await expectParity(async () => {
+      const { t, f } = await manyHolders(LIMITS.removalHolders.max + 1)
+      const taker = await plantSeat(t, { org_id: f.org.id, name: 'Taker', org_role: 'admin' })
+      return {
+        t,
+        orgId: f.org.id,
+        caller: f.admin,
+        taker,
+        change: { kind: 'team_grant', project_id: f.meta.id, team_id: f.team.id } as const,
+      }
+    })
+    expect(p.people).toHaveLength(LIMITS.removalHolders.max + 1)
+    const capped = { allowed: false, refusal: LIMITS.removalHolders.refusal }
+    expect(p.keep).toMatchObject(capped)
+    expect(p.reassign).toEqual(capped)
+  }, 120_000)
 
   it('previews nothing to remove once the access is gone', async () => {
     const b = await base()
