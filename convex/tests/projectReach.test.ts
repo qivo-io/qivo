@@ -1217,6 +1217,93 @@ describe('a restore and the work around it', () => {
     expect((await rowsOf(t, f.user.id)).some((row) => row.project_id === f.sub.id)).toBe(true)
     await expectAll(t, f)
   })
+
+  it('refuses every create of the id of a project its move dropped, and drains its grants and tasks', async () => {
+    const t = newT()
+    const f = await ready(t)
+    const org_id = f.org.id
+    // a sub-project made in the app, which records its id in used_ids,
+    // with a grant and a task
+    const id = uuid()
+    const create = (key: string) =>
+      as(t, f.user).mutation(api.projects.create, {
+        org_id,
+        id,
+        type: 'project',
+        parent_id: f.meta.id,
+        key,
+        name: 'Big',
+        sort_order: 1,
+      })
+    await create('BIG')
+    await as(t, f.admin).mutation(api.projects.setAccess, {
+      org_id,
+      id,
+      user_id: f.pia.id,
+      level: 'user',
+    })
+    const task = await plantIssue(t, { org_id, project_id: id })
+    const grants = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('project_access')
+          .withIndex('by_project_profile', (q) => q.eq('project_id', id))
+          .collect(),
+      )
+    // past what a stored row may hold, so the move drops it
+    await t.run(async (ctx) => {
+      const row = await byId(ctx, 'projects', id)
+      if (row !== null) await ctx.db.patch(row._id, { icon: 'i'.repeat(1_000_100) })
+    })
+    TRASH_BUDGET.rows = 1
+    await as(t, f.user).mutation(api.projects.deleteDeep, { org_id, id })
+    const item = await itemFor(t, id)
+    expect(await projectOf(t, id)).toBeNull()
+    expect(await grants()).toHaveLength(1)
+    expect(await t.run((ctx) => byId(ctx, 'issues', task.id))).not.toBeNull()
+    // no create takes the id while the move has the grant and the task
+    // left: not the app's, nor REST's or MCP's should the server pick it
+    const taken = /with this id already exists/
+    await expectRefusal(create('AGAIN'), 'bad_request', taken)
+    const machine = { callerId: f.admin.id, access: 'write' as const }
+    const serverPicks = () =>
+      vi
+        .spyOn(crypto, 'randomUUID')
+        .mockImplementationOnce(() => id as ReturnType<typeof crypto.randomUUID>)
+    serverPicks()
+    await expectRefusal(
+      t.mutation(internal.machine.projects.restCreateProject, {
+        ...machine,
+        keyName: null,
+        body: JSON.stringify({ name: 'Again' }),
+      }),
+      'bad_request',
+      taken,
+    )
+    serverPicks()
+    await expectRefusal(
+      t.mutation(internal.machine.projects.mcpCreateProject, { ...machine, name: 'Again' }),
+      'bad_request',
+      taken,
+    )
+    vi.restoreAllMocks()
+    expect(await projectOf(t, id)).toBeNull()
+    TRASH_BUDGET.rows = DEFAULT_ROWS
+    for (let steps = 0; (await jobFor(t, item.id)) !== null; steps++) {
+      expect(steps).toBeLessThan(50)
+      await step(t, item.id)
+    }
+    // the move took the grant and the task, and no row is left on the id
+    expect(await grants()).toEqual([])
+    expect(await t.run((ctx) => byId(ctx, 'issues', task.id))).toBeNull()
+    expect((await reachRows(t)).filter((row) => row.project_id === id)).toEqual([])
+    await expectAll(t, f)
+    // the item keeps the project's history until a purge, which takes it
+    await as(t, f.admin).mutation(api.deletedItems.purge, { org_id, ids: [item.id] })
+    await runSteps(t)
+    await expectAll(t, f)
+    await assertNoDanglingRefs(t, 'after the purge of a dropped project')
+  })
 })
 
 describe('fixtures and migrations', () => {
