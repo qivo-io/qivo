@@ -119,13 +119,13 @@ and stops recording until you leave Roadmap and return.
 Leaving Roadmap or reloading clears history without reverting saved changes.
 History expires after 24 hours and holds up to 1,000 steps per visit. If an
 intervening change conflicts with an undo, Qivo refuses the entire restoration
-and clears history until your next visit.
+and clears history until your next visit. A milestone that took a week since
+the change you undo counts as such a change, when the undo would bring a
+milestone of the same project back into that week.
 Followers of the tasks a change or an undo touches get the update in their
 inbox a few seconds after it saves. A change that touches too many tasks to
 save in one go is refused, and nothing changes. An undo that large is refused
-the same way, and history stays. So is an undo that would bring a milestone
-back into a week another milestone of its project took since. Move that
-milestone to another week, then undo again.
+the same way, and history stays.
 
 ## Dependencies you can see and safely fix
 

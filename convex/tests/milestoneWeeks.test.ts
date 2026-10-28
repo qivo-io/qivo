@@ -110,6 +110,21 @@ async function expectTaken(
   })
 }
 
+/* Expects the refusal of an undo into a week `holder` took since, a
+ * conflict, which ends the app's undo history. */
+async function expectTakenSince(
+  call: Promise<unknown>,
+  org: Doc<'organizations'>,
+  holder: { name: string; week: string },
+): Promise<void> {
+  const e = await expectRefusal(call, 'conflict')
+  expect(e.data).toEqual({
+    code: 'conflict',
+    reason: 'roadmap_changed',
+    message: `the milestone “${holder.name}” has taken ${weekPhrase(holder.week, org)} since that change, and a project can have at most 1 milestone a week. Leave and reopen the roadmap to start a new undo history.`,
+  })
+}
+
 describe('one milestone a week in the app', () => {
   it.each([0, 1, 2, 3, 4, 5, 6])(
     'refuses a second milestone in a week that starts on weekday %i, and allows the weeks around it',
@@ -317,7 +332,28 @@ describe('Roadmap saves and undo', () => {
     )
   })
 
-  it('refuses an undo into an occupied week, keeps its history, and undoes once the week is free', async () => {
+  it('refuses an undo into a week another milestone took since as an edit made elsewhere', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org = await orgOf(t, f)
+    const user = as(t, f.user)
+    const session_id = uuid()
+    const alpha = uuid()
+    await user.mutation(api.roadmap.change, {
+      session_id,
+      operations: [create(alpha, f.meta.id, 'Alpha', '2026-06-01')],
+    })
+    await user.mutation(api.roadmap.change, {
+      session_id,
+      operations: [move(alpha, '2026-06-15')],
+    })
+    await add(t, f, f.user, f.meta.id, 'Gamma', '2026-06-03')
+    const undo = () => user.mutation(api.roadmap.undo, { session_id, all: false })
+    await expectTakenSince(undo(), org, { name: 'Gamma', week: '2026-06-03' })
+    expect((await t.run((ctx) => byId(ctx, 'milestones', alpha)))?.week).toBe('2026-06-15')
+  })
+
+  it('does not lead round in a circle when the week is freed on the Roadmap', async () => {
     const t = newT()
     const f = await withOrg(t)
     const org = await orgOf(t, f)
@@ -334,22 +370,20 @@ describe('Roadmap saves and undo', () => {
     })
     const gamma = await add(t, f, f.user, f.meta.id, 'Gamma', '2026-06-03')
     const undo = () => user.mutation(api.roadmap.undo, { session_id, all: false })
-    await expectTaken(
-      undo(),
-      org,
-      { name: 'Gamma', week: '2026-06-03' },
-      'Move that milestone to another week first, then undo again.',
-    )
-    // the refusal is a rule, which the app answers by keeping the history
-    expect(await t.run((ctx) => ctx.db.query('roadmap_history').collect())).toHaveLength(2)
-    expect((await t.run((ctx) => byId(ctx, 'milestones', alpha)))?.week).toBe('2026-06-15')
-    await user.mutation(api.projects.updateMilestone, {
-      org_id: f.org.id,
-      id: gamma,
-      patch: { week: '2026-06-22' },
+    const holder = { name: 'Gamma', week: '2026-06-03' }
+    await expectTakenSince(undo(), org, holder)
+    // A Roadmap that kept its history would free the week with one more
+    // step, and the next undo takes that step back, so the week is taken
+    // again. The refusal ends the history (the app's answer to a conflict)
+    // rather than send the person round this circle.
+    await user.mutation(api.roadmap.change, {
+      session_id,
+      operations: [move(gamma, '2026-06-22')],
     })
-    expect(await undo()).toEqual({ count: 1 })
-    expect((await t.run((ctx) => byId(ctx, 'milestones', alpha)))?.week).toBe('2026-06-01')
+    expect(await undo()).toEqual({ count: 2 })
+    expect((await t.run((ctx) => byId(ctx, 'milestones', gamma)))?.week).toBe('2026-06-03')
+    await expectTakenSince(undo(), org, holder)
+    expect((await t.run((ctx) => byId(ctx, 'milestones', alpha)))?.week).toBe('2026-06-15')
   })
 
   it('checks an undo of the whole visit where it ends', async () => {
@@ -385,12 +419,10 @@ describe('Roadmap saves and undo', () => {
       operations: [{ kind: 'milestone_remove', id: alpha }],
     })
     await add(t, f, f.user, f.meta.id, 'Delta', '2026-06-05')
-    await expectTaken(
-      user.mutation(api.roadmap.undo, { session_id, all: false }),
-      org,
-      { name: 'Delta', week: '2026-06-05' },
-      'Move that milestone to another week first, then undo again.',
-    )
+    await expectTakenSince(user.mutation(api.roadmap.undo, { session_id, all: false }), org, {
+      name: 'Delta',
+      week: '2026-06-05',
+    })
     expect(await t.run((ctx) => byId(ctx, 'milestones', alpha))).toBeNull()
     expect(await t.run((ctx) => ctx.db.query('roadmap_history').collect())).toHaveLength(1)
   })

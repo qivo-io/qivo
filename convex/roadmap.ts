@@ -2,9 +2,10 @@
  * never restoration values. Each mutation is one serializable undo step that
  * journals only the tasks its operations name. A group's dates are
  * calculated from its subtasks, so no write changes another task's dates.
- * A save or an undo that would leave two milestones of one project in one
- * week is refused whole, as a `rule` refusal, which the app answers by
- * keeping the history (model/milestones.ts assertWeekFree). History expires
+ * A save that would leave two milestones of one project in one week is
+ * refused whole with the weekly rule's `rule` refusal, and the history stays
+ * (model/milestones.ts assertWeekFree). An undo that would is an edit made
+ * elsewhere, refused as a conflict that ends the history. History expires
  * after 24 hours. */
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import { v } from 'convex/values'
@@ -32,14 +33,15 @@ import {
 import { newNotifyPreload, notifyIssueUpdate } from './model/messages'
 import {
   assertMilestoneExpected,
-  assertWeekFree,
   changeableMilestone,
   cleanMilestoneName,
   cleanMilestoneWeek,
   milestoneTarget,
   vMilestoneExpected,
+  weekHolder,
+  weekTaken,
 } from './model/milestones'
-import { weekLabel } from './model/orgs'
+import { weekLabel, weekPhrase } from './model/orgs'
 
 type Context = MutationCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> }
 const TTL = 24 * 60 * 60 * 1000
@@ -183,16 +185,22 @@ async function taskGuard(ctx: MutationCtx, row: Doc<'issues'>): Promise<string> 
   })
 }
 
-/* The step an undo refusal names when it would bring a milestone back into a
- * week another milestone of its project holds. */
-const UNDO_WEEK_TAKEN = 'Move that milestone to another week first, then undo again.'
+/* The refusal of an undo that would bring a milestone back into a week that
+ * `holder`, another milestone of its project, took since. It is an edit made
+ * elsewhere, which stale() refuses too. Freeing the week on the Roadmap would
+ * be one more step, which the next undo takes back, so the history ends. */
+const weekTakenSince = (holder: Doc<'milestones'>, org: Doc<'organizations'>) =>
+  conflict(
+    `the milestone “${holder.name}” has taken ${weekPhrase(holder.week, org)} since that change, and a project can have at most 1 milestone a week. Leave and reopen the roadmap to start a new undo history.`,
+    'roadmap_changed',
+  )
 
 /* Refuses the mutation when one of the milestones `ids`, as it stands now,
  * shares its week with another milestone of its project (model/milestones.ts
- * assertWeekFree), naming `next` as the way past it. A save or an undo runs
- * it once every operation has run, so one that swaps the weeks of two
- * milestones passes. */
-async function assertWeeksFree(ctx: Context, ids: Set<string>, batch: Batch, next?: string) {
+ * weekHolder), a save with the weekly rule's refusal and an undo with
+ * weekTakenSince. Each runs it once every operation has run, so one that
+ * swaps the weeks of two milestones passes. */
+async function assertWeeksFree(ctx: Context, ids: Set<string>, batch: Batch, undo: boolean) {
   for (const id of ids) {
     await batch.room()
     const row = await byId(ctx, 'milestones', id)
@@ -200,13 +208,13 @@ async function assertWeeksFree(ctx: Context, ids: Set<string>, batch: Batch, nex
     const { project } = await writer(ctx, row.project_id)
     const org = await byId(ctx, 'organizations', project.org_id)
     if (!org) throw notFound('organization not found')
-    await assertWeekFree(ctx, {
+    const holder = await weekHolder(ctx, {
       org,
       projectId: row.project_id,
       day: row.week,
       except: row._id,
-      next,
     })
+    if (holder) throw undo ? weekTakenSince(holder, org) : weekTaken(holder, org)
   }
 }
 
@@ -446,7 +454,7 @@ export const change = authedMutation({
         }
       }
     }
-    await assertWeeksFree(ctx, dated, batch)
+    await assertWeeksFree(ctx, dated, batch, false)
     const changes: Change[] = []
     for (const before of beforeTasks.values()) {
       await batch.room()
@@ -606,13 +614,13 @@ export const undo = authedMutation({
     const now = new Date().toISOString()
     const batch = batchOf(ctx, all ? ROADMAP_UNDO_TOO_LARGE : ROADMAP_STEP_TOO_LARGE)
     // the milestones the undo moves back or brings back, checked once every
-    // step has run; a refusal keeps every step, so the app keeps the history
+    // step has run
     const dated = new Set<string>()
     for (const entry of selected) {
       await restoreStep(ctx, JSON.parse(entry.changes) as Change[], now, batch, dated)
       await ctx.db.delete(entry._id)
     }
-    await assertWeeksFree(ctx, dated, batch, UNDO_WEEK_TAKEN)
+    await assertWeeksFree(ctx, dated, batch, true)
     return { count: entries.length - selected.length }
   },
 })
