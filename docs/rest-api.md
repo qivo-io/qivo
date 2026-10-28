@@ -108,6 +108,10 @@ sentence too. `403` means the credential is valid but the user lacks the
 required role, the credential can only read, or organization editing is
 paused for billing. Unreadable objects come back as `404`.
 
+A comment past its author's posting rate on the task is a `429`, and a
+comment on a task whose comments Qivo is still counting a `503`, each with
+`Retry-After` (see [Comments](#comments)).
+
 A request that keeps conflicting with changes other requests make to the
 same data at that moment, such as many comments posted to one task at once,
 is a `503` with `Retry-After: 1` and `{"error": "the request conflicted with
@@ -1513,7 +1517,15 @@ true`). It is at most 500 characters after trimming, counted like a
 description, the same limit as the reason the app's delete window shows in
 Deleted items. A longer one is a `400` (`an archive reason must be at most 500
 characters. Shorten it.`) and the PATCH changes nothing, also for a task that is already
-archived. Until October 2026 the limit was 20,000 characters.
+archived. Until October 2026 the limit was 20,000 characters. The reason is a
+comment, so it needs room under [the comment limits](#comments): on a task with
+1,000 comments or more, or past your 10 comments in 60 seconds there, the
+PATCH archives nothing, changes no other field and answers as a comment
+`POST` would, with the sentence saying that the task was not archived, such
+as `this task has reached 1,000 comments, the most a task can have, so the
+archive reason cannot be posted and the task was not archived. Delete
+comments until it has fewer than 1,000, then archive it again.` The same
+PATCH without `archive_reason` archives the task, because it posts nothing.
 
 Task shape of a list row from `GET /v1/tasks`:
 
@@ -1751,7 +1763,35 @@ the created comment; a blank `body` is a `400`. A comment body is at most
 20,000 characters after trimming, counted like a description, on `POST` and
 `PATCH`; a longer one is a `400` (`a comment must be at most 20,000
 characters. Formatting counts too. Shorten it.`). Comments go to Deleted items with their task and come back
-with it. A task has no limit on the number of comments.
+with it.
+
+A task holds at most **1,000 comments**, counted across every author and
+every way of posting: the app, REST, MCP and archive reasons. A `POST` to a
+task that already has 1,000 or more is a `400` (`this task has reached 1,000
+comments, the most a task can have. Delete comments until it has fewer than
+1,000, then post again.`). A task that held more than 1,000 before the limit
+keeps them all and takes no new comment until deletes bring it under 1,000.
+Each comment deleted frees one place, and editing a comment changes nothing.
+A delete that is refused, or of a comment already gone, frees nothing.
+
+One caller may post at most **10 comments on one task in any 60 seconds**
+of server time. Every key, token and OAuth connection of the same agent or
+person shares the allowance, with the app and MCP, and so do archive
+reasons. Each post stops counting 60 seconds after it was saved; a deleted
+comment still counts until then. Past the allowance a `POST` is a `429` with
+`Retry-After` set to the whole seconds until the oldest of those posts stops
+counting, and the same number in its sentence: `{"error": "too many comments
+on this task, at most 10 in any 60 seconds from one person or agent. Try
+again in 42 seconds."}`. Other authors, and your posts on other tasks, are
+not affected. Waiting does not promise that the task still has room for the
+comment then.
+
+A task stored before Qivo counted comments is counted when someone first
+posts on it. A thread too long to count in that request, about 2 MiB of
+comments, is a `503` with `Retry-After: 60` and `{"error": "Qivo is still
+counting this task's comments. Try again shortly."}`, and the comment is not
+saved. Each of these refusals saves nothing, so send the same request again
+later.
 
 `PATCH /v1/comments/{id}` replaces a comment's body and answers the comment;
 `DELETE /v1/comments/{id}` answers `{ "deleted": true, "id": "…", "task_id":

@@ -202,7 +202,11 @@ Useful field rules:
   `high`, `medium`, `low`. Titles must be nonblank and at most 255
   characters, and project, milestone and team names nonblank and at most 80.
 - Descriptions and comments use Markdown, up to 20,000 characters each,
-  formatting included. Omitted update
+  formatting included. A task holds at most 1,000 comments, and you can post
+  at most 10 on one task in any 60 seconds. Past the rate, wait the seconds
+  the refusal names (REST `429` with `Retry-After`) before posting there
+  again; deleting a comment gives no post back. A task at 1,000 takes no
+  comment until some are deleted, so stop and tell the user. Omitted update
   fields stay unchanged. Use `null` to clear `assignee_id`, `reviewer_id`, `due_date`, or
   `remaining_hours`; use `""` to clear a description.
 - While a task is in `review` with a reviewer set, it is the reviewer's to act
@@ -288,7 +292,8 @@ Useful field rules:
   organization admins rename or recolor one.
 - **Archive with a reason:** send `archived: true` with `archive_reason`; the
   reason becomes a comment, as in the app's archive dialog, and holds at most
-  500 characters. Only tasks take a reason. Archive a project with
+  500 characters. The comment limits apply to it, and a refused reason
+  archives nothing. Only tasks take a reason. Archive a project with
   `archived` alone.
 
 ## Files, history and workload

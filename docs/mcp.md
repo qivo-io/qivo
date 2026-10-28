@@ -137,6 +137,13 @@ under a parent with 100 active subtasks comes back without it. The tools
 take the same arguments, so a client holding the older catalogue keeps
 working, and the server answers such a call as described here.
 
+The comment limits added a sentence to the `add_comment` and `update_task`
+descriptions: a task holds at most 1,000 comments, and one person or agent
+posts at most 10 on one task in any 60 seconds, archive reasons included.
+The tools take the same arguments, so a client holding the older catalogue
+keeps working, and the server refuses such a call with the limit's
+sentence.
+
 Description saves that settle their images changed the `delete_attachment`
 description from "Description images (`inline: true`) are left to the app."
 to "A description image (`inline: true`) goes when the description stops
@@ -1260,9 +1267,9 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
 | `get_task` | One task with full description and reporter, assignee and reviewer, `progress` for a group, `delay` and `last_comment_at`, plus its `labels`, `subtasks` (with `has_more_subtasks` when an archived task has more than one call lists), `links`, `following`, `followers`, `attachments` with download links and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
-| `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry |
+| `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry. A task holds at most 1,000 comments, and you post at most 10 on one task in any 60 seconds (see [Comments, inbox and following](#comments-inbox-and-following)) |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` holds at most 255 characters and `description` 20,000 (see [Limits](#limits)). Returns `id` and `key` |
-| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` holds at most 255 characters, `description` 20,000 and `archive_reason` 500 (see [Limits](#limits)). The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task, which the comment limits can refuse, archiving nothing. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` holds at most 255 characters, `description` 20,000 and `archive_reason` 500 (see [Limits](#limits)). The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks become top-level tasks, the active ones at once and the archived ones a moment later, and their followers hear of it moments later; its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. A task is an end of at most 100 links, and a new link to a full task is refused naming it, such as `QN-9 already has 100 links, the most a task can have. Remove one of its links first.`. `get_task` lists the links |
 | `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
@@ -2179,7 +2186,31 @@ most emoji count as two, and the server refuses a longer one with `a comment
 must be at most 20,000 characters. Formatting counts too. Shorten it.`, as
 for REST and the app.
 
-A task has no limit on the number of comments.
+A task holds at most **1,000 comments**, counted across every author and
+every way of posting: the app, REST, MCP and archive reasons. `add_comment`
+on a task that already has 1,000 or more is refused with `this task has
+reached 1,000 comments, the most a task can have. Delete comments until it
+has fewer than 1,000, then post again.` A task that held more than 1,000
+before the limit keeps them all and takes no new comment until deletes bring
+it under 1,000. Each comment deleted frees one place, and editing a comment
+changes nothing. A delete that is refused, or of a comment already gone,
+frees nothing.
+
+You may post at most **10 comments on one task in any 60 seconds** of server
+time, shared by every credential of yours, the app and REST, archive
+reasons included. Each post stops counting 60 seconds after it was saved; a
+deleted comment still counts until then. Past the allowance `add_comment` is
+refused with a sentence that names the wait, such as `too many comments on
+this task, at most 10 in any 60 seconds from one person or agent. Try again
+in 42 seconds.` Other authors, and your posts on other tasks, are not
+affected. Waiting does not promise that the task still has room then.
+
+A task stored before Qivo counted comments is counted when someone first
+posts on it. A thread too long to count in that call, about 2 MiB of
+comments, is refused with `Qivo is still counting this task's comments. Try
+again shortly.`, and the comment is not saved. Each of these refusals saves
+nothing, so the same call can be sent again later.
+
 `set_following` follows a task (`following: true`) or stops following it.
 Following needs only read access to the task, and the result's `changed`
 is `false` when nothing changed. Followers receive the task's updates in
@@ -2437,7 +2468,13 @@ nothing. `archive_reason` without `archived: true` is refused. It is at most
 500 characters after trimming, the same limit as the app's delete reason, and
 a longer one is refused with `an archive reason must be at most 500
 characters. Shorten it.` before the call changes anything, also for a task that is
-already archived.
+already archived. The reason is a comment, so it needs room under the
+comment limits (see [Comments, inbox and
+following](#comments-inbox-and-following)). On a task with 1,000 comments or
+more, or past your 10 comments in 60 seconds there, the call archives
+nothing, changes no other field and is refused with the limit's sentence,
+which says that the task was not archived. The same call without
+`archive_reason` archives the task, because it posts nothing.
 
 Archived **projects** (0106) are the same idea one altitude up, and a
 separate axis again. A project that has been put away in the app keeps
