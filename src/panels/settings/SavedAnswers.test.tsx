@@ -462,14 +462,17 @@ describe('rename toasts', () => {
     expect(requests.map((r) => r.name)).toEqual(['projects:update'])
   })
 
-  it('says nothing of a renamed organization the server refused', async () => {
+  it('says nothing of a renamed organization the server refused, and keeps the name typed', async () => {
+    const { hasUnsaved } = await import('../../lib/leaveGuard')
     await render(() => <pages.general.OrgGeneralPage setPage={vi.fn()} />)
     const field = input('[data-org-name]')
     await rename(field, 'Northstar Labs')
     expect(toasts()).toEqual([])
     await answer('orgs:update', 'refuse')
     expect(toasts()).toEqual(['The server said no. Change reverted.'])
-    expect(field?.value).toBe('Testbed Labs')
+    // the name stays typed, unsaved against the stored one (lib/savedDraft.ts)
+    expect(field?.value).toBe('Northstar Labs')
+    expect(hasUnsaved()).toBe(true)
   })
 
   it('says a project setting changed only once the server saved it', async () => {

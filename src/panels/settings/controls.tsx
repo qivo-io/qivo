@@ -1,15 +1,15 @@
 /* Shared settings navigation, fields and toggles. */
 import type React from 'react'
-import { useEffect as useEffectS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { limitSentence, overLimit } from '@/lib/fieldLimits'
+import { cn } from '@/lib/utils'
 import type { Limit } from '../../../convex/lib/limits'
 import { LimitedInput, LimitedTextarea } from '../../components/LimitedField'
 import { Icon } from '../../components/qivo'
 import { SettingsField } from '../../components/settingsPage'
 import { WORKSPACE_SIGNUP_URL } from '../../lib/demoMode'
-import { useUnsaved } from '../../lib/leaveGuard'
-import { useUpdateBlocker } from '../../lib/updateSafety'
+import { type DraftSave, type SavedDraft, TRIMMED, useSavedDraft } from '../../lib/savedDraft'
+import { P } from '../../store/planner'
 
 /* ---------- shared page atoms ---------- */
 export function DemoCapabilityNotice({ children }: { children: React.ReactNode }) {
@@ -42,11 +42,103 @@ export function BackLink({ onClick, to }: { onClick: () => void; to: string }) {
   )
 }
 
+/** The longest saved value a conflict line quotes whole. */
+const QUOTED_MAX = 80
+
+/** Under a field with a draft: the saved value that changed elsewhere while
+    the person typed, who changed it when a refused save said so, and the
+    two ways out, Use saved and Keep mine. `text` writes a saved value as
+    the field shows it. The line is a polite live region, there while the
+    field is, so screen readers hear a conflict as it comes; the field's
+    input names it with aria-describedby (SavedDraft.conflictId). Either
+    choice puts focus back in that input, so Enter saves after Keep mine.
+    `onChoose` runs after either choice, for a field that holds words of
+    its own about the conflict, such as a refusal, which the choice ends.
+    `compact` is for a field in a roster row: the sentence over the
+    buttons, both wrapping in the room the row gives them, and `end` puts
+    them under the right edge of a field that sits there. */
+export function DraftConflictLine<T>({
+  draft,
+  text,
+  onChoose,
+  compact = false,
+  end = false,
+}: {
+  draft: SavedDraft<T>
+  text: (value: T) => string
+  onChoose?: () => void
+  compact?: boolean
+  end?: boolean
+}) {
+  const conflict = draft.conflict
+  let sentence = ''
+  if (conflict) {
+    const full = text(conflict.value).trim()
+    const value = full.length > QUOTED_MAX ? `${full.slice(0, QUOTED_MAX).trimEnd()}…` : full
+    const by = conflict.by
+    sentence = !value
+      ? by === 'you'
+        ? 'You cleared it elsewhere.'
+        : by
+          ? `${by.name} cleared it.`
+          : 'Cleared elsewhere.'
+      : by === 'you'
+        ? `You changed it elsewhere to “${value}”.`
+        : by
+          ? `${by.name} changed it to “${value}”.`
+          : `Changed elsewhere to “${value}”.`
+  }
+  // the input this line describes, found before the choice renders it gone
+  const choose = (choice: () => void) => () => {
+    const input = [...document.querySelectorAll<HTMLElement>('[aria-describedby]')].find((el) =>
+      el.getAttribute('aria-describedby')?.split(' ').includes(draft.conflictId),
+    )
+    choice()
+    onChoose?.()
+    input?.focus()
+  }
+  return (
+    <div
+      id={draft.conflictId}
+      aria-live="polite"
+      data-draft-conflict={conflict ? '' : undefined}
+      className={cn(
+        conflict && 'flex gap-x-2 gap-y-1 [color:var(--danger)] [line-height:1.5]',
+        conflict &&
+          (compact
+            ? cn('mt-1 flex-col text-xs', end ? 'items-end text-right' : 'items-start')
+            : 'mt-2 flex-wrap items-center [font-size:var(--fs-sm)]'),
+      )}
+    >
+      {conflict && (
+        <>
+          <span className="min-w-0 break-words">{sentence}</span>
+          <span className={cn('flex gap-1.5', compact ? 'flex-wrap' : 'shrink-0')}>
+            <Button type="button" size="xs" data-draft-use-saved onClick={choose(draft.discard)}>
+              Use saved
+            </Button>
+            <Button type="button" size="xs" data-draft-keep-mine onClick={choose(draft.keepMine)}>
+              Keep mine
+            </Button>
+          </span>
+        </>
+      )}
+    </div>
+  )
+}
+
 /** A settings text that saves on blur, and a single-line one also on Enter.
-    A text over `limit` is not saved: the field keeps it, shows it invalid
-    and says why. Leaving the stored text unchanged says nothing. */
+    It keeps what the person types as a draft of `record`'s field `label`
+    against the value it began from (lib/savedDraft.ts), and `onCommit`
+    passes `save` to the store, so the server refuses the save when someone
+    else changed the value first. A value changed elsewhere while the person
+    types shows under the field, which then saves nothing until they choose
+    Use saved or Keep mine. A text over `limit` is not saved: the field
+    keeps it, shows it invalid and says why. Leaving the stored text
+    unchanged says nothing. A save while editing is paused keeps the text. */
 export function TextField({
   label,
+  record,
   value,
   onCommit,
   placeholder,
@@ -58,8 +150,10 @@ export function TextField({
   disabled = false,
 }: {
   label: string
+  /** The record the text belongs to, such as the organization's id. */
+  record: string
   value: string
-  onCommit: (v: string) => void
+  onCommit: (v: string, save: DraftSave<string>) => void
   placeholder?: string
   hint?: React.ReactNode
   width?: number
@@ -68,29 +162,27 @@ export function TextField({
   limit: Limit
   disabled?: boolean
 }) {
-  const [v, setV] = useStateS(value)
-  useUpdateBlocker(!disabled && v !== value)
-  useUnsaved(!disabled && v !== value)
-  useEffectS(() => {
-    setV(value)
-  }, [value])
+  const draft = useSavedDraft(`${record}:${label}`, value, TRIMMED, 'text', disabled)
   const commit = () => {
-    const t = v.trim()
-    if (disabled || t === value) setV(value)
+    const t = draft.text.trim()
+    if (disabled || draft.isSaved(t)) draft.showSaved()
+    // a conflict waits for Use saved or Keep mine
+    else if (draft.conflict) return
     else if (overLimit(limit, t)) window.showToast?.(limitSentence(limit), 'error')
-    else if (t || multiline) onCommit(t)
-    else setV(value)
+    else if (!t && !multiline) draft.showSaved()
+    else if (!P.refusePausedEdit()) onCommit(t, draft.save(t))
   }
   const Control = multiline ? LimitedTextarea : LimitedInput
   return (
     <SettingsField label={label} hint={hint} width={width}>
       <Control
         aria-label={label}
+        aria-describedby={draft.conflict ? draft.conflictId : undefined}
         limit={limit}
-        value={v}
+        value={draft.text}
         rows={multiline ? 1 : undefined}
         disabled={disabled}
-        onChange={(e) => setV(e.target.value)}
+        onChange={(e) => draft.edit(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !multiline) {
@@ -100,7 +192,7 @@ export function TextField({
           if (multiline && e.key === 'Escape') {
             e.preventDefault()
             e.stopPropagation()
-            setV(value)
+            draft.discard()
           }
         }}
         {...(probe ? { [probe]: '' } : {})}
@@ -111,6 +203,7 @@ export function TextField({
             : 'h-control w-full bg-surface-1 px-2.5 text-base font-sans'
         }
       />
+      <DraftConflictLine draft={draft} text={(saved) => saved} />
     </SettingsField>
   )
 }

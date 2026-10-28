@@ -1,5 +1,6 @@
 /* Roster identity, invitation address, role and weekly capacity controls. */
 import React, { useEffect as useEffectS, useState as useStateS } from 'react'
+import { flushSync } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -18,25 +19,24 @@ import {
   useInviteDeliveries,
   useRenderAt,
 } from '../../lib/inviteDeliveries'
-import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { projectRightBox } from '../../lib/projectCreators'
-import { useUpdateBlocker } from '../../lib/updateSafety'
+import { EMAIL, PERSON_NAME, useSavedDraft, wholeNumber } from '../../lib/savedDraft'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
 import type { UserPatch, UserVM } from '../../store/planner'
 import { P } from '../../store/planner'
+import { DraftConflictLine } from './controls'
 
 // Roster renames commit on blur and affect this organization only. Account
 // name changes use the explicit-save field and update the login's other seats.
-// Refusals restore the server value through the store. A name over the cap
-// stays typed and invalid, with the cap's sentence, until it is shortened.
+// The typed name is a draft against the name it began from (lib/savedDraft.ts):
+// a refused save keeps it, and a name changed elsewhere while it is typed
+// shows under it, and nothing saves until Use saved or Keep mine. A name over
+// the cap stays typed and invalid, with the cap's sentence, until it is
+// shortened.
 export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
   const canEdit = P.isAdmin()
-  const [v, setV] = useStateS(user.name)
-  useUpdateBlocker(canEdit && v !== user.name)
-  useUnsaved(canEdit && v !== user.name, 'name')
-  useEffectS(() => {
-    setV(user.name)
-  }, [user.name])
+  const draft = useSavedDraft(`${user.id}:name`, user.name, PERSON_NAME, 'name', !canEdit)
+  const v = draft.text
   // Measure the proportional text so adjacent identity chips stay close.
   const mirror = React.useRef<HTMLSpanElement>(null)
   const [w, setW] = useStateS(0)
@@ -50,21 +50,14 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
   }
   const commit = () => {
     const next = cleanName(v)
-    if (next === user.name) {
-      setV(user.name)
-      return
-    }
+    if (!next || draft.isSaved(next)) return draft.showSaved()
     if (overLimit(LIMITS.personName, next)) {
       window.showToast?.(limitSentence(LIMITS.personName), 'error')
       return
     }
-    if (!next) {
-      setV(user.name)
-      return
-    }
-    // a paused rename keeps the typed name
-    if (P.refusePausedEdit()) return
-    P.updateUser(user.id, { name: next })
+    // a conflict waits for Use saved or Keep mine; a paused rename keeps it
+    if (draft.conflict || P.refusePausedEdit()) return
+    P.updateUser(user.id, { name: next }, draft.save(next).as('name'))
     window.showToast?.(`${(user.isAgent ? 'Agent renamed to “' : 'Renamed to “') + next}”`)
   }
   const chips = (
@@ -97,47 +90,54 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
     )
   }
   return (
-    <div className="[display:flex] [align-items:center] [min-width:0]">
-      <span
-        ref={mirror}
-        aria-hidden="true"
-        style={{ ...nameFace }}
-        className="[position:absolute] [visibility:hidden] [white-space:pre] [pointer-events:none]"
-      >
-        {v || ' '}
-      </span>
-      <LimitedInput
-        limit={LIMITS.personName}
-        clean={cleanName}
-        value={v}
-        onChange={(e) => setV(e.target.value)}
-        data-user-name={user.id}
-        aria-label={`Display name for ${user.name}`}
-        spellCheck={false}
-        title={
-          user.isAgent
-            ? 'Rename this agent'
-            : isSelf
-              ? 'Renames you in this organization. Use Your preferences to change it across organizations.'
-              : `Rename ${user.name} in this organization`
-        }
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') e.currentTarget.blur()
-          if (e.key === 'Escape') {
-            setV(user.name)
-            e.currentTarget.blur()
+    <div className="min-w-0">
+      <div className="[display:flex] [align-items:center] [min-width:0]">
+        <span
+          ref={mirror}
+          aria-hidden="true"
+          style={{ ...nameFace }}
+          className="[position:absolute] [visibility:hidden] [white-space:pre] [pointer-events:none]"
+        >
+          {v || ' '}
+        </span>
+        <LimitedInput
+          limit={LIMITS.personName}
+          clean={cleanName}
+          value={v}
+          onChange={(e) => draft.edit(e.target.value)}
+          data-user-name={user.id}
+          aria-label={`Display name for ${user.name}`}
+          aria-describedby={draft.conflict ? draft.conflictId : undefined}
+          spellCheck={false}
+          title={
+            user.isAgent
+              ? 'Rename this agent'
+              : isSelf
+                ? 'Renames you in this organization. Use Your preferences to change it across organizations.'
+                : `Rename ${user.name} in this organization`
           }
-        }}
-        style={{ ...nameFace, width: Math.min(320, w + 13) }}
-        wrapperClassName="flex-[0_1_auto]"
-        // quiet until hovered (a hairline), and the standard active field look
-        // from tokens.css once it has focus — like every other text box
-        className="h-control-sm min-w-0 border-transparent bg-transparent px-[5px] py-0 text-ellipsis hover:border-border focus:bg-hover"
-      />
-      <span className="[font-size:var(--fs-base)] [font-weight:600] [white-space:nowrap]">
-        {chips}
-      </span>
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+            if (e.key === 'Escape') {
+              // rendered before the blur, whose save then finds nothing typed
+              flushSync(draft.discard)
+              e.currentTarget.blur()
+            }
+          }}
+          style={{ ...nameFace, width: Math.min(320, w + 13) }}
+          wrapperClassName="flex-[0_1_auto]"
+          // quiet until hovered (a hairline), and the standard active field look
+          // from tokens.css once it has focus — like every other text box
+          className="h-control-sm min-w-0 border-transparent bg-transparent px-[5px] py-0 text-ellipsis hover:border-border focus:bg-hover"
+        />
+        <span className="[font-size:var(--fs-base)] [font-weight:600] [white-space:nowrap]">
+          {chips}
+        </span>
+      </div>
+      <div className="pl-[5px]">
+        <DraftConflictLine draft={draft} text={(name) => name} compact />
+      </div>
     </div>
   )
 }
@@ -277,24 +277,22 @@ export function InviteOutcome({
 }
 
 // Only unclaimed invitations can change email. Claimed seats retain the
-// login address; empty, invalid or refused edits restore the saved value,
-// and an invalid or refused one says why (P.updateUser).
+// login address; empty or invalid edits restore the saved value, and an
+// invalid one says why (P.updateUser). The typed address is a draft against
+// the one it began from (lib/savedDraft.ts): the server's refusal keeps it,
+// and an address changed elsewhere while it is typed shows under it, and
+// nothing saves until Use saved or Keep mine.
 export function UserEmail({ user }: { user: UserVM }) {
   const canEdit = !DEMO_MODE && P.isAdmin() && user.pending
-  const [v, setV] = useStateS(user.email || '')
-  useUpdateBlocker(canEdit && v !== (user.email || ''))
-  useUnsaved(canEdit && v !== (user.email || ''), 'email')
-  useEffectS(() => {
-    setV(user.email || '')
-  }, [user.email])
+  const draft = useSavedDraft(`${user.id}:email`, user.email, EMAIL, 'email', !canEdit)
   // Addresses are stored as asciiEmail writes them, so an edit that only
   // changes case or writes the domain in Unicode changes nothing.
   const commit = () => {
-    const saved = user.email || ''
-    const next = v.trim()
-    if (next === '' || asciiEmail(next) === saved) setV(saved)
-    // a paused change keeps the typed address
-    else if (!P.refusePausedEdit() && !P.updateUser(user.id, { email: next })) setV(saved)
+    const next = draft.text.trim()
+    if (next === '' || draft.isSaved(next)) return draft.showSaved()
+    // a conflict waits for Use saved or Keep mine; a paused change keeps it
+    if (draft.conflict || P.refusePausedEdit()) return
+    if (!P.updateUser(user.id, { email: next }, draft.save(next).as('email'))) draft.discard()
   }
   if (!canEdit) {
     return (
@@ -310,35 +308,48 @@ export function UserEmail({ user }: { user: UserVM }) {
     )
   }
   return (
-    <div className="[display:flex] [align-items:center] [gap:6px]">
-      <Input
-        value={v}
-        onChange={(e) => setV(e.target.value)}
-        onBlur={commit}
-        data-user-email={user.id}
-        aria-label={`Email address for ${user.name}`}
-        type="email"
-        spellCheck={false}
-        autoCapitalize="off"
-        placeholder="Email address"
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') e.currentTarget.blur()
-          if (e.key === 'Escape') {
-            setV(user.email || '')
-            e.currentTarget.blur()
-          }
-        }}
-        className="h-control-xs min-w-0 flex-1 border-transparent bg-transparent px-[5px] py-0 font-sans text-sm text-text-1 hover:border-border focus:bg-hover"
-      />
-      <InviteLabel user={user} className="[flex-shrink:0]" />
+    <div className="min-w-0">
+      <div className="[display:flex] [align-items:center] [gap:6px]">
+        <Input
+          value={draft.text}
+          onChange={(e) => draft.edit(e.target.value)}
+          onBlur={commit}
+          data-user-email={user.id}
+          aria-label={`Email address for ${user.name}`}
+          aria-describedby={draft.conflict ? draft.conflictId : undefined}
+          type="email"
+          spellCheck={false}
+          autoCapitalize="off"
+          placeholder="Email address"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+            if (e.key === 'Escape') {
+              // rendered before the blur, whose save then finds nothing typed
+              flushSync(draft.discard)
+              e.currentTarget.blur()
+            }
+          }}
+          className="h-control-xs min-w-0 flex-1 border-transparent bg-transparent px-[5px] py-0 font-sans text-sm text-text-1 hover:border-border focus:bg-hover"
+        />
+        <InviteLabel user={user} className="[flex-shrink:0]" />
+      </div>
+      <div className="pl-[5px]">
+        <DraftConflictLine draft={draft} text={EMAIL.text} compact />
+      </div>
     </div>
   )
 }
 
+/** How the plannable hours field shows and compares hours: a seat that
+    stores none plans the default week. */
+const HOURS = wholeNumber<number | null>(DEFAULT_PLANNABLE_HOURS)
+
 // Capacity commits whole hours on blur (LIMITS.plannableHours); an empty edit
 // restores the saved value, and one outside the range stays typed and invalid
-// with the range's sentence. Team leaders may edit this field, not other
-// profile data.
+// with the range's sentence. The typed hours are a draft against the hours
+// they began from (lib/savedDraft.ts): hours changed elsewhere meanwhile show
+// under the field, and nothing saves until Use saved or Keep mine. Team
+// leaders may edit this field, not other profile data.
 export function PlannableHoursInput({
   user,
   canEdit,
@@ -348,13 +359,15 @@ export function PlannableHoursInput({
   canEdit: boolean
   width?: number
 }) {
-  // hours typed and not yet saved (the field saves on blur)
-  const hoursUnsaved = useFieldUnsaved(
-    P.editsPaused,
-    `${user.id}:${user.plannableHours ?? ''}`,
+  const draft = useSavedDraft(
+    `${user.id}:plannable_hours`,
+    user.plannableHours,
+    HOURS,
     'plannable hours',
+    !canEdit || user.isAgent,
   )
-  // a number refused on blur stays typed and marked until it changes
+  // a number refused on blur stays typed and marked until it changes, or
+  // its draft goes (Use saved, Discard)
   const [refused, setRefused] = useStateS(false)
   // Agents have unlimited capacity and cannot receive a weekly-hour value.
   if (user.isAgent) {
@@ -367,60 +380,63 @@ export function PlannableHoursInput({
       </span>
     )
   }
-  const stored = user.plannableHours || DEFAULT_PLANNABLE_HOURS
   const inputId = `plannable-hours-${user.id}`
+  const commit = () => {
+    const raw = draft.text.trim()
+    if (!raw || draft.isSaved(raw)) return draft.showSaved()
+    const h = wholeIn(LIMITS.plannableHours, raw)
+    if (h === null) {
+      setRefused(true)
+      window.showToast?.(limitSentence(LIMITS.plannableHours), 'error')
+      return
+    }
+    // a conflict waits for Use saved or Keep mine; a pause keeps the hours
+    if (draft.conflict || P.refusePausedEdit()) return
+    P.updateUser(user.id, { plannableHours: h }, draft.save(h).as('plannable_hours'))
+    window.showToast?.(`${user.name} plans ${h} h per week`)
+  }
   return (
-    <HoverTooltip
-      content={
-        canEdit
-          ? 'Weekly time for project work, excluding meetings and other commitments. Shared across projects.'
-          : 'Only an organization admin or one of this person’s team leaders can change these hours.'
-      }
-    >
-      <label
-        htmlFor={inputId}
-        style={{ cursor: canEdit ? 'text' : 'default' }}
-        className="[display:flex] [align-items:center] [gap:8px] [flex-shrink:0] [font-size:var(--fs-xs)] [color:var(--text-2)]"
+    <div className="flex max-w-[180px] shrink-0 flex-col items-end">
+      <HoverTooltip
+        content={
+          canEdit
+            ? 'Weekly time for project work, excluding meetings and other commitments. Shared across projects.'
+            : 'Only an organization admin or one of this person’s team leaders can change these hours.'
+        }
       >
-        <Input
-          id={inputId}
-          type="number"
-          min={LIMITS.plannableHours.min}
-          max={LIMITS.plannableHours.max}
-          step={1}
-          data-plannable-for={user.id}
-          aria-label={`Plannable hours per week for ${user.name}`}
-          aria-invalid={refused || undefined}
-          {...hoursUnsaved}
-          key={`ph${user.id}${stored}`}
-          defaultValue={stored}
-          disabled={!canEdit}
-          onChange={() => setRefused(false)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') e.currentTarget.blur()
-          }}
-          onBlur={(e) => {
-            const raw = e.target.value.trim()
-            if (!raw) {
-              e.target.value = String(stored)
-              return
-            }
-            const h = wholeIn(LIMITS.plannableHours, raw)
-            if (h === null) {
-              setRefused(true)
-              window.showToast?.(limitSentence(LIMITS.plannableHours), 'error')
-              return
-            }
-            if (h === stored || P.refusePausedEdit()) return
-            P.updateUser(user.id, { plannableHours: h })
-            window.showToast?.(`${user.name} plans ${h} h per week`)
-          }}
-          style={{ width, opacity: canEdit ? 1 : 0.55 }}
-          className="h-control-sm w-full bg-surface-1 px-1.5 text-right text-sm font-sans text-text-1"
-        />
-        h/wk
-      </label>
-    </HoverTooltip>
+        <label
+          htmlFor={inputId}
+          style={{ cursor: canEdit ? 'text' : 'default' }}
+          className="[display:flex] [align-items:center] [gap:8px] [flex-shrink:0] [font-size:var(--fs-xs)] [color:var(--text-2)]"
+        >
+          <Input
+            id={inputId}
+            type="number"
+            min={LIMITS.plannableHours.min}
+            max={LIMITS.plannableHours.max}
+            step={1}
+            data-plannable-for={user.id}
+            aria-label={`Plannable hours per week for ${user.name}`}
+            aria-invalid={(refused && draft.unsaved) || undefined}
+            aria-describedby={draft.conflict ? draft.conflictId : undefined}
+            value={draft.text}
+            disabled={!canEdit}
+            onChange={(e) => {
+              setRefused(false)
+              draft.edit(e.target.value)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+            }}
+            onBlur={commit}
+            style={{ width, opacity: canEdit ? 1 : 0.55 }}
+            className="h-control-sm w-full bg-surface-1 px-1.5 text-right text-sm font-sans text-text-1"
+          />
+          h/wk
+        </label>
+      </HoverTooltip>
+      <DraftConflictLine draft={draft} text={HOURS.text} compact end />
+    </div>
   )
 }
 

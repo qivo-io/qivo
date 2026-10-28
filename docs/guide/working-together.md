@@ -77,6 +77,20 @@ says so.
 - New tasks and other new records are not checked, because nobody else can
   have changed them yet.
 
+The settings fields keep your text the same way while you edit them: the
+organization's name, address, attachment size and default plannable hours,
+**Your name**, a person's name and plannable hours and an invitation's email
+address in **Organization → Users**, a team's name and its members' hours,
+and a project's name and description. If someone changes the same setting while
+you type, your text stays and a line under the field says what it was
+changed to, such as **Changed elsewhere to “Northstar Labs”.** It does not
+say who made the change. The field saves nothing until you choose **Use
+saved**, which shows the saved value, or **Keep mine**, after which your
+next save replaces it. Someone else's change to another setting leaves your
+text alone. A save that fails for another reason keeps your text too,
+unsaved, so you can correct it and save again. An invitation address Qivo
+cannot use goes back to the saved one instead.
+
 An edit that was waiting to save when your connection dropped is checked
 when it reaches Qivo. If someone changed the same field of a task or a
 comment in the meantime, the notice says they changed it **while you were

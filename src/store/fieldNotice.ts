@@ -13,6 +13,9 @@ export type Refusal = {
   deletes?: boolean
   /** The draft stays in its editor, so the person can save it again. */
   kept?: boolean
+  /** The kept draft is a settings field's (lib/savedDraft.ts), which saves
+      over the other change only once the person chooses Keep mine. */
+  keepMine?: boolean
   /** How many Roadmap changes the refused batch held. */
   batch?: number
   /** How many of the person's changes this one notice line stands for,
@@ -119,6 +122,14 @@ function fieldWords(changes: readonly FieldChange[]): string[] {
   return words
 }
 
+/** Who wrote the values a refusal's `changes` found: one writer for them
+    all, or null when they name none or several. */
+export function refusalWriter(changes: readonly FieldChange[], look: Lookup): Writer {
+  const people = new Set(changes.map((c) => c.by))
+  const by = people.size === 1 ? (changes[0]?.by ?? null) : null
+  return by === null ? null : look.writer(by)
+}
+
 /** The one line a notice shows for refusal `r`. */
 export function refusalLine(r: Refusal, look: Lookup): string {
   const first = r.changes[0]
@@ -130,9 +141,7 @@ export function refusalLine(r: Refusal, look: Lookup): string {
   // one record per refusal: the server refuses the first record that conflicts
   const words = fieldWords(r.changes.filter((c) => c.id === first.id && c.of === first.of))
   const whole = WHOLE.has(first.record)
-  const people = new Set(r.changes.map((c) => c.by))
-  const by = people.size === 1 ? first.by : null
-  const writer = by === null ? null : look.writer(by)
+  const writer = refusalWriter(r.changes, look)
   const what = whole ? record : `the ${listed(words)} of ${record}`
   const offline = r.offline ? ' while you were offline' : ''
   const changed =
@@ -144,7 +153,9 @@ export function refusalLine(r: Refusal, look: Lookup): string {
   const tail = r.deletes
     ? `Check it before you ${verb} it again.`
     : r.kept
-      ? 'Your text is still in the editor. Save again to replace their version.'
+      ? r.keepMine
+        ? 'Your text is still in the field. Choose Keep mine under it to replace their version.'
+        : 'Your text is still in the editor. Save again to replace their version.'
       : r.batch !== undefined && r.batch > 1
         ? `None of the ${r.batch} roadmap changes were saved.`
         : writer === 'you'

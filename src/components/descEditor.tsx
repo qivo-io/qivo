@@ -324,7 +324,8 @@ export type DescEditorHandle = {
 export type DraftKeep = {
   seen: string
   keepDraft: (shown: unknown) => boolean
-  /** For any other refusal: the draft stays unsaved against `seen`. */
+  /** For any other refusal or failure: the draft stays unsaved against
+      `seen`. */
   keepUnsaved: () => void
 }
 
@@ -830,7 +831,8 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       return true
     },
     // a refusal for any other reason, such as an image the server refuses,
-    // puts back the baseline the save had moved, so the draft is unsaved
+    // or a failure, such as a server fault, puts back the baseline the save
+    // had moved, so the draft is unsaved
     // again; a later change by someone else still refuses the next save
     keepUnsaved: () => {
       if (ed.isDestroyed) return

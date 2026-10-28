@@ -6,9 +6,10 @@ import { LimitedInput } from '../../components/LimitedField'
 import { Avatar, type AvatarSize, Icon, MenuItem, Popover } from '../../components/qivo'
 import { SettingsField } from '../../components/settingsPage'
 import { cleanName, overLimit } from '../../lib/fieldLimits'
-import { useUnsaved } from '../../lib/leaveGuard'
+import { PERSON_NAME, useSavedDraft } from '../../lib/savedDraft'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { P, type ToastTone, type UserVM } from '../../store/planner'
+import { DraftConflictLine } from './controls'
 
 // Account owners and organization admins share the same avatar controls.
 function useAvatarUpload(user: UserVM) {
@@ -129,27 +130,31 @@ export function AvatarField({ user }: { user: UserVM }) {
 }
 
 // An explicit save reports refusals inline and updates the name across seats.
-export function NameField({ me }: { me: Pick<UserVM, 'name'> }) {
-  const [v, setV] = useState(me.name)
+// A draft stays against the name it began from (lib/savedDraft.ts), and Save
+// waits while a name changed elsewhere shows under the field.
+export function NameField({ me }: { me: Pick<UserVM, 'id' | 'name'> }) {
+  const draft = useSavedDraft(`${me.id}:name`, me.name, PERSON_NAME, 'name')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  useEffect(() => {
-    setV(me.name)
-    setErr('')
-  }, [me.name])
+  // a refusal was about the name it found; a new one makes it old news
+  useEffect(() => setErr(''), [me.name])
   // compared as the store will save it, with runs of spaces collapsed
-  const next = cleanName(v)
-  const dirty = next !== me.name
+  const next = cleanName(draft.text)
+  const changed = !draft.isSaved(next)
   const tooLong = overLimit(LIMITS.personName, next)
-  useUpdateBlocker(dirty || busy)
-  useUnsaved(dirty, 'name')
+  useUpdateBlocker(busy)
   const save = async () => {
-    if (busy || !dirty || tooLong) return
+    if (busy || !changed || tooLong || draft.conflict) return
     setBusy(true)
-    const e = await P.setDisplayName(next)
+    const saving = draft.save(next)
+    const e = await P.setDisplayName(next, saving.as('name'))
     setBusy(false)
     setErr(e || '')
-    if (!e) window.showToast?.(`You are now “${next}”`)
+    if (e) saving.refused()
+    else {
+      saving.accepted()
+      window.showToast?.(`You are now “${next}”`)
+    }
   }
   return (
     <SettingsField label="Your name" width={470}>
@@ -157,17 +162,19 @@ export function NameField({ me }: { me: Pick<UserVM, 'name'> }) {
         <LimitedInput
           limit={LIMITS.personName}
           clean={cleanName}
-          value={v}
+          value={draft.text}
           data-account-name
+          aria-label="Your name"
+          aria-describedby={draft.conflict ? draft.conflictId : undefined}
           placeholder="Your name"
           autoComplete="name"
           onChange={(e) => {
-            setV(e.target.value)
+            draft.edit(e.target.value)
             setErr('')
           }}
           // show the saved name again when only spaces differ
           onBlur={() => {
-            if (!dirty) setV(me.name)
+            if (!changed) draft.showSaved()
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
@@ -175,7 +182,7 @@ export function NameField({ me }: { me: Pick<UserVM, 'name'> }) {
               void save()
             }
             if (e.key === 'Escape') {
-              setV(me.name)
+              draft.discard()
               setErr('')
             }
           }}
@@ -185,13 +192,17 @@ export function NameField({ me }: { me: Pick<UserVM, 'name'> }) {
         <Button
           type="button"
           data-account-name-save
-          disabled={busy || !dirty || tooLong}
+          disabled={busy || !changed || tooLong || !!draft.conflict}
           onClick={() => void save()}
         >
           {busy ? 'Saving…' : 'Save'}
         </Button>
       </div>
-      {err && (
+      {/* a choice ends the refusal the conflict answered */}
+      <DraftConflictLine draft={draft} text={(name) => name} onChoose={() => setErr('')} />
+      {/* a refusal is about the draft it kept, and the conflict line says
+          what it would, with Use saved and Keep mine */}
+      {err && draft.unsaved && !draft.conflict && (
         <div
           data-account-name-error
           className="[font-size:var(--fs-sm)] [color:var(--danger)] [margin-top:8px] [line-height:1.5]"

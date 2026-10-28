@@ -126,7 +126,13 @@ import { type UnconfirmedChange, unconfirmedNote, unconfirmedText } from '../lib
 import { beginUpdateBlock } from '../lib/updateSafety'
 import { committedByWeek, DEFAULT_PLANNABLE_HOURS, plannableHoursOf } from '../lib/workload'
 import { createEntityLookup } from './entityLookup'
-import { type Refusal as FieldRefusal, noticeText, refusalLine, type Writer } from './fieldNotice'
+import {
+  type Refusal as FieldRefusal,
+  noticeText,
+  refusalLine,
+  refusalWriter,
+  type Writer,
+} from './fieldNotice'
 import {
   createLayers,
   type Layer,
@@ -1394,17 +1400,20 @@ type SendOptions<R> = {
       `expected` (expectedOf). */
   over?: Over
   /** How the notice of a field_changed refusal reads (store/fieldNotice.ts):
-      a delete, or a Roadmap batch of this many changes. */
-  notice?: { deletes?: boolean; batch?: number }
+      a delete, a Roadmap batch of this many changes, or a settings field's
+      kept draft, which saves again only after Keep mine. */
+  notice?: { deletes?: boolean; batch?: number; keepMine?: boolean }
   /** Runs on a field_changed refusal once the paint has gone, for an
       editor that keeps the person's draft, with the value of the write's
-      first `over` field now on screen. It answers false when the editor
-      has moved on and keeps nothing, and true when it keeps the draft,
-      which the notice that shows after it then says. */
-  keepDraft?: (shown: unknown) => boolean
-  /** Runs on any other refusal from the server, after its toast, for an
-      editor that then keeps the refused draft unsaved against the text it
-      began from, such as a description whose image the server refuses. */
+      first `over` field now on screen and who wrote the value the server
+      keeps (refusalWriter). It answers false when the editor has moved on
+      and keeps nothing, and true when it keeps the draft, which the notice
+      that shows after it then says. */
+  keepDraft?: (shown: unknown, by: Writer) => boolean
+  /** Runs when the sent write fails for any other reason, after its toast,
+      for an editor that then keeps the draft unsaved against the text it
+      began from: a refusal from the server, such as a description whose
+      image it refuses, or an error, such as a server fault. */
   keepUnsaved?: () => void
 }
 
@@ -1546,16 +1555,17 @@ function start<M extends FunctionReference<'mutation'>, T>(
           // server keeps and the notice says whether the draft stayed
           guarded(() => settleRefused(layer))
           let kept = false
-          if (o.keepDraft) guarded(() => (kept = o.keepDraft?.(shownOf(o.over)) !== false))
+          const by = refusalWriter(errData(error).changes ?? [], fieldLookup)
+          if (o.keepDraft) guarded(() => (kept = o.keepDraft?.(shownOf(o.over), by) !== false))
           fieldRefusals.set(error, { layer, kept, ...o.notice })
           guarded(() => onError?.(error))
         } else {
           guarded(() => onError?.(error))
           guarded(() => settleRefused(layer))
           guarded(() => countAfterRefusal(error))
-          // a refused draft stays, unsaved, rather than reading as saved
-          // and giving way to the stored text once its editor blurs
-          if (o.keepUnsaved && error instanceof ConvexError) guarded(() => o.keepUnsaved?.())
+          // a refused or failed draft stays, unsaved, rather than reading as
+          // saved and giving way to the stored text once its editor blurs
+          if (o.keepUnsaved) guarded(() => o.keepUnsaved?.())
         }
         guarded(() => o.onSettled?.())
       }
@@ -2305,6 +2315,7 @@ type FieldRefusalContext = {
   kept: boolean
   deletes?: boolean
   batch?: number
+  keepMine?: boolean
 }
 const fieldRefusals = new WeakMap<object, FieldRefusalContext>()
 
@@ -2396,6 +2407,7 @@ function noticeFieldChanged(e: unknown) {
           (line) =>
             line !== undefined &&
             !!line.refusal.kept === !!context?.kept &&
+            !!line.refusal.keepMine === !!context?.keepMine &&
             !!line.refusal.deletes === !!context?.deletes,
         )
     : undefined
@@ -2419,6 +2431,7 @@ function noticeFieldChanged(e: unknown) {
       count: 1,
       seenName,
       kept: context?.kept,
+      keepMine: context?.keepMine,
       deletes: context?.deletes,
       batch: context?.batch,
       offline: changedWhileOffline(e, changes),
@@ -2430,10 +2443,24 @@ function noticeFieldChanged(e: unknown) {
   showFieldNotice(box)
 }
 
-/** The sentence for field_changed refusal `e` of a field whose input keeps
-    the person's text, shown beside the field rather than as a notice. */
+/** The sentence for field_changed refusal `e` of a settings field that keeps
+    the person's text until they choose Keep mine, shown beside the field
+    rather than as a notice. */
 function keptFieldText(e: unknown): string {
-  return refusalLine({ changes: errData(e).changes ?? [], count: 1, kept: true }, fieldLookup)
+  return refusalLine(
+    { changes: errData(e).changes ?? [], count: 1, kept: true, keepMine: true },
+    fieldLookup,
+  )
+}
+
+/** Runs `save.keepDraft` for a write the store awaited without a paint
+    (setDisplayName, setOrgSlug) when the server refused it with
+    field_changed, with the value now on screen and who wrote the one the
+    server keeps, as send() does for a painted write. */
+function keepAwaitedDraft(e: unknown, save: FieldSave, shown: unknown) {
+  if (errData(e).reason !== FIELD_CHANGED || !save.keepDraft) return
+  const by = refusalWriter(errData(e).changes ?? [], fieldLookup)
+  guarded(() => save.keepDraft?.(shown, by))
 }
 
 function rememberRefused(layerId: number, line: FieldNoticeLine) {
@@ -4185,16 +4212,20 @@ function overOf(
 }
 
 /** The value on screen of `over`'s first field, for a kept draft
-    (SendOptions.keepDraft): a task's or a comment's. */
+    (SendOptions.keepDraft): a task's, a comment's, or a settings field's
+    organization, team, project or person. */
 function shownOf(over: Over | undefined): unknown {
   const field = over && Object.keys(over.fields)[0]
   if (!over || !field) return undefined
-  const row =
-    over.table === 'issues'
-      ? rows.issues.get(over.id)
-      : over.table === 'comments'
-        ? rows.comments.get(over.id)
-        : undefined
+  const table: Partial<Record<string, { get: (id: string) => object | undefined }>> = {
+    issues: rows.issues,
+    comments: rows.comments,
+    organizations: rows.orgs,
+    teams: rows.teams,
+    projects: rows.projects,
+    profiles: rows.profiles,
+  }
+  const row = table[over.table]?.get(over.id)
   return row ? Object.entries(row).find(([key]) => key === field)?.[1] : undefined
 }
 
@@ -4287,6 +4318,24 @@ export type UserPatch = Partial<{
   plannableHours: number | string
   canCreateProjects: boolean
 }>
+/** What a settings field gives a save of its draft (lib/savedDraft.ts).
+    `seen` holds the values the draft began from, by the row's field names,
+    such as `max_attachment_mb`, which go out as the write's `expected` in
+    place of the row on screen. keepDraft and keepUnsaved run when a sent
+    save fails (SendOptions). Without them a save checks the values on screen. */
+export type FieldSave = {
+  seen?: Record<string, unknown>
+  keepDraft?: SendOptions<unknown>['keepDraft']
+  keepUnsaved?: () => void
+}
+
+/** The send() options of settings field save `save`: its callbacks, and for
+    a field that keeps its draft the notice that asks for Keep mine. */
+const fieldSendOptions = (save: FieldSave) => ({
+  keepDraft: save.keepDraft,
+  keepUnsaved: save.keepUnsaved,
+  ...(save.keepDraft ? { notice: { keepMine: true } } : {}),
+})
 /** What a new personal token may do and the instant it stops working (UTC
     ISO 8601). Both are fixed when it is created; no expiresAt means never. */
 export type McpTokenChoice = {
@@ -5766,7 +5815,7 @@ export const PLANNER = {
      the person began, by wire field, in place of the row on screen, and
      `opts.keepDraft` runs when the server refuses because someone changed
      the field first and the editor keeps the draft, and `opts.keepUnsaved`
-     when it refuses for any other reason (SendOptions.keepUnsaved). */
+     when the save fails for any other reason (SendOptions.keepUnsaved). */
   updateIssue: (
     id: string,
     patch: IssuePatch,
@@ -7258,8 +7307,10 @@ export const PLANNER = {
      in front of the person who made it); the server RETURNS the rule
      sentence rather than throwing it, and the snapshot delivery repaints
      every seat — no manual fan-out echo. Returns an error string, or null
-     when it landed. */
-  setDisplayName: async (name: string): Promise<string | null> => {
+     when it landed. `save.seen.name` is the name the field's draft began
+     from, sent as the one seen, and `save.keepDraft` runs on a
+     field_changed refusal (FieldSave). */
+  setDisplayName: async (name: string, save: FieldSave = {}): Promise<string | null> => {
     const me = rows.profiles.get(CURRENT_USER)
     if (!me) return 'You are not signed in'
     // collapse runs of whitespace as well as trimming, exactly as the server
@@ -7269,12 +7320,15 @@ export const PLANNER = {
     if (overText(LIMITS.personName, next)) return limitSentence(LIMITS.personName)
     if (next === me.name) return null
     let sentence: string | null
+    const epoch = storeEpoch
     try {
       // the name this seat shows: another seat of the person may differ
-      const expected = { profile_id: me.id, name: me.name }
+      const seen = typeof save.seen?.name === 'string' ? save.seen.name : me.name
+      const expected = { profile_id: me.id, name: seen }
       sentence = await sendAwaited(api.profiles.setDisplayName, { name: next, expected }, 'none')
     } catch (e) {
       console.error('[qivo] rename failed:', e)
+      if (epoch === storeEpoch) keepAwaitedDraft(e, save, rows.profiles.get(me.id)?.name)
       if (errData(e).reason === FIELD_CHANGED) return keptFieldText(e)
       return refusedAsPaused(e) ? refusalPauseText(e) : 'That name could not be saved'
     }
@@ -7573,8 +7627,9 @@ export const PLANNER = {
   /* Paints the change at once and sends it. Resolves true when the server
      accepts it or nothing needed sending, false when it is missing here or
      refused by the server (toasted). Access changes one grant at a time
-     (setProjectAccess, setProjectTeamAccess, removeAccess). */
-  updateProject: (id: string, patch: ProjectPatch): Promise<boolean> => {
+     (setProjectAccess, setProjectTeamAccess, removeAccess). `save` is a
+     settings field's draft (FieldSave). */
+  updateProject: (id: string, patch: ProjectPatch, save: FieldSave = {}): Promise<boolean> => {
     const row = rows.projects.get(id)
     if (!row || refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseOver(LIMITS.projectName, patch.name ?? ''))
@@ -7614,7 +7669,8 @@ export const PLANNER = {
       },
     }
     return send(api.projects.update, { org_id: row.org_id, id, patch: wire }, view, {
-      over: overOf('projects', row, Object.keys(db)),
+      over: overOf('projects', row, Object.keys(db), save.seen),
+      ...fieldSendOptions(save),
     })
   },
 
@@ -7767,8 +7823,13 @@ export const PLANNER = {
      takes the sentence of a refused first day of the week, the milestones
      that would share a week or that the server could not check them all
      (WEEK_START_REFUSALS), and answers whether it showed it; one it did
-     not show, as its field has gone, is toasted. */
-  setOrg: (patch: OrgPatch, weekStartRefused?: (sentence: string) => boolean): Promise<boolean> => {
+     not show, as its field has gone, is toasted. `save` is a settings
+     field's draft (FieldSave). */
+  setOrg: (
+    patch: OrgPatch,
+    weekStartRefused?: (sentence: string) => boolean,
+    save: FieldSave = {},
+  ): Promise<boolean> => {
     const org = homeRow()
     if (!org || refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseOver(LIMITS.orgName, patch.name ?? ''))
@@ -7810,8 +7871,14 @@ export const PLANNER = {
         if (live) Object.assign(live, wire)
       },
     }
+    // the field shows the default limit for an organization that stores
+    // none (shapeOrg), so a limit seen that reads as the stored one is it
+    const seen = { ...save.seen }
+    if (seen.max_attachment_mb === (org.max_attachment_mb ?? LIMITS.attachmentSize.max))
+      seen.max_attachment_mb = org.max_attachment_mb
     return send(api.orgs.update, { org_id: orgId, patch: wire }, view, {
-      over: overOf('organizations', org, Object.keys(wire)),
+      over: overOf('organizations', org, Object.keys(wire), seen),
+      ...fieldSendOptions(save),
       ...(weekStartRefused && {
         onError: (error: unknown) => {
           const d = errData(error)
@@ -7830,8 +7897,10 @@ export const PLANNER = {
       slug the server never accepted. The refusal taxonomy — taken /
       reserved / malformed — survives as sentences via ConvexError
       {code:'conflict', reason}; the FORMAT rule is mirrored here so the
-      obvious typo answers without a round trip. */
-  setOrgSlug: async (next: string): Promise<string | null> => {
+      obvious typo answers without a round trip. `save.seen.slug` is the
+      address the field's draft began from, sent as the one seen, and
+      `save.keepDraft` runs on a field_changed refusal (FieldSave). */
+  setOrgSlug: async (next: string, save: FieldSave = {}): Promise<string | null> => {
     const org = homeRow()
     if (!org) return 'Only an organization you belong to has an address'
     const slug = String(next || '')
@@ -7841,12 +7910,14 @@ export const PLANNER = {
     if (slug === org.slug) return null
     if (overText(LIMITS.slug, slug) || !SLUG_SHAPE.test(slug)) return limitSentence(LIMITS.slug)
     const orgId = org.id
+    const seen = typeof save.seen?.slug === 'string' ? save.seen.slug : org.slug
+    const epoch = storeEpoch
     try {
       // the accepted address paints now, so the address-bar sync moves now
       // rather than a delivery later
       await sendAwaited(
         api.orgs.setSlug,
-        { org_id: orgId, slug, expected: { slug: org.slug } },
+        { org_id: orgId, slug, expected: { slug: seen } },
         'none',
         {
           keep: () => ({
@@ -7859,6 +7930,7 @@ export const PLANNER = {
       )
     } catch (e) {
       console.error('[qivo] slug change failed:', e)
+      if (epoch === storeEpoch) keepAwaitedDraft(e, save, rows.orgs.get(orgId)?.slug)
       return slugErrorText(e)
     }
     return null
@@ -7890,8 +7962,9 @@ export const PLANNER = {
   /** Paints the change at once and resolves whether the server saved it.
       Resolves false without sending when it refused the change first
       (toasted) or the team is missing here, and false after a refusal,
-      which is toasted and taken back. */
-  updateTeam: (id: string, patch: TeamPatch): Promise<boolean> => {
+      which is toasted and taken back. `save` is a settings field's draft
+      (FieldSave). */
+  updateTeam: (id: string, patch: TeamPatch, save: FieldSave = {}): Promise<boolean> => {
     const row = rows.teams.get(id)
     if (!row || refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseOver(LIMITS.teamName, patch.name ?? ''))
@@ -7907,7 +7980,8 @@ export const PLANNER = {
       },
     }
     return send(api.teams.update, { org_id: row.org_id, id, patch: wire }, view, {
-      over: overOf('teams', row, Object.keys(wire)),
+      over: overOf('teams', row, Object.keys(wire), save.seen),
+      ...fieldSendOptions(save),
     })
   },
 
@@ -8037,8 +8111,9 @@ export const PLANNER = {
 
   /** Applies an admin's edit to one seat. Returns false when a client
       rule refused the whole patch (with a toast), so an inline editor can
-      put the stored value back. */
-  updateUser: (id: string, patch: UserPatch): boolean => {
+      put the stored value back. `save` is a settings field's draft
+      (FieldSave), for each write the patch makes. */
+  updateUser: (id: string, patch: UserPatch, save: FieldSave = {}): boolean => {
     const row = rows.profiles.get(id)
     // deactivation alone only takes access away, so it goes on while paused,
     // unless every seat is gone
@@ -8103,7 +8178,10 @@ export const PLANNER = {
         api.profiles.setPlannableHours,
         { org_id: row.org_id, profile_id: id, hours: h },
         hours,
-        { over: overOf('profiles', row, ['plannable_hours']) },
+        {
+          over: overOf('profiles', row, ['plannable_hours'], save.seen),
+          ...fieldSendOptions(save),
+        },
       )
     }
     const db: Partial<Row<'profiles'>> = {}
@@ -8179,12 +8257,10 @@ export const PLANNER = {
     else if (Object.keys(wire).length) {
       // teams is a list the server diffs, not a field the check compares
       const checked = Object.keys(wire).filter((key) => key !== 'teams')
-      void send(
-        api.profiles.update,
-        { org_id: row.org_id, id, patch: wire },
-        view,
-        checked.length ? { over: overOf('profiles', row, checked) } : {},
-      )
+      void send(api.profiles.update, { org_id: row.org_id, id, patch: wire }, view, {
+        ...(checked.length ? { over: overOf('profiles', row, checked, save.seen) } : {}),
+        ...fieldSendOptions(save),
+      })
     }
     return true
   },
