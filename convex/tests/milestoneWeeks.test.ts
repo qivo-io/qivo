@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { MARKETING_DEMO, marketingWeek } from '../internal/marketingDemoData'
-import { PROJECT_MOST } from '../internal/milestoneWeeks'
+import { PROJECT_MOST, ROOM } from '../internal/milestoneWeeks'
 import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { milestoneWeekTaken, WEEK_START_REFUSALS } from '../lib/limits'
@@ -850,6 +850,89 @@ describe('the activation audit', () => {
     expect(report.counts.duplicate_week + report.counts.sub_project).toBe(2)
     await t.run((ctx) => ctx.db.patch(item._id, { state: 'stuck' }))
     expect((await audit(t)).findings).toEqual([])
+  })
+
+  it('counts each row of a project that is moving to Deleted items once', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plant(t, f.meta.id, '2026-05-04')
+    await plant(t, f.meta.id, '2026-05-06')
+    Object.assign(TRASH_BUDGET, { rows: 1 })
+    await deleteProject(t, f, f.meta.id)
+    const item = await itemFor(t, f.meta.id)
+    expect(item.state).toBe('moving')
+    const report = await audit(t)
+    expect(report.checked).toBe(2)
+    expect(report.counts.duplicate_week).toBe(1)
+    expect(report.findings[0]).toMatchObject({ kind: 'duplicate_week', item_id: item.id })
+  })
+
+  it('leaves a project a restore has revealed to the live phase', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plant(t, f.meta.id, '2026-05-04')
+    await plant(t, f.meta.id, '2026-05-06')
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    await revealed(t, (await itemFor(t, f.meta.id))._id)
+    const report = await audit(t)
+    expect(report.checked).toBe(2)
+    expect(report.findings).toEqual([
+      expect.objectContaining({ kind: 'duplicate_week', project_id: f.meta.id }),
+    ])
+    expect(report.findings[0].item_id).toBeUndefined()
+  })
+
+  it('pages the deleted phase between items and within one, and finds the same', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plant(t, f.meta.id, '2026-05-04')
+    await plant(t, f.meta.id, '2026-05-06')
+    await plant(t, f.sub.id, '2026-05-04')
+    await plant(t, f.sub2.id, '2026-05-11')
+    await plant(t, f.hidden.id, '2026-06-01')
+    await plant(t, f.hidden.id, '2026-06-07')
+    await deleteProject(t, f, f.meta.id)
+    await deleteProject(t, f, f.hidden.id)
+    await runSteps(t)
+    const whole = await t.query(internal.internal.milestoneWeeks.check, { phase: 'deleted' })
+    expect(whole.done).toBe(true)
+    expect(whole.checked).toBe(6)
+    expect(whole.findings.map((x) => x.kind).sort()).toEqual([
+      'duplicate_week',
+      'duplicate_week',
+      'sub_project',
+      'sub_project',
+    ])
+    // with no room, each page reads one project, and its cursor can point
+    // into an item
+    const cursors: string[] = []
+    const found: typeof whole.findings = []
+    let checked = 0
+    ROOM.share = 0
+    try {
+      let cursor: string | null = null
+      for (let page = 0; page < 20; page++) {
+        const result: typeof whole = await t.query(internal.internal.milestoneWeeks.check, {
+          phase: 'deleted',
+          cursor,
+        })
+        found.push(...result.findings)
+        checked += result.checked
+        if (result.done) break
+        cursors.push(result.cursor)
+        cursor = result.cursor
+      }
+    } finally {
+      ROOM.share = 0.5
+    }
+    expect(cursors.some((cursor) => cursor.includes('#'))).toBe(true)
+    expect(checked).toBe(whole.checked)
+    expect(found).toHaveLength(whole.findings.length)
+    expect(found).toEqual(expect.arrayContaining(whole.findings))
+    // one item a page finds the same too
+    const paged = await audit(t, 1)
+    expect(paged.findings).toHaveLength(whole.findings.length)
   })
 
   it('reports nothing for milestones the rule allows', async () => {

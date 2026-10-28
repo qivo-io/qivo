@@ -1,9 +1,9 @@
-/* Read-only activation check of the weekly milestone rule
- * (LIMITS.milestonesPerWeek, model/milestones.ts assertWeekFree). The rule
- * makes no exception for rows stored before it, so every deployment that
- * holds data is checked, and activation stops on any finding until the
- * owner decides how to resolve it. Nothing here writes, deletes, merges or
- * moves a milestone, and there is no fix.
+/* Read-only check of the rows stored before the weekly milestone rule
+ * (LIMITS.milestonesPerWeek, model/milestones.ts assertWeekFree) that break
+ * it. The rule makes no exception for them, so every deployment that holds
+ * data is checked once the rule is on, and the owner decides how to resolve
+ * each finding. Nothing here writes, deletes, merges or moves a milestone,
+ * and there is no fix.
  *
  * It finds, among live milestones and the copies Deleted items keeps of a
  * deleted project's milestones (deleted_rows), which a restore writes back
@@ -34,15 +34,17 @@
  * restore has written back. A finding names ids, days and weeks, never a
  * name.
  *
- * Run it only with the owner's approval, on every deployment that holds
- * data (branch previews included), after the deploy that adds the
- * by_project_week index, and again right after the release that turns the
- * rule on reaches it. `check` is a query, so it cannot write, and a key that
- * may only run internal queries can run it. It reports one page of one
- * phase: start with `{"phase": "live"}`, pass the returned `cursor` back
- * until `done` is true, then do the same for `"deleted"`. `run` walks every
- * page of both phases and answers the counts and the first FINDINGS_MOST
- * findings. With the private helper:
+ * The check ships in the release that turns the rule on. The owner has
+ * approved these releases and has said that no deployment holds real user
+ * data. Right after the release deploys to a deployment that holds data
+ * (staging, the demo, production, a branch preview that keeps data), run the
+ * check there through the private helpers and report every finding to the
+ * owner. `check` is a query, so it cannot write, and a key that may only run
+ * internal queries can run it. It reports one page of one phase. Start with
+ * `{"phase": "live"}`, pass the returned `cursor` back until `done` is true,
+ * then do the same for `"deleted"`. `run` walks every page of both phases
+ * and answers the counts and the first FINDINGS_MOST findings. With the
+ * private helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/milestoneWeeks:check '{"phase": "live"}'
  *   "$H" staging npx convex run internal/milestoneWeeks:run '{}'
@@ -54,7 +56,10 @@
  * an internal action, deployment:functions:runInternalActions.
  *
  * Each page reads in its own transaction, so a milestone written between
- * two pages can be missed or seen twice; run it again after a change. */
+ * two pages can be missed or seen twice; run it again after a change. A
+ * page reads at most PROJECT_MOST + 1 rows of each kind for one project, and
+ * looks at its room before each project, so its cursor can point into a
+ * Deleted items item with many projects. */
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -66,16 +71,18 @@ import { isCalendarDay } from '../model/taskValues'
 
 /** The milestones the `live` phase reads a page, and the project items of
  * Deleted items the `deleted` phase does. A page ends at a project or an
- * item, or sooner at ROOM. `page_size` lowers them, for tests. */
+ * item, or sooner at ROOM.share. `page_size` lowers them, for tests. */
 const PAGE = { live: 2_000, deleted: 100 }
 
-/* The share of Convex's limits for one transaction a page uses before it
- * ends at the next project or item. One item reads at most two ranges for
- * each of its LIMITS.projectDeleteSubProjects.max + 1 projects. */
-const ROOM = 0.5
+/** The share of Convex's limits for one transaction a page uses before it
+ * ends at the next project. One project reads at most PROJECT_MOST + 1 live
+ * rows and as many Deleted items copies, about 3 MiB, so a page stays inside
+ * the limits past its room. Tests lower it. */
+export const ROOM = { share: 0.5 }
 
-/** The most milestones of one project a page reads, about 1 MiB. A project
- * with more is reported as `unchecked`. */
+/** The most milestones of one project a page reads, live rows and Deleted
+ * items copies together, about 1 MiB. A project with more is reported as
+ * `unchecked`. */
 export const PROJECT_MOST = 2_000
 
 /** The most findings `run` lists. It counts every one. */
@@ -167,27 +174,31 @@ async function livePage(ctx: QueryCtx, cursor: string | null, size: number): Pro
     }
     return org
   }
+  // the milestones the page read, and those it judged
+  let read = 0
   let checked = 0
   // the findings of one project's milestones, all of them
   const judge = async (rows: Doc<'milestones'>[]) => {
-    checked += rows.length
+    read += rows.length
     const projectId = rows[0].project_id
     const project = await byId(ctx, 'projects', projectId)
     if (project === null) {
-      // a project in Deleted items: the deleted phase reads its rows
+      // a project in Deleted items, whose rows the deleted phase judges
       const held = await ctx.db
         .query('deleted_rows')
         .withIndex('by_row', (q) => q.eq('table', 'projects').eq('row_id', projectId))
         .first()
-      if (held === null)
-        findings.push({
-          kind: 'orphan',
-          org_id: null,
-          project_id: projectId,
-          milestones: listed(rows),
-        })
+      if (held !== null) return
+      checked += rows.length
+      findings.push({
+        kind: 'orphan',
+        org_id: null,
+        project_id: projectId,
+        milestones: listed(rows),
+      })
       return
     }
+    checked += rows.length
     if (project.parent_id !== undefined) {
       findings.push({
         kind: 'sub_project',
@@ -218,7 +229,7 @@ async function livePage(ctx: QueryCtx, cursor: string | null, size: number): Pro
       await judge(group)
       const last = group[0].project_id
       group = []
-      if (checked >= size || (await usedMoreThan(ctx, ROOM)))
+      if (read >= size || (await usedMoreThan(ctx, ROOM.share)))
         return { findings, checked, cursor: last, done: false }
     }
     group.push(row)
@@ -237,39 +248,67 @@ async function livePage(ctx: QueryCtx, cursor: string | null, size: number): Pro
   return { findings, checked, cursor: '', done: true }
 }
 
-/* One page of the deleted phase: the project items after `cursor`, an item
- * id, in id order. */
+/* Where a deleted-phase page starts, after item `after`, or at project
+ * `from` of it when the room ran out within it (a cursor `<item id>#<n>`). */
+function deletedStart(cursor: string | null): { after: string | null; from: number | null } {
+  if (cursor === null || cursor === '') return { after: null, from: null }
+  const [after, at] = cursor.split('#')
+  return { after, from: at === undefined ? null : Number(at) }
+}
+
+/* One page of the deleted phase, the project items from `cursor` in id
+ * order. An item whose project a restore has already revealed is the live
+ * phase's. */
 async function deletedPage(
   ctx: QueryCtx,
   cursor: string | null,
   size: number,
 ): Promise<PageResult> {
+  const { after, from } = deletedStart(cursor)
   const findings: Finding[] = []
   let checked = 0
   let items = 0
+  // whether the page has read a project yet, so it always gets further
+  let moved = false
   const orgs = new Map<string, Promise<Doc<'organizations'> | null>>()
   const all = ctx.db
     .query('deleted_items')
-    .withIndex('by_uuid', (q) => (cursor === null ? q : q.gt('id', cursor)))
+    .withIndex('by_uuid', (q) =>
+      after === null ? q : from === null ? q.gt('id', after) : q.gte('id', after),
+    )
   for await (const item of all) {
-    if (item.kind === 'project' && RESTORABLE.includes(item.state)) {
-      for (const project of item.projects) {
+    if (
+      item.kind === 'project' &&
+      RESTORABLE.includes(item.state) &&
+      (await byId(ctx, 'projects', item.target_id)) === null
+    ) {
+      for (let i = item.id === after ? (from ?? 0) : 0; i < item.projects.length; i++) {
+        if (moved && (await usedMoreThan(ctx, ROOM.share)))
+          return { findings, checked, cursor: `${item.id}#${i}`, done: false }
+        moved = true
+        const project = item.projects[i]
         // the live rows a move has not taken yet or a restore has written
         // back, then the stored copies
-        const rows = new Map<string, Stored>()
-        for await (const row of ctx.db
+        const live = await ctx.db
           .query('milestones')
-          .withIndex('by_project_week', (q) => q.eq('project_id', project.id)))
-          rows.set(row.id, row)
-        for await (const copy of ctx.db
+          .withIndex('by_project_week', (q) => q.eq('project_id', project.id))
+          .take(PROJECT_MOST + 1)
+        const copies = await ctx.db
           .query('deleted_rows')
           .withIndex('by_item_table_owner', (q) =>
             q.eq('item_id', item.id).eq('table', 'milestones').eq('owner_id', project.id),
-          ))
+          )
+          .take(PROJECT_MOST + 1)
+        const rows = new Map<string, Stored>(live.map((row) => [row.id, row]))
+        for (const copy of copies)
           if (copy.row.table === 'milestones') rows.set(copy.row.doc.id, copy.row.doc)
         if (rows.size === 0) continue
-        checked += rows.size
         const where = { project_id: project.id, item_id: item.id }
+        if (rows.size > PROJECT_MOST) {
+          findings.push({ kind: 'unchecked', org_id: item.org_id, ...where, milestones: [] })
+          continue
+        }
+        checked += rows.size
         if (project.id !== item.target_id || item.parent_project_id !== undefined) {
           findings.push({
             kind: 'sub_project',
@@ -295,7 +334,7 @@ async function deletedPage(
         else findings.push(...judgeTopLevel([...rows.values()], calendar, where))
       }
     }
-    if (++items >= size || (await usedMoreThan(ctx, ROOM)))
+    if (++items >= size || (await usedMoreThan(ctx, ROOM.share)))
       return { findings, checked, cursor: item.id, done: false }
   }
   return { findings, checked, cursor: '', done: true }
@@ -303,7 +342,9 @@ async function deletedPage(
 
 /** Reports, without writing, one page of `phase`. Leave out `cursor`, or
  * pass null, for the first page, then call again with the returned
- * `cursor` until `done`. `checked` counts the milestones the page read. */
+ * `cursor` until `done`. `checked` counts the milestones the page judged,
+ * as the live phase leaves the rows of a project in Deleted items to the
+ * deleted phase. */
 export const check = internalQuery({
   args: {
     phase: vPhase,
