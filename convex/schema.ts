@@ -2124,10 +2124,11 @@ export default defineSchema({
   inbox_items: defineTable({
     recipient_id: v.string(),
     issue_id: v.string(),
-    // The task's project when the row was last written, absent when the task
-    // was not live then. A move re-keys it, inline up to a budget and then in
-    // background steps (model/inboxItems.ts rekeyItems), so readers check it
-    // against the task.
+    // The task's project at the item's last arrival, build or re-key, absent
+    // when a build found the task not live. Other writes keep it. A move
+    // re-keys it, inline up to a budget and then in background steps
+    // (model/inboxItems.ts rekeyItems), so readers check it against the
+    // task.
     project_id: v.optional(v.string()),
     // The list order: the newest message's created_at, or woke_at when the
     // item returned from a snooze later, as the app's `ts` (store/viewModels.ts

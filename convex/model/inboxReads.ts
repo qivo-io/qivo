@@ -126,8 +126,8 @@ async function seatLine(ctx: QueryCtx, me: Doc<'profiles'>): Promise<SeatSummary
  * `most`, in project order (inbox_items.by_recipient_unread_project). At
  * each new project it asks whether the project can hold such tasks, and if
  * not, skips the rest of the project's items with one new range, without
- * reading their tasks. Items without a project (a task not live when the
- * row was written) sort first and have their tasks read. `stopped` says the
+ * reading their tasks. Items without a project (a task that was not live
+ * when the item was last built) sort first and have their tasks read. `stopped` says the
  * budget ended the walk, so `counted` is a lower bound. */
 async function countSeat(
   ctx: QueryCtx,
@@ -174,15 +174,18 @@ async function countSeat(
  * reached SUMMARY.most, which the app shows as "99+" and means more than
  * 99. `complete` is false when a seat is not ready (it adds nothing to the
  * count) or the budget stopped the summary, so the count is a lower bound;
- * a seat the budget did not reach is left out of `seats`. The count never
- * comes from the messages, a page of items or the workspace inbox part.
+ * a seat the budget did not reach is left out of `seats`. With `complete`
+ * true the count can still be short for a moment, never over, while a
+ * move's re-key steps run (below). The count never comes from the
+ * messages, a page of items or the workspace inbox part.
  *
- * A row's project_id is the task's project when the row was last written.
- * A move re-keys it inline up to REKEY.inline rows and the rest in
- * background steps (model/inboxItems.ts rekeyItems), so an item whose task
- * moved from a project the seat cannot see into one it can is left out
- * until its step runs. That is a short undercount, never a task the seat
- * is not shown, because each counted item's task is checked by its own
+ * A row's project_id is the task's project at the item's last arrival,
+ * build or re-key; other writes keep it. A move re-keys it inline up to
+ * REKEY.inline rows and the rest in background steps (model/inboxItems.ts
+ * rekeyItems), so an item whose task moved from a project the seat cannot
+ * see into one it can is left out until its step runs, also when
+ * `complete` is true. That is a short undercount, never a task the seat is
+ * not shown, because each counted item's task is checked by its own
  * project.
  *
  * It reads each seat's line, then at most SUMMARY.most tasks with their

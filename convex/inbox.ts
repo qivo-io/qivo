@@ -8,7 +8,13 @@
  *   all as read and Remove all read would change anything there, and the
  *   number of unread, unsnoozed items about tasks the caller is shown,
  *   exact up to 99 and then "more than 99" (`unread_more`), and a lower
- *   bound when `complete` is false. It reads each seat's profile,
+ *   bound when `complete` is false. Even with `complete` true it can count
+ *   too few for a moment, never too many: an item whose task a move took
+ *   into a project the caller can see counts once the move's background
+ *   re-key reaches its row (model/inboxItems.ts rekeyItems). The two flags
+ *   include messages about tasks the caller cannot see, as both actions
+ *   reach those too, where the workspace inbox part offers them only for
+ *   the rows it shows or leaves unexamined. It reads each seat's profile,
  *   inbox_state, first message and first unsnoozed unread and read
  *   messages, then the unread item rows project by project, each project
  *   with the caller's levels on it, and the task of each item it may
