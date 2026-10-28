@@ -406,9 +406,11 @@ export const restoreSeat = internalMutation({
 /* Clears one bounded batch of WORK (model/orgDeletion.ts wipeWorkStep),
  * deliberately preserving login/profile UUIDs and portraits. Manual demo
  * tasks, files, comments, inbox entries and view preferences are removed
- * too. Once nothing is left it rewinds the counters, and it returns whether
- * it got there. A Northstar copy grown by manual or contract-test work takes
- * several calls, so apply's wipe says whether to call it again. */
+ * too, and last the used_ids rows of its task and project ids, so the seed
+ * can write them again. Once nothing is left it rewinds the counters, and
+ * it returns whether it got there. A Northstar copy grown by manual or
+ * contract-test work takes several calls, so apply's wipe says whether to
+ * call it again. */
 async function clearWork(
   ctx: MutationCtx,
   org: Doc<'organizations'>,
@@ -466,12 +468,15 @@ export const RESERVED_PARTS = Math.ceil(RESERVED.length / RESERVED_PART)
 const CHANGED_DURING_SEED = 'marketing demo: work changed during the seed; use reset to replace it'
 
 /* Refuses when a uuid of `items` belongs to another organization, live or
- * in its Deleted items. All app UUIDs are globally unique, so the seed must
+ * in its Deleted items, or for a task or project, used by one before
+ * (schema.ts used_ids). All app UUIDs are globally unique, so the seed must
  * fail on a matching key in another tenant before it writes anything, and a
  * reset before its wipe deletes anything (checkReserved). A uuid the demo
  * holds itself passes, unless `absent`: a work step, which writes these very
  * rows into a demo its setup proved empty, refuses one the demo already
- * holds (CHANGED_DURING_SEED), since writing it again would duplicate it. */
+ * holds (CHANGED_DURING_SEED), since writing it again would duplicate it,
+ * and a task or project id the demo used since its wipe, which the seed
+ * may not take again. */
 async function assertReserved(
   ctx: QueryCtx,
   org: Doc<'organizations'>,
@@ -531,6 +536,19 @@ async function assertReserved(
       require(live.owned, collision)
       require(!absent, rule(CHANGED_DURING_SEED))
       continue
+    }
+    if (item.kind === 'project' || item.kind === 'issue') {
+      // an id a task or project held before keeps a used_ids row (schema.ts),
+      // one per organization: another's refuses for good, the demo's own
+      // only once the wipe that lets it go has run
+      const used = await ctx.db
+        .query('used_ids')
+        .withIndex('by_row', (q) =>
+          q.eq('table', item.kind === 'project' ? 'projects' : 'issues').eq('row_id', rowId),
+        )
+        .take(2)
+      require(used.every((row) => row.org_id === org.id), collision)
+      require(used.length === 0 || !absent, rule(CHANGED_DURING_SEED))
     }
     if (trashTable === undefined) continue
     const table = trashTable

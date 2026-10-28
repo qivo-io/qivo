@@ -149,6 +149,14 @@ const reset = async (t: T, anchor = ANCHOR) => {
   await wipe(t, anchor)
   return await seed(t, anchor)
 }
+/* The used_ids rows organization `orgId` holds (schema.ts). */
+const usedIds = (t: T, orgId: string) =>
+  t.run((ctx) =>
+    ctx.db
+      .query('used_ids')
+      .withIndex('by_org_kept', (q) => q.eq('org_id', orgId))
+      .collect(),
+  )
 const profiles = (t: T, orgId: string) =>
   t.run(async (ctx) =>
     ctx.db
@@ -1238,6 +1246,10 @@ describe('marketing demo rebuild ownership', () => {
     expect(described).toBeGreaterThanOrEqual(counted.active_tasks)
     const roster = await profiles(t, result.org_id)
     const issueIds = (await t.run(async (ctx) => ctx.db.query('issues').collect())).map((i) => i.id)
+    // every seeded task and project holds its id in used_ids, which the wipe
+    // lets go and the reseed takes again
+    const ids = await usedIds(t, result.org_id)
+    expect(ids).toHaveLength(MARKETING_DEMO.issues.length + MARKETING_DEMO.projects.length)
     expect(await wipe(t)).toMatchObject({
       state: 'empty',
       wipe_done: true,
@@ -1281,7 +1293,11 @@ describe('marketing demo rebuild ownership', () => {
     expect(await countersFor(t, result.org_id)).toEqual({ next_issue_num: 0, next_project_num: 0 })
     expect(await expectLiveCounts(t, result.org_id)).toEqual({ active_tasks: 0, live_projects: 0 })
     expect(await expectDescriptions(t, result.org_id)).toBe(0)
+    expect(await usedIds(t, result.org_id)).toEqual([])
     await seed(t, NEXT_ANCHOR)
+    expect((await usedIds(t, result.org_id)).map((row) => row.row_id).sort()).toEqual(
+      ids.map((row) => row.row_id).sort(),
+    )
     expect(await expectLiveCounts(t, result.org_id)).toEqual(counted)
     expect(await expectDescriptions(t, result.org_id)).toBe(described)
     expect((await t.run(async (ctx) => ctx.db.query('issues').collect())).map((i) => i.id)).toEqual(
@@ -1647,6 +1663,39 @@ describe('marketing demo Deleted items', () => {
     })
     await expectRefusal(apply(t, 'seed', NEXT_ANCHOR), 'conflict', /reserved task id/)
   }, 60_000)
+
+  it('refuses a seed whose reserved task uuid another organization used before, or the demo since its wipe', async () => {
+    const t = newAuthT()
+    const foreign = await withOrg(t)
+    const { org_id } = await seeded(t)
+    await wipe(t)
+    const reserved = await demoId(`issue:${MARKETING_DEMO.issues[0].key}`)
+    // another organization's task that held the id, deleted for good
+    const used = await t.run((ctx) =>
+      ctx.db.insert('used_ids', { table: 'issues', row_id: reserved, org_id: foreign.org.id }),
+    )
+    await expectRefusal(checkReserved(t), 'conflict', /reserved task id belongs to another/)
+    const refusal = await expectRefusal(
+      seed(t, NEXT_ANCHOR),
+      'conflict',
+      /reserved task id belongs to another organization/,
+    )
+    expect(refusal.data.reason).toBe('demo_id_collision')
+    // a task the demo itself created with the id since the wipe and deleted
+    // for good: the check before a wipe passes, as the wipe lets it go, but
+    // a seed step refuses it
+    await t.run(async (ctx) => {
+      await ctx.db.delete(used)
+      await ctx.db.insert('used_ids', { table: 'issues', row_id: reserved, org_id })
+    })
+    await checkReserved(t)
+    await expectRefusal(seed(t, NEXT_ANCHOR), 'rule', /work changed during the seed; use reset/)
+    // a reset lets it go and seeds again
+    await reset(t, NEXT_ANCHOR)
+    expect(await usedIds(t, org_id)).toHaveLength(
+      MARKETING_DEMO.issues.length + MARKETING_DEMO.projects.length,
+    )
+  }, 120_000)
 })
 
 describe('marketing demo seed steps', () => {

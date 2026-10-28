@@ -303,6 +303,11 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // posts stop counting and the hourly sweep deletes it
   // (model/commentLimits.ts), as a task can leave meanwhile.
   'comment_rates.issue_id',
+  // The id a task or project held, by `table`, after the object is gone,
+  // and its organization, which a kept row outlives (model/usedIds.ts). A
+  // teardown deletes the others after its organization row.
+  'used_ids.row_id',
+  'used_ids.org_id',
   // the platform audit log survives its subjects on purpose
   'platform_audit_log.actor_auth_id',
   'platform_audit_log.target_org_id',

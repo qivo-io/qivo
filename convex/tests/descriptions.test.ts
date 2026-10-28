@@ -38,6 +38,7 @@ import {
   DEFAULT_BUDGET,
   deleteProject,
   deleteTask,
+  forgetUsedId,
   installTrashTimers,
   itemById,
   itemFor,
@@ -265,20 +266,24 @@ describe('the writers keep one equal row per task', () => {
     for (let from = 0; from < 80; from += 10)
       await t.run(async (ctx) => {
         for (let i = from; i < from + 10; i++)
-          await insertTask(ctx.db, {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id: f.sub.id,
-            num: 5000 + i,
-            title: 'Untrimmed',
-            description: `${text}  `,
-            status: 'todo',
-            priority: 'low',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-            window_key: newWindowKey(),
-          })
+          await insertTask(
+            ctx.db,
+            {
+              id: uuid(),
+              org_id: f.org.id,
+              project_id: f.sub.id,
+              num: 5000 + i,
+              title: 'Untrimmed',
+              description: `${text}  `,
+              status: 'todo',
+              priority: 'low',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+              window_key: newWindowKey(),
+            },
+            'restore',
+          )
       })
     await t.action(internal.internal.overCapRows.fix, { dry_run: false })
     expect(await expectDescriptions(t, f.org.id)).toBe(80)
@@ -444,8 +449,10 @@ async function splitHalfway(t: T, f: OrgFixture) {
 }
 
 /** Creates a task with id `id` in `f`'s organization, or in the other
- * organization, and answers that organization's id. */
+ * organization, and answers that organization's id. The id is one from
+ * before used_ids, which a create refuses otherwise (forgetUsedId). */
 async function createWithId(t: T, f: OrgFixture, id: string, where: 'same' | 'other') {
+  await forgetUsedId(t, id)
   if (where === 'same') {
     await create(t, f, { id, description: 'Mine' })
     return f.org.id
@@ -536,7 +543,9 @@ describe('a task id that comes back', () => {
         description: 'First',
       }),
     )
-    // the id is free, and the other organization's create takes it
+    // the id, one from before used_ids, is free, and the other
+    // organization's create takes it
+    await forgetUsedId(t, first.id)
     const sub = await plantProject(t, {
       org_id: f.otherOrg.id,
       type: 'project',
@@ -670,19 +679,23 @@ async function plantLong(
     await t.run(async (ctx) => {
       for (let i = from; i < Math.min(count, from + 10); i++) {
         const id = uuid()
-        await insertTask(ctx.db, {
-          id,
-          num: 70_000 + ids.length,
-          title: 'Long',
-          description: text,
-          status: 'todo',
-          priority: 'low',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-          window_key: newWindowKey(),
-          ...task,
-        })
+        await insertTask(
+          ctx.db,
+          {
+            id,
+            num: 70_000 + ids.length,
+            title: 'Long',
+            description: text,
+            status: 'todo',
+            priority: 'low',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            window_key: newWindowKey(),
+            ...task,
+          },
+          'restore',
+        )
         ids.push(id)
       }
     })

@@ -13,7 +13,7 @@ import {
   northstarTaskTimes,
 } from '../internal/marketingDemoData'
 import { projectSightForProfiles } from '../lib/access'
-import { byId, newWindowKey } from '../lib/db'
+import { byId, insertUsed, newWindowKey } from '../lib/db'
 import { demoRefusal } from '../lib/demo'
 import { DEMO_UNAVAILABLE } from '../lib/demoRefusals'
 import { require, rule } from '../lib/functions'
@@ -164,6 +164,13 @@ export const SEED_ROW_MISSING = {
   label: 'marketing demo: a seeded label is missing; use reset to replace it',
   parent: 'marketing demo: a seeded parent task moved to another project; use reset to replace it',
 } as const
+
+/** The refusal of a seeded task or project id that used_ids holds
+ * (schema.ts): one the seed wrote before that a wipe has not let go, or
+ * another organization's. A reset wipes first, which lets the demo's own go
+ * (model/usedIds.ts releaseUsedIds). */
+export const SEED_ID_USED =
+  'marketing demo: a seeded task or project id was used before; use reset to replace it'
 
 /** What the steps of one seed share: the fixture uuids, and the rows they
  * read or wrote, so a seed run in one transaction reads each only once
@@ -373,21 +380,26 @@ async function writeStep(
       })
     }
     for (const [index, p] of data.projects.entries()) {
-      await ctx.db.insert('projects', {
-        id: projectIds[p.key],
-        window_key: newWindowKey(),
-        org_id: org.id,
-        type: p.parent ? 'project' : 'meta',
-        parent_id: p.parent ? projectIds[p.parent] : undefined,
-        key: p.code,
-        ...named(cleanProjectName(p.name)),
-        description: projectDescription(p.description),
-        lead_id: personIds[p.lead],
-        sort_order: index,
-        num: index + 1,
-        track_delay: teamDefaults.track_delay_default,
-        created_at: now,
-      })
+      await insertUsed(
+        ctx.db,
+        'projects',
+        {
+          id: projectIds[p.key],
+          window_key: newWindowKey(),
+          org_id: org.id,
+          type: p.parent ? 'project' : 'meta',
+          parent_id: p.parent ? projectIds[p.parent] : undefined,
+          key: p.code,
+          ...named(cleanProjectName(p.name)),
+          description: projectDescription(p.description),
+          lead_id: personIds[p.lead],
+          sort_order: index,
+          num: index + 1,
+          track_delay: teamDefaults.track_delay_default,
+          created_at: now,
+        },
+        rule(SEED_ID_USED),
+      )
       if (!p.parent)
         for (const team of data.teams)
           await ctx.db.insert('project_team_access', {
@@ -453,43 +465,47 @@ async function writeStep(
       // These are explicitly imported fixtures. Atlas is the import actor;
       // reporter is separate attribution, never a forged creator history.
       const windowKey = newWindowKey()
-      const issueDocId = await insertTask(ctx.db, {
-        id: issueIds[i.key],
-        window_key: windowKey,
-        org_id: org.id,
-        project_id: projectIds[i.project],
-        num: index + 1,
-        title: i.title,
-        description: cleanDescription(i.description),
-        status: i.status,
-        priority: i.priority,
-        assignee_id: i.assignee ? personIds[i.assignee] : undefined,
-        reviewer_id: i.reviewer ? personIds[i.reviewer] : undefined,
-        reporter_id:
-          personIds[
-            i.reporter ??
-              data.projects.find(
-                (project) =>
-                  project.key ===
-                  (data.projects.find((p) => p.key === i.project)?.parent ?? i.project),
-              )?.lead ??
-              'atlas'
-          ],
-        created_by: personIds.atlas,
-        parent_id: i.parent ? issueIds[i.parent] : undefined,
-        start_week: i.startWeek !== undefined ? marketingWeek(anchor, i.startWeek) : undefined,
-        end_week: i.endWeek !== undefined ? marketingWeek(anchor, i.endWeek) : undefined,
-        due_date: i.dueDay !== undefined ? marketingDate(anchor, i.dueDay) : undefined,
-        remaining_hours: i.remaining,
-        remaining_set_at: i.remaining !== undefined ? now : undefined,
-        paused: i.paused ?? false,
-        done_at: times.done,
-        review_at: times.review,
-        status_at: times.status,
-        ...(i.archived ? { archived_at: `${marketingDate(anchor, -1)}T15:00:00.000Z` } : {}),
-        created_at: times.created,
-        updated_at: times.updated,
-      })
+      const issueDocId = await insertTask(
+        ctx.db,
+        {
+          id: issueIds[i.key],
+          window_key: windowKey,
+          org_id: org.id,
+          project_id: projectIds[i.project],
+          num: index + 1,
+          title: i.title,
+          description: cleanDescription(i.description),
+          status: i.status,
+          priority: i.priority,
+          assignee_id: i.assignee ? personIds[i.assignee] : undefined,
+          reviewer_id: i.reviewer ? personIds[i.reviewer] : undefined,
+          reporter_id:
+            personIds[
+              i.reporter ??
+                data.projects.find(
+                  (project) =>
+                    project.key ===
+                    (data.projects.find((p) => p.key === i.project)?.parent ?? i.project),
+                )?.lead ??
+                'atlas'
+            ],
+          created_by: personIds.atlas,
+          parent_id: i.parent ? issueIds[i.parent] : undefined,
+          start_week: i.startWeek !== undefined ? marketingWeek(anchor, i.startWeek) : undefined,
+          end_week: i.endWeek !== undefined ? marketingWeek(anchor, i.endWeek) : undefined,
+          due_date: i.dueDay !== undefined ? marketingDate(anchor, i.dueDay) : undefined,
+          remaining_hours: i.remaining,
+          remaining_set_at: i.remaining !== undefined ? now : undefined,
+          paused: i.paused ?? false,
+          done_at: times.done,
+          review_at: times.review,
+          status_at: times.status,
+          ...(i.archived ? { archived_at: `${marketingDate(anchor, -1)}T15:00:00.000Z` } : {}),
+          created_at: times.created,
+          updated_at: times.updated,
+        },
+        { server: rule(SEED_ID_USED) },
+      )
       await startCount(ctx, { id: issueIds[i.key], org_id: org.id })
       for (const label of i.labels)
         await ctx.db.insert('issue_labels', {

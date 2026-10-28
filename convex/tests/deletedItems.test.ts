@@ -68,6 +68,7 @@ import {
   deleteProject,
   deleteTask,
   expectedRow,
+  forgetUsedId,
   HOUR,
   historyOf,
   installTrashTimers,
@@ -106,20 +107,24 @@ async function plantChildren(
   for (let from = 0; from < n; from += 100)
     await t.run(async (ctx) => {
       for (const [i, id] of ids.slice(from, from + 100).entries())
-        await insertTask(ctx.db, {
-          id,
-          org_id: parent.org_id,
-          project_id: projectId,
-          parent_id: parent.id,
-          num: 10_000 + from + i,
-          title: `Subtask ${from + i + 1}`,
-          description,
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-        })
+        await insertTask(
+          ctx.db,
+          {
+            id,
+            org_id: parent.org_id,
+            project_id: projectId,
+            parent_id: parent.id,
+            num: 10_000 + from + i,
+            title: `Subtask ${from + i + 1}`,
+            description,
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+          },
+          'restore',
+        )
     })
   return ids
 }
@@ -1427,7 +1432,10 @@ describe('purging', () => {
     expect(await itemById(t, item.id)).toBeNull()
     expect(await historyOf(t, task.id)).toEqual([])
     await assertNoOrphanHistory(t, 'after a purge one row at a time')
-    // then the id is free
+    // then used_ids keeps it taken for good (schema.ts); only an id from
+    // before that table is free once purged
+    await expectRefusal(create(), 'bad_request', /^a task with this id already exists$/)
+    await forgetUsedId(t, task.id)
     await create()
   })
 
@@ -1734,6 +1742,8 @@ describe('purging', () => {
       if (stored === null) throw new Error('the task was not stored')
       await ctx.db.delete(stored._id)
     })
+    // and kept no used_ids row of it, which it did not have
+    await forgetUsedId(t, task.id)
     // so a client can take the id again, later
     vi.setSystemTime(Date.now() + HOUR)
     await as(t, f.user).mutation(api.issues.create, {
@@ -1775,6 +1785,7 @@ describe('purging', () => {
       if (stored === null) throw new Error('the task was not stored')
       await ctx.db.delete(stored._id)
     })
+    await forgetUsedId(t, task.id)
     vi.setSystemTime(Date.now() + HOUR)
     await as(t, f.user).mutation(api.issues.create, {
       org_id,

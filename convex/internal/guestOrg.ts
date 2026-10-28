@@ -37,9 +37,10 @@
  * them beyond this file. */
 
 import { internalMutation } from '../_generated/server'
-import { byId, newWindowKey } from '../lib/db'
+import { byId, insertUsed, newWindowKey } from '../lib/db'
 import { refuseProduction } from '../lib/deployment'
 import type { IssueStatus } from '../lib/enums'
+import { conflict } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
 import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
@@ -78,6 +79,13 @@ const ZZ = {
   sharedLoad: 'ffffffff-0000-4000-8000-0000000000bd',
   hiddenLoad: 'ffffffff-0000-4000-8000-0000000000cd',
 } as const
+
+/* The refusal of a fixture task or project id that used_ids holds after the
+ * teardown: another organization's, or one the teardown kept because
+ * something outside the organization still names it, such as a detach of
+ * archived subtasks that has not finished (model/usedIds.ts). */
+const ID_TAKEN =
+  'A ZZ fixture task or project id is still taken; run this again once nothing else names it (schema.ts used_ids)'
 
 export const zzGuestOrg = internalMutation({
   args: {},
@@ -161,7 +169,7 @@ export const zzGuestOrg = internalMutation({
         created_at: now,
         window_key: newWindowKey(),
       } as const
-      await ctx.db.insert('projects', row)
+      await insertUsed(ctx.db, 'projects', row, conflict(ID_TAKEN, 'id_taken'))
       await tallyRow(ctx, 'projects', null, row)
     }
     await project(ZZ.sharedMeta, 1, 'ZGM', 'ZZ Shared Project', 0, {})
@@ -230,7 +238,7 @@ export const zzGuestOrg = internalMutation({
         created_at: now,
         updated_at: now,
       } as const
-      await insertTask(ctx.db, row)
+      await insertTask(ctx.db, row, { server: conflict(ID_TAKEN, 'id_taken') })
       await tallyRow(ctx, 'issues', null, row)
       await startCount(ctx, row)
     }

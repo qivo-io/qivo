@@ -1,12 +1,17 @@
 /* Fails when code in convex/ writes a task row, a task description or a
  * task's project or archived state anywhere but
- * convex/model/descriptions.ts. Task descriptions are kept in
- * issue_descriptions beside the task rows (schema.ts), each row with copies
- * of its task's project and archived state, and that file writes both in
- * one transaction, so the copies stay equal. It reads every write through
- * Convex's database writer (`insert`, `patch` and `replace`) and every call
- * of lib/db.ts insertUnique with TypeScript's checker, outside the tests,
- * which plant rows directly, and fails on one that
+ * convex/model/descriptions.ts, or inserts a task or project without the
+ * used_ids row of its id. Task descriptions are kept in issue_descriptions
+ * beside the task rows (schema.ts), each row with copies of its task's
+ * project and archived state, and that file writes both in one
+ * transaction, so the copies stay equal. Every id a task or project takes
+ * is recorded in used_ids (schema.ts) in the transaction that inserts it,
+ * and only lib/db.ts writes those rows, through insertUnique and
+ * insertUsed, so no new task or project takes an id once used. It reads
+ * every write through Convex's database writer (`insert`, `patch` and
+ * `replace`) and every call of lib/db.ts insertUnique and insertUsed with
+ * TypeScript's checker, outside the tests, which plant rows directly, and
+ * fails on one that
  *
  * - inserts a row that may be a task (insertTask) or replaces one
  *   (patchTask),
@@ -15,23 +20,28 @@
  *   or `archived_at` property or an index signature (patchTask; a write
  *   that changes none of them types its fields as TaskPatch),
  * - writes issue_descriptions,
+ * - inserts or replaces a row that may be a task or project through
+ *   Convex's writer outside lib/db.ts, model/descriptions.ts included
+ *   (insertUnique, insertUsed),
+ * - inserts a used_ids row outside lib/db.ts,
  * - or writes a table named by a type parameter, whose table the check
  *   cannot read. Only the generic writers below may, and for insertUnique
- *   the check reads the table each call names.
+ *   and insertUsed the check reads the table each call names.
  *
  * It finds a write by the function it calls, whatever its name at the call:
  * `ctx.db.patch(...)`, `ctx.db['patch'](...)`, a writer method taken out
- * of the database by destructuring or assignment, insertUnique under
- * another name, and a constant that holds any of these, however many
- * constants deep. The checker reads a table from the type of the argument
- * that names it, a table name or an id, whose type carries its table. A
- * union counts every table it may be. Deleting rows is left to the tests of
- * every teardown.
+ * of the database by destructuring or assignment, insertUnique or
+ * insertUsed under another name, and a constant that holds any of these,
+ * however many constants deep. The checker reads a table from the type of
+ * the argument that names it, a table name or an id, whose type carries its
+ * table. A union counts every table it may be. Deleting rows is left to the
+ * tests of every teardown.
  *
  * It prints nothing when it passes. It fails when it finds no write in
- * model/descriptions.ts, which would mean it reads none, and when the
- * program writes the database without that file. Pass the path of a
- * tsconfig.json whose files in convex/ to check; convex/'s is the default. */
+ * model/descriptions.ts or no insert of used_ids in lib/db.ts, which would
+ * mean it reads none, and when the program writes the database without
+ * model/descriptions.ts. Pass the path of a tsconfig.json whose files in
+ * convex/ to check; convex/'s is the default. */
 import fs from 'node:fs'
 import path from 'node:path'
 import * as ts from 'typescript/unstable/ast'
@@ -41,21 +51,26 @@ import { closeTypeScriptAPI } from './typescript-api.mjs'
 const config = path.resolve(process.argv[2] ?? 'convex/tsconfig.json')
 const convexDirectory = fs.realpathSync(path.resolve('convex'))
 const owner = 'model/descriptions.ts'
+/* The file that alone inserts used_ids rows and inserts tasks and projects
+ * through Convex's writer, and the tables whose ids used_ids records
+ * (lib/enums.ts USED_ID_TABLES). */
+const usedOwner = 'lib/db.ts'
+const usedTables = ['issues', 'projects']
 
 /* The generic writers, functions in files under convex/ that write a table
  * their caller names. demoWriter wraps Convex's `insert`, so the check
- * reads its callers' writes anyway. For insertUnique it reads the table each
- * call names (`unique`). */
+ * reads its callers' writes anyway. For insertUnique and insertUsed it reads
+ * the table each call names (`named`). */
 const genericWriters = new Map([
-  ['lib/db.ts', 'insertUnique'],
-  ['lib/demo.ts', 'demoWriter'],
+  ['lib/db.ts', new Set(['insertUnique', 'insertUsed'])],
+  ['lib/demo.ts', new Set(['demoWriter'])],
 ])
-const unique = { file: 'lib/db.ts', name: 'insertUnique', table: 1 }
+const named = { file: 'lib/db.ts', names: new Set(['insertUnique', 'insertUsed']), table: 1 }
 
 const writes = new Set(['insert', 'patch', 'replace'])
 /* The task fields a description row holds or copies. */
 const copied = ['description', 'project_id', 'archived_at']
-const writerNames = new Set([...writes, unique.name])
+const writerNames = new Set([...writes, ...named.names])
 const convexPackage = /[/\\]node_modules[/\\]convex[/\\]/
 const skipped = /[/\\](?:node_modules|_generated|tests)[/\\]/
 
@@ -75,7 +90,7 @@ function calleeName(callee) {
   return undefined
 }
 
-/** The local names `sourceFile` gives a writer or insertUnique: an import
+/** The local names `sourceFile` gives a writer, insertUnique or insertUsed: an import
  * under another name, a destructured property, a variable assigned a
  * property of that name, and a variable assigned any of these names, how
  * many aliases deep it goes. */
@@ -143,21 +158,25 @@ try {
   // TypeScript's canonical path of a file under convex/, the one declarations carry
   const canonical = (file) => program.getSourceFile(path.join(convexDirectory, file))?.path
   const ownerKey = canonical(owner)
-  const uniqueKey = canonical(unique.file)
+  const usedKey = canonical(usedOwner)
+  const namedKey = canonical(named.file)
   const generic = new Map(
     [...genericWriters]
-      .map(([file, name]) => [canonical(file), name])
+      .map(([file, names]) => [canonical(file), names])
       .filter(([key]) => key !== undefined),
   )
   let ownerWrites = 0
+  let usedWrites = 0
   let allWrites = 0
   /** Whether `symbol`, the symbol of a callee's type declared in lib/db.ts,
-   * is insertUnique's. A function declaration's carries its name, and an
-   * arrow function's takes the name of the constant that holds it. */
-  const isUnique = (symbol) =>
-    symbol.name === unique.name ||
-    enclosingNames(symbol.declarations[0].resolve(project) ?? { parent: undefined })[0] ===
-      unique.name
+   * is insertUnique's or insertUsed's. A function declaration's carries its
+   * name, and an arrow function's takes the name of the constant that holds
+   * it. */
+  const isNamed = (symbol) =>
+    named.names.has(symbol.name) ||
+    named.names.has(
+      enclosingNames(symbol.declarations[0].resolve(project) ?? { parent: undefined })[0],
+    )
 
   /** The tables a table name or id type may name; '*' for one the check
    * cannot read, such as a type parameter or any. */
@@ -208,29 +227,51 @@ try {
       let table
       let fields
       let kind
+      // a write through Convex's writer, rather than through insertUnique
+      // or insertUsed, which write the used_ids row of a task or project
+      let direct = false
       if (writes.has(symbol.name) && convexPackage.test(declared)) {
         // insert(table, value); patch and replace (id, value) or (table, id, value)
         table = call.arguments[0]
         fields = call.arguments.at(-1)
         kind = symbol.name
-      } else if (declared === uniqueKey && isUnique(symbol)) {
-        table = call.arguments[unique.table]
+        direct = true
+      } else if (declared === namedKey && isNamed(symbol)) {
+        table = call.arguments[named.table]
         kind = 'insert'
       } else continue
       if (!table) continue
       allWrites++
-      if (key === ownerKey) {
-        ownerWrites++
-        continue
-      }
+      if (key === ownerKey) ownerWrites++
       const tables = new Set(tablesOf(checker.getTypeAtLocation(table)))
       if (tables.has('*')) {
-        if (enclosingNames(call).includes(generic.get(key))) continue
+        const names = generic.get(key)
+        if (names && enclosingNames(call).some((name) => names.has(name))) continue
         failures.push(
           `${at(call)} - this writes a table that the check cannot read from its type. Name the table, or its id, with its own type.`,
         )
         continue
       }
+      if (key === usedKey) {
+        if (tables.has('used_ids') && kind === 'insert') usedWrites++
+        continue
+      }
+      if (tables.has('used_ids') && kind === 'insert') {
+        failures.push(`${at(call)} - this inserts a used_ids row, which only ${usedOwner} writes.`)
+        continue
+      }
+      // a task outside the owner meets the description rules below, whose
+      // insertTask writes its used_ids row too
+      const used = usedTables.filter(
+        (name) => tables.has(name) && (name !== 'issues' || key === ownerKey),
+      )
+      if (direct && (kind === 'insert' || kind === 'replace') && used.length > 0) {
+        failures.push(
+          `${at(call)} - this ${kind === 'insert' ? 'inserts' : 'replaces'} a ${used.includes('issues') ? 'task' : 'project'} row without the used_ids row of its id. Use ${usedOwner} insertUnique for an id a caller chose, or insertUsed.`,
+        )
+        continue
+      }
+      if (key === ownerKey) continue
       if (!tables.has('issues') && !tables.has('issue_descriptions')) continue
       if (tables.has('issue_descriptions'))
         failures.push(`${at(call)} - this writes issue_descriptions, which only ${owner} writes.`)
@@ -257,6 +298,10 @@ try {
     failures.push(
       `convex/${owner} - the check found no database write in it, so it may read none anywhere. Update scripts/check-task-writes.mjs for the installed typescript and convex.`,
     )
+  if (usedKey !== undefined && usedWrites === 0)
+    failures.push(
+      `convex/${usedOwner} - the check found no insert of used_ids in it, so it may read none anywhere. Update scripts/check-task-writes.mjs for the installed typescript and convex.`,
+    )
 } catch (error) {
   // Closing after a failed read can fail too, and would hide the read's error.
   await closeTypeScriptAPI(api).catch(() => {})
@@ -267,7 +312,7 @@ await closeTypeScriptAPI(api)
 if (failures.length) {
   console.error(failures.join('\n'))
   console.error(
-    `\nTask rows and their description rows, which copy the task's project and archived state, are written together, by ${owner} (schema.ts issue_descriptions).`,
+    `\nTask rows and their description rows, which copy the task's project and archived state, are written together, by ${owner} (schema.ts issue_descriptions), and every task and project with the used_ids row of its id, by ${usedOwner} (schema.ts used_ids).`,
   )
   process.exit(1)
 }

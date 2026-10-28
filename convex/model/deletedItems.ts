@@ -112,7 +112,7 @@ import {
   projectLevelsForOrg,
 } from '../lib/access'
 import { deletionBegun, orgWriteBlock } from '../lib/billingAccess'
-import { byId, newWindowKey, strayRows, usedMoreThan } from '../lib/db'
+import { byId, insertUsed, newWindowKey, strayRows, usedMoreThan } from '../lib/db'
 import { demoForOrg, isDemoDeployment, uncountedWriter } from '../lib/demo'
 import {
   type AccessLevel,
@@ -1440,16 +1440,18 @@ async function purgeLeft(run: Run): Promise<boolean> {
  * subscriptions and the Restored notice measured about 6. With a different
  * assignee and reviewer on each task, 80 people who must all see the
  * parent's project (keptParent), it measured about 22, most of it each
- * person's assignment check (keepsHolder). Convex's 4,096 ranges leave room
- * for that above TRASH_BUDGET's 2,500, and a check of who sees a parent that
- * runs out of what the budget has left makes the reveal wait for a step of
- * its own (revealTasks). */
+ * person's assignment check (keepsHolder). Since then each task also reads
+ * the used_ids row of its id (lib/db.ts insertUsed), one range more.
+ * Convex's 4,096 ranges leave room for that above TRASH_BUDGET's 2,500, and
+ * a check of who sees a parent that runs out of what the budget has left
+ * makes the reveal wait for a step of its own (revealTasks). */
 const REVEAL_RANGES_PER_TASK = 20
 
 /* The index ranges a reveal reads per project of a project item: the
- * conflict check's key and uuid reads, its lead and legacy team, and the
- * stored row it deletes. */
-const REVEAL_RANGES_PER_PROJECT = 5
+ * conflict check's key and uuid reads, its lead and legacy team, the
+ * used_ids row of its id (lib/db.ts insertUsed) and the stored row it
+ * deletes. */
+const REVEAL_RANGES_PER_PROJECT = 6
 
 /** Why an item cannot be restored now (design 5.3). The item's state while
  * it is not ready; read_only while billing or a pending deletion makes the
@@ -2581,20 +2583,25 @@ async function writeTask(
   const { doc } = t
   const active = doc.archived_at === undefined
   // with its description row, from the text the stored copy keeps
-  // (model/descriptions.ts)
-  const _id = await insertTask(uncountedWriter(run.ctx.db), {
-    ...doc,
-    // a copy stored before tasks had keys, whose relation rows gave it
-    // none (storedTaskKey)
-    window_key: doc.window_key ?? (await firstTaskKey(run, doc.id)),
-    parent_id: parentId,
-    ...(await restoredHolders(run, doc)),
-    created_by: await keptProfile(run, doc.created_by),
-    reporter_id: await keptProfile(run, doc.reporter_id),
-    done_at: active && doc.status === 'done' ? run.now : doc.done_at,
-    relations_marked: undefined,
-    updated_at: run.now,
-  })
+  // (model/descriptions.ts), and the used_ids row of its id, which a task
+  // stored before used_ids existed gets now
+  const _id = await insertTask(
+    uncountedWriter(run.ctx.db),
+    {
+      ...doc,
+      // a copy stored before tasks had keys, whose relation rows gave it
+      // none (storedTaskKey)
+      window_key: doc.window_key ?? (await firstTaskKey(run, doc.id)),
+      parent_id: parentId,
+      ...(await restoredHolders(run, doc)),
+      created_by: await keptProfile(run, doc.created_by),
+      reporter_id: await keptProfile(run, doc.reporter_id),
+      done_at: active && doc.status === 'done' ? run.now : doc.done_at,
+      relations_marked: undefined,
+      updated_at: run.now,
+    },
+    'restore',
+  )
   await tallyRow(run.ctx, 'issues', null, doc)
   // a task stored before comment counts starts its count
   await beginCount(run.ctx, doc)
@@ -2821,7 +2828,9 @@ async function sendBack(run: Run, reason: RestoreBlock): Promise<JobState> {
 async function revealProjects(run: Run): Promise<void> {
   for (const row of await storedOf(run, 'projects')) {
     const project = await cleanProject(run, docOf(row, 'projects'))
-    await uncountedWriter(run.ctx.db).insert('projects', project)
+    // with the used_ids row of its id, which a project stored before
+    // used_ids existed gets now
+    await insertUsed(uncountedWriter(run.ctx.db), 'projects', project, 'restore')
     await tallyRow(run.ctx, 'projects', null, project)
     await run.ctx.db.delete(row._id)
     run.budget.rows -= 1
@@ -3937,7 +3946,7 @@ async function startJob(
 export type Teardown = { left: number; bytes?: number }
 
 /** Whether `budget` has run out of rows or of bytes. */
-const teardownSpent = (budget: Teardown): boolean =>
+export const teardownSpent = (budget: Teardown): boolean =>
   budget.left <= 0 || (budget.bytes !== undefined && budget.bytes <= 0)
 
 /** Removes the rows of `rows`, an index range read in one pass (drain),

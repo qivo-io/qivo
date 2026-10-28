@@ -308,22 +308,27 @@ async function plantSubtasks(
     const out: Doc<'issues'>[] = []
     const base = await ctx.db.query('issues').collect()
     for (let i = 0; i < n; i++) {
-      // with its description row, as every writer stores a task
-      const _id = await insertTask(ctx.db, {
-        id: uuid(),
-        org_id: fx.org.id,
-        project_id: fx.sub.id,
-        parent_id: parent.id,
-        num: 50_000 + base.length + i,
-        title: `Step ${i}`,
-        description: '',
-        status: 'done',
-        priority: 'medium',
-        paused: false,
-        created_at: NOW,
-        updated_at: NOW,
-        ...over,
-      })
+      // with its description row and the used_ids row of its id, as every
+      // writer stores a task
+      const _id = await insertTask(
+        ctx.db,
+        {
+          id: uuid(),
+          org_id: fx.org.id,
+          project_id: fx.sub.id,
+          parent_id: parent.id,
+          num: 50_000 + base.length + i,
+          title: `Step ${i}`,
+          description: '',
+          status: 'done',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          ...over,
+        },
+        'restore',
+      )
       out.push((await ctx.db.get(_id)) as Doc<'issues'>)
     }
     return out
