@@ -45,9 +45,10 @@
  * Each row found carries an `outcome`: 'fixed' by this run, 'would_fix' in a
  * dry run or check, 'skipped' when the fixed value would collide with
  * another row or, for a project name, when its reach rows do not fit what
- * its page has left (run the fix again), or 'reported' when only a person
- * can fix it, such as a project name whose reach rows are more than one
- * change may update (LIMITS.projectTreeChange). A dry run sees
+ * its page has left (run the fix again; behind more than REPORTS reported
+ * names on its page, after a person shortens those), or 'reported' when
+ * only a person can fix it, such as a project name whose reach rows are
+ * more than one change may update (LIMITS.projectTreeChange). A dry run sees
  * a collision with a stored row or a row of the same page; two rows on
  * different pages that fix to the same value both show 'would_fix', and the
  * real run fixes the first and skips the second. `fix` answers `counts` for
@@ -82,7 +83,6 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from '../_generated/server'
-import { byId } from '../lib/db'
 import { cleanEmail } from '../lib/email'
 import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
@@ -95,6 +95,12 @@ import { renameProjectTotals } from '../model/storageTotals'
  * `page_size` lowers the rows per page, for tests of a walk over pages. */
 const PAGE = 500
 const PAGE_BYTES = 4 * 1024 * 1024
+
+/** The project names a page may read in full only to report them, each up
+ * to LIMITS.projectTreeChange.max reach rows, besides the allowance its
+ * fixes share. The bound keeps a page within Convex's read limits; past it
+ * the long names left on the page wait until a person shortens those. */
+const REPORTS = 4
 
 /** The tables whose `name` counts NAME_MAX UTF-16 units. */
 const NAMED = [
@@ -298,6 +304,7 @@ async function walk(
     // (model/projectNav.ts), within LIMITS.projectTreeChange.max a page
     const copies = inlineBudget()
     let reachLeft = LIMITS.projectTreeChange.max
+    let reportsLeft = REPORTS
     for (const doc of page.page) {
       const { _id, _creationTime, ...body } = doc
       const changes =
@@ -307,30 +314,44 @@ async function walk(
       const found = sorted(table, _id, changes, write)
       rows.push(...found.rows)
       // A project's reach rows, which its cut name's key must reach, read
-      // in the dry run too, so it reports what the fix does. Past what the
-      // page has left the name waits for a later run ('skipped'), and past
-      // what one change may update a person must shorten it after some
-      // access goes ('reported'), as a rename in the app is refused.
+      // in the dry run too, so it reports what the fix does. A name that
+      // fits or waits spends the page's allowance with its query and each
+      // row it reads, as treeRows counts them. Past what the page has left
+      // the name waits for a later run ('skipped'), and once the allowance
+      // is spent the names left wait without a read. Past what one change
+      // may update, which only a read with the whole allowance finds, a
+      // person must shorten it after some access goes ('reported'), as a
+      // rename in the app is refused. That read spends one of REPORTS
+      // instead, so the names after it still fit, and with none left a
+      // name that would read the whole allowance waits.
       let reach: Doc<'project_reach'>[] = []
       if (table === 'projects' && typeof found.patch?.name === 'string') {
-        const project = await byId(ctx, 'projects', doc.id)
-        const read =
-          project === null
-            ? []
-            : await ctx.db
-                .query('project_reach')
-                .withIndex('by_project_grantee', (q) => q.eq('project_id', project.id))
-                .take(reachLeft)
-        // the query and each row it reads count, as treeRows counts them
+        const named = found.rows.find((row) => row.field === 'name')
+        const wait = (outcome: Outcome) => {
+          if (named !== undefined) named.outcome = outcome
+        }
+        const fresh = reachLeft === LIMITS.projectTreeChange.max
+        if (reachLeft < 1 || (fresh && reportsLeft < 1)) {
+          wait('skipped')
+          continue
+        }
+        const read = await ctx.db
+          .query('project_reach')
+          .withIndex('by_project_grantee', (q) => q.eq('project_id', doc.id))
+          .take(reachLeft)
         const cost = 1 + read.length
-        if (cost > reachLeft) {
-          const named = found.rows.find((row) => row.field === 'name')
-          if (named !== undefined)
-            named.outcome = reachLeft === LIMITS.projectTreeChange.max ? 'reported' : 'skipped'
+        if (fresh && cost > reachLeft) {
+          reportsLeft -= 1
+          wait('reported')
           continue
         }
         reachLeft -= cost
-        reach = read.filter((row) => row.org_id === project?.org_id)
+        if (reachLeft < 0) {
+          wait('skipped')
+          continue
+        }
+        const org = 'org_id' in doc ? doc.org_id : undefined
+        reach = read.filter((row) => row.org_id === org)
       }
       if (found.patch === null || write === null) continue
       const { name } = found.patch

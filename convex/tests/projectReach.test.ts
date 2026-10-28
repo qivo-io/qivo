@@ -1242,6 +1242,95 @@ describe('fixtures and migrations', () => {
   }, 120_000)
 })
 
+describe('the over-cap fix and its page budget', () => {
+  const long = `${'n'.repeat(79)}😀`
+
+  /** A project with a name over NAME_MAX and `rows` reach rows. */
+  async function longNamed(t: T, org_id: string, rows: number): Promise<Doc<'projects'>> {
+    const project = await plantProject(t, { org_id, name: long })
+    await t.run(async (ctx) => {
+      for (let n = 0; n < rows; n++)
+        await ctx.db.insert('project_reach', {
+          org_id,
+          grantee_kind: 'profile',
+          grantee_id: uuid(),
+          kind: 'root',
+          project_id: project.id,
+          root_id: project.id,
+          name_key: nameKey(long),
+          key: project.key,
+          live: true,
+          on_root: false,
+        })
+    })
+    return project
+  }
+
+  /** A run of the fix, answering the outcome of each project's name, or
+   * undefined for a name it no longer finds. */
+  const fixRun = (t: T, projects: Doc<'projects'>[]) => async () => {
+    const got = await t.action(internal.internal.overCapRows.fix, { dry_run: false })
+    return projects.map(
+      (p) =>
+        got.rows.find((row) => row.table === 'projects' && row.id === p._id && row.field === 'name')
+          ?.outcome,
+    )
+  }
+
+  it('charges the reach rows of a name it skips and defers the rest without a read', async () => {
+    // a page that read each skipped name's rows again would read more
+    // than this
+    const t = newT({ transactionLimits: { documentsRead: 4_500 } })
+    const f = await withOrg(t)
+    const projects: Doc<'projects'>[] = []
+    for (let i = 0; i < 6; i++) projects.push(await longNamed(t, f.org.id, 1_500))
+    const run = fixRun(t, projects)
+    // one name a run fits; the next reads what is left and waits, the
+    // others wait without a read
+    const waiting = Array(4).fill('skipped')
+    expect(await run()).toEqual(['fixed', 'skipped', ...waiting])
+    expect(await run()).toEqual([undefined, 'fixed', ...waiting])
+    for (let i = 0; i < 4; i++) await run()
+    for (const p of projects) {
+      const after = (await projectOf(t, p.id))!
+      expect(after.name).not.toBe(long)
+      const keys = await t.run(async (ctx) =>
+        (
+          await ctx.db
+            .query('project_reach')
+            .withIndex('by_project_grantee', (q) => q.eq('project_id', p.id))
+            .collect()
+        ).map((row) => row.name_key),
+      )
+      expect(new Set(keys)).toEqual(new Set([nameKey(after.name)]))
+    }
+  }, 120_000)
+
+  it('fixes the names after one a person must shorten, and reads four of those a page', async () => {
+    // a page that read a fifth such name would read more than this
+    const t = newT({ transactionLimits: { documentsRead: 9_500 } })
+    const f = await withOrg(t)
+    const max = LIMITS.projectTreeChange.max
+    const projects: Doc<'projects'>[] = []
+    for (const rows of [max, 100, 100, max, max, max, max, 100])
+      projects.push(await longNamed(t, f.org.id, rows))
+    const run = fixRun(t, projects)
+    // each name's outcome, or none once it is fixed or shortened
+    const [R, F, S, N] = ['reported', 'fixed', 'skipped', undefined]
+    // the first name has more rows than one change may update, and the two
+    // after it still fit; the fourth reads what is left and waits
+    expect(await run()).toEqual([R, F, F, S, S, S, S, S])
+    // four such names a page, and the names after them wait
+    expect(await run()).toEqual([R, N, N, R, R, R, S, S])
+    // until a person shortens two of them
+    await t.run(async (ctx) => {
+      for (const p of [projects[0], projects[3]])
+        await ctx.db.patch(p._id, { name: 'Shortened', name_key: nameKey('Shortened') })
+    })
+    expect(await run()).toEqual([N, N, N, N, R, R, R, F])
+  }, 120_000)
+})
+
 describe('teardowns', () => {
   it('deletes a deleted team’s rows, and counts them against the deletion', async () => {
     const t = newT()
