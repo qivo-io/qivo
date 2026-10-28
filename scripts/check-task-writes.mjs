@@ -21,9 +21,11 @@
  *   that changes none of them types its fields as TaskPatch),
  * - writes issue_descriptions,
  * - inserts or replaces a row that may be a task or project through
- *   Convex's writer outside lib/db.ts, model/descriptions.ts included
- *   (insertUnique, insertUsed),
- * - inserts a used_ids row outside lib/db.ts,
+ *   Convex's writer, model/descriptions.ts and lib/db.ts included, where
+ *   only insertUnique and insertUsed write a task or project, of the table
+ *   their caller names,
+ * - inserts a used_ids row outside lib/db.ts, the one rule lib/db.ts is
+ *   exempt from,
  * - or writes a table named by a type parameter, whose table the check
  *   cannot read. Only the generic writers below may, and for insertUnique
  *   and insertUsed the check reads the table each call names.
@@ -252,13 +254,12 @@ try {
         )
         continue
       }
-      if (key === usedKey) {
-        if (tables.has('used_ids') && kind === 'insert') usedWrites++
-        continue
-      }
+      // lib/db.ts alone may insert used_ids rows, and meets every other rule
       if (tables.has('used_ids') && kind === 'insert') {
-        failures.push(`${at(call)} - this inserts a used_ids row, which only ${usedOwner} writes.`)
-        continue
+        if (key === usedKey) usedWrites++
+        else
+          failures.push(`${at(call)} - this inserts a used_ids row, which only ${usedOwner} writes.`)
+        if (tables.size === 1) continue
       }
       // a task outside the owner meets the description rules below, whose
       // insertTask writes its used_ids row too

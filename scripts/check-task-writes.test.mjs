@@ -81,6 +81,8 @@ export async function insertUsed<T extends Tables>(db: Ctx['db'], table: T, doc:
 }
 export const insertAny = <T extends Tables>(ctx: Ctx, table: T, doc: WithoutSystemFields<DataModel[T]['document']>) =>
   ctx.db.insert(table, doc)
+export const rawTask = (ctx: Ctx, doc: WithoutSystemFields<DataModel['issues']['document']>) =>
+  ctx.db.insert('issues', doc)
 `
 
 const owner = `${imports.replaceAll("'./", "'../")}
@@ -237,11 +239,15 @@ describe('the task write check', { timeout: 60_000 }, () => {
     })
     const found = output.split('\n').filter((line) => line.startsWith('convex/'))
     // insertAny is in lib/db.ts but is neither insertUnique nor insertUsed,
-    // so it may not write a table of a type parameter
+    // so it may not write a table of a type parameter, and lib/db.ts, which
+    // alone writes used_ids, meets the description rules as any file does
     expect(found[0]).toMatch(
       /^convex\/lib\/db\.ts:13:3 - this writes a table that the check cannot read/,
     )
-    const inBad = found.slice(1)
+    expect(found[1]).toMatch(
+      /^convex\/lib\/db\.ts:15:3 - this inserts a task row without its description row/,
+    )
+    const inBad = found.slice(2)
     expect(inBad).toHaveLength(expected.length)
     for (const [i, line] of inBad.entries()) expect(line.startsWith(expected[i]), line).toBe(true)
   })
