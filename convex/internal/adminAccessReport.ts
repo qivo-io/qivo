@@ -30,10 +30,11 @@
  *               its sub-projects, if at all, when its sub-projects (SUBS)
  *               or the admin's own grants, team memberships and team
  *               shares (OWN) are more than a page reads to tell. Check it
- *               by hand. Also,
- *               once in each phase and without an admin or project, an
- *               organization with more than ADMINS_MOST admins, which the
- *               report leaves out.
+ *               by hand. Also, without an admin or project, an organization
+ *               with more than ADMINS.most admins, active or not, which the
+ *               report leaves out. The projects phase reports it once if
+ *               the organization holds a live project, and the work and
+ *               machine phases once each.
  *   held_task   an open task they are the assignee or reviewer of (not
  *               Done, not archived, in a live project under a live
  *               top-level project), in a project they would no longer see
@@ -131,9 +132,9 @@
  * can be missed or seen twice. Run the report again right before the
  * release with the split. A page checks its room before each organization,
  * part of projects (PART), project, admin, task, follow and row, and ends
- * only between two creation
- * times, so its cursor can point into an organization's projects, into one
- * project's admins and into one admin's tasks, follows, tokens and apps. */
+ * only between two creation times, so its cursor can point into an
+ * organization's projects, into one project's admins and into one admin's
+ * tasks, follows, tokens and apps. */
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize, type Value, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -201,8 +202,8 @@ export const PART = { rows: 1_000, bytes: MIB }
 /** The most admins of one organization a page reads, each a profile of at
  * most about 1.5 KiB (a name of at most 80 characters and an email of at
  * most 254), so about 1.5 MiB. A page reads an organization's admins once.
- * An organization with more is `unchecked`. */
-export const ADMINS_MOST = 1_000
+ * An organization with more is `unchecked`. Tests lower it. */
+export const ADMINS = { most: 1_000 }
 
 /** The most findings `run` lists. It counts every one. */
 const FINDINGS_MOST = 2_000
@@ -456,7 +457,7 @@ const answer = (page: Page, cursor: Cursor | null): PageResult => ({
 })
 
 /** The active admins of organization `orgId` in id order, read once a
- * page. An organization with more than ADMINS_MOST admins, active or not,
+ * page. An organization with more than ADMINS.most admins, active or not,
  * gets an `unchecked` finding and answers none. */
 function adminsOf(page: Page, orgId: string): Promise<Doc<'profiles'>[]> {
   let known = page.admins.get(orgId)
@@ -464,9 +465,9 @@ function adminsOf(page: Page, orgId: string): Promise<Doc<'profiles'>[]> {
     known = page.ctx.db
       .query('profiles')
       .withIndex('by_org_role_name', (q) => q.eq('org_id', orgId).eq('org_role', 'admin'))
-      .take(ADMINS_MOST + 1)
+      .take(ADMINS.most + 1)
       .then((rows) => {
-        if (rows.length <= ADMINS_MOST)
+        if (rows.length <= ADMINS.most)
           return rows.filter((p) => p.active).sort((a, b) => (a.id < b.id ? -1 : 1))
         page.findings.push({
           kind: 'unchecked',

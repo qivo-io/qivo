@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { OWN, ordinaryOf, ROOM, RUN, reportPage, SUBS } from '../internal/adminAccessReport'
+import { ADMINS, OWN, ordinaryOf, ROOM, RUN, reportPage, SUBS } from '../internal/adminAccessReport'
 import {
   accessRowsOf,
   canLeadProjects,
@@ -859,6 +859,36 @@ describe('paging', () => {
         (cursor) => cursor.phase === 'machine' && cursor.part === 'apps' && cursor.tokens === 6,
       ),
     ).toBe(true)
+  })
+
+  it('reports an organization with too many admins once in each phase, whatever the page size', async () => {
+    const t = newT()
+    const f = await busyOrg(t)
+    // the organization's two admins and an inactive third pass a bound of
+    // two, and the other organization's one admin does not
+    await plantAdmin(t, f, { active: false })
+    const orgFinding = {
+      kind: 'unchecked',
+      org_id: f.org.id,
+      profile_id: null,
+      project_id: null,
+      key: null,
+    }
+    try {
+      ADMINS.most = 2
+      for (const size of [1, 2, 3, undefined]) {
+        for (const phase of ['projects', 'work', 'machine'] as const) {
+          const findings = await findingsOf(t, phase, size)
+          expect(findings.filter((found) => found.org_id === f.org.id)).toEqual([orgFinding])
+        }
+        // the other organization's admin is still judged
+        expect(await findingsOf(t, 'projects', size)).toContainEqual(
+          expect.objectContaining({ kind: 'leaves', profile_id: f.otherAdmin.id }),
+        )
+      }
+    } finally {
+      ADMINS.most = 1_000
+    }
   })
 
   it('stops a run past RUN.ms with a cursor that a second call finishes', async () => {
