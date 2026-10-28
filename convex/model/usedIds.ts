@@ -30,7 +30,15 @@ const HOLDER_READS = { issues: 3, projects: 2 } as const
  * which keeps the id until internal/usedIdsBackfill gives it a row of its
  * own; and for a task a pending detach of its archived subtasks
  * (schema.ts archived_detaches), which has no organization and runs on
- * after it. Answers the rows it found. */
+ * after it. Answers the rows it found.
+ *
+ * Stored-byte totals rows (model/storageTotals.ts) are no holders. Each
+ * names its organization and the task's or project's number, which every
+ * writer matches, so a task or project that takes the id elsewhere gets a
+ * row of its own. Every teardown takes the organization's rows out before
+ * this runs: its deletion in steps and the public demo's cleanup drain
+ * them, deleteOrgDeep deletes them, and the Northstar wipe takes out every
+ * counted file with its task, which deletes a row once it holds none. */
 async function heldOutside(ctx: QueryCtx, row: Doc<'used_ids'>): Promise<object[]> {
   const id = row.row_id
   const found = [
