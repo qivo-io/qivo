@@ -43,7 +43,11 @@ describe("the task's history in the store", () => {
   let author: string
   let subs: Live[]
   let earlier: { before: string; answer: Deferred<History> }[]
-  let writes: { name: string; answer: Deferred<null> }[]
+  let writes: { name: string; answer: Deferred<unknown> }[]
+  // the newest workspace subscription's answer, and while set, what each
+  // new one waits for before it answers (a re-init that loads slowly)
+  let publishWhole: (snap: Snapshot) => void
+  let holdWhole: ((answer: () => void) => void) | null
   // two windows, such as the Inbox pane and its pop-out
   const pane = {}
   const popOut = {}
@@ -126,10 +130,13 @@ describe("the task's history in the store", () => {
           writes.push({ name, answer: { resolve, reject } })
         }),
     )
+    holdWhole = null
     network.onUpdate.mockImplementation((ref, args, receive, onError) => {
       const name = getFunctionName(ref)
       if (name === 'workspace:whole') {
-        receive(structuredClone(snap))
+        publishWhole = (value) => receive(structuredClone(value))
+        if (holdWhole) holdWhole(() => receive(structuredClone(snap)))
+        else receive(structuredClone(snap))
         return () => {}
       }
       const live: Live = { name, args, deliver: receive, fail: onError, closed: false }
@@ -451,6 +458,74 @@ describe("the task's history in the store", () => {
     expect(changes()).toEqual(['event-2'])
     again.deliver({ events: [change(2), change(3)], earlier: false, next: null })
     expect(changes()).toEqual(['event-2', 'event-3'])
+  })
+
+  it('subscribes the history of a task created under All once a delivery holds it', async () => {
+    const { P } = store
+    P.showHistory(pane, true)
+    const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' })
+    if (!key) throw new Error('the task was not created')
+    const task = P.issueById[key]
+    P.watchComments(task.uuid)
+    expect(P.historyLoaded).toBe(true)
+    expect(P.historyEarlier).toBe('none')
+    expect(named('snapshot:threadHistory')).toEqual([])
+    // the server holds the task now, and the create answers
+    snap.issues.push({
+      ...snap.issues[0],
+      id: task.uuid,
+      num: snap.orgs[0].next_issue_num + 1,
+      title: 'New task',
+    })
+    publishWhole(snap)
+    const create = writes.find((w) => w.name === 'issues:create')
+    create?.answer.resolve({ num: snap.orgs[0].next_issue_num + 1 })
+    await later()
+    const history = one('snapshot:threadHistory')
+    expect(history.args).toEqual({ org_id: snap.orgs[0].id, issue_id: task.uuid })
+    // its first page replaces the empty one, with what it says is earlier
+    history.deliver({
+      events: [change(2, task.uuid), change(3, task.uuid)],
+      earlier: true,
+      next: 'event-2',
+    })
+    await later()
+    expect(changes()).toEqual(['event-2', 'event-3'])
+    expect(P.historyEarlier).toBe('more')
+    void P.loadEarlierHistory()
+    expect(earlier.map((e) => e.before)).toEqual(['event-2'])
+    // later deliveries keep the one subscription
+    publishWhole(snap)
+    await later()
+    expect(named('snapshot:threadHistory')).toHaveLength(1)
+  })
+
+  it("hands on the history a re-init's boot heard before its workspace, and the newest wins", async () => {
+    const { P } = store
+    P.showHistory(pane, true)
+    P.watchComments(null)
+    let answerWhole = () => {}
+    holdWhole = (answer) => {
+      answerWhole = answer
+    }
+    const again = store.initStore()
+    await settle()
+    // watched while the boot waits for its workspace: the thread and its
+    // history subscribe on the boot's parts and answer before it
+    P.watchComments('task-a')
+    const history = one('snapshot:threadHistory')
+    history.deliver({ events: [change(1)], earlier: false, next: null })
+    history.deliver({ events: [change(1), change(2)], earlier: false, next: null })
+    await settle()
+    expect(changes()).toEqual([])
+    holdWhole = null
+    answerWhole()
+    await again
+    await settle()
+    expect(changes()).toEqual(['event-1', 'event-2'])
+    expect(open('snapshot:threadHistory')).toHaveLength(1)
+    history.deliver({ events: [change(1), change(2), change(3)], earlier: false, next: null })
+    expect(changes()).toEqual(['event-1', 'event-2', 'event-3'])
   })
 
   it('gives a task whose create is on its way an empty history', () => {
