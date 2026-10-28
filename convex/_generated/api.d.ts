@@ -91,6 +91,7 @@ import type * as lib_backgroundPreviews from "../lib/backgroundPreviews.js";
 import type * as lib_billableUsers from "../lib/billableUsers.js";
 import type * as lib_billingAccess from "../lib/billingAccess.js";
 import type * as lib_billingTypes from "../lib/billingTypes.js";
+import type * as lib_clientLabel from "../lib/clientLabel.js";
 import type * as lib_core from "../lib/core.js";
 import type * as lib_db from "../lib/db.js";
 import type * as lib_delay from "../lib/delay.js";
@@ -329,6 +330,7 @@ declare const fullApi: ApiFromModules<{
   "lib/billableUsers": typeof lib_billableUsers;
   "lib/billingAccess": typeof lib_billingAccess;
   "lib/billingTypes": typeof lib_billingTypes;
+  "lib/clientLabel": typeof lib_clientLabel;
   "lib/core": typeof lib_core;
   "lib/db": typeof lib_db;
   "lib/delay": typeof lib_delay;
