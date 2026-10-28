@@ -8,6 +8,7 @@ import { asMachineCaller } from '../lib/core'
 import type { EventOwner } from '../lib/taskEvents'
 import { sha256hex, touchCredential } from '../machine/auth'
 import { enrollOrganization } from '../model/billing'
+import { recordApiCall } from '../model/billingUsage'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { noCheckoutDue, retentionDue, serviceEndedAt } from '../model/orgRetention'
 import { STALLED_MS, SWEEP_PAGES } from '../orgRemovals'
@@ -240,6 +241,11 @@ const orgRows = (t: T, orgId: string) =>
       'messages',
       'issue_attachments',
       'org_counters',
+      'agent_keys',
+      'mcp_tokens',
+      'billing_usage',
+      'billing_usage_accounts',
+      'billing_month_totals',
     ] as const)
       counts[table] = (await ctx.db.query(table).collect()).filter(
         (row) => (row as { org_id?: string }).org_id === orgId,
@@ -608,6 +614,31 @@ describe('deleting the organization', () => {
       body: 'Ready for review',
     })
     for (let i = 0; i < 3; i++) await createTask(t, f.admin, f.org.id, f.sub.id)
+    // an agent key and a personal token, with calls on their accounts and
+    // the month's total
+    const key = await as(t, f.admin).mutation(api.tokens.createAgentKey, {
+      org_id: f.org.id,
+      id: uuid(),
+      agent_id: f.agent.id,
+      name: 'Night job',
+      key_prefix: 'qva_012...abcde',
+      key_hash: 'ab'.repeat(32),
+    })
+    const token = await as(t, f.user).mutation(api.tokens.createMcpToken, {
+      id: uuid(),
+      profile_id: f.user.id,
+      name: 'Cursor',
+      token_prefix: 'qvt_0123456',
+      token_hash: 'cd'.repeat(32),
+      access: 'write',
+    })
+    await t.run(async (ctx) => {
+      for (const [profile_id, credential_id] of [
+        [f.agent.id, `agent_keys:${key.id}`],
+        [f.user.id, `mcp_tokens:${token.id}`],
+      ])
+        await recordApiCall(ctx, { profile_id, credential_id, credential_name: 'planted' })
+    })
     const storage = await t.run(async (ctx) => {
       const storage_id = await ctx.storage.store(new Blob(['bytes']) as never)
       await ctx.db.insert('issue_attachments', {
@@ -636,6 +667,13 @@ describe('deleting the organization', () => {
     const before = await orgRows(t, f.org.id)
     expect(before.issues).toBeGreaterThan(0)
     expect(before.activity_events).toBeGreaterThan(0)
+    expect(before).toMatchObject({
+      agent_keys: 1,
+      mcp_tokens: 1,
+      billing_usage: 2,
+      billing_usage_accounts: 2,
+    })
+    expect(before.billing_month_totals).toBeGreaterThan(0)
     const others = await orgRows(t, f.otherOrg.id)
 
     vi.setSystemTime(Date.parse(at(30)) - 60_000)

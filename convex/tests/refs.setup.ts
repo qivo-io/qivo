@@ -33,6 +33,8 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'billing_periods', field: 'plan_id', target: 'billing_plans' },
   { table: 'billing_usage', field: 'org_id', target: 'organizations' },
   { table: 'billing_usage_totals', field: 'org_id', target: 'organizations' },
+  { table: 'billing_usage_accounts', field: 'org_id', target: 'organizations' },
+  { table: 'billing_month_totals', field: 'org_id', target: 'organizations' },
   { table: 'billing_events', field: 'org_id', target: 'organizations' },
   { table: 'billing_notices', field: 'org_id', target: 'organizations' },
   { table: 'usage_months', field: 'org_id', target: 'organizations' },
@@ -93,8 +95,10 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'message_sweeps', field: 'profile_id', target: 'profiles' },
   { table: 'account_appearance', field: 'custom_image_id', target: 'custom_backgrounds' },
   { table: 'agent_keys', field: 'profile_id', target: 'profiles' },
+  { table: 'agent_keys', field: 'org_id', target: 'organizations' },
   { table: 'agent_keys', field: 'created_by', target: 'profiles' },
   { table: 'mcp_tokens', field: 'profile_id', target: 'profiles' },
+  { table: 'mcp_tokens', field: 'org_id', target: 'organizations' },
   { table: 'oauth_connections', field: 'profile_id', target: 'profiles' },
   { table: 'oauth_connections', field: 'org_id', target: 'organizations' },
   { table: 'webhook_events', field: 'org_id', target: 'organizations' },
@@ -160,6 +164,7 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // billing_periods.profile_ids similarly records the renewal snapshot.
   'billing_usage.profile_id',
   'billing_usage.credential_id',
+  'billing_usage_accounts.profile_id',
   'billing_notices.profile_id',
   // A Better Auth session id, kept after the session row is deleted
   // (lib/sessionEnd.ts endSessionAccess).

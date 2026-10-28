@@ -19,6 +19,7 @@ import {
 import { canSeeProject, hasProjectLevel } from '../lib/access'
 import { MCP_PROVENANCE } from '../machine/shared'
 import { logActivity, machineDetail } from '../model/activity'
+import { removeProfile } from '../model/cascade'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { NORTHSTAR_BATCH, NORTHSTAR_STEPS } from '../model/demoSeed'
 import { nameKeysReady } from '../model/nameKeys'
@@ -85,6 +86,11 @@ const applyRef = makeFunctionReference<
     seed_steps?: number
   }
 >('internal/marketingDemo:apply')
+const restoreRef = makeFunctionReference<
+  'mutation',
+  typeof TARGET & { person: string; sample_avatar?: boolean },
+  { profile_id: string }
+>('internal/marketingDemo:restoreSeat')
 const avatarRef = makeFunctionReference<
   'mutation',
   typeof TARGET & { person: string; storage_id: Id<'_storage'> },
@@ -443,6 +449,35 @@ describe('marketing demo rebuild ownership', () => {
     await reset(t, NEXT_ANCHOR)
     expect((await t.run((ctx) => ctx.db.get(person._id)))?.name_key).toBe(person.name_key)
     await expectExact(t, org_id)
+  })
+
+  it('seeds ranked usage whose account rows and month totals stay exact across a later reseed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.parse('2026-09-20T12:00:00.000Z'))
+    const t = newAuthT()
+    await seeded(t)
+    const clean = {
+      unranked: 0,
+      differing_accounts: 0,
+      differing_totals: 0,
+      unsettled: 0,
+      done: true,
+    }
+    // six months of three callers' calls
+    expect(await t.action(internal.internal.usageRanksBackfill.check, {})).toMatchObject({
+      ...clean,
+      buckets: 6,
+    })
+    const first = await t.run(async (ctx) => ctx.db.query('billing_usage').collect())
+    expect(first.every((row) => row.neg_calls === -row.calls)).toBe(true)
+    // a month later the reseed moves every month's calls and adds one month
+    vi.setSystemTime(Date.parse('2026-10-20T12:00:00.000Z'))
+    await reset(t, NEXT_ANCHOR)
+    expect(await t.action(internal.internal.usageRanksBackfill.check, {})).toMatchObject({
+      ...clean,
+      buckets: 7,
+    })
+    vi.useRealTimers()
   })
 
   it('seeds two teams with separate leaders, partial membership overlap, default settings, and inherited project access', async () => {
@@ -1409,6 +1444,43 @@ describe('marketing demo rebuild ownership', () => {
       await assertNoDanglingRefs(t, `refused ${collision} collision`)
     },
   )
+
+  it('puts back a removed seat with its reserved id and login, so a reset accepts the roster', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    const t = newAuthT()
+    const result = await seeded(t)
+    const roster = await profiles(t, result.org_id)
+    const atlas = roster.find((p) => p.kind === 'agent')!
+    const leo = roster.find((p) => p.email === 'leo@demo.qivo.io')!
+    // both have API usage in the seed, which keeps their ids taken
+    const named = await t.run(async (ctx) =>
+      (await ctx.db.query('billing_usage').collect()).map((row) => row.profile_id),
+    )
+    expect(named).toEqual(expect.arrayContaining([atlas.id, leo.id]))
+    for (const profile of [atlas, leo])
+      await t.run((ctx) => removeProfile(ctx, { profile, now: new Date().toISOString() }))
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    vi.useRealTimers()
+    await expectRefusal(reset(t, NEXT_ANCHOR), 'rule', /roster changed; restore a removed seat/)
+
+    const restore = (person: string) => t.mutation(restoreRef, { ...TARGET, person })
+    await expectRefusal(restore('nobody'), 'bad_request', /unknown person/)
+    // a login that is not the receipt's cannot take the seat back
+    const receipt = await t.run(async (ctx) => (await ctx.db.query('marketing_demo').unique())!)
+    await t.run((ctx) =>
+      ctx.db.patch(receipt._id, { auth_ids: { ...receipt.auth_ids, leo: 'another-login' } }),
+    )
+    await expectRefusal(restore('leo'), 'rule', /login ownership changed/)
+    await t.run((ctx) => ctx.db.patch(receipt._id, { auth_ids: receipt.auth_ids }))
+    expect(await restore('atlas')).toEqual({ profile_id: atlas.id })
+    await restore('leo')
+    await expectRefusal(restore('atlas'), 'conflict', /in place or still being removed/)
+    const strip = ({ _id, _creationTime, created_at, accepted_at, ...row }: Doc<'profiles'>) => row
+    const back = await profiles(t, result.org_id)
+    for (const before of [atlas, leo])
+      expect(strip(back.find((p) => p.id === before.id)!)).toEqual(strip(before))
+    expect(await reset(t, NEXT_ANCHOR)).toMatchObject({ state: 'ready', anchor: NEXT_ANCHOR })
+  })
 
   it.each(['extra-person', 'changed-login'] as const)(
     'refuses reset when ownership changed through %s',

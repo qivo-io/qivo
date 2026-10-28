@@ -968,6 +968,11 @@ describe('OAuth consent and resource binding', () => {
       oauth_query: oauthQuery,
     })
     expect(context.resource).toBe(RESOURCE)
+    // the unfinished authorization it stores has its client name's key
+    const stored = await f.t.run((ctx) => ctx.db.query('oauth_connections').collect())
+    expect(stored.map((row) => [row.client_name, row.name_key, row.approved_at])).toEqual([
+      ['Hermetic MCP client', 'hermetic mcp client', undefined],
+    ])
     const response = await http(f.t, '/api/auth/oauth2/public-client-prelogin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: APP },

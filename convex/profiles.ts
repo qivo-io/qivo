@@ -64,6 +64,7 @@ import { LIMITS, overText } from './lib/limits'
 import { named, nameKey } from './lib/nameKey'
 import { projectRightAfterUpdate } from './lib/projectCreators'
 import { logActivity } from './model/activity'
+import { usageNamesProfile } from './model/billingUsage'
 import { pendingRemoval, removeProfile } from './model/cascade'
 import { lowerSweepDue } from './model/messages'
 import { copyNameKey, inlineBudget } from './model/nameKeys'
@@ -167,8 +168,12 @@ export const create = adminMutation({
     if (teams.length > 0 && args.org_role === 'guest')
       throw forbidden('a guest is never a team member')
     // A removed profile keeps its id until its background cleanup ends, so
-    // a new seat cannot inherit the history that still names it.
-    if ((await pendingRemoval(ctx, args.id)) !== null)
+    // a new seat cannot inherit the history that still names it. Its API
+    // usage names it for good, so the id stays taken in its organization.
+    if (
+      (await pendingRemoval(ctx, args.id)) !== null ||
+      (await usageNamesProfile(ctx, org.id, args.id))
+    )
       throw badRequest('a profile with this id already exists')
     await insertUnique(
       ctx,

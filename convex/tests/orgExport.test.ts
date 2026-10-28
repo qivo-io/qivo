@@ -117,6 +117,8 @@ const EXCLUDED_TABLES = [
   'billing_periods',
   'billing_usage',
   'billing_usage_totals',
+  'billing_usage_accounts',
+  'billing_month_totals',
   'billing_events',
   'billing_webhooks',
   'billing_notices',
@@ -395,20 +397,28 @@ describe('organization export', () => {
         target_id: f.user.id,
         label: 'user',
       })
-      const keyId = uuid()
-      await ctx.db.insert('agent_keys', {
-        id: keyId,
-        profile_id: f.agent.id,
-        name: 'Automation',
-        key_prefix: 'qva_ab...cd',
-        key_hash: 'a'.repeat(64),
-        created_by: f.admin.id,
-        created_at: NOW,
-        revoked_at: NOW,
-      })
-      return { storageId, avatarId, attachmentId, linkId, keyId }
+      return { storageId, avatarId, attachmentId, linkId }
     })
     const caller = as(t, f.admin)
+    // a revoked key, created by the app's writer with its organization and
+    // name key, which serve index reads only
+    const { id: keyId } = await caller.mutation(api.tokens.createAgentKey, {
+      org_id: f.org.id,
+      id: uuid(),
+      agent_id: f.agent.id,
+      name: 'Automation',
+      key_prefix: 'qva_abc...cdef0',
+      key_hash: 'a'.repeat(64),
+    })
+    await caller.mutation(api.tokens.revokeAgentKey, { org_id: f.org.id, id: keyId })
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query('agent_keys')
+          .withIndex('by_uuid', (q) => q.eq('id', keyId))
+          .unique(),
+      ),
+    ).toMatchObject({ org_id: f.org.id, name_key: 'automation' })
     const exported = {} as Record<OrgExportSection, OrgExportRow[]>
     for (const section of Object.keys(ORG_EXPORT_SECTIONS) as OrgExportSection[]) {
       const parent = ORG_EXPORT_SECTIONS[section]
@@ -440,6 +450,9 @@ describe('organization export', () => {
       ['created', undefined],
       ['linked', [task.num]],
       ['renamed', undefined],
+      // the key's creation and revocation, narrated against its agent
+      ['created', undefined],
+      ['revoked', undefined],
     ])
     expect(exported.projects.find((row) => row.id === f.sub.id)).toMatchObject({ archived_at: NOW })
     expect(exported.issues.find((row) => row.id === task.id)).toMatchObject({
@@ -468,10 +481,13 @@ describe('organization export', () => {
     expect(exported.issue_links).toHaveLength(1)
     expect(exported.issue_links[0].id).toBe(ids.linkId)
     expect(exported.agent_keys[0]).toMatchObject({
-      id: ids.keyId,
-      key_prefix: 'qva_ab...cd',
-      revoked_at: NOW,
+      id: keyId,
+      name: 'Automation',
+      key_prefix: 'qva_abc...cdef0',
+      revoked_at: expect.any(String),
     })
+    expect(exported.agent_keys[0]).not.toHaveProperty('org_id')
+    expect(exported.agent_keys[0]).not.toHaveProperty('name_key')
     expect(exported.comments[0].body).toBe('<p>Remember this.</p>')
     expect(JSON.stringify(exported)).not.toContain(f.otherOrg.id)
     expect(JSON.stringify(exported)).not.toContain(f.admin.auth_user_id)

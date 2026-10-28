@@ -197,7 +197,9 @@ export async function sweep<Row>(
 }
 
 /** The unfinished background removal of `profileId`, or null. While it
- * exists, the id stays reserved (profiles.create). */
+ * exists, the id stays reserved (profiles.create). Once it is gone, the id
+ * stays taken in its organization if that organization's API usage names it
+ * (model/billingUsage.ts usageNamesProfile). */
 export function pendingRemoval(ctx: QueryCtx, profileId: string) {
   return ctx.db
     .query('profile_removals')
@@ -442,6 +444,16 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       .withIndex('by_org_period', (q) => q.eq('org_id', org.id))
       .collect())
       await ctx.db.delete(row._id)
+  for (const row of await ctx.db
+    .query('billing_usage_accounts')
+    .withIndex('by_org_period_profile', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(row._id)
+  for (const row of await ctx.db
+    .query('billing_month_totals')
+    .withIndex('by_org_period_shard', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(row._id)
   for (const row of await ctx.db
     .query('billing_notices')
     .filter((q) => q.eq(q.field('org_id'), org.id))

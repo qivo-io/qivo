@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Doc, Id } from '../_generated/dataModel'
+import { recordApiCall } from '../model/billingUsage'
 import { deleteOrgDeep, deleteTeamDeep, removeProfile } from '../model/cascade'
 import {
   fileState,
@@ -367,7 +368,9 @@ describe('deleteOrgDeep', () => {
       await ctx.db.insert('mcp_tokens', {
         id: uuid(),
         profile_id: f.user.id,
+        org_id: f.org.id,
         name: 'planted',
+        name_key: 'planted',
         token_prefix: 'qvt_pla',
         token_hash: 'a'.repeat(64),
         access: 'read',
@@ -376,12 +379,60 @@ describe('deleteOrgDeep', () => {
       await ctx.db.insert('agent_keys', {
         id: uuid(),
         profile_id: f.agent.id,
+        org_id: f.org.id,
         name: 'planted',
+        name_key: 'planted',
         key_prefix: 'qva_pla',
         key_hash: 'b'.repeat(64),
         created_by: f.admin.id,
         created_at: NOW,
       })
+      // calls in a live paid period here and in a month in the other
+      // organization, with their account rows and totals
+      const day = 24 * 60 * 60_000
+      const plan = uuid()
+      await ctx.db.insert('billing_plans', {
+        id: plan,
+        name: 'Team',
+        currency: 'usd',
+        seat_price_cents: 100,
+        minimum_seats: 5,
+        storage_gb_per_seat: 1,
+        minimum_storage_gb: 5,
+        api_calls_per_seat: 25_000,
+        api_block_size: 25_000,
+        api_block_price_cents: 100,
+        storage_block_price_cents: 100,
+        archived: false,
+        created_at: NOW,
+      })
+      const sub = await ctx.db.insert('billing_subscriptions', {
+        id: uuid(),
+        org_id: f.org.id,
+        plan_id: plan,
+        status: 'active',
+        polar_subscription_id: 'provider-sub',
+        current_period_start: new Date(Date.now() - day).toISOString(),
+        current_period_end: new Date(Date.now() + 30 * day).toISOString(),
+        billed_seats: 5,
+        next_seats: 5,
+        cancel_at_period_end: false,
+        created_at: NOW,
+        updated_at: NOW,
+      })
+      for (const profile of [f.user, f.agent, f.otherAdmin])
+        await recordApiCall(ctx, {
+          profile_id: profile.id,
+          credential_id: `mcp_tokens:${profile.id}`,
+          credential_name: 'planted',
+        })
+      const [totals] = await ctx.db.query('billing_usage_totals').collect()
+      expect(totals).toMatchObject({ org_id: f.org.id, calls: 2 })
+      expect(
+        (await ctx.db.query('billing_month_totals').collect()).map((row) => row.org_id),
+      ).toEqual([f.otherOrg.id])
+      // the provider side is resolved, as deleteOrgDeep requires
+      await ctx.db.patch(sub, { polar_subscription_id: undefined })
       await ctx.db.insert('marketing_demo', {
         key: 'planted',
         org_id: f.org.id,
@@ -445,6 +496,23 @@ describe('deleteOrgDeep', () => {
       expect(await collect(t, table), table).toEqual([])
     }
     expect(await t.run(async (ctx) => await ctx.db.query('agent_keys').collect())).toEqual([])
+    // the other organization's month call is all that is left
+    const billing = await t.run(async (ctx) => ({
+      billing_usage: await ctx.db.query('billing_usage').collect(),
+      billing_usage_accounts: await ctx.db.query('billing_usage_accounts').collect(),
+      billing_month_totals: await ctx.db.query('billing_month_totals').collect(),
+      billing_usage_totals: await ctx.db.query('billing_usage_totals').collect(),
+    }))
+    expect(
+      Object.fromEntries(
+        Object.entries(billing).map(([table, rows]) => [table, rows.map((row) => row.org_id)]),
+      ),
+    ).toEqual({
+      billing_usage: [f.otherOrg.id],
+      billing_usage_accounts: [f.otherOrg.id],
+      billing_month_totals: [f.otherOrg.id],
+      billing_usage_totals: [],
+    })
     expect(await t.run(async (ctx) => await ctx.db.query('marketing_demo').collect())).toEqual([])
     expect(await t.run(async (ctx) => await ctx.db.query('removed_access').collect())).toEqual([])
     expect((await collect(t, 'message_sweeps')).map((row) => row.profile_id)).toEqual([

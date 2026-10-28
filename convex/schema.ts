@@ -740,6 +740,17 @@ export default defineSchema({
   // chosen by `usagePeriod` (model/billingUsage.ts): a paid period's ISO start,
   // a pending interval's ISO start, or `month:YYYY-MM` for a UTC calendar month
   // without a paid period. Older rows may be keyed by `complimentary_start`.
+  //
+  // `neg_calls` and `name_key` rank a row, server-owned and written with
+  // `calls` and `credential_name` (model/billingUsage.ts writeUsageRow): the
+  // negated calls, so one ascending range reads calls descending, and the
+  // credential name's key (lib/nameKey.ts). A ranked row's -neg_calls is in
+  // its account's billing_usage_accounts row and, for a calendar month, in
+  // the organization's billing_month_totals; a row without them, stored
+  // before ranks existed, is in neither until the next call of its
+  // credential or internal/usageRanksBackfill ranks it. Such a row sorts
+  // first in the rank indexes, so one read of a bucket's range says whether
+  // the bucket's aggregates are complete (usageRanked).
   billing_usage: defineTable({
     org_id: v.string(),
     profile_id: v.string(),
@@ -747,6 +758,8 @@ export default defineSchema({
     credential_name: v.string(),
     period_start: v.string(),
     calls: v.number(),
+    neg_calls: v.optional(v.number()),
+    name_key: v.optional(v.string()),
   })
     .index('by_org_period', ['org_id', 'period_start'])
     .index('by_credential_period', ['credential_id', 'period_start'])
@@ -755,14 +768,73 @@ export default defineSchema({
       'profile_id',
       'credential_id',
       'period_start',
+    ])
+    // a bucket's credentials, the organization's or one account's, by calls
+    // descending, then name, with the credential breaking ties
+    .index('by_org_period_rank', [
+      'org_id',
+      'period_start',
+      'neg_calls',
+      'name_key',
+      'credential_id',
+    ])
+    .index('by_org_period_profile_rank', [
+      'org_id',
+      'period_start',
+      'profile_id',
+      'neg_calls',
+      'name_key',
+      'credential_id',
     ]),
 
+  // The calls of a paid, pending or older ISO-keyed bucket, every call
+  // counted in its own transaction (model/billingUsage.ts recordApiCall). A
+  // calendar month keeps its total in billing_month_totals instead.
   billing_usage_totals: defineTable({
     org_id: v.string(),
     period_start: v.string(),
     calls: v.number(),
     reported_api_blocks: v.number(),
+    // How many times the bucket's account rows were written
+    // (model/billingUsage.ts addRankedCalls). It only grows, so with `calls`
+    // it tells internal/usageRanksBackfill's check whether any write landed
+    // while it read the bucket. Absent until the first such write.
+    account_writes: v.optional(v.number()),
   }).index('by_org_period', ['org_id', 'period_start']),
+
+  // One account's calls in one usage bucket, every credential of the
+  // profile together: the sum of -neg_calls of the profile's ranked
+  // billing_usage rows in the bucket, kept in the transaction that ranks or
+  // counts each of them (model/billingUsage.ts addRankedCalls). Kept when the
+  // profile leaves, as its usage rows are, and deleted with the
+  // organization.
+  billing_usage_accounts: defineTable({
+    org_id: v.string(),
+    period_start: v.string(), // the bucket key, as on billing_usage
+    profile_id: v.string(),
+    calls: v.number(),
+  })
+    .index('by_org_period_profile', ['org_id', 'period_start', 'profile_id'])
+    // Billing's API calls by account: read in descending order
+    .index('by_org_period_calls', ['org_id', 'period_start', 'calls', 'profile_id']),
+
+  // A calendar-month bucket's calls, the organization's total in
+  // MONTH_TOTAL_SHARDS rows (model/billingUsage.ts), each holding the
+  // ranked calls of the profiles whose id hashes to it. Every call of one
+  // profile writes the same row, which its rate-limit row already
+  // serializes, so calls of different profiles rarely touch the same row.
+  // The total is the sum of the shards, which equals the bucket's calls
+  // once usageRanked says every row is in it. Deleted with the
+  // organization.
+  billing_month_totals: defineTable({
+    org_id: v.string(),
+    period_start: v.string(), // 'month:YYYY-MM'
+    shard: v.number(),
+    calls: v.number(),
+    // how many times this row was written, which only grows, as
+    // billing_usage_totals account_writes
+    writes: v.number(),
+  }).index('by_org_period_shard', ['org_id', 'period_start', 'shard']),
 
   // Durable outbox. Provider event external_id is this id, so a timeout and
   // retry cannot bill twice. Metering is never reconstructed from logs.
@@ -1736,10 +1808,22 @@ export default defineSchema({
     // excluded from the snapshot query on purpose (0036)
   }).index('by_profile', ['profile_id']),
 
+  /* `org_id` and `name_key` on agent keys and personal tokens are
+   * server-owned and written with the row: the owner profile's organization,
+   * which never changes, and the name as name-ordered lists sort and search
+   * it (lib/nameKey.ts), which never changes either, because a credential
+   * cannot be renamed. API access pages read them by organization or by
+   * person in name order. Never sent to clients, REST, MCP, webhooks or the
+   * export. A row stored before they existed has neither until
+   * internal/credentialKeysBackfill gives it both, so a reader that pages by
+   * organization first checks that no row is left without an org_id (one
+   * read of by_org_name with org_id undefined). */
   agent_keys: defineTable({
     id: v.string(),
     profile_id: v.string(), // always a kind='agent' profile
+    org_id: v.optional(v.string()), // the agent's
     name: v.string(),
+    name_key: v.optional(v.string()),
     key_prefix: v.string(), // safe first/last fingerprint of the qva_ secret, display only
     // sha256 hex, unique-checked on by_hash; secret never stored. A pending
     // test credential holds 'pending:' + the hash (machine/testing.ts).
@@ -1752,12 +1836,17 @@ export default defineSchema({
     .index('by_uuid', ['id'])
     .index('by_profile', ['profile_id'])
     .index('by_hash', ['key_hash'])
-    .index('by_created_by', ['created_by']), // removeProfile's SET NULL
+    .index('by_created_by', ['created_by']) // removeProfile's SET NULL
+    // API access: the organization's keys, or one agent's, in name order
+    .index('by_org_name', ['org_id', 'name_key', 'id'])
+    .index('by_profile_name', ['profile_id', 'name_key', 'id']),
 
   mcp_tokens: defineTable({
     id: v.string(),
     profile_id: v.string(),
+    org_id: v.optional(v.string()), // the owner profile's, as on agent_keys
     name: v.string(),
+    name_key: v.optional(v.string()), // as on agent_keys
     token_prefix: v.string(), // first chars of the qvt_ secret, display only
     // sha256 hex, unique-checked on by_hash; secret never stored. A pending
     // test credential holds 'pending:' + the hash (machine/testing.ts).
@@ -1777,8 +1866,12 @@ export default defineSchema({
     revoked_by_admin: v.optional(v.literal(true)),
   })
     .index('by_uuid', ['id'])
+    // also the owner's own list, newest first: insertion order is created_at order
     .index('by_profile', ['profile_id'])
-    .index('by_hash', ['token_hash']),
+    .index('by_hash', ['token_hash'])
+    // API access: the organization's tokens, or one person's, in name order
+    .index('by_org_name', ['org_id', 'name_key', 'id'])
+    .index('by_profile_name', ['profile_id', 'name_key', 'id']),
 
   // One immutable authorization transaction, bound to the consenting home seat.
   // Revocation is permanent; reconnecting creates a different transaction/id.
@@ -1790,6 +1883,14 @@ export default defineSchema({
     org_id: v.string(),
     client_id: v.string(),
     client_name: v.string(),
+    // client_name as name-ordered lists sort and search it (lib/nameKey.ts),
+    // server-owned and written with the row, unfinished authorizations
+    // included; client_name never changes. Never sent to clients or the
+    // export. A row stored before it existed has none until
+    // internal/credentialKeysBackfill gives it one, so a reader that pages
+    // in name order first checks that none of its organization's rows is
+    // left without one (one read of by_org_name with name_key undefined).
+    name_key: v.optional(v.string()),
     resource: v.string(),
     requested_scopes: v.array(v.string()),
     scopes: v.array(v.string()),
@@ -1811,7 +1912,16 @@ export default defineSchema({
     .index('by_profile', ['profile_id'])
     // OAuth client cleanup keeps a client with an approved connection or a
     // pending authorization (oauthRegistrations.ts).
-    .index('by_client', ['client_id', 'approved_at', 'authorization_expires_at']),
+    .index('by_client', ['client_id', 'approved_at', 'authorization_expires_at'])
+    // API access: the organization's connections, or one person's, in name
+    // order. Unfinished authorizations are in these ranges too; readers skip
+    // the rows without approved_at.
+    .index('by_org_name', ['org_id', 'name_key', 'id'])
+    .index('by_profile_name', ['profile_id', 'name_key', 'id'])
+    // The login's connected apps, newest approval first. A range from
+    // approved_at '' reads approved connections only, so the unfinished
+    // authorizations every consent attempt leaves are never read.
+    .index('by_auth_user_approved', ['auth_user_id', 'approved_at']),
 
   // Retained hash tombstones catch replay even after the provider deletes its
   // code/refresh rows. Never store a bearer credential here. A used refresh

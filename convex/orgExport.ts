@@ -263,6 +263,12 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
     delete row.icon
     delete row.icon_color
   }
+  // An agent key's organization and name key only serve API access's
+  // name-ordered index reads.
+  if (section === 'agent_keys') {
+    delete row.org_id
+    delete row.name_key
+  }
   delete row.key_hash
   return row
 }
