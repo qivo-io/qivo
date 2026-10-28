@@ -132,6 +132,11 @@ const EXCLUDED_TABLES = [
   'org_counters',
   // Which migrations the organization's rows finished, operational state.
   'org_ready',
+  // Stored-byte totals for billing, which count the attachments exported
+  // with their tasks.
+  'storage_org_totals',
+  'storage_project_totals',
+  'storage_task_totals',
   // Team sync stamps, exported on the profile row (sync_at, sync_since).
   'sync_stamps',
   // Deleted items are not exported: restore an item to include its work.

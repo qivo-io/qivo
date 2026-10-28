@@ -120,6 +120,7 @@ import {
 } from './messages'
 import { nextIssueNum, tallyRow, tallyRows } from './orgs'
 import { reviewHoursFor } from './projects'
+import { moveTaskFiles } from './storageTotals'
 import { emitTaskEvent } from './taskEvents'
 import { assertWeekPair, cleanRemaining, cleanTaskDate, roundTenths } from './taskValues'
 
@@ -2141,6 +2142,10 @@ export async function moveIssueCore(
   const before = { ...issue }
   await ctx.db.patch(issue._id, w)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
+  // the stored-byte totals follow the task and every subtask it carries, at
+  // one totals row each, however many files they hold
+  // (model/storageTotals.ts), before the room checks of the carry below
+  await moveTaskFiles(ctx, [issue.id, ...carried.map((row) => row.id)], target)
   for (const row of carried) {
     await assertRoom(ctx, MOVE_TOO_LARGE)
     // a carried subtask's stamps change as the task's above; the row as it

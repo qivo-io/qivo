@@ -86,6 +86,11 @@
  * item row, activity rows and notices count as any write does, and each user
  * transaction counts as one demo change.
  *
+ * The stored-byte totals (model/storageTotals.ts) count an attachment once,
+ * live or stored, so moves and restores leave them as they are, retries
+ * included. Each delete of an attachment row for good (discard, dropStored
+ * and the teardowns below) takes it out in the same transaction.
+ *
  * Teardowns that delete an organization's work outright (deleteOrgDeep, an
  * organization's deletion in steps, the public demo's cleanup, the
  * Northstar wipe) empty its Deleted items with clearOrgTrash, whatever
@@ -136,6 +141,7 @@ import {
   scheduleArchivedReads,
 } from './messages'
 import { newUuid, tallyRow } from './orgs'
+import { uncountFile, uncountStored } from './storageTotals'
 import { emitTaskEvent } from './taskEvents'
 
 /** How long a deleted item waits before the nightly expiry purges it. */
@@ -491,11 +497,15 @@ async function deleteLive(ctx: MutationCtx, live: LiveRow): Promise<void> {
     await tallyRow(ctx, live.table, live.doc, null)
 }
 
-/** Deletes a live row for good, letting go of an attachment's file
+/** Deletes a live row for good, taking an attachment out of the stored-byte
+ * totals (model/storageTotals.ts) and letting go of its file
  * (model/fileHolds.ts releaseFile). */
 async function discard(ctx: MutationCtx, live: LiveRow): Promise<void> {
   await deleteLive(ctx, live)
-  if (live.table === 'issue_attachments') await releaseFile(ctx, live.doc.storage_id)
+  if (live.table === 'issue_attachments') {
+    await uncountFile(ctx, live.doc)
+    await releaseFile(ctx, live.doc.storage_id)
+  }
 }
 
 /** Moves `live` into `item`'s stored rows, travelling with `ownerId`, and
@@ -1265,18 +1275,16 @@ async function absentProjects(run: Run): Promise<string[]> {
   return ids
 }
 
-/** Deletes the item's stored rows of `table`, letting go of each
- * attachment's file in the same transaction. */
+/** Deletes the item's stored rows of `table`, taking each attachment out of
+ * the stored-byte totals and letting go of its file in the same
+ * transaction. */
 const purgeStored = (run: Run, table: StoredTable): Promise<boolean> =>
   drain(
     run.budget,
     run.ctx.db
       .query('deleted_rows')
       .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table)),
-    async (row) => {
-      await run.ctx.db.delete(row._id)
-      await releaseFile(run.ctx, row.storage_id)
-    },
+    (row) => dropStored(run.ctx, row),
   )
 
 /* Each deleted_tasks row once its task's history is gone (purgeHistory),
@@ -2158,9 +2166,11 @@ async function droppedInto(ctx: MutationCtx, into: Item): Promise<void> {
   if (fresh !== null) await ctx.db.patch(into._id, { dropped_rows: (fresh.dropped_rows ?? 0) + 1 })
 }
 
-/** Deletes a stored row for good, letting go of an attachment's file. */
+/** Deletes a stored row for good, taking an attachment out of the
+ * stored-byte totals (model/storageTotals.ts) and letting go of its file. */
 async function dropStored(ctx: MutationCtx, row: Doc<'deleted_rows'>): Promise<void> {
   await ctx.db.delete(row._id)
+  await uncountStored(ctx, row)
   await releaseFile(ctx, row.storage_id)
 }
 
@@ -3856,14 +3866,17 @@ async function clearPages<Row>(
   return true
 }
 
-/** Deletes the rows task `taskId` still has in the live tables, letting go
- * of each attachment's file (model/fileHolds.ts releaseFile), then its
- * messages. */
+/** Deletes the rows task `taskId` still has in the live tables, taking each
+ * attachment out of the stored-byte totals and letting go of its file
+ * (model/fileHolds.ts releaseFile), then its messages. */
 async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown): Promise<boolean> {
   for (const relation of TASK_ROWS) {
     const cleared = await clearPages(budget, relation(ctx, taskId), async (row) => {
       await ctx.db.delete(row.doc._id)
-      if (row.table === 'issue_attachments') await releaseFile(ctx, row.doc.storage_id)
+      if (row.table === 'issue_attachments') {
+        await uncountFile(ctx, row.doc)
+        await releaseFile(ctx, row.doc.storage_id)
+      }
       return true
     })
     if (!cleared) return false
@@ -3914,8 +3927,9 @@ async function clearDescriptions(
  * their restores wait to attach, so a step still scheduled finds nothing to
  * do. Then each stored task goes with the rows a move or restore left of it
  * in the live tables, and each stored row, a project after the milestones,
- * grants and tasks still live under it. An attachment's file is let go with
- * its row unless another row, live or stored, still names it, and is held
+ * grants and tasks still live under it. An attachment leaves the
+ * stored-byte totals with its row (model/storageTotals.ts), and its file is
+ * let go unless another row, live or stored, still names it, and is held
  * for a restore before it is erased (model/fileHolds.ts releaseFile).
  * Nothing is narrated or detached, and the stored tasks' history stays,
  * because the caller deletes the rest of the organization's work, its
@@ -3988,6 +4002,7 @@ export async function clearOrgTrash(
         if (!stranded) return false
       }
       await ctx.db.delete(row._id)
+      await uncountStored(ctx, row)
       if (row.storage_id !== undefined) await releaseFile(ctx, row.storage_id)
       return true
     },

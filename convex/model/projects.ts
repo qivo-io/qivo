@@ -54,6 +54,7 @@ import {
 } from './expected'
 import { scheduleArchivedReads } from './messages'
 import { nextProjectNum, tallyRow } from './orgs'
+import { renameProjectTotals } from './storageTotals'
 
 /* The first step of a restore's regroup chain (regroup.ts), referenced by
  * name as model/messages.ts references its steps. */
@@ -648,6 +649,8 @@ export async function updateProjectCore(
   if (Object.keys(db).length > 0) await ctx.db.patch(project._id, db)
   const name = db.name ?? project.name
   const nameChanged = db.name !== undefined && db.name !== project.name
+  // the Storage by project breakdown shows the project's current name
+  if (nameChanged) await renameProjectTotals(ctx, { id, name })
   const event = {
     org_id: me.org_id,
     actor_id: me.id,

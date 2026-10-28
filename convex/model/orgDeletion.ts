@@ -53,6 +53,7 @@ import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import { releaseFile } from './fileHolds'
 import { deleteOrgBookkeeping, tallyRow } from './orgs'
+import { uncountFile } from './storageTotals'
 
 type Row = { _id: Id<TableNames> }
 
@@ -397,7 +398,12 @@ const liveTasks = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
             ctx.db
               .query('issue_attachments')
               .withIndex('by_issue', (q) => q.eq('issue_id', issue.id)),
-            { after: (row) => releaseFile(ctx, row.storage_id) },
+            {
+              after: async (row) => {
+                await uncountFile(ctx, row)
+                await releaseFile(ctx, row.storage_id)
+              },
+            },
           ),
       ]),
     { before: (issue) => tallyRow(ctx, 'issues', issue, null) },
@@ -502,11 +508,28 @@ const webhookRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     ),
   )
 
-/** Usage with its account rows and month totals, billing events, periods,
- * notices and the subscription row, then the monthly usage rows and counts
- * of Qivo Admin's Usage page. */
+/** Any task or project storage totals left, though the earlier phases take
+ * them out with the files (model/storageTotals.ts), then usage with its
+ * account rows and month totals, billing events, periods, notices and the
+ * subscription row, then the monthly usage rows and counts of Qivo Admin's
+ * Usage page. The organization's own totals row goes with its other
+ * bookkeeping in the last phase. */
 const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
+    () =>
+      drain(
+        ctx,
+        budget,
+        ctx.db.query('storage_task_totals').withIndex('by_org', (q) => q.eq('org_id', orgId)),
+      ),
+    () =>
+      drain(
+        ctx,
+        budget,
+        ctx.db
+          .query('storage_project_totals')
+          .withIndex('by_org_bytes', (q) => q.eq('org_id', orgId)),
+      ),
     ...(['billing_usage', 'billing_usage_totals', 'billing_events'] as const).map(
       (table) => () =>
         drain(

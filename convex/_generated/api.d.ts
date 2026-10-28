@@ -182,6 +182,7 @@ import type * as model_orgs from "../model/orgs.js";
 import type * as model_people from "../model/people.js";
 import type * as model_projectAccess from "../model/projectAccess.js";
 import type * as model_projects from "../model/projects.js";
+import type * as model_storageTotals from "../model/storageTotals.js";
 import type * as model_syncStamps from "../model/syncStamps.js";
 import type * as model_taskEvents from "../model/taskEvents.js";
 import type * as model_taskValues from "../model/taskValues.js";
@@ -398,6 +399,7 @@ declare const fullApi: ApiFromModules<{
   "model/people": typeof model_people;
   "model/projectAccess": typeof model_projectAccess;
   "model/projects": typeof model_projects;
+  "model/storageTotals": typeof model_storageTotals;
   "model/syncStamps": typeof model_syncStamps;
   "model/taskEvents": typeof model_taskEvents;
   "model/taskValues": typeof model_taskValues;
