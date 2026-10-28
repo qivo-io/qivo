@@ -1828,9 +1828,11 @@ than 1,000 active projects. When those alone leave no
 room for a single comment, the call is refused with `this organization's active tasks are too large to list in one request; archive done tasks and finished projects so fewer stay active`, and a smaller `limit`
 does not help. When the call instead runs out of index reads, which follow
 the active projects, your team memberships and the labels a search matches,
-it is refused with `this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words`. A `search` of active tasks reads the
-descriptions of the tasks its other fields do not match, in list order, and
-stops once it has found the tasks up to the end of the page. A search that
+it is refused with `this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words`. A `search` of active tasks reads, in list
+order, the label names of the tasks their other fields do not match, then
+the descriptions of those their labels do not match either. It stops once
+it has found the tasks up to the end of the page, whichever field matched
+them. A search that
 matches few tasks, such as one by task ID, reads every active task's
 description. With descriptions of a few hundred characters that fits an
 organization of about 9,000 active tasks in one call. A larger one is

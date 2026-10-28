@@ -485,8 +485,8 @@ async function markedLabelNamesOf(
 }
 
 /** How many reads of one task's assignment of one matching label
- * (labelNamesOf) a search makes before it reads each matching label's
- * active assignments instead. Tests lower `reads`. */
+ * (labelNamesOf) a search makes, within TEXT_TASK_READS, before it reads
+ * each matching label's active assignments instead. Tests lower `reads`. */
 export const LABEL_TASK_READS = { reads: 1000 }
 
 /** What a search's label reads keep back from the request's limits for the
@@ -509,9 +509,10 @@ export const SEARCH_TOO_LARGE =
 /** What a search's description reads keep back from the request's limits
  * when some label matches the search: LABEL_READS_RESERVE for the page
  * after the search, and as many ranges and documents again for the label
- * reads between them (activeLabelNames), which read each matching label's
- * active assignments once a task's own assignments are too many to read one
- * by one. Assignments are small, so one document at Convex's size limit
+ * reads that may follow a description read (searchedTexts), the last of
+ * which read each matching label's active assignments once a task's own
+ * assignments are too many to read one by one (activeLabelNames).
+ * Assignments are small, so one document at Convex's size limit
  * more holds their bytes. A search that no label matches reads no label, so
  * its description reads keep back LABEL_READS_RESERVE only. Tests lower
  * these. */
@@ -521,10 +522,12 @@ export const DESCRIPTION_READS_RESERVE = {
   bytes: LABEL_READS_RESERVE.bytes + DOCUMENT_MAX_BYTES,
 }
 
-/** How many tasks' description rows a search reads one by one, in the
- * order the list answers, before it reads the active description rows of
- * the rest's projects in chunks instead (model/descriptions.ts
- * projectTextReader). Tests lower it. */
+/** How many index ranges a search reads one task at a time, in the order
+ * the list answers, for a task's description rows (descriptionsOf) or its
+ * assignment of one matching label (labelNamesOf), before it reads the
+ * active description rows of the rest's projects in chunks
+ * (model/descriptions.ts projectTextReader) and each matching label's
+ * active assignments (activeLabelNames) instead. Tests lower it. */
 export const TEXT_TASK_READS = { reads: 1000 }
 
 /** The refusal for a search whose task descriptions do not fit in one
@@ -532,60 +535,115 @@ export const TEXT_TASK_READS = { reads: 1000 }
 export const DESCRIPTIONS_TOO_LARGE =
   'this search reads too many task descriptions to answer in one request; name a project or add a filter'
 
-/* The leading tasks of `found`, in the order the list answers, that hold
- * `want` tasks `plain` or `described` match, or all of `found` when fewer
- * do, with the texts read for them by task id. More text never unmatches,
- * so a task `plain` matches without its text reads none, and the tasks
- * after the leading ones cannot reach the page. It reads texts in list
- * order, never more at a time than could still complete the page with the
- * matches among them, and stops once the leading tasks hold `want`. The
- * first TEXT_TASK_READS it reads one range a task (model/descriptions.ts
- * descriptionsOf); past them it reads the active rows of the rest's
+/* The tasks of `found` that match the search, in the order the list
+ * answers, up to `want` of them, with the texts read for them by task id.
+ * Whether a task matches turns on its own fields, the names of the
+ * `labels` the search names that it carries, and its text (`matches`).
+ * More text never unmatches, so it settles the tasks in list order and
+ * reads a task's label names only when its own fields miss, and its text
+ * only when its labels miss too, and it stops once the tasks settled hold
+ * `want` matches, so a page that labels complete stops as one that titles
+ * complete does. It reads never more at a time than could still complete
+ * the page with the matches among them.
+ *
+ * The first TEXT_TASK_READS reads it makes one task at a time: a task's
+ * text in one range (model/descriptions.ts descriptionsOf), and its
+ * assignment of each label in one range each (labelNamesOf) while those
+ * stay within LABEL_TASK_READS and leave LABEL_READS_RESERVE ranges and
+ * documents. Past them it reads the label names of every task left that
+ * needs them through each label's active assignments, once
+ * (activeLabelNames), then the active rows of the rest's
  * projects a step at a time, each from the project of the first task still
  * without a text, ending once the page is complete and reading little ahead
  * once the next task without a text is in another project
  * (projectTextReader), checking before it refuses whether the texts read
- * complete the page, and a task no range
- * holds a row for on its own, all within the request's room less `reserve`,
- * which a step of texts read one by one may pass by one task's text, within
- * COMMENT_READS_RESERVE. A search whose texts do not fit
- * is refused with DESCRIPTIONS_TOO_LARGE, so no answer leaves a text
- * unread, and one that has no room left for the first text with the
- * sentence of what the list read before (ACTIVE_TASKS_TOO_LARGE or
+ * complete the page, and a task no range holds a row for on its own. The
+ * texts are read within the request's room less DESCRIPTION_READS_RESERVE,
+ * or LABEL_READS_RESERVE when it names no label, which a step of texts read
+ * one by one may pass by one task's text, within COMMENT_READS_RESERVE. A
+ * search whose texts do not fit is refused with DESCRIPTIONS_TOO_LARGE, so
+ * no answer leaves a text unread, one whose label assignments do not fit
+ * with SEARCH_TOO_LARGE, and one that has no room left for the first text
+ * with the sentence of what the list read before (ACTIVE_TASKS_TOO_LARGE or
  * ACTIVE_LIST_TOO_WIDE). */
 async function searchedTexts(
   ctx: QueryCtx,
   found: readonly Doc<'issues'>[],
   want: number,
-  plain: (task: Doc<'issues'>) => boolean,
-  described: (task: Doc<'issues'>, text: string) => boolean,
-  reserve: ReadCeiling,
-): Promise<{ leading: Doc<'issues'>[]; texts: Map<string, string> }> {
+  matches: (task: Doc<'issues'>, description: string, labelNames: readonly string[]) => boolean,
+  labels: readonly Doc<'labels'>[],
+): Promise<{ matched: Doc<'issues'>[]; texts: Map<string, string> }> {
   const texts = new Map<string, string>()
+  // the names of `labels` each task carries, once read; a search that names
+  // no label reads none
+  const held = new Map<string, readonly string[]>()
+  /* whether `task` matches, or what it needs read before that is known */
+  const answer = (task: Doc<'issues'>): boolean | 'labels' | 'text' => {
+    const names = labels.length === 0 ? [] : held.get(task.id)
+    if (matches(task, '', names ?? [])) return true
+    if (names === undefined) return 'labels'
+    const text = texts.get(task.id)
+    if (text === undefined) return 'text'
+    return matches(task, text, names)
+  }
   const m = await ctx.meta.getTransactionMetrics()
-  const room = roomOf(m, reserve)
+  const room = roomOf(m, labels.length > 0 ? DESCRIPTION_READS_RESERVE : LABEL_READS_RESERVE)
   // a step of texts read one by one may pass `room` by one task's text,
   // within what the page's own reads keep back (pageReads)
   const steps = roomOf(m, COMMENT_READS_RESERVE)
-  // the tasks before `end` are settled, `matched` of them match
+  // the tasks before `end` are settled, and those that match are `matched`
   let end = 0
-  let matched = 0
+  const matched: Doc<'issues'>[] = []
   /* settles the tasks from `end` whose answer is known, and answers
    * whether the page is complete or every task settled */
   const settle = (): boolean => {
-    for (; end < found.length && matched < want; end++) {
-      const task = found[end]
-      if (plain(task)) {
-        matched++
-        continue
-      }
-      const text = texts.get(task.id)
-      if (text === undefined) break
-      if (described(task, text)) matched++
+    for (; end < found.length && matched.length < want; end++) {
+      const known = answer(found[end])
+      if (known === 'labels' || known === 'text') break
+      if (known) matched.push(found[end])
     }
-    return end === found.length || matched >= want
+    return end === found.length || matched.length >= want
   }
+  /* the next tasks that need `fact` read, as many as could still complete
+   * the page with the matches between them */
+  const nextNeeding = (fact: 'labels' | 'text'): Doc<'issues'>[] => {
+    const next: Doc<'issues'>[] = []
+    for (
+      let at = end, between = 0;
+      at < found.length && next.length + between < want - matched.length;
+      at++
+    ) {
+      const known = answer(found[at])
+      if (known === true) between++
+      else if (known === fact) next.push(found[at])
+    }
+    return next
+  }
+  // the reads made one task at a time, `labelReads` of them of labels
   let reads = 0
+  let labelReads = 0
+  /* reads the label names of `tasks`, one task's assignment of each label
+   * at a time while those reads fit, else those of every task left that
+   * needs them, through each label's assignments */
+  const readLabels = async (tasks: readonly Doc<'issues'>[]): Promise<void> => {
+    const pairs = tasks.length * labels.length
+    const now = await ctx.meta.getTransactionMetrics()
+    if (
+      reads + pairs <= TEXT_TASK_READS.reads &&
+      labelReads + pairs <= LABEL_TASK_READS.reads &&
+      pairs < now.databaseQueries.remaining - LABEL_READS_RESERVE.ranges &&
+      pairs < now.documentsRead.remaining - LABEL_READS_RESERVE.documents
+    ) {
+      reads += pairs
+      labelReads += pairs
+      const names = await Promise.all(tasks.map((task) => labelNamesOf(ctx, task.id, labels)))
+      for (const [i, task] of tasks.entries()) held.set(task.id, names[i])
+      return
+    }
+    const rest = found.slice(end).filter((task) => answer(task) === 'labels')
+    const names = await activeLabelNames(ctx, labels, rest)
+    for (const task of rest) held.set(task.id, names.get(task.id) ?? [])
+  }
   let ranges: ReturnType<typeof projectTextReader> | null = null
   // the first read is checked for room, so a search that never had any
   // says what the list read before
@@ -594,6 +652,10 @@ async function searchedTexts(
     if (!checked) {
       await assertTextRoom(ctx, room)
       checked = true
+    }
+    if (answer(found[end]) === 'labels') {
+      await readLabels(nextNeeding('labels'))
+      continue
     }
     if (ranges !== null) {
       const step = await ranges.step(settle)
@@ -609,21 +671,16 @@ async function searchedTexts(
       for (const [id, text] of read) texts.set(id, text)
       continue
     }
-    // the next tasks without a text, as many as could still complete the
-    // page with the matches between them
-    const next: Doc<'issues'>[] = []
-    for (
-      let at = end, between = 0;
-      at < found.length && next.length + between < want - matched;
-      at++
-    ) {
-      const task = found[at]
-      const text = texts.get(task.id)
-      if (plain(task) || (text !== undefined && described(task, text))) between++
-      else if (text === undefined) next.push(task)
-    }
+    const next = nextNeeding('text')
     if (reads + next.length > TEXT_TASK_READS.reads) {
-      const rest = found.slice(end).filter((task) => !plain(task) && !texts.has(task.id))
+      // the ranges read the texts of the tasks whose labels miss, so every
+      // task left has its label names first
+      const unlabelled = found.slice(end).filter((task) => answer(task) === 'labels')
+      if (unlabelled.length > 0) {
+        await readLabels(unlabelled)
+        continue
+      }
+      const rest = found.slice(end).filter((task) => answer(task) === 'text')
       ranges = projectTextReader(ctx, rest, room, texts)
       continue
     }
@@ -632,7 +689,7 @@ async function searchedTexts(
     reads += next.length
     for (const [id, text] of read) texts.set(id, text)
   }
-  return { leading: found.slice(0, end), texts }
+  return { matched, texts }
 }
 
 /* Refuses a list whose reads before its first description read leave no
@@ -650,18 +707,16 @@ async function assertTextRoom(ctx: QueryCtx, room: ReadCeiling): Promise<void> {
 }
 
 /* The names of `labels` by task, for the active `tasks` a search still
- * needs them for. While the tasks times the labels are at most
- * LABEL_TASK_READS and leave LABEL_READS_RESERVE ranges and documents, each
- * task's assignment of each label is read on its own (labelNamesOf), at most
- * one document each. Past that each label's assignments are read through
- * by_label without the archive mark, so the read follows active work, not
- * every task ever archived with the label (schema.ts taskArchived), within
- * the request's room less LABEL_READS_RESERVE. A search whose assignments do
- * not fit is refused with SEARCH_TOO_LARGE. Assignments stored without an
- * organization are found too. A task restored from the archive keeps marked
- * assignments until background steps clear them and carries relations_marked
- * meanwhile, so each such task is read through its own assignments
- * instead. */
+ * needs them for, read through each label's assignments (by_label) without
+ * the archive mark, so the read follows active work, not every task ever
+ * archived with the label (schema.ts taskArchived), within the request's
+ * room less LABEL_READS_RESERVE. A search reads them so once reading each
+ * task's own assignments would pass LABEL_TASK_READS (searchedTexts). A
+ * search whose assignments do not fit is refused with SEARCH_TOO_LARGE.
+ * Assignments stored without an organization are found too. A task
+ * restored from the archive keeps marked assignments until background steps
+ * clear them and carries relations_marked meanwhile, so each such task is
+ * read through its own assignments instead. */
 async function activeLabelNames(
   ctx: QueryCtx,
   labels: readonly Doc<'labels'>[],
@@ -669,18 +724,7 @@ async function activeLabelNames(
 ): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>()
   if (labels.length === 0 || tasks.length === 0) return out
-  const m = await ctx.meta.getTransactionMetrics()
-  const pairs = tasks.length * labels.length
-  if (
-    pairs <= LABEL_TASK_READS.reads &&
-    pairs < m.databaseQueries.remaining - LABEL_READS_RESERVE.ranges &&
-    pairs < m.documentsRead.remaining - LABEL_READS_RESERVE.documents
-  ) {
-    const names = await Promise.all(tasks.map((task) => labelNamesOf(ctx, task.id, labels)))
-    for (const [i, task] of tasks.entries()) out.set(task.id, names[i] ?? [])
-    return out
-  }
-  const ceiling = roomOf(m, LABEL_READS_RESERVE)
+  const ceiling = roomOf(await ctx.meta.getTransactionMetrics(), LABEL_READS_RESERVE)
   const wanted = new Set(tasks.map((task) => task.id))
   const restored = tasks.filter((task) => task.relations_marked === true)
   const own = new Set(restored.map((task) => task.id))
@@ -768,14 +812,13 @@ async function listedActiveTasks(
  * (lib/search.ts taskSearchText), in any order. Those are the task ID,
  * title, description, status name (not on a task with subtasks), priority
  * name, assignee name and label names. REST retains explicit `*` wildcards;
- * all other punctuation stays literal. Descriptions are read only for the
- * tasks the other fields miss without them and the labels, in list order,
- * and only until the tasks read hold the page (searchedTexts): one range a
- * task for the first TEXT_TASK_READS, then the active descriptions of the
- * rest's projects in chunks, in list order. A search whose descriptions do not fit in one
- * request is refused with DESCRIPTIONS_TOO_LARGE. Label names are read only
- * for the tasks of those that still miss (activeLabelNames), and a search
- * whose label assignments do not fit in one request is refused with
+ * all other punctuation stays literal. The search settles the tasks in list
+ * order until the matches hold the page (searchedTexts). It reads a task's
+ * label names only when its own fields miss, and its description only when
+ * its labels miss too: one range a task for the first TEXT_TASK_READS, then
+ * the active descriptions of the rest's projects in chunks, in list order.
+ * A search whose descriptions do not fit in one request is refused with
+ * DESCRIPTIONS_TOO_LARGE, and one whose label assignments do not fit with
  * SEARCH_TOO_LARGE. A search past LIMITS.search, once trimmed, is refused
  * first.
  */
@@ -827,30 +870,20 @@ export async function listActiveIssuesCore(
   let texts = new Map<string, string>()
   if (o.search) {
     const matches = allWordsMatcher(o.search, o.stars)
-    const pieces = searchPieces(o.search, o.stars)
-    const text = (i: Doc<'issues'>, description: string, labelNames: readonly string[]) =>
-      taskSearchText({ ...searchFields(i, names), description, group: isGroup(i), labelNames })
-    // more text never unmatches, so only the tasks that miss without their
-    // descriptions need them read, only up to the tasks that hold the page,
-    // and only those that still miss need their labels
-    const plain = (i: Doc<'issues'>) => matches(text(i, '', []))
-    const labelled = await matchingLabels(ctx, me.org_id, pieces)
+    // the tasks up to the page that match, reading their labels and texts
+    // only as far as they need (searchedTexts)
     const read = await searchedTexts(
       ctx,
       found,
       o.offset + o.limit,
-      plain,
-      (i, d) => matches(text(i, d, [])),
-      labelled.length > 0 ? DESCRIPTION_READS_RESERVE : LABEL_READS_RESERVE,
+      (i, description, labelNames) =>
+        matches(
+          taskSearchText({ ...searchFields(i, names), description, group: isGroup(i), labelNames }),
+        ),
+      await matchingLabels(ctx, me.org_id, searchPieces(o.search, o.stars)),
     )
     texts = read.texts
-    const textOf = (i: Doc<'issues'>) => texts.get(i.id) ?? ''
-    const missed = read.leading.filter((i) => !plain(i) && !matches(text(i, textOf(i), [])))
-    const labels = await activeLabelNames(ctx, labelled, missed)
-    const unlabelled = new Set(missed.map((i) => i.id))
-    found = read.leading.filter(
-      (i) => !unlabelled.has(i.id) || matches(text(i, textOf(i), labels.get(i.id) ?? [])),
-    )
+    found = read.matched
   }
   const page = found.slice(o.offset, o.offset + o.limit)
   const tasks = new Map(active.map((t) => [t.id, t]))

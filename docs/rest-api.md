@@ -1118,10 +1118,11 @@ anywhere inside a word. These are the fields the app's task filter searches.
 Explicit `*` wildcards within fragments remain supported; other punctuation is
 literal. A `search` holds at most 200 characters, on active and archived
 lists alike, and a longer one is a `400` with `a search must be at most 200
-characters. Search for fewer words.` A search of active tasks reads the
-descriptions of the tasks its other fields do not match, in list order, and
-stops once it has found the tasks up to the end of the page you asked for.
-A search that matches few tasks, such as one by task ID, reads every
+characters. Search for fewer words.` A search of active tasks reads, in list
+order, the label names of the tasks their other fields do not match, then
+the descriptions of those their labels do not match either. It stops once
+it has found the tasks up to the end of the page you asked for, whichever
+field matched them. A search that matches few tasks, such as one by task ID, reads every
 active task's description. With descriptions of a few hundred characters
 that fits an organization of about 9,000 active tasks in one request. A
 larger one is a `400` with `this search reads too many task descriptions

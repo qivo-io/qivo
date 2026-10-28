@@ -960,6 +960,96 @@ describe('real limits', () => {
     expect(quokka.documents).toBeLessThan(3000 + 1000 + 700)
   }, 300_000)
 
+  it('a REST or MCP search whose first task a label matches stops there, before descriptions that would not fit', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // 2,000 rows of 8 KiB, 16 MiB in all, none of which says zephyr, and
+    // the first task carries the label Zephyr
+    const ids = await plantMany(
+      t,
+      f,
+      2000,
+      (i) => `${i} `.padEnd(8 * 1024, 'n'),
+      () => undefined,
+      500,
+    )
+    await t.run(async (ctx) => {
+      const id = uuid()
+      await ctx.db.insert('labels', {
+        id,
+        org_id: f.org.id,
+        name: 'Zephyr',
+        name_lower: 'zephyr',
+        color: '#4C9AFF',
+        created_at: NOW,
+      })
+      await ctx.db.insert('issue_labels', { org_id: f.org.id, issue_id: ids[0], label_id: id })
+    })
+    const agent = { callerId: f.agent.id, access: 'read' as const }
+    expect(
+      (await restTasks(t, { ...agent, search: 'zephyr', limit: '1' })).map((row) => row.id),
+    ).toEqual([ids[0]])
+    const mcp = JSON.parse(
+      await t.query(internal.machine.mcp.listIssues, {
+        ...agent,
+        today: TODAY,
+        search: 'zephyr',
+        limit: 1,
+      }),
+    ) as { id: string }[]
+    expect(mcp.map((row) => row.id)).toEqual([ids[0]])
+    // the page a label completes reads what the one its ID completes reads,
+    // and the label and its assignment
+    const label = await restMetrics(t, f, { limit: 1, search: 'zephyr' })
+    const key = await restMetrics(t, f, { limit: 1, search: 'QN-10000' })
+    expect(label.refused).toBeNull()
+    expect(label.documents - key.documents).toBeLessThan(5)
+    expect(label.mib - key.mib).toBeLessThan(0.1)
+  }, 300_000)
+
+  it('a REST search of a rare label reads one task at a time no more than a search of a task ID', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    const ids = await plantMany(
+      t,
+      f,
+      400,
+      (i) => `Notes ${i} on the board`,
+      () => undefined,
+      200,
+    )
+    // only the second task carries the label Walrus
+    await t.run(async (ctx) => {
+      const id = uuid()
+      await ctx.db.insert('labels', {
+        id,
+        org_id: f.org.id,
+        name: 'Walrus',
+        name_lower: 'walrus',
+        color: '#4C9AFF',
+        created_at: NOW,
+      })
+      await ctx.db.insert('issue_labels', { org_id: f.org.id, issue_id: ids[1], label_id: id })
+    })
+    TEXT_TASK_READS.reads = 100
+    try {
+      const agent = { callerId: f.agent.id, access: 'read' as const }
+      expect((await restTasks(t, { ...agent, search: 'walrus' })).map((row) => row.id)).toEqual([
+        ids[1],
+      ])
+      const rare = await restMetrics(t, f, { limit: 20, search: 'walrus' })
+      const key = await restMetrics(t, f, { limit: 20, search: 'QN-10001' })
+      expect(rare.refused).toBeNull()
+      expect(key.refused).toBeNull()
+      // label and text reads share TEXT_TASK_READS, then the label's
+      // assignments are one range, where reading every task's label on its
+      // own would add 300
+      expect(rare.ranges - key.ranges).toBeLessThan(10)
+    } finally {
+      TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
+    }
+  }, 300_000)
+
   it("a REST search past TEXT_TASK_READS reads its candidates' projects, not an archived project's history", async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
