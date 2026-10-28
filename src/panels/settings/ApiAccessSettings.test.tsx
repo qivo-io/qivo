@@ -505,6 +505,27 @@ describe('the API access page', () => {
     expect(note()).toBe('No credentials for Release bot in this period.')
   })
 
+  it('clears the people search on Escape before Escape closes the list', async () => {
+    await render(<ui.OrgApiAccessPage />)
+    await click(find('[data-api-access-person]'))
+    const search = find<HTMLInputElement>('[data-api-access-people-search]')
+    search.focus()
+    await type(search, 'rel')
+    const escape = async () => {
+      await act(async () =>
+        (document.activeElement ?? document.body).dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+        ),
+      )
+      await settle()
+    }
+    await escape()
+    expect(document.querySelector('[data-api-access-people]')).not.toBeNull()
+    expect(find<HTMLInputElement>('[data-api-access-people-search]').value).toBe('')
+    await escape()
+    expect(document.querySelector('[data-api-access-people]')).toBeNull()
+  })
+
   it('loads the next batch of people on Retry after a failed Load more, one read at a time', async () => {
     server.peopleBatch = 2
     await render(<ui.OrgApiAccessPage />)

@@ -272,7 +272,11 @@ function ProjectNameOf({ id, withOwner }: { id: string | null | undefined; withO
    scrolling and resize closes the menu to preserve trigger alignment.
    wrapStyle controls the measured trigger box; flex rows may need display:flex
    and flexShrink:0. With backLayer the open menu holds a phone Back entry,
-   and close(then) closes it before a callback changes the page. */
+   and close(then) closes it before a callback changes the page.
+   onEscapeKeyDown hears Escape before the popover closes on it, and keeps it
+   open by preventing the event's default, as a search field inside that
+   clears its text first does. Only the Radix popover calls it, not the
+   landscape Roadmap's. */
 type PopoverProps = {
   button: (toggle: () => void, open: boolean) => ReactNode
   children: (close: (then?: () => void) => void) => ReactNode
@@ -280,6 +284,7 @@ type PopoverProps = {
   align?: 'left' | 'right'
   wrapStyle?: CSSProperties
   backLayer?: boolean
+  onEscapeKeyDown?: (event: KeyboardEvent) => void
 }
 
 function landscapeBottomAnchor(
@@ -410,6 +415,7 @@ function LivePopover({
   align = 'left',
   wrapStyle,
   backLayer = false,
+  onEscapeKeyDown,
 }: PopoverProps) {
   const [open, setOpen] = useState(false)
   const close = useMenuBackLayer(open, () => setOpen(false), backLayer)
@@ -423,6 +429,7 @@ function LivePopover({
         sideOffset={6}
         className="z-[120] rounded-lg p-1 shadow-pop"
         style={{ width }}
+        onEscapeKeyDown={onEscapeKeyDown}
       >
         {children(close)}
       </PopoverContent>

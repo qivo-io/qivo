@@ -684,6 +684,13 @@ function PersonFilter({
   return (
     <Popover
       width={260}
+      onEscapeKeyDown={(event) => {
+        // Escape clears the people search first (PersonChoices), and closes
+        // the list once the search is empty
+        const field = event.target
+        if (field instanceof HTMLInputElement && field.matches('[data-api-access-people-search]'))
+          if (field.value !== '') event.preventDefault()
+      }}
       button={(toggle, open) => (
         <Button
           type="button"
