@@ -1,7 +1,21 @@
 /* Milestone rules shared by every milestone write (projects.ts, roadmap.ts,
- * and the REST and MCP milestone actions in machine/projects.ts). A milestone
- * lives on the top-level project whose roadmap shows it, its name is not
- * blank, and its week is one real calendar day.
+ * the REST and MCP milestone actions in machine/projects.ts, and the
+ * Northstar seed in model/demoSeed.ts). A milestone lives on the top-level
+ * project whose roadmap shows it, its name is not blank, and its week is one
+ * real calendar day.
+ *
+ * One milestone a week (LIMITS.milestonesPerWeek). A top-level project holds
+ * at most one milestone in each calendar week of its organization: seven
+ * days from its week_start, whatever week_one_rule numbers them. Every write
+ * that creates a milestone or changes its day calls assertWeekFree in its
+ * own transaction, after its last change to the milestones it checks.
+ * assertWeekFree reads the organization and one by_project_week range, the
+ * days of that week, so two writes that claim one project's week conflict
+ * and the retry is refused, and a change of the first day of the week
+ * (assertWeekStartFits, which reads every range and writes the
+ * organization) conflicts with every milestone write. Deleted items keeps a
+ * deleted project's milestones and a restore writes them back unchanged
+ * (model/deletedItems.ts), so assertWeekStartFits checks those too.
  *
  * Refusals read the same on every surface. A project or milestone the caller
  * cannot see, in their organization or another, reads as not found. One they
@@ -10,16 +24,18 @@
  * (orgMutation, the roadmap writer, asMachineCaller). A machine caller passes
  * its `provenance`, which signs the activity row. */
 
-import { v } from 'convex/values'
-import type { Doc } from '../_generated/dataModel'
+import { ConvexError, v } from 'convex/values'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canSeeProject, hasProjectLevel, rootMetaOf } from '../lib/access'
-import { assertNewRowId, byId, insertUnique } from '../lib/db'
+import { assertNewRowId, byId, insertUnique, usedMoreThan } from '../lib/db'
+import type { DeletedItemState } from '../lib/enums'
 import { trimmedForm } from '../lib/fieldPrints'
-import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
+import { badRequest, forbidden, notFound, type Refusal, require, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS } from '../lib/limits'
+import { LIMITS, milestoneWeekTaken, WEEK_START_REFUSALS } from '../lib/limits'
 import { logActivity, signedDetail } from './activity'
+import { newMemo, viewOf } from './deletedItems'
 import {
   assertExpected,
   DAY_SHAPED,
@@ -31,7 +47,7 @@ import {
   TEXT,
   type View,
 } from './expected'
-import { weekLabel } from './orgs'
+import { dayLabel, WEEKDAY_NAMES, weekDays, weekLabel, weekPhrase } from './orgs'
 import { calendarDay } from './taskValues'
 
 /* Milestone policies are User level (0078:497, member→user). */
@@ -116,9 +132,256 @@ async function orgOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Doc<'organizat
   return org
 }
 
+/** The reason of the refusal of a milestone in a week its project already
+ * holds another milestone in (assertWeekFree). */
+export const MILESTONE_WEEK_TAKEN = 'milestone_week_taken'
+
+/* The milestone of project `projectId`, other than `except`, in the week of
+ * `day` under `org`'s week start, or null. One range holds the days of that
+ * week. It can also hold a day that does not exist, stored before
+ * 2026-10-16, which belongs to the week the app shows it in (weekDays), so
+ * each row's own week decides. */
+async function weekHolder(
+  ctx: QueryCtx,
+  a: {
+    org: Doc<'organizations'>
+    projectId: string
+    day: string
+    except?: Id<'milestones'>
+  },
+): Promise<Doc<'milestones'> | null> {
+  const week = weekDays(a.day, a.org)
+  if (week === null) return null
+  const rows = ctx.db
+    .query('milestones')
+    .withIndex('by_project_week', (q) =>
+      q.eq('project_id', a.projectId).gte('week', week.first).lte('week', week.last),
+    )
+  for await (const row of rows)
+    if (row._id !== a.except && weekDays(row.week, a.org)?.first === week.first) return row
+  return null
+}
+
+/**
+ * Refuses a milestone on `day` in project `projectId` when another milestone
+ * of the project, not `except`, is in that week of `org`'s calendar
+ * (LIMITS.milestonesPerWeek). `org` is the project's organization, read in
+ * this transaction. The refusal names the week and the milestone there, and
+ * `next` says what to do, picking another week unless the caller says
+ * otherwise. Call it after the write it checks, or before an insert, in the
+ * same transaction.
+ */
+export async function assertWeekFree(
+  ctx: QueryCtx,
+  a: {
+    org: Doc<'organizations'>
+    projectId: string
+    day: string
+    except?: Id<'milestones'>
+    next?: string
+  },
+): Promise<void> {
+  const holder = await weekHolder(ctx, a)
+  if (holder === null) return
+  throw new ConvexError<Refusal>({
+    code: 'rule',
+    reason: MILESTONE_WEEK_TAKEN,
+    message: milestoneWeekTaken(weekPhrase(holder.week, a.org), holder.name, a.next),
+  })
+}
+
+/** The share of Convex's limits for one transaction a check of a new first
+ * day of the week may use before it stops and answers that it could not
+ * check every milestone. It reads one document a project and a milestone
+ * and one range a top-level project, so half of the limits cover about
+ * 16,000 projects and milestones together, about 2,000 of the projects
+ * top-level ones. Tests lower the transaction limits. */
+export const WEEK_START_ROOM = 0.5
+
+/* How many milestones the check reads between two looks at its room. 256
+ * of the largest hold about 128 KiB. */
+const WEEK_START_STEP = 256
+
+/* The Deleted items states whose project items can still come back and
+ * bring their milestones with them. A stuck item can only be deleted for
+ * good, and a purging one is being deleted. */
+const RESTORABLE: readonly DeletedItemState[] = ['moving', 'ready', 'restoring']
+
+/* How many clashes a refusal names. It counts the rest. */
+const NAMED_CLASHES = 5
+
+/* A week in which one project would hold two or more milestones. */
+type Clash = {
+  project: { name: string; key: string }
+  /** the live project, or null for a project in Deleted items */
+  live: Doc<'projects'> | null
+  item: Doc<'deleted_items'> | null
+  first: string
+  milestones: Pick<Doc<'milestones'>, 'name' | 'week'>[]
+}
+
+/* The weeks in which `rows`, one project's milestones, would hold more than
+ * one milestone under week start `next`, in date order. A day that names no
+ * day at all belongs to no week. */
+function clashesIn(
+  rows: Iterable<Pick<Doc<'milestones'>, 'name' | 'week'>>,
+  next: Pick<Doc<'organizations'>, 'week_start'>,
+): { first: string; milestones: Pick<Doc<'milestones'>, 'name' | 'week'>[] }[] {
+  const weeks = new Map<string, Pick<Doc<'milestones'>, 'name' | 'week'>[]>()
+  for (const row of rows) {
+    const first = weekDays(row.week, next)?.first
+    if (first !== undefined) weeks.set(first, [...(weeks.get(first) ?? []), row])
+  }
+  return [...weeks]
+    .filter(([, held]) => held.length > 1)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([first, milestones]) => ({
+      first,
+      milestones: milestones.sort((a, b) => a.week.localeCompare(b.week)),
+    }))
+}
+
+/* `items` as one phrase: "a", "a and b", "a, b and c". */
+const listed = (items: string[]): string =>
+  items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
+
+/**
+ * Refuses to change `org`'s first day of the week to `weekStart` when the new
+ * weeks would put two milestones of one top-level project in one week
+ * (LIMITS.milestonesPerWeek). It reads the milestones of every top-level
+ * project of the organization, archived ones included, and of each top-level
+ * project in Deleted items that can still be restored, in this transaction,
+ * so a concurrent milestone write conflicts with the change. The refusal
+ * names the projects, the days and the weeks, and the milestones of a
+ * project only to a caller who can see it. Past WEEK_START_ROOM it stops: it
+ * names the clashes it found, and says that there may be more, or with none
+ * found refuses with the sentence that it could not check every milestone,
+ * never with a clash it did not find. A milestone stored on a sub-project
+ * before 2026-10-14 is left out; internal/milestoneWeeks reports those.
+ */
+export async function assertWeekStartFits(
+  ctx: QueryCtx,
+  a: { me: Doc<'profiles'>; org: Doc<'organizations'>; weekStart: number },
+): Promise<void> {
+  const { me, org } = a
+  const next = { ...org, week_start: a.weekStart }
+  const clashes: Clash[] = []
+  let read = 0
+  let stopped = false
+  // Whether the check has room for more reads. It looks before each range
+  // it reads and every WEEK_START_STEP documents.
+  const room = async (look: boolean): Promise<boolean> => {
+    if (!stopped && look) stopped = await usedMoreThan(ctx, WEEK_START_ROOM)
+    return !stopped
+  }
+  const counted = () => room(++read % WEEK_START_STEP === 0)
+  // one project's milestones from `rows`, until the room runs out
+  const gather = async (
+    rows: AsyncIterable<Pick<Doc<'milestones'>, 'id' | 'name' | 'week'>>,
+    into: Map<string, Pick<Doc<'milestones'>, 'name' | 'week'>>,
+  ): Promise<void> => {
+    if (!(await room(true))) return
+    for await (const row of rows) {
+      into.set(row.id, row)
+      if (!(await counted())) return
+    }
+  }
+  const projects = ctx.db.query('projects').withIndex('by_org', (q) => q.eq('org_id', org.id))
+  for await (const project of projects) {
+    if (!(await counted())) break
+    if (project.parent_id !== undefined) continue
+    const rows = new Map<string, Pick<Doc<'milestones'>, 'name' | 'week'>>()
+    await gather(
+      ctx.db
+        .query('milestones')
+        .withIndex('by_project_week', (q) => q.eq('project_id', project.id)),
+      rows,
+    )
+    for (const clash of clashesIn(rows.values(), next))
+      clashes.push({ ...clash, project, live: project, item: null })
+  }
+  for (const state of RESTORABLE) {
+    const items = ctx.db
+      .query('deleted_items')
+      .withIndex('by_org_parent_kind_state', (q) =>
+        q
+          .eq('org_id', org.id)
+          .eq('parent_project_id', undefined)
+          .eq('kind', 'project')
+          .eq('state', state),
+      )
+    if (!(await room(true))) break
+    for await (const item of items) {
+      if (!(await counted())) break
+      // the rows a move has not taken yet or a restore has written back,
+      // then the stored ones
+      const rows = new Map<string, Pick<Doc<'milestones'>, 'name' | 'week'>>()
+      await gather(
+        ctx.db
+          .query('milestones')
+          .withIndex('by_project_week', (q) => q.eq('project_id', item.target_id)),
+        rows,
+      )
+      const stored = async function* () {
+        const copies = ctx.db
+          .query('deleted_rows')
+          .withIndex('by_item_table_owner', (q) =>
+            q.eq('item_id', item.id).eq('table', 'milestones').eq('owner_id', item.target_id),
+          )
+        for await (const copy of copies) if (copy.row.table === 'milestones') yield copy.row.doc
+      }
+      await gather(stored(), rows)
+      for (const clash of clashesIn(rows.values(), next))
+        clashes.push({
+          ...clash,
+          project: { name: item.name, key: item.key ?? '' },
+          live: null,
+          item,
+        })
+    }
+  }
+  if (clashes.length === 0) {
+    if (!stopped) return
+    throw new ConvexError<Refusal>({
+      code: 'rule',
+      reason: WEEK_START_REFUSALS.unchecked,
+      message: `Qivo could not check every milestone of this organization at once, so workdays still start on ${WEEKDAY_NAMES[org.week_start] ?? 'the same day'}. Contact support@qivo.io to change the first day of the week.`,
+    })
+  }
+  const named: string[] = []
+  const memo = newMemo()
+  for (const clash of clashes.slice(0, NAMED_CLASHES)) {
+    const sees =
+      clash.live !== null
+        ? await canSeeProject(ctx, me, clash.live)
+        : clash.item !== null && (await viewOf(ctx, memo, me, clash.item)) !== null
+    const where = clash.live === null ? ', in Deleted items' : ''
+    const days = clash.milestones.map((m) =>
+      sees ? `“${m.name}” on ${dayLabel(m.week, next)}` : dayLabel(m.week, next),
+    )
+    named.push(
+      `${clash.project.name} (${clash.project.key}${where}) would have ${sees ? '' : 'milestones on '}${listed(days)} in ${weekPhrase(clash.first, next)}`,
+    )
+  }
+  const more = clashes.length - named.length
+  const rest =
+    more === 0
+      ? ''
+      : `; and ${more} more ${more === 1 ? 'week' : 'weeks'} would hold two milestones of one project`
+  throw new ConvexError<Refusal>({
+    code: 'rule',
+    reason: WEEK_START_REFUSALS.conflicts,
+    message:
+      `workdays cannot start on ${WEEKDAY_NAMES[a.weekStart]}, because a project can have at most 1 milestone a week, and then ${named.join('; ')}${rest}. ` +
+      'Move or delete milestones so that no project has two in one week, then change the first day again.' +
+      (stopped ? ' Qivo could not check every project, so there may be more.' : ''),
+  })
+}
+
 /**
  * Adds a milestone named against `projectId` to the top-level project that
- * stores it (milestoneTarget) and narrates it. Narration details embed
+ * stores it (milestoneTarget) and narrates it. A week the project already
+ * holds a milestone in is refused (assertWeekFree). Narration details embed
  * weekLabel computed against the organization's settings, frozen at write
  * time (trap T1).
  */
@@ -139,6 +402,8 @@ export async function addMilestoneCore(
   const home = await milestoneTarget(ctx, me, a.projectId)
   const week = cleanMilestoneWeek(a.week)
   const name = cleanMilestoneName(a.name)
+  const org = await orgOf(ctx, me)
+  await assertWeekFree(ctx, { org, projectId: home.id, day: week })
   await insertUnique(
     ctx,
     'milestones',
@@ -154,7 +419,7 @@ export async function addMilestoneCore(
     target_type: 'milestone',
     target_id: id,
     label: name,
-    detail: signedDetail(`at ${weekLabel(week, await orgOf(ctx, me))}`, a.provenance),
+    detail: signedDetail(`at ${weekLabel(week, org)}`, a.provenance),
     project_id: home.id,
     ts: now,
   })
@@ -213,7 +478,9 @@ export async function assertMilestoneExpected(
 
 /**
  * Renames or moves a milestone the caller may change (changeableMilestone)
- * and narrates it. The verb names what actually CHANGED, so a pure rename
+ * and narrates it. A move into a week another milestone of the project holds
+ * is refused (assertWeekFree); a move within its own week and a rename are
+ * not. The verb names what actually CHANGED, so a pure rename
  * does not read as a move (bc022c2:3536-3562, trap T15). A submit that
  * changes neither the name nor the week is validated, then changes and
  * narrates nothing, although the app's dialog always sends both fields.
@@ -251,9 +518,18 @@ export async function updateMilestoneCore(
   const weekChanged = db.week !== undefined && db.week !== milestone.week
   const renamed = db.name !== undefined && db.name !== milestone.name
   if (!weekChanged && !renamed) return milestone
+  const org = await orgOf(ctx, me)
+  // a new day needs a week no other milestone of the project holds; a
+  // rename keeps its week as it is
+  if (weekChanged && db.week !== undefined)
+    await assertWeekFree(ctx, {
+      org,
+      projectId: milestone.project_id,
+      day: db.week,
+      except: milestone._id,
+    })
   await ctx.db.patch(milestone._id, db)
   const name = db.name ?? milestone.name
-  const org = await orgOf(ctx, me)
   await logActivity(ctx, {
     org_id: me.org_id,
     actor_id: me.id,

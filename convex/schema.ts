@@ -333,11 +333,20 @@ const milestonesTable = defineTable({
   id: v.string(),
   project_id: v.string(), // writes store a top-level project (model/milestones.ts)
   name: v.string(),
-  week: v.string(), // YYYY-MM-DD calendar day, usually the first day of its week
+  // YYYY-MM-DD calendar day, usually the first day of its week. A top-level
+  // project holds at most one milestone in each calendar week of its
+  // organization (LIMITS.milestonesPerWeek), mutation-checked by
+  // model/milestones.ts assertWeekFree; internal/milestoneWeeks reports
+  // rows stored before the rule that break it.
+  week: v.string(),
   created_at: v.string(),
 })
   .index('by_uuid', ['id'])
   .index('by_project', ['project_id'])
+  // one project's milestones in day order: a write reads the days of one
+  // week (model/milestones.ts assertWeekFree), and a change of the first
+  // day of the week reads each project's whole range (assertWeekStartFits)
+  .index('by_project_week', ['project_id', 'week'])
 
 const commentsTable = defineTable({
   id: v.string(),

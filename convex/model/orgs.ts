@@ -594,19 +594,42 @@ export type WeekSettings = Pick<
   'week_start' | 'week_one_rule' | 'date_format'
 >
 
+/** The days of the week by Date#getUTCDay number, as week_start counts them. */
+export const WEEKDAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+] as const
+
 /* setWeekConfig's coercions (dates.ts:68-75): out-of-range settings fall back
  * to ISO 8601 Monday + first4day rather than throwing — narration must not
  * fail on values an older validator let in (withOrg's 'iso' date_format). */
-const weekStartDay = (s: WeekSettings): number =>
+const weekStartDay = (s: Pick<WeekSettings, 'week_start'>): number =>
   Number.isFinite(s.week_start) && s.week_start >= 0 && s.week_start <= 6
     ? Math.round(s.week_start)
     : 1
 
 const minDays = (s: WeekSettings): number => WEEK_ONE_MIN_DAYS[s.week_one_rule] ?? 4
 
+/* UTC midnight of day `d` of month `m` (0 to 11) of year `y`, overflowing
+ * into the next month or year as Date does. Date.UTC would read the years 0
+ * to 99 as 1900 to 1999. */
+const utcDay = (y: number, m: number, d: number): Date => {
+  const date = new Date(0)
+  date.setUTCFullYear(y, m, d)
+  return date
+}
+
+/* A YYYY-MM-DD day as the app reads it (dates.ts isoToDate): a day that does
+ * not exist overflows, so 2026-02-31 is 3 March. Invalid for text that is
+ * not three numbers. */
 const parseISODate = (iso: string): Date => {
   const [y, m, d] = iso.split('-').map(Number)
-  return new Date(Date.UTC(y, (m ?? 1) - 1, d ?? 1))
+  return utcDay(y, (m ?? 1) - 1, d ?? 1)
 }
 
 /* First day of d's week — the org's week-start day (dates.ts weekStartOf). */
@@ -614,7 +637,42 @@ const weekStartOf = (d: Date, startDay: number): Date =>
   new Date(d.getTime() - ((d.getUTCDay() - startDay + 7) % 7) * DAY)
 
 const week1Start = (year: number, s: WeekSettings): Date =>
-  weekStartOf(new Date(Date.UTC(year, 0, minDays(s))), weekStartDay(s))
+  weekStartOf(utcDay(year, 0, minDays(s)), weekStartDay(s))
+
+/* The YYYY-MM-DD text of a day, cut to the days a stored date can name. */
+const isoDay = (d: Date): string =>
+  d.getUTCFullYear() < 0
+    ? '0000-01-01'
+    : d.getUTCFullYear() > 9999
+      ? '9999-12-31'
+      : d.toISOString().slice(0, 10)
+
+/** The YYYY-MM-DD day the app shows stored text `day` on: the day itself,
+ * or for a day that does not exist the day it overflows to (2026-02-31 is
+ * 2026-03-03). Null for text that names no day at all. */
+export function shownDay(day: string): string | null {
+  const date = parseISODate(day)
+  return Number.isFinite(date.getTime()) ? isoDay(date) : null
+}
+
+/**
+ * The first and last day, YYYY-MM-DD, of the week that holds `day` when the
+ * organization's weeks begin on its week_start. Two days share a week when
+ * their `first` is the same. A day that does not exist, such as 2026-02-31,
+ * which a milestone took until 2026-10-16, is read as the app shows it, the
+ * day it overflows to (3 March). Null for text that names no day at all.
+ * The weeks at either end of the dates YYYY-MM-DD can write are cut to
+ * 0000-01-01 and 9999-12-31.
+ */
+export function weekDays(
+  day: string,
+  s: Pick<WeekSettings, 'week_start'>,
+): { first: string; last: string } | null {
+  const date = parseISODate(day)
+  if (!Number.isFinite(date.getTime())) return null
+  const start = weekStartOf(date, weekStartDay(s))
+  return { first: isoDay(start), last: isoDay(new Date(start.getTime() + 6 * DAY)) }
+}
 
 /* Calendar week number of the week STARTING at `start` under the org's rule.
  * The week-year can differ from the start date's year around New Year — a
@@ -644,4 +702,41 @@ export function fmtDate(d: Date, dateFormat: string): string {
 export function weekLabel(weekISO: string, s: WeekSettings): string {
   const start = weekStartOf(parseISODate(weekISO), weekStartDay(s))
   return `W${weekNumberOf(start, s).num}, ${fmtDate(start, s.date_format)}`
+}
+
+/** A day with its year in the org's date format (dates.ts fmtFullWith):
+ * `11 May 2026`, `05/11/2026` or `2026-05-11` for any format it does not
+ * know. */
+export function fmtFull(d: Date, dateFormat: string): string {
+  const p2 = (n: number) => String(n).padStart(2, '0')
+  const y = String(d.getUTCFullYear()).padStart(4, '0')
+  const mm = p2(d.getUTCMonth() + 1)
+  const dd = p2(d.getUTCDate())
+  switch (dateFormat) {
+    case 'DD/MM/YYYY':
+      return `${dd}/${mm}/${y}`
+    case 'MM/DD/YYYY':
+      return `${mm}/${dd}/${y}`
+    case 'DD.MM.YYYY':
+      return `${dd}.${mm}.${y}`
+    case 'D MMM YYYY':
+      return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${y}`
+    case 'MMM D, YYYY':
+      return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${y}`
+    default:
+      return `${y}-${mm}-${dd}`
+  }
+}
+
+/** A stored day in the org's date format, read as weekDays reads it. */
+export function dayLabel(day: string, s: WeekSettings): string {
+  return fmtFull(parseISODate(day), s.date_format)
+}
+
+/** `the week of 11 May 2026 (W20)`, the week that holds `day` in the org's
+ * calendar, as a refusal names it: its first day in the org's date format
+ * and its week number. */
+export function weekPhrase(day: string, s: WeekSettings): string {
+  const start = weekStartOf(parseISODate(day), weekStartDay(s))
+  return `the week of ${fmtFull(start, s.date_format)} (W${weekNumberOf(start, s).num})`
 }

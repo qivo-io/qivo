@@ -83,9 +83,12 @@ subtask, its parent's bar follows it.
 
 Milestones appear as violet diamonds. Drag one to move it or click it to open
 the Milestones window ([Overview milestones](./the-overview-project-health-at-a-glance.md)). The toolbar's **Milestone** button creates one.
+A project has at most one milestone a week, so a diamond dropped on a week
+that already has one of the project's milestones goes back, and Qivo names
+the milestone there.
 Each name stays on one line and runs from its diamond to the next milestone
-in its row, or to the left near the end of the timeline. Milestones in the
-same week, or close together, take rows of their own, and the header grows
+in its row, or to the left near the end of the timeline. Milestones of
+different projects in the same week, or close together, take rows of their own, and the header grows
 when one week holds more than two milestones or the names need more room, as
 far as the screen leaves room for your tasks. Where a name is still cut short,
 hover the milestone or move to it with Tab to read it in full, and press Enter
@@ -120,7 +123,9 @@ and clears history until your next visit.
 Followers of the tasks a change or an undo touches get the update in their
 inbox a few seconds after it saves. A change that touches too many tasks to
 save in one go is refused, and nothing changes. An undo that large is refused
-the same way, and history stays.
+the same way, and history stays. So is an undo that would bring a milestone
+back into a week another milestone of its project took since. Move that
+milestone to another week, then undo again.
 
 ## Dependencies you can see and safely fix
 

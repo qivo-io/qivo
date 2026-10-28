@@ -170,6 +170,15 @@ until the client refreshes its tool list.
 The label limit added `maxLength` 40 to `name` on `set_label`. A client
 holding the older catalogue keeps working.
 
+Late in October 2026 a top-level project began to hold at most one
+milestone in each calendar week of its organization, and the `set_milestone`
+description now says so. The tool takes the same arguments. A call that adds
+a milestone, or moves one, into a week that already holds another of the
+project's milestones is refused (see [Projects, access and
+milestones](#projects-access-and-milestones)). A client holding the older
+catalogue gets the refusal too, but its model does not learn the rule until
+the client refreshes its tool list.
+
 In October 2026 the server's sentences lost their em dashes. A refusal
 that read `that project is archived — restore it first` now reads `that
 project is archived, so restore it first`, and the activity rows that MCP
@@ -575,6 +584,7 @@ the range.
 | Labels per task | 20 labels | this task already has 20 labels, the most a task can have. Remove one first. |
 | Followers per task | 100 followers | this task already has 100 followers, the most a task can have. Someone must unfollow it first. |
 | People mentioned in one text | 100 people | a text can mention at most 100 people. Remove some mentions and save again. |
+| Milestones per project week | 1 milestone in each calendar week, for a project and its sub-projects together | this project already has a milestone in that week, and a project can have at most 1 milestone a week. Pick another week, or move that milestone first. |
 | Tasks one access removal reassigns | 120 tasks | a removal can reassign at most 120 tasks at once, fewer when the change is too large for one request. Keep the people as Viewers or reassign some of the tasks first. |
 | People with open tasks one access removal settles | 700 people | a removal that keeps people as Viewers or reassigns their tasks can take access from at most 700 people with open tasks at once. Leave the tasks with them, or remove some of the team's members first. |
 
@@ -1240,7 +1250,7 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `create_project` | Create a top-level project from `name` (at most 80 characters), or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
 | `update_project` | Change a project you lead: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). Answers like `get_project`. It takes no `archive_reason`, which only tasks take. `expected` holds what you last read of the fields it changes, `lead_id` as `get_project` shows it. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access. With a level, `expected` holds the `level` you last read in `get_project`'s `grants`, `null` for none; with `level: null` it is refused. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
-| `set_milestone` | Add a milestone (`name` of at most 80 characters, `date`) to a `project`'s top-level project, or with `milestone` rename or move one; then `expected` holds the `name` and `date` you last read of the fields it changes. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `set_milestone` | Add a milestone (`name` of at most 80 characters, `date`) to a `project`'s top-level project, or with `milestone` rename or move one; then `expected` holds the `name` and `date` you last read of the fields it changes. A top-level project holds at most one milestone a week. See [Projects, access and milestones](#projects-access-and-milestones) and [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_milestone` | Delete a `milestone` of a `project`. `expected` holds the `name` and `date` you last read, either or both. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_team` | Without `team_id`, create a team called `name` (at most 80 characters, organization admins only); with `team_id`, rename it (an organization admin or a leader of the team), and then `expected` holds the `name` you last read. Answers the `list_teams` row with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_team_member` | Add (`member: true`) or remove (`member: false`) one `user_id` in a team, and with `member: true` make or unmake them a leader (`leader`). People only, as an organization admin or a leader of the team. A removal settles the user's open tasks by `on_held_tasks` |
@@ -1614,6 +1624,18 @@ project of `project` answers `milestone "<id>" not found (or not visible to
 you)`. Both need Edit access on the top-level project, and an archived
 project takes no new milestone. Results are `{id, name, date, project_id,
 created}` and `{deleted: true, id}`.
+
+A top-level project holds at most one milestone in each calendar week of
+its organization, whose weeks begin on the organization's first day of the
+week, and a milestone named on a sub-project counts for its top-level
+project. `set_milestone` that adds a milestone, or changes a `date`, into a
+week that already holds another of the project's milestones is refused with
+a sentence that names the week and that milestone, such as `this project
+already has the milestone “Launch” in the week of 2026-11-02 (W45), and a
+project can have at most 1 milestone a week. Pick another week, or move that
+milestone first.`, and changes nothing. A move within the milestone's own
+week, or a rename, is not refused. Different projects can each have a
+milestone in the same week.
 
 Creating, renaming, archiving and restoring a project, handing over its lead,
 changing its access and changing its milestones write the app's activity

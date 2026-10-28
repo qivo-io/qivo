@@ -2,7 +2,10 @@
  * never restoration values. Each mutation is one serializable undo step that
  * journals only the tasks its operations name. A group's dates are
  * calculated from its subtasks, so no write changes another task's dates.
- * History expires after 24 hours. */
+ * A save or an undo that would leave two milestones of one project in one
+ * week is refused whole, as a `rule` refusal, which the app answers by
+ * keeping the history (model/milestones.ts assertWeekFree). History expires
+ * after 24 hours. */
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
@@ -29,6 +32,7 @@ import {
 import { newNotifyPreload, notifyIssueUpdate } from './model/messages'
 import {
   assertMilestoneExpected,
+  assertWeekFree,
   changeableMilestone,
   cleanMilestoneName,
   cleanMilestoneWeek,
@@ -179,6 +183,33 @@ async function taskGuard(ctx: MutationCtx, row: Doc<'issues'>): Promise<string> 
   })
 }
 
+/* The step an undo refusal names when it would bring a milestone back into a
+ * week another milestone of its project holds. */
+const UNDO_WEEK_TAKEN = 'Move that milestone to another week first, then undo again.'
+
+/* Refuses the mutation when one of the milestones `ids`, as it stands now,
+ * shares its week with another milestone of its project (model/milestones.ts
+ * assertWeekFree), naming `next` as the way past it. A save or an undo runs
+ * it once every operation has run, so one that swaps the weeks of two
+ * milestones passes. */
+async function assertWeeksFree(ctx: Context, ids: Set<string>, batch: Batch, next?: string) {
+  for (const id of ids) {
+    await batch.room()
+    const row = await byId(ctx, 'milestones', id)
+    if (!row) continue
+    const { project } = await writer(ctx, row.project_id)
+    const org = await byId(ctx, 'organizations', project.org_id)
+    if (!org) throw notFound('organization not found')
+    await assertWeekFree(ctx, {
+      org,
+      projectId: row.project_id,
+      day: row.week,
+      except: row._id,
+      next,
+    })
+  }
+}
+
 /* Undo of a task needs current write access on that task's own project, the
  * same access the original operation needed. */
 async function taskWriter(ctx: Context, row: Doc<'issues'>) {
@@ -306,6 +337,8 @@ export const change = authedMutation({
       )
     const beforeTasks = new Map<string, Doc<'issues'>>()
     const beforeMilestones = new Map<string, Milestone | undefined>()
+    // the milestones this save gives a week, checked once all have run
+    const dated = new Set<string>()
     const now = new Date().toISOString()
     const batch = batchOf(ctx, ROADMAP_CHANGE_TOO_LARGE)
     for (const op of operations) {
@@ -376,6 +409,7 @@ export const change = authedMutation({
             after,
             badRequest('a milestone with this id already exists'),
           )
+          dated.add(op.id)
           await logMilestone(ctx, undefined, after, now)
         } else {
           const me = await seatFor(ctx, existing?.project_id)
@@ -406,11 +440,13 @@ export const change = authedMutation({
             const after = { ...before, ...patch }
             if (same(before, after)) continue
             await ctx.db.patch(existing._id, patch)
+            if (after.week !== before.week) dated.add(op.id)
             await logMilestone(ctx, before, after, now)
           }
         }
       }
     }
+    await assertWeeksFree(ctx, dated, batch)
     const changes: Change[] = []
     for (const before of beforeTasks.values()) {
       await batch.room()
@@ -465,7 +501,13 @@ export const change = authedMutation({
  * ordinary update core would re-stamp estimates. Validate the complete
  * transaction, then send normal notifications and activity for the actual
  * reverse changes. Each step restores only the rows it journaled. */
-async function restoreStep(ctx: Context, changes: Change[], now: string, batch: Batch) {
+async function restoreStep(
+  ctx: Context,
+  changes: Change[],
+  now: string,
+  batch: Batch,
+  dated: Set<string>,
+) {
   const tasks: { change: TaskChange; before: Doc<'issues'>; me: Doc<'profiles'> }[] = []
   for (const change of changes) {
     await batch.room()
@@ -506,13 +548,17 @@ async function restoreStep(ctx: Context, changes: Change[], now: string, batch: 
             patch[field] = change.before[field]
           }
         await ctx.db.patch(row._id, patch)
+        if (patch.week !== undefined) dated.add(change.id)
         await logMilestone(ctx, actual, { ...actual, ...patch }, now)
       } else {
         if (!same(actual, change.after)) throw stale()
         if (change.before && project.archived_at !== undefined)
           throw rule('that project is archived, so restore it first')
         if (row) await ctx.db.delete(row._id)
-        if (change.before) await ctx.db.insert('milestones', change.before)
+        if (change.before) {
+          await ctx.db.insert('milestones', change.before)
+          dated.add(change.id)
+        }
         await logMilestone(ctx, actual, change.before, now)
       }
     }
@@ -559,10 +605,14 @@ export const undo = authedMutation({
     const selected = all ? entries.slice().reverse() : entries.slice(-1)
     const now = new Date().toISOString()
     const batch = batchOf(ctx, all ? ROADMAP_UNDO_TOO_LARGE : ROADMAP_STEP_TOO_LARGE)
+    // the milestones the undo moves back or brings back, checked once every
+    // step has run; a refusal keeps every step, so the app keeps the history
+    const dated = new Set<string>()
     for (const entry of selected) {
-      await restoreStep(ctx, JSON.parse(entry.changes) as Change[], now, batch)
+      await restoreStep(ctx, JSON.parse(entry.changes) as Change[], now, batch, dated)
       await ctx.db.delete(entry._id)
     }
+    await assertWeeksFree(ctx, dated, batch, UNDO_WEEK_TAKEN)
     return { count: entries.length - selected.length }
   },
 })
