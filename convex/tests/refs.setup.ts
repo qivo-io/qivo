@@ -50,6 +50,8 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'teams', field: 'org_id', target: 'organizations' },
   { table: 'team_members', field: 'team_id', target: 'teams' },
   { table: 'team_members', field: 'profile_id', target: 'profiles' },
+  { table: 'team_counts', field: 'team_id', target: 'teams' },
+  { table: 'team_counts', field: 'org_id', target: 'organizations' },
   { table: 'profiles', field: 'org_id', target: 'organizations' },
   { table: 'projects', field: 'org_id', target: 'organizations' },
   { table: 'projects', field: 'team_id', target: 'teams' },
@@ -72,6 +74,9 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'issue_links', field: 'source_id', target: 'issues' },
   { table: 'issue_links', field: 'target_id', target: 'issues' },
   { table: 'labels', field: 'org_id', target: 'organizations' },
+  { table: 'label_counts', field: 'label_id', target: 'labels' },
+  { table: 'label_counts', field: 'org_id', target: 'organizations' },
+  { table: 'label_count_runs', field: 'org_id', target: 'organizations' },
   { table: 'issue_labels', field: 'org_id', target: 'organizations' },
   { table: 'issue_labels', field: 'issue_id', target: 'issues' },
   { table: 'issue_labels', field: 'label_id', target: 'labels' },
@@ -193,6 +198,9 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // background cleanup deletes the row (profileRemovals.ts).
   'profile_removals.profile_id',
   'profile_removals.scheduled_id',
+  // the organization whose team counts still count the removed profile's
+  // memberships left (model/teamCounts.ts), which may be deleted before them
+  'profile_removals.counted_org_id',
   // A pending removal names the label that is already gone, until its
   // background cleanup deletes the row (labelRemovals.ts).
   'label_removals.label_id',

@@ -80,6 +80,7 @@ import {
   normalizeEmail,
   vProfileExpected,
 } from './model/people'
+import { countingOrg, countMemberAdded, countMemberRemoved } from './model/teamCounts'
 
 /* The 0112/0116 fan-out predicate: every profile carrying the caller's login,
  * OR the address held by one of the caller's claimed seats (the unclaimed-
@@ -205,6 +206,7 @@ export const create = adminMutation({
         is_leader: false,
         name_key: nameKey(name),
       })
+      await countMemberAdded(ctx, team.id, countingOrg({ org_id: org.id, org_role: args.org_role }))
     }
     await logActivity(ctx, {
       org_id: org.id,
@@ -404,7 +406,12 @@ async function updateProfile(
       ts: now,
     })
   }
-  for (const m of dels) await ctx.db.delete(m._id)
+  // the team counts take the deleted memberships off by the role they were
+  // held under, and count the new ones by the role the patch stored
+  for (const m of dels) {
+    await ctx.db.delete(m._id)
+    await countMemberRemoved(ctx, m, countingOrg(row))
+  }
   for (const team of adds) {
     await ctx.db.insert('team_members', {
       team_id: team.id,
@@ -412,6 +419,7 @@ async function updateProfile(
       is_leader: false,
       name_key: nameKey(effectiveName),
     })
+    await countMemberAdded(ctx, team.id, countingOrg({ org_id: row.org_id, org_role: newRole }))
   }
   // the memberships and grants copy the name key (model/nameKeys.ts)
   if (renamedFrom !== undefined)

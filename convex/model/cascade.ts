@@ -25,6 +25,7 @@ import { deleteSweepRow } from './messages'
 import { deleteOrgBookkeeping } from './orgs'
 import { deleteStamp } from './syncStamps'
 import { emitTaskEvent } from './taskEvents'
+import { countingOrg, countMemberRemoved, deleteTeamCount } from './teamCounts'
 
 async function deleteProfileRateLimit(ctx: MutationCtx, profileId: string): Promise<void> {
   const rows = ctx.db
@@ -87,6 +88,7 @@ export async function deleteTeamDeep(
     await next()
     await ctx.db.delete(tm._id)
   }
+  await deleteTeamCount(ctx, team.id)
   await ctx.db.delete(team._id)
 }
 
@@ -226,7 +228,9 @@ type AccessTable = 'agent_keys' | 'mcp_tokens' | 'team_members' | 'project_acces
  *   credential whose profile is gone, and the lists read through live
  *   seats (tokens.ts, apiAccess.ts).
  * - team_members, project_access: lib/access.ts asks by a resolved
- *   profile, and the snapshot sends only rows whose profile it sends.
+ *   profile, and the snapshot sends only rows whose profile it sends. A
+ *   membership left still counts in its team's member count until a
+ *   background step deletes it (model/teamCounts.ts).
  * - user_prefs: only the person's own seats read them (prefs.ts). */
 const ACCESS_RANGES: ((
   ctx: QueryCtx,
@@ -248,14 +252,23 @@ const ACCESS_RANGES: ((
 ]
 
 /** Deletes the access rows of `profileId` (ACCESS_RANGES) until none is
- * left (true) or `budget` is spent (false), each range in one pass (sweep). */
+ * left (true) or `budget` is spent (false), each range in one pass (sweep).
+ * `countedIn` is the organization whose team counts count the profile's
+ * memberships (model/teamCounts.ts), which each deleted membership leaves. */
 export async function deleteAccessRows(
   ctx: MutationCtx,
   profileId: string,
   budget: RemovalBudget,
+  countedIn: string | null,
 ): Promise<boolean> {
   for (const range of ACCESS_RANGES)
-    if (!(await sweep(budget, range(ctx, profileId), (row) => ctx.db.delete(row._id)))) return false
+    if (
+      !(await sweep(budget, range(ctx, profileId), async (row) => {
+        await ctx.db.delete(row._id)
+        if ('team_id' in row) await countMemberRemoved(ctx, row, countedIn)
+      }))
+    )
+      return false
   return true
 }
 
@@ -334,10 +347,21 @@ export async function removeProfile(
   // DELETE, credentials first, within ACCESS_FIRST_PASS.rows rows. Every
   // reader of the rest ends with the profile row deleted below
   // (ACCESS_RANGES), and the profile removal access phase deletes them.
-  await deleteAccessRows(ctx, profile.id, {
-    rows: ACCESS_FIRST_PASS.rows,
-    bytes: REMOVAL_BUDGET.bytes,
-  })
+  // Memberships left keep counting in their teams through the removal row
+  // (counted_org_id) until that phase deletes them.
+  const countedIn = countingOrg(profile)
+  await deleteAccessRows(
+    ctx,
+    profile.id,
+    { rows: ACCESS_FIRST_PASS.rows, bytes: REMOVAL_BUDGET.bytes },
+    countedIn,
+  )
+  const membershipsLeft =
+    countedIn !== null &&
+    (await ctx.db
+      .query('team_members')
+      .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
+      .first()) !== null
   // SET NULL + touch on open tasks within one budget, in TASK_HOLDERS order.
   // Each clear reads and writes the whole task, and a task the profile
   // created and reports is cleared once per field, so an unbounded pass
@@ -381,15 +405,18 @@ export async function removeProfile(
   // Usage remains owed by the organization after its profile departs.
   await deleteProfileRateLimit(ctx, profile.id)
   const scheduled_id = await ctx.scheduler.runAfter(0, removalStepRef, { profile_id: profile.id })
+  // A row left by an earlier removal of the same id starts over, still
+  // counting the memberships it counted.
+  const earlier = await pendingRemoval(ctx, profile.id)
+  const counted_org_id = membershipsLeft ? (countedIn ?? undefined) : earlier?.counted_org_id
   const job = {
     profile_id: profile.id,
     removed_at: now,
     phase: REMOVAL_PHASES[0],
     progress_at: new Date().toISOString(),
     scheduled_id,
+    ...(counted_org_id !== undefined ? { counted_org_id } : {}),
   }
-  // A row left by an earlier removal of the same id starts over.
-  const earlier = await pendingRemoval(ctx, profile.id)
   if (earlier) await ctx.db.replace(earlier._id, job)
   else await ctx.db.insert('profile_removals', job)
   // the row, then its picture, which is held for a restore (model/fileHolds.ts)
@@ -590,6 +617,14 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       await ctx.db.delete(m._id)
     await ctx.db.delete(t._id)
   }
+
+  // the label and team counts, and any left without their label or team
+  for (const table of ['label_counts', 'team_counts'] as const)
+    for (const row of await ctx.db
+      .query(table)
+      .withIndex('by_org', (q) => q.eq('org_id', org.id))
+      .collect())
+      await ctx.db.delete(row._id)
 
   for (const pr of await ctx.db
     .query('profiles')

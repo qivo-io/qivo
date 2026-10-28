@@ -46,8 +46,10 @@ import { DEFAULT_PLANNABLE_HOURS } from '../lib/workload'
 import { deleteOrgDeep, pendingRemoval } from '../model/cascade'
 import { startCount } from '../model/commentLimits'
 import { insertTask } from '../model/descriptions'
+import { insertLabelCount } from '../model/labelCounts'
 import { insertOrgRows, newOrgDefaults, newTeamDefaults, tallyRow } from '../model/orgs'
 import { projectDescription } from '../model/projects'
+import { insertTeamCount } from '../model/teamCounts'
 
 /* The seat's login: `<key>@demo.qivo.io` is the Northstar roster's address
  * pattern (internal/marketingDemo). */
@@ -131,6 +133,7 @@ export const zzGuestOrg = internalMutation({
       ...named('ZZ Guest Team'),
       ...newTeamDefaults(now),
     })
+    await insertTeamCount(ctx, { id: ZZ.team, org_id: ZZ.org }, 0)
 
     /* The SHARED pair (the guest is invited to the meta; grants inherit) and
      * the HIDDEN sibling they are NOT invited to — the control that proves a
@@ -248,6 +251,7 @@ export const zzGuestOrg = internalMutation({
       color: '#888888',
       created_at: now,
     })
+    await insertLabelCount(ctx, { id: ZZ.label, org_id: ZZ.org })
 
     /* The invitation itself: an UNCLAIMED guest seat carrying Ben's email —
      * no auth_user_id, no accepted_at — granted member on the shared project

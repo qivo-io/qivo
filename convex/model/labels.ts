@@ -20,6 +20,7 @@ import { LIMITS } from '../lib/limits'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, DELETES, type Fields, filledText, type Next } from './expected'
 import { assertCanEdit } from './issues'
+import { deleteLabelCount, insertLabelCount, tallyAssignment } from './labelCounts'
 
 /** Refuses a caller who may not add labels to the organization's list. */
 export async function assertLabelCreator(ctx: QueryCtx, me: Doc<'profiles'>): Promise<void> {
@@ -140,6 +141,7 @@ export async function createLabelCore(
     { id, org_id: me.org_id, name, name_lower: name.toLowerCase(), color, created_at: now },
     rule('a label with that name already exists'),
   )
+  await insertLabelCount(ctx, { id, org_id: me.org_id })
   await logActivity(ctx, {
     org_id: me.org_id,
     actor_id: me.id,
@@ -287,7 +289,8 @@ export async function deleteLabelAssignments(
  * same transaction. A label on more tasks gets a label_removals row, which
  * reserves the id, and background steps remove the rest (labelRemovals.ts).
  * Every reader skips an assignment whose label is gone, so the label leaves
- * every task at once either way.
+ * every task at once either way. Its usage count goes with it
+ * (model/labelCounts.ts), so the assignments left count nowhere.
  */
 export async function deleteLabelCore(
   ctx: MutationCtx,
@@ -303,6 +306,7 @@ export async function deleteLabelCore(
   const { me, label, now } = a
   assertLabelManager(me)
   await assertLabelExpected(ctx, me, label, a.expected, DELETES)
+  await deleteLabelCount(ctx, label.id)
   const more = await deleteLabelAssignments(ctx, label.id, LABEL_REMOVAL.inline)
   await ctx.db.delete(label._id)
   await logActivity(ctx, {
@@ -367,6 +371,8 @@ export async function setTaskLabel(
       task_key: issue.window_key,
     })
   }
+  // read again, as an update may have archived the task before its labels
+  await tallyAssignment(ctx, { issue_id: issue.id, label_id: label.id }, a.on ? 1 : -1)
   const named = `“${label.name}”`
   await logActivity(ctx, {
     org_id: issue.org_id,

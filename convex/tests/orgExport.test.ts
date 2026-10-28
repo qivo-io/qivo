@@ -143,6 +143,10 @@ const EXCLUDED_TABLES = [
   'comment_rates',
   // Team sync stamps, exported on the profile row (sync_at, sync_since).
   'sync_stamps',
+  // Counts the exported memberships and label assignments give again.
+  'team_counts',
+  'label_counts',
+  'label_count_runs',
   // Deleted items are not exported: restore an item to include its work.
   'deleted_items',
   'deleted_item_jobs',

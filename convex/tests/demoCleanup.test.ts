@@ -161,6 +161,11 @@ const APP_OWNED: TableNames[] = [
   'webhook_subscriptions',
   'webhook_deliveries',
   'team_members',
+  // member and label usage counts, deleted with their team and label
+  'team_counts',
+  'label_counts',
+  // a label count the backfill runs, deleted with the organization
+  'label_count_runs',
   'project_access',
   'project_team_access',
   'milestones',

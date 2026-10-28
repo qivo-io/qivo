@@ -22,8 +22,10 @@ import { clearOrgTrash } from '../model/deletedItems'
 import { recordDemoCreated } from '../model/demoMetrics'
 import { drainDemoUploads } from '../model/demoUploads'
 import { eraseFile } from '../model/fileHolds'
+import { deleteLabelCount } from '../model/labelCounts'
 import { deleteOrgBookkeeping, tallyRow } from '../model/orgs'
 import { uncountFile } from '../model/storageTotals'
+import { deleteTeamCount } from '../model/teamCounts'
 import { marketingId } from './marketingDemoData'
 
 const BATCH = 64
@@ -97,12 +99,20 @@ async function storageRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
   )
 }
 
-/** Every task with its rows, its comment count and post logs among them,
- * then the description rows the tasks leave (model/descriptions.ts), which
- * a visitor's payload limit keeps small, then any storage totals left
- * (storageRows) and any comment count or post log left naming no task
- * (model/commentLimits.ts). */
+/** The label usage counts, so none reads wrong while the tasks they count
+ * go over many batches (model/labelCounts.ts), then every task with its
+ * rows, its comment count and post logs among them, then the description
+ * rows the tasks leave (model/descriptions.ts), which a visitor's payload
+ * limit keeps small, then any storage totals left (storageRows) and any
+ * comment count or post log left naming no task (model/commentLimits.ts). */
 async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
+  const counts = await drain(ctx, budget, (n) =>
+    ctx.db
+      .query('label_counts')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .take(n),
+  )
+  if (!counts) return false
   while (budget.left > 0) {
     const issue = await ctx.db
       .query('issues')
@@ -267,13 +277,23 @@ async function projectRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
   return false
 }
 
+/* Each team goes with its member count first (model/teamCounts.ts), which
+ * leaves the profiles phase no count to move, then any count left without
+ * its team. */
 async function teamRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
   while (budget.left > 0) {
     const team = await ctx.db
       .query('teams')
       .withIndex('by_org', (q) => q.eq('org_id', orgId))
       .first()
-    if (!team) return true
+    if (!team)
+      return await drain(ctx, budget, (n) =>
+        ctx.db
+          .query('team_counts')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .take(n),
+      )
+    await deleteTeamCount(ctx, team.id)
     if (
       !(await drain(ctx, budget, (n) =>
         ctx.db
@@ -434,13 +454,22 @@ async function profileRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
   return false
 }
 
+/* Each label goes with its usage count first (model/labelCounts.ts), then
+ * any count left without its label. */
 async function labelRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
   while (budget.left > 0) {
     const label = await ctx.db
       .query('labels')
       .withIndex('by_org', (q) => q.eq('org_id', orgId))
       .first()
-    if (!label) return true
+    if (!label)
+      return await drain(ctx, budget, (n) =>
+        ctx.db
+          .query('label_counts')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .take(n),
+      )
+    await deleteLabelCount(ctx, label.id)
     if (
       !(await drain(ctx, budget, (n) =>
         ctx.db
@@ -653,6 +682,8 @@ export const purge = internalMutation({
             'labels',
             'task_comment_counts',
             'comment_rates',
+            'label_counts',
+            'team_counts',
           ] as const)
             require((await ctx.db
               .query(table)

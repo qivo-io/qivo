@@ -134,6 +134,7 @@ import { scheduleImageReap } from './descriptionImages'
 import { dropDescription, insertTask, withDescription } from './descriptions'
 import { releaseFile } from './fileHolds'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
+import { tallyAssignment } from './labelCounts'
 import { linksFullAt } from './links'
 import {
   type NotifyPreload,
@@ -490,16 +491,27 @@ const tooLarge = (item: Pick<Item, 'id' | 'org_id'>, live: LiveRow, ownerId: str
   estimateDocumentBytes(wrapRow(item, live, ownerId)) > STORED_ROW_MAX_BYTES
 
 /** Deletes `live` from its table, a task or project out of its
- * organization's live counts (model/orgs.ts tallyRow) and a comment out of
- * its task's comment count (model/commentLimits.ts tallyComments), at the
- * end of the transaction when `txn` collects the comments (finishTxn). A
- * task's count row stays while the task is stored, so a restore that writes
- * its comments back counts them in again. A task's description row is its
- * caller's (dropTaskDescription). */
-async function deleteLive(ctx: MutationCtx, live: LiveRow, txn?: Txn): Promise<void> {
+ * organization's live counts (model/orgs.ts tallyRow), a label assignment
+ * of a live task out of its label's count (model/labelCounts.ts), and a
+ * comment out of its task's comment count (model/commentLimits.ts
+ * tallyComments), at the end of the transaction when `txn` collects the
+ * comments (finishTxn). A task's count row stays while the task is stored,
+ * so a restore that writes its comments back counts them in again. `task`
+ * is the live task a relation row belongs to when the caller holds it, so
+ * the label count need not read the task again for each of its rows;
+ * without it the task is read, which finds none for the stored tasks most
+ * callers move rows of. A task's description row is its caller's
+ * (dropTaskDescription). */
+async function deleteLive(
+  ctx: MutationCtx,
+  live: LiveRow,
+  txn?: Txn,
+  task?: Doc<'issues'>,
+): Promise<void> {
   await ctx.db.delete(live.doc._id)
-  if (live.table === 'issues' || live.table === 'projects')
-    await tallyRow(ctx, live.table, live.doc, null)
+  if (live.table === 'issues') await tallyRow(ctx, live.table, live.doc, null)
+  else if (live.table === 'projects') await tallyRow(ctx, live.table, live.doc, null)
+  else if (live.table === 'issue_labels') await tallyAssignment(ctx, live.doc, -1, task)
   else if (live.table !== 'comments') return
   else if (txn !== undefined) txn.comments.push([live.doc, -1])
   else await tallyComments(ctx, [[live.doc, -1]])
@@ -510,9 +522,16 @@ async function deleteLive(ctx: MutationCtx, live: LiveRow, txn?: Txn): Promise<v
  * (model/storageTotals.ts), and letting go of its file (model/fileHolds.ts
  * releaseFile), and a task with its comment count and post logs
  * (model/commentLimits.ts deleteCommentRows), which a task that takes its
- * freed id must not find. `txn` collects a comment's count (deleteLive). */
-async function discard(ctx: MutationCtx, live: LiveRow, num?: number, txn?: Txn): Promise<void> {
-  await deleteLive(ctx, live, txn)
+ * freed id must not find. `txn` collects a comment's count and `task` is as
+ * for deleteLive. */
+async function discard(
+  ctx: MutationCtx,
+  live: LiveRow,
+  num?: number,
+  txn?: Txn,
+  task?: Doc<'issues'>,
+): Promise<void> {
+  await deleteLive(ctx, live, txn, task)
   if (live.table === 'issue_attachments') {
     await uncountFile(ctx, live.doc, num)
     await releaseFile(ctx, live.doc.storage_id)
@@ -523,13 +542,15 @@ async function discard(ctx: MutationCtx, live: LiveRow, num?: number, txn?: Txn)
  * deletes it from its table. The only insert into deleted_rows. A row too
  * large to store (STORED_ROW_MAX_BYTES) is deleted instead, letting go of
  * an attachment's file; that is logged with the item id and returns false.
- * `txn` collects a comment's count (deleteLive). */
+ * `txn` collects a comment's count (deleteLive), and `task` is as for
+ * deleteLive. */
 export async function storeRow(
   ctx: MutationCtx,
   item: Pick<Item, 'id' | 'org_id'>,
   live: LiveRow,
   ownerId: string,
   txn?: Txn,
+  task?: Doc<'issues'>,
 ): Promise<boolean> {
   const stored = wrapRow(item, live, ownerId)
   if (estimateDocumentBytes(stored) > STORED_ROW_MAX_BYTES) {
@@ -537,11 +558,11 @@ export async function storeRow(
       item_id: item.id,
       table: live.table,
     })
-    await discard(ctx, live, undefined, txn)
+    await discard(ctx, live, undefined, txn, task)
     return false
   }
   await uncountedWriter(ctx.db).insert('deleted_rows', stored)
-  await deleteLive(ctx, live, txn)
+  await deleteLive(ctx, live, txn, task)
   return true
 }
 
@@ -727,17 +748,20 @@ const emptyTally = (item: Pick<Item, 'projects'>): Tally => ({
 
 /** Stores `live` (keep) or deletes it for good (purge). A grant or share
  * the item already stores is only deleted (storedAlready). `num` is the
- * number of the task a task's row travels with. */
+ * number of the task a task's row travels with, and `task` is as for
+ * deleteLive. */
 async function clearRow(
   run: Run,
   live: LiveRow,
   ownerId: string,
   mode: Mode,
   num?: number,
+  task?: Doc<'issues'>,
 ): Promise<void> {
   if (mode === 'purge' || (await storedAlready(run, live, ownerId)))
-    return await discard(run.ctx, live, num, run.txn)
-  if (!(await storeRow(run.ctx, run.item, live, ownerId, run.txn))) tallyOf(run).dropped_rows += 1
+    return await discard(run.ctx, live, num, run.txn, task)
+  if (!(await storeRow(run.ctx, run.item, live, ownerId, run.txn, task)))
+    tallyOf(run).dropped_rows += 1
 }
 
 /** Whether `run`'s item already stores grant or team grant `live` of
@@ -942,8 +966,9 @@ async function idTaken(run: Run, taskId: string): Promise<boolean> {
  * project emit no task.deleted. */
 async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boolean> {
   for (const relation of TASK_ROWS) {
+    // the task stays live until its own row goes, below
     const done = await drain(run.budget, relation(run.ctx, task.id), (row) =>
-      clearRow(run, row, task.id, mode, task.num),
+      clearRow(run, row, task.id, mode, task.num, task),
     )
     if (!done) return false
   }
@@ -2343,13 +2368,19 @@ async function writeRowBack(run: Run, row: Doc<'deleted_rows'>): Promise<void> {
     // back in its task's comment count, which stayed while it was stored
     run.txn.comments.push([{ _id: id, issue_id: r.doc.issue_id }, 1])
   } else if (r.table === 'issue_labels') {
-    if (sameReference(await labelOf(run, r.doc.label_id), run.item))
+    if (sameReference(await labelOf(run, r.doc.label_id), run.item)) {
       await db.insert('issue_labels', {
         ...r.doc,
         org_id,
         task_archived: undefined,
         task_key: await taskKeyOf(run, r.doc.issue_id, r.doc.task_key),
       })
+      // counted here when its task is back already, else with the task
+      // (writeTask), which a restore usually writes after its rows
+      const task = await byId(run.ctx, 'issues', r.doc.issue_id)
+      if (task !== null) chargeRead(run.budget, task)
+      await tallyAssignment(run.ctx, r.doc, 1, task)
+    }
   } else if (r.table === 'issue_subscriptions') {
     if ((await keptProfile(run, r.doc.profile_id)) !== undefined)
       await db.insert('issue_subscriptions', {
@@ -3929,12 +3960,15 @@ async function clearPages<Row>(
  * its file (model/fileHolds.ts releaseFile), then the attachments the
  * organization stores of it, then its messages, comment count and post
  * logs. The caller deletes the task after, so its number is still known for
- * each file. */
+ * each file. `live` is the task when the caller holds it live, such as one
+ * a moving project left behind, whose labels still count it; without it a
+ * label assignment's count reads the task (model/labelCounts.ts). */
 async function clearLiveRows(
   ctx: MutationCtx,
   orgId: string,
   task: { id: string; num: number },
   budget: Teardown,
+  live?: Doc<'issues'>,
 ): Promise<boolean> {
   for (const relation of TASK_ROWS) {
     const cleared = await clearPages(budget, relation(ctx, task.id), async (row) => {
@@ -3943,6 +3977,7 @@ async function clearLiveRows(
         await uncountFile(ctx, row.doc, task.num)
         await releaseFile(ctx, row.doc.storage_id)
       }
+      if (row.table === 'issue_labels') await tallyAssignment(ctx, row.doc, -1, live)
       return true
     })
     if (!cleared) return false
@@ -4089,7 +4124,7 @@ export async function clearOrgTrash(
           budget,
           ctx.db.query('issues').withIndex('by_project', (q) => q.eq('project_id', row.owner_id)),
           async (task) => {
-            if (!(await clearLiveRows(ctx, orgId, task, budget))) return false
+            if (!(await clearLiveRows(ctx, orgId, task, budget, task))) return false
             if (!(await clearDescriptions(ctx, budget, orgId, task.id, true))) return false
             await deleteLive(ctx, { table: 'issues', doc: task })
             return true

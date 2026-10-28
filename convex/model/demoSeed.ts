@@ -25,6 +25,7 @@ import { markArchivedTask } from './archiveMarks'
 import { type CommentWrite, startCount, tallyComments } from './commentLimits'
 import { insertTask } from './descriptions'
 import { browserVerbDetail, cleanDescription } from './issues'
+import { insertLabelCount } from './labelCounts'
 import {
   type NotifyPreload,
   notifyCommentInsert,
@@ -44,6 +45,7 @@ import {
 } from './orgs'
 import { cleanProjectName, projectDescription } from './projects'
 import { deleteStamp, writeStamp } from './syncStamps'
+import { insertTeamCount } from './teamCounts'
 import { cleanTeamName } from './teams'
 
 export const SAMPLE_AVATARS = [
@@ -313,6 +315,9 @@ export async function writeNorthstarStep(
           is_leader: member === team.lead,
           name_key: personKeys.get(member),
         })
+      // each member counts: the dataset makes nobody a guest, and this step
+      // gives the people their roles below
+      await insertTeamCount(ctx, { id: teamIds[team.key], org_id: org.id }, team.members.length)
     }
     for (const p of data.people) {
       const profile = profiles.find((pr) => pr.id === personIds[p.key])
@@ -367,7 +372,7 @@ export async function writeNorthstarStep(
       'projects',
       data.projects.map((_, index) => [null, { org_id: org.id, num: index + 1 }] as const),
     )
-    for (const l of data.labels)
+    for (const l of data.labels) {
       await ctx.db.insert('labels', {
         id: labelIds[l.key],
         org_id: org.id,
@@ -376,6 +381,9 @@ export async function writeNorthstarStep(
         color: l.color,
         created_at: now,
       })
+      // the tasks step counts the labels it puts on tasks (tallyRows)
+      await insertLabelCount(ctx, { id: labelIds[l.key], org_id: org.id })
+    }
     shared.labels = new Set(data.labels.map((l) => labelIds[l.key]))
     return
   }
@@ -481,7 +489,8 @@ export async function writeNorthstarStep(
       shared.tasks.set(i.key, issue)
       await notifyIssueInsert(ctx, { issue, actor: atlas, now, preload, skipTaskEvent: true })
     }
-    // one read of the counters for the step's tasks, not one per task
+    // one read of the counters for the step's tasks, not one per task,
+    // which also counts the labels just put on them (model/labelCounts.ts)
     await tallyRows(
       ctx,
       'issues',
