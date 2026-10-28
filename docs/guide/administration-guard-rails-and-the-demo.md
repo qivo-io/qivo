@@ -114,8 +114,10 @@ that Qivo checked part of the list; **Next** continues with the rest. After
 an update, the page can say that API access is not ready yet while Qivo
 prepares the organization's credentials and usage. Revoked and expired
 credentials stay listed because their calls in the period still count.
-**Refresh** reads current figures, and calls made while you browse can move
-a credential to another page until you refresh.
+**Refresh** reads current figures for the page on screen. Calls made while
+you browse can move a credential to another page, so a credential can be
+missed or shown twice; going back to the first page with **Previous**, or
+changing a filter, shows the current order.
 
 **View credentials** beside an account on [Billing](#billing-and-free-access)
 opens API access on that account and Billing's usage period, with every
