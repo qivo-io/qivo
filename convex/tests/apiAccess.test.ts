@@ -1115,6 +1115,55 @@ describe('apiAccess.page at scale', () => {
     expect(pages.at(-1)).toMatchObject({ next: null, stopped: false })
   }, 120_000)
 
+  it('ends a list whose credentials all have calls without pages that stopped empty', async () => {
+    const t = newT({ transactionLimits: HALF })
+    const f = await withOrg(t)
+    // 2,000 personal tokens of 40 people, every one with calls this month
+    const people = await t.run(async (ctx) => {
+      const made: Doc<'profiles'>[] = []
+      for (let i = 0; i < 40; i++) {
+        const _id = await ctx.db.insert('profiles', {
+          id: uuid(),
+          org_id: f.org.id,
+          ...named(`Caller ${String(i).padStart(2, '0')}`),
+          initials: 'CA',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+        const profile = await ctx.db.get(_id)
+        if (profile) made.push(profile)
+      }
+      return made
+    })
+    for (let from = 0; from < 2000; from += 250)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 250; i++) {
+          const id = uuid()
+          const owner = people[i % people.length]
+          await plantToken(ctx, id, owner, `Called ${i}`)
+          await plantUsage(ctx, {
+            org_id: f.org.id,
+            profile_id: owner.id,
+            credential_id: `mcp_tokens:${id}`,
+            name: `Called ${i}`,
+            calls: 1 + (i % 9),
+            period_start: SEPTEMBER,
+          })
+        }
+      })
+    const pages = await walk(t, f)
+    const listed = pages.flatMap((shown) => shown.rows)
+    expect(listed.length).toBe(2000)
+    expect(new Set(listed.map((r) => r.id)).size).toBe(2000)
+    // the credentials without calls follow on no page of their own: every
+    // page before the end lists rows, and none stopped
+    expect(pages.filter((shown) => shown.stopped)).toEqual([])
+    expect(pages.slice(0, -1).every((shown) => shown.rows.length > 0)).toBe(true)
+  }, 180_000)
+
   it('stops a scan over large rows on bytes before Convex’s limits', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)

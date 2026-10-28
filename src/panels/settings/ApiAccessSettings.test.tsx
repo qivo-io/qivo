@@ -688,10 +688,13 @@ describe('the explicit states', () => {
         ? { state: 'ready', period: CURRENT, person: null, rows: [], next: 'more', stopped: true }
         : undefined
     await render(<ui.OrgApiAccessPage />)
+    // with no filter set, nothing it checked was a miss
+    expect(note()).toBe('Qivo checked part of the list. Next continues with the rest.')
+    expect(document.body.textContent).not.toContain('No credentials match')
+    await click(buttonIn(find('[aria-label="State"]'), 'Active'))
     expect(note()).toBe(
       'Qivo checked part of the list and found no matches there. Next continues with the rest.',
     )
-    expect(document.body.textContent).not.toContain('No credentials match')
     server.page = (args) =>
       args.cursor === undefined
         ? {

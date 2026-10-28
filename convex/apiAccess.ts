@@ -94,17 +94,22 @@ export const API_ACCESS_PAGE = 25
 
 /**
  * What one page or people batch may read, as transaction totals: at most
- * `candidates` rows of its streams, and at most half of each of Convex's
+ * `candidates` rows that it joins, and at most half of each of Convex's
  * limits for one query (16 MiB read, 32,000 documents, 4,096 index ranges),
- * checked with the transaction's metrics before each candidate (lib/
+ * checked with the transaction's metrics before each row (lib/
  * namedPages.ts readGuard). A candidate costs up to five index ranges: its
  * usage or credential row, its owner's profile, its credential by id or the
  * usage check of a credential without calls, and the OAuth client of a
  * connected app, the last two memoized per page. 400 candidates thus read
  * at most 2,000 ranges, under half the 4,096 a query may read, and about
- * 1,600 documents of well under 2 KB each. The byte share stops a scan over
- * unusually large rows first. Past either, the page answers what it found
- * and a cursor, marked as stopped early. Tests lower these.
+ * 1,600 documents of well under 2 KB each. A credential the stream of
+ * credentials without calls leaves out on its own row and at most one usage
+ * read, such as one already listed with its calls, is no candidate: the
+ * read share alone bounds those, so an organization whose credentials all
+ * have calls does not end in pages that checked 400 of them and listed
+ * nothing. The byte share stops a scan over unusually large rows first.
+ * Past either, the page answers what it found and a cursor, marked as
+ * stopped early. Tests lower these.
  */
 export const API_ACCESS_SCAN: { candidates: number; read: ReadCeiling } = {
   candidates: 400,
@@ -898,18 +903,19 @@ function credentialIndex(
   }
 }
 
-/** The stream `stream` ending with STOPPED once it handed out `most` rows,
- * the share of API_ACCESS_SCAN.candidates left to it. A batch reads one row
- * past a full one; a cut there only leaves the end unknown. */
+/** The stream `stream` ending with STOPPED in place of a row once `more`
+ * answers false, as when API_ACCESS_SCAN.candidates run out; its first row
+ * always passes, so a batch moves on. A batch reads one row past a full
+ * one; a cut there only leaves the end unknown. */
 function capped<Row>(
   stream: (reads: NamedReads) => NamedStream<Row>,
-  most: number,
+  more: () => boolean,
 ): (reads: NamedReads) => NamedStream<Row> {
   return (reads) =>
     (async function* () {
       let handed = 0
       for await (const item of stream(reads)) {
-        if (item !== STOPPED && handed >= most) {
+        if (item !== STOPPED && handed > 0 && !more()) {
           yield STOPPED
           return
         }
@@ -992,7 +998,7 @@ async function zeroPart(
     return row
   }
   const listed = async (doc: CredentialDoc, guard: ReadGuard): Promise<ApiCredential | null> => {
-    walk.candidates += 1
+    // left out on the row and one usage read, which the read guard bounds
     if (
       'client_id' in doc &&
       (doc.approved_at === undefined || doc.revocation_reason === 'deleted')
@@ -1000,22 +1006,24 @@ async function zeroPart(
       return null
     const created = 'client_id' in doc ? (doc.approved_at ?? doc.created_at) : doc.created_at
     if (Date.parse(created) >= closed) return null
-    const owner = await joins.member(doc.profile_id, guard)
-    if (owner === null) return null
-    const row = credentialRow(doc, owner, 0, ask.now)
-    if (!passesState(ask, row) || !searched(ask, row)) return null
     const id = `${tableOf(doc)}:${doc.id}`
     if (
       (await guard.lookup(() => usageOf(ctx, ask.orgId, doc.profile_id, id, period.key))) !== null
     )
       return null
+    // a candidate: what follows joins the credential's owner and client
+    walk.candidates += 1
+    const owner = await joins.member(doc.profile_id, guard)
+    if (owner === null) return null
+    const row = credentialRow(doc, owner, 0, ask.now)
+    if (!passesState(ask, row) || !searched(ask, row)) return null
     const live = await liveState(row, doc, joins, guard)
     return passesState(ask, live) ? live : null
   }
   const batch = await readBatch(ctx, {
     stream: capped(
       (reads) => mergeNamed(indexes.map((index) => indexAfter(index, after)(reads))),
-      Math.max(1, API_ACCESS_SCAN.candidates - walk.candidates),
+      () => walk.candidates < API_ACCESS_SCAN.candidates,
     ),
     keep,
     limit: probe ? 1 : limit,
@@ -1282,12 +1290,19 @@ export const people = orgQuery({
     }
     if (!(await nameKeysReady(ctx, orgId))) return { state: 'not_ready' }
     const matches = allWordsMatcher(nameKey(search))
+    // the profiles the batch has looked at, each a candidate
+    let seen = 0
     const batch = await readBatch(ctx, {
-      stream: capped(indexAfter(profileIndex(ctx, orgId), after), API_ACCESS_SCAN.candidates),
-      keep: async (profile: Doc<'profiles'>) =>
-        matches(nameKey(profile.name))
+      stream: capped(
+        indexAfter(profileIndex(ctx, orgId), after),
+        () => seen < API_ACCESS_SCAN.candidates,
+      ),
+      keep: async (profile: Doc<'profiles'>) => {
+        seen += 1
+        return matches(nameKey(profile.name))
           ? { id: profile.id, name: profile.name, agent: profile.kind === 'agent', removed: false }
-          : null,
+          : null
+      },
       limit: API_ACCESS_PAGE,
       through: null,
       ceiling: API_ACCESS_SCAN.read,

@@ -340,9 +340,13 @@ function ApiAccessPage({
         </Note>
       )
   else if (page?.state === 'ready' && rows.length === 0)
+    // without a filter nothing was a miss: the part it checked holds only
+    // credentials it does not list here, such as those listed with their calls
     body = (
       <Note data="none" focusable>
-        Qivo checked part of the list and found no matches there. Next continues with the rest.
+        {shown && filteredOf(shown.ask)
+          ? 'Qivo checked part of the list and found no matches there. Next continues with the rest.'
+          : 'Qivo checked part of the list. Next continues with the rest.'}
       </Note>
     )
 
