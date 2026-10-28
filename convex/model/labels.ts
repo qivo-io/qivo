@@ -5,18 +5,32 @@
  * putting one on a task or taking it off. Each caller resolves what it names
  * and refuses with its own sentences first. Deleting a label is app only
  * (labels.remove), and its bounded cascade, deleteLabelCore, lives here with
- * the other writes. */
+ * the other writes. The app's label lists read the organization's labels a
+ * batch at a time through labelBatch, in name order with search, under a
+ * read budget (lib/namedPages.ts). */
 
-import { makeFunctionReference } from 'convex/server'
+import { type GenericDocument, makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { canManageOrgLabels, canWriteOrgLabels } from '../lib/access'
+import type { ReadCeiling } from '../lib/archivedTasks'
 import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS } from '../lib/limits'
+import { LIMITS, LIST_BATCH } from '../lib/limits'
+import {
+  compareNamed,
+  indexAfter,
+  type NamedAt,
+  type NamedIndex,
+  namedCursor,
+  openNamedCursor,
+  readBatch,
+} from '../lib/namedPages'
+import { nameKey } from '../lib/nameKey'
+import { allWordsMatcher } from '../lib/search'
 import { logActivity, signedDetail } from './activity'
 import { assertExpected, DELETES, type Fields, filledText, type Next } from './expected'
 import { assertCanEdit } from './issues'
@@ -92,6 +106,145 @@ export async function listLabelsCore(ctx: QueryCtx, orgId: string): Promise<Doc<
     .collect()
   return rows.sort((a, b) => a.name_lower.localeCompare(b.name_lower) || a.id.localeCompare(b.id))
 }
+
+/* The labels of the organization `orgId` in the order of by_org_name_lower:
+ * name_lower, then _creationTime, the index's implicit last field, so labels
+ * stored with one name_lower before names were unique page one by one. */
+const labelIndex = (ctx: QueryCtx, orgId: string): NamedIndex<Doc<'labels'>, number> => ({
+  all: () => ctx.db.query('labels').withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId)),
+  sameKey: (at) =>
+    ctx.db
+      .query('labels')
+      .withIndex('by_org_name_lower', (q) =>
+        q.eq('org_id', orgId).eq('name_lower', at.key).gt('_creationTime', at.tie),
+      ),
+  pastKey: (at) =>
+    ctx.db
+      .query('labels')
+      .withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId).gt('name_lower', at.key)),
+  at: (label) => ({ key: label.name_lower, tie: label._creationTime }),
+})
+
+/** The app's label lists, which cursors name (lib/namedPages.ts): Settings >
+ * Labels (labels.settingsPage) and the task label picker (labels.picker). */
+export type LabelList = 'labels.settings' | 'labels.picker'
+
+/** The refusal of an `after` or `through` that is not a cursor of this
+ * list, organization and search. */
+const NOT_LABEL_CURSOR =
+  'after and through must be cursors from an earlier answer of this list, with the same search'
+
+/** One label list asked for: the organization, the search as stored and its
+ * name key, and the positions the batch reads between. */
+export type LabelListAsk = {
+  list: LabelList
+  orgId: string
+  /** the search, trimmed */
+  search: string
+  scope: readonly string[]
+  after: NamedAt<number> | null
+  through: NamedAt<number> | null
+}
+
+/**
+ * The arguments of a label list (labels.settingsPage and labels.picker)
+ * checked and opened. Refuses a search longer than LIMITS.search with that
+ * limit's sentence, and with badRequest a cursor that is not one this list
+ * gave for the organization `orgId` and the same search, and a `through`
+ * that does not come after `after`. Two searches with one name key
+ * (lib/nameKey.ts), such as "Café" and "cafe", share their cursors, since
+ * they match the same labels.
+ */
+export async function labelListAsk(
+  list: LabelList,
+  orgId: string,
+  a: { search?: string; after?: string; through?: string },
+): Promise<LabelListAsk> {
+  const search = limitedText(LIMITS.search, a.search ?? '')
+  const scope = [orgId, nameKey(search)]
+  const open = async (text: string | undefined): Promise<NamedAt<number> | null> => {
+    if (text === undefined) return null
+    const at = await openNamedCursor(text, list, scope)
+    if (at === null || typeof at.tie !== 'number') throw badRequest(NOT_LABEL_CURSOR)
+    return { key: at.key, tie: at.tie }
+  }
+  const after = await open(a.after)
+  const through = await open(a.through)
+  if (after !== null && through !== null && compareNamed(through, after) <= 0) {
+    throw badRequest('through must be a cursor after the one in after')
+  }
+  return { list, orgId, search, scope, after, through }
+}
+
+/** One batch of a label list (labelBatch). */
+export type LabelBatch<Row> = {
+  rows: Row[]
+  next: string | null
+  stopped: boolean
+  exact: Row | null
+}
+
+/**
+ * One batch of the labels of `ask.orgId` in name order (labelIndex), the
+ * reader of Settings > Labels and of the task label picker. With a search,
+ * the rows are the labels whose name holds every whitespace-separated
+ * fragment of it in any order, ignoring case and accents (lib/search.ts
+ * allWordsMatcher over lib/nameKey.ts nameKey of both). Without
+ * `ask.through` a batch holds at most LIST_BATCH labels after `ask.after`.
+ * With it, a batch holds every match after `ask.after` up to and including
+ * `ask.through`, so a loaded batch can stay live without its end moving as
+ * labels come and go before it, and one that would hold more than four times
+ * LIST_BATCH rows stops there as if the read budget stopped it, and the app
+ * splits it.
+ *
+ * `row` makes a label's row, counting its own reads with `lookup`. The answer
+ * holds the rows; `next`, a cursor at the position the batch reached, or
+ * null when no label follows it; `stopped`, whether the read budget
+ * (`ceiling`, lib/namedPages.ts) ended the batch before it was full or
+ * reached `through`, so the rows are every match up to `next`, possibly
+ * none; and `exact`, the label whose name_lower is the search lowercased,
+ * wherever it falls in the list, read with one lookup, or null for a blank
+ * search, so the app can tell a free name from a taken one without loading
+ * the list.
+ */
+export async function labelBatch<Row>(
+  ctx: QueryCtx,
+  ask: LabelListAsk,
+  o: { ceiling: ReadCeiling; row: (label: Doc<'labels'>, lookup: Lookup) => Promise<Row> },
+): Promise<LabelBatch<Row>> {
+  const plain: Lookup = (read) => read()
+  const named =
+    ask.search === ''
+      ? null
+      : await ctx.db
+          .query('labels')
+          .withIndex('by_org_name_lower', (q) =>
+            q.eq('org_id', ask.orgId).eq('name_lower', ask.search.toLowerCase()),
+          )
+          .first()
+  const exact = named === null ? null : await o.row(named, plain)
+  const matches = allWordsMatcher(nameKey(ask.search))
+  const batch = await readBatch(ctx, {
+    stream: indexAfter(labelIndex(ctx, ask.orgId), ask.after),
+    keep: async (label: Doc<'labels'>, guard) =>
+      matches(nameKey(label.name)) ? await o.row(label, guard.lookup) : null,
+    limit: ask.through === null ? LIST_BATCH : 4 * LIST_BATCH,
+    through: ask.through,
+    ceiling: o.ceiling,
+  })
+  // a batch under `through` that stopped short of it holds too many rows
+  const short = !batch.ended && ask.through !== null && compareNamed(batch.at, ask.through) < 0
+  return {
+    rows: batch.rows,
+    next: batch.ended ? null : await namedCursor(ask.list, ask.scope, batch.at),
+    stopped: batch.stopped || short,
+    exact,
+  }
+}
+
+/** A lookup of at most one document, counted when a batch reads it
+ * (lib/namedPages.ts ReadGuard lookup). */
+export type Lookup = <D extends GenericDocument>(read: () => Promise<D | null>) => Promise<D | null>
 
 /** The organization's label with this id, or with this name in any case;
  * null when none matches. */

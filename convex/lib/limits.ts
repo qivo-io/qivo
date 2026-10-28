@@ -115,6 +115,16 @@ export const DEFAULT_PAGE_SIZE = 50
  * its views read their milestones there. */
 export const MILESTONE_READ_PROJECTS = 200
 
+/** The rows one batch of an app list holds before Load more, such as the
+ * labels of Settings > Labels and of the task label picker (labels.ts). A
+ * batch size, not a limit on what the list holds. */
+export const LIST_BATCH = 25
+
+/** The most ids one call that looks rows up by id may name, such as
+ * labels.byIds for the labels a task shows. A bound on the app's own calls,
+ * not a limit people meet. */
+export const BY_IDS_MAX = 100
+
 /** The most messages one seat's bounded inbox walk examines in each of its
  * unread and read halves (lib/inbox.ts). */
 export const INBOX_LIMIT = 500

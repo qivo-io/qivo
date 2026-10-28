@@ -1,8 +1,8 @@
 /* One-time migration that counts, for every label, the active tasks that
- * carry it (schema.ts label_counts), which Settings > Labels and its delete
- * confirmation are to show. No reader uses the counts yet. Until a label is
- * counted it has no row, and a reader is to show its count as unavailable
- * (model/labelCounts.ts activeTaskCount). Labels created since this release
+ * carry it (schema.ts label_counts), which labels.settingsPage answers for
+ * Settings > Labels and its delete confirmation. Until a label is counted it
+ * has no row, and that read answers its count as unavailable
+ * (model/labelCounts.ts shownCount). Labels created since this release
  * start with a row at zero, and every write keeps the rows that exist.
  *
  * An organization's count runs in steps, each its own transaction. The

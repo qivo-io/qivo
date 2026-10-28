@@ -1331,6 +1331,10 @@ export default defineSchema({
   })
     .index('by_uuid', ['id'])
     .index('by_org', ['org_id'])
+    // the uniqueness check and lookups by name (model/labels.ts), and the
+    // organization's labels in name order, name_lower then _creationTime,
+    // for Settings > Labels and the task label picker (labels.settingsPage,
+    // labels.picker through model/labels.ts labelBatch)
     .index('by_org_name_lower', ['org_id', 'name_lower']),
 
   // One label's use on active tasks (model/labelCounts.ts), for Settings >
@@ -1346,10 +1350,10 @@ export default defineSchema({
   // in its own transaction. A label has no row until
   // internal/labelCountsBackfill counts its organization, and labels created
   // since this release start with one. `revision` goes up with every write
-  // of the row, so a dry run sees a change that ends where it began. No
-  // reader uses the count yet; one is to show it only while its
-  // organization has no label_count_runs row (activeTaskCount), never a
-  // missing row as zero.
+  // of the row, so a dry run sees a change that ends where it began.
+  // labels.settingsPage answers the count for Settings > Labels only while
+  // its organization has no label_count_runs row (model/labelCounts.ts
+  // shownCount), and never a missing row as zero.
   label_counts: defineTable({
     label_id: v.string(),
     org_id: v.string(),
