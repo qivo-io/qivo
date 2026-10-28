@@ -189,6 +189,46 @@ describe('reach rows follow ordinary access', () => {
   })
 })
 
+describe('projects outside every tree', () => {
+  it("leaves the parent's row of a grantee who also holds a source on a project nested under it", async () => {
+    const t = newT()
+    const f = await ready(t)
+    // a project under a sub-project, which no writer makes now, led by Pia,
+    // who also holds a grant on the sub-project above it
+    const nested = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.sub.id,
+      lead_id: f.pia.id,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: f.pia.id,
+        level: 'user',
+      })
+      await ctx.db.insert('project_access', {
+        project_id: nested.id,
+        profile_id: f.viewer.id,
+        level: 'viewer',
+      })
+    })
+    await backfill(t, false)
+    await expectAll(t, f)
+    expect(await rowsOf(t, f.pia.id)).toEqual([
+      expect.objectContaining({ kind: 'child', project_id: f.sub.id }),
+      expect.objectContaining({ kind: 'root', project_id: f.meta.id, on_root: false }),
+    ])
+    // a recompute on the nested project leaves the sub-project's row alone
+    await t.run((ctx) => syncReach(ctx, grantee.profile(f.pia.id), nested.id))
+    await expectReachExact(t)
+    expect(await backfill(t, true)).toMatchObject({
+      archive_state: { missing: 0, stale: 0 },
+      reach: { missing: 0, extra: 0, stale: 0 },
+    })
+  })
+})
+
 /* Source text through the ?raw eager glob, as tests/manifest.test.ts reads
  * it, so the scan needs no fs in the edge runtime. */
 const sources = import.meta.glob(['../**/*.ts', '!../_generated/**', '!../tests/**'], {

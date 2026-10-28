@@ -168,6 +168,11 @@ export async function planReach(
   const rootId = project === null ? own?.root_id : (project.parent_id ?? project.id)
   if (rootId === undefined) return []
   const root = project !== null && project.id === rootId ? project : await read(rootId)
+  // A project under a sub-project, which no writer makes now, is outside
+  // every tree: only its own row goes. Its parent is no top-level project,
+  // so the grantee's row there is the parent's own, which this leaves.
+  if (project !== null && root?.parent_id !== undefined)
+    return [{ row: own, want: null }].filter(differs)
   const org = known ?? (await granteeOrg(ctx, g))
   const changes: ReachChange[] = []
   let childRow: ReachRow | null = null
