@@ -32,7 +32,6 @@ import type { IndexRange } from 'convex/server'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { descriptionsOf } from '../model/descriptions'
-import { roomOf } from './archivedTasks'
 import { shownLabelColor } from '../model/labels'
 import {
   countersRow,
@@ -44,6 +43,7 @@ import {
 import { shownAvatarColor } from '../model/people'
 import { stampOfRow } from '../model/syncStamps'
 import { type Access, accessOf, isOrgStaff } from './access'
+import { roomOf } from './archivedTasks'
 import { chunkLists } from './arrayLimit'
 import { orgCreateFor, seatlessState } from './billingAccess'
 import { byId } from './db'
