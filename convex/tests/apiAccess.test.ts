@@ -1008,6 +1008,65 @@ describe('apiAccess.page', () => {
   })
 })
 
+describe('API access across organizations', () => {
+  /* The other organization's usage: a token's 50 calls in PERIOD, which
+     this organization also has, and a paid bucket of its own. */
+  const ELSEWHERE = '2025-01-01T00:00:00.000Z'
+
+  it('refuses another organization’s admin on summary and people, as on page', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    for (const call of [
+      as(t, f.otherAdmin).query(api.apiAccess.summary, { org_id: f.org.id }),
+      as(t, f.otherAdmin).query(api.apiAccess.people, { org_id: f.org.id }),
+      as(t, f.otherAdmin).query(api.apiAccess.page, {
+        org_id: f.org.id,
+        kind: 'all',
+        state: 'all',
+      }),
+    ])
+      await expectRefusal(call, 'forbidden')
+  })
+
+  it('answers another organization’s period key as unavailable, on summary and page', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    const shown = await summary(t, f, ELSEWHERE)
+    expect(shown.state).toBe('period_unavailable')
+    expect(shown.periods.map((p) => p.key)).not.toContain(ELSEWHERE)
+    expect(await page(t, f, { period: ELSEWHERE })).toEqual({ state: 'period_unavailable' })
+    // and the other way round: neither of this organization's own past
+    // periods is one of the other's
+    const other = { admin: f.otherAdmin, org: f.otherOrg }
+    for (const key of [PAST, MONTH, FREE]) {
+      expect((await summary(t, other, key)).state).toBe('period_unavailable')
+      expect(await page(t, other, { period: key })).toEqual({ state: 'period_unavailable' })
+    }
+    // a key both have counts each organization's own calls
+    expect(await summary(t, other, PERIOD)).toMatchObject({ state: 'ready' })
+    expect(rows((await ready(page(t, other, { period: PERIOD }))).rows)).toEqual([
+      ['Elsewhere', 'active', 50],
+    ])
+    expect(await summary(t, f, PERIOD)).toMatchObject({ summary: { calls: 48 } })
+  })
+
+  it('lists only the caller’s organization in the person filter', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    await t.run(async (ctx) => {
+      for (const profile of await ctx.db.query('profiles').collect())
+        await ctx.db.patch(profile._id, named(profile.name))
+      for (const org of [f.org.id, f.otherOrg.id])
+        await ctx.db.insert('org_ready', { org_id: org, name_keys_at: NOW })
+    })
+    const mine = await people(t, f)
+    const theirs = await people(t, { admin: f.otherAdmin, org: f.otherOrg })
+    if (mine.state !== 'ready' || theirs.state !== 'ready') throw new Error('both are ready')
+    expect(mine.rows.map((p) => p.id)).not.toContain(f.otherAdmin.id)
+    expect(theirs.rows.map((p) => p.id)).toEqual([f.otherAdmin.id])
+  })
+})
+
 describe('apiAccess.list, deprecated', () => {
   /* Tabs and desktop windows loaded before the pages call it until they
      reload, and render its whole list. */
