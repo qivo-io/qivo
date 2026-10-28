@@ -145,26 +145,39 @@ describe('bulkReach', () => {
     ).toBe(1)
   })
 
-  it('answers many without a cutoff for the seats past its budget', async () => {
+  it('answers many for the seats past its budget, with the cutoff a first call chooses', async () => {
     const t = newT()
     const f = await withOrg(t)
     const [first, second] = await twoSeats(t, f)
-    await plantRows(t, first, 200)
+    await plantRows(t, first, INBOX_BATCH)
     await plantRows(t, second, 1)
-    // 0.5% of 32,000 documents is 160: the first seat's rows pass it
-    BULK_REACH.room = 0.005
-    expect((await reachOf(t, first, 'read')).seats).toEqual([
+    // the first seat's range passes a budget of 0.8 of its rows
+    BULK_REACH.room = (INBOX_BATCH * 0.8) / 32_000
+    const reach = (await reachOf(t, first, 'read')).seats
+    expect(reach).toEqual([
       { org_id: first.org_id, reach: 'one', before: expect.any(Number) },
-      { org_id: second.org_id, reach: 'many' },
+      { org_id: second.org_id, reach: 'many', before: expect.any(Number) },
     ])
     BULK_REACH.room = 0
     expect((await reachOf(t, first, 'remove')).seats).toEqual([
       { org_id: first.org_id, reach: 'many' },
       { org_id: second.org_id, reach: 'many' },
     ])
-    // nothing to do in the second seat without the budget
+    // the skipped seat's cutoff is the one a first call there chooses, so a
+    // message that arrives after the press stays unread
     Object.assign(BULK_REACH, DEFAULT_REACH)
-    expect((await reachOf(t, second, 'remove')).seats.map((s) => s.reach)).toEqual(['none', 'none'])
+    await plantRows(t, second, 1, { from: 900 })
+    const done = await as(t, second).mutation(api.messages.markAllRead, {
+      org_id: second.org_id,
+      before: reach[1].before,
+    })
+    expect(done).toMatchObject({ marked: 1, hasMore: false, before: reach[1].before })
+    expect((await reachOf(t, second, 'read')).seats[1]).toMatchObject({ reach: 'one' })
+    // without the budget, Remove all read finds the message just marked
+    expect((await reachOf(t, second, 'remove')).seats.map((s) => s.reach)).toEqual([
+      'none',
+      'one',
+    ])
   })
 
   it('refuses a caller without a sign-in', async () => {

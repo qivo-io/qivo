@@ -1119,9 +1119,9 @@ export async function markCutoff(ctx: QueryCtx, recipientId: string): Promise<nu
   return latest?._creationTime ?? 0
 }
 
-/** The budget of readBulkReach: it reads a seat only while the transaction
- * has used no more than `room` of any of Convex's limits (lib/db.ts
- * usedMoreThan). Tests lower it. */
+/** The budget of readBulkReach: it reads a seat's range only while the
+ * transaction has used no more than `room` of any of Convex's limits
+ * (lib/db.ts usedMoreThan). Tests lower it. */
 export const BULK_REACH = { room: 0.5 }
 
 /** How much one bulk action has to do in one seat: nothing, one batch or
@@ -1131,13 +1131,15 @@ export type SeatReach = { org_id: string; reach: 'none' | 'one' | 'many'; before
 
 /**
  * How much bulk action `action` has to do in each of the seats `seats`, the
- * caller's active profiles, in organization id order. It reads
- * INBOX_BATCH + 1 rows of the range the batches walk (bulkRows), and for
- * Mark all as read the newest unread row first, whose time it answers as
- * `before` and limits the range to, as a first batch would. A seat it
- * cannot read within BULK_REACH answers `many` without `before`, so a
- * budget makes the app warn rather than stay silent. Each seat costs at
- * most 258 rows of about 3 KB, so seats past the budget are rare.
+ * caller's active profiles, in organization id order. For Mark all as read
+ * it reads each seat's newest unread row first and answers its time as
+ * `before`, the cutoff a first batch would choose now, for every seat, so
+ * no seat's first batch chooses a later one. It then reads INBOX_BATCH + 1
+ * rows of the range the batches walk (bulkRows), up to that cutoff. A seat
+ * whose range it cannot read within BULK_REACH answers `many`, so a budget
+ * makes the app warn rather than stay silent. A seat costs one row for the
+ * cutoff and INBOX_BATCH + 1 rows of the range, each a message of at most a
+ * few KB (see INBOX_BATCH), so seats past the budget are rare.
  */
 export async function readBulkReach(
   ctx: QueryCtx,
@@ -1146,18 +1148,15 @@ export async function readBulkReach(
 ): Promise<SeatReach[]> {
   const out: SeatReach[] = []
   for (const seat of [...seats].sort((a, b) => (a.org_id < b.org_id ? -1 : 1))) {
+    const before = action === 'read' ? await markCutoff(ctx, seat.id) : undefined
+    const answer = (reach: SeatReach['reach']): SeatReach =>
+      before === undefined ? { org_id: seat.org_id, reach } : { org_id: seat.org_id, reach, before }
     if (await usedMoreThan(ctx, BULK_REACH.room)) {
-      out.push({ org_id: seat.org_id, reach: 'many' })
+      out.push(answer('many'))
       continue
     }
-    const before = action === 'read' ? await markCutoff(ctx, seat.id) : undefined
     const rows = await bulkRows(ctx, seat.id, action, before).take(INBOX_BATCH + 1)
-    const reach = rows.length === 0 ? 'none' : rows.length > INBOX_BATCH ? 'many' : 'one'
-    out.push(
-      before === undefined
-        ? { org_id: seat.org_id, reach }
-        : { org_id: seat.org_id, reach, before },
-    )
+    out.push(answer(rows.length === 0 ? 'none' : rows.length > INBOX_BATCH ? 'many' : 'one'))
   }
   return out
 }
