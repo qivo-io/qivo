@@ -80,15 +80,19 @@ loads when you choose **All**, starting with the newest 50. Until they arrive
 the thread says **Loading activity…**, and if they cannot load it says so with
 **Retry** instead of showing the comments alone. Going back to **Comments**
 stops loading changes. A task keeps all its changes. **Show earlier activity**
-above the oldest row loads earlier comments and up to 50 earlier changes
-together. Until the first comment and the first change are loaded,
-**All** shows only the rows since the later of the oldest loaded comment and
-the oldest loaded change, so it never shows comments beside a gap in the
-changes, or changes beside a gap in the comments. Field-change entries show before and after
-values, including short description excerpts. A **New** line marks unread
-activity, and sits at the top of the loaded comments when the first unread one
-is earlier ([Your inbox](./working-together.md#your-inbox)). Under **Comments**,
-unread changes show as a note at the end of the thread that points to **All**.
+above the oldest row loads what comes before it: earlier comments or up to 50
+earlier changes, whichever the oldest row needs, or both. Until the first
+comment and the first change are loaded, **All** shows only the rows since the
+later of the oldest loaded comment and the oldest loaded change, so it never
+shows comments beside a gap in the changes, or changes beside a gap in the
+comments. A comment you are editing stays on screen either way. Field-change
+entries show before and after values, including short description excerpts. A
+**New** line marks unread activity, and sits at the top of the loaded comments
+when the first unread one is earlier ([Your inbox](./working-together.md#your-inbox)).
+When nothing unread is on screen, such as a change under **Comments** or a
+comment that was deleted, a note at the end of the thread says there is new
+activity. Under **Comments** it adds that changes show only under **All** when
+your unread inbox updates include a change or a mention in the description.
 
 You can edit or delete your own comments. Project leads can moderate other
 people's comments. The edit indicator shows when and by whom a comment changed,
