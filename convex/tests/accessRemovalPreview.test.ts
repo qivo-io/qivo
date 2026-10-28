@@ -25,8 +25,8 @@ import { ASSIGNEE_RULE, NO_WRITE_ACCESS } from '../model/issues'
 import { LAST_TEAM_RULE } from '../model/orgs'
 import {
   type AccessRemoval,
-  type HeldTasks,
   HELD_TASKS_REFUSED,
+  type HeldTasks,
   type Holding,
   LEAD_ACCESS_RULE,
   NO_USER_MANAGEMENT,
