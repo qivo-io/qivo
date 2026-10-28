@@ -1712,7 +1712,9 @@ function IssueDetail({
   // All five key terms earn their place: a different task is a different
   // thread; watchComments empties the cache first, so the opening render has
   // an empty spine and the snap must re-fire when the thread lands; under
-  // All the history lands on its own, later; All ⇄ Comments changes the
+  // All the history lands on its own, later, and only this window's All
+  // counts, since the store's one history also serves a pop-out that the
+  // pane behind it must not follow; All ⇄ Comments changes the
   // content height wholesale; and popping the thread out moves it into a
   // taller scroller that opens at the top unless this fires again
   // (actScrollRef follows it — only one is ever mounted).
@@ -1723,7 +1725,7 @@ function IssueDetail({
           ':' +
           (P.commentsLoaded ? '1' : '0') +
           ':' +
-          (P.historyLoaded ? '1' : '0') +
+          (actFilter !== 'all' ? '-' : P.historyLoaded ? '1' : '0') +
           ':' +
           actFilter +
           ':' +

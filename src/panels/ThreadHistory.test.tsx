@@ -341,6 +341,37 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
   }
   const popOut = () => document.querySelector('[role="dialog"]:not(.inbox-detail-frame *)')
 
+  it("leaves the pane's scroll alone while its pop-out loads and drops the history", async () => {
+    await load([{ minute: 3, kind: 'comment' }])
+    await openInbox()
+    await select()
+    await comments({ comments: range(1, 4), earlier: false })
+    // jsdom lays nothing out: the pane's scroller is 5,000 px tall, and the
+    // reader scrolled it up, which is what a snap to its end would undo
+    const scroller = pane().querySelector<HTMLElement>('[data-spine-scroll]')
+    if (!scroller) throw new Error('missing the scroller')
+    const snaps: number[] = []
+    Object.defineProperties(scroller, {
+      scrollHeight: { configurable: true, get: () => 5000 },
+      scrollTop: {
+        configurable: true,
+        get: () => 1000,
+        set: (value: number) => snaps.push(value),
+      },
+    })
+    const button = pane().querySelector<HTMLElement>('[data-task-popout]')
+    if (!button) throw new Error('missing the pop-out button')
+    await act(async () => button.click())
+    const dialog = popOut()
+    if (!dialog) throw new Error('the pop-out did not open')
+    await pick('All', dialog)
+    await history([change(2)])
+    await pick('Comments', dialog)
+    await pick('All', dialog)
+    await history([change(2)])
+    expect(snaps).toEqual([])
+  })
+
   it('freezes whether a change was unread before its click marks the item read', async () => {
     await load([{ minute: 20, kind: 'change' }])
     await openInbox()
