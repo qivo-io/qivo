@@ -931,7 +931,9 @@ async function judgeTask(
   const root = project && (await treeOf(levels, project, admin.org_id, true))
   if (project === null || root === null) return
   const level = await sightOf(page, admin, levels, project, root)
-  if (level !== null && level !== 'viewer' && level !== 'unchecked') return
+  const sight =
+    level === null ? 'none' : level === 'viewer' || level === 'unchecked' ? level : undefined
+  if (sight === undefined) return
   page.findings.push({
     kind: 'held_task',
     org_id: admin.org_id,
@@ -940,7 +942,7 @@ async function judgeTask(
     num: task.num,
     role,
     project_id: project.id,
-    sight: level ?? 'none',
+    sight,
   })
 }
 
@@ -958,13 +960,14 @@ async function judgeFollow(
   const root = project && (await treeOf(levels, project, admin.org_id, true))
   if (project === null || root === null) return
   const level = await sightOf(page, admin, levels, project, root)
-  if (level !== null && level !== 'unchecked') return
+  const sight = level === null ? 'none' : level === 'unchecked' ? level : undefined
+  if (sight === undefined) return
   page.findings.push({
     kind: 'follow',
     org_id: admin.org_id,
     profile_id: admin.id,
     task_id: task.id,
-    sight: level ?? 'none',
+    sight,
   })
 }
 
