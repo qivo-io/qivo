@@ -1191,7 +1191,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'set_milestone',
       title: 'Set milestone',
       description:
-        "Without `milestone`, add one to `project` from `name` and `date` (YYYY-MM-DD); a sub-project's goes on its top-level project. With `milestone` (an id from get_project), rename or move it. Needs Edit access on the top-level project. " +
+        "Without `milestone`, add one to `project` from `name` and `date` (YYYY-MM-DD); a sub-project's goes on its top-level project. With `milestone` (an id from get_project), rename or move it. Needs Edit access on the top-level project. A top-level project holds at most one milestone in each calendar week of its organization, so a `date` in a week that holds another of its milestones is refused. " +
         EXPECTED_SENTENCE,
       inputSchema: {
         type: 'object',

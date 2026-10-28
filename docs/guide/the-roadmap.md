@@ -59,6 +59,13 @@ lines. Narrow columns shorten the labels.
 Plans use whole weeks. Bars snap to weeks, while due-date markers retain
 exact dates.
 
+The one-milestone-a-week rule counts each project's weeks in the calendar of
+the organization that owns the project. If you work as a guest in another
+organization whose weeks start on another day than your own, the Roadmap
+still shows your organization's weeks. A week that looks free there can then
+hold one of the project's milestones in its owner's calendar, and Qivo
+refuses a milestone moved into it, naming that week in the owner's dates.
+
 ## Scheduling by hand
 
 With edit access, drag a bar to move it or drag either edge to resize it.
@@ -83,9 +90,12 @@ subtask, its parent's bar follows it.
 
 Milestones appear as violet diamonds. Drag one to move it or click it to open
 the Milestones window ([Overview milestones](./the-overview-project-health-at-a-glance.md)). The toolbar's **Milestone** button creates one.
+A project has at most one milestone a week, so a diamond dropped on a week
+that already has one of the project's milestones goes back, and Qivo names
+the milestone there.
 Each name stays on one line and runs from its diamond to the next milestone
-in its row, or to the left near the end of the timeline. Milestones in the
-same week, or close together, take rows of their own, and the header grows
+in its row, or to the left near the end of the timeline. Milestones of
+different projects in the same week, or close together, take rows of their own, and the header grows
 when one week holds more than two milestones or the names need more room, as
 far as the screen leaves room for your tasks. Where a name is still cut short,
 hover the milestone or move to it with Tab to read it in full, and press Enter
@@ -116,7 +126,9 @@ and stops recording until you leave Roadmap and return.
 Leaving Roadmap or reloading clears history without reverting saved changes.
 History expires after 24 hours and holds up to 1,000 steps per visit. If an
 intervening change conflicts with an undo, Qivo refuses the entire restoration
-and clears history until your next visit.
+and clears history until your next visit. A milestone that took a week since
+the change you undo counts as such a change, when the undo would bring a
+milestone of the same project back into that week.
 Followers of the tasks a change or an undo touches get the update in their
 inbox a few seconds after it saves. A change that touches too many tasks to
 save in one go is refused, and nothing changes. An undo that large is refused

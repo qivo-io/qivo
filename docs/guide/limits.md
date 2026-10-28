@@ -48,6 +48,7 @@ A character is one UTF-16 code unit, the count a browser's text field uses. Most
 | Followers per task | 100 followers | This task already has 100 followers, the most a task can have. Someone must unfollow it first. |
 | People mentioned in one text | 100 people | A text can mention at most 100 people. Remove some mentions and save again. |
 | Invitation emails per organization | 50 emails per hour | This organization sent 50 invitation emails in the last hour, the most it can send. Send this one again once the hour has passed. |
+| Milestones per project week | 1 milestone in each calendar week, for a project and its sub-projects together | This project already has a milestone in that week, and a project can have at most 1 milestone a week. Pick another week, or move that milestone first. |
 | Tasks one access removal reassigns | 120 tasks | A removal can reassign at most 120 tasks at once, fewer when the change is too large for one request. Keep the people as Viewers or reassign some of the tasks first. |
 | People with open tasks one access removal settles | 700 people | A removal that keeps people as Viewers or reassigns their tasks can take access from at most 700 people with open tasks at once. Leave the tasks with them, or remove some of the team's members first. |
 | Memberships and project shares one team deletion removes | 3,000 memberships and project shares | Deleting a team can remove at most 3,000 of its memberships and project shares at once. Remove some of its members or project shares first. |

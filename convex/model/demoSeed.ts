@@ -29,7 +29,7 @@ import {
   profileCacheOf,
   type RecipientSight,
 } from './messages'
-import { cleanMilestoneName } from './milestones'
+import { assertWeekFree, cleanMilestoneName } from './milestones'
 import {
   assertSlugAvailable,
   cleanOrgName,
@@ -551,14 +551,20 @@ export async function writeNorthstarStep(
           known?.get(projectIds[m.project]) ?? (await byId(ctx, 'projects', projectIds[m.project])),
       ),
     )
+    // The organization as it is now, whose first day of the week the setup
+    // step reset. Between the calls of a seed the app can add a milestone,
+    // which the weekly rule then holds to as to any other.
+    const calendar = (await byId(ctx, 'organizations', org.id)) ?? org
     for (const [index, m] of data.milestones.entries()) {
       const project = projects[index]
       require(project !== null && project !== undefined, rule(SEED_ROW_MISSING.project))
+      const week = marketingWeek(anchor, m.week)
+      await assertWeekFree(ctx, { org: calendar, projectId: project.id, day: week })
       await ctx.db.insert('milestones', {
         id: await id(`milestone:${m.key}`),
         project_id: projectIds[m.project],
         name: cleanMilestoneName(m.name),
-        week: marketingWeek(anchor, m.week),
+        week,
         created_at: now,
       })
     }

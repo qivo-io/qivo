@@ -15,6 +15,7 @@ import { vProjectCreators } from './lib/enums'
 import { adminMutation, badRequest, notFound, require, rule } from './lib/functions'
 import { limitedWhole } from './lib/limitRules'
 import { LIMITS } from './lib/limits'
+import { assertWeekStartFits } from './model/milestones'
 import {
   assertOrgExpected,
   assertSlugAvailable,
@@ -38,7 +39,10 @@ const vWeekOneRule = literals('jan1', 'first4day', 'firstfull')
 /* ----------------------------------------------------------------- update
  * P.setOrg — organization settings folded into one patch (they had no
  * ordering interplay; each was an independent UPDATE). org_update was
- * is_org_admin (0081:108). Narrates nothing, name included. */
+ * is_org_admin (0081:108). Narrates nothing, name included. A new first day
+ * of the week is checked against every milestone in this transaction
+ * (model/milestones.ts assertWeekStartFits), which refuses the whole patch
+ * when it would put two milestones of one project in one week. */
 export const update = adminMutation({
   args: {
     patch: v.object({
@@ -91,6 +95,9 @@ export const update = adminMutation({
       fields.max_attachment_mb = limitedWhole(LIMITS.attachmentLimit, patch.max_attachment_mb)
     }
     await assertOrgExpected(ctx, { me: ctx.me, org, expected, next: fields })
+    // new weeks must not put two milestones of one project in one week
+    if (fields.week_start !== undefined && fields.week_start !== org.week_start)
+      await assertWeekStartFits(ctx, { me: ctx.me, org, weekStart: fields.week_start })
     if (Object.keys(fields).length > 0) await ctx.db.patch(org._id, fields)
     return null
   },

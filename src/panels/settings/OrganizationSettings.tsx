@@ -1,5 +1,5 @@
 /* Organization identity, access rules and shared display defaults. */
-import { useEffect as useEffectS, useState as useStateS } from 'react'
+import { useEffect as useEffectS, useRef as useRefS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -98,6 +98,85 @@ function OrgAddressField() {
           className="[font-size:var(--fs-sm)] [color:var(--danger)] [margin-top:8px] [line-height:1.5]"
         >
           {err}
+        </div>
+      )}
+    </SettingsField>
+  )
+}
+
+/* The week-start save in flight for each organization. It outlives the
+   field, so a field opened again before the answer stays disabled until that
+   save settles, and its next choice is sent against the saved day. */
+const weekStartSaves = new Map<string, Promise<boolean>>()
+
+// The first day of each roadmap week. The server refuses a day that would
+// put two milestones of one project in one week, or that it could not check
+// against every milestone; the setting stays as it was and the refusal shows
+// under it, long enough to read the projects and dates it names, until the
+// next choice. The select waits for each answer, also across leaving and
+// opening the page again, so an answer always belongs to the choice on screen
+// and the next choice is sent against the saved day.
+function WeekStartField() {
+  const orgId = P.org.id
+  const [refusal, setRefusal] = useStateS('')
+  const [busy, setBusy] = useStateS(() => weekStartSaves.has(orgId))
+  // a refusal that comes after the page has gone is toasted instead
+  const mounted = useRefS(true)
+  useEffectS(() => {
+    mounted.current = true
+    const pending = weekStartSaves.get(orgId)
+    setBusy(pending !== undefined)
+    void pending?.then(() => {
+      if (mounted.current) setBusy(false)
+    })
+    return () => {
+      mounted.current = false
+    }
+  }, [orgId])
+  const refused = (sentence: string) => {
+    if (!mounted.current) return false
+    setRefusal(sentence)
+    return true
+  }
+  // wide enough for the refusal; the select keeps its own width
+  return (
+    <SettingsField label="Workdays start on" width={560}>
+      <NativeSelect
+        value={P.org.weekStart ?? 1}
+        aria-label="Workdays start on"
+        aria-describedby={refusal ? 'week-start-refusal' : undefined}
+        aria-busy={busy || undefined}
+        disabled={busy}
+        data-week-start
+        onChange={(e) => {
+          if (busy) return
+          const d = Number(e.target.value)
+          setRefusal('')
+          setBusy(true)
+          const save = P.setOrg({ weekStart: d }, refused).then((saved) => {
+            if (weekStartSaves.get(orgId) === save) weekStartSaves.delete(orgId)
+            if (mounted.current) setBusy(false)
+            if (saved) window.showToast?.(`Workdays now start on ${P.WEEKDAYS[d]}`)
+            return saved
+          })
+          weekStartSaves.set(orgId, save)
+        }}
+        className="h-control w-60 bg-surface-1 font-sans text-base"
+      >
+        {[1, 2, 3, 4, 5, 6, 0].map((d) => (
+          <option key={d} value={d}>
+            {P.WEEKDAYS[d]}
+          </option>
+        ))}
+      </NativeSelect>
+      {refusal && (
+        <div
+          id="week-start-refusal"
+          role="alert"
+          data-week-start-refusal
+          className="[font-size:var(--fs-sm)] [color:var(--danger)] [margin-top:8px] [line-height:1.5]"
+        >
+          {refusal}
         </div>
       )}
     </SettingsField>
@@ -279,26 +358,7 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
             ))}
           </NativeSelect>
         </SettingsField>
-        <SettingsField label="Workdays start on" width={330}>
-          <NativeSelect
-            value={P.org.weekStart ?? 1}
-            aria-label="Workdays start on"
-            data-week-start
-            onChange={(e) => {
-              const d = Number(e.target.value)
-              void P.setOrg({ weekStart: d }).then((saved) => {
-                if (saved) window.showToast?.(`Workdays now start on ${P.WEEKDAYS[d]}`)
-              })
-            }}
-            className="h-control w-60 bg-surface-1 font-sans text-base"
-          >
-            {[1, 2, 3, 4, 5, 6, 0].map((d) => (
-              <option key={d} value={d}>
-                {P.WEEKDAYS[d]}
-              </option>
-            ))}
-          </NativeSelect>
-        </SettingsField>
+        <WeekStartField />
         <SettingsField label="Week 1 of the year" width={330}>
           <NativeSelect
             value={P.org.weekOneRule || 'first4day'}

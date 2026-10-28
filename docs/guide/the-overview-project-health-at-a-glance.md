@@ -37,6 +37,18 @@ window. Qivo adds milestones to the top-level project. People with read-only
 access to it, including people whose access covers only a sub-project, can
 view milestones but cannot add, move or edit them.
 
+A project has at most one milestone in each calendar week, counting the
+milestones added from its sub-projects. Weeks begin on the organization's
+**Workdays start on** day ([Organization and team
+settings](./organization-and-team-settings.md)). Adding or moving a
+milestone into a week that already has one is refused with the name of the
+milestone there, and the window keeps the name and date you entered. Move
+or delete that milestone, or pick another week. Different projects can each
+have a milestone in the same week. The weeks are those of the organization
+that owns the project. A guest whose own organization starts weeks on
+another day sees week labels in their own calendar, so a refusal can name a
+week whose dates differ from the ones shown.
+
 When a scope has no task to summarize, for example a project without
 sub-projects or My view with nothing assigned to you, Overview says why. If
 the scope has milestones, **Milestones** stays below that note.

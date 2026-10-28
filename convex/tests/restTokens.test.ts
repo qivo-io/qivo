@@ -189,6 +189,14 @@ const LABEL_ADMINS = 'only organization admins can rename, recolor or delete lab
 
 type Fx = Awaited<ReturnType<typeof fixture>>
 
+/* A Monday of its own for each milestone the requests add or plant, since a
+ * project holds at most one milestone a week (LIMITS.milestonesPerWeek). */
+let weeks = 0
+const freshWeek = (): string =>
+  new Date(Date.parse('2026-03-02T00:00:00.000Z') + weeks++ * 7 * 86_400_000)
+    .toISOString()
+    .slice(0, 10)
+
 /* A fresh milestone on the fixture's top-level project, so each credential
  * edits or deletes one that exists. */
 const plantMilestone = (fx: Fx): Promise<string> =>
@@ -198,7 +206,7 @@ const plantMilestone = (fx: Fx): Promise<string> =>
       id,
       project_id: fx.f.meta.id,
       name: 'Gate',
-      week: '2026-03-02',
+      week: freshWeek(),
       created_at: NOW,
     })
     return id
@@ -330,7 +338,7 @@ const REQUESTS: Record<
   }),
   'POST projects/:ref/milestones': () => ({
     path: '/v1/projects/FW/milestones',
-    body: { name: 'Token gate', date: '2026-04-06' },
+    body: { name: 'Token gate', date: freshWeek() },
   }),
   'PATCH projects/:ref/milestones/:milestone': async (fx) => ({
     path: `/v1/projects/FW/milestones/${await plantMilestone(fx)}`,

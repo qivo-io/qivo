@@ -113,15 +113,29 @@ async function cleanup() {
 
 try {
   await signInDemo(page, demo)
+  /* A top-level project holds one milestone a week, so the run uses a
+     Northstar project, Luma Sensor when it can, whose milestones leave this
+     week and the week two ahead free for the milestone it adds and moves. */
   const fixture = await page.evaluate(() => {
     const P = window.PLANNER
-    const project = P.projects.find((p) => p.name === 'Luma Sensor' && p.type === 'meta')
-    if (!project) throw new Error('Northstar Luma Sensor fixture is unavailable')
+    // P.projects holds only active projects; the demo organization's own
+    const metas = P.projects
+      .filter((p) => p.type === 'meta' && p.org === P.org.id)
+      .sort((a, b) => Number(b.name === 'Luma Sensor') - Number(a.name === 'Luma Sensor'))
+    const free = (p) =>
+      P.milestonesIn(p.id).every((m) => m.week !== P.TODAY_WEEK && m.week !== P.TODAY_WEEK + 2)
+    const project = metas.find(free)
+    if (!project) throw new Error('No Northstar project has this week and the week two ahead free')
     P.saveUINow({ roadmapWin: P.DEFAULT_WIN })
     const iso = (week) => P.isoFromDate(P.weekToDate(week))
-    return { project: project.id, today: P.TODAY_WEEK, thisWeek: iso(P.TODAY_WEEK) }
+    return {
+      project: project.id,
+      name: project.name,
+      today: P.TODAY_WEEK,
+      thisWeek: iso(P.TODAY_WEEK),
+    }
   })
-  await page.locator('aside').getByText('Luma Sensor', { exact: true }).click()
+  await page.locator('aside').getByText(fixture.name, { exact: true }).click()
   await selectView('Overview')
   const existing = await page.evaluate(
     (id) => window.PLANNER.milestonesIn(id).length,
@@ -132,7 +146,7 @@ try {
   await page.getByRole('button', { name: 'New milestone', exact: true }).click()
   await modal().waitFor()
   assert.equal(await modal().getByRole('heading', { name: 'Milestones' }).count(), 1)
-  assert.ok(await modal().getByText('Luma Sensor', { exact: true }).isVisible(), 'No project chip')
+  assert.ok(await modal().getByText(fixture.name, { exact: true }).isVisible(), 'No project chip')
   const newBox = modal().getByRole('textbox', { name: 'New milestone', exact: true })
   assert.ok(await newBox.evaluate((el) => el === document.activeElement), 'New box not focused')
   assert.equal(await modal().getByRole('button', { name: 'Add', exact: true }).isDisabled(), true)

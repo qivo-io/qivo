@@ -367,6 +367,19 @@ export const LIMITS = {
       'this organization sent 50 invitation emails in the last hour, the most it can send. Send this one again once the hour has passed.',
     on: ['app', 'operator'],
   },
+  // One milestone a calendar week of the organization for each top-level
+  // project, a milestone named on a sub-project included
+  // (model/milestones.ts assertWeekFree). The check allows exactly one, as
+  // it refuses when any other milestone holds the week, so `max` documents
+  // the rule and a change of it needs a change of weekHolder.
+  milestonesPerWeek: {
+    label: 'Milestones per project week',
+    group: 'tasks',
+    max: 1,
+    unit: 'milestone in each calendar week, for a project and its sub-projects together',
+    refusal: milestoneWeekTaken(),
+    on: ALL,
+  },
   roadmapWeeks: {
     label: 'Weeks the Roadmap shows',
     group: 'numbers',
@@ -593,6 +606,28 @@ export type LimitName = keyof typeof LIMITS
 export function attachmentTooLarge(capMb: number): string {
   return `a file must be at most ${capMb} MiB, this organization's attachment limit. Attach a smaller file.`
 }
+
+/** The refusal of a milestone in a week its top-level project already holds
+ * another milestone in (LIMITS.milestonesPerWeek): `week` names that week
+ * and `name` the milestone there, and `next` is the step that gets past it. */
+export function milestoneWeekTaken(
+  week = 'that week',
+  name?: string,
+  next = 'Pick another week, or move that milestone first.',
+): string {
+  const held = name === undefined ? 'a milestone' : `the milestone “${name}”`
+  return `this project already has ${held} in ${week}, and a project can have at most 1 milestone a week. ${next}`
+}
+
+/** The reasons of the two refusals of a change of an organization's first
+ * day of the week (model/milestones.ts assertWeekStartFits): the change
+ * would put two milestones of one project in one week, or Qivo could not
+ * check every milestone in one transaction. Both are `rule` refusals, and
+ * the app shows them beside the setting. */
+export const WEEK_START_REFUSALS = {
+  conflicts: 'week_start_conflicts',
+  unchecked: 'week_start_unchecked',
+} as const
 
 /** The refusal of a link to task `key`, either end of the link, once it has
  * LIMITS.links.max links. */

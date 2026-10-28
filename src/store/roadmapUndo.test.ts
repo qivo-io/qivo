@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { milestoneWeekTaken } from '../../convex/lib/limits'
 import type { Workspace } from '../../convex/lib/workspaceJoin'
 
 type Snapshot = Workspace
@@ -185,6 +186,59 @@ describe('roadmap undo through the client store', () => {
     latest().resolve({ count: 1 })
     await settled()
   }
+
+  it('ends the history after an undo refused because a milestone took the week since', async () => {
+    await savePlan()
+    // the server's refusal of an undo into a week another milestone took
+    // (convex/roadmap.ts weekTakenSince): freeing the week on the Roadmap
+    // would be one more step, which the next undo takes back
+    const sentence =
+      'the milestone “Gamma” has taken the week of 2026-09-14 (W38) since that change, and a project can have at most 1 milestone a week. Leave and reopen the roadmap to start a new undo history.'
+    P.undoRoadmap()
+    expect(latest().name).toBe('roadmap:undo')
+    latest().reject(
+      new ConvexError({ code: 'conflict', reason: 'roadmap_changed', message: sentence }),
+    )
+    await settled()
+    expect(showToast).toHaveBeenCalledWith(
+      `Couldn't undo: ${sentence.slice(0, -1)}. No changes reverted.`,
+      'error',
+    )
+    expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: true })
+  })
+
+  it('takes back a Roadmap milestone move refused over an occupied week, and keeps the history', async () => {
+    await savePlan()
+    const id = crypto.randomUUID()
+    snap.milestones.push({
+      id,
+      project_id: snap.projects[0].id,
+      name: 'Beta',
+      week: '2026-09-21',
+      created_at: NOW,
+    })
+    publish(structuredClone(snap))
+    await settled()
+    const milestone = () => P.milestones.find((m) => m.id === id)
+    const week = milestone()?.week ?? 0
+    P.setMilestone(id, week - 1)
+    expect(latest()).toMatchObject({
+      name: 'roadmap:change',
+      args: { operations: [{ kind: 'milestone_update', id, patch: { week: '2026-09-14' } }] },
+    })
+    expect(milestone()?.week).toBe(week - 1)
+    const sentence = milestoneWeekTaken('the week of 2026-09-14 (W38)', 'Gamma')
+    latest().reject(
+      new ConvexError({ code: 'rule', reason: 'milestone_week_taken', message: sentence }),
+    )
+    await settled()
+    expect(showToast).toHaveBeenCalledWith(
+      `This project already has the milestone “Gamma” in the week of 2026-09-14 (W38), and a project can have at most 1 milestone a week. Pick another week, or move that milestone first. Change reverted.`,
+      'error',
+    )
+    expect(milestone()?.week).toBe(week)
+    expect(P.roadmapUndo).toEqual({ count: 1, busy: false, disabled: false })
+  })
 
   it('keeps a late response from an earlier visit out of a newly entered roadmap', async () => {
     P.updateIssue(task().id, { remaining: 12 })

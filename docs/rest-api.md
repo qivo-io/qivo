@@ -371,6 +371,7 @@ over its size (`413`), a full webhook quota (`409`) and the request rate
 | Labels per task | 20 labels | this task already has 20 labels, the most a task can have. Remove one first. |
 | Followers per task | 100 followers | this task already has 100 followers, the most a task can have. Someone must unfollow it first. |
 | People mentioned in one text | 100 people | a text can mention at most 100 people. Remove some mentions and save again. |
+| Milestones per project week | 1 milestone in each calendar week, for a project and its sub-projects together | this project already has a milestone in that week, and a project can have at most 1 milestone a week. Pick another week, or move that milestone first. |
 | Tasks one access removal reassigns | 120 tasks | a removal can reassign at most 120 tasks at once, fewer when the change is too large for one request. Keep the people as Viewers or reassign some of the tasks first. |
 | People with open tasks one access removal settles | 700 people | a removal that keeps people as Viewers or reassigns their tasks can take access from at most 700 people with open tasks at once. Leave the tasks with them, or remove some of the team's members first. |
 
@@ -791,7 +792,22 @@ write access to this project`. An archived project takes no new milestones
 `date must be a valid calendar date`), usually the first day of a planning
 week. `name` is trimmed, may not be blank (`a milestone name cannot be
 blank`) and holds at most 80 characters (`a milestone name must be at most
-80 characters. Shorten it.`). `POST` answers `201` and `PATCH` `200` with
+80 characters. Shorten it.`).
+
+A top-level project holds at most one milestone in each calendar week of
+its organization, whose weeks begin on the organization's first day of the
+week, and a milestone named on a sub-project counts for its top-level
+project. A `POST`, or a `PATCH` that changes `date`, into a week that
+already holds another of the project's milestones is a `400` that names the
+week and that milestone, such as `this project already has the milestone
+“Launch” in the week of 2026-11-02 (W45), and a project can have at most 1
+milestone a week. Pick another week, or move that milestone first.`, in the
+organization's date format, and changes nothing. A `PATCH` that only
+renames a milestone is not refused, and neither is one that moves it within
+its own week, unless another milestone stored before the rule shares that
+week. Two
+requests that claim the same week at the same time cannot both succeed.
+Different projects can each have a milestone in the same week. `POST` answers `201` and `PATCH` `200` with
 `{"id", "name", "date", "project_id"}`, where `project_id` is the top-level project;
 `DELETE` answers `{"deleted": true, "id"}`.
 `GET /v1/projects/{ref}` lists them. Each write narrates `added milestone`,

@@ -415,7 +415,10 @@ Useful field rules:
   Confirm the choice with the user when it is not clear. A misspelled
   `on_held_tasks` is refused, on MCP and on these REST routes.
 - **Milestones:** they live on the top-level project; naming a sub-project
-  adds them there. `date` is `YYYY-MM-DD`. `get_project` lists them.
+  adds them there. `date` is `YYYY-MM-DD`. `get_project` lists them. A
+  top-level project holds at most one milestone in each calendar week of its
+  organization, so a date in a week that holds another of its milestones is
+  refused; pick another week or move that milestone first.
 
 ## Teams
 
