@@ -385,6 +385,7 @@ into the range.
 | Milestones per project week | 1 milestone in each calendar week, for a project and its sub-projects together | this project already has a milestone in that week, and a project can have at most 1 milestone a week. Pick another week, or move that milestone first. |
 | Tasks one access removal reassigns | 120 tasks | a removal can reassign at most 120 tasks at once, fewer when the change is too large for one request. Keep the people as Viewers or reassign some of the tasks first. |
 | People with open tasks one access removal settles | 700 people | a removal that keeps people as Viewers or reassigns their tasks can take access from at most 700 people with open tasks at once. Leave the tasks with them, or remove some of the team's members first. |
+| Sub-projects and access entries one project archive, restore, rename or key change updates | 2,000 sub-projects and access entries | archiving, restoring or renaming a project, or changing its key, can update at most 2,000 sub-projects and access entries at once. A person or team is one entry for each project the change updates that they have their own access to, and for a top-level project also when they have access only to one of its sub-projects. Archive or restore some of its sub-projects on their own first, or remove some access. |
 
 ### Numbers and settings
 

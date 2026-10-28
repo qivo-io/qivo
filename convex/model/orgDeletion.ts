@@ -57,6 +57,7 @@ import { releaseFile } from './fileHolds'
 import { recipientItems, stateRows, taskItems } from './inboxItems'
 import { deleteLabelCount } from './labelCounts'
 import { deleteOrgBookkeeping, tallyRow } from './orgs'
+import { reachOfOrg } from './projectNav'
 import { uncountFile } from './storageTotals'
 import { deleteTeamCount } from './teamCounts'
 import { releaseUsedIds } from './usedIds'
@@ -466,8 +467,10 @@ const liveTasks = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     { before: (issue) => tallyRow(ctx, 'issues', issue, null) },
   )
 
-/** Projects with their milestones and access grants. */
-const projectRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+/** The organization's reach rows (model/projectNav.ts), then its projects
+ * with their milestones and access grants. */
+const projectRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+  (await drain(ctx, budget, reachOfOrg(ctx, orgId))) &&
   parents(
     ctx,
     budget,
@@ -686,6 +689,7 @@ async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<v
     'issues',
     'issue_descriptions',
     'projects',
+    'project_reach',
     'teams',
     'profiles',
     'labels',

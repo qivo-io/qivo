@@ -44,6 +44,7 @@ import {
   setCounters,
   tallyRows,
 } from './orgs'
+import { insertShare, syncLeads } from './projectNav'
 import { cleanProjectName, projectDescription } from './projects'
 import { deleteStamp, writeStamp } from './syncStamps'
 import { insertTeamCount } from './teamCounts'
@@ -403,18 +404,27 @@ async function writeStep(
           num: index + 1,
           track_delay: teamDefaults.track_delay_default,
           created_at: now,
+          archive_state: 'live',
         },
         rule(SEED_ID_USED),
       )
+      // the shares and, below, the leads write their reach rows
+      // (model/projectNav.ts)
       if (!p.parent)
         for (const team of data.teams)
-          await ctx.db.insert('project_team_access', {
-            project_id: projectIds[p.key],
-            team_id: teamIds[team.key],
-            level: team.key === p.team ? 'user' : 'viewer',
-            name_key: teamKeys.get(team.key),
-          })
+          await insertShare(
+            ctx,
+            {
+              project_id: projectIds[p.key],
+              team_id: teamIds[team.key],
+              level: team.key === p.team ? 'user' : 'viewer',
+              name_key: teamKeys.get(team.key),
+            },
+            { org: org.id },
+          )
     }
+    // once every project is in, so a sub-project's parent is there
+    for (const p of data.projects) await syncLeads(ctx, projectIds[p.key], [personIds[p.lead]])
     // one read of the counters for every project, not one per project
     await tallyRows(
       ctx,

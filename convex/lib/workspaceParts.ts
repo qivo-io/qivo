@@ -457,10 +457,12 @@ export async function readProjects(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWind
   return {
     state: 'ok' as const,
     ...chunkLists({
-      projects: shown.map((p): Omit<IconFree<'projects'>, 'window_key' | 'name_key'> => {
-        const { window_key: _window, name_key: _key, ...row } = iconFree(p)
-        return row
-      }),
+      projects: shown.map(
+        (p): Omit<IconFree<'projects'>, 'window_key' | 'name_key' | 'archive_state'> => {
+          const { window_key: _window, name_key: _key, archive_state: _state, ...row } = iconFree(p)
+          return row
+        },
+      ),
       // Every grant on a shown project, other members' too. The app shows
       // only those of people it holds (lib/workspaceJoin.ts), as a removed
       // person's grants can outlive their profile for a moment

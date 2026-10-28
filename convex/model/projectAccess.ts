@@ -45,6 +45,7 @@ import { logActivity, signedDetail } from './activity'
 import { assertExpected, exact, type Fields, oneOf } from './expected'
 import { assertAssigneeRule, hasSubtasks, holderKey, updateIssueCore } from './issues'
 import { newNotifyPreload } from './messages'
+import { deleteGrant, deleteShare, grantBatch, insertGrant, insertShare } from './projectNav'
 import { assertGrantee, assertTeamGrantee } from './projects'
 
 /** The one person or team whose access a write changes, already resolved in
@@ -252,21 +253,21 @@ export async function setProjectGrantCore(
     next: level,
   })
   if (row?.level === level) return { changed: false }
+  // a new grant or share writes its reach rows (model/projectNav.ts); a
+  // level change leaves them as they are
   if (row !== null) await ctx.db.patch(row._id, { level, name_key })
   else if ('team' in subject) {
-    await ctx.db.insert('project_team_access', {
-      project_id: project.id,
-      team_id: subject.team.id,
-      level,
-      name_key,
-    })
+    await insertShare(
+      ctx,
+      { project_id: project.id, team_id: subject.team.id, level, name_key },
+      { org: project.org_id },
+    )
   } else {
-    await ctx.db.insert('project_access', {
-      project_id: project.id,
-      profile_id: subject.profile.id,
-      level,
-      name_key,
-    })
+    await insertGrant(
+      ctx,
+      { project_id: project.id, profile_id: subject.profile.id, level, name_key },
+      { org: project.org_id },
+    )
   }
   await narrateAccess(ctx, a)
   return { changed: true }
@@ -618,6 +619,9 @@ export async function removeAndSettle(
       // a task's project and a grant already worked out cost no more room
       const placed = new Map<string, Doc<'projects'>>()
       const granted = new Set<string>()
+      // the grants' reach rows go in together after the last grant
+      // (model/projectNav.ts)
+      const grants = grantBatch(ctx)
       for (const h of lost) {
         let where = placed.get(h.project.id)
         if (where === undefined) {
@@ -644,7 +648,7 @@ export async function removeAndSettle(
         if (existing === null) {
           // every holder is one of a.people (removeAndFindLost)
           const person = a.people.get(h.profile_id)
-          await ctx.db.insert('project_access', {
+          await grants.insert(where, {
             project_id: where.id,
             profile_id: h.profile_id,
             level: 'viewer',
@@ -653,6 +657,7 @@ export async function removeAndSettle(
           })
         }
       }
+      await grants.finish(full)
     })
   }
   if (stranded.length > 0 && held === 'keep_as_viewer') {
@@ -740,7 +745,8 @@ export async function removeProjectGrantCore(
     me,
     people: await withinRoom(() => peopleOf(ctx, subject)),
     projects: await reachedProjects(ctx, project),
-    remove: () => ctx.db.delete(row._id),
+    // the grant or share goes with its reach rows (model/projectNav.ts)
+    remove: () => ('team_id' in row ? deleteShare(ctx, row) : deleteGrant(ctx, row)),
     held: a.held,
     viewerOn: async () => project,
     keepRefusal:

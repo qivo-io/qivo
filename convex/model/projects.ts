@@ -54,6 +54,16 @@ import {
 } from './expected'
 import { scheduleArchivedReads } from './messages'
 import { nextProjectNum, tallyRow } from './orgs'
+import {
+  archiveStateOf,
+  deleteGrant,
+  insertGrant,
+  insertShare,
+  patchRows,
+  syncLeads,
+  treeRows,
+  treeSubProjects,
+} from './projectNav'
 import { renameProjectTotals } from './storageTotals'
 
 /* The first step of a restore's regroup chain (regroup.ts), referenced by
@@ -381,6 +391,8 @@ export async function createProjectCore(
       track_delay: p.track_delay ?? true,
       created_at: now,
       window_key: newWindowKey(),
+      // a parent is never archived (above)
+      archive_state: 'live',
     },
     badRequest('a project with this id already exists'),
   )
@@ -404,24 +416,25 @@ export async function createProjectCore(
     if (mine === null) grants.delete(me.id)
     else grants.set(me.id, mine)
   }
-  // grants and shares copy their profile's or team's name key (model/nameKeys.ts)
+  // grants and shares copy their profile's or team's name key
+  // (model/nameKeys.ts), and they and the lead write their reach rows
+  // (model/projectNav.ts)
+  await syncLeads(ctx, project.id, [lead_id])
   for (const [uid, level] of grants) {
     const grantee = await assertGrantee(ctx, project, uid, level)
-    await ctx.db.insert('project_access', {
-      project_id: project.id,
-      profile_id: uid,
-      level,
-      name_key: nameKey(grantee.name),
-    })
+    await insertGrant(
+      ctx,
+      { project_id: project.id, profile_id: uid, level, name_key: nameKey(grantee.name) },
+      { org: grantee.org_id },
+    )
   }
   for (const [sharedTeamId, level] of Object.entries(p.team_access ?? {})) {
     const team = await assertTeamGrantee(ctx, project, sharedTeamId)
-    await ctx.db.insert('project_team_access', {
-      project_id: project.id,
-      team_id: sharedTeamId,
-      level,
-      name_key: nameKey(team.name),
-    })
+    await insertShare(
+      ctx,
+      { project_id: project.id, team_id: sharedTeamId, level, name_key: nameKey(team.name) },
+      { org: team.org_id },
+    )
   }
   await logActivity(ctx, {
     org_id: me.org_id,
@@ -597,6 +610,19 @@ export async function updateProjectCore(
     if (leadChanged && nextLead !== undefined) await assertLeadAllowed(ctx, me, nextLead)
     db.lead_id = nextLead
   }
+  // The reach rows copy the project's name key and key (model/projectNav.ts),
+  // read before anything is written, so a change past
+  // LIMITS.projectTreeChange is refused whole.
+  const copies: { name_key?: string; key?: string } = {}
+  if (db.name_key !== undefined && db.name_key !== nameKey(project.name))
+    copies.name_key = db.name_key
+  if (db.key !== undefined && db.key !== project.key) copies.key = db.key
+  const reach = Object.keys(copies).length > 0 ? await treeRows(ctx, project.org_id, [id]) : []
+  // The project row goes first, so the reach rows the access writes below
+  // bring in line copy it as it is now.
+  if (Object.keys(db).length > 0) await ctx.db.patch(project._id, db)
+  await patchRows(ctx, reach, copies)
+  if (leadChanged) await syncLeads(ctx, id, [prevLead, nextLead])
   // whether a map leaves out a grant it may not remove (ACCESS_MAP_REMOVES)
   let removes = false
   if (patch.access !== undefined) {
@@ -633,12 +659,11 @@ export async function updateProjectCore(
       const row = held.get(teamId)
       const name_key = nameKey(team.name)
       if (row === undefined) {
-        await ctx.db.insert('project_team_access', {
-          project_id: id,
-          team_id: teamId,
-          level,
-          name_key,
-        })
+        await insertShare(
+          ctx,
+          { project_id: id, team_id: teamId, level, name_key },
+          { org: team.org_id },
+        )
       } else if (row.level !== level) await ctx.db.patch(row._id, { level, name_key })
     }
     removes ||= prev.some((row) => !next.has(row.team_id))
@@ -646,7 +671,6 @@ export async function updateProjectCore(
   // refused once every entry of both maps was checked, so their own
   // refusals come first
   if (removes) throw rule(ACCESS_MAP_REMOVES)
-  if (Object.keys(db).length > 0) await ctx.db.patch(project._id, db)
   const name = db.name ?? project.name
   const nameChanged = db.name !== undefined && db.name !== project.name
   // the Storage by project breakdown shows the project's current name
@@ -712,17 +736,16 @@ async function writeGrants(
     const name_key = nameKey(grantee.name)
     if (row !== undefined) await ctx.db.patch(row._id, { level, name_key })
     else
-      await ctx.db.insert('project_access', {
-        project_id: project.id,
-        profile_id: uid,
-        level,
-        name_key,
-      })
+      await insertGrant(
+        ctx,
+        { project_id: project.id, profile_id: uid, level, name_key },
+        { org: grantee.org_id },
+      )
   }
   let removes = false
   for (const [uid, row] of held) {
     if (next.has(uid)) continue
-    if (mayDrop(uid)) await ctx.db.delete(row._id)
+    if (mayDrop(uid)) await deleteGrant(ctx, row)
     // a removed person's grant waits for its cleanup (profileRemovals.ts),
     // and no client lists it (lib/workspaceJoin.ts), so leaving it out
     // removes nothing
@@ -737,11 +760,15 @@ async function writeGrants(
  * Archives a project, Lead access required (0106). Subtree-atomic
  * (0106:86-91): a meta stamps its active subs with the parent's OWN instant,
  * which is the only record of "these came along" and what restoring reads.
- * Existing tasks are untouched; the snapshot stops shipping them because its
- * section filters on project.archived_at. Their inbox messages are marked
- * read for every recipient in the background (model/messages.ts
- * scheduleArchivedReads). Already archived is a silent no-op. Returns
- * whether it archived anything.
+ * Every sub-project then sits under an archived parent (archive_state
+ * 'under'), and the reach rows of the projects it archives say they are no
+ * longer live (model/projectNav.ts). A tree whose sub-projects and those
+ * rows pass LIMITS.projectTreeChange.max is refused before anything is
+ * written. Existing tasks are untouched; the snapshot stops shipping them
+ * because its section filters on project.archived_at. Their inbox messages
+ * are marked read for every recipient in the background
+ * (model/messages.ts scheduleArchivedReads). Already archived is a silent
+ * no-op. Returns whether it archived anything.
  */
 export async function archiveProjectCore(
   ctx: MutationCtx,
@@ -750,21 +777,22 @@ export async function archiveProjectCore(
   const { me, project, now } = a
   await assertLead(ctx, me, project.id)
   if (project.archived_at !== undefined) return false
-  const archived = [project.id]
-  if (project.type === 'meta') {
-    const subs = await ctx.db
-      .query('projects')
-      .withIndex('by_parent', (q) => q.eq('parent_id', project.id))
-      .collect()
-    for (const s of subs) {
-      if (s.archived_at === undefined) {
-        await ctx.db.patch(s._id, { archived_at: now })
-        archived.push(s.id)
-      }
-    }
+  const subs = project.type === 'meta' ? await treeSubProjects(ctx, project.id) : []
+  const carried = subs.filter((s) => s.archived_at === undefined)
+  const archived = [project.id, ...carried.map((s) => s.id)]
+  const reach = await treeRows(ctx, project.org_id, archived, subs.length)
+  const parent =
+    project.parent_id === undefined ? null : await byId(ctx, 'projects', project.parent_id)
+  for (const s of subs) {
+    if (s.archived_at === undefined)
+      await ctx.db.patch(s._id, { archived_at: now, archive_state: 'under' })
+    else if (s.archive_state !== 'under') await ctx.db.patch(s._id, { archive_state: 'under' })
   }
-  const carried = archived.length - 1
-  await ctx.db.patch(project._id, { archived_at: now })
+  await ctx.db.patch(project._id, {
+    archived_at: now,
+    archive_state: archiveStateOf({ archived_at: now }, parent),
+  })
+  await patchRows(ctx, reach, { live: false })
   await scheduleArchivedReads(ctx, { projects: archived })
   await logActivity(ctx, {
     org_id: me.org_id,
@@ -774,7 +802,9 @@ export async function archiveProjectCore(
     target_id: project.id,
     label: project.name,
     detail: signedDetail(
-      carried > 0 ? `with ${carried} sub-project${carried > 1 ? 's' : ''}` : undefined,
+      carried.length > 0
+        ? `with ${carried.length} sub-project${carried.length > 1 ? 's' : ''}`
+        : undefined,
       a.provenance,
     ),
     project_id: project.id,
@@ -790,10 +820,14 @@ export async function archiveProjectCore(
  * restores exactly the subs carrying the meta's own archive stamp. Surfacing
  * an archived parent is a restore of that parent, so it needs lead on the
  * parent as well; a sub-project's own lead cannot bring back a project its
- * lead archived. Not archived is a silent no-op. Returns whether it restored
- * anything. The restored projects' tasks make the parents they have in
- * other active projects groups again, which then lose their own remaining
- * hours in background steps (regroup.ts).
+ * lead archived. The sub-projects that stay archived then sit under a live
+ * parent (archive_state 'listed'), and the reach rows of the projects it
+ * restores say they are live again (model/projectNav.ts). A tree whose
+ * sub-projects and those rows pass LIMITS.projectTreeChange.max is refused
+ * before anything is written. Not archived is a silent no-op. Returns
+ * whether it restored anything. The restored projects' tasks make the
+ * parents they have in other active projects groups again, which then lose
+ * their own remaining hours in background steps (regroup.ts).
  */
 export async function unarchiveProjectCore(
   ctx: MutationCtx,
@@ -810,28 +844,32 @@ export async function unarchiveProjectCore(
   if (parentArchived && !(await hasProjectLevel(ctx, me, parent.id, 'lead'))) {
     throw forbidden('requires lead access to the archived parent project')
   }
-  await ctx.db.patch(project._id, { archived_at: undefined })
   // the projects whose tasks come back. Tasks live in sub-projects, but a
   // task older code stored under a top-level project comes back too
   // (lib/liveTasks.ts liveTasksOf reads it).
-  const restored = [project.id]
+  const restored = [project]
+  // the archived sub-projects that stay archived under a parent that is live now
+  let left: Doc<'projects'>[] = []
   if (project.parent_id !== undefined) {
     if (parentArchived) {
-      await ctx.db.patch(parent._id, { archived_at: undefined })
-      restored.push(parent.id)
+      restored.push(parent)
+      left = (await treeSubProjects(ctx, parent.id)).filter(
+        (s) => s.id !== project.id && s.archived_at !== undefined,
+      )
     }
   } else {
-    const subs = await ctx.db
-      .query('projects')
-      .withIndex('by_parent', (q) => q.eq('parent_id', project.id))
-      .collect()
-    for (const s of subs) {
-      if (s.archived_at !== stamp) continue
-      await ctx.db.patch(s._id, { archived_at: undefined })
-      restored.push(s.id)
-    }
+    const subs = await treeSubProjects(ctx, project.id)
+    restored.push(...subs.filter((s) => s.archived_at === stamp))
+    left = subs.filter((s) => s.archived_at !== undefined && s.archived_at !== stamp)
   }
-  await ctx.scheduler.runAfter(0, restoredStepRef, { projects: restored, restorer_id: me.id })
+  const ids = restored.map((p) => p.id)
+  const reach = await treeRows(ctx, project.org_id, ids, restored.length - 1 + left.length)
+  for (const p of restored)
+    await ctx.db.patch(p._id, { archived_at: undefined, archive_state: 'live' })
+  for (const s of left)
+    if (s.archive_state !== 'listed') await ctx.db.patch(s._id, { archive_state: 'listed' })
+  await patchRows(ctx, reach, { live: true })
+  await ctx.scheduler.runAfter(0, restoredStepRef, { projects: ids, restorer_id: me.id })
   await logActivity(ctx, {
     org_id: me.org_id,
     actor_id: me.id,

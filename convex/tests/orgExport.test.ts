@@ -150,6 +150,9 @@ const EXCLUDED_TABLES = [
   // the exported comments give again.
   'task_comment_counts',
   'comment_rates',
+  // Which projects each seat and team reaches, derived from the exported
+  // grants, shares and leads (model/projectNav.ts).
+  'project_reach',
   // Team sync stamps, exported on the profile row (sync_at, sync_since).
   'sync_stamps',
   // Counts the exported memberships and label assignments give again.

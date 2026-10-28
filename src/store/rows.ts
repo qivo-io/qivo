@@ -13,6 +13,7 @@ type InternalFields<T extends TableNames> =
       : never)
   | (T extends 'issues' ? 'relations_marked' : never)
   | (T extends 'issues' | 'projects' ? 'window_key' : never)
+  | (T extends 'projects' ? 'archive_state' : never)
   | (T extends
       | 'profiles'
       | 'teams'

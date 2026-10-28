@@ -144,6 +144,12 @@ Sub-projects archived with a project return with it. A sub-project archived
 separately stays archived when its project returns and then has its own row
 in the archived list.
 
+Archiving or restoring a project updates its sub-projects and the access
+entries of the people and teams who reach them in one change. A project and
+its sub-projects with more than 2,000 of them together cannot be archived or
+restored at once ([Limits](./limits.md)). Archive or restore some of its
+sub-projects on their own first, or remove some access.
+
 A task in another sub-project whose subtasks were all in the archived one
 becomes an ordinary task again, with its own status, dates and estimate.
 When the sub-project is restored, the task becomes a group again and loses

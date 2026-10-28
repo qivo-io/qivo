@@ -76,6 +76,7 @@ import {
   vGrantExpected,
   vHeldTasks,
 } from './model/projectAccess'
+import { insertGrant } from './model/projectNav'
 import {
   archiveProjectCore,
   assertGrantee,
@@ -463,13 +464,13 @@ export const inviteGuest = orgMutation({
     }
     const name_key = nameKey(grantee)
     if (grant !== null) await ctx.db.patch(grant._id, { level, name_key })
+    // a new grant writes its reach rows (model/projectNav.ts)
     else
-      await ctx.db.insert('project_access', {
-        project_id: project.id,
-        profile_id: pid,
-        level,
-        name_key,
-      })
+      await insertGrant(
+        ctx,
+        { project_id: project.id, profile_id: pid, level, name_key },
+        { org: project.org_id },
+      )
     if (existing === null) {
       await markBillingMembershipChanged(ctx, ctx.me.org_id, [em])
       // A new guest seat is an invitation; email it once this mutation commits.

@@ -170,6 +170,8 @@ const APP_OWNED: TableNames[] = [
   'teams',
   'profiles',
   'projects',
+  // which projects each seat and team reaches, deleted with the projects
+  'project_reach',
   'issues',
   'issue_descriptions',
   'labels',

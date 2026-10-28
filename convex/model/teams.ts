@@ -59,6 +59,7 @@ import {
   removeAndSettle,
   withinRoom,
 } from './projectAccess'
+import { grantee, reachOfGrantee } from './projectNav'
 import {
   countingOrg,
   countingOrgOf,
@@ -68,12 +69,13 @@ import {
 } from './teamCounts'
 
 /* Refuses with LIMITS.teamDeleteRows' sentence a team deletion that changes
- * more than LIMITS.teamDeleteRows.max memberships, project shares and legacy
- * owned projects (model/cascade.ts deleteTeamDeep), read before anything
- * else so the refusal itself fits. A deployment counts each changed row as
- * one of Convex's 4,096 reads: a local backend read 3,062 ranges deleting a
- * team with 3,000 memberships, and refused one with 5,000. Answers the
- * team's legacy owned projects it read, for deleteTeamDeep. */
+ * more than LIMITS.teamDeleteRows.max memberships, project shares, their
+ * reach rows (model/projectNav.ts, at most two a share) and legacy owned
+ * projects (model/cascade.ts deleteTeamDeep), read before anything else so
+ * the refusal itself fits. A deployment counts each changed row as one of
+ * Convex's 4,096 reads: a local backend read 3,062 ranges deleting a team
+ * with 3,000 memberships, and refused one with 5,000. Answers the team's
+ * legacy owned projects it read, for deleteTeamDeep. */
 async function assertTeamFits(ctx: QueryCtx, team: Doc<'teams'>): Promise<Doc<'projects'>[]> {
   const over = LIMITS.teamDeleteRows.max + 1
   const memberships = await ctx.db
@@ -84,11 +86,12 @@ async function assertTeamFits(ctx: QueryCtx, team: Doc<'teams'>): Promise<Doc<'p
     .query('project_team_access')
     .withIndex('by_team', (q) => q.eq('team_id', team.id))
     .take(over)
+  const reach = await reachOfGrantee(ctx, grantee.team(team.id)).take(over)
   const owned = await ctx.db
     .query('projects')
     .withIndex('by_team', (q) => q.eq('team_id', team.id))
     .take(over)
-  if (memberships.length + shares.length + owned.length > LIMITS.teamDeleteRows.max)
+  if (memberships.length + shares.length + reach.length + owned.length > LIMITS.teamDeleteRows.max)
     throw rule(LIMITS.teamDeleteRows.refusal)
   return owned
 }

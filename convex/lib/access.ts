@@ -56,13 +56,18 @@ export async function rootMetaOf(
 /* The project fields that decide levels: the hierarchy and the leads. */
 type LevelProject = Pick<Doc<'projects'>, 'id' | 'org_id' | 'type' | 'parent_id' | 'lead_id'>
 
-/* Access lives on a top-level meta and its direct sub-projects, where `root`
- * is the project itself or the top-level project above it. A row outside
- * that tree, such as a top-level project that is not a meta or a sub-project
- * of a sub-project, carries no access for anyone, so the per-project
+/** Whether `project` is in the tree of `root`, a top-level meta. Access
+ * lives on a top-level meta and its direct sub-projects, where `root` is the
+ * project itself or the top-level project above it. A row outside that
+ * tree, such as a top-level project that is not a meta or a sub-project of
+ * a sub-project, carries no access for anyone, so the per-project
  * predicates and levelsFrom (behind projectLevelsForOrg and the levels of a
- * project item in Deleted items) hide it alike. */
-function inMetaTree(project: LevelProject, root: LevelProject): boolean {
+ * project item in Deleted items) hide it alike, and it has no project_reach
+ * rows (model/projectNav.ts). */
+export function inMetaTree(
+  project: Pick<LevelProject, 'id' | 'type' | 'parent_id'>,
+  root: Pick<LevelProject, 'id' | 'type' | 'parent_id'>,
+): boolean {
   return (
     root.parent_id === undefined &&
     root.type === 'meta' &&

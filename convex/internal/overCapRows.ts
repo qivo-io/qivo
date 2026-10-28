@@ -79,11 +79,13 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from '../_generated/server'
+import { byId } from '../lib/db'
 import { cleanEmail } from '../lib/email'
 import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { patchTask } from '../model/descriptions'
 import { copyNameKey, inlineBudget } from '../model/nameKeys'
+import { patchRows, treeRows } from '../model/projectNav'
 import { renameProjectTotals } from '../model/storageTotals'
 
 /** Rows per page and the bytes one page may read; a page can end early.
@@ -314,6 +316,16 @@ async function walk(
       // the Storage by project breakdown shows the project's current name
       if ('num' in doc && 'org_id' in doc && typeof name === 'string')
         await renameProjectTotals(write, { id: doc.id, org_id: doc.org_id, num: doc.num, name })
+      // a cut project name's reach rows copy its key too (model/projectNav.ts),
+      // refused past LIMITS.projectTreeChange as a rename is
+      const project =
+        typeof name === 'string' && table === 'projects'
+          ? await byId(write, 'projects', doc.id)
+          : null
+      if (project !== null)
+        await patchRows(write, await treeRows(write, project.org_id, [project.id]), {
+          name_key: nameKey(project.name),
+        })
     }
     return { rows, cursor: page.continueCursor, done: page.isDone }
   }

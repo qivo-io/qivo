@@ -25,6 +25,25 @@ export const PROJECT_TYPES = ['meta', 'project'] as const
 export const vProjectType = literals(...PROJECT_TYPES)
 export type ProjectType = (typeof PROJECT_TYPES)[number]
 
+/* Where a project stands in the archive (schema.ts projects.archive_state):
+ * 'live' is not archived, 'listed' is archived as its own Archived projects
+ * entry (a top-level project, or a sub-project of a live parent) and 'under'
+ * is archived beneath an archived parent. Server-owned, never on the wire. */
+export const ARCHIVE_STATES = ['live', 'listed', 'under'] as const
+export const vArchiveState = literals(...ARCHIVE_STATES)
+export type ArchiveState = (typeof ARCHIVE_STATES)[number]
+
+/* Who a project_reach row is for (schema.ts): a seat, by its profile, or a
+ * team; and whether it stands for a top-level project or a sub-project.
+ * Stored on project_reach only, never on the wire. */
+export const GRANTEE_KINDS = ['profile', 'team'] as const
+export const vGranteeKind = literals(...GRANTEE_KINDS)
+export type GranteeKind = (typeof GRANTEE_KINDS)[number]
+
+export const REACH_KINDS = ['root', 'child'] as const
+export const vReachKind = literals(...REACH_KINDS)
+export type ReachKind = (typeof REACH_KINDS)[number]
+
 export const PROFILE_KINDS = ['person', 'agent'] as const
 export const vProfileKind = literals(...PROFILE_KINDS)
 export type ProfileKind = (typeof PROFILE_KINDS)[number]

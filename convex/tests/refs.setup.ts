@@ -61,6 +61,9 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'project_access', field: 'profile_id', target: 'profiles' },
   { table: 'project_team_access', field: 'project_id', target: 'projects' },
   { table: 'project_team_access', field: 'team_id', target: 'teams' },
+  { table: 'project_reach', field: 'org_id', target: 'organizations' },
+  { table: 'project_reach', field: 'project_id', target: 'projects' },
+  { table: 'project_reach', field: 'root_id', target: 'projects' },
   { table: 'issues', field: 'project_id', target: 'projects' },
   { table: 'issues', field: 'org_id', target: 'organizations' },
   { table: 'issues', field: 'assignee_id', target: 'profiles' },
@@ -216,6 +219,10 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // (nameCopies.ts).
   'name_copies.source_id',
   'name_copies.scheduled_id',
+  // A reach row names a profile or a team, by grantee_kind (schema.ts
+  // project_reach); tests/projectReach.setup.ts checks that every row's
+  // grantee and sources are there.
+  'project_reach.grantee_id',
   // A pending detach names the deleted task, which is in Deleted items or
   // back, and who deleted it, until its last step deletes the row
   // (model/deletedItems.ts detachArchivedChildren).

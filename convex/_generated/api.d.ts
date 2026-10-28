@@ -197,6 +197,7 @@ import type * as model_orgRetention from "../model/orgRetention.js";
 import type * as model_orgs from "../model/orgs.js";
 import type * as model_people from "../model/people.js";
 import type * as model_projectAccess from "../model/projectAccess.js";
+import type * as model_projectNav from "../model/projectNav.js";
 import type * as model_projects from "../model/projects.js";
 import type * as model_storageTotals from "../model/storageTotals.js";
 import type * as model_syncStamps from "../model/syncStamps.js";
@@ -432,6 +433,7 @@ declare const fullApi: ApiFromModules<{
   "model/orgs": typeof model_orgs;
   "model/people": typeof model_people;
   "model/projectAccess": typeof model_projectAccess;
+  "model/projectNav": typeof model_projectNav;
   "model/projects": typeof model_projects;
   "model/storageTotals": typeof model_storageTotals;
   "model/syncStamps": typeof model_syncStamps;

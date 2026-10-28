@@ -245,8 +245,9 @@ function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgEx
   // a task's or project's window key only places it in the app's windows
   delete row.window_key
   // a name key, or its copy on a membership, grant or team share, only
-  // serves name-ordered index reads
+  // serves name-ordered index reads, and so does a project's archive state
   delete row.name_key
+  delete row.archive_state
   // an activity row's field prints only let a refused edit name who wrote
   // the value (model/expected.ts)
   delete row.field_prints
