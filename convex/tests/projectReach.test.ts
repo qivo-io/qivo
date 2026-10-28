@@ -18,13 +18,21 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { NAV_STEP, RUN } from '../internal/navBackfill'
 import { byId } from '../lib/db'
+import type { Refusal } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { ACCESS_FIRST_PASS, deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
 import { clearOrgTrash, meterDb, TRASH_BUDGET } from '../model/deletedItems'
 import { deleteOrgStep } from '../model/orgDeletion'
 import { insertOrgRows, newOrgDefaults } from '../model/orgs'
-import { grantBatch, grantee, navReady, syncReach, TREE_READ } from '../model/projectNav'
+import {
+  grantBatch,
+  grantee,
+  navReady,
+  syncReach,
+  TREE_READ,
+  TREE_TOO_LARGE,
+} from '../model/projectNav'
 import { createProjectCore } from '../model/projects'
 import {
   as,
@@ -663,13 +671,50 @@ describe('archiving and restoring a tree', () => {
     const t = newT()
     const f = await ready(t)
     TREE_READ.bytes = 600
-    await expectRefusal(
+    const e = await expectRefusal(
       as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: f.meta.id }),
       'rule',
-      /can update at most 2,000/,
     )
+    // its own sentence, which names the cause, not the 2,000 entries
+    expect((e.data as Refusal).message).toBe(TREE_TOO_LARGE)
     expect((await projectOf(t, f.meta.id))?.archived_at).toBeUndefined()
   })
+
+  it('shares one budget between the archive and the rename of one REST update', async () => {
+    const t = newT()
+    const f = await ready(t)
+    // 1,200 entries on the product: an archive or a rename alone fits, both
+    // in one transaction do not
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1_200; i++)
+        await ctx.db.insert('project_reach', {
+          org_id: f.org.id,
+          grantee_kind: 'profile',
+          grantee_id: uuid(),
+          kind: 'root',
+          project_id: f.meta.id,
+          root_id: f.meta.id,
+          name_key: nameKey(f.meta.name),
+          key: f.meta.key,
+          live: true,
+          on_root: false,
+        })
+    })
+    const update = (body: object) =>
+      t.mutation(internal.machine.projects.restUpdateProject, {
+        callerId: f.user.id,
+        access: 'write',
+        keyName: null,
+        ref: f.meta.key,
+        body: JSON.stringify(body),
+      })
+    await expectRefusal(update({ archived: true, name: 'Both' }), 'rule', /at most 2,000/)
+    expect(await projectOf(t, f.meta.id)).toMatchObject({ name: f.meta.name })
+    expect((await projectOf(t, f.meta.id))?.archived_at).toBeUndefined()
+    await update({ archived: true })
+    await update({ name: 'One at a time' })
+    expect(await projectOf(t, f.meta.id)).toMatchObject({ archive_state: 'listed' })
+  }, 60_000)
 })
 
 describe('Deleted items', () => {

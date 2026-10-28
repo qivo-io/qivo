@@ -56,10 +56,13 @@ import { scheduleArchivedReads } from './messages'
 import { nextProjectNum, tallyRow } from './orgs'
 import {
   archiveStateOf,
+  childRows,
   deleteGrant,
   grantBatch,
   patchRows,
   syncLeads,
+  type TreeBudget,
+  treeBudget,
   treeRows,
   treeSubProjects,
 } from './projectNav'
@@ -550,6 +553,9 @@ export async function updateProjectCore(
      * maps take none. */
     expected?: Readonly<Record<string, unknown>>
     view?: View
+    /** The tree budget an archive or restore of the same mutation shares
+     * (model/projectNav.ts TreeBudget). */
+    budget?: TreeBudget
   },
 ): Promise<Doc<'projects'>> {
   const { me, project, patch, now } = a
@@ -620,7 +626,10 @@ export async function updateProjectCore(
   if (db.name_key !== undefined && db.name_key !== nameKey(project.name))
     copies.name_key = db.name_key
   if (db.key !== undefined && db.key !== project.key) copies.key = db.key
-  const reach = Object.keys(copies).length > 0 ? await treeRows(ctx, project.org_id, [id]) : []
+  const reach =
+    Object.keys(copies).length > 0
+      ? await treeRows(ctx, project.org_id, [id], a.budget ?? treeBudget())
+      : []
   // The project row goes first, so the reach rows the access writes below
   // bring in line copy it as it is now.
   if (Object.keys(db).length > 0) await ctx.db.patch(project._id, db)
@@ -762,6 +771,17 @@ async function writeGrants(
 
 /* ------------------------------------------------------ archive / restore */
 
+/** An archive or a restore as a caller asks for it. `budget` is the tree
+ * budget a rename of the same mutation shares (model/projectNav.ts
+ * TreeBudget), else the change takes its own. */
+type TreeChange = {
+  me: Doc<'profiles'>
+  project: Doc<'projects'>
+  now: string
+  provenance?: string
+  budget?: TreeBudget
+}
+
 /**
  * Archives a project, Lead access required (0106). Subtree-atomic
  * (0106:86-91): a meta stamps its active subs with the parent's OWN instant,
@@ -776,17 +796,19 @@ async function writeGrants(
  * (model/messages.ts scheduleArchivedReads). Already archived is a silent
  * no-op. Returns whether it archived anything.
  */
-export async function archiveProjectCore(
-  ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; project: Doc<'projects'>; now: string; provenance?: string },
-): Promise<boolean> {
+export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promise<boolean> {
   const { me, project, now } = a
   await assertLead(ctx, me, project.id)
   if (project.archived_at !== undefined) return false
-  const subs = project.type === 'meta' ? await treeSubProjects(ctx, project.id) : []
+  const budget = a.budget ?? treeBudget()
+  const subs = project.type === 'meta' ? await treeSubProjects(ctx, project.id, budget) : []
   const carried = subs.filter((s) => s.archived_at === undefined)
   const archived = [project.id, ...carried.map((s) => s.id)]
-  const reach = await treeRows(ctx, project.org_id, archived, subs.length)
+  // the project's rows, and the live child rows under it, which are those
+  // of the sub-projects it carries
+  const reach = await treeRows(ctx, project.org_id, [project.id], budget)
+  if (subs.length > 0)
+    reach.push(...(await childRows(ctx, project.org_id, project.id, true, budget)))
   const parent =
     project.parent_id === undefined ? null : await byId(ctx, 'projects', project.parent_id)
   for (const s of subs) {
@@ -835,10 +857,7 @@ export async function archiveProjectCore(
  * parents they have in other active projects groups again, which then lose
  * their own remaining hours in background steps (regroup.ts).
  */
-export async function unarchiveProjectCore(
-  ctx: MutationCtx,
-  a: { me: Doc<'profiles'>; project: Doc<'projects'>; now: string; provenance?: string },
-): Promise<boolean> {
+export async function unarchiveProjectCore(ctx: MutationCtx, a: TreeChange): Promise<boolean> {
   const { me, project, now } = a
   await assertLead(ctx, me, project.id)
   if (project.archived_at === undefined) return false
@@ -856,20 +875,35 @@ export async function unarchiveProjectCore(
   const restored = [project]
   // the archived sub-projects that stay archived under a parent that is live now
   let left: Doc<'projects'>[] = []
+  const budget = a.budget ?? treeBudget()
+  let reach: Doc<'project_reach'>[]
   if (project.parent_id !== undefined) {
     if (parentArchived) {
       restored.push(parent)
-      left = (await treeSubProjects(ctx, parent.id)).filter(
+      left = (await treeSubProjects(ctx, parent.id, budget)).filter(
         (s) => s.id !== project.id && s.archived_at !== undefined,
       )
     }
+    reach = await treeRows(
+      ctx,
+      project.org_id,
+      restored.map((p) => p.id),
+      budget,
+    )
   } else {
-    const subs = await treeSubProjects(ctx, project.id)
-    restored.push(...subs.filter((s) => s.archived_at === stamp))
+    const subs = await treeSubProjects(ctx, project.id, budget)
+    const back = subs.filter((s) => s.archived_at === stamp)
+    restored.push(...back)
     left = subs.filter((s) => s.archived_at !== undefined && s.archived_at !== stamp)
+    // the project's rows, and the child rows of the sub-projects it brings
+    // back, among the archived child rows under it
+    reach = await treeRows(ctx, project.org_id, [project.id], budget)
+    const ids = new Set(back.map((s) => s.id))
+    if (ids.size > 0)
+      for (const row of await childRows(ctx, project.org_id, project.id, false, budget))
+        if (ids.has(row.project_id)) reach.push(row)
   }
   const ids = restored.map((p) => p.id)
-  const reach = await treeRows(ctx, project.org_id, ids, restored.length - 1 + left.length)
   for (const p of restored)
     await ctx.db.patch(p._id, { archived_at: undefined, archive_state: 'live' })
   for (const s of left)

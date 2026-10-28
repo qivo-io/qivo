@@ -429,51 +429,119 @@ export async function syncLeads(
  * A mutable object, so tests can lower it. */
 export const TREE_READ = { bytes: 8 * MIB }
 
+/** The index ranges a mutation's tree changes may spend on their queries,
+ * besides LIMITS.projectTreeChange.max for what they write: at most four
+ * for one change (its sub-projects, the rows of the project, of its parent
+ * and of the sub-projects under it), and two changes, an archive or a
+ * restore and a rename, in one REST or MCP update. */
+const TREE_QUERIES = 8
+
+/** The refusal of a tree whose sub-projects hold more than TREE_READ.bytes,
+ * which only legacy icons make so large. Archiving or restoring other
+ * projects first reads them all the same, so it names what helps. */
+export const TREE_TOO_LARGE =
+  "this project's sub-projects hold more data than one change can read, most likely icons an earlier version of Qivo stored, so it cannot be archived or restored at once. Delete some of its sub-projects first, or contact support@qivo.io to remove the old icons."
+
+/**
+ * What the tree changes of one mutation may still spend: `entries`, the
+ * sub-projects they write and the reach rows they read, each of which a
+ * write may change and Convex reads by id first, within
+ * LIMITS.projectTreeChange.max, which keeps them to about half of the
+ * 4,096 index ranges one transaction may read, as model/labels.ts
+ * LABEL_REMOVAL measured; and `queries`, the ranges their reads take.
+ * A rename, a key change, an archive and a restore each take one unless the
+ * caller passes the one it shares, as a REST or MCP update that archives or
+ * restores a project and changes its fields does.
+ */
+export type TreeBudget = { entries: number; queries: number }
+
+/** A fresh budget for a mutation's tree changes. */
+export const treeBudget = (): TreeBudget => ({
+  entries: LIMITS.projectTreeChange.max,
+  queries: TREE_QUERIES,
+})
+
+/* Spends one query of `budget`; a change that needs more is a bug, not the
+ * size of a tree. */
+function query(budget: TreeBudget): void {
+  budget.queries -= 1
+  if (budget.queries < 0) throw new Error('a tree change read more ranges than TREE_QUERIES')
+}
+
+/* Spends `n` entries of `budget`, refused with LIMITS.projectTreeChange's
+ * sentence past it. Every caller spends before it writes, so a refusal
+ * leaves everything as it was. */
+function spend(budget: TreeBudget, n: number): void {
+  budget.entries -= n
+  if (budget.entries < 0) throw rule(LIMITS.projectTreeChange.refusal)
+}
+
 /**
  * The reach rows of `projectIds` in organization `orgId`, every grantee's,
  * for a change that updates their copies of the projects (a rename, a key
- * change, an archive or a restore) and also writes `writes` sub-projects.
- * Refuses with LIMITS.projectTreeChange's sentence when the rows and those
- * sub-projects together pass its max, reading at most one row past it. Call
- * it before the change writes anything, so a refusal leaves everything as
- * it was. Each row is one of the change's writes, which Convex reads by id
- * first, so the max keeps them to about half of the 4,096 index ranges one
- * transaction may read, as model/labels.ts LABEL_REMOVAL measured, and
- * leaves the rest to the change's own reads. A row another organization
- * left on a reused project id until its teardown deletes it counts but is
- * not returned, so the change never writes it.
+ * change, an archive or a restore), each read row spent from `budget`,
+ * reading at most one row past it. Call it before the change writes
+ * anything, so a refusal leaves everything as it was. A row another
+ * organization left on a reused project id until its teardown deletes it
+ * counts but is not returned, so the change never writes it.
  */
 export async function treeRows(
   ctx: QueryCtx,
   orgId: string,
   projectIds: readonly string[],
-  writes = 0,
+  budget: TreeBudget,
 ): Promise<Doc<'project_reach'>[]> {
-  let left = LIMITS.projectTreeChange.max - writes
-  if (left < 0) throw rule(LIMITS.projectTreeChange.refusal)
   const rows: Doc<'project_reach'>[] = []
   for (const id of new Set(projectIds)) {
+    query(budget)
     const got = await ctx.db
       .query('project_reach')
       .withIndex('by_project_grantee', (q) => q.eq('project_id', id))
-      .take(left + 1)
-    if (got.length > left) throw rule(LIMITS.projectTreeChange.refusal)
+      .take(Math.max(0, budget.entries) + 1)
+    spend(budget, got.length)
     rows.push(...got.filter((row) => row.org_id === orgId))
-    left -= got.length
   }
   return rows
 }
 
+/** The child rows under top-level project `rootId` whose `live` copy is
+ * `live`, every grantee's, in one range, spent from `budget` as treeRows
+ * spends. An archive of the project reads the live ones, which are those
+ * of the sub-projects it archives, and a restore the archived ones, among
+ * them those of the sub-projects it restores. */
+export async function childRows(
+  ctx: QueryCtx,
+  orgId: string,
+  rootId: string,
+  live: boolean,
+  budget: TreeBudget,
+): Promise<Doc<'project_reach'>[]> {
+  query(budget)
+  const got = await ctx.db
+    .query('project_reach')
+    .withIndex('by_root_child', (q) => q.eq('root_id', rootId).eq('kind', 'child').eq('live', live))
+    .take(Math.max(0, budget.entries) + 1)
+  spend(budget, got.length)
+  return got.filter((row) => row.org_id === orgId)
+}
+
 /** The sub-projects of `parentId`, for a change that writes each of them,
- * refused with LIMITS.projectTreeChange's sentence past its max or past
- * TREE_READ's bytes, reading at most one more. */
-export async function treeSubProjects(ctx: QueryCtx, parentId: string): Promise<Doc<'projects'>[]> {
-  const { max } = LIMITS.projectTreeChange
+ * each spent from `budget`, reading at most one more, and refused with
+ * TREE_TOO_LARGE past TREE_READ's bytes. */
+export async function treeSubProjects(
+  ctx: QueryCtx,
+  parentId: string,
+  budget: TreeBudget,
+): Promise<Doc<'projects'>[]> {
+  query(budget)
+  const numItems = Math.max(0, budget.entries) + 1
   const page = await ctx.db
     .query('projects')
     .withIndex('by_parent', (q) => q.eq('parent_id', parentId))
-    .paginate({ cursor: null, numItems: max + 1, maximumBytesRead: TREE_READ.bytes })
-  if (!page.isDone || page.page.length > max) throw rule(LIMITS.projectTreeChange.refusal)
+    .paginate({ cursor: null, numItems, maximumBytesRead: TREE_READ.bytes })
+  spend(budget, page.page.length)
+  // a page that ended before its count ended on the bytes
+  if (!page.isDone) throw rule(TREE_TOO_LARGE)
   return page.page
 }
 

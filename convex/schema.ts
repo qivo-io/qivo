@@ -1320,15 +1320,17 @@ export default defineSchema({
   // its root exact, and every lead, grant and share writer calls it in its
   // own transaction, the user grant and team share inserts and deletes
   // through model/projectNav.ts (insertGrant, deleteGrant, insertShare,
-  // deleteShare). A rename, a key change, an archive or a restore updates
-  // the rows of the projects it changes in the same transaction, and
-  // refuses with LIMITS.projectTreeChange's sentence, before it writes,
-  // when its sub-projects and these rows are more than
-  // LIMITS.projectTreeChange.max (about half of Convex's 4,096 reads, as a
-  // label deletion measured; no background job takes the rest). A move to
-  // Deleted items deletes the rows of its projects in its steps, and a
-  // restore writes them again before its reveal (model/deletedItems.ts
-  // clearProjectRows, restoreAccess). Not a stored table: nothing goes to
+  // deleteShare, grantBatch). A rename, a key change, an archive or a
+  // restore updates the rows of the projects it changes in the same
+  // transaction, and refuses with LIMITS.projectTreeChange's sentence, before
+  // it writes, when the sub-projects it writes and the rows it reads are
+  // more than LIMITS.projectTreeChange.max, shared by every such change of
+  // one mutation (about half of Convex's 4,096 reads, as a label deletion
+  // measured; no background job takes the rest; model/projectNav.ts
+  // TreeBudget). A move to Deleted items deletes the rows of its projects
+  // in its steps, and a restore writes them again before its reveal and
+  // brings them in line again after it (model/deletedItems.ts
+  // clearProjectRows, restoreAccess, restoreGrants). Not a stored table: nothing goes to
   // deleted_rows. Teardowns delete them by organization. Rows written before
   // this table existed are none; internal/navBackfill writes them, and
   // readers wait for org_ready.nav_at. Never sent to clients, REST, MCP,
@@ -1375,6 +1377,9 @@ export default defineSchema({
     .index('by_grantee_key', ['grantee_kind', 'grantee_id', 'kind', 'live', 'key', 'project_id'])
     // every grantee's row on one project, at most one each
     .index('by_project_grantee', ['project_id', 'grantee_kind', 'grantee_id'])
+    // the child rows under one top-level project, live or archived, which
+    // an archive or a restore of the project reads in one range
+    .index('by_root_child', ['root_id', 'kind', 'live'])
     .index('by_org', ['org_id']),
 
   issues: issuesTable,
