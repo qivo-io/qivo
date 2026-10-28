@@ -1523,10 +1523,10 @@ export const SUBTREE_WALK = { reads: 1000 }
 /** What a single-task read of an archived task keeps back from the
  * request's limits for the reads after its subtree walk, which stops short
  * of them. Each can come close to Convex's document size limit: the
- * document the walk read last, which may pass its ceiling, the last subtask
- * listed read again with the one after it, which tell whether a subtask is
- * left out (taskSubtree), the task's parent and its newest comment, and the
- * task's people besides. What has no fixed count is read before the walk:
+ * document the walk read last, which may pass its ceiling, the first
+ * subtask when the walk read none, the two subtasks that tell whether one
+ * is left out (subtaskFollows), the task's parent and its newest comment,
+ * and the task's people besides. What has no fixed count is read before the walk:
  * the access to every project of the organization, answered at once
  * (orgReach), and the task's links, labels, followers and attachments
  * (taskRelations). So is the task's text (model/descriptions.ts
@@ -1668,8 +1668,9 @@ async function activeTasksUnder(
  * archived subtasks it has. When that stops the walk, the index keeps only
  * the root's own subtasks, which it reads first, as many as fit. When not
  * even one fit, it reads the first, within the reserve, so the read still
- * tells a group from a leaf, and it reads one past the last listed, so
- * `more` is set only when a subtask is left out. Active subtasks number at
+ * tells a group from a leaf, and it asks whether one follows the last
+ * listed (subtaskFollows), so `more` is set only when a subtask is left
+ * out. Active subtasks number at
  * most LIMITS.subtasks.max, so an active task's read lists them all. */
 async function taskSubtree(
   ctx: QueryCtx,
@@ -1685,31 +1686,44 @@ async function taskSubtree(
   if (walk.whole) return { children: walk.children, partial: false, more: false }
   let kids = walk.children.get(root.id) ?? []
   if (walk.rootWhole) return { children: new Map([[root.id, kids]]), partial: true, more: false }
-  // the first subtask in by_parent order that is not among `read`: the
-  // first of all when none was read, and past them all whether any is left
-  // out. Subtasks created at the same moment as the last one read are
-  // looked at too, past those already read.
-  const after = async (read: readonly Doc<'issues'>[]): Promise<Doc<'issues'> | null> => {
-    const last = read.at(-1)
-    // those read at the last one's moment, which the range starts with
-    const tied = read.filter((kid) => kid._creationTime === last?._creationTime)
-    const seen = new Set(tied.map((kid) => kid.id))
-    const rest = await ctx.db
-      .query('issues')
-      .withIndex('by_parent', (q) =>
-        last === undefined
-          ? q.eq('parent_id', root.id)
-          : q.eq('parent_id', root.id).gte('_creationTime', last._creationTime),
-      )
-      .take(tied.length + 1)
-    return rest.find((kid) => !seen.has(kid.id)) ?? null
-  }
+  // when not even one was read, the first in by_parent order
   if (kids.length === 0) {
-    const first = await after([])
+    const first = await ctx.db
+      .query('issues')
+      .withIndex('by_parent', (q) => q.eq('parent_id', root.id))
+      .first()
     kids = first === null ? [] : [first]
   }
-  const more = kids.length > 0 && (await after(kids)) !== null
+  const last = kids.at(-1)
+  const more = last !== undefined && (await subtaskFollows(ctx, root.id, last))
   return { children: new Map([[root.id, kids]]), partial: true, more }
+}
+
+/** Whether task `parentId` has a subtask after `last` in by_parent order,
+ * creation time and then id. It reads two documents at most, whatever
+ * number of subtasks share `last`'s creation time: the highest of those in
+ * id order, which follows `last` unless it is `last`, and else the first
+ * created after it. TASK_READ_RESERVE counts both. */
+export async function subtaskFollows(
+  ctx: QueryCtx,
+  parentId: string,
+  last: Doc<'issues'>,
+): Promise<boolean> {
+  const tied = await ctx.db
+    .query('issues')
+    .withIndex('by_parent', (q) =>
+      q.eq('parent_id', parentId).eq('_creationTime', last._creationTime),
+    )
+    .order('desc')
+    .first()
+  if (tied !== null && tied._id > last._id) return true
+  const later = await ctx.db
+    .query('issues')
+    .withIndex('by_parent', (q) =>
+      q.eq('parent_id', parentId).gt('_creationTime', last._creationTime),
+    )
+    .first()
+  return later !== null
 }
 
 /** Whether a task under a group counts toward the group's totals. */
