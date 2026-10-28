@@ -1,19 +1,23 @@
 /* Task descriptions in issue_descriptions (schema.ts, model/descriptions.ts),
  * the first of three releases. Every writer keeps exactly one row per live
- * task equal to issues.description, and internal/descriptionsBackfill gives
- * older tasks their rows, reports what differs and mends it. Each case also
- * checks a write that must leave the rows as they were. scripts/
- * check-task-writes.test.mjs covers the check that no other code writes
- * them. */
+ * task equal to issues.description, with copies of the task's project and
+ * archived state that every move and archive keeps, and
+ * internal/descriptionsBackfill gives older tasks their rows, reports what
+ * differs and mends it. Each case also checks a write that must leave the
+ * rows as they were. scripts/check-task-writes.test.mjs covers the check
+ * that no other code writes them. */
 
+import type { WithoutSystemFields } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
+import type { Doc } from '../_generated/dataModel'
 import { PAGE, RUN } from '../internal/descriptionsBackfill'
 import { newWindowKey } from '../lib/db'
 import { LIMITS } from '../lib/limits'
 import { deleteOrgDeep } from '../model/cascade'
 import { clearOrgTrash, startPurge, TRASH_BUDGET } from '../model/deletedItems'
 import { insertTask, putDescription } from '../model/descriptions'
+import { MOVE_TOO_LARGE, SUBTREE_TOO_LARGE } from '../model/issues'
 import { wipeWorkStep } from '../model/orgDeletion'
 import {
   as,
@@ -560,7 +564,9 @@ describe('teardowns', () => {
     for (const description of ['A', 'B'])
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description })
     await plantOldTask(t, f, 'Old')
-    await t.run((ctx) => putDescription(ctx.db, { id: uuid(), org_id: f.org.id }, 'Orphan'))
+    await t.run((ctx) =>
+      putDescription(ctx.db, { id: uuid(), org_id: f.org.id, project_id: f.sub.id }, 'Orphan'),
+    )
     await plantIssue(t, {
       org_id: f.otherOrg.id,
       project_id: f.otherProject.id,
@@ -627,6 +633,377 @@ describe('teardowns', () => {
     })
     expect(await expectDescriptions(t)).toBe(3)
   })
+})
+
+/* ------------------------------------------- project and archived copies */
+
+/** The only description row of task `id`. */
+async function rowOf(t: T, id: string) {
+  const rows = await rowsOf(t, id)
+  expect(rows).toHaveLength(1)
+  return rows[0]
+}
+
+/** A sub-project of the fixture's second top-level project, which the
+ * agent may write too, for moves that carry subtasks. */
+async function awayProject(t: T, f: OrgFixture) {
+  await t.run((ctx) =>
+    ctx.db.insert('project_access', {
+      project_id: f.hidden.id,
+      profile_id: f.agent.id,
+      level: 'user',
+    }),
+  )
+  return await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id })
+}
+
+/** `count` tasks with descriptions of LIMITS.description.max three-byte
+ * characters and their rows, ten a transaction. */
+async function plantLong(
+  t: T,
+  count: number,
+  task: { org_id: string; project_id: string } & Partial<WithoutSystemFields<Doc<'issues'>>>,
+) {
+  const text = '中'.repeat(LIMITS.description.max)
+  const ids: string[] = []
+  for (let from = 0; from < count; from += 10)
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(count, from + 10); i++) {
+        const id = uuid()
+        await insertTask(ctx.db, {
+          id,
+          num: 70_000 + ids.length,
+          title: 'Long',
+          description: text,
+          status: 'todo',
+          priority: 'low',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          window_key: newWindowKey(),
+          ...task,
+        })
+        ids.push(id)
+      }
+    })
+  return ids
+}
+
+describe('the project and archived copies', () => {
+  it('moves through the app and REST carry them, a subtree to another top-level project included', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const away = await awayProject(t, f)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const root = await plantIssue(t, base)
+    const kid = await plantIssue(t, { ...base, parent_id: root.id })
+    const shelved = await plantIssue(t, { ...base, parent_id: root.id, archived_at: NOW })
+    const lone = await plantIssue(t, base)
+    const untouched = await plantIssue(t, base)
+    const [before] = await rowsOf(t, untouched.id)
+    // to another top-level project the subtasks come along, the archived one
+    // too, which stays archived
+    await as(t, f.admin).mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: root.id,
+      project_id: away.id,
+    })
+    for (const id of [root.id, kid.id, shelved.id])
+      expect((await rowOf(t, id)).project_id).toBe(away.id)
+    expect((await rowOf(t, shelved.id)).archived_at).toBe(NOW)
+    // REST and MCP move through the same core
+    await t.mutation(internal.machine.rest.updateIssue, {
+      callerId: f.agent.id,
+      access: 'write',
+      keyName: 'descriptions',
+      ref: lone.id,
+      body: JSON.stringify({ project: f.sub2.id }),
+    })
+    expect((await rowOf(t, lone.id)).project_id).toBe(f.sub2.id)
+    await t.mutation(internal.machine.mcp.updateIssue, {
+      callerId: f.agent.id,
+      access: 'write',
+      ref: lone.id,
+      project: f.hidden.id,
+      sub_project: away.id,
+    })
+    expect((await rowOf(t, lone.id)).project_id).toBe(away.id)
+    // a move to the project the task is in writes nothing
+    await as(t, f.admin).mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: untouched.id,
+      project_id: f.sub.id,
+    })
+    expect(await rowsOf(t, untouched.id)).toEqual([before])
+    expect(await expectDescriptions(t, f.org.id)).toBe(5)
+  })
+
+  it('archives and restores through the app, REST and MCP carry them, a subtree included', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const root = await plantIssue(t, base)
+    const kids = [
+      await plantIssue(t, { ...base, parent_id: root.id }),
+      await plantIssue(t, { ...base, parent_id: root.id }),
+    ]
+    const family = [root.id, ...kids.map((kid) => kid.id)]
+    const archivedAt = async (id: string) => (await rowOf(t, id)).archived_at
+    await as(t, f.user).mutation(api.issues.archive, {
+      org_id: f.org.id,
+      id: root.id,
+      reason: 'Shipped',
+    })
+    for (const id of family) expect(await archivedAt(id)).toBeDefined()
+    await expectDescriptions(t, f.org.id)
+    // restoring a subtask brings its parent back too, and the parent's row
+    // with it; the other subtask stays archived
+    await as(t, f.user).mutation(api.issues.unarchive, { org_id: f.org.id, id: kids[0].id })
+    expect([await archivedAt(root.id), await archivedAt(kids[0].id)]).toEqual([
+      undefined,
+      undefined,
+    ])
+    expect(await archivedAt(kids[1].id)).toBeDefined()
+    await expectDescriptions(t, f.org.id)
+
+    // the machine toggle archives the subtree in the task's own write
+    await t.mutation(internal.machine.rest.updateIssue, {
+      callerId: f.agent.id,
+      access: 'write',
+      keyName: 'descriptions',
+      ref: root.id,
+      body: JSON.stringify({ archived: true }),
+    })
+    for (const id of family) expect(await archivedAt(id)).toBeDefined()
+    await t.mutation(internal.machine.mcp.updateIssue, {
+      callerId: f.agent.id,
+      access: 'write',
+      ref: root.id,
+      archived: false,
+    })
+    expect(await archivedAt(root.id)).toBeUndefined()
+    // and the same toggle with an edit writes the row once, text and copies
+    await t.mutation(internal.machine.mcp.updateIssue, {
+      callerId: f.agent.id,
+      access: 'write',
+      ref: kids[0].id,
+      archived: true,
+      description: 'Archived with a note',
+    })
+    expect(await rowOf(t, kids[0].id)).toMatchObject({
+      description: 'Archived with a note',
+      archived_at: expect.any(String),
+    })
+    expect(await expectDescriptions(t, f.org.id)).toBe(3)
+  })
+
+  it('the nightly archive stamps the rows of the tasks it archives', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const done_at = new Date(Date.now() - 60 * 86_400_000).toISOString()
+    const due = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at,
+    })
+    const young = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: new Date().toISOString(),
+    })
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    await t.mutation(internal.jobs.archiveDoneIssues, {})
+    await runSteps(t)
+    expect((await rowOf(t, due.id)).archived_at).toBeDefined()
+    expect((await rowOf(t, young.id)).archived_at).toBeUndefined()
+    expect(await expectDescriptions(t, f.org.id)).toBe(2)
+  })
+
+  it('a restore from Deleted items writes the copies of the task as it comes back', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const archived = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      archived_at: NOW,
+      description: 'Archived',
+    })
+    const inProject = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub2.id,
+      description: 'In the project',
+    })
+    await deleteTask(t, f, archived.id)
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+    for (const id of [archived.id, inProject.id]) expect(await rowsOf(t, id)).toEqual([])
+    const items = [(await itemFor(t, archived.id)).id, (await itemFor(t, f.sub2.id)).id]
+    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: items })
+    await runSteps(t)
+    expect(await rowOf(t, archived.id)).toMatchObject({ project_id: f.sub.id, archived_at: NOW })
+    expect((await rowOf(t, inProject.id)).project_id).toBe(f.sub2.id)
+    expect(await expectDescriptions(t, f.org.id)).toBe(2)
+  })
+
+  it('a task without a row gets none from a move or an archive, and the backfill inserts it with them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const old = await plantOldTask(t, f, 'Before the table')
+    await as(t, f.admin).mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: old,
+      project_id: f.sub2.id,
+    })
+    await as(t, f.user).mutation(api.issues.archive, { org_id: f.org.id, id: old })
+    expect(await rowsOf(t, old)).toEqual([])
+    expect(await backfill(t, { dry_run: false })).toMatchObject({ missing: 1, differ: 0 })
+    expect(await rowOf(t, old)).toMatchObject({
+      project_id: f.sub2.id,
+      archived_at: expect.any(String),
+      description: 'Before the table',
+    })
+    expect(await expectDescriptions(t, f.org.id)).toBe(1)
+  })
+
+  it('a write that skips them leaves the rows stale, which the check sees', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // as an earlier release archives it, without its row
+    await t.run((ctx) => ctx.db.patch(task._id, { archived_at: NOW }))
+    await expect(expectDescriptions(t, f.org.id)).rejects.toThrow()
+  })
+
+  it('search_description filters by organization, project and archived state', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const plant = async (project_id: string, archived_at?: string, org_id = f.org.id) =>
+      (
+        await plantIssue(t, {
+          org_id,
+          project_id,
+          archived_at,
+          description: 'Calibrate the torque sensor',
+        })
+      ).id
+    const active = await plant(f.sub.id)
+    const elsewhere = await plant(f.sub2.id)
+    const shelved = await plant(f.sub.id, NOW)
+    await plant(f.otherProject.id, undefined, f.otherOrg.id)
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: 'Order cables' })
+    const search = (narrow: { project_id?: string; active?: true } = {}) =>
+      t.run(async (ctx) =>
+        (
+          await ctx.db
+            .query('issue_descriptions')
+            .withSearchIndex('search_description', (q) => {
+              let filter = q.search('description', 'torque').eq('org_id', f.org.id)
+              if (narrow.project_id !== undefined)
+                filter = filter.eq('project_id', narrow.project_id)
+              if (narrow.active) filter = filter.eq('archived_at', undefined)
+              return filter
+            })
+            .collect()
+        )
+          .map((row) => row.issue_id)
+          .sort(),
+      )
+    expect(await search()).toEqual([active, elsewhere, shelved].sort())
+    expect(await search({ project_id: f.sub.id })).toEqual([active, shelved].sort())
+    expect(await search({ active: true })).toEqual([active, elsewhere].sort())
+    expect(await search({ project_id: f.sub.id, active: true })).toEqual([active])
+    // the writers move rows between the filters
+    await as(t, f.user).mutation(api.issues.unarchive, { org_id: f.org.id, id: shelved })
+    await as(t, f.user).mutation(api.issues.archive, { org_id: f.org.id, id: active })
+    expect(await search({ project_id: f.sub.id, active: true })).toEqual([shelved])
+    // a row without the copies, as rows written before them, matches no
+    // project, so main Search waits for the backfill
+    await t.run(async (ctx) => {
+      const row = (await ctx.db
+        .query('issue_descriptions')
+        .withIndex('by_issue', (q) => q.eq('issue_id', shelved))
+        .unique())!
+      await ctx.db.patch(row._id, { project_id: undefined })
+    })
+    expect(await search({ project_id: f.sub.id, active: true })).toEqual([])
+  })
+})
+
+describe("the copies at Convex's limits", () => {
+  it('the nightly archive takes the largest descriptions in more, smaller legs', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const done_at = new Date(Date.now() - 60 * 86_400_000).toISOString()
+    await plantLong(t, 120, { org_id: f.org.id, project_id: f.sub.id, status: 'done', done_at })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    await t.mutation(internal.jobs.archiveDoneIssues, {})
+    await runSteps(t)
+    expect(errors).not.toHaveBeenCalled()
+    const legs = (
+      await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+    ).filter((job) => job.name.includes('archiveProject'))
+    expect(legs.length).toBeGreaterThan(3)
+    const rows = await t.run((ctx) => ctx.db.query('issue_descriptions').collect())
+    expect(rows.every((row) => row.archived_at !== undefined)).toBe(true)
+    expect(await expectDescriptions(t, f.org.id)).toBe(120)
+  }, 300_000)
+
+  it('a subtree archive or move of the largest descriptions finishes, or refuses and changes nothing', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const away = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const small = await plantIssue(t, base)
+    const large = await plantIssue(t, base)
+    await plantLong(t, 30, { ...base, parent_id: small.id })
+    await plantLong(t, LIMITS.subtasks.max, { ...base, parent_id: large.id })
+    const snapshotOf = () =>
+      t.run(async (ctx) => ({
+        tasks: await ctx.db.query('issues').collect(),
+        rows: await ctx.db.query('issue_descriptions').collect(),
+      }))
+    const before = await snapshotOf()
+    // each subtask reads its row and writes it with the task, so the room
+    // check refuses the largest subtree before a Convex limit could stop it
+    const move = await expectRefusal(
+      as(t, f.admin).mutation(api.issues.move, {
+        org_id: f.org.id,
+        id: large.id,
+        project_id: away.id,
+      }),
+      'rule',
+    )
+    expect(move.data.message).toBe(MOVE_TOO_LARGE)
+    const archive = await expectRefusal(
+      as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: large.id }),
+      'rule',
+    )
+    expect(archive.data.message).toBe(SUBTREE_TOO_LARGE)
+    expect(await snapshotOf()).toEqual(before)
+    // a smaller one moves and archives, with its rows
+    await as(t, f.admin).mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: small.id,
+      project_id: away.id,
+    })
+    await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: small.id })
+    const moved = await t.run((ctx) =>
+      ctx.db
+        .query('issues')
+        .withIndex('by_parent', (q) => q.eq('parent_id', small.id))
+        .collect(),
+    )
+    expect(moved).toHaveLength(30)
+    for (const kid of moved) expect(kid.project_id).toBe(away.id)
+    expect(await expectDescriptions(t, f.org.id)).toBe(2 + 30 + LIMITS.subtasks.max)
+  }, 300_000)
 })
 
 /* ------------------------------------------------------------- backfill */

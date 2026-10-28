@@ -92,7 +92,7 @@ import { excerpt, issueChanges, logActivity, machineDetail, narratedChange } fro
 import { scheduleMarkClears } from './archiveMarks'
 import { startCount } from './commentLimits'
 import { IMAGE_NOT_ATTACHED, settleDescriptionImages } from './descriptionImages'
-import { insertTask, patchTask, type TaskFields, type TaskPatch } from './descriptions'
+import { insertTask, patchTask, type TaskFields } from './descriptions'
 import {
   assertExpected,
   BOOLEAN,
@@ -586,6 +586,13 @@ function roomCheck(ctx: QueryCtx, refusal = SUBTREE_TOO_LARGE): (bytes?: number)
  * description, up to 3 bytes a UTF-16 unit, and 1 KiB for the rest. */
 const subtaskBytes = (task: Doc<'issues'>): number =>
   3 * (task.title.length + (task.description?.length ?? 0)) + 1024
+
+/* An upper estimate of what patching a task reads for roomCheck
+ * (model/descriptions.ts patchTask): the task row again, and its
+ * description row twice, as it is found and as its patch reads it again.
+ * Neither is larger than the task row while issues.description holds the
+ * text. */
+const patchBytes = (task: Doc<'issues'>): number => 3 * subtaskBytes(task)
 
 /* The active subtasks of the task `parentId`, one by_parent_archived range,
  * at most LIMITS.subtasks.max rows. */
@@ -1907,9 +1914,11 @@ export const MOVE_SUBTREE_HOLDER_RULE =
  * and carries the rest. LIMITS.subtasks.max bounds only the active ones, so
  * this bounds what the move reads and writes: LIMITS.subtasks.max active
  * subtasks and as many archived. Each carried subtask is read twice, once by
- * the move and once by its write, so about 120 subtasks with descriptions at
- * TEXT_MAX fit in one request. A larger family is refused with
- * MOVE_TOO_LARGE. */
+ * the move and once by its write, and so is its description row, found and
+ * then read again by its own write (model/descriptions.ts patchTask). So
+ * about 60 subtasks with descriptions at TEXT_MAX of three-byte characters
+ * fit in one request while issues.description holds the text too. A larger
+ * family is refused with MOVE_TOO_LARGE. */
 
 /* Per-call cache from a project id to its top-level project id, null for a
  * missing project. */
@@ -2084,7 +2093,7 @@ export async function moveIssueCore(
   if (issue.assignee_id !== undefined && !replacedLater(issue, later, 'assignee_id')) {
     await assertAssigneeRule(ctx, target, issue.assignee_id)
   }
-  const w: TaskPatch = {
+  const w: TaskFields = {
     project_id,
     updated_at: now,
     ...movedStamps(issue, now),
@@ -2143,7 +2152,8 @@ export async function moveIssueCore(
     if (!(await canSeeProject(ctx, profile, target))) throw rule(MOVE_HOLDER_RULE)
   }
   const before = { ...issue }
-  await ctx.db.patch(issue._id, w)
+  // the task and its description row (model/descriptions.ts)
+  await patchTask(ctx.db, issue, w)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   // the stored-byte totals follow the task and every subtask it carries, at
   // one totals row each, however many files they hold
@@ -2155,7 +2165,7 @@ export async function moveIssueCore(
     // lands is built from the patch rather than read again, which would
     // read every carried subtask a second time
     const moved = { project_id, updated_at: now, ...movedStamps(row, now) }
-    await ctx.db.patch(row._id, moved)
+    await patchTask(ctx.db, row, moved)
     const landed: Doc<'issues'> = { ...row, ...moved }
     if (landed.status_at === undefined) delete landed.status_at
     await emitTaskEvent(ctx, { name: 'task.updated', issue: landed, before: row, actor: me, now })
@@ -2286,8 +2296,8 @@ async function archiveSubtree(
     if (!editable) throw rule(ARCHIVE_CASCADE_RULE)
   }
   for (const c of kids) {
-    await room(subtaskBytes(c))
-    await ctx.db.patch(c._id, { archived_at: now, updated_at: now })
+    await room(patchBytes(c))
+    await patchTask(ctx.db, c, { archived_at: now, updated_at: now })
     // built from the patch rather than read again, which would read every
     // subtask a second time
     const after: Doc<'issues'> = { ...c, archived_at: now, updated_at: now }
@@ -2328,7 +2338,7 @@ export async function archiveIssueCore(
     }
   }
   const before = { ...issue }
-  await ctx.db.patch(issue._id, { archived_at: now, updated_at: now })
+  await patchTask(ctx.db, issue, { archived_at: now, updated_at: now })
   await tallyRow(ctx, 'issues', issue, { ...issue, archived_at: now })
   const descendants = await archiveSubtree(ctx, issue.id, now, me)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
@@ -2397,7 +2407,7 @@ async function restoreAncestors(
     const ownHours = clears
       ? { remaining_hours: undefined, remaining_set_at: undefined, review_at: undefined }
       : {}
-    await ctx.db.patch(parent._id, {
+    await patchTask(ctx.db, parent, {
       archived_at: undefined,
       ...ownHours,
       done_at: doneStampUpdate(parent, { status: parent.status, archived_at: undefined }, now),
@@ -2512,7 +2522,7 @@ export async function unarchiveIssueCore(
   const before = { ...issue }
   const left = await restoreLeavesParent(ctx, issue)
   const leaves = left !== undefined
-  await ctx.db.patch(issue._id, {
+  await patchTask(ctx.db, issue, {
     archived_at: undefined,
     ...(leaves ? { parent_id: undefined } : {}),
     done_at: doneStampUpdate(issue, { status: issue.status, archived_at: undefined }, now),

@@ -1,9 +1,9 @@
 /* Task descriptions in issue_descriptions (schema.ts), one row per live
  * task beside its issues row. Every insert of a task row and every write of
- * a task's description goes through this file, in the transaction that
- * writes the task, so the two copies stay equal, and only this file writes
- * issue_descriptions. scripts/check-task-writes.mjs fails on any other
- * such write.
+ * a task's description, project or archived state goes through this file,
+ * in the transaction that writes the task, so the copies stay equal, and
+ * only this file writes issue_descriptions. scripts/check-task-writes.mjs
+ * fails on any other such write.
  *
  * In this release issues.description stays the source of truth. Readers
  * read it, and a task stored before the table, which has no row until
@@ -12,11 +12,17 @@
  * without the row, so every path here takes the text from the task row
  * while it holds one, and only then from the row.
  *
- * A row names its task and its organization. A create may choose the id of
- * a task deleted for good, also in another organization, so a write that
- * finds a row for its task resets both its text and its organization
- * (putDescription), and an organization's teardown never takes another's
- * row.
+ * A row names its task and copies its organization, project and archived
+ * state, so main Search can filter descriptions by them (schema.ts
+ * search_description). Every write of a row writes the copies from the
+ * task, and every change of a task's project or archived state goes through
+ * patchTask, which brings the copies of its row in line in the same
+ * transaction. A task without a row, which the backfill has not reached,
+ * gets none from such a change; the backfill inserts it with its copies. A
+ * create may choose the id of a task deleted for good, also in another
+ * organization, so a write that finds a row for its task resets its text
+ * and every copy (putDescription), and an organization's teardown never
+ * takes another's row.
  *
  * Deleted items stores a task with this text (withDescription), and its
  * steps delete the task's description row with its messages
@@ -41,11 +47,27 @@ type Writer = MutationCtx['db']
 export type TaskFields = Partial<WithoutSystemFields<Doc<'issues'>>>
 
 /** The fields of a task row a write sets that never changes its
- * description, so it may patch the row itself. */
-export type TaskPatch = Omit<TaskFields, 'description'>
+ * description, project or archived state, so it may patch the row itself. */
+export type TaskPatch = Omit<TaskFields, 'description' | 'project_id' | 'archived_at'>
 
-/** The task and organization a description row belongs to. */
-type Owner = Pick<Doc<'issues'>, 'id' | 'org_id'>
+/** The task a description row belongs to, with the fields the row copies. */
+type Owner = Pick<Doc<'issues'>, 'id' | 'org_id' | 'project_id' | 'archived_at'>
+
+/** The fields a description row copies from task `task`. An absent
+ * archived_at stays absent: an insert leaves it out and a patch unsets it. */
+const copies = (task: Owner) => ({
+  org_id: task.org_id,
+  project_id: task.project_id,
+  archived_at: task.archived_at,
+})
+
+/** Whether description row `row` holds the copies of task `task`: its
+ * organization, project and archived state. A row without project_id was
+ * written before the copies and holds none. */
+export const holdsCopies = (row: Doc<'issue_descriptions'>, task: Owner): boolean =>
+  row.org_id === task.org_id &&
+  row.project_id === task.project_id &&
+  row.archived_at === task.archived_at
 
 /** The description row of task `issueId`, or null for a task stored
  * before the table that the backfill has not reached. */
@@ -60,9 +82,10 @@ export async function descriptionRow(
 }
 
 /** Sets the description row of `owner` to `description` and the owner's
- * organization, inserting it when the task has none. `known` is the row a
- * caller read already, or null when it found none, so this reads no row
- * again. Answers what it did. */
+ * copies (holdsCopies), inserting it when the task has none. `owner` is the
+ * task as the transaction leaves it. `known` is the row a caller read
+ * already, or null when it found none, so this reads no row again. Answers
+ * what it did. */
 export async function putDescription(
   db: Writer,
   owner: Owner,
@@ -73,13 +96,13 @@ export async function putDescription(
   if (row === null) {
     await uncountedWriter(db).insert('issue_descriptions', {
       issue_id: owner.id,
-      org_id: owner.org_id,
       description,
+      ...copies(owner),
     })
     return 'inserted'
   }
-  if (row.description === description && row.org_id === owner.org_id) return 'same'
-  await db.patch('issue_descriptions', row._id, { description, org_id: owner.org_id })
+  if (row.description === description && holdsCopies(row, owner)) return 'same'
+  await db.patch('issue_descriptions', row._id, { description, ...copies(owner) })
   return 'updated'
 }
 
@@ -99,11 +122,21 @@ export async function insertTask(
   return _id
 }
 
-/** Patches task row `issue` with `fields`. A description among them goes
- * to the task's description row too, '' when it is cleared. */
+/** Patches task row `issue` with `fields`, and its description row in the
+ * same transaction. A description among them goes to the row, '' when it
+ * is cleared, and a task without a row gets one. A new project or archived
+ * state goes to the copies of the row the task has, with the text of
+ * issues.description while the task row holds one, and a task without a
+ * row gets none (the backfill inserts it). Either reads the row, which a
+ * write of it reads again. */
 export async function patchTask(db: Writer, issue: Doc<'issues'>, fields: TaskFields) {
   await db.patch('issues', issue._id, fields)
-  if ('description' in fields) await putDescription(db, issue, fields.description ?? '')
+  const describes = 'description' in fields
+  if (!describes && !('project_id' in fields) && !('archived_at' in fields)) return
+  const row = await descriptionRow(db, issue.id)
+  const after = { ...issue, ...fields }
+  if (describes) await putDescription(db, after, fields.description ?? '', row)
+  else if (row !== null) await putDescription(db, after, after.description ?? row.description, row)
 }
 
 /** Deletes the description row of task `issueId`, if it has one, and

@@ -1268,12 +1268,17 @@ export default defineSchema({
    * 1 MiB). The server owns it, with exactly one row per live issues row
    * and '' for a task without a description. Only model/descriptions.ts
    * writes it, in the transaction that writes the task
-   * (scripts/check-task-writes.mjs fails on any other writer). A row names
-   * its task's organization, and a write that finds a row resets it, since
+   * (scripts/check-task-writes.mjs fails on any other writer). A row copies
+   * its task's organization, project and archived state, and every write
+   * of the row, and every change of the task's project or archived state,
+   * writes the copies from the task in that transaction (patchTask), so
+   * main Search can filter descriptions by project and archived state
+   * (search_description). A write that finds a row resets every copy, since
    * a create may take the id of a task deleted for good, also in another
    * organization. Deleted items stores a task with its text and deletes
    * its row in its steps, so a task in Deleted items has no row once they
-   * have run, and a restore writes the row again (model/deletedItems.ts).
+   * have run, and a restore writes the row again from the restored task
+   * (model/deletedItems.ts).
    *
    * The move takes three releases. In the first, this one, every writer
    * keeps both copies and every reader still reads issues.description, the
@@ -1283,14 +1288,31 @@ export default defineSchema({
    * backfill on every deployment reports zero missing, differing,
    * duplicate, orphaned and skipped rows (docs/deployment.md). The third
    * stops writing issues.description and clears it, after which an earlier
-   * release no longer shows the descriptions, so it cannot be rolled back. */
+   * release no longer shows the descriptions, so it cannot be rolled back.
+   *
+   * The project and archived copies came after the first release. A row
+   * holds them once project_id is present (stamped); a row written before
+   * them, or by an earlier release that runs again after this one, holds
+   * none or stale ones, and the same backfill reports and mends it
+   * (`differ`). Main Search reads search_description only after a dry run
+   * on every deployment reports zero (docs/deployment.md). */
   issue_descriptions: defineTable({
     issue_id: v.string(),
     org_id: v.string(), // the task's, for the teardowns that delete an organization's rows
     description: v.string(),
+    // the task's; absent only on a row not yet stamped (above). Optional
+    // until the backfill has stamped every deployment's rows.
+    project_id: v.optional(v.string()),
+    archived_at: v.optional(v.string()), // the task's, absent while it is active
   })
     .index('by_issue', ['issue_id'])
-    .index('by_org', ['org_id']),
+    .index('by_org', ['org_id'])
+    // main Search's description matches within an organization, narrowed to
+    // a project and to active tasks (archived_at absent)
+    .searchIndex('search_description', {
+      searchField: 'description',
+      filterFields: ['org_id', 'project_id', 'archived_at'],
+    }),
 
   issue_links: issueLinksTable,
 

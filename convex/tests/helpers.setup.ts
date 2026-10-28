@@ -873,9 +873,9 @@ export async function expectLiveCounts(t: T, orgId: string) {
 
 /** Expects every live task of organization `orgId`, or of every
  * organization without one, to have exactly one description row with its
- * issues.description ('' for none), and no description row without its
- * live task (schema.ts issue_descriptions). Answers how many tasks it
- * checked. */
+ * issues.description ('' for none) and the copies of its project and
+ * archived state, and no description row without its live task (schema.ts
+ * issue_descriptions). Answers how many tasks it checked. */
 export async function expectDescriptions(t: T, orgId?: string): Promise<number> {
   const { tasks, rows } = await t.run(async (ctx) => ({
     tasks:
@@ -894,8 +894,15 @@ export async function expectDescriptions(t: T, orgId?: string): Promise<number> 
             .collect(),
   }))
   const held = (row: Doc<'issue_descriptions'>) =>
-    `${row.org_id}:${row.issue_id}:${row.description}`
-  const kept = (task: Doc<'issues'>) => `${task.org_id}:${task.id}:${task.description ?? ''}`
+    JSON.stringify([row.org_id, row.issue_id, row.project_id, row.archived_at, row.description])
+  const kept = (task: Doc<'issues'>) =>
+    JSON.stringify([
+      task.org_id,
+      task.id,
+      task.project_id,
+      task.archived_at,
+      task.description ?? '',
+    ])
   expect(rows.map(held).sort()).toEqual(tasks.map(kept).sort())
   return tasks.length
 }

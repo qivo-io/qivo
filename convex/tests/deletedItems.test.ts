@@ -33,7 +33,7 @@ import {
   whereIsTask,
 } from '../model/deletedItems'
 import { estimateDocumentBytes } from '../model/demoMetrics'
-import { insertTask } from '../model/descriptions'
+import { insertTask, patchTask } from '../model/descriptions'
 import { PARENT_BEING_DELETED, SUBTASK_BEING_DELETED } from '../model/issues'
 import { ITEM_UNREAD_CAP } from '../model/messages'
 import {
@@ -1448,7 +1448,8 @@ describe('purging', () => {
     // a task with rows filed under Firmware that moved to Skunkworks since
     const movedOut = await plantIssue(t, { org_id, project_id: f.sub.id })
     await plantHistory(t, movedOut, { listed: 1, unlisted: 1 })
-    await t.run((ctx) => ctx.db.patch(movedOut._id, { project_id: f.hidden.id }))
+    // with its description row, as every move writes it
+    await t.run((ctx) => patchTask(ctx.db, movedOut, { project_id: f.hidden.id }))
     // a sub-project deleted before its parent is an item of its own
     await deleteProject(t, f, f.sub2.id)
     const subItem = await itemFor(t, f.sub2.id)
@@ -1499,7 +1500,7 @@ describe('purging', () => {
     for (let i = 0; i < 3; i++) {
       const task = await plantIssue(t, { org_id, project_id: f.sub.id })
       await plantHistory(t, task, { listed: 0, unlisted: 400 })
-      await t.run((ctx) => ctx.db.patch(task._id, { project_id: f.hidden.id }))
+      await t.run((ctx) => patchTask(ctx.db, task, { project_id: f.hidden.id }))
       movedOut.push(task)
     }
     const elsewhere = await plantIssue(t, { org_id, project_id: f.sub2.id })

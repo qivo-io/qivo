@@ -70,6 +70,7 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'issues', field: 'reporter_id', target: 'profiles' },
   { table: 'issue_descriptions', field: 'issue_id', target: 'issues' },
   { table: 'issue_descriptions', field: 'org_id', target: 'organizations' },
+  { table: 'issue_descriptions', field: 'project_id', target: 'projects' },
   { table: 'issue_links', field: 'org_id', target: 'organizations' },
   { table: 'issue_links', field: 'source_id', target: 'issues' },
   { table: 'issue_links', field: 'target_id', target: 'issues' },
