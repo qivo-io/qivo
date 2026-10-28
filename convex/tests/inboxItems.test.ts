@@ -37,6 +37,7 @@ import {
   type OrgFixture,
   plantIssue,
   plantMessage,
+  plantProject,
   type T,
   uuid,
   withOrg,
@@ -611,6 +612,79 @@ describe('every message write keeps the items exact', () => {
     expect(await drift(t)).toEqual([])
   }, 120_000)
 
+  it('an archive read step over a list of 500 tasks stays inside the real limits', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // 170 tasks with nothing to mark come first, so the step visits all of
+    // them, then 330 with one unread row each for a person of its own
+    const empty: string[] = []
+    const marked: string[] = []
+    for (let i = 0; i < 500; i += 100)
+      await t.run(async (ctx) => {
+        for (let j = i; j < i + 100; j++) {
+          const issue = await ctx.db.insert('issues', {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            num: 30_000 + j,
+            title: `Task ${j}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+          })
+          const task = (await ctx.db.get(issue))!
+          if (j < 170) {
+            empty.push(task.id)
+            continue
+          }
+          marked.push(task.id)
+          const id = uuid()
+          await ctx.db.insert('profiles', {
+            id,
+            org_id: f.org.id,
+            name: `Reader ${j}`,
+            initials: 'RE',
+            color: '#7a7ad0',
+            org_role: 'admin',
+            active: true,
+            kind: 'person',
+            created_at: NOW,
+            message_retention_days: 30,
+          })
+          await postMessage(ctx, {
+            org_id: f.org.id,
+            recipient_id: id,
+            issue_id: task.id,
+            kind: 'change',
+            body: 'Update',
+            actor_id: f.admin.id,
+            now: at(1),
+          })
+        }
+      })
+    const used = await t.run(async (ctx) => {
+      for (const id of [...empty, ...marked]) {
+        const task = (await byId(ctx, 'issues', id))!
+        await ctx.db.patch(task._id, { archived_at: at(2) })
+      }
+      return null
+    })
+    expect(used).toBeNull()
+    const ranges = await t.run(async (ctx) => {
+      await readArchivedTaskMessages(ctx, { issues: [...empty, ...marked], now: at(3) })
+      return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+    })
+    // about 3,480 (model/messages.ts ARCHIVED_READ_BATCH)
+    expect(ranges).toBeLessThan(3600)
+    expect(
+      (await t.run((ctx) => ctx.db.query('inbox_items').collect())).filter((i) => i.unread),
+    ).toEqual([])
+    expect(await drift(t)).toEqual([])
+  }, 120_000)
+
   it('the retention sweep deletes read rows, the newest included, and the items follow', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -668,15 +742,58 @@ describe('every message write keeps the items exact', () => {
     expect(await keyed()).toEqual([f.sub.id, f.sub.id])
     expect(await drift(t)).toEqual([])
   })
+
+  it('a move to another top-level project re-keys its carried subtasks, in steps', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const ops = await plantProject(t, { org_id: f.org.id, name: 'Operations' })
+    const dest = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: ops.id,
+      name: 'Field work',
+    })
+    const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const kids: Doc<'issues'>[] = []
+    for (let i = 0; i < 3; i++)
+      kids.push(
+        await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id }),
+      )
+    for (const task of [parent, ...kids])
+      for (const to of [f.user, f.guest]) await post(t, f, { to, task, minute: 1 })
+    Object.assign(REKEY, { inlineTasks: 1, tasks: 1 })
+    await as(t, f.admin).mutation(api.issues.move, {
+      org_id: f.org.id,
+      id: parent.id,
+      project_id: dest.id,
+    })
+    const keyed = async () =>
+      (await t.run((ctx) => ctx.db.query('inbox_items').collect())).filter(
+        (i) => i.project_id === dest.id,
+      ).length
+    // the parent's rows inline, the subtasks' in steps of one task
+    expect(await keyed()).toBe(2)
+    expect(
+      (await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())).filter((job) =>
+        job.name.includes('rekeyItems'),
+      ),
+    ).not.toEqual([])
+    await runSteps(t)
+    expect(await keyed()).toBe(8)
+    expect(await drift(t)).toEqual([])
+  })
 })
 
 describe('a random sequence of every inbox write', () => {
-  /* A small linear congruential generator, so a failing seed repeats. */
+  /* mulberry32, exact in 32-bit integer arithmetic, so a failing seed
+   * repeats and every value is as likely as the others. */
   const random = (seed: number) => {
-    let x = seed
+    let a = seed >>> 0
     return (n: number) => {
-      x = (x * 1_103_515_245 + 12_345) % 2_147_483_648
-      return x % n
+      a = (a + 0x6d2b79f5) >>> 0
+      let x = Math.imul(a ^ (a >>> 15), a | 1)
+      x ^= x + Math.imul(x ^ (x >>> 7), x | 61)
+      return ((x ^ (x >>> 14)) >>> 0) % n
     }
   }
 
@@ -687,15 +804,32 @@ describe('a random sequence of every inbox write', () => {
       const list = await tasks(t, f, 3)
       const people = [f.user, f.guest]
       await t.run((ctx) => ctx.db.patch(f.user._id, { message_retention_days: 1 }))
+      // an item past the cap for each, which dropped three, so the writes
+      // below move a dropped count that is not zero
+      for (const to of people)
+        for (let i = 0; i < ITEM_UNREAD_CAP + 3; i++)
+          await post(t, f, { to, task: list[0], minute: -100 + i })
       const pick = random(seed)
       const kinds: MessageKind[] = ['mention', 'change', 'comment']
       let minute = 0
+      const whom = new Set<string>()
+      const choices = new Set<number>()
+      let partial = 0
+      const dropped = new Set<number>()
       for (let op = 0; op < 120; op++) {
         const who = people[pick(2)]
         const task = list[pick(3)]
         const choice = pick(11)
         minute += 1
-        await t.run(async (ctx) => {
+        whom.add(who.id)
+        choices.add(choice)
+        if (choice === 10)
+          await t.mutation(internal.jobs.sweepDueProfiles, {
+            profiles: [who.id],
+            now: at(minute + 2 * 24 * 60),
+            deleted: 0,
+          })
+        const subset = await t.run(async (ctx) => {
           const me = (await byId(ctx, 'profiles', who.id))!
           const mine = await ctx.db
             .query('messages')
@@ -703,6 +837,7 @@ describe('a random sequence of every inbox write', () => {
             .collect()
           const some = mine.filter(() => pick(2) === 0)
           const pair = { recipient_id: me.id, issue_id: task.id }
+          const part = some.length > 0 && some.length < mine.length
           switch (choice) {
             case 0:
             case 1:
@@ -745,21 +880,91 @@ describe('a random sequence of every inbox write', () => {
               await removeReadMessages(ctx, me)
               break
             default:
-              await ctx.scheduler.runAfter(0, internal.jobs.sweepDueProfiles, {
-                profiles: [me.id],
-                now: at(minute + 2 * 24 * 60),
-                deleted: 0,
-              })
+            // the sweep ran above, in a transaction of its own
           }
+          return part && [3, 4, 5].includes(choice)
         })
-        await t.finishInProgressScheduledFunctions()
+        if (subset) partial++
         const off = await drift(t)
         if (off.length > 0) throw new Error(`op ${op} (${choice}): ${off.join('; ')}`)
+        for (const item of await t.run((ctx) => ctx.db.query('inbox_items').collect()))
+          if (item.issue_id === list[0].id) dropped.add(item.dropped)
       }
+      // both people, every write and partial selections of rows came up,
+      // and the writes moved the full item's dropped count
+      expect(dropped.size).toBeGreaterThan(1)
+      expect(whom.size).toBe(2)
+      expect(choices.size).toBe(11)
+      expect(partial).toBeGreaterThan(5)
     })
 })
 
 describe('the teardowns delete the items and the build state with the messages', () => {
+  it('a task or profile id used again after a purge or a removal starts with no item', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [a] = await tasks(t, f, 1)
+    for (let i = 0; i < 3; i++) await post(t, f, { to: f.user, task: a, minute: i })
+    await deleteTask(t, f, a.id)
+    await runSteps(t)
+    await as(t, f.admin).mutation(api.deletedItems.purge, {
+      org_id: f.org.id,
+      ids: [(await itemFor(t, a.id)).id],
+    })
+    await runSteps(t)
+    // the same uuid, in this organization and in another one
+    const again = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, id: a.id })
+    await post(t, f, { to: f.user, task: again, minute: 10 })
+    expect(await itemOfPair(t, f.user.id, a.id)).toMatchObject({ unread_count: 1, changes: 1 })
+    await as(t, f.admin).mutation(api.issues.deleteDeep, { org_id: f.org.id, id: a.id })
+    await runSteps(t)
+    await as(t, f.admin).mutation(api.deletedItems.purge, {
+      org_id: f.org.id,
+      ids: [(await itemFor(t, a.id)).id],
+    })
+    await runSteps(t)
+    const elsewhere = await plantIssue(t, {
+      org_id: f.otherOrg.id,
+      project_id: f.otherProject.id,
+      id: a.id,
+    })
+    await t.run((ctx) =>
+      postMessage(ctx, {
+        org_id: f.otherOrg.id,
+        recipient_id: f.otherAdmin.id,
+        issue_id: elsewhere.id,
+        kind: 'comment',
+        body: 'Elsewhere',
+        actor_id: undefined,
+        now: at(20),
+      }),
+    )
+    expect(
+      (await t.run((ctx) => ctx.db.query('inbox_items').collect())).map((i) => [
+        i.recipient_id,
+        i.unread_count,
+      ]),
+    ).toEqual([[f.otherAdmin.id, 1]])
+    // a removed profile's id, taken by a new profile
+    const [b] = await tasks(t, f, 1)
+    await post(t, f, { to: f.guest, task: b, minute: 30 })
+    await post(t, f, { to: f.guest, task: b, minute: 31 })
+    await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: f.guest.id })
+    await runSteps(t)
+    const { _id, _creationTime, ...guest } = f.guest
+    void _id
+    void _creationTime
+    // an admin, who sees the task without the grants the removal deleted
+    await t.run((ctx) =>
+      ctx.db.insert('profiles', { ...guest, name: 'New admin', org_role: 'admin' }),
+    )
+    expect(await stateOf(t, f.guest.id)).toBeNull()
+    await post(t, f, { to: f.guest, task: b, minute: 40 })
+    expect(await itemOfPair(t, f.guest.id, b.id)).toMatchObject({ unread_count: 1 })
+    expect(await stateOf(t, f.guest.id)).toMatchObject({ built: true })
+    expect(await drift(t)).toEqual([])
+  })
+
   it('a task or project moved to Deleted items takes its items, and a restore brings none back', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -885,14 +1090,15 @@ describe('the build gate', () => {
     expect(await drift(t)).toEqual([])
   })
 
-  it('an ItemEdits flushed several times reads each item once and stays exact', async () => {
+  it('one ItemEdits shared by many messages reads each item once, in its one flush', async () => {
     const t = newT()
     const f = await withOrg(t)
     const [a, b] = await tasks(t, f)
     await post(t, f, { to: f.user, task: a, minute: 0 })
+    await post(t, f, { to: f.user, task: b, minute: 0 })
     const reads = await t.run(async (ctx) => {
       const items = itemEdits(ctx)
-      for (let i = 1; i <= 3; i++) {
+      for (let i = 1; i <= 3; i++)
         for (const task of [a, b])
           await postMessage(ctx, {
             org_id: f.org.id,
@@ -904,14 +1110,12 @@ describe('the build gate', () => {
             now: at(i),
             items,
           })
-        const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
-        await items.flush()
-        if (i === 3) return (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before
-      }
-      return -1
+      const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+      await items.flush()
+      return (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before
     })
-    // the third flush read nothing: the state and both rows were known
-    expect(reads).toBe(0)
+    // the two rows; the state was read once, before the first insert
+    expect(reads).toBe(2)
     expect(await itemOfPair(t, f.user.id, a.id)).toMatchObject({ unread_count: 4 })
     expect(await drift(t)).toEqual([])
   })

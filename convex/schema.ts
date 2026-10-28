@@ -1948,7 +1948,9 @@ export default defineSchema({
     .index('by_org', ['org_id']),
 
   // Every insert, patch and delete of a message goes through an ItemEdits
-  // (model/inboxItems.ts), which keeps the item's inbox_items row.
+  // (model/inboxItems.ts), which keeps the item's inbox_items row, except
+  // the teardowns, which delete the items after the messages, and profile
+  // removal's patch of actor_id, which no item reads.
   messages: defineTable({
     id: v.string(),
     org_id: v.string(),

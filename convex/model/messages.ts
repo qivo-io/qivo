@@ -24,7 +24,10 @@
  * mark unread and snooze refuse such a task (refuseArchivedItems).
  *
  * Every message write here goes through an ItemEdits (model/inboxItems.ts),
- * which keeps the item's inbox_items row equal to what its messages make. */
+ * which keeps the item's inbox_items row equal to what its messages make.
+ * The only message writes elsewhere are the teardowns, which delete the
+ * items after the messages, and profile removal's patch of actor_id, which
+ * no item reads. */
 
 import { makeFunctionReference } from 'convex/server'
 import { type Infer, v } from 'convex/values'
@@ -94,9 +97,12 @@ const pairRows = (
  * narrows it to the snooze it was scheduled for, so a wake scheduled for a
  * superseded or already-lifted snooze finds nothing and does nothing (no
  * cancellation bookkeeping). Without `until` (the nightly fallback) any
- * snooze on the pair ends. Returns how many rows it wrote, 0 when nothing
- * woke. It writes each row of the item at most once, so a wake writes at
- * most ITEM_UNREAD_CAP + 1 rows, which the nightly sweep budgets on. */
+ * snooze on the pair ends. Returns how many messages it wrote, 0 when
+ * nothing woke. It writes each row of the item at most once, so a wake
+ * writes at most ITEM_UNREAD_CAP + 1 messages, which the nightly sweep
+ * budgets on, and the item's inbox_items row once more
+ * (model/inboxItems.ts), after reading it and its recipient's build state,
+ * two index ranges. */
 export async function wakeSnoozedItem(
   ctx: MutationCtx,
   a: { recipient_id: string; issue_id: string; until?: string },
@@ -1241,9 +1247,11 @@ export async function snoozeMessages(
 /** The most rows one archived-read step marks read. A row of its own
  * recipient costs up to six index ranges: two for its item's prune, two for
  * the recipient's sweep row and two for the recipient's build state and
- * the item's row (model/inboxItems.ts). With the two each task costs, a
- * step over ARCHIVED_READ_TASKS tasks then reads about 3,000 of Convex's
- * 4,096 ranges (convex/tests/inboxItems.test.ts measures it). */
+ * the item's row (model/inboxItems.ts). Each task a step visits costs two
+ * more, and a step over a list of tasks (readArchivedTaskMessages) also
+ * reads each task, a third. A list step over ARCHIVED_READ_TASKS tasks then
+ * reads at most about 3,480 of Convex's 4,096 ranges, and a project's step
+ * about 3,000 (convex/tests/inboxItems.test.ts measures both). */
 export const ARCHIVED_READ_BATCH = 330
 
 /** The most tasks one archived-read step visits. scheduleArchivedReads gives

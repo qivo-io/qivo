@@ -50,9 +50,6 @@ type MessageFields = WithoutSystemFields<Message>
 /** An inbox_items row as itemOf builds it. */
 export type ItemFields = WithoutSystemFields<Doc<'inbox_items'>>
 
-/* A stored inbox_items row as a writer knows it: as read, or as written. */
-type KnownItem = ItemFields & { _id: Id<'inbox_items'> }
-
 /** The field of inbox_items that counts each kind of message. */
 const KIND_FIELD = {
   mention: 'mentions',
@@ -247,11 +244,12 @@ type PairChanges = {
 
 /** The message writes of one writer, made through it so that flush can keep
  * their inbox_items rows. Every insert, patch and delete of a message goes
- * through one, and the writer calls flush once after its last write. It
- * keeps each recipient's build state and each item's row as it read or
- * wrote them, so a writer that flushes one several times, the Northstar
- * seed (NotifyPreload.items), reads each once. That holds only while every
- * write of the transaction to those rows goes through it. */
+ * through one, except the teardowns, which delete the items after the
+ * messages, and profile removal's patch of actor_id, which no item reads.
+ * The writer calls flush once after its last write; the Northstar seed
+ * shares one between the notices of a transaction (NotifyPreload.items)
+ * and flushes it once. It reads each recipient's build state once, and
+ * flush reads each item's row once. */
 export type ItemEdits = {
   /** Inserts a message about a task in project `projectId`. `fresh` says
    * the caller read the item and found no message in it, so flush makes its
@@ -285,7 +283,6 @@ export function itemEdits(ctx: MutationCtx): ItemEdits {
   const states = new Map<string, Promise<BuildState | null>>()
   // the recipients whose state this ItemEdits added, who had no item then
   const added = new Set<string>()
-  const known = new Map<string, KnownItem | null>()
   const keyOf = (pair: Pair) => JSON.stringify([pair.recipient_id, pair.issue_id])
   const changesOf = (pair: Pair): PairChanges => {
     const key = keyOf(pair)
@@ -351,13 +348,8 @@ export function itemEdits(ctx: MutationCtx): ItemEdits {
         const { pair } = changes
         if (changes.rows.size === 0) continue
         if (!covers(await edits.state(pair.recipient_id), pair.issue_id)) continue
-        const key = keyOf(pair)
-        const item = known.has(key)
-          ? (known.get(key) ?? null)
-          : added.has(pair.recipient_id)
-            ? null
-            : await itemRow(ctx, pair)
-        known.set(key, await applyChanges(ctx, changes, item))
+        const item = added.has(pair.recipient_id) ? null : await itemRow(ctx, pair)
+        await applyChanges(ctx, changes, item)
       }
     },
   }
@@ -365,12 +357,12 @@ export function itemEdits(ctx: MutationCtx): ItemEdits {
 }
 
 /* Moves one item's row, `item` as stored, by its changes
- * (ItemEdits.flush), and returns the row as it stored it. */
+ * (ItemEdits.flush). */
 async function applyChanges(
   ctx: MutationCtx,
   changes: PairChanges,
-  item: KnownItem | null,
-): Promise<KnownItem | null> {
+  item: Doc<'inbox_items'> | null,
+): Promise<void> {
   const { pair } = changes
   if (changes.fresh) {
     // every message of the item went through this ItemEdits
@@ -449,40 +441,35 @@ async function applyChanges(
     woke_rows: wokeRows,
   }
   const next = { ...base, ...derived(base) }
-  if ((Object.keys(next) as (keyof typeof next)[]).every((key) => next[key] === item[key]))
-    return item
-  await ctx.db.patch(item._id, next)
-  return { ...item, ...next }
+  if ((Object.keys(next) as (keyof typeof next)[]).some((key) => next[key] !== item[key]))
+    await ctx.db.patch(item._id, next)
 }
 
 /** Stores `built` as the item's row in place of `stored`, the row read
- * before, or deletes the row when `built` is null. Returns the row as
- * stored. */
+ * before, or deletes the row when `built` is null. */
 export async function storeItem(
   ctx: MutationCtx,
-  stored: KnownItem | null,
+  stored: Doc<'inbox_items'> | null,
   built: ItemFields | null,
-): Promise<KnownItem | null> {
+): Promise<void> {
   if (built === null) {
     if (stored !== null) await ctx.db.delete(stored._id)
-    return null
+  } else if (stored === null) {
+    await uncountedWriter(ctx.db).insert('inbox_items', built)
+  } else {
+    await ctx.db.replace(stored._id, built)
   }
-  if (stored === null) {
-    return { ...built, _id: await uncountedWriter(ctx.db).insert('inbox_items', built) }
-  }
-  await ctx.db.replace(stored._id, built)
-  return { ...built, _id: stored._id }
 }
 
 /* Builds the pair's row from all its messages in place of `stored`, the
  * row read before. `projectId` is the task's project when the caller knows
- * it; otherwise the task is read. Returns the row as stored. */
+ * it; otherwise the task is read. */
 async function rebuild(
   ctx: MutationCtx,
   pair: Pair,
   projectId: string | undefined,
-  stored: KnownItem | null,
-): Promise<KnownItem | null> {
+  stored: Doc<'inbox_items'> | null,
+): Promise<void> {
   const rows = await pairMessages(ctx, pair)
   const project = projectId ?? (await byId(ctx, 'issues', pair.issue_id))?.project_id
   return await storeItem(ctx, stored, itemOf(pair, rows, project))
