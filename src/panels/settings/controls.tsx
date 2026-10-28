@@ -52,15 +52,19 @@ const QUOTED_MAX = 80
     field is, so screen readers hear a conflict as it comes; the field's
     input names it with aria-describedby (SavedDraft.conflictId). Either
     choice puts focus back in that input, so Enter saves after Keep mine.
-    `compact` is for a field in a roster row. */
+    `compact` is for a field in a roster row: the sentence over the
+    buttons, both wrapping in the room the row gives them, and `end` puts
+    them under the right edge of a field that sits there. */
 export function DraftConflictLine<T>({
   draft,
   text,
   compact = false,
+  end = false,
 }: {
   draft: SavedDraft<T>
   text: (value: T) => string
   compact?: boolean
+  end?: boolean
 }) {
   const conflict = draft.conflict
   let sentence = ''
@@ -94,15 +98,17 @@ export function DraftConflictLine<T>({
       aria-live="polite"
       data-draft-conflict={conflict ? '' : undefined}
       className={cn(
+        conflict && 'flex gap-x-2 gap-y-1 [color:var(--danger)] [line-height:1.5]',
         conflict &&
-          'flex flex-wrap items-center gap-x-2 gap-y-1 [color:var(--danger)] [line-height:1.5]',
-        conflict && (compact ? 'mt-1 text-xs' : 'mt-2 [font-size:var(--fs-sm)]'),
+          (compact
+            ? cn('mt-1 flex-col text-xs', end ? 'items-end text-right' : 'items-start')
+            : 'mt-2 flex-wrap items-center [font-size:var(--fs-sm)]'),
       )}
     >
       {conflict && (
         <>
           <span className="min-w-0 break-words">{sentence}</span>
-          <span className="flex shrink-0 gap-1.5">
+          <span className={cn('flex gap-1.5', compact ? 'flex-wrap' : 'shrink-0')}>
             <Button type="button" size="xs" data-draft-use-saved onClick={choose(draft.discard)}>
               Use saved
             </Button>

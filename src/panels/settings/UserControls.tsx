@@ -395,7 +395,7 @@ export function PlannableHoursInput({
     window.showToast?.(`${user.name} plans ${h} h per week`)
   }
   return (
-    <div className="flex max-w-[220px] shrink-0 flex-col items-end">
+    <div className="flex max-w-[180px] shrink-0 flex-col items-end">
       <HoverTooltip
         content={
           canEdit
@@ -434,7 +434,7 @@ export function PlannableHoursInput({
           h/wk
         </label>
       </HoverTooltip>
-      <DraftConflictLine draft={draft} text={HOURS.text} compact />
+      <DraftConflictLine draft={draft} text={HOURS.text} compact end />
     </div>
   )
 }
