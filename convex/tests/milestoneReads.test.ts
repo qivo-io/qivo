@@ -11,11 +11,13 @@ import { getDocumentSize } from 'convex/values'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { projectLevelsOf } from '../lib/access'
 import { LIMITS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { rowOf } from '../lib/workspaceParts'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import {
+  MILESTONE_NAV,
   MILESTONE_READ,
   MILESTONE_READ_TOO_LARGE,
   type MilestonePosition,
@@ -54,8 +56,10 @@ type Range = FunctionReturnType<typeof api.milestones.between>
 type Caller = ReturnType<typeof as>
 
 const READ = { ...MILESTONE_READ }
+const NAV = { ...MILESTONE_NAV }
 afterEach(() => {
   Object.assign(MILESTONE_READ, READ)
+  Object.assign(MILESTONE_NAV, NAV)
 })
 
 /* Stores a milestone directly, as rows stored before the weekly rule were. */
@@ -242,6 +246,31 @@ async function sharedWithTeams(
     })
     return { ids, milestone: (await ctx.db.get(_id)) as Doc<'milestones'> }
   })
+}
+
+/* `count` top-level projects, each with a grant for `who`, in transactions
+ * of 1,000. */
+async function grantsOn(t: T, f: OrgFixture, who: Doc<'profiles'>, count: number): Promise<void> {
+  for (let at = 0; at < count; at += 1000)
+    await t.run(async (ctx) => {
+      for (let i = at; i < Math.min(count, at + 1000); i++) {
+        const id = uuid()
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'meta',
+          key: `G${i}`,
+          name: `Granted ${i}`,
+          description: '',
+          sort_order: 50_000 + i,
+          num: 50_000 + i,
+          track_delay: false,
+          created_at: NOW,
+          window_key: uuid().slice(0, 8),
+        })
+        await ctx.db.insert('project_access', { project_id: id, profile_id: who.id, level: 'user' })
+      }
+    })
 }
 
 /* `parents` top-level projects of `children` sub-projects each, with a
@@ -754,6 +783,88 @@ describe('a section', () => {
     expect(await listed(f.user, [f.sub2.id])).toEqual([])
   })
 
+  it.each([64, 0])(
+    'decides navigation as the access layer does, asking up to %i sub-projects one by one',
+    async (children) => {
+      const t = newT()
+      const f = await withOrg(t)
+      const parent = () => plantProject(t, { org_id: f.org.id })
+      const child = (p: Doc<'projects'>, extra: Partial<Doc<'projects'>> = {}) =>
+        plantProject(t, { org_id: f.org.id, type: 'project', parent_id: p.id, ...extra })
+      // A: the guest holds a grant on its second sub-project
+      const a = await parent()
+      await child(a)
+      const a2 = await child(a)
+      // B: the guest leads its sub-project
+      const b = await parent()
+      await child(b, { lead_id: f.guest.id })
+      // C: a team of the viewer and the guest is shared on its sub-project,
+      // which reaches the viewer but never a guest
+      const c = await parent()
+      const c1 = await child(c)
+      // D: nothing of the guest's or the viewer's
+      const d = await parent()
+      await child(d)
+      const parents = [a, b, c, d]
+      await t.run(async (ctx) => {
+        await ctx.db.insert('project_access', {
+          project_id: a2.id,
+          profile_id: f.guest.id,
+          level: 'user',
+        })
+        const team = uuid()
+        await ctx.db.insert('teams', {
+          id: team,
+          org_id: f.org.id,
+          name: 'Reviewers',
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        for (const who of [f.viewer, f.guest])
+          await ctx.db.insert('team_members', {
+            team_id: team,
+            profile_id: who.id,
+            is_leader: false,
+          })
+        await ctx.db.insert('project_team_access', {
+          project_id: c1.id,
+          team_id: team,
+          level: 'user',
+        })
+      })
+      const milestones = await plantMany(
+        t,
+        parents.map((p, i) => ({ project: p.id, week: plus(MONDAY, i), name: `Of ${i}` })),
+      )
+      MILESTONE_NAV.children = children
+      for (const [who, shown] of [
+        [f.guest, [a, b]],
+        [f.viewer, [c]],
+      ] as const) {
+        // the access layer's own answer, navigation included
+        const visible = await t.run(async (ctx) => {
+          const levels = projectLevelsOf(ctx, who)
+          const out: string[] = []
+          for (const p of parents) if ((await levels.level(p.id)) !== null) out.push(p.id)
+          return out
+        })
+        expect(visible).toEqual(shown.map((p) => p.id))
+        const batch = await as(t, who).query(api.milestones.section, {
+          projects: parents.map((p) => p.id),
+          from: MONDAY,
+          side: 'upcoming',
+          limit: 10,
+        })
+        expect(batch.rows.map((r) => r.project_id)).toEqual(visible)
+        for (const m of milestones) {
+          const got = await as(t, who).query(api.milestones.get, { id: m.id })
+          if (visible.includes(m.project_id)) expect(got).toMatchObject({ can_write: false })
+          else expect(got).toBeNull()
+        }
+      }
+    },
+  )
+
   it('lists nothing for projects the caller cannot see and refuses none of them', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -1240,24 +1351,70 @@ describe('under Convex limits', () => {
     }
   })
 
-  it('refuses a read whose navigation-only parents need more reads than the request allows', async () => {
+  it('shows parents of 600 sub-projects through one grant each', async () => {
     const t = newT({ transactionLimits: { documentsRead: 2500 } })
     const f = await withOrg(t)
     const { ids, milestones } = await navigationOnly(t, f, f.guest, 5, 600)
     const guest = as(t, f.guest)
-    const section = { from: MONDAY, side: 'upcoming' as const, limit: 10 }
-    // two of them fit, and their milestones are listed read-only
-    const two = await guest.query(api.milestones.section, { ...section, projects: ids.slice(0, 2) })
-    expect(two.rows.map((r) => r.id)).toEqual(ascending(milestones.slice(0, 2)))
-    // five would read 3,000 sub-projects, past the request's 2,500
-    // documents, so the check stops before it would and refuses
-    for (const call of [
-      guest.query(api.milestones.section, { ...section, projects: ids }),
-      guest.query(api.milestones.between, { projects: ids, from: MONDAY, to: plus(MONDAY, 7) }),
-    ]) {
-      const e = await expectRefusal(call, 'rule', /Choose fewer projects/)
-      expect(e.data.reason).toBe(MILESTONE_READ_TOO_LARGE)
-    }
+    // five parents hold 3,000 sub-projects, past the request's 2,500
+    // documents, so the check looks among the guest's own grants instead
+    const five = await guest.query(api.milestones.section, {
+      from: MONDAY,
+      side: 'upcoming',
+      limit: 10,
+      projects: ids,
+    })
+    expect(five.rows.map((r) => r.id)).toEqual(ascending(milestones))
+    expect(await guest.query(api.milestones.get, { id: milestones[4].id })).toMatchObject({
+      row: rowOf(milestones[4]),
+      can_write: false,
+    })
+  })
+
+  it('shows a parent of one sub-project to a person with 3,000 grants', async () => {
+    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+    const f = await withOrg(t)
+    await grantsOn(t, f, f.guest, 3000)
+    const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 1)
+    const guest = as(t, f.guest)
+    // the check asks the one sub-project, not every grant of the guest
+    expect(
+      await guest.query(api.milestones.section, {
+        from: MONDAY,
+        side: 'upcoming',
+        limit: 10,
+        projects: ids,
+      }),
+    ).toMatchObject({ rows: [rowOf(milestones[0])] })
+    expect(await guest.query(api.milestones.get, { id: milestones[0].id })).toMatchObject({
+      can_write: false,
+    })
+  })
+
+  it('refuses when a parent of 600 sub-projects meets a person with 3,000 grants', async () => {
+    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+    const f = await withOrg(t)
+    await grantsOn(t, f, f.guest, 3000)
+    const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 600)
+    const guest = as(t, f.guest)
+    // neither the sub-projects asked one by one nor the guest's own grants
+    // fit, so both reads refuse instead of passing the request's limits
+    const many = await expectRefusal(
+      guest.query(api.milestones.section, {
+        from: MONDAY,
+        side: 'upcoming',
+        limit: 10,
+        projects: ids,
+      }),
+      'rule',
+      /Choose fewer projects/,
+    )
+    const one = await expectRefusal(
+      guest.query(api.milestones.get, { id: milestones[0].id }),
+      'rule',
+      /Contact support@qivo.io/,
+    )
+    for (const e of [many, one]) expect(e.data.reason).toBe(MILESTONE_READ_TOO_LARGE)
   })
 
   it.for([

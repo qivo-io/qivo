@@ -183,7 +183,9 @@ export const between = authedQuery({
  * the Milestones window to open on, or null. A milestone the caller cannot
  * see answers null, and so does one stored on a sub-project before
  * 2026-10-14 or one of an archived project, which the app does not show
- * (model/milestones.ts visibleMilestone).
+ * (model/milestones.ts visibleMilestone). When the check of whether its
+ * project shows to the caller for navigation needs more reads than one
+ * request allows, it refuses with MILESTONE_READ_TOO_LARGE.
  */
 export const get = authedQuery({
   args: { id: v.string() },

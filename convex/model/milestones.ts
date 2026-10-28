@@ -29,7 +29,7 @@
  * top-level projects in one order, a batch at a time and inside a read
  * budget, and visibleMilestone answers one milestone by id. */
 
-import type { TransactionMetric, TransactionMetrics } from 'convex/server'
+import type { GenericDocument, TransactionMetric, TransactionMetrics } from 'convex/server'
 import { ConvexError, getDocumentSize, v } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -722,7 +722,8 @@ const SCOPE_BATCH = 8
  * reads than one request allows (milestoneProjects). */
 export const MILESTONE_READ_TOO_LARGE = 'milestone_read_too_large'
 
-/* That refusal. The caller can ask again for fewer projects. */
+/* That refusal of a read of several projects, which the caller can ask
+ * again for fewer. */
 const readTooLarge = (): ConvexError<Refusal> =>
   new ConvexError<Refusal>({
     code: 'rule',
@@ -731,16 +732,28 @@ const readTooLarge = (): ConvexError<Refusal> =>
       'these projects need more reads than one request allows, so Qivo cannot show their milestones at once. Choose fewer projects.',
   })
 
+/* That refusal of a read of one milestone (visibleMilestone). */
+const milestoneTooLarge = (): ConvexError<Refusal> =>
+  new ConvexError<Refusal>({
+    code: 'rule',
+    reason: MILESTONE_READ_TOO_LARGE,
+    message:
+      'checking access to the project of this milestone needs more reads than one request allows, so Qivo cannot open it. Contact support@qivo.io.',
+  })
+
 /* A read's check of the request's reads against a ceiling. The read
- * reports each index range before it starts it and each milestone it read. */
+ * reports each index range before it starts it and each document it read. */
 type ReadGuard = {
   /** Whether the read may start one more index range. */
   range(): Promise<boolean>
   /** Whether the read may go on after `doc`, which it just read. */
-  document(doc: Doc<'milestones'>): Promise<boolean>
+  document(doc: GenericDocument): Promise<boolean>
+  /** Forgets what the last look left, after reads the guard did not count,
+   * such as an access check's, so that its next check looks again. */
+  forget(): void
 }
 
-/* A ReadGuard for `ceiling`, transaction totals. It counts each milestone
+/* A ReadGuard for `ceiling`, transaction totals. It counts each document
  * at its own size (getDocumentSize, Convex's measure) and looks at the
  * transaction's metrics only once the counted reads used what its last look
  * left, so a read looks a few times. lib/archivedTasks.ts ceilingGuard
@@ -771,6 +784,9 @@ function sizedGuard(ctx: QueryCtx, ceiling: ReadCeiling): ReadGuard {
       left.documents -= 1
       left.bytes -= getDocumentSize(doc)
       return (left.documents > 0 && left.bytes > 0) || (await look())
+    },
+    forget: () => {
+      left = { ranges: 0, documents: 0, bytes: 0 }
     },
   }
 }
@@ -840,6 +856,124 @@ function dayBounds(
   return { lower, upper }
 }
 
+/** How many sub-projects of a top-level project a navigation check
+ * (navigationOf) asks about one at a time. Past this many it looks among
+ * the caller's own grants, team shares and led projects instead. Tests
+ * lower it. */
+export const MILESTONE_NAV = { children: 64 }
+
+/* Whether top-level projects that `me` holds no level of their own on show
+ * to `me` for navigation, as lib/access.ts levelUnder decides it, which is
+ * when one of their sub-projects is led by `me` or gives `me` a level of
+ * their own. The access layer answers that by reading every sub-project of
+ * the project and every grant of `me`, which passes Convex's limits under a
+ * project of thousands of sub-projects or for a person with thousands of
+ * grants. This check reads a project's first MILESTONE_NAV.children
+ * sub-projects and one more. A project with no more than that asks each of
+ * them in turn. A larger one looks for its sub-projects among `me`'s own
+ * grants, team shares and led projects, read once for every project asked.
+ * Either way projectLevelsOf judges each sub-project it asks about (its
+ * level without navigation), so the rule stays the access layer's. Every
+ * read is counted under `ceiling` or follows a look at it, and past the
+ * ceiling the check throws `refusal()`. It passes the ceiling by at most
+ * one sub-project's own access check. */
+function navigationOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  ceiling: ReadCeiling,
+  refusal: () => ConvexError<Refusal>,
+): { shows(root: Doc<'projects'>): Promise<boolean> } {
+  const guard = sizedGuard(ctx, ceiling)
+  /* hands each row of `rows` to `step`, under the guard, until `step`
+   * answers false */
+  const each = async <D extends GenericDocument>(
+    rows: AsyncIterable<D>,
+    step: (row: D) => boolean,
+  ): Promise<void> => {
+    if (!(await guard.range())) throw refusal()
+    for await (const row of rows) {
+      if (!(await guard.document(row))) throw refusal()
+      if (!step(row)) return
+    }
+  }
+  /* the projects `me` holds a grant on, a team of theirs is shared on or
+   * they lead, by their parent, read once */
+  let own: Promise<Map<string, Doc<'projects'>[]>> | undefined
+  const ownByParent = () =>
+    (own ??= (async () => {
+      const ids = new Set<string>()
+      await each(
+        ctx.db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', me.id)),
+        (grant) => {
+          ids.add(grant.project_id)
+          return true
+        },
+      )
+      const teams: string[] = []
+      await each(
+        ctx.db.query('team_members').withIndex('by_profile', (q) => q.eq('profile_id', me.id)),
+        (membership) => {
+          teams.push(membership.team_id)
+          return true
+        },
+      )
+      for (const team of teams)
+        await each(
+          ctx.db.query('project_team_access').withIndex('by_team', (q) => q.eq('team_id', team)),
+          (share) => {
+            ids.add(share.project_id)
+            return true
+          },
+        )
+      const byParent = new Map<string, Doc<'projects'>[]>()
+      const add = (project: Doc<'projects'>) => {
+        if (project.parent_id !== undefined)
+          byParent.set(project.parent_id, [...(byParent.get(project.parent_id) ?? []), project])
+      }
+      // a project they lead is read here, so it is not read again by id
+      await each(
+        ctx.db.query('projects').withIndex('by_lead', (q) => q.eq('lead_id', me.id)),
+        (project) => {
+          ids.delete(project.id)
+          add(project)
+          return true
+        },
+      )
+      for (const id of ids) {
+        if (!(await guard.range())) throw refusal()
+        const project = await byId(ctx, 'projects', id)
+        if (project === null) continue
+        if (!(await guard.document(project))) throw refusal()
+        add(project)
+      }
+      return byParent
+    })())
+  return {
+    async shows(root) {
+      const children: Doc<'projects'>[] = []
+      await each(
+        ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', root.id)),
+        (child) => children.push(child) <= MILESTONE_NAV.children,
+      )
+      const asked =
+        children.length <= MILESTONE_NAV.children
+          ? children
+          : ((await ownByParent()).get(root.id) ?? [])
+      const levels = projectLevelsOf(ctx, me, [root, ...asked])
+      try {
+        for (const child of asked) {
+          if (!(await readsUnder(ctx, ceiling))) throw refusal()
+          if ((await levels.level(child.id, false)) !== null) return true
+        }
+        return false
+      } finally {
+        // the access checks read past the guard's count
+        guard.forget()
+      }
+    },
+  }
+}
+
 /**
  * The top-level projects whose milestones a read of `ids` lists for the
  * caller, whose active seats are `myProfiles` keyed by organization, each
@@ -857,13 +991,12 @@ function dayBounds(
  * The check reads within MILESTONE_SCOPE (scopeCeiling). It first asks every
  * project's level without navigation, SCOPE_BATCH projects at a time, and
  * then, one project at a time, whether a top-level project the caller holds
- * no level on shows for navigation, which reads all its sub-projects. Before
- * each batch and each navigation check it looks at the reads so far, and
- * past the ceiling it refuses the whole read (MILESTONE_READ_TOO_LARGE)
- * instead of answering for part of the projects, so the caller can ask for
- * fewer. It can pass the ceiling by one batch's checks, whose team shares
- * projectLevelsOf may read project by project, or by one navigation check's
- * sub-projects, as any access check of those projects reads them.
+ * no level on shows for navigation (navigationOf). Before each batch and
+ * each navigation check it looks at the reads so far, and past the ceiling
+ * it refuses the whole read (MILESTONE_READ_TOO_LARGE) instead of answering
+ * for part of the projects, so the caller can ask for fewer. It can pass
+ * the ceiling by one batch's checks, whose team shares projectLevelsOf may
+ * read project by project, or by one sub-project's access check.
  */
 export async function milestoneProjects(
   ctx: QueryCtx,
@@ -879,7 +1012,7 @@ export async function milestoneProjects(
       bySeat.set(project.org_id, [...(bySeat.get(project.org_id) ?? []), project])
   const roots = new Set<string>()
   // the top-level projects the caller holds no level on, in the order named
-  const navigation: { at: number; project: Doc<'projects'>; levels: ProjectLevels }[] = []
+  const navigation: { at: number; project: Doc<'projects'>; me: Doc<'profiles'> }[] = []
   for (const [orgId, projects] of bySeat) {
     const me = myProfiles.get(orgId)
     if (me === undefined) continue
@@ -891,7 +1024,7 @@ export async function milestoneProjects(
           if (project.archived_at !== undefined) return null
           if ((await levels.level(project.id, false)) === null) {
             if (project.parent_id === undefined)
-              navigation.push({ at: unique.indexOf(project.id), project, levels })
+              navigation.push({ at: unique.indexOf(project.id), project, me })
             return null
           }
           // a project the caller can see is top-level or directly under one
@@ -903,15 +1036,19 @@ export async function milestoneProjects(
       for (const id of found) if (id !== null) roots.add(id)
     }
   }
-  for (const { project, levels } of navigation.sort((a, b) => a.at - b.at)) {
+  // one navigation check a seat, so its own grants are read at most once
+  const checks = new Map<string, ReturnType<typeof navigationOf>>()
+  for (const { project, me } of navigation.sort((a, b) => a.at - b.at)) {
     if (!(await readsUnder(ctx, ceiling))) throw readTooLarge()
-    if ((await levels.level(project.id)) !== null) roots.add(project.id)
+    let check = checks.get(me.org_id)
+    if (check === undefined) {
+      check = navigationOf(ctx, me, ceiling, readTooLarge)
+      checks.set(me.org_id, check)
+    }
+    if (await check.shows(project)) roots.add(project.id)
   }
   return [...roots]
 }
-
-/* The levels of one seat (lib/access.ts projectLevelsOf). */
-type ProjectLevels = ReturnType<typeof projectLevelsOf>
 
 /* Whether one of the projects `projectIds` holds a milestone the app shows
  * before `day`, read newest first until the first, under `guard`, and
@@ -1187,6 +1324,9 @@ export async function readMilestones(
  * milestones of active projects only (lib/workspaceParts.ts readProjects),
  * though REST still lists an archived project's milestones. An unknown
  * milestone and one of a project the caller cannot see answer null alike.
+ * Whether a project the caller holds no level on shows to them for
+ * navigation is checked within MILESTONE_SCOPE (navigationOf), and a check
+ * that does not fit there is refused with MILESTONE_READ_TOO_LARGE.
  */
 export async function visibleMilestone(
   ctx: QueryCtx,
@@ -1202,10 +1342,13 @@ export async function visibleMilestone(
   if (!milestone || !project) return null
   if (project.parent_id !== undefined || project.archived_at !== undefined) return null
   const me = myProfiles.get(project.org_id)
-  // projectLevelsOf reads a parent's sub-projects in one range to learn
-  // whether it shows for navigation, where projectLevel asks each in turn
-  const level =
-    me === undefined ? null : await projectLevelsOf(ctx, me, [project]).level(project.id)
-  if (level === null) return null
+  if (me === undefined) return null
+  const ceiling = scopeCeiling(await ctx.meta.getTransactionMetrics())
+  // The caller's own level, or else whether the project shows to them only
+  // to reach a sub-project, which gives Viewer access and no write
+  // (lib/access.ts levelUnder), checked within bounded reads.
+  const level = await projectLevelsOf(ctx, me, [project]).level(project.id, false)
+  if (level === null && !(await navigationOf(ctx, me, ceiling, milestoneTooLarge).shows(project)))
+    return null
   return { milestone, project, canWrite: levelRank(level) >= levelRank('user') }
 }
