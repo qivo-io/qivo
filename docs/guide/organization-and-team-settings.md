@@ -8,6 +8,15 @@ planning hours. Organization, team, project and milestone names allow up to
 - **Week 1 of the year** offers **First 4-day week (ISO 8601)**,
   **Week containing Jan 1** or **First full week**.
 
+A project has at most one milestone in each week, so Qivo refuses a new
+first day that would put two milestones of one project in the same week. It
+checks every project, archived projects and projects in Deleted items
+included, keeps the old day and lists the projects, dates and weeks under
+the setting. Move or delete one milestone of each pair, then choose the day
+again. In an organization too large to check at once, the day cannot be
+changed here and the setting says so. **Week 1 of the year** only numbers the
+weeks, so changing it is never refused.
+
 **Max attachment size** limits each new task attachment or description image
 to **1–20 MiB**, with a default of **20 MiB**. The task's organization sets the
 limit, including for guest uploads. Lowering it leaves existing files intact.

@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { milestoneWeekTaken } from '../../convex/lib/limits'
 import type { Workspace } from '../../convex/lib/workspaceJoin'
 
 type Snapshot = Workspace
@@ -185,6 +186,33 @@ describe('roadmap undo through the client store', () => {
     latest().resolve({ count: 1 })
     await settled()
   }
+
+  it('keeps the history after an undo refused over an occupied milestone week, and clears it after a conflict', async () => {
+    await savePlan()
+    const sentence = milestoneWeekTaken(
+      'the week of 2026-09-14 (W38)',
+      'Gamma',
+      'Move that milestone to another week first, then undo again.',
+    )
+    P.undoRoadmap()
+    expect(latest().name).toBe('roadmap:undo')
+    latest().reject(
+      new ConvexError({ code: 'rule', reason: 'milestone_week_taken', message: sentence }),
+    )
+    await settled()
+    expect(showToast).toHaveBeenCalledWith(
+      `Couldn't undo: ${sentence.slice(0, -1)}. No changes reverted.`,
+      'error',
+    )
+    // the person can free the week and undo again
+    expect(P.roadmapUndo).toEqual({ count: 1, busy: false, disabled: false })
+    P.undoRoadmap()
+    latest().reject(
+      new ConvexError({ code: 'conflict', reason: 'roadmap_changed', message: 'edited elsewhere' }),
+    )
+    await settled()
+    expect(P.roadmapUndo.disabled).toBe(true)
+  })
 
   it('keeps a late response from an earlier visit out of a newly entered roadmap', async () => {
     P.updateIssue(task().id, { remaining: 12 })

@@ -104,6 +104,51 @@ function OrgAddressField() {
   )
 }
 
+// The first day of each roadmap week. The server refuses a day that would
+// put two milestones of one project in one week, or that it could not check
+// against every milestone; the setting stays as it was and the refusal shows
+// under it, long enough to read the projects and dates it names, until the
+// next choice.
+function WeekStartField() {
+  const [refusal, setRefusal] = useStateS('')
+  // wide enough for the refusal; the select keeps its own width
+  return (
+    <SettingsField label="Workdays start on" width={560}>
+      <NativeSelect
+        value={P.org.weekStart ?? 1}
+        aria-label="Workdays start on"
+        aria-invalid={refusal ? true : undefined}
+        aria-describedby={refusal ? 'week-start-refusal' : undefined}
+        data-week-start
+        onChange={(e) => {
+          const d = Number(e.target.value)
+          setRefusal('')
+          void P.setOrg({ weekStart: d }, setRefusal).then((saved) => {
+            if (saved) window.showToast?.(`Workdays now start on ${P.WEEKDAYS[d]}`)
+          })
+        }}
+        className="h-control w-60 bg-surface-1 font-sans text-base"
+      >
+        {[1, 2, 3, 4, 5, 6, 0].map((d) => (
+          <option key={d} value={d}>
+            {P.WEEKDAYS[d]}
+          </option>
+        ))}
+      </NativeSelect>
+      {refusal && (
+        <div
+          id="week-start-refusal"
+          role="alert"
+          data-week-start-refusal
+          className="[font-size:var(--fs-sm)] [color:var(--danger)] [margin-top:8px] [line-height:1.5]"
+        >
+          {refusal}
+        </div>
+      )}
+    </SettingsField>
+  )
+}
+
 /* The segments of "Who can create new projects?" and the toast after
    choosing each, keyed by the setting so a new value needs both. */
 const CREATOR_SETTINGS: Record<OrgVM['projectCreators'], { label: string; toast: string }> = {
@@ -279,26 +324,7 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
             ))}
           </NativeSelect>
         </SettingsField>
-        <SettingsField label="Workdays start on" width={330}>
-          <NativeSelect
-            value={P.org.weekStart ?? 1}
-            aria-label="Workdays start on"
-            data-week-start
-            onChange={(e) => {
-              const d = Number(e.target.value)
-              void P.setOrg({ weekStart: d }).then((saved) => {
-                if (saved) window.showToast?.(`Workdays now start on ${P.WEEKDAYS[d]}`)
-              })
-            }}
-            className="h-control w-60 bg-surface-1 font-sans text-base"
-          >
-            {[1, 2, 3, 4, 5, 6, 0].map((d) => (
-              <option key={d} value={d}>
-                {P.WEEKDAYS[d]}
-              </option>
-            ))}
-          </NativeSelect>
-        </SettingsField>
+        <WeekStartField />
         <SettingsField label="Week 1 of the year" width={330}>
           <NativeSelect
             value={P.org.weekOneRule || 'first4day'}
