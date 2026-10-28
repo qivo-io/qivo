@@ -12,6 +12,7 @@
  * (trash.setup.ts installTrashTimers). */
 /// <reference types="vite/client" />
 
+import type { FunctionArgs } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -59,8 +60,22 @@ afterEach(() => {
   Object.assign(ACCESS_FIRST_PASS, PASS_DEFAULTS)
 })
 
-const backfill = (t: T, dry_run: boolean, cursor?: string) =>
+/** Where a call of the backfill goes on, as the last call answered it. */
+type Cursor = FunctionArgs<typeof internal.internal.navBackfill.run>['cursor']
+
+const backfill = (t: T, dry_run: boolean, cursor?: Cursor) =>
   t.action(internal.internal.navBackfill.run, { dry_run, ...(cursor ? { cursor } : {}) })
+
+/** The backfill's audit rows, oldest first. */
+const audits = (t: T) =>
+  t.run(async (ctx) =>
+    (
+      await ctx.db
+        .query('platform_audit_log')
+        .filter((q) => q.eq(q.field('action'), 'nav_backfill'))
+        .collect()
+    ).map((row) => row.detail),
+  )
 
 /** withOrg with its archive states and reach rows written by the backfill,
  * checked against the oracle, and a person without access, `pia`. */
@@ -845,16 +860,20 @@ describe('the backfill', () => {
     expect((await projectOf(t, f.hidden.id))?.archive_state).toBe('listed')
   })
 
-  it('goes on from its cursor one row at a time while writers change the rows', async () => {
+  it('goes on from its cursor one row and one stamp a call while writers change the rows', async () => {
     const t = newT()
     const f = await withOrg(t)
     NAV_STEP.rows = 1
+    // every call is past its time after its first step
     RUN.ms = 0
-    let cursor: string | undefined
+    let cursor: Cursor
     let calls = 0
+    const stamping: string[] = []
     for (;;) {
       const got = await backfill(t, false, cursor)
       calls++
+      if (got.cursor?.table === 'organizations' && got.cursor.after !== null)
+        stamping.push(got.cursor.after)
       // a writer between two calls
       if (calls === 3)
         await as(t, f.admin).mutation(api.projects.setAccess, {
@@ -868,15 +887,68 @@ describe('the backfill', () => {
       expect(calls).toBeLessThan(200)
     }
     expect(calls).toBeGreaterThan(10)
+    // the stamping stopped between the two organizations
+    expect(stamping).toEqual([[f.org.id, f.otherOrg.id].sort()[0]])
     await expectAll(t, f)
     expect(await expectedReach(t)).toEqual(await reachRows(t))
+    expect((await audits(t)).length).toBe(calls)
   })
 
-  it('refuses a cursor it never answered', async () => {
+  it('records what committed when a step throws, and goes on from that step', async () => {
+    // withOrg writes 20 documents in one transaction
+    const t = newT({ transactionLimits: { documentsWritten: 20 } })
+    const f = await withOrg(t)
+    // 24 grants on the product, whose rows one step writes at once
+    const people: string[] = []
+    for (let i = 0; i < 24; i++)
+      people.push(
+        (await plantSeat(t, { org_id: f.org.id, name: `P${i}`, email: `p${i}@testbed.test` })).id,
+      )
+    for (const half of [people.slice(0, 12), people.slice(12)])
+      await t.run(async (ctx) => {
+        for (const id of half)
+          await ctx.db.insert('project_access', {
+            project_id: f.meta.id,
+            profile_id: id,
+            level: 'user',
+          })
+      })
+    const failed = await backfill(t, false)
+    expect(failed).toMatchObject({
+      done: false,
+      error: expect.any(String),
+      cursor: { dry_run: false, table: 'project_access' },
+    })
+    expect(await audits(t)).toEqual([
+      {
+        stamped: 0,
+        archive_states: failed.archive_state.missing,
+        reach_missing: failed.reach.missing,
+        reach_extra: 0,
+        reach_stale: 0,
+        done: false,
+        cursor: failed.cursor,
+        error: failed.error,
+      },
+    ])
+    // the projects committed, the grants' step did not
+    expect((await projectOf(t, f.meta.id))?.archive_state).toBe('live')
+    expect(await rowsOf(t, people[0])).toEqual([])
+    // smaller steps fit
+    NAV_STEP.rows = 5
+    let last = await backfill(t, false, failed.cursor ?? undefined)
+    while (!last.done) last = await backfill(t, false, last.cursor ?? undefined)
+    expect(last.error).toBeUndefined()
+    await expectAll(t, f)
+  })
+
+  it("refuses to resume a run that writes from a dry run's cursor", async () => {
     const t = newT()
-    await expect(backfill(t, true, '{"table":"teams","at":null}')).rejects.toThrow(
-      /cursor is not one a navBackfill run answered/,
-    )
+    await withOrg(t)
+    RUN.ms = 0
+    const first = await backfill(t, true)
+    expect(first.cursor).toMatchObject({ dry_run: true })
+    await expect(backfill(t, false, first.cursor ?? undefined)).rejects.toThrow('other dry_run')
   })
 
   it('stamps an organization created since this release at its creation', async () => {
