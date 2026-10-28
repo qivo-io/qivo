@@ -143,18 +143,22 @@ type Walk = { items: number; messages: number; oversized: string[]; next: string
  * calls `each` with each item as its messages make it, with its task's
  * project. It stops at an item too large to build, listed in `oversized`.
  * It reads one item at least, and another only while the transaction has
- * used less than BUILD.room of each limit. */
+ * used less than BUILD.room of each limit. With `until` it reads no item
+ * past that task and goes on after it (`next`) even when no item is left. */
 async function walk(
   ctx: QueryCtx,
   profileId: string,
   after: string | undefined,
   each: (pair: Pair, item: ItemFields, rows: number) => Promise<void>,
+  until?: string,
 ): Promise<Walk> {
   const out: Walk = { items: 0, messages: 0, oversized: [], next: after ?? null }
   let through = after
   while (out.items < BUILD.pairs) {
     if (out.items > 0 && (await usedMoreThan(ctx, BUILD.room))) return out
     const first = await nextMessage(ctx, profileId, through)
+    if (until !== undefined && (first === null || first.issue_id > until))
+      return { ...out, next: until }
     if (first === null) return { ...out, next: null }
     const pair = { recipient_id: profileId, issue_id: first.issue_id }
     through = pair.issue_id
@@ -386,32 +390,45 @@ export const check = internalQuery({
     const list = <T>(into: T[], value: T) => {
       if (into.length < RUN.listed) into.push(value)
     }
-    const walked = await walk(ctx, profile_id, after, async (pair, item) => {
-      seen.add(pair.issue_id)
-      if (!covers(state, pair.issue_id)) {
-        build += 1
-        return
-      }
-      const stored = await itemRow(ctx, pair)
-      if (stored === null) {
-        found.missing += 1
-        list(missing, pair.issue_id)
-        return
-      }
-      const fields = (Object.keys(item) as (keyof ItemFields)[]).filter(
-        (key) => item[key] !== stored[key],
-      )
-      for (const key of Object.keys(stored) as (keyof typeof stored)[])
-        if (!key.startsWith('_') && !(key in item) && stored[key] !== undefined)
-          fields.push(key as keyof ItemFields)
-      if (fields.length === 0) return
-      found.differ += 1
-      list(differ, { issue_id: pair.issue_id, fields })
-    })
-    // rows between the items walked, or after the last one, that no message
-    // makes: the page's range of task ids, to its end once no item is left
-    const rows = await pageItems(ctx, profile_id, after, walked.next).take(BUILD.pairs + RUN.listed)
+    // the stored rows go first: a page counts the extra ones of its whole
+    // range, so with more rows than one read holds it ends at the last one
+    // read, and the next page goes on after it
+    const cap = BUILD.pairs + RUN.listed
+    const rows = await pageItems(ctx, profile_id, after, null).take(cap + 1)
+    const until = rows.length > cap ? rows[cap - 1].issue_id : undefined
+    const walked = await walk(
+      ctx,
+      profile_id,
+      after,
+      async (pair, item) => {
+        seen.add(pair.issue_id)
+        if (!covers(state, pair.issue_id)) {
+          build += 1
+          return
+        }
+        const stored = await itemRow(ctx, pair)
+        if (stored === null) {
+          found.missing += 1
+          list(missing, pair.issue_id)
+          return
+        }
+        const fields = (Object.keys(item) as (keyof ItemFields)[]).filter(
+          (key) => item[key] !== stored[key],
+        )
+        for (const key of Object.keys(stored) as (keyof typeof stored)[])
+          if (!key.startsWith('_') && !(key in item) && stored[key] !== undefined)
+            fields.push(key as keyof ItemFields)
+        if (fields.length === 0) return
+        found.differ += 1
+        list(differ, { issue_id: pair.issue_id, fields })
+      },
+      until,
+    )
+    // rows of the page's range of task ids that no message makes, to its end
+    // once no item and no row is left
+    const end = walked.next
     for (const row of rows) {
+      if (end !== null && row.issue_id > end) break
       if (seen.has(row.issue_id) || walked.oversized.includes(row.issue_id)) continue
       found.extra += 1
       list(extra, row.issue_id)

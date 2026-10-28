@@ -1466,6 +1466,48 @@ describe('the backfill', () => {
     expect(await drift(t)).toEqual([])
   })
 
+  it('a check counts every row no message makes, however many there are', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const list = await tasks(t, f, 11)
+    await post(t, f, { to: f.user, task: list[5], minute: 1 })
+    // ten rows with no message, more than one page reads
+    await t.run(async (ctx) => {
+      for (const task of list)
+        if (task !== list[5])
+          await ctx.db.insert('inbox_items', {
+            recipient_id: f.user.id,
+            issue_id: task.id,
+            project_id: f.sub.id,
+            sort_at: NOW,
+            latest_id: uuid(),
+            latest_at: NOW,
+            unread: false,
+            unread_count: 0,
+            dropped: 0,
+            mentions: 0,
+            changes: 1,
+            comments: 0,
+            snoozed: false,
+            woke_rows: 0,
+          })
+    })
+    Object.assign(BUILD, { pairs: 2 })
+    Object.assign(RUN, { listed: 2 })
+    let extra = 0
+    let checked = 0
+    let after: string | undefined
+    for (let n = 0; n < 20; n++) {
+      const page = await check(t, f.user.id, after)
+      extra += page.found.extra
+      checked += page.checked
+      if (page.done) break
+      after = page.next ?? undefined
+    }
+    expect({ extra, checked }).toEqual({ extra: 10, checked: 1 })
+    expect(await backfill(t, { dry_run: true })).toMatchObject({ extra: 10, differing: 0 })
+  })
+
   it('a rebuild resets no profile that is gone', async () => {
     const t = newT()
     const f = await withOrg(t)
