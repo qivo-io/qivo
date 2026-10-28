@@ -1157,6 +1157,44 @@ describe('under Convex limits', () => {
     expect(e.data.reason).toBe(MILESTONE_READ_TOO_LARGE)
   })
 
+  it('stops at its frontier once the past probe has used the request, with documents near 1 MiB', async () => {
+    const t = newT({ transactionLimits: { bytesRead: 8 * 1024 * 1024 } })
+    const [upcoming, history] = [uuid(), uuid()]
+    // names stored before names had a limit, about 900 KB a milestone
+    const big = (project: string, week: string, n: number) =>
+      t.run((ctx) =>
+        ctx.db.insert('milestones', {
+          id: uuid(),
+          project_id: project,
+          name: `${n} ${'L'.repeat(900_000)}`,
+          week,
+          created_at: NOW,
+        }),
+      )
+    const first = await big(upcoming, MONDAY, 0)
+    await big(upcoming, plus(MONDAY, 7), 1)
+    await big(upcoming, plus(MONDAY, 14), 2)
+    // past of `from` by their text but naming no day, so the probe reads
+    // past every one of them
+    for (let n = 0; n < 9; n++) await big(history, '0000-xx-xx', n)
+    const batch = await t.query(async (ctx) => {
+      const read = await readMilestones(ctx, [upcoming, history], {
+        span: { from: MONDAY, order: 'asc' },
+        after: null,
+        search: '',
+        limit: 10,
+        pastBefore: MONDAY,
+      })
+      return { ...read, rows: read.rows.map((m) => m._id) }
+    })
+    // the probe stopped before it had asked every project, so past is true,
+    // and the read answered what it had read whole without another read
+    expect(batch.past).toBe(true)
+    expect(batch.rows).toEqual([first])
+    expect(batch.stopped).toBe(MONDAY)
+    expect(batch.next?.week).toBe(MONDAY)
+  })
+
   it('refuses a read whose projects are shared with more teams than the request can check', async () => {
     const t = newT({ transactionLimits: { documentsRead: 1500 } })
     const f = await withOrg(t)

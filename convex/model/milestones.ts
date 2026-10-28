@@ -914,28 +914,30 @@ export async function milestoneProjects(
 type ProjectLevels = ReturnType<typeof projectLevelsOf>
 
 /* Whether one of the projects `projectIds` holds a milestone the app shows
- * before `day`, read newest first until the first, under `guard`. True as
- * well when the guard stops before every project was asked, so a project
- * whose history went unread never reads as one without history. */
+ * before `day`, read newest first until the first, under `guard`, and
+ * whether the guard let it ask every project it had to. A probe the guard
+ * stopped answers that the projects hold one, so a project whose history
+ * went unread never reads as one without history. */
 async function holdsPast(
   ctx: QueryCtx,
   projectIds: readonly string[],
   day: string,
   guard: ReadGuard,
-): Promise<boolean> {
+): Promise<{ holds: boolean; asked: boolean }> {
+  const stopped = { holds: true, asked: false }
   for (const projectId of projectIds) {
-    if (!(await guard.range())) return true
+    if (!(await guard.range())) return stopped
     const rows = ctx.db
       .query('milestones')
       .withIndex('by_project_week', (q) => q.eq('project_id', projectId).lt('week', day))
       .order('desc')
     for await (const row of rows) {
-      if (!(await guard.document(row))) return true
+      if (!(await guard.document(row))) return stopped
       const shown = shownDay(row.week)
-      if (shown !== null && shown < day) return true
+      if (shown !== null && shown < day) return { holds: true, asked: true }
     }
   }
-  return false
+  return { holds: false, asked: true }
 }
 
 /* One project's range in a read, read a day at a time. */
@@ -997,7 +999,8 @@ type Lane = {
  * search can answer a `next` that leads to an empty last batch. With
  * `pastBefore`, the batch also says whether one of the projects holds a
  * milestone shown before that day, once the projects are open and within
- * the request's own limits, and says true when those ran out first.
+ * the request's own limits, and says true when those ran out first; the
+ * read then reads nothing more and stops at its frontier.
  *
  * `after` is a plain position, not a sealed one, and a caller can send any
  * position. That reveals nothing, because whatever the position, a batch
@@ -1115,13 +1118,17 @@ export async function readMilestones(
         (lane.through === null || (after !== null && !before(after, lane.through)))
       )
         if (!(await readDay(lane, opening))) throw readTooLarge()
-    const past =
-      o.pastBefore === undefined ? undefined : await holdsPast(ctx, projects, o.pastBefore, opening)
+    const probe =
+      o.pastBefore === undefined ? null : await holdsPast(ctx, projects, o.pastBefore, opening)
+    // A probe the guard stopped has used the request's own room, past which
+    // even one more document might not fit, so the read then reads nothing
+    // more and stops at its frontier.
+    const full = probe !== null && !probe.asked
     const answer = (next: MilestonePosition | null, stopped: string | null): MilestoneBatch => ({
       rows,
       next,
       stopped,
-      ...(past === undefined ? {} : { past }),
+      ...(probe === null ? {} : { past: probe.holds }),
     })
     for (;;) {
       const last = rows.at(-1)
@@ -1155,7 +1162,7 @@ export async function readMilestones(
         }
       }
       if (lag === null) return answer(null, null)
-      if (!(await readDay(lag, budget))) {
+      if (full || !(await readDay(lag, budget))) {
         // every project was read through a day past `after`
         const frontier = lag.through
         if (frontier === null) throw new Error('a stopped read had not opened every project')
