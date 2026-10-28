@@ -429,7 +429,7 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     expect(control()).toBeNull()
   })
 
-  it('keeps the loaded history when an empty live page is delivered again', async () => {
+  it('drops the loaded history for an empty live page with rows before it, and pages on again', async () => {
     await load()
     await open()
     await showAll()
@@ -439,9 +439,14 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     await press('Show earlier activity')
     await act(async () => histories[0].resolve({ events: [change(2)], earlier: false, next: null }))
     expect(thread().filter((r) => r === 'event')).toHaveLength(1)
-    // a change the person does not receive re-runs the history, which
-    // answers the same page
+    // the history runs again and answers no row it is sure the person may
+    // see, so nothing loaded before stays beside it
     await deliverHistory(empty)
+    expect(thread().filter((r) => r === 'event')).toHaveLength(0)
+    expect(thread()[0]).toBe('[Show earlier activity]')
+    await press('Show earlier activity')
+    expect(histories.map((h) => h.before)).toEqual(['hidden-row', 'hidden-row'])
+    await act(async () => histories[1].resolve({ events: [change(2)], earlier: false, next: null }))
     expect(thread().filter((r) => r === 'event')).toHaveLength(1)
     expect(control()).toBeNull()
   })

@@ -272,6 +272,100 @@ describe("the task's history in the store", () => {
     expect(earlier).toHaveLength(2)
   })
 
+  describe("each live page is the server's word from its first row on", () => {
+    const span = (from: number, to: number) =>
+      Array.from({ length: to - from }, (_, i) => change(from + i))
+    const ids = (from: number, to: number) => span(from, to).map((e) => e.id)
+
+    it('drops the loaded rows for an empty live page with rows before it, and pages on from it', async () => {
+      const { P } = store
+      P.watchComments('task-a')
+      P.showHistory(pane, true)
+      const empty = { events: [], earlier: true, next: 'hidden-row' }
+      one('snapshot:threadHistory').deliver(empty)
+      void P.loadEarlierHistory()
+      earlier[0].answer.resolve({ events: [change(2)], earlier: false, next: null })
+      await settle()
+      expect(changes()).toEqual(['event-2'])
+      expect(P.historyEarlier).toBe('none')
+      // the history runs again: no row it is sure of, so none loaded stays
+      one('snapshot:threadHistory').deliver(empty)
+      expect(changes()).toEqual([])
+      expect(P.historyEarlier).toBe('more')
+      void P.loadEarlierHistory()
+      expect(earlier.map((e) => e.before)).toEqual(['hidden-row', 'hidden-row'])
+      earlier[1].answer.resolve({ events: [change(2)], earlier: false, next: null })
+      await settle()
+      expect(changes()).toEqual(['event-2'])
+    })
+
+    it('drops a loaded row the live page leaves out from its first row on', async () => {
+      const { P } = store
+      P.watchComments('task-a')
+      P.showHistory(pane, true)
+      one('snapshot:threadHistory').deliver({
+        events: span(30, 36),
+        earlier: true,
+        next: 'event-30',
+      })
+      void P.loadEarlierHistory()
+      earlier[0].answer.resolve({ events: span(20, 30), earlier: true, next: 'event-20' })
+      await settle()
+      expect(changes()).toEqual(ids(20, 36))
+      // reaching back into the loaded rows, without 28
+      one('snapshot:threadHistory').deliver({
+        events: [change(27), change(29), ...span(30, 36)],
+        earlier: true,
+        next: 'event-27',
+      })
+      expect(changes()).toEqual([...ids(20, 28), ...ids(29, 36)])
+      // sliding forward, without 33
+      one('snapshot:threadHistory').deliver({
+        events: [change(31), change(32), ...span(34, 37)],
+        earlier: true,
+        next: 'event-31',
+      })
+      expect(changes()).toEqual([...ids(20, 28), ...ids(29, 33), ...ids(34, 37)])
+      // the rows before the page stay, and the next earlier page reads on
+      void P.loadEarlierHistory()
+      expect(earlier.map((e) => e.before).at(-1)).toBe('event-20')
+    })
+
+    it('starts over after more changes than a page between two deliveries, with nothing left loading', async () => {
+      const { P } = store
+      P.watchComments('task-a')
+      P.showHistory(pane, true)
+      one('snapshot:threadHistory').deliver({
+        events: span(51, 101),
+        earlier: true,
+        next: 'event-51',
+      })
+      void P.loadEarlierHistory()
+      expect(P.historyEarlier).toBe('loading')
+      // 80 more changes arrive before the earlier page answers
+      one('snapshot:threadHistory').deliver({
+        events: span(131, 181),
+        earlier: true,
+        next: 'event-131',
+      })
+      expect(changes()).toEqual(ids(131, 181))
+      expect(P.historyEarlier).toBe('more')
+      // the page asked for before the gap lands nowhere
+      earlier[0].answer.resolve({ events: span(1, 51), earlier: false, next: null })
+      await settle()
+      expect(changes()).toEqual(ids(131, 181))
+      expect(P.historyEarlier).toBe('more')
+      // Show earlier activity reads on from the new page
+      void P.loadEarlierHistory()
+      expect(earlier.map((e) => e.before)).toEqual(['event-51', 'event-131'])
+      expect(P.historyEarlier).toBe('loading')
+      earlier[1].answer.resolve({ events: span(81, 131), earlier: true, next: 'event-81' })
+      await settle()
+      expect(changes()).toEqual(ids(81, 181))
+      expect(P.historyEarlier).toBe('more')
+    })
+  })
+
   it('reads no earlier page before the live page arrives', () => {
     const { P } = store
     P.watchComments('task-a')

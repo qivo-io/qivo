@@ -397,8 +397,8 @@ let commentsSnap: Row<'comments'>[] | null = null
 const historyOwners = new Set<object>()
 /* The task and organization of the history the parts watch, or null. */
 let historyWatched: { task: string; org: string } | null = null
-/* Moves on whenever the history starts over (resetHistory), so an earlier
-   page asked for before that is dropped when it answers. */
+/* Moves on whenever the history starts over (resetHistory, restartHistory),
+   so an earlier page asked for before that is dropped when it answers. */
 let historyEpoch = 0
 /* The last page the history's subscription delivered (threadHistory), its
    newest rows, oldest first in insertion order, the task window's changes
@@ -417,7 +417,12 @@ let historySnap: Row<'activity_events'>[] | null = null
    person could see them, so nothing new shows. The store does not re-read
    the loaded pages, since no change it hears of covers every input of the
    server's rule (lib/activityVisibility.ts memberSeesActivity): a task a
-   row names can move or go where the person never sees it. */
+   row names can move or go where the person never sees it. A live page
+   that does not begin with a loaded row, as after more changes between two
+   deliveries than a page holds, starts the history over from that page
+   (receiveHistory), and Show earlier activity loads the rest again: joining
+   the rows loaded before across that gap would need the server's word on
+   every interval it joins. */
 let olderEvents: Row<'activity_events'>[] = []
 /* Whether the watched task's first history row is loaded, so nothing is
    earlier, and how the last load of an earlier page of history went. */
@@ -523,39 +528,49 @@ function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }):
   return slid
 }
 
-/* Records a delivery of the watched task's live history page. The first
-   since the history started over starts it. A page with nothing earlier
-   holds the whole history. A page whose first row the last one held slid
-   forward as new rows arrived: the rows before that one left at its old
-   end and move to olderEvents, so the history a reader loaded stays. A
-   page whose first row is in olderEvents reaches back into what was
-   loaded, and one that again holds no row repeats the last. Neither moves
-   historyNext, which stays older than every row they hold. Any other page,
-   one that no longer meets the last because more rows arrived between two
-   deliveries than it holds, or one that gained rows at its old end because
-   what the person sees changed, starts the history over from the page. */
+/* Records a delivery of the watched task's live history page. The page
+   is the server's word on every row from its first on, so a loaded row in
+   that stretch that the page does not hold is gone. The first page since
+   the history started over starts it, and so do a page with nothing
+   earlier, which holds the whole history, and an empty page with rows
+   before it, which leaves nothing loaded a place beside it. A page whose
+   first row the last one held slid forward as new rows arrived: the rows
+   before that one left at its old end and move to olderEvents, so the
+   history a reader loaded stays. A page whose first row is in olderEvents
+   reaches back into what was loaded, and the loaded rows from that one on
+   give way to it. Neither moves historyNext, which stays older than every
+   row they hold. Any other page begins with no loaded row, because more
+   rows arrived between two deliveries than it holds or the person can now
+   see a row they could not, and starts the history over from it. */
 function receiveHistory(page: {
   events: Row<'activity_events'>[]
   earlier: boolean
   next: string | null
 }) {
-  const first = historySnap === null
   const prev = historySnap ?? []
-  const restart = () => {
-    olderEvents = []
-    historyStart = !page.earlier
-    historyNext = page.next
-  }
   const head = page.events[0]
   const at = head ? prev.findIndex((r) => r.id === head.id) : -1
   const back = head ? olderEvents.findIndex((r) => r.id === head.id) : -1
-  if (first || !page.earlier) restart()
+  if (historySnap === null || !page.earlier || head === undefined) restartHistory(page)
   else if (at !== -1) {
     const known = new Set(olderEvents.map((r) => r.id))
     olderEvents = [...olderEvents, ...prev.slice(0, at).filter((r) => !known.has(r.id))]
   } else if (back !== -1) olderEvents = olderEvents.slice(0, back)
-  else if (head !== undefined || prev.length > 0) restart()
+  else restartHistory(page)
   historySnap = page.events
+}
+
+/* Starts the watched task's history over from a live page that says
+   whether it has rows before it and where they start: nothing loaded
+   before the page, no earlier page loading, and one asked for before this
+   dropped when it answers, so Show earlier activity reads on from the
+   page. The caller sets the page itself. */
+function restartHistory(page: { earlier: boolean; next: string | null }) {
+  historyEpoch++
+  olderEvents = []
+  historyStart = !page.earlier
+  historyNext = page.next
+  historyLoad = 'idle'
 }
 
 /* Drops the watched task's history and starts it over, empty until its
@@ -770,10 +785,9 @@ function historyNews(news: SideNews) {
       emit('comments')
       return
     }
+    // the task is gone or hidden: a whole history that holds nothing
+    restartHistory({ earlier: false, next: null })
     historySnap = []
-    olderEvents = []
-    historyNext = null
-    historyStart = true
   } else receiveHistory(anchor(news.value as FunctionReturnType<typeof api.snapshot.threadHistory>))
   PLANNER.historyFailure = 'none'
   owe('thread')
