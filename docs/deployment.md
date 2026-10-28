@@ -687,10 +687,13 @@ as the limit asks. Run the backfill on every hosted deployment right after it
 serves that release, as the module's header says: read its dry run first,
 then run it, and call it again with each `cursor` until it answers `done`.
 The deployment is ready when every call of a dry run, followed through its
-cursors to `done`, answers `counted: 0`, `stuck: 0` and `drift: 0`. A
-rollback past that release deploys, because Convex keeps the rows of tables
-the schema no longer lists, but the earlier release posts, deletes and moves
-comments without counting them. After rolling forward again, read a dry run
+cursors to `done`, answers `counted: 0`, `stuck: 0`, `drift: 0`, `held: 0`,
+`differing: 0` and `unsettled: 0`. A run clears the first three. Tasks a
+dry run lists as `held` or `differing` need a run with `"recount": true`,
+and `unsettled` tasks, whose comments changed while it counted, another dry
+run. A rollback past that release deploys, because Convex keeps the rows of
+tables the schema no longer lists, but the earlier release posts, deletes
+and moves comments without counting them. After rolling forward again, read a dry run
 and run the backfill with `"recount": true`, which counts every live task
 again, counts the tasks that release created, deletes rows that name no task
 of their organization any more, and deletes the counts of tasks in Deleted

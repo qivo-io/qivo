@@ -39,7 +39,10 @@
  * again with the same arguments and `"cursor"` set to it until `done` is
  * true. Every list is cut at TASK_PAGE.listed, so read the totals: a
  * deployment is ready when every call of a dry run, followed through its
- * cursors until `done`, answers `counted: 0`, `stuck: 0` and `drift: 0`.
+ * cursors until `done`, answers `counted: 0`, `stuck: 0`, `drift: 0`,
+ * `held: 0`, `differing: 0` and `unsettled: 0`. A run clears the first
+ * three; `held` and `differing` need a run with `"recount": true`, and
+ * `unsettled` tasks another dry run.
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
