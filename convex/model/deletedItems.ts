@@ -1494,15 +1494,20 @@ async function purgeLeft(run: Run): Promise<boolean> {
  * makes the reveal wait for a step of its own (revealTasks). */
 const REVEAL_RANGES_PER_TASK = 20
 
-/* The index ranges a reveal reads per project of a project item: the
- * conflict check's key and uuid reads, its lead and legacy team, the
- * used_ids row of its id (lib/db.ts insertUsed), the stored row it
- * deletes, and the reach rows of its lead it brings in line
- * (revealProjects), three more, as they read the projects the reveal
- * wrote. In convex-test, which counts no range for a delete, a reveal of
- * 10 and of 20 sub-projects read 4 ranges a project without a lead and 8
- * with a lead of its own, with a legacy team or without. */
-const REVEAL_RANGES_PER_PROJECT = 9
+/** The index ranges a reveal reads per project of a project item, with a
+ * delete counted as one for the row it reads: the conflict check's key and
+ * uuid reads, its lead and legacy team, the used_ids row of its id
+ * (lib/db.ts insertUsed), the counters (tallyRow), the stored row it
+ * deletes, and the reach rows of its stored lead it brings in line
+ * (revealProjects), which read the projects the reveal wrote. A lead who
+ * became a Viewer after restore_access wrote their rows comes back without
+ * the project (cleanProject), and taking their rows costs six reads and two
+ * deletes. Counted as a step's budget counts reads (meterDb), a reveal of
+ * 5 and of 10 sub-projects, each with a legacy team and such a lead, spent
+ * 15 a project, and 11 with each lead kept (tests/projectReach.test.ts).
+ * The largest item, 201 projects, so reads about 3,000 in a step of its
+ * own, inside Convex's 4,096. */
+export const REVEAL_RANGES_PER_PROJECT = 15
 
 /** Why an item cannot be restored now (design 5.3). The item's state while
  * it is not ready; read_only while billing or a pending deletion makes the

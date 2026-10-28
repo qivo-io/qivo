@@ -16,6 +16,7 @@ import { type FunctionArgs, makeFunctionReference } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import type { MutationCtx } from '../_generated/server'
 import { NAV_STEP, RUN } from '../internal/navBackfill'
 import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
@@ -23,7 +24,13 @@ import { LIMITS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import type { OrgExportPage, OrgExportSection } from '../lib/orgExport'
 import { ACCESS_FIRST_PASS, deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
-import { clearOrgTrash, meterDb, TRASH_BUDGET } from '../model/deletedItems'
+import {
+  clearOrgTrash,
+  meterDb,
+  REVEAL_RANGES_PER_PROJECT,
+  runStep,
+  TRASH_BUDGET,
+} from '../model/deletedItems'
 import { ARCHIVED_READ_PROJECTS } from '../model/messages'
 import { deleteOrgStep } from '../model/orgDeletion'
 import { insertOrgRows, newOrgDefaults } from '../model/orgs'
@@ -1136,6 +1143,99 @@ describe('a restore and the work around it', () => {
     })
     await expectAll(t, f)
   }, 120_000)
+
+  /** `ctx` whose reads `count` counts as a step's budget does (meterDb),
+   * and each delete or patch as one more, for the row it reads, as
+   * REVEAL_RANGES_PER_PROJECT counts the stored row's delete. */
+  const counting = (ctx: MutationCtx, count: () => void): MutationCtx => {
+    const metered = meterDb(ctx, { range: count })
+    const db = new Proxy(metered.db, {
+      get(target, key) {
+        const value: unknown = Reflect.get(target, key)
+        if (typeof value !== 'function') return value
+        if (key !== 'delete' && key !== 'patch' && key !== 'replace') return value.bind(target)
+        return (...args: unknown[]) => {
+          count()
+          return value.apply(target, args)
+        }
+      },
+    })
+    return { ...metered, db }
+  }
+
+  /** What the step that reveals Testbed platform with `subs` more
+   * sub-projects reads (counting). Each sub-project has a legacy team and
+   * a lead of its own, whose reach rows restore_access writes back and who
+   * becomes a Viewer before the reveal, so the reveal leaves them out and
+   * takes their rows. */
+  async function demotedReveal(subs: number): Promise<number> {
+    const t = newT()
+    const f = await ready(t)
+    const org_id = f.org.id
+    const leads: string[] = []
+    for (let i = 0; i < subs; i++) {
+      const lead = await plantSeat(t, { org_id, name: `Lead ${i}`, email: `lead${i}@testbed.test` })
+      const team = uuid()
+      await t.run((ctx) =>
+        ctx.db.insert('teams', {
+          id: team,
+          org_id,
+          name: `Legacy ${i}`,
+          track_delay_default: false,
+          created_at: NOW,
+        }),
+      )
+      await plantProject(t, {
+        org_id,
+        type: 'project',
+        parent_id: f.meta.id,
+        lead_id: lead.id,
+        team_id: team,
+      })
+      leads.push(lead.id)
+    }
+    await backfill(t, false)
+    const ofLeads = async () => (await reachRows(t)).filter((row) => leads.includes(row.grantee_id))
+    await as(t, f.user).mutation(api.projects.deleteDeep, { org_id, id: f.meta.id })
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    // a row a step, so restore_access writes the rows back over steps and
+    // the reveal waits for a step of its own
+    TRASH_BUDGET.rows = 1
+    await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
+    for (let steps = 0; (await jobFor(t, item.id))?.phase !== 'restore_reveal'; steps++) {
+      expect(steps).toBeLessThan(100)
+      await step(t, item.id)
+    }
+    TRASH_BUDGET.rows = DEFAULT_ROWS
+    // a child row and a root row on Testbed platform for each lead
+    expect(await ofLeads()).toHaveLength(2 * subs)
+    await t.run(async (ctx) => {
+      for (const id of leads) {
+        const row = await byId(ctx, 'profiles', id)
+        if (row !== null) await ctx.db.patch(row._id, { org_role: 'viewer' })
+      }
+    })
+    let ranges = 0
+    await t.run((ctx) =>
+      runStep(
+        counting(ctx, () => {
+          ranges += 1
+        }),
+        item.id,
+      ),
+    )
+    expect(await t.run((ctx) => byId(ctx, 'deleted_items', item.id))).toBeNull()
+    expect(await ofLeads()).toEqual([])
+    await expectAll(t, f)
+    return ranges
+  }
+
+  it('admits a project reveal by an estimate that holds leads who became Viewers after their rows came back', async () => {
+    const [five, ten] = [await demotedReveal(5), await demotedReveal(10)]
+    // what each sub-project adds stays within what revealFits counts for it
+    expect((ten - five) / 5).toBeLessThanOrEqual(REVEAL_RANGES_PER_PROJECT)
+  }, 300_000)
 
   it('deletes the rows of a stuck restoring item it purges', async () => {
     const t = newT()
