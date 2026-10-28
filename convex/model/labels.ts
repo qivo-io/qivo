@@ -22,11 +22,17 @@ import { assertExpected, DELETES, type Fields, filledText, type Next } from './e
 import { assertCanEdit } from './issues'
 import { deleteLabelCount, insertLabelCount, tallyAssignment } from './labelCounts'
 
-/** Refuses a caller who may not add labels to the organization's list. */
+/** The refusal of a label create whose rights check could not finish in one
+ * request (lib/access.ts canWriteOrgLabels answered null). */
+export const LABEL_RIGHTS_UNCHECKED =
+  'you belong to too many projects and teams for Qivo to check in one request whether you may create labels; an organization admin can create this label'
+
+/** Refuses a caller who may not add labels to the organization's list, and
+ * one whose rights the check could not finish reading (LABEL_RIGHTS_UNCHECKED). */
 export async function assertLabelCreator(ctx: QueryCtx, me: Doc<'profiles'>): Promise<void> {
-  if (!(await canWriteOrgLabels(ctx, me))) {
-    throw forbidden('no label access in this organization')
-  }
+  const may = await canWriteOrgLabels(ctx, me)
+  if (may === null) throw rule(LABEL_RIGHTS_UNCHECKED)
+  if (!may) throw forbidden('no label access in this organization')
 }
 
 /** Refuses a caller who may not rename, recolor or delete labels. Checked

@@ -3,13 +3,16 @@
 // machine surfaces share (end of file).
 // Identity and active-seat checks belong to lib/functions.ts.
 
+import type { GenericDocument } from 'convex/server'
 import type { ConvexError } from 'convex/values'
 import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import type { ReadCeiling } from './archivedTasks'
 import { byId } from './db'
 import { type AccessLevel, type CredentialAccess, LEVEL_RANK, type OrgRole } from './enums'
 import { badRequest, forbidden, notFound, type Refusal } from './functions'
+import { namedCeiling, readGuard } from './namedPages'
 import type { EventOwner } from './taskEvents'
 import { inWorkingSet } from './workingSet'
 
@@ -1159,16 +1162,88 @@ async function sameOrgTeamMembers(ctx: QueryCtx, teamId: string, orgId: string):
   return members.map((member) => member.profile_id)
 }
 
-/* Staff may add organization labels when any meta grants user standing,
- * including explicit team sharing. Renaming, recoloring and deleting follow
- * canManageOrgLabels. */
-export async function canWriteOrgLabels(ctx: QueryCtx, me: Doc<'profiles'>): Promise<boolean> {
+/** How many of the person's own rows canWriteOrgLabels reads before it
+ * answers that it could not finish: the projects they lead, their grants,
+ * their team memberships and the shares of those teams. A grant or a
+ * membership exists for each project or team someone gave the person, so
+ * real people hold far fewer. Each row adds at most one lookup of a project
+ * or a team, so 2,000 rows with their lookups read at most 4,000 documents
+ * of a few hundred bytes to about 1 KB, an eighth of Convex's 32,000 and well
+ * under its 16 MiB. A membership also opens one range for its team's shares,
+ * so when most rows are memberships the ranges can pass NAMED_READ's 2,000
+ * (lib/namedPages.ts), and the read guard stops the check first. A person
+ * with 2,000 viewer grants and no proof gets null, not a limit error. Tests
+ * lower it. */
+export const LABEL_WRITE_READ = { rows: 2000 }
+
+/**
+ * Whether `me` may add labels to the organization's list: true, false, or
+ * null when the check could not finish, which callers refuse or show as
+ * unknown, never as either answer. Organization staff may: an admin always,
+ * and a user when a top-level meta project of the organization, archived
+ * ones included as orgProjects lists them, gives them User or Lead standing
+ * on itself. That holds when they lead it, hold a `user` grant on it, or
+ * belong to a team of the organization that holds a `user` share on it.
+ * Grants and shares on sub-projects, and `viewer` ones, never count. This is
+ * the rule of projectLevelsForOrg over every meta, read from the person's
+ * own rows only, and it stops at the first proof. It answers null past
+ * LABEL_WRITE_READ rows or once its read guard finds `ceiling` reached
+ * (lib/namedPages.ts namedCeiling by default), in a mutation too. Renaming,
+ * recoloring and deleting follow canManageOrgLabels.
+ */
+export async function canWriteOrgLabels(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  ceiling?: ReadCeiling,
+): Promise<boolean | null> {
   if (!isOrgStaff(me)) return false
   if (me.org_role === 'admin') return true
-  const { levelOf: levelForRoot } = await projectLevelsForOrg(ctx, me)
-  const orgProjects = ctx.db.query('projects').withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-  for await (const p of orgProjects) {
-    if (p.type === 'meta' && levelRank(levelForRoot(p)) >= LEVEL_RANK.user) return true
+  const guard = readGuard(ctx, ceiling ?? (await namedCeiling(ctx)))
+  let rows = 0
+  // counts one of the person's own rows, and answers whether the check may go on
+  const counted = async (row: GenericDocument) =>
+    (await guard.document(row)) && ++rows <= LABEL_WRITE_READ.rows
+  // a top-level meta of the organization, where label rights come from
+  const isRoot = (project: Doc<'projects'> | null) =>
+    project !== null &&
+    project.org_id === me.org_id &&
+    project.parent_id === undefined &&
+    project.type === 'meta'
+  const project = (id: string) => guard.lookup(() => byId(ctx, 'projects', id))
+
+  if (!(await guard.range())) return null
+  const led = ctx.db.query('projects').withIndex('by_lead', (q) => q.eq('lead_id', me.id))
+  for await (const p of led) {
+    if (canLeadProjects(me) && isRoot(p)) return true
+    if (!(await counted(p))) return null
+  }
+  if (!(await guard.range())) return null
+  const grants = ctx.db
+    .query('project_access')
+    .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+  for await (const grant of grants) {
+    if (!(await counted(grant))) return null
+    if (grant.level === 'user' && isRoot(await project(grant.project_id))) return true
+    if (guard.full) return null
+  }
+  if (!(await guard.range())) return null
+  const memberships = ctx.db
+    .query('team_members')
+    .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+  for await (const membership of memberships) {
+    if (!(await counted(membership))) return null
+    const team = await guard.lookup(() => byId(ctx, 'teams', membership.team_id))
+    if (guard.full) return null
+    if (team === null || team.org_id !== me.org_id) continue
+    if (!(await guard.range())) return null
+    const shares = ctx.db
+      .query('project_team_access')
+      .withIndex('by_team', (q) => q.eq('team_id', team.id))
+    for await (const share of shares) {
+      if (!(await counted(share))) return null
+      if (share.level === 'user' && isRoot(await project(share.project_id))) return true
+      if (guard.full) return null
+    }
   }
   return false
 }
