@@ -35,7 +35,7 @@ import { noProjectsHint, seesNoProject } from '../lib/noProjects'
 import { notificationPermission, requestNotificationPermission } from '../lib/notify'
 import { matchesAllWords } from '../lib/search'
 import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '../lib/snooze'
-import { firstUnreadTs } from '../lib/spine'
+import { type UnreadStart, unreadStart } from '../lib/spine'
 import { useMobile } from '../lib/useMobile'
 import { OUT_OF_USE } from '../lib/viewHidden'
 import { type MessageGroupVM, type MessageVM, P } from '../store/planner'
@@ -364,9 +364,10 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const listScrollRef = useRef<HTMLDivElement>(null)
   const queueScrollTop = useRef(0)
   const [sort, setSort] = useState('new') // "new" | "old"
-  // where this visit's unread part starts, frozen at select time — WITH the
-  // task it was asked about, so in-pane navigation can't inherit it
-  const [frozen, setFrozen] = useState(null as { uuid: string; ts: number | null } | null)
+  // where this visit's unread part starts and whether it holds a change,
+  // frozen at select time — WITH the task it was asked about, so in-pane
+  // navigation can't inherit it
+  const [frozen, setFrozen] = useState(null as { uuid: string; unread: UnreadStart } | null)
   const [unreadOnly, setUnreadOnly] = useState(false)
   const [showSnoozed, setShowSnoozed] = useState(false) // sleeping items are hidden by default
   const [kinds, setKinds] = useState([] as string[]) // empty = all
@@ -583,7 +584,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     queueScrollTop.current = listScrollRef.current?.scrollTop || 0
     // the list as it shows now, which a read row leaves under Unread only
     paneRows.current = { id: g.id, ids: visible.map((x) => x.id) }
-    setFrozen({ uuid: g.issueUuid, ts: firstUnreadTs(P.messages, g.issueUuid) })
+    setFrozen({ uuid: g.issueUuid, unread: unreadStart(P.messages, g.issueUuid) })
     // a task still to arrive opens once it does, and its item reads then
     const later = !g.issueKey && P.stillLoading() !== null
     // a sleeping row is a reminder that returns unread; looking does not read it
@@ -611,7 +612,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     if (deadKey) showTask(deadKey)
   }, [deadItem, deadKey, loading])
   // …and only for the task it was frozen about
-  const unreadTs = frozen && paneIssue && frozen.uuid === paneIssue.uuid ? frozen.ts : undefined
+  const unread = frozen && paneIssue && frozen.uuid === paneIssue.uuid ? frozen.unread : undefined
   const menuGroup = menu ? P.messageGroups.find((g) => g.id === menu.id) : null
   const filterCount = (unreadOnly ? 1 : 0) + (showSnoozed ? 1 : 0) + kinds.length
   const toggleKind = (k: string) =>
@@ -966,7 +967,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             modalActive={!poppedOut}
             key={paneId}
             issueId={paneId}
-            unreadTs={unreadTs}
+            unread={unread}
             onClose={closeTask}
             closeLabel="Back to inbox"
             onOpen={showTask}
@@ -1143,7 +1144,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           <IssueDetail
             issueId={paneId}
             holdThread
-            unreadTs={undefined} // the pane already consumed this visit's New mark
+            unread={undefined} // the pane already consumed this visit's New mark
             onPopOut={undefined} // this IS the pop-out
             onShowOnBoard={showOnBoard}
             onClose={() => closeOrAsk([popScope], () => setPoppedOut(false))}

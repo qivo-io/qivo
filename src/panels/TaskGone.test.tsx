@@ -75,7 +75,7 @@ async function open(
     if (name === 'workspace:whole') {
       deliver = (snapshot) => next(structuredClone(snapshot))
       deliver(snap)
-    } else if (name === 'snapshot:commentThread') next({ comments: [], earlier: false, events: [] })
+    } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     return () => {}
   })
   network.query.mockReset()

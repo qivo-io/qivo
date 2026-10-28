@@ -572,12 +572,13 @@ const read = (name, args = {}) => {
         complimentary_until: null,
         current_period_end: null,
       }
-    case 'snapshot:commentThread':
+    case 'snapshot:threadComments':
       return {
         comments: comments.filter((comment) => comment.issue_id === args.issue_id),
         earlier: false,
-        events: [],
       }
+    case 'snapshot:threadHistory':
+      return { events: [], earlier: false, next: null }
     case 'teamSync:lastComments':
       return { rows: [], complete: true }
     case 'admin:isOperator':
@@ -816,8 +817,8 @@ const scenarios = {
   },
   deliverComments() {
     const active = [
-      ...(listeners.get('snapshot:commentThread') || []),
-      ...[...watchedParts.values()].filter((part) => part.name === 'snapshot:commentThread'),
+      ...(listeners.get('snapshot:threadComments') || []),
+      ...[...watchedParts.values()].filter((part) => part.name === 'snapshot:threadComments'),
     ]
     if (active.length !== 1) throw new Error('Benchmark requires one open comment thread')
     const body = `Benchmark delivered comment ${comments.length + 1}`
@@ -828,7 +829,7 @@ const scenarios = {
       body,
       created_at: new Date().toISOString(),
     })
-    void emit('snapshot:commentThread')
+    void emit('snapshot:threadComments')
     if (watchedParts.size) void transition()
     return body
   },

@@ -1,6 +1,6 @@
 /* The workspace parts (workspace.ts) joined as the app joins them
  * (helpers.setup.ts workspaceOf), the read-path gate, and the task history
- * that snapshot.commentThread answers beside a task's comments.
+ * that snapshot.threadHistory answers beside a task's comments.
  *
  * Extra scenery beside withOrg's mini-Testbed:
  * - hiddenSub: a sub under f.hidden (lead: user) — invisible to guest/viewer,
@@ -16,6 +16,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { HISTORY_PAGE_MAX, WINDOW_HISTORY_PAGE } from '../lib/activityVisibility'
 import { byId } from '../lib/db'
 import { loadInbox } from '../lib/inbox'
 import { INBOX_LIMIT } from '../lib/limits'
@@ -1077,7 +1078,7 @@ describe('task history visibility', () => {
   const historyOf = async (p: Doc<'profiles'>, taskId: string) => {
     const snap = await snapFor(p)
     if (!snap.issues.some((i) => i.id === taskId)) return []
-    const page = await as(t, p).query(api.snapshot.commentThread, {
+    const page = await as(t, p).query(api.snapshot.threadHistory, {
       org_id: f.org.id,
       issue_id: taskId,
     })
@@ -1589,9 +1590,9 @@ describe('hidden parents', () => {
   })
 })
 
-/* The task window's history arrives with its comments (commentThread
- * events), by the rule REST and MCP follow. */
-describe('commentThread events', () => {
+/* The task window's history under All (threadHistory), by the rule REST
+ * and MCP follow. */
+describe('threadHistory events', () => {
   /* A seat with User on each of `projectIds`. */
   const seatOn = async (...projectIds: string[]) => {
     const seat = await plantSeat(t, {
@@ -1606,7 +1607,7 @@ describe('commentThread events', () => {
     return seat
   }
   const thread = (p: Doc<'profiles'>, issue_id: string) =>
-    as(t, p).query(api.snapshot.commentThread, { org_id: f.org.id, issue_id })
+    as(t, p).query(api.snapshot.threadHistory, { org_id: f.org.id, issue_id })
   const events = async (p: Doc<'profiles'>, issue_id: string) =>
     (await thread(p, issue_id)).events.map((e) => e.id)
   const rest = async (p: Doc<'profiles'>, issue_id: string) =>
@@ -1743,10 +1744,17 @@ describe('commentThread events', () => {
         }),
       )
       for (const p of [f.admin, f.guest]) {
-        const page = await thread(p, task.id)
-        expect(page.comments.map((c) => c.body)).toEqual(['still here'])
-        expect(page.events).toEqual([])
-        expect(page.events_earlier).toBe(false)
+        const comments = await as(t, p).query(api.snapshot.threadComments, {
+          org_id: f.org.id,
+          issue_id: task.id,
+        })
+        expect(comments.comments.map((c) => c.body)).toEqual(['still here'])
+        expect(await thread(p, task.id)).toEqual({ events: [], earlier: false, next: null })
+        const old = await as(t, p).query(api.snapshot.commentThread, {
+          org_id: f.org.id,
+          issue_id: task.id,
+        })
+        expect(old).toMatchObject({ events: [], events_earlier: false, events_next: null })
         const anchor = (await rest(f.admin, task.id))[0]
         const before = await as(t, p).query(api.snapshot.historyBefore, {
           org_id: f.org.id,
@@ -1894,27 +1902,43 @@ describe('commentThread events', () => {
     })
     const times = (from: number, n: number) =>
       Array.from({ length: n }, (_, i) => new Date(base + (from + i) * 1000).toISOString())
+    // the window opens at the newest WINDOW_HISTORY_PAGE rows
     const page = await thread(f.admin, issueVis.id)
-    expect(page.events.map((e) => e.ts)).toEqual(times(100, 500))
-    expect(page.events_earlier).toBe(true)
-    expect(await rest(f.admin, issueVis.id)).toEqual(page.events.map((e) => e.id))
-    // "Show earlier comments" reads the rest, which REST and MCP page the same way
-    const before = page.events[0].id
-    const earlier = await as(t, f.admin).query(api.snapshot.historyBefore, {
+    expect(page.events.map((e) => e.ts)).toEqual(times(550, 50))
+    expect(page.earlier).toBe(true)
+    expect(page.next).toBe(page.events[0].id)
+    // "Show earlier activity" reads the rest 50 at a time, each row once
+    let read = page.events
+    for (let next = page.next; next !== null; ) {
+      const earlier = await as(t, f.admin).query(api.snapshot.historyBefore, {
+        org_id: f.org.id,
+        issue_id: issueVis.id,
+        before: next,
+      })
+      expect(earlier.events.length).toBe(WINDOW_HISTORY_PAGE)
+      expect(earlier.events.every((e) => !('field_prints' in e))).toBe(true)
+      read = [...earlier.events, ...read]
+      next = earlier.next
+      expect(next !== null).toBe(earlier.earlier)
+    }
+    expect(read.map((e) => e.ts)).toEqual(times(0, 600))
+    // REST, MCP and the deprecated commentThread keep pages of HISTORY_PAGE_MAX
+    const old = await as(t, f.admin).query(api.snapshot.commentThread, {
       org_id: f.org.id,
       issue_id: issueVis.id,
-      before,
     })
-    expect(earlier.events.map((e) => e.ts)).toEqual(times(0, 100))
-    expect(earlier.earlier).toBe(false)
-    expect(earlier.events.every((e) => !('field_prints' in e))).toBe(true)
+    expect(old.events.map((e) => e.ts)).toEqual(times(100, HISTORY_PAGE_MAX))
+    expect(old.events_earlier).toBe(true)
+    expect(old.events_next).toBe(old.events[0].id)
+    expect(await rest(f.admin, issueVis.id)).toEqual(old.events.map((e) => e.id))
+    const before = old.events[0].id
     const restBefore = await t.query(internal.machine.records.restTaskActivity, {
       callerId: f.admin.id,
       access: 'read',
       ref: issueVis.id,
       before,
     })
-    expect(restBefore.map((row) => row.id)).toEqual(earlier.events.map((e) => e.id))
+    expect(restBefore.map((row) => row.created_at)).toEqual(times(0, 100))
     const mcpBefore = JSON.parse(
       await t.query(internal.machine.records.mcpTaskActivity, {
         callerId: f.admin.id,
@@ -1923,7 +1947,7 @@ describe('commentThread events', () => {
         before: before.toUpperCase(),
       }),
     ) as { id: string }[]
-    expect(mcpBefore.map((row) => row.id)).toEqual(earlier.events.map((e) => e.id))
+    expect(mcpBefore.map((row) => row.id)).toEqual(restBefore.map((row) => row.id))
     // a row of another task is no place in this history
     const elsewhere = await t.run((ctx) =>
       ctx.db
@@ -1945,7 +1969,146 @@ describe('commentThread events', () => {
   })
 })
 
-describe('commentThread events near the read limits', () => {
+/* The task window's history pages: the live page a window subscribes to
+ * under All (threadHistory) and the earlier ones it reads once
+ * (historyBefore), each WINDOW_HISTORY_PAGE rows. REST and MCP keep
+ * HISTORY_PAGE_MAX. */
+describe('the task window history pages', () => {
+  /* `n` rows about `task`, one second apart, oldest first, as their ids. */
+  const plantHistory = (task: Doc<'issues'>, n: number) =>
+    t.run(async (ctx) => {
+      const base = Date.parse(NOW)
+      const ids: string[] = []
+      for (let i = 0; i < n; i++) {
+        const id = uuid()
+        await ctx.db.insert('activity_events', {
+          id,
+          org_id: f.org.id,
+          ts: new Date(base + i * 1000).toISOString(),
+          actor_id: f.admin.id,
+          verb: 'changed',
+          target_type: 'issue',
+          target_id: task.id,
+          label: 'x',
+          project_id: task.project_id,
+          named_task_nums: [],
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+  const live = (p: Doc<'profiles'>, task: Doc<'issues'>) =>
+    as(t, p).query(api.snapshot.threadHistory, { org_id: f.org.id, issue_id: task.id })
+  const earlierPage = (p: Doc<'profiles'>, task: Doc<'issues'>, row: string) =>
+    as(t, p).query(api.snapshot.historyBefore, {
+      org_id: f.org.id,
+      issue_id: task.id,
+      before: row,
+    })
+
+  it('holds the newest 50 rows, and historyBefore pages back 50 at a time', async () => {
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const ids = await plantHistory(task, 120)
+    const newest = await live(f.admin, task)
+    expect(newest.events.map((e) => e.id)).toEqual(ids.slice(70))
+    expect(newest.earlier).toBe(true)
+    expect(newest.next).toBe(ids[70])
+    const middle = await earlierPage(f.admin, task, ids[70])
+    expect(middle.events.map((e) => e.id)).toEqual(ids.slice(20, 70))
+    expect(middle.earlier).toBe(true)
+    const first = await earlierPage(f.admin, task, ids[20])
+    expect(first.events.map((e) => e.id)).toEqual(ids.slice(0, 20))
+    expect(first).toMatchObject({ earlier: false, next: null })
+  })
+
+  it('says there is more only past 50 rows', async () => {
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const ids = await plantHistory(task, 50)
+    expect(await live(f.guest, task)).toMatchObject({ earlier: false, next: null })
+    expect((await live(f.guest, task)).events.map((e) => e.id)).toEqual(ids)
+    const [newer] = await plantHistory(task, 1)
+    const page = await live(f.guest, task)
+    expect(page.events.map((e) => e.id)).toEqual([...ids.slice(1), newer])
+    expect(page).toMatchObject({ earlier: true, next: ids[1] })
+    expect((await earlierPage(f.guest, task, ids[1])).events.map((e) => e.id)).toEqual([ids[0]])
+  })
+
+  it("pages a member past the rows it does not receive, and an admin's pages hold every row", async () => {
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // every third row is a move from a project the guest cannot access
+    const ids = await t.run(async (ctx) => {
+      const base = Date.parse(NOW)
+      const out: { id: string; hidden: boolean }[] = []
+      for (let i = 0; i < 130; i++) {
+        const id = uuid()
+        const hidden = i % 3 === 0
+        await ctx.db.insert('activity_events', {
+          id,
+          org_id: f.org.id,
+          ts: new Date(base + i * 1000).toISOString(),
+          actor_id: f.admin.id,
+          verb: hidden ? 'moved' : 'changed',
+          target_type: 'issue',
+          target_id: task.id,
+          label: 'x',
+          project_id: f.sub.id,
+          ...(hidden
+            ? { related_project_id: hiddenSub.id, detail: 'to the Firmware sub-project' }
+            : {}),
+          named_task_nums: [],
+        })
+        out.push({ id, hidden })
+      }
+      return out
+    })
+    const received = ids.filter((row) => !row.hidden).map((row) => row.id)
+    /* Every row `p` reads from the live page back to the start, and the
+     * size of each page. */
+    const walk = async (p: Doc<'profiles'>) => {
+      const page = await live(p, task)
+      let rows = page.events.map((e) => e.id)
+      const sizes = [rows.length]
+      for (let next = page.next; next !== null; ) {
+        const older = await earlierPage(p, task, next)
+        rows = [...older.events.map((e) => e.id), ...rows]
+        sizes.unshift(older.events.length)
+        next = older.next
+      }
+      return { rows, sizes }
+    }
+    const guest = await walk(f.guest)
+    expect(guest.rows).toEqual(received)
+    expect(guest.sizes).toEqual([received.length - 50, 50])
+    const admin = await walk(f.admin)
+    expect(admin.rows).toEqual(ids.map((row) => row.id))
+    expect(admin.sizes).toEqual([30, 50, 50])
+    expect((await live(f.admin, task)).events.some((e) => e.verb === 'moved')).toBe(true)
+  })
+
+  it('refuses an unknown, foreign or hidden task alike, and a before from another task', async () => {
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const [row] = await plantHistory(task, 1)
+    const hidden = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
+    const foreign = await plantIssue(t, { org_id: f.otherOrg.id, project_id: f.otherProject.id })
+    for (const other of [hidden, foreign]) {
+      for (const query of [api.snapshot.threadHistory, api.snapshot.threadComments])
+        await expectRefusal(
+          as(t, f.guest).query(query, { org_id: f.org.id, issue_id: other.id }),
+          'not_found',
+          /^task not found$/,
+        )
+    }
+    await expectRefusal(
+      as(t, f.guest).query(api.snapshot.threadHistory, { org_id: f.org.id, issue_id: uuid() }),
+      'not_found',
+      /^task not found$/,
+    )
+    const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await expectRefusal(earlierPage(f.guest, other, row), 'bad_request', /^before must be the id/)
+  })
+})
+
+describe('the task window history near the read limits', () => {
   it("stops looking up named tasks before Convex's limits and leaves their rows out", async () => {
     const big = newT({ transactionLimits: true })
     const g = await withOrg(big)
@@ -2041,6 +2204,27 @@ describe('commentThread events near the read limits', () => {
     const inRest = fits(overRest.map((row) => row.id))
     // without the comments, REST has room for more lookups
     expect(inRest).toBeGreaterThan(inThread)
+    // and so has the window's own history page, which reads no comment, and
+    // its earlier pages, each with room of its own, reach every row once
+    const live = await as(big, g.guest).query(api.snapshot.threadHistory, {
+      org_id: g.org.id,
+      issue_id: task.id,
+    })
+    expect(fits(live.events.map((e) => e.id))).toBeGreaterThan(inThread)
+    expect(live.earlier).toBe(true)
+    let shown = live.events.map((e) => e.id)
+    let next = live.next
+    for (let pages = 0; next !== null && pages < 40; pages++) {
+      const older = await as(big, g.guest).query(api.snapshot.historyBefore, {
+        org_id: g.org.id,
+        issue_id: task.id,
+        before: next,
+      })
+      expect(older.events.length).toBeGreaterThan(0)
+      shown = [...older.events.map((e) => e.id), ...shown]
+      next = older.next
+    }
+    expect(shown).toEqual(all)
     const overMcp = JSON.parse(
       await big.query(internal.machine.records.mcpTaskActivity, {
         callerId: g.guest.id,
@@ -2144,11 +2328,11 @@ describe('the task window history', () => {
       })
     })
     for (const p of [f.admin, f.user, f.guest, f.viewer]) {
-      const thread = await as(t, p).query(api.snapshot.commentThread, {
+      const history = await as(t, p).query(api.snapshot.threadHistory, {
         org_id: f.org.id,
         issue_id: created,
       })
-      expect(thread.events.map((e) => e.verb)).toEqual(['created'])
+      expect(history.events.map((e) => e.verb)).toEqual(['created'])
     }
   })
 })

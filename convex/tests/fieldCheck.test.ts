@@ -636,12 +636,12 @@ describe('field prints', () => {
     await edit(fx, fx.user, row.id, { title: 'Two' })
     const [stored] = await activityFor(fx.t, fx.org.id)
     expect(stored.field_prints).toEqual({ title: titlePrint('Two') })
-    const thread = await as(fx.t, fx.admin).query(api.snapshot.commentThread, {
+    const history = await as(fx.t, fx.admin).query(api.snapshot.threadHistory, {
       org_id: fx.org.id,
       issue_id: row.id,
     })
-    expect(thread.events.map((e) => e.id)).toEqual([stored.id])
-    expect(thread.events[0]).not.toHaveProperty('field_prints')
+    expect(history.events.map((e) => e.id)).toEqual([stored.id])
+    expect(history.events[0]).not.toHaveProperty('field_prints')
     const exported = await as(fx.t, fx.admin).query(api.orgExport.page, {
       org_id: fx.org.id,
       section: 'activity_events',

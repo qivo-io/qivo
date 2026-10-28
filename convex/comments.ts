@@ -50,7 +50,7 @@ async function myComment(
  * P.addComment. Author is structurally ctx.me ('comments can only be
  * created as yourself' becomes shape); created_at is server-stamped — a
  * client cannot backdate. Returns nothing: the client pre-generated the id
- * and the thread arrives via the commentThread subscription. The write
+ * and the thread arrives via the threadComments subscription. The write
  * itself is model/comments.ts postComment, shared with REST and MCP. */
 export const create = orgMutation({
   args: { id: v.string(), issue_id: v.string(), body: v.string() },

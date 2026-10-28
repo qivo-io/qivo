@@ -107,6 +107,16 @@ describe('the benchmark server', () => {
     expect(posted.find((m) => m.to === 'known').text).toBeTruthy()
   })
 
+  it("answers the task window's comment page and, apart, its history page", async () => {
+    const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
+    const args = { issue_id: TASK_1 }
+    await send({ type: 'query', id: 'comments', name: 'snapshot:threadComments', args })
+    await send({ type: 'query', id: 'history', name: 'snapshot:threadHistory', args })
+    const answer = (id) => JSON.parse(posted.find((m) => m.to === id).text)
+    expect(Object.keys(answer('comments')).sort()).toEqual(['comments', 'earlier'])
+    expect(answer('history')).toEqual({ events: [], earlier: false, next: null })
+  })
+
   it('answers the appearance mode the page asks for, dark unless it asks for light', async () => {
     const modeOf = async (params) => {
       const { posted, send } = await server(`tasks=20&latency=0&mbps=100000${params}`)

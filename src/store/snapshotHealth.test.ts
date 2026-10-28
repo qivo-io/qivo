@@ -116,7 +116,7 @@ describe('snapshot trouble', () => {
           else if (firstDelivery === 'deactivated') deliver(DEACTIVATED)
           else fail(firstDelivery instanceof Error ? firstDelivery : new Error(QUERY_FAILURE))
         }
-      } else if (getFunctionName(ref) === 'snapshot:commentThread')
+      } else if (getFunctionName(ref) === 'snapshot:threadComments')
         threads.push({ deliver, unsubscribe })
       return unsubscribe
     })
@@ -402,13 +402,8 @@ describe('snapshot trouble', () => {
   it('keeps a comment saved while Try again starts every part afresh until the new thread answers', async () => {
     await boot()
     const { P } = store
-    const page = {
-      comments: [],
-      earlier: false,
-      events: [],
-      events_earlier: false,
-      events_next: null,
-    }
+    // a threadComments page
+    const page = { comments: [], earlier: false }
     P.watchComments('task-a')
     await settle()
     threads[0].deliver(structuredClone(page))

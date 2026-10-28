@@ -2321,7 +2321,7 @@ function App() {
                 onClose={closeIssue}
                 onOpen={openTask}
                 onPlanOnRoadmap={planOnRoadmap}
-                unreadTs={undefined}
+                unread={undefined}
                 onPopOut={undefined}
                 onShowOnBoard={showOnBoard}
               />

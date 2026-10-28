@@ -116,6 +116,7 @@ import type * as lib_machineDelay from "../lib/machineDelay.js";
 import type * as lib_mailConfig from "../lib/mailConfig.js";
 import type * as lib_md from "../lib/md.js";
 import type * as lib_mentions from "../lib/mentions.js";
+import type * as lib_messageDetails from "../lib/messageDetails.js";
 import type * as lib_microsoftAccounts from "../lib/microsoftAccounts.js";
 import type * as lib_nameKey from "../lib/nameKey.js";
 import type * as lib_namedPages from "../lib/namedPages.js";
@@ -353,6 +354,7 @@ declare const fullApi: ApiFromModules<{
   "lib/mailConfig": typeof lib_mailConfig;
   "lib/md": typeof lib_md;
   "lib/mentions": typeof lib_mentions;
+  "lib/messageDetails": typeof lib_messageDetails;
   "lib/microsoftAccounts": typeof lib_microsoftAccounts;
   "lib/nameKey": typeof lib_nameKey;
   "lib/namedPages": typeof lib_namedPages;

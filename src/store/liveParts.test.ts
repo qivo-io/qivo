@@ -124,6 +124,10 @@ function serve(s: ReturnType<typeof scripted>) {
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
+// the task window's side queries
+const THREAD = makeFunctionReference<'query'>('snapshot:threadComments')
+const HISTORY = makeFunctionReference<'query'>('snapshot:threadHistory')
+
 async function started() {
   const s = scripted()
   serve(s)
@@ -324,12 +328,61 @@ describe('the live parts registry', () => {
 
   it('a failed side query rides along without failing or holding the workspace', async () => {
     const { s, parts, reports, last } = await started()
-    parts.watchSide(makeFunctionReference<'query'>('snapshot:commentThread'), { issue_id: 't' })
-    const side = s.keyOf('snapshot:commentThread', { issue_id: 't' })
-    s.set('snapshot:commentThread', { issue_id: 't' }, { error: new Error('thread failed') })
+    parts.watchSide('thread', THREAD, { issue_id: 't' })
+    const side = s.keyOf('snapshot:threadComments', { issue_id: 't' })
+    s.set('snapshot:threadComments', { issue_id: 't' }, { error: new Error('thread failed') })
     s.send([side])
     expect(last()?.state).toBe('complete')
-    expect(reports.at(-1)?.side).toMatchObject({ error: expect.any(Error) })
+    expect(reports.at(-1)?.sides).toEqual({ thread: { error: expect.any(Error) } })
+  })
+
+  it('reports each side query on its own, and one failing holds neither the workspace nor the other', async () => {
+    const { s, parts, reports, last } = await started()
+    parts.watchSide('thread', THREAD, { issue_id: 't' })
+    parts.watchSide('history', HISTORY, { issue_id: 't' })
+    const thread = s.keyOf('snapshot:threadComments', { issue_id: 't' })
+    const history = s.keyOf('snapshot:threadHistory', { issue_id: 't' })
+    s.set('snapshot:threadComments', { issue_id: 't' }, { value: { comments: ['c'] } })
+    s.send([thread])
+    expect(reports.at(-1)?.sides).toEqual({ thread: { value: { comments: ['c'] } } })
+    s.set('snapshot:threadHistory', { issue_id: 't' }, { error: new Error('history failed') })
+    s.send([history])
+    expect(reports.at(-1)?.sides).toEqual({ history: { error: expect.any(Error) } })
+    // Convex keeps a failed run until the side is watched afresh, as a retry
+    // does, and then both in one transition, beside a workspace change,
+    // report once
+    parts.watchSide('history', HISTORY, { issue_id: 't' })
+    const count = reports.length
+    s.set('snapshot:threadComments', { issue_id: 't' }, { value: { comments: ['c', 'd'] } })
+    s.set('snapshot:threadHistory', { issue_id: 't' }, { value: { events: ['e'] } })
+    s.set('workspace:tasks', { org_id: ORG, ...LEFT }, { value: tasksPart(['a']) })
+    s.send([thread, history, s.keyOf('workspace:tasks', { org_id: ORG, ...LEFT })])
+    expect(reports).toHaveLength(count + 1)
+    expect(reports.at(-1)?.sides).toEqual({
+      thread: { value: { comments: ['c', 'd'] } },
+      history: { value: { events: ['e'] } },
+    })
+    expect(last()).toMatchObject({ state: 'complete', changed: true })
+    // a workspace transition alone tells of no side
+    s.send([s.keyOf('workspace:catalog', { org_id: ORG })])
+    expect(reports.at(-1)?.sides).toBeUndefined()
+  })
+
+  it('replaces or stops one side query and keeps the other, and stop() drops both', async () => {
+    const { s, parts } = await started()
+    parts.watchSide('thread', THREAD, { issue_id: 't' })
+    parts.watchSide('history', HISTORY, { issue_id: 't' })
+    const history = s.keyOf('snapshot:threadHistory', { issue_id: 't' })
+    parts.watchSide('thread', THREAD, { issue_id: 'u' })
+    expect(s.watched.has(s.keyOf('snapshot:threadComments', { issue_id: 't' }))).toBe(false)
+    expect(s.watched.has(s.keyOf('snapshot:threadComments', { issue_id: 'u' }))).toBe(true)
+    expect(s.watched.has(history)).toBe(true)
+    parts.stopSide('history')
+    expect(s.watched.has(history)).toBe(false)
+    expect(s.watched.has(s.keyOf('snapshot:threadComments', { issue_id: 'u' }))).toBe(true)
+    parts.watchSide('history', HISTORY, { issue_id: 'u' })
+    parts.stop()
+    expect([...s.watched.keys()].filter((key) => key.startsWith('snapshot:'))).toEqual([])
   })
 
   it('fails a workspace that stays incomplete with no part answering while online, and waits while offline', async () => {
@@ -389,14 +442,14 @@ describe('the live parts registry', () => {
       (r) => reports.push(r),
       () => true,
     )
-    parts.watchSide(makeFunctionReference<'query'>('snapshot:commentThread'), { issue_id: 't' })
+    parts.watchSide('thread', THREAD, { issue_id: 't' })
     s.send()
     await vi.advanceTimersByTimeAsync(0)
     s.send()
     expect(reports.at(-1)?.workspace.state).toBe('held')
-    const side = s.keyOf('snapshot:commentThread', { issue_id: 't' })
+    const side = s.keyOf('snapshot:threadComments', { issue_id: 't' })
     for (let i = 0; i < 4; i++) {
-      s.set('snapshot:commentThread', { issue_id: 't' }, { value: { comments: [i] } })
+      s.set('snapshot:threadComments', { issue_id: 't' }, { value: { comments: [i] } })
       s.send([side])
       await vi.advanceTimersByTimeAsync(400)
     }

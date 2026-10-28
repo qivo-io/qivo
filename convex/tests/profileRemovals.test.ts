@@ -666,7 +666,7 @@ describe('access ends in the removal transaction', () => {
     const session = t.withIdentity({ subject: login._id })
     const probe = async () => ({
       comments: await session
-        .query(api.snapshot.commentThread, { org_id: f.org.id, issue_id: task.id })
+        .query(api.snapshot.threadComments, { org_id: f.org.id, issue_id: task.id })
         .then(
           () => 'ok',
           (e: { data?: { message?: string } }) => e.data?.message,

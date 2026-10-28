@@ -23,7 +23,7 @@ type Deferred<T> = { resolve: (value: T) => void; reject: (reason: unknown) => v
 const START = Date.parse('2026-09-14T08:00:00.000Z')
 
 /* "Show earlier comments" in the store. The task window subscribes to the
-   thread's live window (snapshot.commentThread) and reads earlier pages once
+   thread's live window (snapshot.threadComments) and reads earlier pages once
    (snapshot.commentsBefore). Comment #n is posted n minutes after START. */
 describe('earlier comments in the store', () => {
   let store: typeof import('./planner')
@@ -95,9 +95,8 @@ describe('earlier comments in the store', () => {
     )
     network.onUpdate.mockImplementation((ref, _args, receive, fail) => {
       if (getFunctionName(ref) === 'workspace:whole') receive(structuredClone(snap))
-      // the live window also carries the task's changes, which these tests leave out
-      else if (getFunctionName(ref) === 'snapshot:commentThread') {
-        publish = (page) => receive({ ...page, events: [] })
+      else if (getFunctionName(ref) === 'snapshot:threadComments') {
+        publish = (page) => receive(page)
         failThread = fail
       }
       return () => {}
@@ -119,8 +118,8 @@ describe('earlier comments in the store', () => {
     network.onUpdate.mockImplementation((ref, _args, receive, fail) => {
       if (getFunctionName(ref) === 'workspace:whole')
         answerWhole = () => receive(structuredClone(snap))
-      else if (getFunctionName(ref) === 'snapshot:commentThread') {
-        publish = (page) => receive({ ...page, events: [] })
+      else if (getFunctionName(ref) === 'snapshot:threadComments') {
+        publish = (page) => receive(page)
         failThread = fail
       }
       return () => {}
@@ -307,7 +306,7 @@ describe('earlier comments in the store', () => {
     publish({ comments: range(100, 150), earlier: true })
     await new Promise((resolve) => setTimeout(resolve, 0))
     const edited = P.updateComment('comment-100', 'Edited while failing')
-    failThread(new Error('[CONVEX Q(snapshot:commentThread)] Server Error'))
+    failThread(new Error('[CONVEX Q(snapshot:threadComments)] Server Error'))
     writes[0].answer.resolve(null)
     expect(await edited).toBe(true)
     // the recovering window starts one comment later, so #100 slides out of

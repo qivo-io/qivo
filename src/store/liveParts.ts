@@ -62,9 +62,10 @@
      together in one transition, so a large organization on a busy backend
      can take many seconds before anything arrives.
 
-   One side query rides along, the open task's thread, so a transition that
-   brings both repaints once. Its failure is its own and never holds the
-   workspace. */
+   Named side queries ride along, the open task's comment thread and, while
+   a window shows All, its history (SideName), so a transition that brings
+   the workspace and a side repaints once. Each side is its own: its failure
+   never holds the workspace or another side. */
 
 import type { FunctionReference } from 'convex/server'
 import { ConvexError, type Value } from 'convex/values'
@@ -103,6 +104,14 @@ export const STALL = { ms: 60_000 }
     unless a probe sets fewer. */
 export const STAGES = { most: 32, first: 16, batch: Number.POSITIVE_INFINITY }
 
+/** The side queries that ride along with the workspace: the open task's
+    comment thread and, while a window shows All, its history. */
+export const SIDE_NAMES = ['thread', 'history'] as const
+export type SideName = (typeof SIDE_NAMES)[number]
+
+/** What one transition brought a side query: its answer or its failure. */
+export type SideNews = { value: unknown } | { error: unknown }
+
 /** What the store hears after each transition, and when the workspace
     fails outside one. */
 export type PartsReport = {
@@ -131,8 +140,9 @@ export type PartsReport = {
       }
     | { state: 'held' }
     | { state: 'failed'; error: unknown }
-  /** the side query's news, when this transition brought some */
-  side?: { value: unknown } | { error: unknown }
+  /** the news of each side query this transition brought news of, when
+      it brought any */
+  sides?: Partial<Record<SideName, SideNews>>
 }
 
 type Kind = 'tasks' | 'people' | 'projects'
@@ -154,6 +164,8 @@ type Slot = {
   error?: unknown
   /** whether the answer arrived since the socket last connected */
   fresh: boolean
+  /** the side query it is, for a side query's slot */
+  side?: SideName
 }
 
 /* A window of one kind, its own part, and the pieces it gives way to once
@@ -199,7 +211,7 @@ export function createLiveParts(
   const orgs = new Map<string, Org>()
   // whether a part changed since the last complete report
   let dirty = true
-  let side: Slot | null = null
+  const sides = new Map<SideName, Slot>()
   let lastAt = 0
   let stallTimer: ReturnType<typeof setTimeout> | null = null
   // whether the first organizations load in stages, and whether a complete
@@ -442,10 +454,11 @@ export function createLiveParts(
   }
 
   /** Tells the store the workspace's state after a transition, `news` the
-      side query's. Outside one, after Retry, it tells only of a failure: the workspace cannot be newer than the last transition, so a
-      complete answer then would let the store take writes as shown that
-      no transition brought yet. */
-  function settle(transition?: { news?: PartsReport['side']; progress?: boolean }) {
+      side queries'. Outside one, after Retry, it tells only of a failure:
+      the workspace cannot be newer than the last transition, so a complete
+      answer then would let the store take writes as shown that no
+      transition brought yet. */
+  function settle(transition?: { news?: PartsReport['sides']; progress?: boolean }) {
     if (stopped) return
     if (reconcile()) dirty = true
     // every part watched so far answered: the next stage starts, unless the
@@ -484,7 +497,7 @@ export function createLiveParts(
       transition?.progress === true,
     )
     if (transition || workspace.state === 'failed')
-      report({ at: lastAt, workspace, ...(transition?.news ? { side: transition.news } : {}) })
+      report({ at: lastAt, workspace, ...(transition?.news ? { sides: transition.news } : {}) })
   }
 
   /** Starts or ends the stall check of an incomplete workspace, starting
@@ -521,7 +534,7 @@ export function createLiveParts(
     if (connection !== null && transition.connection !== connection)
       for (const slot of slots.values()) slot.fresh = false
     connection = transition.connection
-    let news: PartsReport['side']
+    let news: PartsReport['sides']
     let progress = false
     for (const token of transition.tokens) {
       const slot = slots.get(token)
@@ -540,9 +553,11 @@ export function createLiveParts(
       slot.value = value
       slot.error = error
       slot.fresh = true
-      if (slot === side) news = error === undefined ? { value } : { error }
-      else {
-        // the side query never holds the workspace, so it is no progress
+      if (slot.side) {
+        news ??= {}
+        news[slot.side] = error === undefined ? { value } : { error }
+      } else {
+        // a side query never holds the workspace, so it is no progress
         progress = true
         dirty = true
       }
@@ -576,17 +591,23 @@ export function createLiveParts(
       if (failed.length > 0) settle()
       return failed.length > 0
     },
-    /** Watches `ref` with `args` as the side query, replacing any before. */
-    watchSide(ref: FunctionReference<'query'>, args: Record<string, Value>) {
-      if (side) drop(side)
-      side = watch(ref, args)
+    /** Watches `ref` with `args` as the side query `name`, replacing only
+        that side's subscription. A fresh subscription runs the query again,
+        so its answer is never one held from before. */
+    watchSide(name: SideName, ref: FunctionReference<'query'>, args: Record<string, Value>) {
+      const before = sides.get(name)
+      if (before) drop(before)
+      const slot = watch(ref, args)
+      slot.side = name
+      sides.set(name, slot)
     },
-    /** Stops the side query. */
-    stopSide() {
-      if (side) drop(side)
-      side = null
+    /** Stops the side query `name`, and keeps the others. */
+    stopSide(name: SideName) {
+      const slot = sides.get(name)
+      if (slot) drop(slot)
+      sides.delete(name)
     },
-    /** Stops every subscription. */
+    /** Stops every subscription, the side queries included. */
     stop() {
       stopped = true
       stopTransitions()
@@ -594,6 +615,7 @@ export function createLiveParts(
       // a Map lets its loop delete the entry it is on
       for (const slot of slots.values()) drop(slot)
       orgs.clear()
+      sides.clear()
     },
   }
 }

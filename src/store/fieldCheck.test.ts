@@ -101,13 +101,12 @@ describe('the field check in the store', () => {
     requests = []
     network.query.mockResolvedValue(null)
     network.onUpdate.mockImplementation((ref, _args, next) => {
-      if (getFunctionName(ref) === 'snapshot:commentThread')
+      if (getFunctionName(ref) === 'snapshot:threadComments')
         next({
           comments: [
             { id: 'c-1', issue_id: 'task-1', author: EMIL, body: 'First take', created_at: NOW },
           ],
           earlier: false,
-          events: [],
         })
       else next(structuredClone(snap))
       return () => {}

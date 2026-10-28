@@ -70,7 +70,7 @@ import {
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { buildPath, issueLink } from '../lib/router'
 import { matchesAllWords, moreMatches } from '../lib/search'
-import { firstUnreadTs, mergeSpine, spineWindow, unreadMark } from '../lib/spine'
+import { mergeSpine, spineWindow, type UnreadStart, unreadMark, unreadStart } from '../lib/spine'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import { markTaskFocus, restoreTaskFocus } from '../lib/taskFocus'
 import { useUpdateBlocker } from '../lib/updateSafety'
@@ -983,17 +983,20 @@ function EarlierComments({
   )
 }
 
-/* The last row of a thread whose subscription failed (P.commentsFailure).
-   It says so with Retry, and shows static text while the retry runs, in
-   EarlierComments' style and height. `shown` says whether comments loaded
-   before the failure are still on screen above it, which then reads as the
-   newest ones failing to load. */
+/* The last row of a thread whose comment subscription failed
+   (P.commentsFailure), or under All whose history subscription failed
+   (P.historyFailure, `what` 'activity'). It says so with Retry, and shows
+   static text while the retry runs, in EarlierComments' style and height.
+   `shown` says whether rows loaded before the failure are still on screen
+   above it, which then reads as the newest ones failing to load. */
 function ThreadFailure({
   state,
+  what = 'comments',
   shown,
   onRetry,
 }: {
   state: Exclude<CommentsFailure, 'none'>
+  what?: 'comments' | 'activity'
   shown: boolean
   onRetry: () => void
 }) {
@@ -1001,18 +1004,20 @@ function ThreadFailure({
     return (
       <div
         data-thread-failure="retrying"
+        data-thread-side={what}
         className="flex min-h-control-sm items-center text-sm italic text-text-3"
       >
-        {shown ? 'Loading the latest comments…' : 'Loading comments…'}
+        {shown ? `Loading the latest ${what}…` : `Loading ${what}…`}
       </div>
     )
   }
   return (
     <div
       data-thread-failure="failed"
+      data-thread-side={what}
       className="flex min-h-control-sm items-center gap-2 text-sm text-text-2"
     >
-      {shown ? "Couldn't load the latest comments." : "Couldn't load comments."}
+      {shown ? `Couldn't load the latest ${what}.` : `Couldn't load ${what}.`}
       <Button type="button" variant="ghost" size="sm" className="px-2" onClick={onRetry}>
         <Icon name="rotateCcw" size={16} />
         Retry
@@ -1302,10 +1307,11 @@ function CommentRow({
    room for the details column, so embedded shows the discussion alone, names
    the location in a breadcrumb over the title, and offers `onPopOut` — the
    same window, floating, with everything the pane left out.
-   `unreadTs` overrides where this visit's unread part starts. The window
-   normally freezes that itself on open, but the inbox marks an item read the
-   moment you click its row — before this component has rendered at all — so
-   the only surviving answer is the one the inbox froze first.
+   `unread` overrides where this visit's unread part starts, and whether it
+   holds a change (lib/spine.ts unreadStart). The window normally freezes
+   that itself on open, but the inbox marks an item read the moment you click
+   its row — before this component has rendered at all — so the only
+   surviving answer is the one the inbox froze first.
    `holdThread` says somebody else owns the store's one comment cache — the
    pane behind a popped-out window, which is on the same task. Without it the
    pop-out's unmount would release a thread the pane is still showing. */
@@ -1315,7 +1321,7 @@ function IssueDetail({
   onOpen,
   onPlanOnRoadmap,
   embedded = false,
-  unreadTs: unreadTsIn,
+  unread: unreadIn,
   onPopOut,
   onShowOnBoard,
   holdThread = false,
@@ -1327,7 +1333,7 @@ function IssueDetail({
   onOpen: (id: string) => void
   onPlanOnRoadmap?: (id: string) => void
   embedded?: boolean
-  unreadTs?: number | null
+  unread?: UnreadStart
   onPopOut?: () => void
   /** Shows the project's Board and reveals `issueKey`'s card, with the
       task's window open over it unless `keepOpen` is false */
@@ -1433,6 +1439,14 @@ function IssueDetail({
     setLeaveEnded((n) => n + 1)
   }
   const [actFilter, setActFilter] = useStateID('comments') // comments ⇄ all
+  // Another task opens under Comments from its first render, not only once
+  // resetWindow's effect has run, so a window on All never asks for the
+  // history of a task it will not show under All (P.showHistory).
+  const [filterTask, setFilterTask] = useStateID(issueId)
+  if (filterTask !== issueId) {
+    setFilterTask(issueId)
+    setActFilter('comments')
+  }
   // the description discloses only in the embedded pane; the floating window
   // pins it open, which is what discussion-first means there
   const [descOpen, setDescOpen] = useStateID(!embedded)
@@ -1621,6 +1635,18 @@ function IssueDetail({
     },
     [holdThread],
   )
+  // Under All the window shows the task's history, which the store loads
+  // only while some window asks for it. A window with holdThread asks too:
+  // the Inbox pane and its pop-out can show one task under different
+  // filters, and each registers on its own.
+  const historyOwner = useRefID({})
+  const showsAll = actFilter === 'all' && watchUuid !== null
+  useEffectID(() => {
+    if (!showsAll) return
+    const owner = historyOwner.current
+    P.showHistory(owner, true)
+    return () => P.showHistory(owner, false)
+  }, [showsAll, watchUuid])
 
   // Where this visit's unread part starts, frozen the moment the task opens.
   // Opening marks the task's messages read (below), so an unfrozen mark would
@@ -1631,17 +1657,20 @@ function IssueDetail({
   // …unless the surface that opened us froze it first (the inbox, whose click
   // marks the item read before this render): then that answer IS the frozen
   // one, and asking again here would only ever find nothing.
-  const frozen = useRefID<{ key: string | null | undefined; ts: number | null }>({
+  // Frozen with it: whether the unread messages include a change, which the
+  // tail note under Comments points at All for, since Comments loads no
+  // history to look for it in.
+  const frozen = useRefID<{ key: string | null | undefined; unread: UnreadStart }>({
     key: undefined,
-    ts: null,
+    unread: { ts: null, change: false },
   })
   if (frozen.current.key !== watchUuid) {
     frozen.current = {
       key: watchUuid,
-      ts: unreadTsIn !== undefined ? unreadTsIn : firstUnreadTs(P.messages, watchUuid),
+      unread: unreadIn !== undefined ? unreadIn : unreadStart(P.messages, watchUuid),
     }
   }
-  const unreadTs = frozen.current.ts
+  const unreadTs = frozen.current.unread.ts
   // …and mark them read, so the sidebar badge and this window cannot disagree.
   // The per-visit `done` set is the belt to the optimistic flip's braces: a
   // write persistRows rolls back must not re-arm on every realtime refetch.
@@ -1680,18 +1709,23 @@ function IssueDetail({
   }, [toReadKey])
 
   // The spine opens at its newest end, like the inbox thread it now matches.
-  // All four key terms earn their place: a different task is a different
+  // All five key terms earn their place: a different task is a different
   // thread; watchComments empties the cache first, so the opening render has
-  // an empty spine and the snap must re-fire when the thread lands;
-  // All ⇄ Comments changes the content height wholesale; and popping the
-  // thread out moves it into a taller scroller that opens at the top unless
-  // this fires again (actScrollRef follows it — only one is ever mounted).
+  // an empty spine and the snap must re-fire when the thread lands; under
+  // All the history lands on its own, later, and only this window's All
+  // counts, since the store's one history also serves a pop-out that the
+  // pane behind it must not follow; All ⇄ Comments changes the
+  // content height wholesale; and popping the thread out moves it into a
+  // taller scroller that opens at the top unless this fires again
+  // (actScrollRef follows it — only one is ever mounted).
   useBottomSnap(
     actScrollRef,
     issueId
       ? String(issueId) +
           ':' +
           (P.commentsLoaded ? '1' : '0') +
+          ':' +
+          (actFilter !== 'all' ? '-' : P.historyLoaded ? '1' : '0') +
           ':' +
           actFilter +
           ':' +
@@ -2027,23 +2061,36 @@ function IssueDetail({
 
   // the discussion spine: this issue's comments and activity interleaved in
   // chat order — oldest at the top, newest at the bottom where the reply box
-  // is and where the scroller opens. The Comments filter simply drops the
-  // events from the merge.
+  // is and where the scroller opens. The Comments filter drops the events
+  // from the merge, and the store loads them only under All (showHistory).
   // Under All, while the start of the comments or of the history is not
   // loaded, rows older than the later of the two oldest loaded rows stay
   // hidden, so All never shows one beside a gap in the other (spineWindow).
+  // History that has not arrived, or failed before it did, is no whole
+  // history, so All then shows nothing beside it.
   const comments = it ? P.comments.filter((c) => c.issue === it.uuid) : []
   const history = it
     ? P.threadEvents.filter((e) => e.targetType === 'issue' && e.targetId === it.id)
     : []
   const all = actFilter === 'all'
+  // whether everything the filter shows has arrived, and whether the thread
+  // says it is loading: under All also while the history is on its way,
+  // unless the history's failure row speaks for it (ThreadFailure)
+  const loaded = P.commentsLoaded && (!all || P.historyLoaded)
+  const waitingComments = !P.commentsLoaded && P.commentsFailure === 'none'
+  const waitingLine = all
+    ? (waitingComments || !P.historyLoaded) && P.historyFailure === 'none'
+    : waitingComments
   const from = spineWindow(
     { rows: comments, whole: P.commentsLoaded && P.commentsEarlier === 'none' },
-    { rows: history, whole: P.commentsLoaded && P.historyEarlier === 'none' },
+    { rows: history, whole: P.historyLoaded && P.historyEarlier === 'none' },
   )
+  // The comment being edited in place stays whatever the window, so neither
+  // choosing All nor the history arriving unmounts its editor with the
+  // draft in it.
   const spine = all
     ? mergeSpine(
-        comments.filter((c) => c.ts >= from.start),
+        comments.filter((c) => c.ts >= from.start || c.id === editingComment),
         history.filter((e) => e.ts >= from.start),
       )
     : mergeSpine(comments, [])
@@ -2103,22 +2150,20 @@ function IssueDetail({
       next?.focus({ preventScroll: true })
     }
   }, [earlier, spine.length])
-  // nothing is said until the thread is in: watchComments empties the cache
-  // first, and against an empty spine every mark degrades to 'tail' — which
-  // would flash "New activity on this task" over "Loading comments…" and then
-  // resolve into a rule somewhere else
-  const mark = P.commentsLoaded ? unreadMark(spine, unreadTs) : { place: 'none', index: -1 }
+  // nothing is said until the thread is in, and under All its history too:
+  // watchComments empties the cache first, and against an empty spine every
+  // mark degrades to 'tail' — which would flash "New activity on this task"
+  // over "Loading comments…" and then resolve into a rule somewhere else
+  const mark = loaded ? unreadMark(spine, unreadTs) : { place: 'none', index: -1 }
   // 'tail': something is unread but nothing on screen is at or after it — say
-  // so in words rather than drawing a rule with nothing under it. Point at the
-  // All filter only when flipping to it would actually show the thing.
+  // so in words rather than drawing a rule with nothing under it. Under
+  // Comments, name the All filter when the unread messages tell of a change,
+  // frozen with the boundary, since Comments loads no history. It says
+  // where changes show rather than that All shows this one: whether the
+  // person may see that change's row is the server's to decide.
   const tailNote =
-    it &&
-    actFilter === 'comments' &&
-    P.threadEvents.some(
-      (e) =>
-        e.targetType === 'issue' && e.targetId === it.id && unreadTs !== null && e.ts >= unreadTs,
-    )
-      ? 'New activity on this task. See All.'
+    it && actFilter === 'comments' && frozen.current.unread.change
+      ? 'New activity on this task. Changes show only under All.'
       : 'New activity on this task.'
   const canLead = !!it && P.levelOn(it.project) === 'lead'
   /* Resolves whether the server saved the comment; the composer keeps the
@@ -2235,12 +2280,16 @@ function IssueDetail({
           threads the rows together now. */}
       <div data-spine-feed ref={mobile ? actScrollRef : undefined}>
         <div data-spine className="relative flex flex-col gap-4">
-          {!P.commentsLoaded && P.commentsFailure === 'none' && (
-            <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
-              Loading comments…
+          {waitingLine && (
+            <div
+              data-thread-loading
+              className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]"
+            >
+              {all ? 'Loading activity…' : 'Loading comments…'}
             </div>
           )}
-          {P.commentsLoaded && earlier !== 'none' && (
+          {/* under All, nothing earlier can load before the history is in */}
+          {loaded && earlier !== 'none' && (
             <EarlierComments
               state={earlier}
               what={all ? 'activity' : 'comments'}
@@ -2267,8 +2316,9 @@ function IssueDetail({
               ? [<UnreadDivider key="unread" />, row]
               : [row]
           })}
-          {P.commentsLoaded &&
+          {loaded &&
             P.commentsFailure === 'none' &&
+            (!all || P.historyFailure === 'none') &&
             spine.length === 0 &&
             earlier === 'none' && (
               <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
@@ -2277,12 +2327,23 @@ function IssueDetail({
             )}
           {mark.place === 'tail' && <UnreadDivider key="unread" place="tail" note={tailNote} />}
           {/* a failed thread never passes for an empty one. The comments
-              that did load stay, and this row closes the thread. */}
+              that did load stay, and this row closes the thread. It says
+              "the latest" only while the thread shows some of them. */}
           {P.commentsFailure !== 'none' && (
             <ThreadFailure
               state={P.commentsFailure}
-              shown={comments.length > 0}
+              shown={spine.some((s) => s.kind === 'c')}
               onRetry={P.retryComments}
+            />
+          )}
+          {/* …and failed history never passes for no history: under All
+              its own row closes the thread, and the comments' stays theirs */}
+          {all && P.historyFailure !== 'none' && (
+            <ThreadFailure
+              state={P.historyFailure}
+              what="activity"
+              shown={spine.some((s) => s.kind === 'e')}
+              onRetry={P.retryHistory}
             />
           )}
         </div>

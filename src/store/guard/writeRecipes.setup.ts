@@ -12,7 +12,7 @@ import type { Row } from '../rows'
    that differs from what the server stores shows up. */
 
 export type Snapshot = Workspace
-export type Thread = FunctionReturnType<typeof api.snapshot.commentThread>
+export type Thread = FunctionReturnType<typeof api.snapshot.threadComments>
 type Store = typeof import('../planner')
 type Planner = Store['P']
 
@@ -254,9 +254,6 @@ export function thread(): Thread {
   return {
     comments: [comment('comment-a', 'First', 1), comment('comment-b', 'Second', 2)],
     earlier: false,
-    events: [],
-    events_earlier: false,
-    events_next: null,
   }
 }
 

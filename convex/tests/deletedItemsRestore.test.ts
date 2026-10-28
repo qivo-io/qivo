@@ -1483,11 +1483,11 @@ describe('notices, activity and events', () => {
     const verbs = ['updated', 'updated', 'updated', 'deleted', 'restored']
     expect((await historyOf(t, root.id)).map((e) => e.verb)).toEqual(verbs)
     // the task window reads all of it, in order
-    const thread = await as(t, f.admin).query(api.snapshot.commentThread, {
+    const history = await as(t, f.admin).query(api.snapshot.threadHistory, {
       org_id,
       issue_id: root.id,
     })
-    expect(thread.events.map((e) => e.verb)).toEqual(verbs)
+    expect(history.events.map((e) => e.verb)).toEqual(verbs)
     // no row of the organization is gone
     expect(await activityFor(t, org_id)).toHaveLength(3 + 1 + 600 + 1)
     for (const other of others) expect(await historyOf(t, other.id)).toHaveLength(300)

@@ -168,10 +168,11 @@ describe('project team sharing', () => {
       'rule',
       /active user with Edit permission or higher on its project/,
     )
-    await expectRefusal(
-      as(t, person).query(api.snapshot.commentThread, { org_id: f.org.id, issue_id: issue.id }),
-      'not_found',
-    )
+    for (const thread of [api.snapshot.threadComments, api.snapshot.threadHistory])
+      await expectRefusal(
+        as(t, person).query(thread, { org_id: f.org.id, issue_id: issue.id }),
+        'not_found',
+      )
   })
 
   it('caps viewer team members and does not promote leaders of shared teams to project leads', async () => {

@@ -27,6 +27,7 @@ import {
   NAMED_TASK_ROOM,
   olderRows,
   taskHistoryPage,
+  WINDOW_HISTORY_PAGE,
 } from '../lib/activityVisibility'
 import { LIMITS } from '../lib/limits'
 import { type ActivityEntry, insertActivity, issueChanges, logActivity } from '../model/activity'
@@ -356,12 +357,38 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     expect(first.rows.map((row) => row.ts)).toEqual(times(0, 200))
     expect(first.rows.every((row) => row.target_id === task.id)).toBe(true)
     expect(await page(first.rows[0].id)).toEqual({ rows: [], earlier: false })
+    // the task window's smaller page reads the same history 50 rows at a time
+    const window = await t.run((ctx) =>
+      taskHistoryPage(ctx, f.admin, task, undefined, WINDOW_HISTORY_PAGE),
+    )
+    expect(window.rows.map((row) => row.ts)).toEqual(times(1_150, 50))
+    expect(window.next?.id).toBe(window.rows[0].id)
     // a row of another task, or no row, is no place in this history
     const elsewhere = (await stored(t, f.org.id, other.id))[0]
     for (const before of [elsewhere.id, uuid()]) {
       const e = await expectRefusal(page(before), 'bad_request')
       expect(e.data.message).toBe(BEFORE_NOT_A_CHANGE)
     }
+  })
+
+  it('reads one row past the page in its first read, whatever the page size', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 600; i++)
+        await insertActivity(ctx, entry(f.org.id, task.id, at(START - 3_600_000 + i)))
+    })
+    /* The documents a page of `size` reads, and how many rows it holds. */
+    const reads = (size: number) =>
+      t.run(async (ctx) => {
+        const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        const page = await taskHistoryPage(ctx, f.admin, task, undefined, size)
+        const after = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        return { read: after - before, rows: page.rows.length }
+      })
+    expect(await reads(WINDOW_HISTORY_PAGE)).toEqual({ read: WINDOW_HISTORY_PAGE + 1, rows: 50 })
+    expect(await reads(HISTORY_PAGE_MAX)).toEqual({ read: HISTORY_PAGE_MAX + 1, rows: 500 })
   })
 
   it('reads on past rows a member does not receive, and pages on where it stopped', async () => {
@@ -892,7 +919,7 @@ describe('browser verbs — the feed contract (evIcon substring-matches these)',
 
 describe('which task rows a member receives, in the task window and over REST', () => {
   /* The task, a task the guest may read, one it may not, and a reader that
-   * asks commentThread and REST for the task's history and checks they agree.
+   * asks threadHistory and REST for the task's history and checks they agree.
    * The guest holds User on TBED (FW and PCB) and nothing on SKNK. */
   async function setup() {
     const t = newT()
@@ -901,7 +928,7 @@ describe('which task rows a member receives, in the task window and over REST', 
     const visible = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
     const hidden = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
     const seen = async (p: Doc<'profiles'>): Promise<string[]> => {
-      const thread = await as(t, p).query(api.snapshot.commentThread, {
+      const thread = await as(t, p).query(api.snapshot.threadHistory, {
         org_id: f.org.id,
         issue_id: task.id,
       })
