@@ -109,6 +109,12 @@ replace, a task patch whose fields may hold a description, a project or an
 archived state, and a write to `issue_descriptions` anywhere else, and on a
 write whose table it cannot read from its type outside the two generic
 writers it allows.
+Then `scripts/check-task-reads.mjs` fails on a read of
+`issues.description` outside `convex/model/descriptions.ts` and the
+descriptions backfill: a property or element read, or a destructuring that
+binds the field, of a value whose type may be a task row. Readers take a
+task's text from its description row through that file, which falls back to
+`issues.description` only for a task without a row.
 It needs no deployment credentials and does not reset any hosted data.
 `npm run verify:static` runs every check of this gate except the tests.
 When `npm run check:dependencies` fails, as after a pull or a branch switch
