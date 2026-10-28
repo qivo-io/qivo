@@ -9,7 +9,7 @@
  * releases it. */
 /// <reference types="vite/client" />
 
-import { makeFunctionReference } from 'convex/server'
+import { type FunctionArgs, type FunctionReturnType, makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -975,9 +975,42 @@ describe('readiness', () => {
 })
 
 describe('the backfill', () => {
-  const run = (t: T, args: { dry_run: boolean; recheck?: boolean; cursor?: string }) =>
-    t.action(internal.internal.nameKeysBackfill.run, args)
+  type RunArgs = FunctionArgs<typeof internal.internal.nameKeysBackfill.run>
+  type RunResult = FunctionReturnType<typeof internal.internal.nameKeysBackfill.run>
+  const run = (t: T, args: RunArgs) => t.action(internal.internal.nameKeysBackfill.run, args)
   const zero = { missing: 0, stale: 0 }
+
+  /** Calls run, each call from the cursor the one before answered, until it
+   * answers `done`, and answers every call's result. */
+  async function drain(t: T, dry_run: boolean): Promise<RunResult[]> {
+    const calls: RunResult[] = []
+    let cursor: RunArgs['cursor']
+    for (let n = 0; n < 200; n++) {
+      const got = await run(t, { dry_run, ...(cursor === undefined ? {} : { cursor }) })
+      calls.push(got)
+      if (got.done) return calls
+      cursor = got.cursor ?? undefined
+    }
+    throw new Error('the backfill did not finish in 200 calls')
+  }
+
+  /** The keys of `calls` summed by table. */
+  const summed = (calls: RunResult[]) =>
+    Object.fromEntries(
+      Object.keys(calls[0].keys).map((table) => [
+        table,
+        {
+          missing: calls.reduce(
+            (sum, call) => sum + call.keys[table as keyof RunResult['keys']].missing,
+            0,
+          ),
+          stale: calls.reduce(
+            (sum, call) => sum + call.keys[table as keyof RunResult['keys']].stale,
+            0,
+          ),
+        },
+      ]),
+    )
 
   it('reports without writing, then keys and stamps every organization', async () => {
     const t = newT()
@@ -1020,19 +1053,23 @@ describe('the backfill', () => {
         .collect(),
     )
     expect(audit.map((row) => [row.actor_email, row.detail])).toEqual([
-      ['system', { orgs: 2, stamped: 2, missing: 16, stale: 0 }],
+      ['system', { orgs: 2, stamped: 2, missing: 16, stale: 0, done: true, cursor: null }],
     ])
 
     const again = await run(t, { dry_run: true })
     expect(Object.values(again.keys)).toEqual(Array(6).fill(zero))
     expect(again.unstamped).toEqual([])
     expect(again.to_fix).toEqual([])
-    // a run finds the organizations stamped and walks none
-    expect(await run(t, { dry_run: false })).toMatchObject({ orgs: 0, stamped: 0 })
+    // a run walks the stamped organizations too, and finds nothing
+    expect(await run(t, { dry_run: false })).toMatchObject({
+      orgs: 2,
+      stamped: 0,
+      keys: again.keys,
+    })
     await assertNoDanglingRefs(t, 'after the name key backfill')
   })
 
-  it('finds stale keys and mends them in a stamped organization only on a recheck', async () => {
+  it('finds stale keys in a stamped organization and mends them', async () => {
     const t = newT()
     const f = await withOrg(t)
     await run(t, { dry_run: false })
@@ -1048,9 +1085,7 @@ describe('the backfill', () => {
     expect(dry.keys.profiles).toEqual({ missing: 0, stale: 1 })
     expect(dry.keys.team_members).toEqual({ missing: 0, stale: 1 })
     expect(dry.to_fix).toEqual([{ org_id: f.org.id, missing: 0, stale: 2 }])
-    await run(t, { dry_run: false })
-    expect((await profileOf(t, f.viewer.id))?.name_key).toBe('not the name')
-    expect(await run(t, { dry_run: false, recheck: true })).toMatchObject({ orgs: 2, stamped: 0 })
+    expect(await run(t, { dry_run: false })).toMatchObject({ orgs: 2, stamped: 0, keys: dry.keys })
     await expectExact(t, f.org.id)
   })
 
@@ -1073,19 +1108,92 @@ describe('the backfill', () => {
     expect((await run(t, { dry_run: true })).at_least).toBe(false)
   })
 
-  it('answers a cursor when its time runs out and goes on from it', async () => {
-    RUN.orgs = 1
-    RUN.ms = 0
-    const t = newT()
+  it.each([1, 100])(
+    'stops after a step past its time and goes on inside an organization, %i organizations a read',
+    async (orgs) => {
+      const t = newT()
+      const f = await withOrg(t)
+      const whole = await run(t, { dry_run: true })
+      expect(whole.done).toBe(true)
+      RUN.orgs = orgs
+      RUN.ms = 0
+      KEY_PAGE.rows = 2
+      // every call takes one step, so the counts of a dry run split over
+      // calls add up to one call's only when no call walks a page again
+      const dry = await drain(t, true)
+      expect(summed(dry)).toEqual(whole.keys)
+      expect(dry.length).toBeGreaterThan(5)
+      const [first] = dry
+      expect(first).toMatchObject({ done: false, orgs: 0, cursor: { dry_run: true } })
+      const inside = dry.flatMap((call) =>
+        call.cursor !== null && 'org_id' in call.cursor ? [call.cursor] : [],
+      )
+      // some call stopped inside a table, past its first page
+      expect(inside.some((cursor) => typeof cursor.page === 'string')).toBe(true)
+      // a call that finished an organization answers the next one's start
+      expect(
+        dry.some(
+          (call) =>
+            call.orgs === 1 &&
+            call.cursor !== null &&
+            'org_id' in call.cursor &&
+            call.cursor.table === 'profiles' &&
+            call.cursor.page === null,
+        ),
+      ).toBe(true)
+
+      const runs = await drain(t, false)
+      expect(summed(runs)).toEqual(whole.keys)
+      expect(runs.reduce((sum, call) => sum + call.stamped, 0)).toBe(2)
+      await expectExact(t, f.org.id)
+      await expectExact(t, f.otherOrg.id)
+      expect(await t.run((ctx) => nameKeysReady(ctx, f.org.id))).toBe(true)
+      expect(await t.run((ctx) => nameKeysReady(ctx, f.otherOrg.id))).toBe(true)
+      // a cursor from a dry run does not resume a run that writes
+      await expect(run(t, { dry_run: false, cursor: first.cursor! })).rejects.toThrow(
+        'other dry_run',
+      )
+    },
+  )
+
+  it('records what committed when a step throws, and goes on from that step', async () => {
+    KEY_PAGE.rows = 1
+    // withOrg writes 20 documents in one transaction
+    const t = newT({ transactionLimits: { documentsWritten: 20 } })
     const f = await withOrg(t)
-    const first = await run(t, { dry_run: false })
-    expect(first).toMatchObject({ orgs: 1, stamped: 1, done: false })
-    const second = await run(t, { dry_run: false, cursor: first.cursor! })
-    expect(second).toMatchObject({ orgs: 1, stamped: 1 })
-    let last = second
+    // the fixture's people each write two rows at most, this one 21
+    const busy = await plantBusyPerson(t, f, 10)
+    const failed = await run(t, { dry_run: false })
+    expect(failed).toMatchObject({ done: false, error: expect.any(String) })
+    expect(failed.cursor).toMatchObject({ table: 'profiles', page: expect.any(String) })
+    const audit = async () =>
+      (
+        await t.run((ctx) =>
+          ctx.db
+            .query('platform_audit_log')
+            .filter((q) => q.eq(q.field('action'), 'name_keys_backfill'))
+            .collect(),
+        )
+      ).map((row) => row.detail)
+    expect(await audit()).toEqual([
+      {
+        orgs: failed.orgs,
+        stamped: failed.stamped,
+        missing: Object.values(failed.keys).reduce((sum, k) => sum + k.missing, 0),
+        stale: 0,
+        done: false,
+        cursor: failed.cursor,
+        error: failed.error,
+      },
+    ])
+    expect((await profileOf(t, busy.id))?.name_key).toBeUndefined()
+    // a page that brings fewer copies in line at once fits
+    KEY_PAGE.copies = 10
+    let last = await run(t, { dry_run: false, cursor: failed.cursor! })
     while (!last.done) last = await run(t, { dry_run: false, cursor: last.cursor! })
-    expect(await t.run((ctx) => nameKeysReady(ctx, f.org.id))).toBe(true)
-    expect(await t.run((ctx) => nameKeysReady(ctx, f.otherOrg.id))).toBe(true)
+    expect(last.error).toBeUndefined()
+    await expectExact(t, f.org.id)
+    await expectExact(t, f.otherOrg.id)
   })
 
   it('leaves the copies of a removed person alone and keys rows written while it runs', async () => {

@@ -628,7 +628,9 @@ the backfill on every hosted deployment once it serves that release, as the
 module's header says. Read its dry run first, then run it. A call that does
 not finish in about five minutes answers a `cursor`; call it again with the
 same arguments and that `cursor` until it answers `done`, and check that a
-second dry run reports no missing or stale keys. Earlier releases do not
+second dry run reports no missing or stale keys. A call that a failed step
+stopped answers `error` with the cursor of that step, and its audit row
+records what it wrote first. Earlier releases do not
 accept the fields or the `org_ready` and `name_copies` tables, and every new
 organization writes its `org_ready` row, so the release that added them is a
 rollback floor for the backend as soon as it deploys (see Rollback and

@@ -27,15 +27,20 @@
  *
  * Read the dry run first. It writes nothing and reports, by table, how many
  * keys are missing or stale (`keys`), and lists the organizations with any
- * (`to_fix`) and those without a stamp (`unstamped`). It counts at most
- * KEY_PAGE.copies copies a page; past that, `at_least` is true and the copy
- * counts are lower bounds. With the private helper:
+ * (`to_fix`) and those without a stamp (`unstamped`). It counts one chunk
+ * of a source's copies in each table (model/nameKeys.ts NAME_COPIES.chunk)
+ * and at most KEY_PAGE.copies a page; past that, `at_least` is true and the
+ * copy counts are lower bounds. With the private helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/nameKeysBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/nameKeysBackfill:run '{"dry_run": false}'
- * A call stops after RUN.ms, well inside Convex's action time limit, and
- * then answers `done: false` with a `cursor`. Call it again with the same
- * arguments and `"cursor"` set to it until `done` is true. `check` reads one
+ * A call checks the time after each step and stops past RUN.ms, well inside
+ * Convex's action time limit, inside an organization if it is in one. It
+ * then answers `done: false` with a `cursor`, the organization, table and
+ * page to go on from. Call it again with the same arguments and `"cursor"`
+ * set to it until `done` is true. A step that throws stops the call with
+ * `error` and the cursor of that step, after the call has recorded what
+ * committed. `check` reads one
  * page of one organization's table without writing, for a key that may only
  * run internal queries:
  *   "$H" staging npx convex run internal/nameKeysBackfill:check '{"org_id": "…", "table": "profiles"}'
@@ -48,35 +53,50 @@
  * deployment:functions:runInternalActions, and `check`
  * deployment:functions:runInternalQueries.
  *
- * A run walks the organizations without a stamp and leaves the others as
- * they are. `"recheck": true` walks every organization again, to mend keys
- * a dry run lists in a stamped one. A dry run walks every organization. A
- * call that wrote adds one platform_audit_log row (action
- * 'name_keys_backfill', actor 'system') with its totals. Running it again is
+ * Every run walks every organization, stamped or not, so a run also mends
+ * keys a dry run lists in a stamped organization. An earlier release cannot
+ * deploy over a row that holds a key, as its schema has no such field, so a
+ * rollback leaves rows without keys only before the first key is written,
+ * and a run finds those as it finds any other. A call that wrote adds one
+ * platform_audit_log row (action 'name_keys_backfill', actor 'system') with
+ * its totals, whether it finished, its cursor and its error. Running it again is
  * safe, and a finished deployment's dry run reports zeros. It writes no
  * activity, sends no task event and changes nothing a person sees. */
 import { makeFunctionReference } from 'convex/server'
-import { v } from 'convex/values'
+import { type Infer, v } from 'convex/values'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { internalAction, internalMutation, internalQuery } from '../_generated/server'
 import { byId } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { audit as writeAudit } from '../model/admin'
-import { readyRow, staleCopies } from '../model/nameKeys'
+import { bringInLine, readyRow } from '../model/nameKeys'
 
-/** Rows of a table one page reads, the bytes it reads before it ends early,
- * the copies one page brings in line or counts, and the most organizations
- * a run lists. A team or project stored before legacy icons were dropped
- * can be large, so pages end at the bytes too. A page reads its rows in one
- * range, each source's copies in up to four more (staleCopies), and patches
- * each copy and row it changes, which Convex reads by id first, so a page
- * uses about 2,500 of the 4,096 index ranges a transaction may read. Tests
- * lower them. */
-export const KEY_PAGE = { rows: 100, bytes: 4 * MIB, copies: 2000, listed: 100 }
+/** Rows of a table one page reads, the bytes that read takes before it ends
+ * early, the copies one page brings in line or counts, the bytes it may
+ * read of them, and the most organizations a run lists. A team or project
+ * stored before legacy icons were dropped can be large, so pages end at the
+ * bytes too. Every read counts. A page reads its rows once, up to `bytes`
+ * and one more document, under 4 MiB with a document near Convex's 1 MiB
+ * limit, and again for each row it gives its key, so its rows cost at most
+ * 8 MiB. Its copies cost `copy_bytes`, with both reads of each copy counted,
+ * and at most one chunk more (model/nameKeys.ts bringInLine), and each
+ * later source reads one copy a table to see whether more are left: under
+ * 14 MiB of Convex's 16 in all. Index ranges: one for the page, two for
+ * each chunk or probe of a source's copies and one for each patch, which
+ * Convex reads by id first, about 2,600 of the 4,096 a transaction may
+ * read. Tests lower them. */
+export const KEY_PAGE = {
+  rows: 100,
+  bytes: 3 * MIB,
+  copies: 2000,
+  copy_bytes: 4 * MIB,
+  listed: 100,
+}
 
-/** Organizations one page of a run reads, and how long one call of run
- * goes on before it answers where to go on from. Tests lower them. */
+/** Organizations one read of a run takes, and how long one call of run goes
+ * on before it answers where to go on from. It checks the time after each
+ * step, so a call always makes progress. Tests lower them. */
 export const RUN = { orgs: 100, ms: 5 * 60_000 }
 
 /** The tables that hold their own name key, in the order a run walks them. */
@@ -95,12 +115,8 @@ const TABLES = [
 ] as const
 type Table = (typeof TABLES)[number]
 
-/** The tables that copy each phase's key. */
-const COPIES = {
-  profiles: ['team_members', 'project_access'],
-  teams: ['project_team_access'],
-  projects: [],
-} as const satisfies Record<Phase, readonly Table[]>
+/** The source each phase's rows are for their copies, if any. */
+const SOURCE = { profiles: 'profiles', teams: 'teams', projects: null } as const
 
 /** Keys without a value and keys that are not their name's (or, for a
  * copy, its source's name's), by table. */
@@ -139,23 +155,16 @@ async function walk(
   const tally = (table: Table, value: string | undefined) => {
     keys[table][value === undefined ? 'missing' : 'stale'] += 1
   }
-  let left = KEY_PAGE.copies
+  const budget = { rows: KEY_PAGE.copies, bytes: KEY_PAGE.copy_bytes }
+  const source = SOURCE[phase]
+  const found = (table: Table, copy: { name_key?: string }) => tally(table, copy.name_key)
   let full = false
   for (const row of page.page) {
-    const key = nameKey(row.name)
-    for (const table of COPIES[phase]) {
-      const stale = await staleCopies(ctx, table, row.id, key, left + 1)
-      const now = stale.slice(0, left)
-      for (const copy of now) {
-        tally(table, copy.name_key)
-        if (write !== null) await write.db.patch(copy._id, { name_key: key })
-      }
-      left -= now.length
-      if (stale.length > now.length) full = true
-    }
+    if (source !== null && (await bringInLine(ctx, source, row, budget, write, found))) full = true
     // a run gives a row its own key once its copies are done; a page it
     // walks again finds the rest
     if (full && write !== null) break
+    const key = nameKey(row.name)
     if (row.name_key === key) continue
     tally(phase, row.name_key)
     if (write !== null) await write.db.patch(row._id, { name_key: key })
@@ -208,27 +217,60 @@ export const stamp = internalMutation({
   },
 })
 
-/** A page of organizations, each with whether it holds its stamp. */
-type OrgPage = { orgs: { org_id: string; stamped: boolean }[]; cursor: string; done: boolean }
+/** Organizations by id from `from`, `from` itself only when `inclusive`,
+ * each with whether it holds its stamp. `done` when no more follow. */
+type OrgPage = { orgs: { org_id: string; stamped: boolean }[]; done: boolean }
 
-/** One page of organizations, by creation. */
+/** Up to RUN.orgs organizations by id from `from` on (OrgPage). */
 export const orgPage = internalQuery({
-  args: { cursor: v.union(v.string(), v.null()) },
-  handler: async (ctx, { cursor }): Promise<OrgPage> => {
-    const page = await ctx.db.query('organizations').paginate({ cursor, numItems: RUN.orgs })
+  args: { from: v.union(v.string(), v.null()), inclusive: v.boolean() },
+  handler: async (ctx, { from, inclusive }): Promise<OrgPage> => {
+    const rows = await ctx.db
+      .query('organizations')
+      .withIndex('by_uuid', (q) =>
+        from === null ? q : inclusive ? q.gte('id', from) : q.gt('id', from),
+      )
+      .take(RUN.orgs)
     const orgs: OrgPage['orgs'] = []
-    for (const org of page.page)
+    for (const org of rows)
       orgs.push({
         org_id: org.id,
         stamped: (await readyRow(ctx, org.id))?.name_keys_at !== undefined,
       })
-    return { orgs, cursor: page.continueCursor, done: page.isDone }
+    return { orgs, done: rows.length < RUN.orgs }
   },
 })
 
-/** Records a run that wrote, with its totals. */
+/** Where a call of run goes on from, in a dry run or a run that writes:
+ * the page `page` of the organization's `table`, null for its first, or the
+ * organization after the finished one `after`. */
+const vRunCursor = v.union(
+  v.object({
+    dry_run: v.boolean(),
+    org_id: v.string(),
+    table: vPhase,
+    page: v.union(v.string(), v.null()),
+  }),
+  v.object({ dry_run: v.boolean(), after: v.string() }),
+)
+type RunCursor = Infer<typeof vRunCursor>
+
+/** The totals a run that wrote records. */
+const vTotals = {
+  orgs: v.number(),
+  stamped: v.number(),
+  missing: v.number(),
+  stale: v.number(),
+  done: v.boolean(),
+  cursor: v.union(vRunCursor, v.null()),
+  error: v.optional(v.string()),
+}
+type Totals = Infer<ReturnType<typeof v.object<typeof vTotals>>>
+
+/** Records a call of run that wrote, with its totals, where to go on from
+ * and the error that stopped it, if one did. */
 export const audit = internalMutation({
-  args: { orgs: v.number(), stamped: v.number(), missing: v.number(), stale: v.number() },
+  args: vTotals,
   handler: async (ctx, totals) => {
     await writeAudit(ctx, { actor_email: 'system', action: 'name_keys_backfill', detail: totals })
     return null
@@ -245,30 +287,31 @@ const checkRef = makeFunctionReference<'query', PageArgs, PageResult>(
 const stampRef = makeFunctionReference<'mutation', { org_id: string }, boolean>(
   'internal/nameKeysBackfill:stamp',
 )
-const orgPageRef = makeFunctionReference<'query', { cursor: string | null }, OrgPage>(
-  'internal/nameKeysBackfill:orgPage',
-)
-const auditRef = makeFunctionReference<
-  'mutation',
-  { orgs: number; stamped: number; missing: number; stale: number },
-  null
->('internal/nameKeysBackfill:audit')
+const orgPageRef = makeFunctionReference<
+  'query',
+  { from: string | null; inclusive: boolean },
+  OrgPage
+>('internal/nameKeysBackfill:orgPage')
+const auditRef = makeFunctionReference<'mutation', Totals, null>('internal/nameKeysBackfill:audit')
 
 /** One organization as a run lists it, with the keys it found missing or
  * stale. */
 type OrgReport = { org_id: string; missing: number; stale: number }
 
-/** Walks every organization without a stamp, or every one with `recheck`,
- * from `cursor` on, gives the keys it finds missing or stale and stamps
- * each organization it finished. A dry run walks every organization and
- * writes nothing. Answers the keys by table, how many organizations it
- * walked and stamped, the first KEY_PAGE.listed organizations with keys to
+/** Walks every organization by id, from `cursor` on, gives the keys it
+ * finds missing or stale and stamps each organization it finished. A dry
+ * run writes nothing. Answers the keys by table, how many organizations it
+ * finished and stamped, the first KEY_PAGE.listed organizations with keys to
  * fix and, in a dry run, those without a stamp. Past RUN.ms it stops after
- * a page of organizations and answers the `cursor` to go on from, else
- * `done`. A call that wrote ends with its audit row. */
+ * the step it is in, inside an organization or between two, and answers the
+ * `cursor` to go on from, else `done`. A step that throws stops the call
+ * too, with `error` and the cursor of that step. A call that wrote ends
+ * with its audit row, also when a step threw. */
 export const run = internalAction({
-  args: { dry_run: v.boolean(), recheck: v.optional(v.boolean()), cursor: v.optional(v.string()) },
-  handler: async (ctx, { dry_run, recheck = false, cursor: from }) => {
+  args: { dry_run: v.boolean(), cursor: v.optional(vRunCursor) },
+  handler: async (ctx, { dry_run, cursor: from }) => {
+    if (from !== undefined && from.dry_run !== dry_run)
+      throw new Error('this cursor is from a call with the other dry_run')
     const until = Date.now() + RUN.ms
     const keys = noKeys()
     const toFix: OrgReport[] = []
@@ -276,44 +319,80 @@ export const run = internalAction({
     let orgs = 0
     let stamped = 0
     let atLeast = false
-    let cursor: string | null = from ?? null
+    let stepped = false
+    // the next step, which a call that stops answers as its cursor
+    let next: RunCursor | null = from ?? null
     let done = false
-    for (;;) {
-      const page: OrgPage = await ctx.runQuery(orgPageRef, { cursor })
-      for (const org of page.orgs) {
-        if (dry_run && !org.stamped && unstamped.length < KEY_PAGE.listed)
-          unstamped.push(org.org_id)
-        if (!dry_run && org.stamped && !recheck) continue
-        orgs++
-        const report: OrgReport = { org_id: org.org_id, missing: 0, stale: 0 }
-        for (const table of PHASES) {
-          let at: string | null = null
-          for (;;) {
-            const args: PageArgs = { org_id: org.org_id, table, cursor: at }
-            const got: PageResult = dry_run
-              ? await ctx.runQuery(checkRef, args)
-              : await ctx.runMutation(stepRef, args)
-            for (const name of TABLES) {
-              keys[name].missing += got.keys[name].missing
-              keys[name].stale += got.keys[name].stale
-              report.missing += got.keys[name].missing
-              report.stale += got.keys[name].stale
+    let error: string | undefined
+    const due = () => stepped && Date.now() >= until
+    try {
+      let read =
+        from === undefined
+          ? { from: null, inclusive: false }
+          : 'after' in from
+            ? { from: from.after, inclusive: false }
+            : { from: from.org_id, inclusive: true }
+      walking: for (;;) {
+        const page: OrgPage = await ctx.runQuery(orgPageRef, read)
+        for (const org of page.orgs) {
+          const resume =
+            next !== null && 'org_id' in next && next.org_id === org.org_id ? next : null
+          const first = PHASES.indexOf(resume?.table ?? 'profiles')
+          next = { dry_run, org_id: org.org_id, table: PHASES[first], page: resume?.page ?? null }
+          if (due()) break walking
+          if (dry_run && !org.stamped && unstamped.length < KEY_PAGE.listed)
+            unstamped.push(org.org_id)
+          const report: OrgReport = { org_id: org.org_id, missing: 0, stale: 0 }
+          for (let at = first; at < PHASES.length; at++) {
+            const table = PHASES[at]
+            let cursor = at === first ? (resume?.page ?? null) : null
+            for (;;) {
+              next = { dry_run, org_id: org.org_id, table, page: cursor }
+              if (due()) break walking
+              const args: PageArgs = { org_id: org.org_id, table, cursor }
+              const got: PageResult = dry_run
+                ? await ctx.runQuery(checkRef, args)
+                : await ctx.runMutation(stepRef, args)
+              stepped = true
+              for (const name of TABLES) {
+                keys[name].missing += got.keys[name].missing
+                keys[name].stale += got.keys[name].stale
+                report.missing += got.keys[name].missing
+                report.stale += got.keys[name].stale
+              }
+              atLeast ||= got.at_least
+              if (got.done) break
+              cursor = got.cursor
             }
-            atLeast ||= got.at_least
-            if (got.done) break
-            at = got.cursor
           }
+          if (report.missing + report.stale > 0 && toFix.length < KEY_PAGE.listed)
+            toFix.push(report)
+          if (!dry_run && (await ctx.runMutation(stampRef, { org_id: org.org_id }))) stamped++
+          orgs++
+          next = { dry_run, after: org.org_id }
         }
-        if (report.missing + report.stale > 0 && toFix.length < KEY_PAGE.listed) toFix.push(report)
-        if (!dry_run && (await ctx.runMutation(stampRef, { org_id: org.org_id }))) stamped++
+        if (page.done) {
+          done = true
+          break
+        }
+        read = { from: page.orgs.at(-1)?.org_id ?? null, inclusive: false }
       }
-      done = page.done
-      cursor = page.cursor
-      if (done || Date.now() >= until) break
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
     }
     const missing = TABLES.reduce((sum, table) => sum + keys[table].missing, 0)
     const stale = TABLES.reduce((sum, table) => sum + keys[table].stale, 0)
-    if (!dry_run) await ctx.runMutation(auditRef, { orgs, stamped, missing, stale })
+    const cursor = done ? null : next
+    if (!dry_run)
+      await ctx.runMutation(auditRef, {
+        orgs,
+        stamped,
+        missing,
+        stale,
+        done,
+        cursor,
+        ...(error === undefined ? {} : { error }),
+      })
     return {
       dry_run,
       orgs,
@@ -323,7 +402,8 @@ export const run = internalAction({
       to_fix: toFix,
       ...(dry_run ? { unstamped } : {}),
       done,
-      cursor: done ? null : cursor,
+      cursor,
+      ...(error === undefined ? {} : { error }),
     }
   },
 })
