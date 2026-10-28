@@ -1157,30 +1157,26 @@ describe('refusals', () => {
   it('writes nothing', async () => {
     const t = newT()
     await busyOrg(t)
-    const tables = [
-      'organizations',
-      'profiles',
-      'projects',
-      'project_access',
-      'project_team_access',
-      'teams',
-      'team_members',
-      'issues',
-      'issue_descriptions',
-      'issue_subscriptions',
-      'webhook_subscriptions',
-      'mcp_tokens',
-      'oauth_connections',
-      'used_ids',
-    ] as const
-    const contents = () =>
-      t.run(async (ctx) => {
+    // every table of the schema, the scheduled functions and the stored
+    // files, and the Better Auth users the webhook check reads
+    const tables = Object.keys(schema.tables) as TableNames[]
+    expect(tables).toEqual(
+      expect.arrayContaining(['projects', 'issues', 'issue_subscriptions', 'mcp_tokens']),
+    )
+    const contents = async () => ({
+      app: await t.run(async (ctx) => {
         const out: Record<string, unknown[]> = {}
         for (const table of tables) out[table] = await ctx.db.query(table).collect()
+        out._scheduled_functions = await ctx.db.system.query('_scheduled_functions').collect()
+        out._storage = await ctx.db.system.query('_storage').collect()
         return out
-      })
+      }),
+      auth: await runInAuth(t, (ctx) => ctx.db.query('user').collect()),
+    })
     const before = await contents()
-    expect((await t.action(report.run, {})).checked).toBeGreaterThan(0)
+    const result = await t.action(report.run, {})
+    expect(result.checked).toBeGreaterThan(0)
+    expect(result.findings.some((found) => found.kind === 'webhook')).toBe(true)
     expect(await contents()).toEqual(before)
   })
 })
