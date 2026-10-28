@@ -1771,7 +1771,8 @@ export default defineSchema({
    * of its work. A row whose id something outside the organization still
    * names stays instead (`kept`), until a later teardown of the same
    * organization finds the id named nowhere. The table grows by one row of
-   * about 100 bytes for every task and project an organization creates.
+   * about 170 bytes, as Convex counts a document's size, with its two index
+   * entries, for every task and project an organization creates.
    *
    * Ids freed before this table existed are unknown and stay free. Live
    * and stored tasks and projects from before it get their rows from

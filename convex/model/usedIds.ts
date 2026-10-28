@@ -80,7 +80,8 @@ async function pass(
 /** Deletes organization `orgId`'s used_ids rows until they are gone (true)
  * or `budget` is spent (false), keeping each whose id something outside the
  * organization still names (heldOutside). A budget not yet spent handles at
- * least one row, and reads no more index ranges than it has rows. Each row
+ * least one row, and reads no more index ranges than the rows it spends,
+ * plus one for each of its two passes. Each row
  * leaves the range it is read in, deleted or marked kept, as the next step
  * reads that range from its start again. Once the others are gone it looks
  * at the rows kept before, in what the budget has left, and deletes those
