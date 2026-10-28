@@ -759,21 +759,28 @@ while such a removal runs; wait for it to finish, or roll forward.
 
 Every inbox item, a person's messages about one task, has an `inbox_items`
 row that every message write keeps in step, and each person an
-`inbox_state` row that says whether their rows are complete. Nothing reads
-them yet: the app, REST and MCP still read the messages. A person whose
-messages were stored before the release that added them has no complete
+`inbox_state` row that says whether their rows are complete.
+`convex/inbox.ts` reads the rows for the capped unread summary and one
+task's item, and answers that a person's Inbox is not ready while their
+`inbox_state` is not built. The app does not call those reads yet. It keeps
+the workspace inbox until a later release switches it, and REST and MCP
+still read the messages. A person whose messages were stored before the
+release that added the rows (PR 299, merged as `cf3d683`) has no complete
 rows until the one-time `internal/inboxItemsBackfill` builds them, while a
 person whose first message comes later has them from that message on. Run
 the backfill on every hosted deployment once it serves that release, as the
-module's header says: read its dry run first, then run it, calling it again
-with its `cursor` until it answers `done`. Then check that `remaining`
-reports no profile on any page and that a new dry run reports no rows that
-differ, are missing, are extra or belong to removed profiles. A later
-release may read the rows only once every deployment reports that. An
-earlier release writes messages without keeping the rows, so after a
-deployment ran one, a dry run lists the profiles whose rows differ,
-`"rebuild": true` builds every profile's rows again, and a run deletes the
-rows of the profiles that release removed.
+module's header says: read its dry run first, then run it, calling it again with its
+`cursor` until it answers `done`. Then check that `remaining` reports no
+profile on any page and that a new dry run reports no rows that differ, are
+missing, are extra or belong to removed profiles. A release whose app shows
+these reads may reach a deployment only once it reports that. An earlier
+release writes messages without keeping the rows, so after a deployment ran
+one, a dry run lists the profiles whose rows differ, `"rebuild": true`
+builds every profile's rows again, and a run deletes the rows of the
+profiles that release removed. Such a release leaves the rows stale while
+`inbox_state` still says built, which the reads take as complete, so a
+deployment that ran a release from before PR 299 must run the backfill with
+`"rebuild": true` before it serves a release whose app shows these reads.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
