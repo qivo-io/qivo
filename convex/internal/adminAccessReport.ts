@@ -340,17 +340,19 @@ function parseCursor(raw: string, phase: Phase): Cursor {
   if (fields === null || fields.phase !== phase)
     throw new Error(`cursor must be one a page of the ${phase} phase answered`)
   // inside a project the cursor names the last admin done, and inside an
-  // admin's rows the part; the organization's webhooks name no admin
+  // admin's rows the part; the organization's webhooks name no admin, and
+  // a creation time in the work and machine phases belongs to a part
   const adminPart = fields.part !== undefined && fields.part !== 'webhooks'
   const valid =
     Object.entries(fields).every(
       ([field, value]) =>
         field === 'phase' ||
-        (field in CURSOR_FIELDS &&
+        (Object.hasOwn(CURSOR_FIELDS, field) &&
           CURSOR_FIELDS[field as Exclude<keyof Cursor, 'phase'>](value, phase)),
     ) &&
     (fields.admin !== undefined) ===
       (phase === 'projects' ? fields.project !== undefined : adminPart) &&
+    (phase === 'projects' || fields.after === undefined || fields.part !== undefined) &&
     (fields.org !== undefined || Object.keys(fields).length === 1)
   if (!valid) throw new Error(`cursor must be one a page of the ${phase} phase answered`)
   return fields as Cursor

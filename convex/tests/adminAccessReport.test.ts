@@ -934,6 +934,11 @@ describe('refusals', () => {
       ['work', JSON.stringify({ phase: 'work', org, admin: 'a' })],
       ['work', JSON.stringify({ phase: 'work', org, admin: 'a', part: 'tokens' })],
       ['work', JSON.stringify({ phase: 'work', org, admin: 'a', part: 'assigned', extra: 1 })],
+      // a field every object inherits, and a creation time without its part
+      ['projects', JSON.stringify({ phase: 'projects', org, after: 0, constructor: 1 })],
+      ['work', JSON.stringify({ phase: 'work', org, toString: 'x' })],
+      ['work', JSON.stringify({ phase: 'work', org, after: 5 })],
+      ['machine', JSON.stringify({ phase: 'machine', org, after: 5 })],
       ['machine', JSON.stringify({ phase: 'machine', org, part: 'tokens' })],
       ['machine', JSON.stringify({ phase: 'machine', org, admin: 'a', part: 'webhooks' })],
       ['machine', JSON.stringify({ phase: 'machine', org, admin: 'a', part: 'apps', apps: 1.5 })],
