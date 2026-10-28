@@ -418,28 +418,31 @@ describe('the one way to write a grant, a share or a lead', () => {
   })
 
   /* A grant or share read, or taken as a row, and deleted in one
-   * declaration, the shape a direct delete takes; the declaration ends at
-   * the next one that starts a line. Any `.delete(` counts, whatever its
-   * receiver is called and across a line break, except on a Set or Map the
-   * file declares with `new`, such as a set of the ids it read. Only the
-   * helpers and the teardowns, which delete the reach rows themselves, may. */
+   * declaration, the shape a direct delete takes; a declaration runs from
+   * one line that starts one to the next. Any `.delete(` after the read
+   * counts, whatever its receiver is called, across a line break and on a
+   * parenthesized receiver, except on a Set or Map the same declaration
+   * makes with `new`, such as a set of the ids it read. Only the helpers and
+   * the teardowns, which delete the reach rows themselves, may. */
   const READ =
     /\.query\(\s*['"]project_(team_)?access['"]|tagged\(\s*['"]project_(team_)?access['"]|Doc<\s*['"]project_(team_)?access['"]\s*>/g
-  // the receiver's name, as `ids` in ids.delete( or uncountedWriter in
-  // uncountedWriter(ctx.db).delete(
-  const DELETE = /([\w$]+)(?:\([^()]*\))?\s*\.\s*delete\(/g
-  const COLLECTION = /\b(?:const|let)\s+([\w$]+)\b[^=\n]*=\s*new\s+(?:Set|Map)\b/g
-  const NEXT = /^(\}|export |async function |function |const |type |\/\*)/m
-  const deletesGrants = (source: string) => {
-    const collections = new Set([...source.matchAll(COLLECTION)].map((m) => m[1]))
-    return [...source.matchAll(READ)].some((read) => {
-      const rest = source.slice((read.index ?? 0) + read[0].length)
-      const end = NEXT.exec(rest)
-      return [...rest.slice(0, end?.index ?? rest.length).matchAll(DELETE)].some(
-        (del) => !collections.has(del[1]),
+  // the receiver's last name, as `ids` in ids.delete(, or `)` after a call
+  // or parentheses, as in uncountedWriter(ctx.db).delete( and (o.db ?? ctx.db).delete(
+  const DELETE = /([\w$]+|\))\s*\.\s*delete\(/g
+  // its type may span lines, but holds no `=`
+  const COLLECTION = /\b(?:const|let)\s+([\w$]+)\b[^=]*=\s*new\s+(?:Set|Map)\b/g
+  const START = /^(\}|export |async function |function |const |type |\/\*)/gm
+  const deletesGrants = (source: string) =>
+    [...source.matchAll(READ)].some((read) => {
+      const at = (read.index ?? 0) + read[0].length
+      const starts = [...source.matchAll(START)].map((m) => m.index ?? 0)
+      const from = starts.filter((i) => i < at).at(-1) ?? 0
+      const to = starts.find((i) => i >= at) ?? source.length
+      const made = new Set([...source.slice(from, to).matchAll(COLLECTION)].map((m) => m[1]))
+      return [...source.slice(at, to).matchAll(DELETE)].some(
+        (del) => del[1] === ')' || !made.has(del[1]),
       )
     })
-  }
   const TEARDOWNS = new Set([
     '../model/projectNav.ts',
     // team deletion and the deep organization delete, which delete the rows
@@ -473,6 +476,19 @@ describe('the one way to write a grant, a share or a lead', () => {
     expect(deletesGrants(`${ids}${read} ids.delete(row.project_id)`)).toBe(false)
     // the same name taken by a writer is not taken for a set
     expect(deletesGrants(`${read} ids.delete(row._id)`)).toBe(true)
+    // nor in another declaration, where a set has the writer's name
+    const other = 'function other() {\n  const ids = new Set<string>()\n  const db = new Map()\n}\n'
+    const writer = 'async function prune(ctx: MutationCtx) {\n  const ids = ctx.db\n  '
+    expect(deletesGrants(`${other}${writer}${read} await ids.delete(row._id)\n}`)).toBe(true)
+    expect(
+      deletesGrants(`${other}async function prune() {\n  ${read} await ctx.db.delete(row._id)\n}`),
+    ).toBe(true)
+    // a parenthesized writer, as model/projectNav.ts's (o.db ?? ctx.db)
+    expect(deletesGrants(`${read} await (writer ?? ctx.db).delete(row._id)`)).toBe(true)
+    expect(deletesGrants(`${read} await (ctx.db).delete(row._id)`)).toBe(true)
+    // a set whose type spans lines
+    const typed = 'const ids: Set<\n    string\n  > = new Set()\n  '
+    expect(deletesGrants(`${typed}${read} ids.delete(row.project_id)`)).toBe(false)
     const others = Object.entries(sources)
       .filter(([path, source]) => !TEARDOWNS.has(path) && deletesGrants(source))
       .map(([path]) => path)
