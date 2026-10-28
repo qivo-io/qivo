@@ -961,11 +961,11 @@ describe('bulk notification actions through the client store', () => {
     // all three first batches go at once, none with a cutoff, so the server
     // chooses each one at the start
     expect(requests.map((r) => [r.args.org_id, r.args.before])).toEqual(
-      [...snap.orgs.map((org) => org.id)].map((org) => [org, undefined]),
+      snap.orgs.map((org) => [org.id, undefined]),
     )
     expect(requests.map((r) => r.args.org_id)).toContain(third)
     // later batches keep to two seats at once
-    for (const request of [...requests]) request.resolve({ marked: 200, hasMore: true, before: 9 })
+    for (const request of requests) request.resolve({ marked: 200, hasMore: true, before: 9 })
     await vi.waitFor(() => expect(requests).toHaveLength(5))
     await asked()
     expect(requests).toHaveLength(5)

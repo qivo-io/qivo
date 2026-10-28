@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { act, useState } from 'react'
+import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
@@ -134,7 +134,9 @@ async function openInbox(
   /** The Inbox in a kept view, as App keeps it beside the other pages. */
   function KeptHost() {
     const [shown, setShown] = useState(true)
-    showKept = setShown
+    useEffect(() => {
+      showKept = setShown
+    }, [])
     return (
       <KeptView view="inbox" shown={shown} className="view">
         <InboxHost />
