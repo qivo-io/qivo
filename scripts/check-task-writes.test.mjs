@@ -57,14 +57,17 @@ export type Id<T extends Tables> = GenericId<T>
 
 const imports = `import type { WithoutSystemFields } from 'convex/server'
 import type { Ctx, DataModel, Id, Tables } from './schema'
-import { insertUnique } from './lib/db'
+import { insertUnique, insertUnique as putRow } from './lib/db'
 type Task = WithoutSystemFields<DataModel['issues']['document']>
 `
 
-/* A generic writer the check allows, whose callers it reads. */
+/* A generic writer the check allows, whose callers it reads, and one beside
+ * it that it does not allow. */
 const db = `import type { WithoutSystemFields } from 'convex/server'
 import type { Ctx, DataModel, Tables } from '../schema'
 export const insertUnique = <T extends Tables>(ctx: Ctx, table: T, doc: WithoutSystemFields<DataModel[T]['document']>) =>
+  ctx.db.insert(table, doc)
+export const insertAny = <T extends Tables>(ctx: Ctx, table: T, doc: WithoutSystemFields<DataModel[T]['document']>) =>
   ctx.db.insert(table, doc)
 `
 
@@ -84,9 +87,15 @@ export const edit = (ctx: Ctx, id: Id<'comments'>) => ctx.db.patch(id, { descrip
 export const unique = (ctx: Ctx) => insertUnique(ctx, 'comments', { body: 'Hi' })
 export const gone = (ctx: Ctx, id: Id<'issues'>) => ctx.db.delete(id)
 export const text = 'a.b'.replace('.', '')
+export const tidy = (ctx: Ctx, id: Id<'comments'>) => {
+  const { patch } = ctx.db
+  return patch(id, { body: 'Tidy', description: 'not a task' })
+}
+export const uniqueComment = (ctx: Ctx) => putRow(ctx, 'comments', { body: 'Hi' })
 `
 
-/* Each write the check refuses, one a line, with the start of its sentence. */
+/* Each write the check refuses, one a line, with the start of its sentence
+ * and, where the call does not follow the arrow, the text it starts with. */
 const refused = [
   [
     "export const insert = (ctx: Ctx, doc: Task) => ctx.db.insert('issues', doc)",
@@ -120,6 +129,29 @@ const refused = [
     "export const put = <T extends Tables>(ctx: Ctx, t: T, doc: WithoutSystemFields<DataModel[T]['document']>) => ctx.db.insert(t, doc)",
     'this writes a table that the check cannot read',
   ],
+  [
+    "export const aliased = (ctx: Ctx, doc: Task) => putRow(ctx, 'issues', doc)",
+    'this inserts a task row',
+  ],
+  [
+    "export const indexed = (ctx: Ctx, id: Id<'issues'>) => ctx.db['patch'](id, { description: 'x' })",
+    "this patch can change a task's description",
+  ],
+  [
+    "export const destructured = (ctx: Ctx, doc: Task) => { const { insert } = ctx.db; return insert('issues', doc) }",
+    'this inserts a task row',
+    "insert('issues'",
+  ],
+  [
+    "export const renamed = (ctx: Ctx, id: Id<'issues'>) => { const { patch: p } = ctx.db; return p(id, { description: 'x' }) }",
+    "this patch can change a task's description",
+    'p(id',
+  ],
+  [
+    "export const assigned = (ctx: Ctx, id: Id<'issues'>, doc: Task) => { const r = ctx.db.replace; return r(id, doc) }",
+    'this replaces a task row',
+    'r(id',
+  ],
 ]
 
 describe('the task write check', { timeout: 60_000 }, () => {
@@ -135,25 +167,42 @@ describe('the task write check', { timeout: 60_000 }, () => {
     })
     expect(status).toBe(1)
     const lines = bad.split('\n')
-    const expected = refused.map(([source, sentence]) => {
+    const expected = refused.map(([source, sentence, starts]) => {
       const line = lines.indexOf(source)
-      const call = source.lastIndexOf('=> ') + 3
+      const call = starts === undefined ? source.lastIndexOf('=> ') + 3 : source.indexOf(starts)
       return `convex/bad.ts:${line + 1}:${call + 1} - ${sentence}`
     })
     const found = output.split('\n').filter((line) => line.startsWith('convex/'))
-    expect(found).toHaveLength(expected.length)
-    for (const [i, line] of found.entries()) expect(line.startsWith(expected[i]), line).toBe(true)
+    // insertAny is in lib/db.ts but is not insertUnique, so it may not write
+    // a table of a type parameter
+    expect(found[0]).toMatch(
+      /^convex\/lib\/db\.ts:6:3 - this writes a table that the check cannot read/,
+    )
+    const inBad = found.slice(1)
+    expect(inBad).toHaveLength(expected.length)
+    for (const [i, line] of inBad.entries()) expect(line.startsWith(expected[i]), line).toBe(true)
   })
 
   it('passes a tree whose task writes all go through model/descriptions.ts', () => {
     const { status, output } = check({
       'schema.ts': schema,
-      'lib/db.ts': db,
+      'lib/db.ts': db.slice(0, db.indexOf('export const insertAny')),
       'model/descriptions.ts': owner,
       'good.ts': good,
     })
     expect(output).toBe('')
     expect(status).toBe(0)
+  })
+
+  it('fails when the code writes the database without model/descriptions.ts', () => {
+    const { status, output } = check({
+      'schema.ts': schema,
+      'lib/db.ts': db.slice(0, db.indexOf('export const insertAny')),
+      'good.ts': good,
+    })
+    expect(status).toBe(1)
+    expect(output).toContain('convex/model/descriptions.ts - ')
+    expect(output).toContain('does not hold it, though its code writes the database')
   })
 
   it('fails when it finds no write in model/descriptions.ts, which would mean it reads none', () => {

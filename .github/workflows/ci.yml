@@ -72,7 +72,9 @@ jobs:
         run: npm run typecheck:strict
 
       # The root project does not cover the entire backend or the desktop shell.
-      # This also checks that the default-runtime code uses no Node global.
+      # This also checks that the default-runtime code uses no Node global,
+      # and that only convex/model/descriptions.ts writes task rows and their
+      # descriptions (scripts/check-task-writes.mjs).
       - name: Typecheck backend (convex, strict)
         run: npm run typecheck:convex
 
