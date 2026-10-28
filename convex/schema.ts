@@ -1143,6 +1143,9 @@ export default defineSchema({
   name_copies: defineTable({
     source: vNameSource,
     source_id: v.string(),
+    // the source's _creationTime, which a profile or team that later takes
+    // the same id does not share, so the row never passes to it
+    source_created: v.number(),
     progress_at: v.string(), // the last committed step; recovery restarts a stalled row
     scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
   })

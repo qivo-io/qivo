@@ -300,7 +300,7 @@ export async function updateTeamCore(
   await ctx.db.patch(team._id, upd)
   // the team's project shares copy its name key (model/nameKeys.ts)
   if (upd.name !== undefined)
-    await copyNameKey(ctx, 'teams', { id: team.id, name: upd.name }, inlineBudget())
+    await copyNameKey(ctx, 'teams', { ...team, name: upd.name }, inlineBudget())
   return (await ctx.db.get(team._id)) ?? team
 }
 

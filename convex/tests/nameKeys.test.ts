@@ -37,7 +37,7 @@ import { expectExact, keysOf } from './nameKeys.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
 const START = Date.parse('2026-05-04T10:00:00.000Z')
-const COPY_DEFAULTS = { ...NAME_COPIES }
+const COPY_DEFAULTS = structuredClone(NAME_COPIES)
 const PAGE_DEFAULTS = { ...KEY_PAGE }
 const RUN_DEFAULTS = { ...RUN }
 const OPERATOR = { auth_user_id: 'operator-login', email: 'operator@platform.test' }
@@ -47,7 +47,7 @@ beforeEach(() => {
   vi.setSystemTime(START)
 })
 afterEach(() => {
-  Object.assign(NAME_COPIES, COPY_DEFAULTS)
+  Object.assign(NAME_COPIES, structuredClone(COPY_DEFAULTS))
   Object.assign(KEY_PAGE, PAGE_DEFAULTS)
   Object.assign(RUN, RUN_DEFAULTS)
   vi.clearAllTimers()
@@ -360,7 +360,7 @@ describe('writers', () => {
   })
 
   it('renames every seat of a login and its copies, within one budget', async () => {
-    NAME_COPIES.inline = 3
+    NAME_COPIES.inline.rows = 3
     const t = newT()
     const f = await withOrg(t)
     // a second seat of the user's login, in the other organization
@@ -635,8 +635,8 @@ describe('Deleted items', () => {
 
 describe('copies after a rename', () => {
   it('brings up to the inline budget in line at once and the rest in steps', async () => {
-    NAME_COPIES.inline = 2
-    NAME_COPIES.step = 3
+    NAME_COPIES.inline.rows = 2
+    NAME_COPIES.step.rows = 3
     const t = newT()
     const f = await withOrg(t)
     const person = await plantBusyPerson(t, f, 4)
@@ -660,7 +660,7 @@ describe('copies after a rename', () => {
   })
 
   it('starts no job for a rename whose copies fit the inline budget', async () => {
-    NAME_COPIES.inline = 4
+    NAME_COPIES.inline.rows = 4
     const t = newT()
     const f = await withOrg(t)
     const person = await plantBusyPerson(t, f, 2)
@@ -677,8 +677,8 @@ describe('copies after a rename', () => {
   })
 
   it('ends with the last rename when renames and steps interleave', async () => {
-    NAME_COPIES.inline = 1
-    NAME_COPIES.step = 2
+    NAME_COPIES.inline.rows = 1
+    NAME_COPIES.step.rows = 2
     const t = newT()
     const f = await withOrg(t)
     const person = await plantBusyPerson(t, f, 3)
@@ -698,8 +698,8 @@ describe('copies after a rename', () => {
   })
 
   it('brings a renamed team’s shares in line in steps', async () => {
-    NAME_COPIES.inline = 1
-    NAME_COPIES.step = 1
+    NAME_COPIES.inline.rows = 1
+    NAME_COPIES.step.rows = 1
     const t = newT()
     const f = await withOrg(t)
     const team = await plantSharedTeam(t, f, 3)
@@ -712,7 +712,7 @@ describe('copies after a rename', () => {
   })
 
   it('resumes a dropped step once it stalls and leaves a waiting step alone', async () => {
-    NAME_COPIES.inline = 1
+    NAME_COPIES.inline.rows = 1
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
     const f = await withOrg(t)
@@ -747,7 +747,7 @@ describe('copies after a rename', () => {
   })
 
   it('restarts a job whose step was dropped when the next rename comes first', async () => {
-    NAME_COPIES.inline = 1
+    NAME_COPIES.inline.rows = 1
     const t = newT()
     const f = await withOrg(t)
     const person = await plantBusyPerson(t, f, 2)
@@ -771,8 +771,98 @@ describe('copies after a rename', () => {
     expect(await jobOf(t, 'profiles', person.id)).toBeNull()
   })
 
+  it('stops a pass at its bytes, one chunk past them at most', async () => {
+    NAME_COPIES.chunk = 2
+    NAME_COPIES.inline = { rows: 100, bytes: 1 }
+    NAME_COPIES.step = { rows: 100, bytes: 1 }
+    const t = newT()
+    const f = await withOrg(t)
+    const person = await plantBusyPerson(t, f, 4)
+    await renamePerson(t, f, person.id, 'Bytes')
+    // one chunk of two memberships, then the bytes are spent
+    expect(
+      Object.values(await copiesOf(t, person.id))
+        .flat()
+        .filter((k) => k === 'bytes'),
+    ).toHaveLength(2)
+    await runSteps(t)
+    expect(Object.values(await copiesOf(t, person.id)).flat()).toEqual(Array(8).fill('bytes'))
+    // the rest of the memberships, then two chunks of grants
+    expect(await stepsRun(t)).toBe(3)
+  })
+
+  it('never passes a job to a team that takes the id of a deleted one', async () => {
+    NAME_COPIES.inline.rows = 1
+    const t = newT()
+    const f = await withOrg(t)
+    const team = await plantSharedTeam(t, f, 2, 'Old Team')
+    await renameTeam(t, f, team.id, 'Old Renamed')
+    const old = (await jobOf(t, 'teams', team.id))!
+    expect(old.source_created).toBe(team._creationTime)
+    await t.run((ctx) => ctx.scheduler.cancel(old.scheduled_id!))
+    await as(t, f.admin).mutation(api.teams.deleteDeep, { org_id: f.org.id, id: team.id })
+    // another organization's team takes the freed id, with a share whose
+    // key a step for it would change
+    await as(t, f.otherAdmin).mutation(api.teams.create, {
+      org_id: f.otherOrg.id,
+      id: team.id,
+      name: 'Newcomer',
+    })
+    const project = await plantProject(t, { org_id: f.otherOrg.id })
+    await t.run((ctx) =>
+      ctx.db.insert('project_team_access', {
+        project_id: project.id,
+        team_id: team.id,
+        level: 'viewer',
+        name_key: 'planted',
+      }),
+    )
+    await t.mutation(internal.nameCopies.step, { source: 'teams', source_id: team.id })
+    expect(await jobOf(t, 'teams', team.id)).toBeNull()
+    expect(await sharesOf(t, team.id)).toEqual(['planted'])
+  })
+
+  it('lets a rename of the team that took the id take the job over', async () => {
+    NAME_COPIES.inline.rows = 1
+    const t = newT()
+    const f = await withOrg(t)
+    const team = await plantSharedTeam(t, f, 2, 'Old Team')
+    await renameTeam(t, f, team.id, 'Old Renamed')
+    const old = (await jobOf(t, 'teams', team.id))!
+    await t.run((ctx) => ctx.scheduler.cancel(old.scheduled_id!))
+    await as(t, f.admin).mutation(api.teams.deleteDeep, { org_id: f.org.id, id: team.id })
+    await as(t, f.otherAdmin).mutation(api.teams.create, {
+      org_id: f.otherOrg.id,
+      id: team.id,
+      name: 'Newcomer',
+    })
+    const fresh = (await teamOf(t, team.id))!
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 2; n++) {
+        const project = uuid()
+        await ctx.db.insert('project_team_access', {
+          project_id: project,
+          team_id: team.id,
+          level: 'viewer',
+        })
+      }
+    })
+    await as(t, f.otherAdmin).mutation(api.teams.update, {
+      org_id: f.otherOrg.id,
+      id: team.id,
+      patch: { name: 'Taken Over' },
+    })
+    const taken = (await jobOf(t, 'teams', team.id))!
+    expect(taken._id).toBe(old._id)
+    expect(taken.source_created).toBe(fresh._creationTime)
+    expect(taken.scheduled_id).not.toBe(old.scheduled_id)
+    await runSteps(t)
+    expect(await sharesOf(t, team.id)).toEqual(['taken over', 'taken over'])
+    expect(await jobOf(t, 'teams', team.id)).toBeNull()
+  })
+
   it('ends a job whose profile or team is gone', async () => {
-    NAME_COPIES.inline = 1
+    NAME_COPIES.inline.rows = 1
     const t = newT()
     const f = await withOrg(t)
     const person = await plantBusyPerson(t, f, 2)

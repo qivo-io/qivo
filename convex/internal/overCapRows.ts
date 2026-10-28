@@ -298,7 +298,7 @@ async function walk(
       if (typeof name === 'string' && keyed) found.patch.name_key = nameKey(name)
       await write.db.patch(table, _id, found.patch)
       if (typeof name === 'string' && (table === 'teams' || table === 'profiles'))
-        await copyNameKey(write, table, { id: doc.id, name }, copies)
+        await copyNameKey(write, table, { ...doc, name }, copies)
     }
     return { rows, cursor: page.continueCursor, done: page.isDone }
   }

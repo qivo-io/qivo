@@ -20,28 +20,39 @@
  * because a row without a key sorts first and a search by name misses it. */
 
 import { makeFunctionReference } from 'convex/server'
+import { getDocumentSize } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import type { NameSource } from '../lib/enums'
+import { MIB } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 
-/** The copies a rename brings in line in its own transaction, shared by
- * every source one transaction renames, and the most one background step
- * brings in line (nameCopies.ts). Convex reads a row by id before it
- * patches it, so each copy uses one of the 4,096 index ranges a transaction
- * may read, as a label deletion's rows do (model/labels.ts LABEL_REMOVAL,
- * which measured a step of 2,000 at about half the limit). A copy is a
- * small row, far from the byte limits. Tests lower both values. */
-export const NAME_COPIES = { inline: 500, step: 2000 }
+/** What a rename may spend on copies in its own transaction, shared by
+ * every source the transaction renames, and what one background step may
+ * spend (nameCopies.ts): the copies it gives their key and the bytes it
+ * reads. Convex reads a row by id before it patches it, so each copy uses
+ * one of the 4,096 index ranges a transaction may read, as a label
+ * deletion's rows do (model/labels.ts LABEL_REMOVAL, which measured a step
+ * of 2,000 at about half the limit), and each copy is read twice, in its
+ * range and by its patch. A copy is under 3 KiB even with the longest key a
+ * name of NAME_MAX units gives (2,640 bytes), so the bytes only bind for
+ * such names. A pass reads `chunk` copies at a time and starts a chunk only
+ * while bytes are left, so it reads at most one chunk past its bytes. Tests
+ * lower them. */
+export const NAME_COPIES = {
+  inline: { rows: 500, bytes: 2 * MIB },
+  step: { rows: 2000, bytes: 8 * MIB },
+  chunk: 100,
+}
 
-/** What a transaction may still bring in line. */
-export type CopyBudget = { left: number }
+/** What a transaction may still spend on copies (NAME_COPIES). */
+export type CopyBudget = { rows: number; bytes: number }
 
 /** A fresh budget for one rename's transaction. */
-export const inlineBudget = (): CopyBudget => ({ left: NAME_COPIES.inline })
+export const inlineBudget = (): CopyBudget => ({ ...NAME_COPIES.inline })
 
 /** The tables that copy each source's key. */
-type CopyTable = 'team_members' | 'project_access' | 'project_team_access'
+export type CopyTable = 'team_members' | 'project_access' | 'project_team_access'
 const COPIES: Readonly<Record<NameSource, readonly CopyTable[]>> = {
   profiles: ['team_members', 'project_access'],
   teams: ['project_team_access'],
@@ -99,26 +110,47 @@ export async function staleCopies(
   return rows
 }
 
-/** A source row, which its copies follow. */
-type Source = Pick<Doc<NameSource>, 'id' | 'name'>
+/** A source row, which its copies follow. Its _creationTime tells it from
+ * a later row that takes the same id. */
+type Source = Pick<Doc<NameSource>, '_creationTime' | 'id' | 'name'>
 
-/** Gives up to `budget.left` copies of `row`'s name key (a profile's when
- * `source` is 'profiles', a team's for 'teams') the key of its current name,
- * spending the budget, and answers whether copies that differ are left. */
+/**
+ * Gives the copies of `row`'s name key (a profile's when `source` is
+ * 'profiles', a team's for 'teams') that do not hold the key of its current
+ * name that key, within `budget`, and answers whether any are left. Each
+ * copy given its key spends one of `budget.rows`, and every read of a copy
+ * spends `budget.bytes`. Copies are read NAME_COPIES.chunk at a time, and a
+ * chunk starts only while bytes are left. Without `write` it gives no key and only
+ * reads, one chunk a table, as it would find the same copies again; `found`
+ * sees each copy it would give a key, and it answers whether more are left
+ * past them.
+ */
 export async function bringInLine(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   source: NameSource,
-  row: Source,
+  row: Pick<Source, 'id' | 'name'>,
   budget: CopyBudget,
+  write: MutationCtx | null,
+  found?: (table: CopyTable, copy: Doc<CopyTable>) => void,
 ): Promise<boolean> {
   const key = nameKey(row.name)
   for (const table of COPIES[source]) {
-    // one more than the budget tells whether any are left
-    const stale = await staleCopies(ctx, table, row.id, key, budget.left + 1)
-    const now = stale.slice(0, budget.left)
-    for (const copy of now) await ctx.db.patch(copy._id, { name_key: key })
-    budget.left -= now.length
-    if (stale.length > now.length) return true
+    for (;;) {
+      const n = budget.bytes > 0 ? Math.min(budget.rows, NAME_COPIES.chunk) : 0
+      // one more than the chunk tells whether any are left
+      const stale = await staleCopies(ctx, table, row.id, key, n + 1)
+      for (const copy of stale) budget.bytes -= getDocumentSize(copy)
+      const now = stale.slice(0, n)
+      for (const copy of now) {
+        found?.(table, copy)
+        if (write === null) continue
+        await write.db.patch(copy._id, { name_key: key })
+        budget.bytes -= getDocumentSize(copy)
+      }
+      budget.rows -= now.length
+      if (stale.length <= n) break
+      if (write === null || budget.rows <= 0 || budget.bytes <= 0) return true
+    }
   }
   return false
 }
@@ -136,23 +168,35 @@ export const pendingNameCopies = (ctx: QueryCtx, source: NameSource, id: string)
 
 /** Brings the copies of `row`'s name key in line after a rename, within
  * `budget`, and leaves the rest to a name_copies row and its background
- * steps (nameCopies.ts). Call it in the transaction that writes the name. A
- * row whose step still waits or runs keeps it, because that step reads the
- * name this transaction writes. */
+ * steps (nameCopies.ts). Call it in the transaction that writes the name,
+ * with the row as stored and its new name. A row left by an earlier profile
+ * or team with the same id is taken over for this one. A row whose step
+ * still waits or runs keeps it, because that step reads the name this
+ * transaction writes. */
 export async function copyNameKey(
   ctx: MutationCtx,
   source: NameSource,
   row: Source,
   budget: CopyBudget,
 ): Promise<void> {
-  if (!(await bringInLine(ctx, source, row, budget))) return
+  if (!(await bringInLine(ctx, source, row, budget, ctx))) return
   const job = await pendingNameCopies(ctx, source, row.id)
+  const source_created = row._creationTime
+  if (job !== null && job.source_created !== source_created)
+    await ctx.db.patch(job._id, { source_created })
   const next = job?.scheduled_id === undefined ? null : await ctx.db.system.get(job.scheduled_id)
   if (next?.state.kind === 'pending' || next?.state.kind === 'inProgress') return
   const progress_at = new Date().toISOString()
   const scheduled_id = await ctx.scheduler.runAfter(0, stepRef, { source, source_id: row.id })
   if (job !== null) await ctx.db.patch(job._id, { progress_at, scheduled_id })
-  else await ctx.db.insert('name_copies', { source, source_id: row.id, progress_at, scheduled_id })
+  else
+    await ctx.db.insert('name_copies', {
+      source,
+      source_id: row.id,
+      source_created,
+      progress_at,
+      scheduled_id,
+    })
 }
 
 /** The org_ready row of the organization, or null. */

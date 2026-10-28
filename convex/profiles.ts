@@ -410,7 +410,7 @@ async function updateProfile(
   }
   // the memberships and grants copy the name key (model/nameKeys.ts)
   if (renamedFrom !== undefined)
-    await copyNameKey(ctx, 'profiles', { id: row.id, name: effectiveName }, inlineBudget())
+    await copyNameKey(ctx, 'profiles', { ...row, name: effectiveName }, inlineBudget())
   if (upd.active !== undefined || upd.org_role !== undefined || upd.email !== undefined) {
     await markBillingMembershipChanged(
       ctx,
@@ -538,7 +538,7 @@ export const setDisplayName = authedMutation({
     for (const p of matched) {
       if (p.name === name) continue
       await ctx.db.patch(p._id, { ...named(name), initials })
-      await copyNameKey(ctx, 'profiles', { id: p.id, name }, copies)
+      await copyNameKey(ctx, 'profiles', { ...p, name }, copies)
       await logActivity(ctx, {
         org_id: p.org_id,
         actor_id: ctx.myProfiles.get(p.org_id)?.id,

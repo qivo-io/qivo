@@ -13,7 +13,11 @@
  * that has no step waiting or running. The job is keyed by its source, not
  * by organization, so it also ends after the organization is deleted. A
  * step that finds the source gone deletes the row, as the copies go with
- * their profile or team. */
+ * their profile or team. The row holds the source's _creationTime, so a
+ * profile or team that later takes the same id, even in another
+ * organization, never inherits it. A step that finds another row under the
+ * id deletes the job, and a rename of the new one takes it over
+ * (model/nameKeys.ts copyNameKey). */
 
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
@@ -42,7 +46,9 @@ export const step = internalMutation({
     const job = await pendingNameCopies(ctx, source, source_id)
     if (job === null) return null
     const row = await byId(ctx, source, source_id)
-    if (row !== null && (await bringInLine(ctx, source, row, { left: NAME_COPIES.step }))) {
+    // a profile or team that took a freed id is not the one the row is for
+    const mine = row !== null && row._creationTime === job.source_created
+    if (mine && (await bringInLine(ctx, source, row, { ...NAME_COPIES.step }, ctx))) {
       const scheduled_id = await ctx.scheduler.runAfter(0, stepRef, { source, source_id })
       await ctx.db.patch(job._id, { progress_at: new Date().toISOString(), scheduled_id })
       return null

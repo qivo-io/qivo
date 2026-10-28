@@ -373,7 +373,7 @@ export const updateInvite = internalMutation({
     await ctx.db.patch(seat._id, patch)
     // a pending seat can hold memberships and project grants already
     if (patch.name !== undefined)
-      await copyNameKey(ctx, 'profiles', { id: seat.id, name }, inlineBudget())
+      await copyNameKey(ctx, 'profiles', { ...seat, name }, inlineBudget())
     await audit(ctx, {
       actor_auth_id: a.actor.auth_user_id,
       actor_email: a.actor.email,
