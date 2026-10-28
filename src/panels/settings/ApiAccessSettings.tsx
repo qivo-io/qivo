@@ -165,8 +165,11 @@ function ApiAccessPage({
   const [loading, setLoading] = useState(!foreign)
   const [failed, setFailed] = useState(false)
   const [now, setNow] = useState(() => new Date())
-  // the search box, which reaches `ask.search` once typing rests
+  // The search box, which only typing and Escape change, and its settled
+  // text: the trimmed text once typing rests, at once when cleared. Every
+  // read applies the settled text as its search (withQuery).
   const [text, setText] = useState('')
+  const [query, setQuery] = useState('')
   const [revoking, setRevoking] = useState<ApiCredentialRow | null>(null)
   /* The credential whose Revoke opened the window last, with where focus
      goes once that Revoke has left: the next row's Revoke, the previous
@@ -184,16 +187,22 @@ function ApiAccessPage({
   askRef.current = ask
   const shownRef = useRef(shown)
   shownRef.current = shown
-  const textRef = useRef(text)
-  textRef.current = text
+  const queryRef = useRef(query)
+
+  /* `ask` with the search box's settled text as its search. Cursors belong
+     to one search, so a changed search starts at the first page. */
+  const withQuery = (ask: Ask): Ask =>
+    ask.search === queryRef.current
+      ? ask
+      : { ...ask, search: queryRef.current, pages: [FIRST_PAGE] }
 
   /* Reads the page for `next`, with the summary when `figures`, and also
      when the figures on screen belong to another period than `next` names,
-     as when a filter changes while a period change is still on its way. A
-     failed read keeps what is on screen, and the controls go back to what
-     it belongs to, the search box too unless typing has moved on; Retry
-     (`again`) sends the failed read again and puts its search back. */
-  const load = async (next: Ask, figures: boolean, again = false) => {
+     as when a filter changes while a period change is still on its way.
+     Callers pass `next` through withQuery. A failed read keeps what is on
+     screen, the controls go back to what it belongs to and the search box
+     stays as typed, and the error line offers Retry. */
+  const load = async (next: Ask, figures: boolean) => {
     const n = ++sequence.current
     attempt.current = { ask: next, figures }
     // at once, so a second change made before the next render builds on it
@@ -214,7 +223,6 @@ function ApiAccessPage({
       if (!kept) return
       askRef.current = kept.ask
       setAsk(kept.ask)
-      if (textRef.current.trim() === next.search) setText(kept.ask.search)
       return
     }
     let settled = next
@@ -231,29 +239,34 @@ function ApiAccessPage({
     setFailed(false)
     askRef.current = settled
     setAsk(settled)
-    if (again) setText(settled.search)
     setShown({ ask: settled, figures: summary, page })
   }
 
   useEffect(() => {
     if (opened !== null) onEntryUsed?.()
-    if (!foreign) void load(askRef.current, true)
+    if (!foreign) void load(withQuery(askRef.current), true)
     return () => {
       sequence.current++
     }
   }, [])
 
   /* A filter or search change reads the first page of the new list. */
-  const filter = (patch: Partial<ApiAccessFilters>) =>
-    void load({ ...askRef.current, ...patch, pages: [FIRST_PAGE] }, false)
+  const filter = (patch: Partial<Omit<ApiAccessFilters, 'search'>>) =>
+    void load(withQuery({ ...askRef.current, ...patch, pages: [FIRST_PAGE] }), false)
 
-  // The search reaches the server once typing rests, at once when cleared.
+  // The box's text settles once typing rests, at once when cleared, and
+  // the list reads it.
   const typed = text.trim()
   const tooLong = overLimit(LIMITS.search, typed)
   useEffect(() => {
-    if (typed === askRef.current.search || tooLong || foreign) return
-    if (typed === '') return void filter({ search: '' })
-    const timer = window.setTimeout(() => filter({ search: typed }), SEARCH_DELAY_MS)
+    if (typed === queryRef.current || tooLong || foreign) return
+    const settle = () => {
+      queryRef.current = typed
+      setQuery(typed)
+      filter({})
+    }
+    if (typed === '') return settle()
+    const timer = window.setTimeout(settle, SEARCH_DELAY_MS)
     return () => window.clearTimeout(timer)
   }, [typed, tooLong, foreign])
 
@@ -271,21 +284,24 @@ function ApiAccessPage({
     () => asked?.focus() ?? null,
   )
 
-  const refresh = () => void load(askRef.current, true)
+  const refresh = () => void load(withQuery(askRef.current), true)
+  // Previous and Next browse the list on screen, which a failed search read
+  // can leave behind the search box; Retry reads the box's search then.
+  const behind = shown !== null && shown.ask.search !== query
   const next = () => {
-    if (page?.state !== 'ready' || page.next === null || !shown) return
+    if (page?.state !== 'ready' || page.next === null || !shown || behind) return
     const pages = [...shown.ask.pages, { cursor: page.next, first: start.first + rows.length }]
     // keep the first page's start and drop the oldest after it (STACK_MOST)
     if (pages.length > STACK_MOST) pages.splice(1, 1)
     void load({ ...shown.ask, pages }, false)
   }
   const previous = () => {
-    if (!shown || shown.ask.pages.length < 2) return
+    if (!shown || shown.ask.pages.length < 2 || behind) return
     void load({ ...shown.ask, pages: shown.ask.pages.slice(0, -1) }, false)
   }
   // the current period, a deliberate change of scope from an unavailable one
   const currentPeriod = () =>
-    void load({ ...askRef.current, period: undefined, pages: [FIRST_PAGE] }, true)
+    void load(withQuery({ ...askRef.current, period: undefined, pages: [FIRST_PAGE] }), true)
 
   const personName = ask.person ? (ask.person.name ?? 'Chosen account') : null
 
@@ -383,7 +399,7 @@ function ApiAccessPage({
             className="mt-3 h-control-sm"
             onClick={() => {
               setForeign(false)
-              void load(firstAsk(null), true)
+              void load(withQuery(firstAsk(null)), true)
             }}
           >
             Show this organization's credentials
@@ -404,7 +420,8 @@ function ApiAccessPage({
             className="h-control-sm text-sm"
             onClick={() => {
               const last = attempt.current
-              if (last) void load(last.ask, last.figures || shown === null, true)
+              // the failed read's filters, with the search box as it is now
+              if (last) void load(withQuery(last.ask), last.figures || shown === null)
             }}
           >
             <Icon name="rotateCcw" size={16} />
@@ -439,7 +456,7 @@ function ApiAccessPage({
                 value={ask.period ?? (figures.state === 'ready' ? figures.period : '')}
                 onChange={(e) =>
                   void load(
-                    { ...askRef.current, period: e.target.value, pages: [FIRST_PAGE] },
+                    withQuery({ ...askRef.current, period: e.target.value, pages: [FIRST_PAGE] }),
                     true,
                   )
                 }
@@ -588,7 +605,7 @@ function ApiAccessPage({
                 type="button"
                 variant="outline"
                 data-api-access-previous=""
-                disabled={loading || shown.ask.pages.length < 2}
+                disabled={loading || behind || shown.ask.pages.length < 2}
                 onClick={previous}
               >
                 <Icon name="chevronLeft" size={16} />
@@ -598,7 +615,7 @@ function ApiAccessPage({
                 type="button"
                 variant="outline"
                 data-api-access-next=""
-                disabled={loading || page.next === null}
+                disabled={loading || behind || page.next === null}
                 onClick={next}
               >
                 Next

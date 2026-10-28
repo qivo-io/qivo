@@ -676,7 +676,8 @@ describe('the API access page', () => {
     expect(listed()).toEqual(['GitHub Actions'])
   })
 
-  it('puts the search box back with the search when a search read fails, and Retry applies it again', async () => {
+  it('leaves the search box as typed when a search read fails, and Retry reads the box', async () => {
+    server.pageSize = 3
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await render(<ui.OrgApiAccessPage />)
     const box = () => find<HTMLInputElement>('[data-api-access-search]')
@@ -684,28 +685,86 @@ describe('the API access page', () => {
     await type(box(), 'sheets')
     await rest()
     expect(find('[role="alert"]').textContent).toContain("Couldn't refresh API access.")
-    // the box says what the rows on screen are filtered by
-    expect(box().value).toBe('')
-    expect(listed()).toHaveLength(7)
+    // nothing writes the box but the person; the rows are the ones before
+    expect(box().value).toBe('sheets')
+    expect(listed()).toEqual(['Cursor', 'Claude', 'GitHub Actions'])
+    // the pages on screen belong to another search than the box's
+    expect(find<HTMLButtonElement>('[data-api-access-next]').disabled).toBe(true)
     await click(buttonIn(find('[role="alert"]'), 'Retry'))
     expect(pageCalls().at(-1)).toMatchObject({ search: 'sheets' })
     expect(box().value).toBe('sheets')
     expect(listed()).toEqual(['Sheets export script'])
-    // later reads use the search the box shows
     await click(buttonIn(find('[aria-label="State"]'), 'Active'))
     expect(pageCalls().at(-1)).toMatchObject({ state: 'active', search: 'sheets' })
   })
 
-  it('keeps the search box with the rows after a failed search, so the next filter reads what it shows', async () => {
+  it('applies the box’s search to a filter change after a failed search read', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await render(<ui.OrgApiAccessPage />)
     network.query.mockRejectedValueOnce(new Error('offline'))
     await type(find<HTMLInputElement>('[data-api-access-search]'), 'sheets')
     await rest()
+    await click(buttonIn(find('[aria-label="Kind"]'), 'Personal tokens'))
+    expect(pageCalls().at(-1)).toEqual({
+      kind: 'mcp_tokens',
+      state: 'all',
+      period: CURRENT,
+      search: 'sheets',
+    })
+    expect(find<HTMLInputElement>('[data-api-access-search]').value).toBe('sheets')
+    expect(listed()).toEqual(['Sheets export script'])
+  })
+
+  /* A failed search read, then a Retry whose read the test holds. */
+  async function heldRetry() {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await render(<ui.OrgApiAccessPage />)
+    network.query.mockRejectedValueOnce(new Error('offline'))
+    await type(find<HTMLInputElement>('[data-api-access-search]'), 'sheets')
+    await rest()
+    const read = network.query.getMockImplementation()
+    const held: (() => void)[] = []
+    network.query.mockImplementation((ref, args) => {
+      if (getFunctionName(ref) === 'apiAccess:page' && args.search === 'sheets' && !held.length)
+        return new Promise((resolve) => held.push(() => resolve(read?.(ref, args))))
+      return read?.(ref, args)
+    })
+    await click(buttonIn(find('[role="alert"]'), 'Retry'))
+    return async () => {
+      await act(async () => {
+        for (const go of held) go()
+      })
+      await settle()
+    }
+  }
+
+  it('keeps what is typed while a Retry is on its way, and lists what the box says', async () => {
+    const release = await heldRetry()
+    const box = find<HTMLInputElement>('[data-api-access-search]')
+    await type(box, 'cursor')
+    // the Retry answers before typing rests
+    await release()
+    expect(box.value).toBe('cursor')
+    await rest()
+    expect(box.value).toBe('cursor')
+    expect(pageCalls().at(-1)).toMatchObject({ search: 'cursor' })
+    expect(listed()).toEqual(['Cursor', 'Cursor, old'])
+  })
+
+  it('applies the box’s search to a filter change made while a Retry is on its way', async () => {
+    const release = await heldRetry()
     await click(buttonIn(find('[aria-label="Kind"]'), 'Agent keys'))
-    expect(pageCalls().at(-1)).toEqual({ kind: 'agent_keys', state: 'all', period: CURRENT })
-    expect(find<HTMLInputElement>('[data-api-access-search]').value).toBe('')
-    expect(listed()).toEqual(['GitHub Actions'])
+    await release()
+    expect(pageCalls().at(-1)).toEqual({
+      kind: 'agent_keys',
+      state: 'all',
+      period: CURRENT,
+      search: 'sheets',
+    })
+    // the box says sheets, and no agent key matches it
+    expect(find<HTMLInputElement>('[data-api-access-search]').value).toBe('sheets')
+    expect(listed()).toEqual([])
+    expect(note()).toBe('No credentials match the filters.')
   })
 
   it('says when the page could not be loaded, and loads it on Retry', async () => {
