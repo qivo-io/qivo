@@ -878,7 +878,12 @@ export const MILESTONE_NAV = { children: 64 }
  * level without navigation), so the rule stays the access layer's. Every
  * read is counted under `ceiling` or follows a look at it, and past the
  * ceiling the check throws `refusal()`. It passes the ceiling by at most
- * one sub-project's own access check. */
+ * one sub-project's own access check. That check is the access layer's,
+ * which reads every team share on the sub-project before the next look
+ * (lib/access.ts projectLevelsOf), so a sub-project shared with tens of
+ * thousands of teams passes Convex's document limit here, as it does in
+ * every access check of that sub-project. Bounding it belongs in
+ * lib/access.ts. */
 function navigationOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
