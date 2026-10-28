@@ -5494,10 +5494,13 @@ export const PLANNER = {
     if (u.orgRole !== 'admin' && u.orgRole !== 'user') return false
     if (u.orgRole === 'admin') return true
     // the access map already surfaces projects.lead_id as 'lead'; the org
-    // fence is intrinsic — a grant elsewhere says nothing about this list
+    // fence is intrinsic — a grant elsewhere says nothing about this list.
+    // Only a top-level meta counts, as on the server, which reads no meta
+    // stored under another (convex/lib/access.ts canWriteOrgLabels)
     return PLANNER.projects.some(
       (p) =>
         p.type === 'meta' &&
+        !p.parent &&
         p.org === org &&
         ['lead', 'user'].includes(levelOnProject(p, u.id) || ''),
     )
