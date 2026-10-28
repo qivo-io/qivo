@@ -45,7 +45,7 @@ import {
   reachRows,
 } from './projectReach.setup'
 import { assertNoDanglingRefs } from './refs.setup'
-import { installTrashTimers, itemFor, jobFor, runSteps } from './trash.setup'
+import { installTrashTimers, itemFor, jobFor, runSteps, step } from './trash.setup'
 
 installTrashTimers()
 
@@ -665,6 +665,103 @@ describe('Deleted items', () => {
     expect((await reachRows(t)).some((row) => row.root_id === f.meta.id)).toBe(true)
     await t.run((ctx) => clearOrgTrash(ctx, f.org.id, { left: Number.POSITIVE_INFINITY }))
     expect((await reachRows(t)).filter((row) => row.root_id === f.meta.id)).toEqual([])
+  })
+})
+
+describe('a restore and the work around it', () => {
+  /** Pia's grant on Firmware, its move to Deleted items finished, and a
+   * restore whose call writes her grant back with its rows and stops there,
+   * one row of budget spent, the reveal left to the steps. */
+  async function halfRestored(t: T) {
+    const f = await ready(t)
+    const org_id = f.org.id
+    await as(t, f.admin).mutation(api.projects.setAccess, {
+      org_id,
+      id: f.sub.id,
+      user_id: f.pia.id,
+      level: 'user',
+    })
+    const pia = await rowsOf(t, f.pia.id)
+    await as(t, f.user).mutation(api.projects.deleteDeep, { org_id, id: f.sub.id })
+    await runSteps(t)
+    const item = await itemFor(t, f.sub.id)
+    TRASH_BUDGET.rows = 1
+    await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
+    expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_access' })
+    expect(await projectOf(t, f.sub.id)).toBeNull()
+    expect(await rowsOf(t, f.pia.id)).toEqual(pia)
+    return { f, item, pia }
+  }
+
+  it('keeps through a backfill the rows a restore wrote before its reveal', async () => {
+    const t = newT()
+    const { f, pia } = await halfRestored(t)
+    expect(await backfill(t, false)).toMatchObject({ done: true })
+    expect(await rowsOf(t, f.pia.id)).toEqual(pia)
+    await runSteps(t)
+    await expectAll(t, f)
+    expect((await backfill(t, true)).reach).toEqual({ missing: 0, extra: 0, stale: 0 })
+  })
+
+  it('writes after its reveal the rows an earlier release left out', async () => {
+    const t = newT()
+    const { f } = await halfRestored(t)
+    // as a job of the base release, which wrote grants back without rows
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('project_reach').collect())
+        if (row.grantee_id === f.pia.id) await ctx.db.delete(row._id)
+    })
+    await runSteps(t)
+    await expectAll(t, f)
+  })
+
+  /** Board rev led by Pia, moved to Deleted items, and a restore whose
+   * call wrote her lead's rows and stops before its reveal. */
+  async function ledAndRestoring(t: T, extra: Partial<Doc<'projects'>> = {}) {
+    const f = await ready(t)
+    const org_id = f.org.id
+    await t.run(async (ctx) => {
+      const row = await byId(ctx, 'projects', f.sub2.id)
+      if (row !== null) await ctx.db.patch(row._id, { lead_id: f.pia.id, ...extra })
+    })
+    await backfill(t, false)
+    // Pia leads Board rev now, so the admin deletes and restores it
+    await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id, id: f.sub2.id })
+    await runSteps(t)
+    return { f, item: await itemFor(t, f.sub2.id) }
+  }
+
+  it("brings a lead's rows in line with the lead its reveal writes", async () => {
+    const t = newT()
+    const { f, item } = await ledAndRestoring(t)
+    // few ranges, so the call stops after the lead's rows, before the reveal
+    TRASH_BUDGET.ranges = 40
+    await as(t, f.admin).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [item.id] })
+    expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_reveal' })
+    expect((await rowsOf(t, f.pia.id)).length).toBe(2)
+    // a viewer leads nothing, so the reveal writes the project without her
+    await t.run(async (ctx) => {
+      const row = await byId(ctx, 'profiles', f.pia.id)
+      if (row !== null) await ctx.db.patch(row._id, { org_role: 'viewer' })
+    })
+    await runSteps(t)
+    expect((await projectOf(t, f.sub2.id))?.lead_id).toBeUndefined()
+    expect(await rowsOf(t, f.pia.id)).toEqual([])
+    await expectAll(t, f)
+  })
+
+  it("counts the bytes of the stored projects its lead's rows read", async () => {
+    const t = newT()
+    // a legacy icon, stored with the project
+    const { f, item } = await ledAndRestoring(t, { icon: 'i'.repeat(900_000) })
+    // a call's quarter of a step holds less than the icon
+    TRASH_BUDGET.bytes = 2 * 1024 * 1024
+    await as(t, f.admin).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [item.id] })
+    // the lead's rows read the icon, so the call stops before the reveal,
+    // where a call that missed the icon's bytes would have revealed
+    expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_reveal' })
+    await runSteps(t)
+    await expectAll(t, f)
   })
 })
 

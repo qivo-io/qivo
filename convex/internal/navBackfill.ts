@@ -9,25 +9,30 @@
  * (model/orgs.ts insertOrgRows).
  *
  * A run walks four tables in turn, each in creation order: the projects,
- * whose archive state it derives from their archive time and their
- * parent's and whose lead's rows it brings in line, the user grants and the
- * team shares, whose grantee's rows it brings in line, and last the reach
- * rows themselves, each checked against the sources it stands for, so a row
- * without one goes and a stale copy of a project's name key, key or state
- * is corrected. Each recompute is model/projectNav.ts planReach, the one
- * the writers use, in its own step's transaction, so a write meanwhile
- * cannot leave a row wrong. A step goes on from the creation time of the
- * last row it finished, with the ids it finished at that time, so a row
- * sharing that time is neither skipped nor walked twice. A step counts the
- * index ranges and bytes of everything it reads, the projects and teams a
- * recompute reads included, and each write as a range, and ends when it has
- * spent NAV_STEP, after one row at least, so a step over large legacy rows
- * stays inside Convex's limits and every step makes progress. Once every
- * table is walked, a run stamps every organization without `nav_at`, in id
- * order. Deleted items keep no reach rows and a restore writes
- * them from the grants it writes back (model/deletedItems.ts
- * restoreAccess), so this walks no deleted_rows; a reveal computes a
- * restored project's archive state (revealProjects).
+ * whose archive state it derives from their archive time and their parent's
+ * and whose lead's rows it brings in line, the user grants and the team
+ * shares, whose grantee's rows it brings in line, and last the reach rows
+ * themselves, each checked against the sources it stands for, so a row
+ * without one goes and a stale copy of a project's name key, key or state is
+ * corrected. Each recompute is model/projectNav.ts planReach, the one the
+ * writers use, in its own step's transaction, so a write meanwhile cannot
+ * leave a row wrong once the walk has passed it. A project a restore from
+ * Deleted items has written access back for, which stays absent until its
+ * reveal, counts as present with its stored copy, as the restore reads it
+ * (present), so the walk keeps the rows that restore wrote; a restore also
+ * brings every grant's rows in line again after its reveal
+ * (model/deletedItems.ts restoreGrants). A step goes on from the creation
+ * time of the last row it finished, with the ids it finished at that time,
+ * so a row sharing that time is neither skipped nor walked twice. A step
+ * counts the index ranges and bytes of everything it reads, the projects and
+ * teams a recompute reads included, and of every row it patches or deletes,
+ * which Convex reads again, and ends when it has spent NAV_STEP, after one
+ * row at least, so a step over large legacy rows stays inside Convex's
+ * limits and every step makes progress. Once every table is walked, a run
+ * stamps every organization without `nav_at`, in id order. Deleted items
+ * keep no reach rows and a restore writes them from the grants it writes
+ * back (model/deletedItems.ts restoreAccess), so this walks no deleted_rows;
+ * a reveal computes a restored project's archive state (revealProjects).
  *
  * The walk also finds every kind of drift a release before this one leaves
  * if a deployment is rolled back to it and forward again: projects,
@@ -89,6 +94,7 @@ import {
   type ProjectRead,
   planReach,
   type ReachChange,
+  type ReachProject,
 } from '../model/projectNav'
 
 /** What one step may spend before it ends: rows walked, index ranges read
@@ -128,6 +134,24 @@ const noCounts = (): Counts => ({
  * step starts and whether the table is done. */
 type StepResult = { counts: Counts; orgs: string[]; at: At | null; done: boolean }
 
+/* Project `id` as a recompute takes it: the live project, else the stored
+ * copy of a project whose item is restoring. A restore writes a project's
+ * grants back, with their reach rows, before its reveal writes the project
+ * (model/deletedItems.ts restoreAccess, restoreRead); a walk that took the
+ * project as gone meanwhile would delete those rows, and the reveal would
+ * show the project without them. */
+async function present(ctx: QueryCtx, id: string): Promise<ReachProject | null> {
+  const live = await byId(ctx, 'projects', id)
+  if (live !== null) return live
+  const stored = await ctx.db
+    .query('deleted_rows')
+    .withIndex('by_row', (q) => q.eq('table', 'projects').eq('row_id', id))
+    .first()
+  if (stored === null || stored.row.table !== 'projects') return null
+  const item = await byId(ctx, 'deleted_items', stored.item_id)
+  return item?.state === 'restoring' ? stored.row.doc : null
+}
+
 /* Walks one step of `table` from `at`: counts what is missing or wrong and,
  * unless `write` is null, writes it right. The check and the step share
  * it, so both find the same rows. */
@@ -148,11 +172,11 @@ async function walk(
   })
   // the projects the step read, each once; a step changes none of the
   // fields a recompute reads
-  const projects = new Map<string, Promise<Doc<'projects'> | null>>()
+  const projects = new Map<string, Promise<ReachProject | null>>()
   const read: ProjectRead = (id) => {
     let project = projects.get(id)
     if (project === undefined) {
-      project = byId(db, 'projects', id)
+      project = present(db, id)
       projects.set(id, project)
     }
     return project

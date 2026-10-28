@@ -149,6 +149,8 @@ import {
 import { newUuid, tallyRow } from './orgs'
 import {
   archiveStateOf,
+  type Grantee,
+  grantee,
   insertGrant,
   insertShare,
   type ProjectRead,
@@ -1482,9 +1484,10 @@ const REVEAL_RANGES_PER_TASK = 20
 
 /* The index ranges a reveal reads per project of a project item: the
  * conflict check's key and uuid reads, its lead and legacy team, the
- * used_ids row of its id (lib/db.ts insertUsed) and the stored row it
- * deletes. */
-const REVEAL_RANGES_PER_PROJECT = 6
+ * used_ids row of its id (lib/db.ts insertUsed), the stored row it
+ * deletes, and the reach rows of its lead it brings in line
+ * (revealProjects), about eight. */
+const REVEAL_RANGES_PER_PROJECT = 14
 
 /** Why an item cannot be restored now (design 5.3). The item's state while
  * it is not ready; read_only while billing or a pending deletion makes the
@@ -2763,12 +2766,15 @@ async function restoreAccess(run: Run): Promise<boolean> {
     const at = Math.floor(cursor.index / ids.length)
     const owner = ids[cursor.index % ids.length]
     if (at === GRANT_TABLES.length) {
-      const project = (await hierarchyOf(run)).projects.find((p) => p.id === owner)
-      const lead = project?.lead_id
-      if (lead !== undefined) {
-        await syncReachOf(run, (ctx) => syncLeads(ctx, owner, [lead], restoreRead(run, ctx)))
+      // the stored project's lead, read through the measured ctx, so the
+      // step counts the stored rows when this reads them first
+      await syncReachOf(run, async (ctx) => {
+        const project = (await hierarchyOf({ ...run, ctx })).projects.find((p) => p.id === owner)
+        const lead = project?.lead_id
+        if (lead === undefined) return
+        await syncLeads(ctx, owner, [lead], restoreRead(run, ctx))
         run.budget.moved = true
-      }
+      })
       continue
     }
     const table = GRANT_TABLES[at]
@@ -2802,7 +2808,10 @@ async function restoreAccess(run: Run): Promise<boolean> {
  * restore_access wrote every one before the reveal (granted), and a grant
  * an admin removed since must stay removed. A job the release before left
  * past its reveal wrote its grants back here, so without `granted` this
- * writes back each one still missing on a live project first. */
+ * writes back each one still missing on a live project first. For each
+ * stored row it also brings the grantee's reach rows on the project, live
+ * now, in line (model/projectNav.ts syncReach), so rows an earlier release
+ * never wrote, or a change while the projects were absent, end exact. */
 async function restoreGrants(run: Run): Promise<boolean> {
   for (const table of GRANT_TABLES) {
     const done = await drain(
@@ -2811,14 +2820,27 @@ async function restoreGrants(run: Run): Promise<boolean> {
         .query('deleted_rows')
         .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table)),
       async (row) => {
-        if (!run.state.granted && (await byId(run.ctx, 'projects', row.owner_id)) !== null)
-          await writeGrantBack(run, row)
+        const live = (await byId(run.ctx, 'projects', row.owner_id)) !== null
+        if (!run.state.granted && live) await writeGrantBack(run, row)
+        // the reach rows of the grantee on the project, which is live now:
+        // the rows restore_access wrote, or none where an earlier release
+        // wrote the grant back without them
+        const g = granteeOfStored(row)
+        if (live && g !== null) await syncReachOf(run, (ctx) => syncReach(ctx, g, row.owner_id))
         await run.ctx.db.delete(row._id)
       },
     )
     if (!done) return false
   }
   return true
+}
+
+/** The grantee of stored grant or team grant `row`, null for another row. */
+function granteeOfStored(row: Doc<'deleted_rows'>): Grantee | null {
+  const r = row.row
+  if (r.table === 'project_access') return grantee.profile(r.doc.profile_id)
+  if (r.table === 'project_team_access') return grantee.team(r.doc.team_id)
+  return null
 }
 
 /** Writes stored grant or team grant `row` back to its live table, with
@@ -2931,6 +2953,14 @@ async function revealProjects(run: Run): Promise<void> {
     run.budget.rows -= 1
     run.budget.bytes -= estimateDocumentBytes(row)
   }
+  // Once every project is in, the reach rows of each stored lead follow the
+  // lead the reveal wrote, which a role change since restore_access can
+  // have dropped or brought back (cleanProject).
+  for (const stored of docs)
+    if (stored.lead_id !== undefined) {
+      const lead = stored.lead_id
+      await syncReachOf(run, (ctx) => syncLeads(ctx, stored.id, [lead]))
+    }
 }
 
 /** Writes a task item's stored tasks `tasks` back, parents before
