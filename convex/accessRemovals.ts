@@ -24,11 +24,14 @@ import { previewRemoval, vRemovalChange } from './model/removalPreview'
  *
  * A one-shot read: the app fetches it when a removal starts and again before
  * it submits, and never subscribes, because one call can read a few
- * thousand rows. It answers `unavailable` for an unknown project, team or
- * person, `refused` with the write's sentence when the write would refuse
- * the removal itself, and `too_large` when working out who loses sight would
- * not fit in one request, or its answer would not (model/removalPreview.ts
- * PREVIEW.bytes), with model/projectAccess.ts REMOVAL_FULL. Every list is
+ * thousand rows. It answers `unavailable` for a project or team that is not
+ * the organization's, and for a grant's person who is not; a member removal
+ * of someone without a membership, whoever it names, answers `pending:
+ * false`, as the write removes nothing. It answers `refused` with the
+ * write's sentence when the write would refuse the removal itself, and
+ * `too_large` when working out who loses sight would not fit in one
+ * request, or its answer would not (model/removalPreview.ts PREVIEW.bytes),
+ * with model/projectAccess.ts REMOVAL_FULL. Every list is
  * bounded: each project it names appears once, and each person who can still
  * change projects names a few of them and counts the rest. A grant or
  * member removal that leaves the tasks reads the same, so it is then

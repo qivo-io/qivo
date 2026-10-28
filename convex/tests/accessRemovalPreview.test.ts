@@ -641,8 +641,11 @@ describe('the removal preview and the write it previews', () => {
       { kind: 'user_grant', project_id: b.f.meta.id, user_id: pia.id },
       { kind: 'team_grant', project_id: b.f.meta.id, team_id: b.f.team.id },
       { kind: 'team_member', team_id: b.f.team.id, user_id: pia.id },
-      // removeTeamMemberCore never looks up a person without a membership
+      // removeTeamMemberCore never looks up a person without a membership,
+      // so neither someone unknown nor someone of another organization is
+      // unavailable here
       { kind: 'team_member', team_id: b.f.team.id, user_id: uuid() },
+      { kind: 'team_member', team_id: b.f.team.id, user_id: b.f.otherAdmin.id },
     ]
     for (const change of changes) expect(await preview(b.t, b.f.admin, change)).toEqual(empty)
   })

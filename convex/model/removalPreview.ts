@@ -149,11 +149,14 @@ export type RemovalEffect = {
   reassign: { allowed: boolean; refusal: string | null }
 }
 
-/** The preview's answer. `unavailable`: the project, team or person is not
- * one of the organization's. `refused`: the write would refuse the removal
- * itself, with its sentence. `too_large`: working out who loses sight would
- * not fit in one request, or the answer would pass PREVIEW.bytes or hold a
- * list longer than Convex allows (REMOVAL_FULL). */
+/** The preview's answer. `unavailable`: the project or team, or a grant's
+ * person, is not one of the organization's; a member removal looks for the
+ * membership only, so one of someone without a membership answers `ok` with
+ * `pending: false`, as the write removes nothing. `refused`: the write
+ * would refuse the removal itself, with its sentence. `too_large`: working
+ * out who loses sight would not fit in one request, or the answer would
+ * pass PREVIEW.bytes or hold a list longer than Convex allows
+ * (REMOVAL_FULL). */
 export type RemovalPreview =
   | { state: 'unavailable' }
   | { state: 'refused'; message: string }
@@ -184,8 +187,9 @@ async function ownRow<T extends 'projects' | 'teams' | 'profiles'>(
 }
 
 /* The checks of the write `change` names, in its order, and what it would
- * remove: 'unavailable' for an unknown subject, null when there is nothing
- * to remove. A refusal throws the write's own error. */
+ * remove: 'unavailable' for a project, team or grant's person that is not
+ * the organization's, null when there is nothing to remove. A refusal
+ * throws the write's own error. */
 async function planOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
