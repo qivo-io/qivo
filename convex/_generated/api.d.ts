@@ -64,6 +64,7 @@ import type * as internal_storageTotalsBackfill from "../internal/storageTotalsB
 import type * as internal_storedGrantees from "../internal/storedGrantees.js";
 import type * as internal_teamCountsBackfill from "../internal/teamCountsBackfill.js";
 import type * as internal_usageRanksBackfill from "../internal/usageRanksBackfill.js";
+import type * as internal_usedIdsBackfill from "../internal/usedIdsBackfill.js";
 import type * as internal_windowKeysBackfill from "../internal/windowKeysBackfill.js";
 import type * as invites from "../invites.js";
 import type * as issues from "../issues.js";
@@ -292,6 +293,7 @@ declare const fullApi: ApiFromModules<{
   "internal/storedGrantees": typeof internal_storedGrantees;
   "internal/teamCountsBackfill": typeof internal_teamCountsBackfill;
   "internal/usageRanksBackfill": typeof internal_usageRanksBackfill;
+  "internal/usedIdsBackfill": typeof internal_usedIdsBackfill;
   "internal/windowKeysBackfill": typeof internal_windowKeysBackfill;
   invites: typeof invites;
   issues: typeof issues;
