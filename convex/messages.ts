@@ -290,6 +290,9 @@ export const readArchivedTasks = internalMutation({
 export const readArchivedProject = internalMutation({
   args: {
     project_id: v.string(),
+    // the archived projects the chain walks after this one
+    // (model/messages.ts ARCHIVED_READ_PROJECTS)
+    rest: v.optional(v.array(v.string())),
     cursor: v.optional(v.string()),
     batch: v.optional(v.number()),
     tasks: v.optional(v.number()),

@@ -23,6 +23,7 @@ import { LIMITS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { ACCESS_FIRST_PASS, deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
 import { clearOrgTrash, meterDb, TRASH_BUDGET } from '../model/deletedItems'
+import { ARCHIVED_READ_PROJECTS } from '../model/messages'
 import { deleteOrgStep } from '../model/orgDeletion'
 import { insertOrgRows, newOrgDefaults } from '../model/orgs'
 import {
@@ -679,6 +680,38 @@ describe('archiving and restoring a tree', () => {
     expect((e.data as Refusal).message).toBe(TREE_TOO_LARGE)
     expect((await projectOf(t, f.meta.id))?.archived_at).toBeUndefined()
   })
+
+  it('archives a project with more than 1,000 live sub-projects within the scheduler limit', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    for (let from = 0; from < 1_100; from += 275)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 275; i++)
+          await ctx.db.insert('projects', {
+            id: uuid(),
+            org_id: f.org.id,
+            type: 'project',
+            parent_id: f.meta.id,
+            key: `S${i}`,
+            name: `Sub ${i}`,
+            description: '',
+            sort_order: i,
+            num: 100 + i,
+            track_delay: false,
+            created_at: NOW,
+          })
+      })
+    // one step a sub-project would schedule more than Convex's 1,000
+    await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: f.meta.id })
+    expect((await projectOf(t, f.meta.id))?.archive_state).toBe('listed')
+    const scheduled = await t.run(
+      async (ctx) =>
+        (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+          (job) => job.name === 'messages:readArchivedProject',
+        ).length,
+    )
+    expect(scheduled).toBe(Math.ceil(1_103 / ARCHIVED_READ_PROJECTS))
+  }, 120_000)
 
   it('shares one budget between the archive and the rename of one REST update', async () => {
     const t = newT()
