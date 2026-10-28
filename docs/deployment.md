@@ -73,7 +73,9 @@ Website, docs and app changes all ship the same way.
 6. If the release adds a one-time backfill or migration, run it on each
    hosted deployment once that deployment serves the release, with the
    owner's approval for each run, as the backfill's header says. Deployments
-   never run it on their own.
+   never run it on their own. The release that adds the comment limits needs
+   `internal/commentCountsBackfill` right after it deploys, on staging, the
+   demo and production (see Recovery and compatibility).
 
 A release can also be created by hand in the GitHub interface. It must target
 a main commit that already passed staging, or production refuses it. That
@@ -672,6 +674,26 @@ deleted organizations. An organization created again under the id of one
 deleted while an earlier release served, such as a fixture with a fixed id,
 starts not counted while rows of the deleted one are left, until the
 backfill counts it.
+
+A task holds at most 1,000 comments, and each task's count lives in a
+`task_comment_counts` row that every comment write keeps (the release that
+added the comment limits). A task stored before that release has no row
+until the one-time `internal/commentCountsBackfill` counts it. Until then
+each post on such a task counts its thread first, and a thread with more
+than about 1.5 MiB of comments refuses posts and archives with a reason for
+about a minute while a background count, which the refusal starts, finishes.
+A task with 1,000 or more comments refuses them until comments are deleted,
+as the limit asks. Run the backfill on every hosted deployment right after it
+serves that release, as the module's header says: read its dry run first,
+then run it, and call it again with each `cursor` until it answers `done`.
+The deployment is ready when every call of a dry run, followed through its
+cursors to `done`, answers `counted: 0`, `stuck: 0` and `drift: 0`. A
+rollback past that release deploys, because Convex keeps the rows of tables
+the schema no longer lists, but the earlier release posts, deletes and moves
+comments without counting them. After rolling forward again, read a dry run
+and run the backfill with `"recount": true`, which counts every task again,
+counts the tasks that release created and deletes rows that name no task of
+their organization any more.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to

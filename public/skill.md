@@ -206,7 +206,9 @@ Useful field rules:
   at most 10 on one task in any 60 seconds. Past the rate, wait the seconds
   the refusal names (REST `429` with `Retry-After`) before posting there
   again; deleting a comment gives no post back. A task at 1,000 takes no
-  comment until some are deleted, so stop and tell the user. Omitted update
+  comment until some are deleted, so stop and tell the user. `Qivo is still
+  counting this task's comments` (REST `503`) clears by itself: wait the
+  seconds it names and send the same request again. Omitted update
   fields stay unchanged. Use `null` to clear `assignee_id`, `reviewer_id`, `due_date`, or
   `remaining_hours`; use `""` to clear a description.
 - While a task is in `review` with a reviewer set, it is the reviewer's to act

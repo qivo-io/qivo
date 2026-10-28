@@ -463,8 +463,11 @@ call, including discovery, invalid tool arguments, permission refusals and
 other protocol or routing errors. A batch is still one HTTP request. During a
 paid billing period, calls count toward the organization's pooled API
 allowance. Without a paid billing period, calls are counted per calendar month
-(UTC) and are never charged. Missing or invalid credentials and rate-limited
-requests are not counted. OAuth
+(UTC) and are never charged. Missing or invalid credentials, and requests
+refused by one of these two request limits, are not counted. A tool call
+refused by a limit of the data, such as a comment past the comment limits
+(see [Comments, inbox and following](#comments-inbox-and-following)),
+passed the request limits and counts as a call. OAuth
 MCP requests follow the same metering and limits as personal tokens and agent
 keys; this does not meter authorization or token-exchange endpoints as tool
 calls.
@@ -2189,8 +2192,10 @@ for REST and the app.
 A task holds at most **1,000 comments**, counted across every author and
 every way of posting: the app, REST, MCP and archive reasons. `add_comment`
 on a task that already has 1,000 or more is refused with `this task has
-reached 1,000 comments, the most a task can have. Delete comments until it
-has fewer than 1,000, then post again.` A task that held more than 1,000
+reached 1,000 comments, the most a task can have. Ask a project lead to
+delete comments until it has fewer than 1,000, then post again.` Only a
+comment's author or a lead of the task's project can delete it. A task that
+held more than 1,000
 before the limit keeps them all and takes no new comment until deletes bring
 it under 1,000. Each comment deleted frees one place, and editing a comment
 changes nothing. A delete that is refused, or of a comment already gone,
@@ -2206,10 +2211,14 @@ in 42 seconds.` Other authors, and your posts on other tasks, are not
 affected. Waiting does not promise that the task still has room then.
 
 A task stored before Qivo counted comments is counted when someone first
-posts on it. A thread too long to count in that call, about 2 MiB of
-comments, is refused with `Qivo is still counting this task's comments. Try
-again shortly.`, and the comment is not saved. Each of these refusals saves
-nothing, so the same call can be sent again later.
+posts on it. A thread too long to count in that call, more than about
+1.5 MiB of comments, is refused with `Qivo is still counting this task's
+comments. Try again in 60 seconds.`, and the comment is not saved. That
+refusal starts the count in the background, which takes seconds for most
+threads, so the same call sent after the wait passes. Each of these
+refusals saves nothing, so the same call can be sent again later, and each
+still counts as an API call (see [Request limits and
+billing](#request-limits-and-billing)).
 
 `set_following` follows a task (`following: true`) or stops following it.
 Following needs only read access to the task, and the result's `changed`
@@ -2471,10 +2480,12 @@ characters. Shorten it.` before the call changes anything, also for a task that 
 already archived. The reason is a comment, so it needs room under the
 comment limits (see [Comments, inbox and
 following](#comments-inbox-and-following)). On a task with 1,000 comments or
-more, or past your 10 comments in 60 seconds there, the call archives
-nothing, changes no other field and is refused with the limit's sentence,
-which says that the task was not archived. The same call without
-`archive_reason` archives the task, because it posts nothing.
+more, past your 10 comments in 60 seconds there, or while Qivo counts its
+comments, the call archives nothing, changes no other field and is refused
+with the limit's sentence, which says that the task was not archived and
+what to do, such as archiving without a reason or asking a project lead to
+delete comments. The same call without `archive_reason` archives the task,
+because it posts nothing.
 
 Archived **projects** (0106) are the same idea one altitude up, and a
 separate axis again. A project that has been put away in the app keeps
