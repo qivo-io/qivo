@@ -319,7 +319,10 @@ describe('task search reads only the labels it can match', () => {
       'bad_request',
     )
     expect((e.data as Refusal).message).toBe(SEARCH_TOO_LARGE)
-    // a search that the titles answer reads no assignment
+    // a search that the titles answer reads no assignment. It reads the
+    // descriptions of the tasks before the first spare, which need the room
+    // the reserve stood in for.
+    Object.assign(LABEL_READS_RESERVE, DEFAULT_LABEL_RESERVE)
     expect(
       await restTasks(fx.t, { callerId: fx.admin.id, access: 'read', search: 'spare', limit: '1' }),
     ).toHaveLength(1)

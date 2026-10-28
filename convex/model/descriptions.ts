@@ -53,7 +53,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import type { ConvexError } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import type { ReadCeiling } from '../lib/archivedTasks'
+import { ceilingGuard, type ReadCeiling } from '../lib/archivedTasks'
 import { insertUnique, insertUsed } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { Refusal } from '../lib/functions'
@@ -117,6 +117,48 @@ export async function descriptionsOf(
     for (const [i, task] of step.entries()) out.set(task.id, texts[i])
     at += step.length
   }
+  return out
+}
+
+/** The texts of `tasks`, active tasks of organization `orgId`, by task id
+ * (descriptionOf), or null when `room` ran out first. It reads the
+ * organization's active description rows in one range (by_org_archived)
+ * rather than one range a task, so a caller that needs most of them pays
+ * one range and each row once. That range holds every active task's row,
+ * so a caller that needs a few reads them through descriptionsOf instead.
+ * A task the range holds no row for, one without a row or one whose row's
+ * archived copy is stale, which only a rollback leaves, then reads its
+ * own. Of two rows of one task, which only a rollback leaves and the
+ * backfill's repair deletes, it takes the first the range holds. It checks
+ * `room` before the range and after each row, so it passes `room` by one
+ * row at most. */
+export async function activeTextsOf(
+  ctx: QueryCtx,
+  orgId: string,
+  tasks: readonly Pick<Doc<'issues'>, 'id' | 'description'>[],
+  room: ReadCeiling,
+): Promise<Map<string, string> | null> {
+  const wanted = new Set(tasks.map((task) => task.id))
+  const out = new Map<string, string>()
+  if (wanted.size > 0) {
+    const guard = ceilingGuard(ctx, room)
+    if (!(await guard.range())) return null
+    const rows = ctx.db
+      .query('issue_descriptions')
+      .withIndex('by_org_archived', (q) => q.eq('org_id', orgId).eq('archived_at', undefined))
+    for await (const row of rows) {
+      if (wanted.has(row.issue_id) && !out.has(row.issue_id)) out.set(row.issue_id, row.description)
+      if (out.size === wanted.size) break
+      if (!(await guard.document())) return null
+    }
+  }
+  const rest = await descriptionsOf(
+    ctx,
+    tasks.filter((task) => !out.has(task.id)),
+    room,
+  )
+  if (rest === null) return null
+  for (const [id, text] of rest) out.set(id, text)
   return out
 }
 

@@ -42,7 +42,7 @@ import {
   postArchiveReason,
 } from '../model/comments'
 import type { Via } from '../model/deletedItems'
-import { descriptionOf, descriptionsOf } from '../model/descriptions'
+import { activeTextsOf, descriptionOf, descriptionsOf } from '../model/descriptions'
 import {
   assertLive,
   assertTaskExpected,
@@ -506,35 +506,97 @@ const LABEL_ROWS_PER_CHECK = 256
 export const SEARCH_TOO_LARGE =
   'this search reads too many label assignments to answer in one request; name a project or add a filter'
 
-/** What a search's description reads keep back from the request's limits:
- * LABEL_READS_RESERVE for the page after the search, and as much again for
- * the label reads between them (activeLabelNames), whose ranges and
- * documents read each matching label's active assignments once a task's
- * own assignments are too many to read one by one. Tests lower these. */
+/** What a search's description reads keep back from the request's limits
+ * when some label matches the search: LABEL_READS_RESERVE for the page
+ * after the search, and as many ranges and documents again for the label
+ * reads between them (activeLabelNames), which read each matching label's
+ * active assignments once a task's own assignments are too many to read one
+ * by one. Assignments are small, so one document at Convex's size limit
+ * more holds their bytes. A search that no label matches reads no label, so
+ * its description reads keep back LABEL_READS_RESERVE only. Tests lower
+ * these. */
 export const DESCRIPTION_READS_RESERVE = {
   ranges: 2 * LABEL_READS_RESERVE.ranges,
   documents: 2 * LABEL_READS_RESERVE.documents,
-  bytes: 2 * LABEL_READS_RESERVE.bytes,
+  bytes: LABEL_READS_RESERVE.bytes + DOCUMENT_MAX_BYTES,
 }
+
+/** How many tasks' description rows a search reads one by one, in the
+ * order the list answers, before it reads the organization's active
+ * description rows in one range instead (model/descriptions.ts
+ * activeTextsOf). Tests lower it. */
+export const TEXT_TASK_READS = { reads: 1000 }
+
+/* How many tasks a search looks at, in the order the list answers, between
+ * two counts of the matches it has found. */
+const SEARCH_STEP = 128
 
 /** The refusal for a search whose task descriptions do not fit in one
  * request. */
 export const DESCRIPTIONS_TOO_LARGE =
   'this search reads too many task descriptions to answer in one request; name a project or add a filter'
 
-/* The texts of the active `tasks` a search still needs them for, by task
- * id, read within the request's room less DESCRIPTION_READS_RESERVE
- * (model/descriptions.ts descriptionsOf). A search whose texts do not fit
- * is refused with DESCRIPTIONS_TOO_LARGE, so no answer leaves a text
- * unread. */
+/* The leading tasks of `found`, in the order the list answers, that hold
+ * `want` tasks `plain` or `described` match, or all of `found` when fewer
+ * do, with the texts read for them by task id. More text never unmatches,
+ * so a task `plain` matches without its text reads none, and the tasks
+ * after the leading ones cannot reach the page. It reads the rows of the
+ * tasks that miss a step at a time, one range each (model/descriptions.ts
+ * descriptionsOf), and once that would pass TEXT_TASK_READS the rows of the
+ * rest at once (activeTextsOf), within the request's room less `reserve`.
+ * A search whose texts do not fit is refused
+ * with DESCRIPTIONS_TOO_LARGE, so no answer leaves a text unread, and one
+ * that has no room left for the first text with the sentence of what the
+ * list read before (ACTIVE_TASKS_TOO_LARGE or ACTIVE_LIST_TOO_WIDE). */
 async function searchedTexts(
   ctx: QueryCtx,
-  tasks: readonly Doc<'issues'>[],
-): Promise<Map<string, string>> {
-  const room = roomOf(await ctx.meta.getTransactionMetrics(), DESCRIPTION_READS_RESERVE)
-  const texts = await descriptionsOf(ctx, tasks, room)
-  if (texts === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)
-  return texts
+  orgId: string,
+  found: readonly Doc<'issues'>[],
+  want: number,
+  plain: (task: Doc<'issues'>) => boolean,
+  described: (task: Doc<'issues'>, text: string) => boolean,
+  reserve: ReadCeiling,
+): Promise<{ leading: Doc<'issues'>[]; texts: Map<string, string> }> {
+  const texts = new Map<string, string>()
+  const room = roomOf(await ctx.meta.getTransactionMetrics(), reserve)
+  const matches = (task: Doc<'issues'>) => plain(task) || described(task, texts.get(task.id) ?? '')
+  let reads = 0
+  let matched = 0
+  for (let at = 0; at < found.length; at += SEARCH_STEP) {
+    const step = found.slice(at, at + SEARCH_STEP)
+    const misses = step.filter((task) => !plain(task))
+    if (misses.length > 0 && reads === 0) await assertTextRoom(ctx, room)
+    if (reads + misses.length > TEXT_TASK_READS.reads) {
+      const rest = found.slice(at).filter((task) => !plain(task))
+      const read = await activeTextsOf(ctx, orgId, rest, room)
+      if (read === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)
+      for (const [id, text] of read) texts.set(id, text)
+      let end = at
+      for (; end < found.length && matched < want; end++) if (matches(found[end])) matched++
+      return { leading: found.slice(0, end), texts }
+    }
+    const read = await descriptionsOf(ctx, misses, room)
+    if (read === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)
+    reads += misses.length
+    for (const [id, text] of read) texts.set(id, text)
+    matched += step.filter(matches).length
+    if (matched >= want) return { leading: found.slice(0, at + step.length), texts }
+  }
+  return { leading: [...found], texts }
+}
+
+/* Refuses a list whose reads before its first description read leave no
+ * room under `room` for one, with the sentence of what filled it, as
+ * pageReads does: ACTIVE_TASKS_TOO_LARGE when documents or bytes ran out,
+ * else ACTIVE_LIST_TOO_WIDE. */
+async function assertTextRoom(ctx: QueryCtx, room: ReadCeiling): Promise<void> {
+  const m = await ctx.meta.getTransactionMetrics()
+  if (
+    room.documents - m.documentsRead.used < 1 ||
+    room.bytes - m.bytesRead.used < DOCUMENT_MAX_BYTES
+  )
+    throw badRequest(ACTIVE_TASKS_TOO_LARGE)
+  if (room.ranges - m.databaseQueries.used < 1) throw badRequest(ACTIVE_LIST_TOO_WIDE)
 }
 
 /* The names of `labels` by task, for the active `tasks` a search still
@@ -657,12 +719,15 @@ async function listedActiveTasks(
  * title, description, status name (not on a task with subtasks), priority
  * name, assignee name and label names. REST retains explicit `*` wildcards;
  * all other punctuation stays literal. Descriptions are read only for the
- * tasks the other fields miss without them and the labels, and a search
- * whose descriptions do not fit in one request is refused with
- * DESCRIPTIONS_TOO_LARGE (searchedTexts). Label names are read only for the
- * tasks that still miss (activeLabelNames), and a search whose label
- * assignments do not fit in one request is refused with SEARCH_TOO_LARGE. A
- * search past LIMITS.search, once trimmed, is refused first.
+ * tasks the other fields miss without them and the labels, in list order,
+ * and only until the tasks read hold the page (searchedTexts): one range a
+ * task for the first TEXT_TASK_READS, then the organization's active
+ * descriptions in one range. A search whose descriptions do not fit in one
+ * request is refused with DESCRIPTIONS_TOO_LARGE. Label names are read only
+ * for the tasks of those that still miss (activeLabelNames), and a search
+ * whose label assignments do not fit in one request is refused with
+ * SEARCH_TOO_LARGE. A search past LIMITS.search, once trimmed, is refused
+ * first.
  */
 export async function listActiveIssuesCore(
   ctx: QueryCtx,
@@ -707,6 +772,7 @@ export async function listActiveIssuesCore(
     if (o.owner && taskOwnerId(i, isGroup(i)) !== o.owner) continue
     found.push(i)
   }
+  found.sort(byCreation)
   // the texts the search read, which the page's rows reuse
   let texts = new Map<string, string>()
   if (o.search) {
@@ -715,30 +781,28 @@ export async function listActiveIssuesCore(
     const text = (i: Doc<'issues'>, description: string, labelNames: readonly string[]) =>
       taskSearchText({ ...searchFields(i, names), description, group: isGroup(i), labelNames })
     // more text never unmatches, so only the tasks that miss without their
-    // descriptions need them read, and only those that still miss need
-    // their labels
-    const plain = new Set(found.filter((i) => matches(text(i, '', []))).map((i) => i.id))
-    texts = await searchedTexts(
+    // descriptions need them read, only up to the tasks that hold the page,
+    // and only those that still miss need their labels
+    const plain = (i: Doc<'issues'>) => matches(text(i, '', []))
+    const labelled = await matchingLabels(ctx, me.org_id, pieces)
+    const read = await searchedTexts(
       ctx,
-      found.filter((i) => !plain.has(i.id)),
+      me.org_id,
+      found,
+      o.offset + o.limit,
+      plain,
+      (i, d) => matches(text(i, d, [])),
+      labelled.length > 0 ? DESCRIPTION_READS_RESERVE : LABEL_READS_RESERVE,
     )
+    texts = read.texts
     const textOf = (i: Doc<'issues'>) => texts.get(i.id) ?? ''
-    const described = new Set(
-      found.filter((i) => !plain.has(i.id) && matches(text(i, textOf(i), []))).map((i) => i.id),
-    )
-    const labels = await activeLabelNames(
-      ctx,
-      await matchingLabels(ctx, me.org_id, pieces),
-      found.filter((i) => !plain.has(i.id) && !described.has(i.id)),
-    )
-    found = found.filter(
-      (i) =>
-        plain.has(i.id) ||
-        described.has(i.id) ||
-        matches(text(i, textOf(i), labels.get(i.id) ?? [])),
+    const missed = read.leading.filter((i) => !plain(i) && !matches(text(i, textOf(i), [])))
+    const labels = await activeLabelNames(ctx, labelled, missed)
+    const unlabelled = new Set(missed.map((i) => i.id))
+    found = read.leading.filter(
+      (i) => !unlabelled.has(i.id) || matches(text(i, textOf(i), labels.get(i.id) ?? [])),
     )
   }
-  found.sort(byCreation)
   const page = found.slice(o.offset, o.offset + o.limit)
   const tasks = new Map(active.map((t) => [t.id, t]))
   // parents outside the read, read within the room left like the comments

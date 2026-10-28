@@ -10,7 +10,7 @@
  * reads issues.description. */
 
 import { makeFunctionReference } from 'convex/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -18,9 +18,11 @@ import {
   accessFlags,
   asMachineCaller,
   DESCRIPTIONS_TOO_LARGE,
+  LABEL_READS_RESERVE,
   listActiveIssuesCore,
   loadCatalogue,
   PAGE_TOO_LARGE,
+  TEXT_TASK_READS,
 } from '../lib/core'
 import { newWindowKey } from '../lib/db'
 import { descriptionForm, printOf } from '../lib/fieldPrints'
@@ -48,6 +50,7 @@ import {
 import { plantNorthstar } from './northstar.setup'
 
 const whole: IdWindow = { from: '', to: null }
+const DEFAULT_TEXT_READS = TEXT_TASK_READS.reads
 
 const exportPage = makeFunctionReference<
   'query',
@@ -251,50 +254,137 @@ const notFound = {
   archivedPageFound: false,
 }
 
-describe('every reader takes the text of the description row', () => {
-  it('answers the row text once issues.description is cleared, as the third release leaves it', async () => {
-    const t = newT()
-    const f = await machineOrg(t)
-    const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
-    const pair = await plantPair(t, f, texts)
-    await clearTaskText(t, f.org.id)
-    expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
+/* A search reads the rows of the tasks it needs one by one, and past
+ * TEXT_TASK_READS the organization's active rows in one range; each reader
+ * case runs both ways. */
+for (const [way, reads] of [
+  ['one by one', DEFAULT_TEXT_READS],
+  ['in one range', 0],
+] as const)
+  describe(`every reader takes the text of the description row, searches reading rows ${way}`, () => {
+    beforeEach(() => {
+      TEXT_TASK_READS.reads = reads
+    })
+    afterEach(() => {
+      TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
+    })
+
+    it('answers the row text once issues.description is cleared, as the third release leaves it', async () => {
+      const t = newT()
+      const f = await machineOrg(t)
+      const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
+      const pair = await plantPair(t, f, texts)
+      await clearTaskText(t, f.org.id)
+      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
+    })
+
+    it('answers a planted row whose text differs from issues.description, and searches only the row', async () => {
+      const t = newT()
+      const f = await machineOrg(t)
+      const pair = await plantPair(t, f, ['Stale walrus text', 'Stale narwhal text'])
+      await setRowText(t, pair.active.id, 'Calibrate the zephyr sensor')
+      await setRowText(t, pair.archived.id, 'Archive the quokka notes')
+      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(
+        everywhere('Calibrate the zephyr sensor', 'Archive the quokka notes'),
+      )
+      // the stale text in the task row finds nothing
+      expect(searches(await readers(t, f, pair, ['walrus', 'narwhal']))).toEqual(notFound)
+    })
+
+    it('falls back to issues.description for a task without a row', async () => {
+      const t = newT()
+      const f = await machineOrg(t)
+      const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
+      const pair = await plantPair(t, f, texts)
+      await dropRows(t, pair.active.id)
+      await dropRows(t, pair.archived.id)
+      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
+    })
+
+    it('reads the first of two rows in creation order and never throws over the second', async () => {
+      const t = newT()
+      const f = await machineOrg(t)
+      const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
+      const pair = await plantPair(t, f, texts)
+      await secondRow(t, pair.active, 'A second walrus row')
+      await secondRow(t, pair.archived, 'A second narwhal row')
+      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
+      expect(searches(await readers(t, f, pair, ['walrus', 'narwhal']))).toEqual(notFound)
+    })
+
+    it('reads the row of an active task whose archived copy is stale, which only a rollback leaves', async () => {
+      const t = newT()
+      const f = await machineOrg(t)
+      const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
+      const pair = await plantPair(t, f, texts)
+      await t.run(async (ctx) => {
+        const row = await ctx.db
+          .query('issue_descriptions')
+          .withIndex('by_issue', (q) => q.eq('issue_id', pair.active.id))
+          .first()
+        if (row !== null) await ctx.db.patch(row._id, { archived_at: NOW })
+      })
+      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
+    })
   })
 
-  it('answers a planted row whose text differs from issues.description, and searches only the row', async () => {
-    const t = newT()
-    const f = await machineOrg(t)
-    const pair = await plantPair(t, f, ['Stale walrus text', 'Stale narwhal text'])
-    await setRowText(t, pair.active.id, 'Calibrate the zephyr sensor')
-    await setRowText(t, pair.archived.id, 'Archive the quokka notes')
-    expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(
-      everywhere('Calibrate the zephyr sensor', 'Archive the quokka notes'),
-    )
-    // the stale text in the task row finds nothing
-    expect(searches(await readers(t, f, pair, ['walrus', 'narwhal']))).toEqual(notFound)
-  })
+for (const [way, reads] of [
+  ['one by one', DEFAULT_TEXT_READS],
+  ['in one range', 0],
+] as const)
+  describe(`a search reads descriptions only up to its page, rows ${way}`, () => {
+    beforeEach(() => {
+      TEXT_TASK_READS.reads = reads
+    })
+    afterEach(() => {
+      TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
+    })
 
-  it('falls back to issues.description for a task without a row', async () => {
-    const t = newT()
-    const f = await machineOrg(t)
-    const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
-    const pair = await plantPair(t, f, texts)
-    await dropRows(t, pair.active.id)
-    await dropRows(t, pair.archived.id)
-    expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
+    it('answers every page as a search of every task would', async () => {
+      const t = newT()
+      const f = await machineOrg(t)
+      // 300 tasks in list order; every tenth says zephyr in its description,
+      // and two others carry a label named for it, one in the first step of
+      // tasks a search looks at and one after it
+      const ids = await plantMany(
+        t,
+        f,
+        300,
+        (i) => (i % 10 === 3 ? `Wire the zephyr ${i}` : `Wire the board ${i}`),
+        () => undefined,
+        100,
+      )
+      const labelled = [ids[5], ids[155]]
+      await t.run(async (ctx) => {
+        const label = uuid()
+        await ctx.db.insert('labels', {
+          id: label,
+          org_id: f.org.id,
+          name: 'Zephyr board',
+          name_lower: 'zephyr board',
+          color: '#336699',
+          created_at: NOW,
+        })
+        for (const issue_id of labelled)
+          await ctx.db.insert('issue_labels', { org_id: f.org.id, issue_id, label_id: label })
+      })
+      const expected = ids.filter((id, i) => i % 10 === 3 || labelled.includes(id))
+      const agent = { callerId: f.agent.id, access: 'read' as const }
+      const pages: string[] = []
+      for (let offset = 0; offset < expected.length + 10; offset += 10) {
+        const page = await restTasks(t, {
+          ...agent,
+          search: 'zephyr',
+          limit: '10',
+          offset: String(offset),
+        })
+        pages.push(...page.map((row) => row.id))
+      }
+      expect(pages).toEqual(expected)
+      // a task that matches in none of its fields stays out
+      expect(await restTasks(t, { ...agent, search: 'zephyr unicorn' })).toEqual([])
+    })
   })
-
-  it('reads the first of two rows in creation order and never throws over the second', async () => {
-    const t = newT()
-    const f = await machineOrg(t)
-    const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
-    const pair = await plantPair(t, f, texts)
-    await secondRow(t, pair.active, 'A second walrus row')
-    await secondRow(t, pair.archived, 'A second narwhal row')
-    expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
-    expect(searches(await readers(t, f, pair, ['walrus', 'narwhal']))).toEqual(notFound)
-  })
-})
 
 describe('the writers compare the text of the description row', () => {
   /** The fixture with a webhook subscription on its sub-project, so each
@@ -663,28 +753,69 @@ describe('real limits', () => {
     expect(PAGE_TOO_LARGE).toMatch(/smaller limit/)
   }, 300_000)
 
-  it('a REST search over 3,000 tasks that match only in their descriptions answers or refuses with its sentence', async () => {
+  it('a REST search over 4,000 active tasks answers a key and a description word, reading only up to its page', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    await plantMany(
+    const ids = await plantMany(
       t,
       f,
-      3000,
+      4000,
       (i) => `Notes ${i} on the zephyr`,
       (i) => `Notes ${i} on the zephyr`,
       500,
     )
     const agent = { callerId: f.agent.id, access: 'read' as const }
+    // a key matches one task, so every other task's text is read, in one
+    // range past TEXT_TASK_READS
+    const key = await restTasks(t, { ...agent, search: 'QN-10001' })
+    expect(key.map((row) => row.id)).toEqual([ids[1]])
+    // a word in every description finds the page in the first tasks
+    const word = await restTasks(t, { ...agent, search: 'zephyr', limit: '20' })
+    expect(word.map((row) => row.id)).toEqual(ids.slice(0, 20))
+    const broad = await restMetrics(t, f, { limit: 20, search: 'zephyr' })
+    expect(broad.refused).toBeNull()
+    // the 4,000 tasks, one step of their rows and the page's reads
+    expect(broad.documents).toBeLessThan(4000 + 300)
+    const rare = await restMetrics(t, f, { limit: 20, search: 'QN-10001' })
+    expect(rare.refused).toBeNull()
+    expect(rare.ranges).toBeLessThan(TEXT_TASK_READS.reads + 200)
+  }, 300_000)
+
+  it('a REST search refuses with its sentence when the descriptions do not fit, and with the list sentence when nothing does', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // 2,500 rows of 6 KB beside task rows without text, as the third
+    // release leaves them: 15 MB of descriptions
+    await plantMany(
+      t,
+      f,
+      2500,
+      (i) => `${i} `.padEnd(6000, 'z'),
+      () => undefined,
+      250,
+    )
+    const agent = { callerId: f.agent.id, access: 'read' as const }
     await expectRefusal(
-      restTasks(t, { ...agent, search: 'zephyr' }),
+      restTasks(t, { ...agent, search: 'QN-10001' }),
       'bad_request',
       new RegExp(DESCRIPTIONS_TOO_LARGE.slice(0, 40)),
     )
-    // within the request, never past Convex's limits
-    const metrics = await restMetrics(t, f, { limit: 50, search: 'zephyr' })
+    const metrics = await restMetrics(t, f, { limit: 50, search: 'QN-10001' })
     expect(metrics.refused).toContain(DESCRIPTIONS_TOO_LARGE)
     expect(metrics.mib).toBeLessThan(16)
-    expect(metrics.ranges).toBeLessThan(4096)
+    // a search whose reads before the first text leave no room for one
+    // says what filled the request
+    const reserve = { ...LABEL_READS_RESERVE }
+    LABEL_READS_RESERVE.bytes = 16 * MIB
+    try {
+      await expectRefusal(
+        restTasks(t, { ...agent, search: 'QN-10001' }),
+        'bad_request',
+        /active tasks are too large to list/,
+      )
+    } finally {
+      Object.assign(LABEL_READS_RESERVE, reserve)
+    }
   }, 300_000)
 
   it('an export issues page with description rows near 1 MiB stays within the limits and goes on', async () => {

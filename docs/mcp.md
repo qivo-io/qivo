@@ -1827,10 +1827,14 @@ room for a single comment, the call is refused with `this organization's active 
 does not help. When the call instead runs out of index reads, which follow
 the active projects, your team memberships and the labels a search matches,
 it is refused with `this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words`. A `search` of active tasks reads the
-descriptions of the tasks its other fields do not match, and one that would
-have to read too many at once is refused with `this search reads too many
-task descriptions to answer in one request; name a project or add a
-filter`. A `search` whose label names it would have
+descriptions of the tasks its other fields do not match, in list order, and
+stops once it has found the tasks up to the end of the page. A search that
+matches few tasks, such as one by task ID, reads every active task's
+description. With descriptions of a few hundred characters that fits an
+organization of about 9,000 active tasks in one call. A larger one is
+refused with `this search reads too many task descriptions to answer in one
+request; name a project or add a filter`. A search that finds its page
+early keeps the list's own scale. A `search` whose label names it would have
 to read for too many tasks at once is refused with `this search reads too
 many label assignments to answer in one request; name a project or add a
 filter`.
