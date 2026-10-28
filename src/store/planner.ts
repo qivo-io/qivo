@@ -7734,10 +7734,11 @@ export const PLANNER = {
      the server saved the change: false without sending when it refused the
      change first (toasted) or there is no home organization here, and false
      after a refusal, which is toasted and taken back. `weekStartRefused`
-     takes the sentence of a refused first day of the week instead of a
-     toast: the milestones that would share a week, or that the server could
-     not check them all (WEEK_START_REFUSALS). */
-  setOrg: (patch: OrgPatch, weekStartRefused?: (sentence: string) => void): Promise<boolean> => {
+     takes the sentence of a refused first day of the week, the milestones
+     that would share a week or that the server could not check them all
+     (WEEK_START_REFUSALS), and answers whether it showed it; one it did
+     not show, as its field has gone, is toasted. */
+  setOrg: (patch: OrgPatch, weekStartRefused?: (sentence: string) => boolean): Promise<boolean> => {
     const org = homeRow()
     if (!org || refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseOver(LIMITS.orgName, patch.name ?? ''))
@@ -7784,8 +7785,9 @@ export const PLANNER = {
       ...(weekStartRefused && {
         onError: (error: unknown) => {
           const d = errData(error)
-          if (d.message && weekStartRefusal(d)) weekStartRefused(asSentence(String(d.message)))
-          else toastWriteError(error)
+          const shown =
+            !!d.message && weekStartRefusal(d) && weekStartRefused(asSentence(String(d.message)))
+          if (!shown) toastWriteError(error)
         },
       }),
     })

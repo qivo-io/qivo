@@ -1,5 +1,5 @@
 /* Organization identity, access rules and shared display defaults. */
-import { useEffect as useEffectS, useState as useStateS } from 'react'
+import { useEffect as useEffectS, useRef as useRefS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -108,22 +108,41 @@ function OrgAddressField() {
 // put two milestones of one project in one week, or that it could not check
 // against every milestone; the setting stays as it was and the refusal shows
 // under it, long enough to read the projects and dates it names, until the
-// next choice.
+// next choice. The select waits for each answer, so an answer always belongs
+// to the choice on screen and the next choice is sent against the saved day.
 function WeekStartField() {
   const [refusal, setRefusal] = useStateS('')
+  const [busy, setBusy] = useStateS(false)
+  // a refusal that comes after the page has gone is toasted instead
+  const mounted = useRefS(true)
+  useEffectS(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const refused = (sentence: string) => {
+    if (!mounted.current) return false
+    setRefusal(sentence)
+    return true
+  }
   // wide enough for the refusal; the select keeps its own width
   return (
     <SettingsField label="Workdays start on" width={560}>
       <NativeSelect
         value={P.org.weekStart ?? 1}
         aria-label="Workdays start on"
-        aria-invalid={refusal ? true : undefined}
         aria-describedby={refusal ? 'week-start-refusal' : undefined}
+        aria-busy={busy || undefined}
+        disabled={busy}
         data-week-start
         onChange={(e) => {
+          if (busy) return
           const d = Number(e.target.value)
           setRefusal('')
-          void P.setOrg({ weekStart: d }, setRefusal).then((saved) => {
+          setBusy(true)
+          void P.setOrg({ weekStart: d }, refused).then((saved) => {
+            if (mounted.current) setBusy(false)
             if (saved) window.showToast?.(`Workdays now start on ${P.WEEKDAYS[d]}`)
           })
         }}
