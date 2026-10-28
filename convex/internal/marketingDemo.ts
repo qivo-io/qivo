@@ -551,27 +551,30 @@ async function assertReserved(
       const existing = await byId(ctx, 'activity_events', rowId)
       if (existing) live = { owned: existing.org_id === org.id }
     }
+    // An id a task or project held before keeps a used_ids row (schema.ts),
+    // one per organization. Another organization's refuses for good, also
+    // beside a live row of the demo, which only an earlier release can
+    // leave after a rollback, so it is read before the live row passes. The
+    // demo's own passes before a wipe, which lets it go, and refuses a
+    // seed's steps: a check step names the demo as its holder, and a work
+    // step says the work changed.
+    const used =
+      item.kind === 'project' || item.kind === 'issue'
+        ? await ctx.db
+            .query('used_ids')
+            .withIndex('by_row', (q) =>
+              q.eq('table', item.kind === 'project' ? 'projects' : 'issues').eq('row_id', rowId),
+            )
+            .take(2)
+        : []
+    require(used.every((row) => row.org_id === org.id), collision)
     if (live) {
       require(live.owned, collision)
       require(!absent, rule(CHANGED_DURING_SEED))
       continue
     }
-    if (item.kind === 'project' || item.kind === 'issue') {
-      // an id a task or project held before keeps a used_ids row (schema.ts),
-      // one per organization. Another organization's refuses for good. The
-      // demo's own passes before a wipe, which lets it go, and refuses a
-      // seed's steps: a check step names the demo as its holder, and a work
-      // step says the work changed
-      const used = await ctx.db
-        .query('used_ids')
-        .withIndex('by_row', (q) =>
-          q.eq('table', item.kind === 'project' ? 'projects' : 'issues').eq('row_id', rowId),
-        )
-        .take(2)
-      require(used.every((row) => row.org_id === org.id), collision)
-      require(used.length === 0 || check !== 'empty', takenByDemo(what))
-      require(used.length === 0 || !absent, rule(CHANGED_DURING_SEED))
-    }
+    require(used.length === 0 || check !== 'empty', takenByDemo(what))
+    require(used.length === 0 || !absent, rule(CHANGED_DURING_SEED))
     if (trashTable === undefined) continue
     const table = trashTable
     const trashed = await ctx.db

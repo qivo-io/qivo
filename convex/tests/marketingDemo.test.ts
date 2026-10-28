@@ -1744,6 +1744,25 @@ describe('marketing demo Deleted items', () => {
       MARKETING_DEMO.issues.length + MARKETING_DEMO.projects.length,
     )
   }, 120_000)
+
+  it("refuses a reset before its wipe when another organization's row holds a reserved id the demo holds live", async () => {
+    const t = newAuthT()
+    const foreign = await withOrg(t)
+    await seeded(t)
+    const reserved = await demoId(`issue:${MARKETING_DEMO.issues[0].key}`)
+    // an earlier release after a rollback can leave another organization's
+    // row of an id the demo holds
+    await t.run((ctx) =>
+      ctx.db.insert('used_ids', { table: 'issues', row_id: reserved, org_id: foreign.org.id }),
+    )
+    const refusal = await expectRefusal(
+      checkReserved(t),
+      'conflict',
+      /reserved task id belongs to another organization/,
+    )
+    expect(refusal.data.reason).toBe('demo_id_collision')
+    expect((await t.query(inspectRef, TARGET)).counts.tasks).toBe(MARKETING_DEMO.issues.length)
+  }, 60_000)
 })
 
 describe('marketing demo seed steps', () => {
