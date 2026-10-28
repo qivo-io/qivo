@@ -4290,6 +4290,15 @@ type NoticeHost = { prepare: () => boolean }
 /* The Inbox that shows the notice now, if any. */
 let noticeHost: NoticeHost | null = null
 
+/** A press of a bulk Inbox action, with the Inbox that showed it, when it
+    asks for the notice. */
+type Press = { host: NoticeHost | null }
+
+/* The press still asking messages.bulkReach or waiting for its notice, if
+   any. Its Inbox unregistering ends it (P.hostInboxNotice), and what a
+   press does once it is no longer this one is nothing. */
+let asking: Press | null = null
+
 /* The keys of the stop toasts a bulk Inbox action left on screen, so a
    later run that finishes there takes them away. */
 const stopToasts = new Set<string>()
@@ -4369,8 +4378,9 @@ function dropStopToast(key: string) {
    REACH_WAIT_MS, or the question fails, it changes nothing and says so,
    because only bulkReach gives each seat its cutoff. With `ask`, an action
    of more than one round waits for the keep-open notice
-   (P.answerInboxNotice) and sends nothing when the person cancels it or no
-   Inbox shows it (P.hostInboxNotice). Then the `messages` it reached when pressed show
+   (P.answerInboxNotice) and sends nothing when the person cancels it; the
+   press ends, sending nothing, when the Inbox that showed it hides or goes
+   (P.hostInboxNotice). Then the `messages` it reached when pressed show
    `paint`, under one umbrella layer per seat, and the `flags` it clears
    under one more; rows that arrived later stay as they are, as the press's
    cutoff leaves them out. At most BULK_SEATS seats send `batch` at once,
@@ -4410,6 +4420,10 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
   if (bulkBusy(PLANNER.inboxBulk) || refusePausedWrite(a.ref)) return
   const epoch = storeEpoch
   const live = () => epoch === storeEpoch
+  // this press, which an Inbox that hides or goes ends while it asks
+  const press: Press = { host: ask ? noticeHost : null }
+  asking = press
+  const current = () => live() && asking === press
   // the rows the press reaches, as loaded now
   const pressed = messagesByOrg(a.messages().map((message) => message.id))
   const opened: Layer[] = []
@@ -4426,25 +4440,35 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
     }
     setInboxBulk(bulk)
     const reach = await askReach(action)
-    if (!live()) return
+    if (!current()) return
     if (reach === null) {
+      asking = null
       setInboxBulk(null)
       return toast(bulkUncheckedText(action))
     }
     const plan = planBulk(reach)
     // the pause may have begun while bulkReach was asked
-    if (plan.seats.length === 0 || refusePausedWrite(a.ref)) return setInboxBulk(null)
+    if (plan.seats.length === 0 || refusePausedWrite(a.ref)) {
+      asking = null
+      return setInboxBulk(null)
+    }
     bulk = { ...bulk, long: plan.long, why: plan.why, seats: plan.seats.length }
     if (plan.long && ask) {
-      // only a shown Inbox asks, and not over a field the person types in
-      if (!noticeHost?.prepare()) return setInboxBulk(null)
+      // only the Inbox that showed the press asks, and not over a field the
+      // person types in
+      if (!press.host || noticeHost !== press.host || !press.host.prepare()) {
+        asking = null
+        return setInboxBulk(null)
+      }
       setInboxBulk({ ...bulk, state: 'notice' })
       const go = await new Promise<boolean>((resolve) => {
         noticeAnswer = resolve
       })
-      if (!live()) return
+      if (!current()) return
+      asking = null
       if (!go || refusePausedWrite(a.ref)) return setInboxBulk(null)
     }
+    asking = null
     const name = getFunctionName(a.ref)
     const flag = openUmbrella(name, a.flags)
     opened.push(flag)
@@ -4537,6 +4561,7 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
       )
     if (stops.length === 0 && bulk.long) toast(bulkDoneText(bulk), 'success')
   } catch (fault) {
+    if (asking === press) asking = null
     if (!live()) return
     reportFault(fault)
     noticeAnswer = null
@@ -7617,15 +7642,21 @@ export const PLANNER = {
   },
   /* Registers `host` as what shows the keep-open notice, while the Inbox
      shows (it calls this from an effect, which a kept Inbox's hiding ends).
-     The answered function unregisters it, and a notice that waits then ends
-     as if cancelled, so none waits for an Inbox nobody sees and opens hours
-     later with an old cutoff. */
+     The answered function unregisters it, and a press it showed that still
+     asks bulkReach or waits for its notice then ends as if cancelled, so
+     none opens its notice in an Inbox shown again, with an old plan and
+     cutoff. */
   hostInboxNotice: (host: NoticeHost) => {
     noticeHost = host
     return () => {
-      if (noticeHost !== host) return
-      noticeHost = null
-      if (PLANNER.inboxBulk?.state === 'notice') PLANNER.answerInboxNotice(false)
+      if (noticeHost === host) noticeHost = null
+      // the press this Inbox showed ends, asking or waiting for its notice
+      if (asking?.host !== host) return
+      asking = null
+      const answer = noticeAnswer
+      noticeAnswer = null
+      setInboxBulk(null)
+      answer?.(false)
     }
   },
   markMessageRead: (id: string) => {
@@ -9627,6 +9658,7 @@ export function disposeDemoStore() {
   storeEpoch++
   demoDisposed = true
   // a bulk Inbox action, and the notice it waits on, end with the store
+  asking = null
   noticeAnswer?.(false)
   noticeAnswer = null
   PLANNER.inboxBulk = null

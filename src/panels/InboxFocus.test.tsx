@@ -637,4 +637,25 @@ describe('Inbox bulk actions that take more than one round', { timeout: 20_000 }
       expect(markAllButton()?.disabled).toBe(false)
     },
   )
+
+  it('opens no notice for a press made before the kept Inbox hid and showed again', async () => {
+    await openInbox(3, null, [], { kept: true })
+    reach = 'many'
+    let open: () => void = () => {}
+    reachGate = new Promise((resolve) => {
+      open = resolve
+    })
+    await press(markAllButton())
+    await settle()
+    await act(async () => showKept(false))
+    await settle()
+    // shown again while the old press still waits for bulkReach
+    await act(async () => showKept(true))
+    await settle()
+    await act(async () => open())
+    await settle()
+    expect(notice()).toBeNull()
+    expect(sentMarks()).toEqual([])
+    expect(markAllButton()?.disabled).toBe(false)
+  })
 })

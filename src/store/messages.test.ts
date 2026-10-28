@@ -1229,6 +1229,34 @@ describe('bulk notification actions through the client store', () => {
     expect(dismissToast).toHaveBeenCalledWith(`inbox-bulk:read:${first}`)
   })
 
+  it('ends a press whose Inbox left while it asked, also when the Inbox shows again before the answer', async () => {
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many', before: 5 })) }
+    let open: () => void = () => {}
+    reachGate = new Promise((resolve) => {
+      open = resolve
+    })
+    const old = P.markAllMessagesRead(true)
+    await asked()
+    expect(P.inboxBulk?.state).toBe('asking')
+    // the Inbox hides, then shows again, before bulkReach answers
+    unhost()
+    expect(P.inboxBulk).toBeNull()
+    unhost = P.hostInboxNotice({ prepare: () => true })
+    open()
+    await old
+    // the old press opens no notice with its old plan, and sends nothing
+    expect(P.inboxBulk).toBeNull()
+    expect(requests).toEqual([])
+    // a new press asks again and opens its own notice
+    reachGate = null
+    const fresh = P.markAllMessagesRead(true)
+    await asked()
+    expect(reachAsked()).toBe(2)
+    expect(P.inboxBulk?.state).toBe('notice')
+    P.answerInboxNotice(false)
+    await fresh
+  })
+
   it('opens the notice only while a shown Inbox lets it', async () => {
     reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many', before: 5 })) }
     // the person types in a field when the notice would open
