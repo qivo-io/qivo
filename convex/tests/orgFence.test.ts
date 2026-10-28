@@ -646,6 +646,28 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
         as(t, f.admin).query(api.snapshot.commentThread, { org_id: f.org.id, issue_id: ref }),
       answer: { code: 'not_found', message: 'task not found' },
     },
+    // the task window answers a foreign task like an unknown one, without
+    // a sentence of its own
+    {
+      name: 'taskWindow.task',
+      ref: () => otherIssue.id,
+      call: (ref) => as(t, f.admin).query(api.taskWindow.task, { org_id: f.org.id, ref }),
+      value: { state: 'unavailable' },
+    },
+    {
+      name: 'taskWindow.links',
+      ref: () => otherIssue.id,
+      call: (ref) =>
+        as(t, f.admin).query(api.taskWindow.links, { org_id: f.org.id, issue_id: ref }),
+      value: { state: 'unavailable' },
+    },
+    {
+      name: 'taskWindow.attachments',
+      ref: () => otherIssue.id,
+      call: (ref) =>
+        as(t, f.admin).query(api.taskWindow.attachments, { org_id: f.org.id, issue_id: ref }),
+      value: { state: 'unavailable' },
+    },
     {
       name: 'snapshot.threadComments',
       ref: () => otherIssue.id,

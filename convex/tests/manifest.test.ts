@@ -658,6 +658,9 @@ snapshot:commentsBefore query public {"type":"object","value":{"issue_id":{"fiel
 snapshot:historyBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:threadComments query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:threadHistory query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+taskWindow:attachments query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+taskWindow:links query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+taskWindow:task query public {"type":"object","value":{"ref":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:lastComments query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:stamp mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"first_since":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:addMember mutation public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1088,6 +1091,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     threadComments: 'orgQuery',
     threadHistory: 'orgQuery',
   },
+  // The task window's own reads: any member reads the opened task, its
+  // links and its attachment list under ordinary access, and a task they
+  // may not open answers unavailable.
+  taskWindow: { task: 'orgQuery', links: 'orgQuery', attachments: 'orgQuery' },
   // Team sync: staff stamp the person a change was made on (often not
   // themselves); any member reads the latest comment per visible open task.
   teamSync: { lastComments: 'orgQuery', stamp: 'orgMutation' },
@@ -1127,7 +1134,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 198
+const PUBLIC_COUNT = 201
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
