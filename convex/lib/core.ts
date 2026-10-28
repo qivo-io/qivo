@@ -824,17 +824,20 @@ export async function listActiveIssuesCore(
   // the rows' texts the search did not read, within the room left like the
   // comments
   const unread = page.filter((task) => !texts.has(task.id))
+  // a page of one row that the page's own reads fill cannot be smaller, so
+  // it gets the sentence of what the list read before (pageReads)
+  const smaller = page.length > 1 ? PAGE_TOO_LARGE : null
   const read = await pageReads(
     ctx,
     unread,
     (task) => descriptionOf(ctx.db, task),
-    absent.size > 0 ? PAGE_TOO_LARGE : null,
+    absent.size > 0 ? smaller : null,
   )
   for (const [i, task] of unread.entries()) texts.set(task.id, read[i])
   const lastComments = await lastCommentTimes(
     ctx,
     page,
-    absent.size > 0 || unread.length > 0 ? PAGE_TOO_LARGE : null,
+    absent.size > 0 || unread.length > 0 ? smaller : null,
   )
   return await Promise.all(
     page.map((task) =>

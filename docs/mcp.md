@@ -1757,12 +1757,13 @@ boundary it can differ from the app, which uses the browser's time zone.
 the newest one makes the one before it the newest.
 
 Each row's `description` and `last_comment_at` are one read each, besides
-the task. A `list_tasks` page whose descriptions, comments and parents do
-not fit in one request is refused with `this page of tasks is too large to
-read at once; ask for a smaller limit`, and a smaller `limit` helps. A
-search of active tasks whose descriptions do not fit is refused with `this
-search reads too many task descriptions to answer in one request; name a
-project or add a filter`.
+the task. An active `list_tasks` page of more than one task whose
+descriptions, comments and parents do not fit in one request is refused
+with `this page of tasks is too large to read at once; ask for a smaller
+limit`, and a smaller `limit` helps. An archived page instead ends early
+and answers a `next_cursor`. A search of active tasks whose descriptions
+do not fit is refused with `this search reads too many task descriptions
+to answer in one request; name a project or add a filter`.
 
 `get_task` adds eight fields, which name only tasks you can read:
 
@@ -1819,7 +1820,8 @@ task's newest comment, and a row whose parent is in an archived project
 reads that parent. When those reads do not fit in one request beside the
 rest of the page, as for a page of many long descriptions, the call is
 refused with `this page of tasks is too large to read at once; ask for a
-smaller limit`; call again with a smaller `limit`. A list also reads every active
+smaller limit`; call again with a smaller `limit`. A page of one task gets
+the sentence of what filled the call instead, one of the two below. A list also reads every active
 task in the organization's active projects, or every active task of the
 organization when it names an archived project or the organization has more
 than 1,000 active projects. When those alone leave no

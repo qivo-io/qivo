@@ -17,6 +17,7 @@ import type { QueryCtx } from '../_generated/server'
 import {
   accessFlags,
   asMachineCaller,
+  COMMENT_READS_RESERVE,
   DESCRIPTIONS_TOO_LARGE,
   LABEL_READS_RESERVE,
   listActiveIssuesCore,
@@ -385,6 +386,37 @@ for (const [way, reads] of [
       expect(await restTasks(t, { ...agent, search: 'zephyr unicorn' })).toEqual([])
     })
   })
+
+describe('an active page whose own reads fill the request', () => {
+  it('asks for a smaller limit only when the page holds more than one row', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    for (let i = 0; i < 2; i++)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: `Text ${i}` })
+    const agent = { callerId: f.agent.id, access: 'read' as const }
+    const reserve = { ...COMMENT_READS_RESERVE }
+    try {
+      for (const limit of [1, 2]) {
+        // the ranges the page reads through its rows' newest comments, the
+        // last of its reads, one a row
+        const all = await restMetrics(t, f, { limit })
+        expect(all.refused).toBeNull()
+        // room for the rows' texts, none for their comments
+        COMMENT_READS_RESERVE.ranges = 4096 - (all.ranges - limit)
+        const e = await expectRefusal(
+          restTasks(t, { ...agent, limit: String(limit) }),
+          'bad_request',
+        )
+        const message = (e.data as { message: string }).message
+        if (limit === 1) expect(message).toMatch(/too many projects, teams or labels/)
+        else expect(message).toBe(PAGE_TOO_LARGE)
+        Object.assign(COMMENT_READS_RESERVE, reserve)
+      }
+    } finally {
+      Object.assign(COMMENT_READS_RESERVE, reserve)
+    }
+  })
+})
 
 describe('the writers compare the text of the description row', () => {
   /** The fixture with a webhook subscription on its sub-project, so each
