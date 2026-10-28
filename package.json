@@ -19,7 +19,7 @@
     "check:typecheck": "node scripts/check-typecheck-coverage.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:strict": "tsc --noEmit -p tsconfig.strict.json",
-    "typecheck:convex": "tsc --noEmit -p convex && node scripts/check-convex-runtime.mjs && node scripts/check-task-writes.mjs",
+    "typecheck:convex": "tsc --noEmit -p convex && node scripts/check-convex-runtime.mjs && node scripts/check-task-writes.mjs && node scripts/check-task-reads.mjs",
     "typecheck:desktop": "tsc --noEmit -p desktop && tsc --noEmit -p desktop/tsconfig.build.json",
     "typecheck:node": "tsc -p tsconfig.node.json",
     "demo": "node scripts/marketing-demo.mjs",

@@ -18,6 +18,7 @@ import {
   listArchivedIssuesCore,
   loadCatalogue,
   SEARCH_TOO_LARGE,
+  TEXT_TASK_READS,
 } from '../lib/core'
 import type { Refusal } from '../lib/functions'
 import { allWordsMatcher, searchPieces, taskSearchText } from '../lib/search'
@@ -110,6 +111,12 @@ const found = (fx: Fx, c: SearchCase) =>
  * them into each task's search text. The fixture has no subtasks, so no
  * status line is dormant. */
 async function oldMatch(ctx: MutationCtx, fx: Fx, c: SearchCase): Promise<string[]> {
+  return (await oldMatches(ctx, fx, c)).map((i) => i.id).sort()
+}
+
+/* The tasks oldMatch finds, in the order an active list answers them,
+ * oldest first by creation with ties by number. */
+async function oldMatches(ctx: MutationCtx, fx: Fx, c: SearchCase): Promise<Doc<'issues'>[]> {
   const labels = new Map<string, string[]>()
   const rows = ctx.db.query('labels').withIndex('by_org', (q) => q.eq('org_id', fx.org.id))
   for await (const l of rows) {
@@ -143,8 +150,7 @@ async function oldMatch(ctx: MutationCtx, fx: Fx, c: SearchCase): Promise<string
         }),
       ),
     )
-    .map((i) => i.id)
-    .sort()
+    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.num - b.num)
 }
 
 /* Tasks in FW with labels created in the order Thermal, Power supply,
@@ -175,10 +181,44 @@ async function mixed() {
 
 const DEFAULT_LABEL_READS = { ...LABEL_TASK_READS }
 const DEFAULT_LABEL_RESERVE = { ...LABEL_READS_RESERVE }
+const DEFAULT_TEXT_READS = { ...TEXT_TASK_READS }
 afterEach(() => {
   Object.assign(LABEL_TASK_READS, DEFAULT_LABEL_READS)
   Object.assign(LABEL_READS_RESERVE, DEFAULT_LABEL_RESERVE)
+  Object.assign(TEXT_TASK_READS, DEFAULT_TEXT_READS)
 })
+
+/* 27 tasks that match a search through each mix of their title, labels and
+ * description, in turn and alternating between FW's two sub-projects, with
+ * the labels Zephyr and Wire harness. */
+async function labelPages(): Promise<Fx> {
+  const t = newT()
+  const fx: Fx = { t, ...(await withOrg(t)) }
+  const zephyr = await plantLabel(t, fx.org.id, 'Zephyr')
+  const wire = await plantLabel(t, fx.org.id, 'Wire harness')
+  const kinds: { title: string; description?: string; labels?: string[] }[] = [
+    { title: 'Zephyr wire' },
+    { title: 'Bracket', description: 'Wire the board', labels: [zephyr] },
+    { title: 'Bracket', description: 'zephyr and wire' },
+    { title: 'Wire', labels: [zephyr] },
+    { title: 'Nothing here' },
+    { title: 'Bracket', labels: [zephyr, wire] },
+    { title: 'Bracket', description: 'board', labels: [zephyr] },
+    { title: 'Bracket', description: 'zephyr' },
+    { title: 'Zephyr', description: 'wire' },
+  ]
+  for (let n = 0; n < 27; n++) {
+    const kind = kinds[n % kinds.length]
+    const task = await plantIssue(t, {
+      org_id: fx.org.id,
+      project_id: n % 2 === 0 ? fx.sub.id : fx.sub2.id,
+      title: kind.title,
+      description: kind.description ?? '',
+    })
+    for (const id of kind.labels ?? []) await label(fx, id, [task])
+  }
+  return fx
+}
 
 describe('task search reads only the labels it can match', () => {
   it('splits a search into its distinct non-empty pieces', () => {
@@ -319,7 +359,10 @@ describe('task search reads only the labels it can match', () => {
       'bad_request',
     )
     expect((e.data as Refusal).message).toBe(SEARCH_TOO_LARGE)
-    // a search that the titles answer reads no assignment
+    // a search that the titles answer reads no assignment. It reads the
+    // descriptions of the tasks before the first spare, which need the room
+    // the reserve stood in for.
+    Object.assign(LABEL_READS_RESERVE, DEFAULT_LABEL_RESERVE)
     expect(
       await restTasks(fx.t, { callerId: fx.admin.id, access: 'read', search: 'spare', limit: '1' }),
     ).toHaveLength(1)
@@ -338,6 +381,44 @@ describe('task search reads only the labels it can match', () => {
     )
     expect((e.data as Refusal).message).toBe(SEARCH_TOO_LARGE)
   })
+
+  it('answers every page that main answered, the matches its labels complete counted toward it', async () => {
+    const fx = await labelPages()
+    const page = (search: string, offset: number, limit: number) =>
+      fx.t.run(async (ctx) =>
+        (
+          await listActiveIssuesCore(
+            ctx,
+            fx.admin,
+            { today: TODAY, scope: null, search, stars: true, limit, offset },
+            { surface: 'rest', cat: await loadCatalogue(ctx, fx.admin), readable: () => true },
+          )
+        ).map((row) => row.id),
+      )
+    const searches = ['zephyr', 'zephyr wire', 'wire zephyr', 'board zephyr', 'harness', 'zzz']
+    // texts and labels read one task at a time, through ranges, or both
+    for (const [texts, labels] of [
+      [DEFAULT_TEXT_READS.reads, DEFAULT_LABEL_READS.reads],
+      [0, DEFAULT_LABEL_READS.reads],
+      [DEFAULT_TEXT_READS.reads, 0],
+      [0, 0],
+    ]) {
+      TEXT_TASK_READS.reads = texts
+      LABEL_TASK_READS.reads = labels
+      for (const search of searches) {
+        const all = (
+          await fx.t.run((ctx) => oldMatches(ctx, fx, { search, stars: true, archived: false }))
+        ).map((i) => i.id)
+        if (search !== 'zzz') expect(all.length).toBeGreaterThan(2)
+        for (const limit of [1, 3])
+          for (let offset = 0; offset <= all.length; offset++)
+            expect(
+              await page(search, offset, limit),
+              `${search} at ${offset}, ${limit} a page, ${texts} texts and ${labels} labels one by one`,
+            ).toEqual(all.slice(offset, offset + limit))
+      }
+    }
+  }, 300_000)
 
   it('finds exactly what the matcher found when it read every label', async () => {
     const { fx } = await mixed()

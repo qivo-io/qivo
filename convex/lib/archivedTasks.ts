@@ -22,6 +22,7 @@ import type { TransactionMetric, TransactionMetrics } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
+import { descriptionOf } from '../model/descriptions'
 import { canSeeProject } from './access'
 import { openCursorText, sealCursorText } from './archiveCursorSeal'
 import { byId } from './db'
@@ -284,12 +285,16 @@ export const ARCHIVE_PAGE = {
 
 /** What an archived page keeps back from the request's limits, for the
  * reads of a row after its last check and of the page's end. The first task
- * a page looks at may use the rest. Past its last check a REST or MCP row
- * reads at most four documents (lib/core.ts listArchivedIssuesCore). They
- * are the subtask its walk read last, the first subtask of a group too
- * large to walk, its parent and its newest comment. The bytes hold four
- * documents at Convex's size limit. Tests lower these. */
-export const ARCHIVE_RESERVE = { ranges: 16, documents: 64, bytes: 4 * DOCUMENT_MAX_BYTES }
+ * a page looks at may use the rest. A task's filters can read whether it is
+ * a group and its text, two description rows at most (model/descriptions.ts
+ * descriptionOf), before its row's walk checks the room, and past the walk's
+ * last check a REST or MCP row reads at most four more documents
+ * (lib/core.ts listArchivedIssuesCore): the subtask its walk read last, the
+ * first subtask of a group too large to walk, its parent and its newest
+ * comment. Its text is the one the filters read, or one more read in its
+ * place. The bytes hold seven documents at Convex's size limit. Tests lower
+ * these. */
+export const ARCHIVE_RESERVE = { ranges: 16, documents: 64, bytes: 7 * DOCUMENT_MAX_BYTES }
 
 /** Transaction totals (ctx.meta.getTransactionMetrics) that a read keeps
  * below, in index ranges, documents and bytes read. */
@@ -376,13 +381,18 @@ export type TaskFacts = {
   isGroup(): Promise<boolean>
   /** The ids of the labels the task carries, archive marks included. */
   labelIds(): Promise<string[]>
+  /** The task's text, from its description row (model/descriptions.ts
+   * descriptionOf). */
+  description(): Promise<string>
 }
 
 /** The facts of `task`, read on first use. */
 export function taskFacts(ctx: QueryCtx, task: Doc<'issues'>): TaskFacts {
   let group: Promise<boolean> | undefined
   let labels: Promise<string[]> | undefined
+  let text: Promise<string> | undefined
   return {
+    description: () => (text ??= descriptionOf(ctx.db, task)),
     isGroup: () =>
       (group ??= ctx.db
         .query('issues')
@@ -435,15 +445,15 @@ export async function rosterNames(ctx: QueryCtx, orgId: string): Promise<Map<str
   return namesOf(await rosterOf(ctx, orgId))
 }
 
-/** The search fields of a task, without its labels and with its status line
+/** The search fields a task's own row holds, without its description, which
+ * its description row holds, and its labels, and with its status line
  * decided by `group` (lib/search.ts taskSearchText). */
 export const searchFields = (
   task: Doc<'issues'>,
   names: ReadonlyMap<string, string>,
-): Omit<TaskSearchFields, 'group' | 'labelNames'> => ({
+): Omit<TaskSearchFields, 'group' | 'labelNames' | 'description'> => ({
   key: issueKey(task.num),
   title: task.title,
-  description: task.description ?? '',
   status: task.status,
   priority: task.priority,
   assigneeName: task.assignee_id === undefined ? null : names.get(task.assignee_id),
@@ -460,9 +470,10 @@ export type ArchivedTaskMatcher = (task: ArchivedTask, facts: TaskFacts) => Prom
  * name, assignee name or label names, in any order. With `stars`, as REST
  * reads it, `*` stands for any run of text.
  *
- * More text never undoes a match, so it first tries the task's own fields.
- * Only when they fail does it read what else can still change the answer:
- * the roster's names (`names`, read once), whether the task is a group when
+ * More text never undoes a match, so it first tries the fields the task's
+ * own row holds. Only when they fail does it read its description row, and
+ * only when that fails too what else can still change the answer: the
+ * roster's names (`names`, read once), whether the task is a group when
  * some fragment occurs in a status name, and the task's labels when some
  * label's name holds a fragment. Each of those costs one index range at
  * most, read through `facts` so the task's row can reuse it.
@@ -488,12 +499,16 @@ export async function archivedTaskMatcher(
   }
   return async (task, facts) => {
     const own = searchFields(task, new Map())
-    if (matches(taskSearchText({ ...own, group: true, labelNames: [] }))) return true
+    const cheap = { ...own, group: true, labelNames: [] }
+    if (matches(taskSearchText({ ...cheap, description: '' }))) return true
+    const description = await facts.description()
+    if (matches(taskSearchText({ ...cheap, description }))) return true
     const assigneeName = task.assignee_id === undefined ? null : await nameOf(task.assignee_id)
     const held = labels.length > 0 ? new Set(await facts.labelIds()) : null
     return matches(
       taskSearchText({
         ...own,
+        description,
         assigneeName,
         group: statusMatters ? await facts.isGroup() : true,
         labelNames: held === null ? [] : labels.filter((l) => held.has(l.id)).map((l) => l.name),

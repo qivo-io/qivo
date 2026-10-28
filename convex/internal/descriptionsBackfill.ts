@@ -1,19 +1,27 @@
 /* One-time migration that gives every live task stored before
  * issue_descriptions existed its description row (schema.ts
  * issue_descriptions, model/descriptions.ts), copied from
- * issues.description, which stays the source of truth in this release,
- * and gives every row the copies of its task's project and archived state,
- * which rows written before those copies lack. Tasks created or changed
- * since this release already have an equal row: every writer keeps both
- * copies in one transaction. Tasks in Deleted items have none once their
- * item's steps have run, and a restore writes theirs.
+ * issues.description, which every writer still takes the text from while
+ * the task row holds it, and gives every row the copies of its task's
+ * project and archived state, which rows written before those copies lack.
+ * Tasks created or changed since the first release of the move already have
+ * an equal row: every writer keeps both copies in one transaction. Tasks in
+ * Deleted items have none once their item's steps have run, and a restore
+ * writes theirs.
  *
- * The next release reads issue_descriptions, falling back to
- * issues.description for a task without a row, and main Search reads its
- * search_description index. Each ships only once a dry run on every
- * deployment (development, staging, production and the demo) reports zero
- * `missing`, `differ`, `duplicates`, `orphans` and `skipped`
- * (docs/deployment.md).
+ * Readers read issue_descriptions from the second release, this one: a
+ * task's text is its first row's in creation order that holds its copies,
+ * else its first row's, and only a task without a row reads
+ * issues.description (model/descriptions.ts descriptionOf). It ships to
+ * production only once a dry run on every deployment (development, staging,
+ * production and the demo) reports zero `missing`, `differ`, `duplicates`,
+ * `orphans` and `skipped` (docs/deployment.md), because a reader shows a row
+ * that differs from its task, not the task's text. Main Search's
+ * description matches, which a later stage reads through the
+ * search_description index, follow the same rule. The third release stops
+ * writing issues.description and clears it; a rollback from it to this
+ * release still shows every description, and one to the first release does
+ * not.
  *
  * A call walks two phases in creation order, each page its own
  * transaction. `tasks` reads every live task and its description rows. A
@@ -59,7 +67,8 @@
  * (docs/deployment.md). A release from before the table still deploys, and
  * writes tasks without rows and changes descriptions and moves and
  * archives tasks without them. A repair after the roll forward mends what
- * either leaves. No call writes a waiting row, which its step or teardown
+ * either leaves, and since this release shows a row such a release left
+ * stale, run a dry run and that repair before anyone relies on the text. No call writes a waiting row, which its step or teardown
  * deletes. Run the dry run again afterwards, until it reports zeros.
  *
  * Run it only after the deployment serves this release, and only with the
@@ -85,7 +94,7 @@ import { byId } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { audit as writeAudit } from '../model/admin'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
-import { holdsCopies, putDescription } from '../model/descriptions'
+import { holdsCopies, putDescription, shownText } from '../model/descriptions'
 
 /** Rows one page reads, the bytes it reads before it ends early, as Convex
  * counts a document's size, and the most ids a call lists of each kind.
@@ -170,9 +179,11 @@ function read<D extends Record<string, Value> | null>(reads: Reads, doc: D): D {
 }
 
 /** Checks task `task` against its description rows, and mends them with
- * `write`. A task without issues.description is skipped: nothing checks or
- * writes its row's text, but a repair gives its first row the task's
- * copies. A repair reuses the rows read here. */
+ * `write`. A task without issues.description is skipped: nothing checks its
+ * row's text, but a repair gives its first row the task's copies, with the
+ * text readers showed before (model/descriptions.ts shownText), so a second
+ * row that held the copies leaves its text shown. A repair reuses the rows
+ * read here. */
 async function checkTask(
   ctx: QueryCtx,
   task: Doc<'issues'>,
@@ -192,7 +203,8 @@ async function checkTask(
     if (row !== undefined && !holdsCopies(row, task)) {
       note(found, 'differ', task.id)
       // the patch reads the row again
-      if (write?.repair) await putDescription(write.ctx.db, task, row.description, read(reads, row))
+      if (write?.repair)
+        await putDescription(write.ctx.db, task, shownText(rows, task), read(reads, row))
     }
     return
   }

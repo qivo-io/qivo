@@ -1118,7 +1118,17 @@ anywhere inside a word. These are the fields the app's task filter searches.
 Explicit `*` wildcards within fragments remain supported; other punctuation is
 literal. A `search` holds at most 200 characters, on active and archived
 lists alike, and a longer one is a `400` with `a search must be at most 200
-characters. Search for fewer words.` A search of active tasks whose label names it would have to read for
+characters. Search for fewer words.` A search of active tasks reads, in list
+order, the label names of the tasks their other fields do not match, then
+the descriptions of those their labels do not match either. It stops once
+it has found the tasks up to the end of the page you asked for, whichever
+field matched them. A search that matches few tasks, such as one by task ID, reads every
+active task's description. With descriptions of a few hundred characters
+that fits an organization of about 9,000 active tasks in one request. A
+larger one is a `400` with `this search reads too many task descriptions
+to answer in one request; name a project or add a filter`. A search that
+finds its page early, such as a word many tasks hold, keeps the list's
+own scale. A search of active tasks whose label names it would have to read for
 too many tasks at once is a `400` with `this search reads too many label
 assignments to answer in one request; name a project or add a filter`.
 
@@ -1130,11 +1140,14 @@ tasks than `limit`. A `limit` that is not a whole number from 1 to 200 is a
 `offset` that is not a whole number from 0 up is a `400` with `offset must
 be a whole number, 0 or more`. Until October 2026 a list without `limit`
 held up to 100 tasks, and Qivo moved a `limit` or `offset` out of range into
-it, so `limit=500` answered 200 tasks and `limit=0` answered 100. Each row's `last_comment_at` reads the task's newest
-comment, and a row whose parent is in an archived project reads that
-parent. When those reads do not fit in one request beside the rest of
-the page, the request is a `400` (`this page of tasks is too large to read
-at once; ask for a smaller limit`); ask again with a smaller `limit`. A list
+it, so `limit=500` answered 200 tasks and `limit=0` answered 100. Each row's `description` reads the task's
+description and its `last_comment_at` the task's newest comment, and a row
+whose parent is in an archived project reads that parent. When those reads
+do not fit in one request beside the rest of the page, as for a page of
+many long descriptions, the request is a `400` (`this page of tasks is too
+large to read at once; ask for a smaller limit`); ask again with a smaller
+`limit`. A page of one task gets the sentence of what filled the request
+instead, one of the two below. A list
 also reads every active task in the organization's active projects, or every
 active task of the organization when it names an archived project or the
 organization has more than 1,000 active projects. When

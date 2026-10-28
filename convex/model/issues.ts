@@ -93,7 +93,14 @@ import { excerpt, issueChanges, logActivity, machineDetail, narratedChange } fro
 import { scheduleMarkClears } from './archiveMarks'
 import { startCount } from './commentLimits'
 import { IMAGE_NOT_ATTACHED, settleDescriptionImages } from './descriptionImages'
-import { insertTask, patchTask, type TaskFields } from './descriptions'
+import {
+  descriptionOf,
+  insertTask,
+  patchTask,
+  type TaskFields,
+  textsOf,
+  withText,
+} from './descriptions'
 import {
   assertExpected,
   BOOLEAN,
@@ -365,7 +372,9 @@ export async function taskWriters(
  * was read (model/expected.ts assertExpected), naming who where an activity
  * row proves it. `next` holds the value the edit sends for each key; hours
  * cleared by an edit that enters Review compare as the review time the core
- * stores instead, from `destination` for a move. */
+ * stores instead, from `destination` for a move. An `expected` that names
+ * the description compares the task's text (model/descriptions.ts
+ * descriptionOf): `text` when the caller read it already, else read here. */
 export async function assertTaskExpected(
   ctx: QueryCtx,
   a: {
@@ -375,32 +384,38 @@ export async function assertTaskExpected(
     expected: Readonly<Record<string, unknown>> | undefined
     next: Readonly<Record<string, unknown>>
     destination?: Doc<'projects'>
+    text?: string
   },
 ): Promise<void> {
   if (a.expected === undefined) return
+  const issue = !('description' in a.expected)
+    ? a.issue
+    : a.text === undefined
+      ? await withText(ctx.db, a.issue)
+      : { ...a.issue, description: a.text }
   const read: Read = { ctx, me: a.me, view: a.view }
   let next = a.next
   if (
     'remaining_hours' in next &&
     next.remaining_hours == null &&
     next.status === 'review' &&
-    a.issue.status !== 'review'
+    issue.status !== 'review'
   ) {
-    const project = a.destination ?? (await byId(ctx, 'projects', a.issue.project_id))
+    const project = a.destination ?? (await byId(ctx, 'projects', issue.project_id))
     if (project !== null) next = { ...next, remaining_hours: await reviewHoursFor(ctx, project) }
   }
   await assertExpected({
     read,
     fields: TASK_FIELDS,
     record: 'task',
-    id: a.issue.id,
-    label: issueKey(a.issue.num),
-    row: a.issue,
+    id: issue.id,
+    label: issueKey(issue.num),
+    row: issue,
     expected: a.expected,
     next,
     writers: (fields) =>
-      taskWriters(read, a.issue, fields, (field) =>
-        printOf(TASK_FIELDS[field].form((a.issue as Record<string, unknown>)[field])),
+      taskWriters(read, issue, fields, (field) =>
+        printOf(TASK_FIELDS[field].form((issue as Record<string, unknown>)[field])),
       ),
   })
 }
@@ -1156,7 +1171,8 @@ export function fmtRangeWith(format: string, aIso: string, bIso: string): string
 /** The app's verb and detail for an update of `before` to `after`, chosen
  * by the highest-ranked key `patch` holds (status first), and `named`, the numbers of
  * the tasks the detail names in text order ([] when none), which the row
- * stores for the visibility rule. */
+ * stores for the visibility rule. A patch with the description passes both
+ * documents with their text (model/descriptions.ts textsOf). */
 export async function browserVerbDetail(
   ctx: QueryCtx,
   a: { before: Doc<'issues'>; after: Doc<'issues'>; patch: IssuePatch },
@@ -1290,8 +1306,7 @@ export async function browserVerbDetail(
     }
   }
   if ('description' in patch) {
-    const from = before.description ?? ''
-    const to = after.description ?? ''
+    const { before: from, after: to } = textsOf(before, after)
     if (to === '') {
       return {
         verb: 'removed the description from',
@@ -1529,7 +1544,7 @@ export async function createIssueCore(
   if (issue.parent_id !== undefined) {
     await clearParentRemaining(ctx, { parentId: issue.parent_id, actor: me, now })
   }
-  await notifyIssueInsert(ctx, { issue, actor: me, now })
+  await notifyIssueInsert(ctx, { issue, description, actor: me, now })
   const event = {
     org_id,
     actor_id: me.id,
@@ -1611,7 +1626,12 @@ async function checkOnce(
  * clears it. `machine` carries a REST or MCP caller's provenance and
  * archive toggle (MachineUpdate). `bulk` lets a bulk writer skip the write
  * gate and the assignee and reviewer rules it already passed for the
- * project, and notify from its preload (BulkUpdate). */
+ * project, and notify from its preload (BulkUpdate). A patch with the
+ * description reads the task's text once (model/descriptions.ts
+ * descriptionOf), or takes `text` when the caller read it already, and
+ * passes the task with its text on both sides to the image settling, the
+ * notices, the webhook event and the activity row. Any other patch reads
+ * no description row and passes the stored rows. */
 export async function updateIssueCore(
   ctx: MutationCtx,
   a: {
@@ -1621,6 +1641,7 @@ export async function updateIssueCore(
     now: string
     machine?: MachineUpdate
     bulk?: BulkUpdate
+    text?: string
   },
 ): Promise<Doc<'issues'>> {
   const { me, issue, now, bulk } = a
@@ -1760,13 +1781,17 @@ export async function updateIssueCore(
     if (changed) w.remaining_set_at = next === undefined ? undefined : now
   }
   if ('title' in patch) w.title = cleanTitle(patch.title)
+  // the text the task shows before the write, read only when the patch
+  // writes it
+  const text = 'description' in patch ? (a.text ?? (await descriptionOf(ctx.db, issue))) : undefined
   if ('description' in patch) {
     w.description = cleanDescription(patch.description)
     // the images the save takes out, brings back or adds (model/descriptionImages.ts)
-    if (w.description !== (issue.description ?? '')) {
+    if (w.description !== text) {
       await settleDescriptionImages(ctx, {
         me,
         issue,
+        before: text ?? '',
         description: w.description,
         now,
         provenance: a.machine?.provenance,
@@ -1830,6 +1855,10 @@ export async function updateIssueCore(
   await patchTask(ctx.db, issue, w)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   await tallyRow(ctx, 'issues', issue, after)
+  // the documents the notices, the event and the activity row compare: with
+  // the text on both sides when the patch writes it, else as stored
+  const was = text === undefined ? issue : { ...issue, description: text }
+  const is = text === undefined ? after : { ...after, description: w.description }
   // -- cascade, then clear-on-attach
   if (toggle === 'restored') {
     // the restore cascade: the ancestor chain surfaces (suppressed echoes),
@@ -1854,8 +1883,8 @@ export async function updateIssueCore(
   //    `group` is known whenever the status, dates or reviewer changed; an assignee
   //    change alone subscribes the same people either way.
   await notifyIssueUpdate(ctx, {
-    before: issue,
-    after,
+    before: was,
+    after: is,
     actor: me,
     now,
     isGroup: group === true,
@@ -1866,13 +1895,13 @@ export async function updateIssueCore(
   //    is present (verb archived/restored wins, else 'changed'; multi-field
   //    diff + provenance), else the browser verb/detail strings, ported
   //    verbatim
-  if (!narratedChange(issue, after)) return after
+  if (!narratedChange(was, is)) return after
   let verb: string
   let detail: string | undefined
   // the diff names no task (DIFF_FIELDS has no parent_id)
   let named: number[] = []
   if (a.machine?.appGrammar === true) {
-    const browser = await browserVerbDetail(ctx, { before: issue, after, patch })
+    const browser = await browserVerbDetail(ctx, { before: was, after: is, patch })
     verb = browser.verb
     detail = machineDetail(browser.detail, a.machine.provenance)
     named = browser.named
@@ -1891,9 +1920,9 @@ export async function updateIssueCore(
       }
     }
     verb = toggle ?? 'changed'
-    detail = machineDetail(issueChanges(issue, after, names), a.machine.provenance)
+    detail = machineDetail(issueChanges(was, is, names), a.machine.provenance)
   } else {
-    const browser = await browserVerbDetail(ctx, { before: issue, after, patch })
+    const browser = await browserVerbDetail(ctx, { before: was, after: is, patch })
     verb = browser.verb
     detail = browser.detail
     named = browser.named
@@ -1909,7 +1938,7 @@ export async function updateIssueCore(
     project_id: after.project_id,
     ts: now,
     named_task_nums: named,
-    field_prints: changedPrints(TASK_FIELDS, issue, after),
+    field_prints: changedPrints(TASK_FIELDS, was, is),
   }
   await logActivity(ctx, event)
   // a restore that left a full parent gets the row a detach writes

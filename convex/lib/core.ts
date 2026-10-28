@@ -42,6 +42,7 @@ import {
   postArchiveReason,
 } from '../model/comments'
 import type { Via } from '../model/deletedItems'
+import { descriptionOf, descriptionsOf, projectTextReader } from '../model/descriptions'
 import {
   assertLive,
   assertTaskExpected,
@@ -484,16 +485,17 @@ async function markedLabelNamesOf(
 }
 
 /** How many reads of one task's assignment of one matching label
- * (labelNamesOf) a search makes before it reads each matching label's
- * active assignments instead. Tests lower `reads`. */
+ * (labelNamesOf) a search makes, within TEXT_TASK_READS, before it reads
+ * each matching label's active assignments instead. Tests lower `reads`. */
 export const LABEL_TASK_READS = { reads: 1000 }
 
 /** What a search's label reads keep back from the request's limits for the
- * page after them, its parents and newest comments. They check the request's
- * reads before each index range and every LABEL_ROWS_PER_CHECK rows, so the
- * documents and bytes also hold that many rows, or one restored task's
- * assignments. Tests lower these. */
-export const LABEL_READS_RESERVE = { ranges: 416, documents: 1024, bytes: 2 * DOCUMENT_MAX_BYTES }
+ * page after them, its parents, texts and newest comments, a range each for
+ * up to LIMITS.listTasks.max rows. They check the request's reads before
+ * each index range and every LABEL_ROWS_PER_CHECK rows, so the documents
+ * and bytes also hold that many rows, or one restored task's assignments.
+ * Tests lower these. */
+export const LABEL_READS_RESERVE = { ranges: 616, documents: 1024, bytes: 2 * DOCUMENT_MAX_BYTES }
 
 /* How many label assignments a search reads between two checks of the
  * request's reads. */
@@ -504,19 +506,217 @@ const LABEL_ROWS_PER_CHECK = 256
 export const SEARCH_TOO_LARGE =
   'this search reads too many label assignments to answer in one request; name a project or add a filter'
 
+/** What a search's description reads keep back from the request's limits
+ * when some label matches the search: LABEL_READS_RESERVE for the page
+ * after the search, and as many ranges and documents again for the label
+ * reads that may follow a description read (searchedTexts), the last of
+ * which read each matching label's active assignments once a task's own
+ * assignments are too many to read one by one (activeLabelNames).
+ * Assignments are small, so one document at Convex's size limit
+ * more holds their bytes. A search that no label matches reads no label, so
+ * its description reads keep back LABEL_READS_RESERVE only. Tests lower
+ * these. */
+export const DESCRIPTION_READS_RESERVE = {
+  ranges: 2 * LABEL_READS_RESERVE.ranges,
+  documents: 2 * LABEL_READS_RESERVE.documents,
+  bytes: LABEL_READS_RESERVE.bytes + DOCUMENT_MAX_BYTES,
+}
+
+/** How many index ranges a search reads one task at a time, in the order
+ * the list answers, for a task's description rows (descriptionsOf) or its
+ * assignment of one matching label (labelNamesOf), before it reads the
+ * active description rows of the rest's projects in chunks
+ * (model/descriptions.ts projectTextReader) and each matching label's
+ * active assignments (activeLabelNames) instead. Tests lower it. */
+export const TEXT_TASK_READS = { reads: 1000 }
+
+/** The refusal for a search whose task descriptions do not fit in one
+ * request. */
+export const DESCRIPTIONS_TOO_LARGE =
+  'this search reads too many task descriptions to answer in one request; name a project or add a filter'
+
+/* The tasks of `found` that match the search, in the order the list
+ * answers, up to `want` of them, with the texts read for them by task id.
+ * Whether a task matches turns on its own fields, the names of the
+ * `labels` the search names that it carries, and its text (`matches`).
+ * More text never unmatches, so it settles the tasks in list order and
+ * reads a task's label names only when its own fields miss, and its text
+ * only when its labels miss too, and it stops once the tasks settled hold
+ * `want` matches, so a page that labels complete stops as one that titles
+ * complete does. It reads never more at a time than could still complete
+ * the page with the matches among them.
+ *
+ * The first TEXT_TASK_READS reads it makes one task at a time: a task's
+ * text in one range (model/descriptions.ts descriptionsOf), and its
+ * assignment of each label in one range each (labelNamesOf) while those
+ * stay within LABEL_TASK_READS and leave LABEL_READS_RESERVE ranges and
+ * documents. Past them it reads the label names of every task left that
+ * needs them through each label's active assignments, once
+ * (activeLabelNames), then the active rows of the rest's
+ * projects a step at a time, each from the project of the first task still
+ * without a text, ending once the page is complete and reading little ahead
+ * once the next task without a text is in another project
+ * (projectTextReader), checking before it refuses whether the texts read
+ * complete the page, and a task no range holds a row for on its own. The
+ * texts are read within the request's room less DESCRIPTION_READS_RESERVE,
+ * or LABEL_READS_RESERVE when it names no label, which a step of texts read
+ * one by one may pass by one task's text, within COMMENT_READS_RESERVE. A
+ * search whose texts do not fit is refused with DESCRIPTIONS_TOO_LARGE, so
+ * no answer leaves a text unread, one whose label assignments do not fit
+ * with SEARCH_TOO_LARGE, and one that has no room left for the first text
+ * with the sentence of what the list read before (ACTIVE_TASKS_TOO_LARGE or
+ * ACTIVE_LIST_TOO_WIDE). */
+async function searchedTexts(
+  ctx: QueryCtx,
+  found: readonly Doc<'issues'>[],
+  want: number,
+  matches: (task: Doc<'issues'>, description: string, labelNames: readonly string[]) => boolean,
+  labels: readonly Doc<'labels'>[],
+): Promise<{ matched: Doc<'issues'>[]; texts: Map<string, string> }> {
+  const texts = new Map<string, string>()
+  // the names of `labels` each task carries, once read; a search that names
+  // no label reads none
+  const held = new Map<string, readonly string[]>()
+  /* whether `task` matches, or what it needs read before that is known */
+  const answer = (task: Doc<'issues'>): boolean | 'labels' | 'text' => {
+    const names = labels.length === 0 ? [] : held.get(task.id)
+    if (matches(task, '', names ?? [])) return true
+    if (names === undefined) return 'labels'
+    const text = texts.get(task.id)
+    if (text === undefined) return 'text'
+    return matches(task, text, names)
+  }
+  const m = await ctx.meta.getTransactionMetrics()
+  const room = roomOf(m, labels.length > 0 ? DESCRIPTION_READS_RESERVE : LABEL_READS_RESERVE)
+  // a step of texts read one by one may pass `room` by one task's text,
+  // within what the page's own reads keep back (pageReads)
+  const steps = roomOf(m, COMMENT_READS_RESERVE)
+  // the tasks before `end` are settled, and those that match are `matched`
+  let end = 0
+  const matched: Doc<'issues'>[] = []
+  /* settles the tasks from `end` whose answer is known, and answers
+   * whether the page is complete or every task settled */
+  const settle = (): boolean => {
+    for (; end < found.length && matched.length < want; end++) {
+      const known = answer(found[end])
+      if (known === 'labels' || known === 'text') break
+      if (known) matched.push(found[end])
+    }
+    return end === found.length || matched.length >= want
+  }
+  /* the next tasks that need `fact` read, as many as could still complete
+   * the page with the matches between them */
+  const nextNeeding = (fact: 'labels' | 'text'): Doc<'issues'>[] => {
+    const next: Doc<'issues'>[] = []
+    for (
+      let at = end, between = 0;
+      at < found.length && next.length + between < want - matched.length;
+      at++
+    ) {
+      const known = answer(found[at])
+      if (known === true) between++
+      else if (known === fact) next.push(found[at])
+    }
+    return next
+  }
+  // the reads made one task at a time, `labelReads` of them of labels
+  let reads = 0
+  let labelReads = 0
+  /* reads the label names of `tasks`, one task's assignment of each label
+   * at a time while those reads fit, else those of every task left that
+   * needs them, through each label's assignments */
+  const readLabels = async (tasks: readonly Doc<'issues'>[]): Promise<void> => {
+    const pairs = tasks.length * labels.length
+    const now = await ctx.meta.getTransactionMetrics()
+    if (
+      reads + pairs <= TEXT_TASK_READS.reads &&
+      labelReads + pairs <= LABEL_TASK_READS.reads &&
+      pairs < now.databaseQueries.remaining - LABEL_READS_RESERVE.ranges &&
+      pairs < now.documentsRead.remaining - LABEL_READS_RESERVE.documents
+    ) {
+      reads += pairs
+      labelReads += pairs
+      const names = await Promise.all(tasks.map((task) => labelNamesOf(ctx, task.id, labels)))
+      for (const [i, task] of tasks.entries()) held.set(task.id, names[i])
+      return
+    }
+    const rest = found.slice(end).filter((task) => answer(task) === 'labels')
+    const names = await activeLabelNames(ctx, labels, rest)
+    for (const task of rest) held.set(task.id, names.get(task.id) ?? [])
+  }
+  let ranges: ReturnType<typeof projectTextReader> | null = null
+  // the first read is checked for room, so a search that never had any
+  // says what the list read before
+  let checked = false
+  while (!settle()) {
+    if (!checked) {
+      await assertTextRoom(ctx, room)
+      checked = true
+    }
+    if (answer(found[end]) === 'labels') {
+      await readLabels(nextNeeding('labels'))
+      continue
+    }
+    if (ranges !== null) {
+      const step = await ranges.step(settle)
+      if (step === 'read') continue
+      // a page the texts read so far complete needs no more
+      if (step === 'full') {
+        if (settle()) break
+        throw badRequest(DESCRIPTIONS_TOO_LARGE)
+      }
+      // no range holds the text of the task the page waits on
+      const read = await descriptionsOf(ctx, [found[end]], room, steps)
+      if (read === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)
+      for (const [id, text] of read) texts.set(id, text)
+      continue
+    }
+    const next = nextNeeding('text')
+    if (reads + next.length > TEXT_TASK_READS.reads) {
+      // the ranges read the texts of the tasks whose labels miss, so every
+      // task left has its label names first
+      const unlabelled = found.slice(end).filter((task) => answer(task) === 'labels')
+      if (unlabelled.length > 0) {
+        await readLabels(unlabelled)
+        continue
+      }
+      const rest = found.slice(end).filter((task) => answer(task) === 'text')
+      ranges = projectTextReader(ctx, rest, room, texts)
+      continue
+    }
+    const read = await descriptionsOf(ctx, next, room, steps)
+    if (read === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)
+    reads += next.length
+    for (const [id, text] of read) texts.set(id, text)
+  }
+  return { matched, texts }
+}
+
+/* Refuses a list whose reads before its first description read leave no
+ * room under `room` for one, with the sentence of what filled it, as
+ * pageReads does: ACTIVE_TASKS_TOO_LARGE when documents or bytes ran out,
+ * else ACTIVE_LIST_TOO_WIDE. */
+async function assertTextRoom(ctx: QueryCtx, room: ReadCeiling): Promise<void> {
+  const m = await ctx.meta.getTransactionMetrics()
+  if (
+    room.documents - m.documentsRead.used < 1 ||
+    room.bytes - m.bytesRead.used < DOCUMENT_MAX_BYTES
+  )
+    throw badRequest(ACTIVE_TASKS_TOO_LARGE)
+  if (room.ranges - m.databaseQueries.used < 1) throw badRequest(ACTIVE_LIST_TOO_WIDE)
+}
+
 /* The names of `labels` by task, for the active `tasks` a search still
- * needs them for. While the tasks times the labels are at most
- * LABEL_TASK_READS and leave LABEL_READS_RESERVE ranges and documents, each
- * task's assignment of each label is read on its own (labelNamesOf), at most
- * one document each. Past that each label's assignments are read through
- * by_label without the archive mark, so the read follows active work, not
- * every task ever archived with the label (schema.ts taskArchived), within
- * the request's room less LABEL_READS_RESERVE. A search whose assignments do
- * not fit is refused with SEARCH_TOO_LARGE. Assignments stored without an
- * organization are found too. A task restored from the archive keeps marked
- * assignments until background steps clear them and carries relations_marked
- * meanwhile, so each such task is read through its own assignments
- * instead. */
+ * needs them for, read through each label's assignments (by_label) without
+ * the archive mark, so the read follows active work, not every task ever
+ * archived with the label (schema.ts taskArchived), within the request's
+ * room less LABEL_READS_RESERVE. A search reads them so once reading each
+ * task's own assignments would pass LABEL_TASK_READS (searchedTexts). A
+ * search whose assignments do not fit is refused with SEARCH_TOO_LARGE.
+ * Assignments stored without an organization are found too. A task
+ * restored from the archive keeps marked assignments until background steps
+ * clear them and carries relations_marked meanwhile, so each such task is
+ * read through its own assignments instead. */
 async function activeLabelNames(
   ctx: QueryCtx,
   labels: readonly Doc<'labels'>[],
@@ -524,18 +724,7 @@ async function activeLabelNames(
 ): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>()
   if (labels.length === 0 || tasks.length === 0) return out
-  const m = await ctx.meta.getTransactionMetrics()
-  const pairs = tasks.length * labels.length
-  if (
-    pairs <= LABEL_TASK_READS.reads &&
-    pairs < m.databaseQueries.remaining - LABEL_READS_RESERVE.ranges &&
-    pairs < m.documentsRead.remaining - LABEL_READS_RESERVE.documents
-  ) {
-    const names = await Promise.all(tasks.map((task) => labelNamesOf(ctx, task.id, labels)))
-    for (const [i, task] of tasks.entries()) out.set(task.id, names[i] ?? [])
-    return out
-  }
-  const ceiling = roomOf(m, LABEL_READS_RESERVE)
+  const ceiling = roomOf(await ctx.meta.getTransactionMetrics(), LABEL_READS_RESERVE)
   const wanted = new Set(tasks.map((task) => task.id))
   const restored = tasks.filter((task) => task.relations_marked === true)
   const own = new Set(restored.map((task) => task.id))
@@ -613,19 +802,25 @@ async function listedActiveTasks(
  * active projects, which is read on its own before the comments. With the
  * roster it also holds every input of the rows' delay verdicts
  * (lib/machineDelay.ts listForecaster), judged on `o.today`. Each row's
- * newest comment is one more read (lastCommentTimes). A page whose comments
- * do not fit in what the request has left is refused with PAGE_TOO_LARGE,
- * and with ACTIVE_TASKS_TOO_LARGE or ACTIVE_LIST_TOO_WIDE when the reads
- * before them leave no room at all.
+ * text, from its description row (model/descriptions.ts descriptionOf), and
+ * its newest comment are one more read each (lastCommentTimes). A page
+ * whose texts and comments do not fit in what the request has left is
+ * refused with PAGE_TOO_LARGE, and with ACTIVE_TASKS_TOO_LARGE or
+ * ACTIVE_LIST_TOO_WIDE when the reads before them leave no room at all.
  *
  * In a search, each fragment may match any field of the app's task filter
  * (lib/search.ts taskSearchText), in any order. Those are the task ID,
  * title, description, status name (not on a task with subtasks), priority
  * name, assignee name and label names. REST retains explicit `*` wildcards;
- * all other punctuation stays literal. Label names are read only for the
- * tasks the other fields miss (activeLabelNames), and a search whose label
- * assignments do not fit in one request is refused with SEARCH_TOO_LARGE. A
- * search past LIMITS.search, once trimmed, is refused first.
+ * all other punctuation stays literal. The search settles the tasks in list
+ * order until the matches hold the page (searchedTexts). It reads a task's
+ * label names only when its own fields miss, and its description only when
+ * its labels miss too: one range a task for the first TEXT_TASK_READS, then
+ * the active descriptions of the rest's projects in chunks, in list order.
+ * A search whose descriptions do not fit in one request is refused with
+ * DESCRIPTIONS_TOO_LARGE, and one whose label assignments do not fit with
+ * SEARCH_TOO_LARGE. A search past LIMITS.search, once trimmed, is refused
+ * first.
  */
 export async function listActiveIssuesCore(
   ctx: QueryCtx,
@@ -670,22 +865,26 @@ export async function listActiveIssuesCore(
     if (o.owner && taskOwnerId(i, isGroup(i)) !== o.owner) continue
     found.push(i)
   }
+  found.sort(byCreation)
+  // the texts the search read, which the page's rows reuse
+  let texts = new Map<string, string>()
   if (o.search) {
     const matches = allWordsMatcher(o.search, o.stars)
-    const pieces = searchPieces(o.search, o.stars)
-    const text = (i: Doc<'issues'>, labelNames: readonly string[]) =>
-      taskSearchText({ ...searchFields(i, names), group: isGroup(i), labelNames })
-    // more text never unmatches, so only the tasks that miss without their
-    // labels need them read
-    const plain = new Set(found.filter((i) => matches(text(i, []))).map((i) => i.id))
-    const labels = await activeLabelNames(
+    // the tasks up to the page that match, reading their labels and texts
+    // only as far as they need (searchedTexts)
+    const read = await searchedTexts(
       ctx,
-      await matchingLabels(ctx, me.org_id, pieces),
-      found.filter((i) => !plain.has(i.id)),
+      found,
+      o.offset + o.limit,
+      (i, description, labelNames) =>
+        matches(
+          taskSearchText({ ...searchFields(i, names), description, group: isGroup(i), labelNames }),
+        ),
+      await matchingLabels(ctx, me.org_id, searchPieces(o.search, o.stars)),
     )
-    found = found.filter((i) => plain.has(i.id) || matches(text(i, labels.get(i.id) ?? [])))
+    texts = read.texts
+    found = read.matched
   }
-  found.sort(byCreation)
   const page = found.slice(o.offset, o.offset + o.limit)
   const tasks = new Map(active.map((t) => [t.id, t]))
   // parents outside the read, read within the room left like the comments
@@ -704,7 +903,26 @@ export async function listActiveIssuesCore(
     view: { byUuid: cat.byUuid, visible: readable },
     profiles,
   })
-  const lastComments = await lastCommentTimes(ctx, page, absent.size > 0 ? PAGE_TOO_LARGE : null)
+  // the rows' texts the search did not read, within the room left like the
+  // comments
+  const unread = page.filter((task) => !texts.has(task.id))
+  // a page of one row that the page's own reads fill cannot be smaller, so
+  // it gets the sentence of what the list read before (pageReads)
+  const smaller = page.length > 1 ? PAGE_TOO_LARGE : null
+  // a text can read two rows (model/descriptions.ts TEXT_DOCUMENTS)
+  const read = await pageReads(
+    ctx,
+    unread,
+    (task) => descriptionOf(ctx.db, task),
+    absent.size > 0 ? smaller : null,
+    2,
+  )
+  for (const [i, task] of unread.entries()) texts.set(task.id, read[i])
+  const lastComments = await lastCommentTimes(
+    ctx,
+    page,
+    absent.size > 0 || unread.length > 0 ? smaller : null,
+  )
   return await Promise.all(
     page.map((task) =>
       listRow(ctx, task, {
@@ -717,6 +935,7 @@ export async function listActiveIssuesCore(
         orgSlug: org?.slug,
         tasks,
         lastComments,
+        texts,
         children,
         forecast,
         live,
@@ -725,14 +944,14 @@ export async function listActiveIssuesCore(
   )
 }
 
-/** What an active page's parent and newest-comment reads leave of the
- * request's limits, for the one document a read may take past its room
+/** What an active page's parent, text and newest-comment reads leave of
+ * the request's limits, for the one document a read may take past its room
  * (pageReads). Tests lower these. */
 export const COMMENT_READS_RESERVE = { ranges: 16, documents: 16, bytes: DOCUMENT_MAX_BYTES }
 
 /** The refusal for an active page whose tasks' parents outside the active
- * read and newest comments do not fit in what the request has left to
- * read. */
+ * read, texts and newest comments do not fit in what the request has left
+ * to read. */
 export const PAGE_TOO_LARGE =
   'this page of tasks is too large to read at once; ask for a smaller limit'
 
@@ -750,10 +969,11 @@ export const ACTIVE_LIST_TOO_WIDE =
   'this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words'
 
 /* `read` of each of `items`, in order, for an active page. Each read is one
- * index range and at most one document, and they run a few at a time, never
- * more than the request's unspent room could hold at Convex's document size
- * limit, so they pass that room by one document at most and the request
- * stays inside its limits. When the room runs out first, the page is
+ * index range and at most `documents` documents, and they run a few at a
+ * time, never more than the request's unspent room could hold with each
+ * document at Convex's document size limit, so they pass that room by one
+ * read at most, which `documents` times COMMENT_READS_RESERVE holds, and
+ * the request stays inside its limits. When the room runs out first, the page is
  * refused with PAGE_TOO_LARGE, or with `first` when no room was left before
  * the first read. A null `first` names what the list read before the page:
  * ACTIVE_TASKS_TOO_LARGE when documents or bytes ran out, else
@@ -763,20 +983,24 @@ async function pageReads<T, R>(
   items: readonly T[],
   read: (item: T) => Promise<R>,
   first: string | null,
+  documents = 1,
 ): Promise<R[]> {
   const out: R[] = []
   while (out.length < items.length) {
     const m = await ctx.meta.getTransactionMetrics()
     const ranges = m.databaseQueries.remaining - COMMENT_READS_RESERVE.ranges
-    const documents = m.documentsRead.remaining - COMMENT_READS_RESERVE.documents
-    const bytes = m.bytesRead.remaining - COMMENT_READS_RESERVE.bytes
-    if (ranges <= 0 || documents <= 0 || bytes <= 0) {
+    const docs = m.documentsRead.remaining - documents * COMMENT_READS_RESERVE.documents
+    const bytes = m.bytesRead.remaining - documents * COMMENT_READS_RESERVE.bytes
+    if (ranges <= 0 || docs < documents || bytes <= 0) {
       if (out.length > 0) throw badRequest(PAGE_TOO_LARGE)
-      const filled = documents <= 0 || bytes <= 0 ? ACTIVE_TASKS_TOO_LARGE : ACTIVE_LIST_TOO_WIDE
+      const filled = docs < documents || bytes <= 0 ? ACTIVE_TASKS_TOO_LARGE : ACTIVE_LIST_TOO_WIDE
       throw badRequest(first ?? filled)
     }
-    const fits = Math.max(1, Math.floor(bytes / DOCUMENT_MAX_BYTES))
-    const batch = items.slice(out.length, out.length + Math.min(fits, ranges, documents))
+    const fits = Math.max(1, Math.floor(bytes / (documents * DOCUMENT_MAX_BYTES)))
+    const batch = items.slice(
+      out.length,
+      out.length + Math.min(fits, ranges, Math.floor(docs / documents)),
+    )
     out.push(...(await Promise.all(batch.map(read))))
   }
   return out
@@ -824,7 +1048,8 @@ export type ArchivedPage<Row> = { rows: Row[]; next: ArchiveCursor | null }
  * looks at may walk everything the request has left. A group whose subtree
  * does not fit even that is listed with null plan weeks and a partial
  * progress that counts nothing, so every page moves on. Each row's newest
- * comment is one more read, which ARCHIVE_RESERVE leaves room for.
+ * comment and its text, from its description row unless a search read it
+ * already, are one more read each, which ARCHIVE_RESERVE leaves room for.
  */
 export async function listArchivedIssuesCore(
   ctx: QueryCtx,
@@ -877,7 +1102,7 @@ export async function listArchivedIssuesCore(
         if (o.owner && taskOwnerId(task, await facts.isGroup()) !== o.owner) return false
         return matches === null || (await matches(task, facts))
       },
-      row: async (task, _facts, ceiling, first) => {
+      row: async (task, facts, ceiling, first) => {
         // keeps found the project in the catalogue
         const project = projectOf(task.project_id) as Doc<'projects'>
         const counts = groupCounter(ctx, me, task, project, readable, projectOf)
@@ -901,6 +1126,8 @@ export async function listArchivedIssuesCore(
           projectOf,
           names,
           orgSlug,
+          // the text a search read already, or one more read
+          texts: new Map([[task.id, await facts.description()]]),
           children,
           live,
           counts,
@@ -1189,6 +1416,9 @@ export type IssueOutPre = {
   /** each task's newest comment time a list already read (lastCommentTimes);
    *  a task missing here is read on its own */
   lastComments?: ReadonlyMap<string, string | null>
+  /** each task's text a list already read (model/descriptions.ts
+   *  descriptionOf); a task missing here reads its own */
+  texts?: ReadonlyMap<string, string>
 }
 
 /** Tasks keyed by parent id, from whatever rows the caller read. */
@@ -1381,14 +1611,19 @@ export const SUBTREE_WALK = { reads: 1000 }
 
 /** What a single-task read of an archived task keeps back from the
  * request's limits for the reads after its subtree walk, which stops short
- * of them. They are the task's parent, people and newest comment. What has
- * no fixed count is read before the walk: the access to every project of
- * the organization, answered at once (orgReach), and the task's links,
- * labels, followers and attachments (taskRelations). Tests lower these. */
+ * of them. Each can come close to Convex's document size limit: the
+ * document the walk read last, which may pass its ceiling, the first
+ * subtask when the walk read none, the two subtasks that tell whether one
+ * is left out (subtaskFollows), the task's parent and its newest comment,
+ * and the task's people besides. What has no fixed count is read before the walk:
+ * the access to every project of the organization, answered at once
+ * (orgReach), and the task's links, labels, followers and attachments
+ * (taskRelations). So is the task's text (model/descriptions.ts
+ * descriptionOf). Tests lower these. */
 export const TASK_READ_RESERVE = {
   ranges: 1024,
   documents: 4096,
-  bytes: 4 * DOCUMENT_MAX_BYTES,
+  bytes: 6 * DOCUMENT_MAX_BYTES,
 }
 
 /* A subtree index, whether the walk read all of it, and whether it read
@@ -1522,8 +1757,9 @@ async function activeTasksUnder(
  * archived subtasks it has. When that stops the walk, the index keeps only
  * the root's own subtasks, which it reads first, as many as fit. When not
  * even one fit, it reads the first, within the reserve, so the read still
- * tells a group from a leaf, and it reads one past the last listed, so
- * `more` is set only when a subtask is left out. Active subtasks number at
+ * tells a group from a leaf, and it asks whether one follows the last
+ * listed (subtaskFollows), so `more` is set only when a subtask is left
+ * out. Active subtasks number at
  * most LIMITS.subtasks.max, so an active task's read lists them all. */
 async function taskSubtree(
   ctx: QueryCtx,
@@ -1539,31 +1775,44 @@ async function taskSubtree(
   if (walk.whole) return { children: walk.children, partial: false, more: false }
   let kids = walk.children.get(root.id) ?? []
   if (walk.rootWhole) return { children: new Map([[root.id, kids]]), partial: true, more: false }
-  // the first subtask in by_parent order that is not among `read`: the
-  // first of all when none was read, and past them all whether any is left
-  // out. Subtasks created at the same moment as the last one read are
-  // looked at too, past those already read.
-  const after = async (read: readonly Doc<'issues'>[]): Promise<Doc<'issues'> | null> => {
-    const last = read.at(-1)
-    // those read at the last one's moment, which the range starts with
-    const tied = read.filter((kid) => kid._creationTime === last?._creationTime)
-    const seen = new Set(tied.map((kid) => kid.id))
-    const rest = await ctx.db
-      .query('issues')
-      .withIndex('by_parent', (q) =>
-        last === undefined
-          ? q.eq('parent_id', root.id)
-          : q.eq('parent_id', root.id).gte('_creationTime', last._creationTime),
-      )
-      .take(tied.length + 1)
-    return rest.find((kid) => !seen.has(kid.id)) ?? null
-  }
+  // when not even one was read, the first in by_parent order
   if (kids.length === 0) {
-    const first = await after([])
+    const first = await ctx.db
+      .query('issues')
+      .withIndex('by_parent', (q) => q.eq('parent_id', root.id))
+      .first()
     kids = first === null ? [] : [first]
   }
-  const more = kids.length > 0 && (await after(kids)) !== null
+  const last = kids.at(-1)
+  const more = last !== undefined && (await subtaskFollows(ctx, root.id, last))
   return { children: new Map([[root.id, kids]]), partial: true, more }
+}
+
+/** Whether task `parentId` has a subtask after `last` in by_parent order,
+ * creation time and then id. It reads two documents at most, whatever
+ * number of subtasks share `last`'s creation time: the highest of those in
+ * id order, which follows `last` unless it is `last`, and else the first
+ * created after it. TASK_READ_RESERVE counts both. */
+export async function subtaskFollows(
+  ctx: QueryCtx,
+  parentId: string,
+  last: Doc<'issues'>,
+): Promise<boolean> {
+  const tied = await ctx.db
+    .query('issues')
+    .withIndex('by_parent', (q) =>
+      q.eq('parent_id', parentId).eq('_creationTime', last._creationTime),
+    )
+    .order('desc')
+    .first()
+  if (tied !== null && tied._id > last._id) return true
+  const later = await ctx.db
+    .query('issues')
+    .withIndex('by_parent', (q) =>
+      q.eq('parent_id', parentId).gt('_creationTime', last._creationTime),
+    )
+    .first()
+  return later !== null
 }
 
 /** Whether a task under a group counts toward the group's totals. */
@@ -1788,6 +2037,7 @@ export async function issueOut(
   const last_comment_at = opts.lastComments?.has(issue.id)
     ? (opts.lastComments.get(issue.id) ?? null)
     : ((await latestComment(ctx, issue.id))?.created_at ?? null)
+  const description = opts.texts?.get(issue.id) ?? (await descriptionOf(ctx.db, issue))
   if (opts.surface === 'rest') {
     return {
       id: issue.id,
@@ -1797,7 +2047,7 @@ export async function issueOut(
       project_key: project.key,
       project_num: project.num,
       title: issue.title,
-      description: issue.description ?? '',
+      description,
       status: issue.status,
       is_group,
       priority: issue.priority,
@@ -1831,7 +2081,7 @@ export async function issueOut(
     key: issueKey(issue.num),
     num: issue.num,
     title: issue.title,
-    description: issue.description ?? '',
+    description,
     status: issue.status,
     is_group,
     priority: issue.priority,
@@ -2044,6 +2294,7 @@ export async function taskOut(
   // task's walk takes only the room those reads leave (taskSubtree)
   const relations = await taskRelations(ctx, opts.me, issue, readable)
   const attachments = await taskAttachments(ctx, opts.me, issue)
+  const texts = new Map([[issue.id, await descriptionOf(ctx.db, issue)]])
   // one walk of the subtree serves the row's group facts and the detail,
   // and one counter its pruning and both totals
   const counts = groupCounter(ctx, opts.me, issue, project, readable, projectOf)
@@ -2055,6 +2306,7 @@ export async function taskOut(
     ...subtree,
     orgSlug: opts.orgSlug ?? org?.slug,
     forecast: taskForecaster(ctx, opts.me, delayClock(org, opts.today)),
+    texts,
   }
   const row =
     opts.surface === 'rest'
@@ -2173,6 +2425,13 @@ export async function applyTaskUpdate(
   },
 ): Promise<Doc<'issues'>> {
   const { me, now, provenance } = a
+  // the text readers showed when the request began, read once for the
+  // check and the field write when the update writes it. A move before that
+  // write rewrites the description row from issues.description when the
+  // copies differ, which only a rollback leaves (model/descriptions.ts
+  // patchTask); the field write then still narrates from the text the
+  // request saw.
+  const text = 'description' in a.patch ? await descriptionOf(ctx.db, a.issue) : undefined
   // against the task as it is before the move changes it
   await assertTaskExpected(ctx, {
     me,
@@ -2185,6 +2444,7 @@ export async function applyTaskUpdate(
       ...(a.destination !== undefined ? { project_id: a.destination.id } : {}),
     },
     destination: a.destination,
+    text,
   })
   const archives = a.archive === true && a.issue.archived_at === undefined
   const toggles = a.archive !== undefined && a.archive !== (a.issue.archived_at !== undefined)
@@ -2231,6 +2491,7 @@ export async function applyTaskUpdate(
       issue: task,
       patch: a.patch,
       now,
+      text,
       machine: {
         provenance,
         archive: a.archive,

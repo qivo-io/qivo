@@ -66,8 +66,9 @@ const EXCLUDED_TABLES = [
   // The eraser's restore witness, deployment state.
   'restore_watch',
   'marketing_demo',
-  // A copy of each task's description, which the issues section carries
-  // while every writer keeps both (model/descriptions.ts).
+  // Each task's description, which the issues section carries as its
+  // task's text (model/descriptions.ts descriptionOf), so it needs no
+  // section of its own.
   'issue_descriptions',
   'issue_subscriptions',
   'messages',
@@ -175,7 +176,8 @@ async function readAll(
 ): Promise<OrgExportRow[]> {
   const rows: OrgExportRow[] = []
   let cursor: string | null = null
-  for (let guard = 0; guard < 100; guard++) {
+  // an issues page in flight holds two tasks, so 200 pages hold 400
+  for (let guard = 0; guard < 200; guard++) {
     const result: OrgExportPage = await caller.query(page, {
       org_id: orgId,
       section,
@@ -588,7 +590,7 @@ describe('organization export', () => {
     )
   })
 
-  it('reads the parents of a page of tasks only while a deleted item is in flight, four tasks a page then', async () => {
+  it('reads the parents of a page of tasks only while a deleted item is in flight, two tasks a page then', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     // 100 parents with descriptions from before the 20,000-character cap,
@@ -629,9 +631,10 @@ describe('organization export', () => {
     expect(exported.size).toBe(100)
     for (const [index, id] of children.entries())
       expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
-    expect((await firstChildPage()).rows.length).toBeGreaterThan(10)
+    // a page holds six tasks, each read with its description rows
+    expect((await firstChildPage()).rows).toHaveLength(6)
 
-    // While a project item is in flight, a page holds ten tasks and reads
+    // While a project item is in flight, a page holds two tasks and reads
     // their parents, so the one parent under the moving project is left out.
     const moving = await plantProject(t, {
       org_id: f.org.id,
@@ -650,7 +653,7 @@ describe('organization export', () => {
     await plantProjectItem(t, moving, 'moving')
     await t.run((ctx) => ctx.db.delete(moving._id))
     const inFlight = await firstChildPage()
-    expect(inFlight.rows).toHaveLength(4)
+    expect(inFlight.rows).toHaveLength(2)
     expect(inFlight.isDone).toBe(false)
     exported = childRows(await readAll(caller, f.org.id, 'issues'))
     expect(exported.size).toBe(100)

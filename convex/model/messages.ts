@@ -49,6 +49,7 @@ import { MENTION_DETAILS } from '../lib/messageDetails'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { scheduleArchiveMarks } from './archiveMarks'
+import { textsOf } from './descriptions'
 import { type ItemEdits, itemEdits, type Written } from './inboxItems'
 import { newUuid } from './orgs'
 import { messageRetentionDays } from './people'
@@ -2064,6 +2065,8 @@ export async function notifyIssueInsert(
   ctx: MutationCtx,
   a: {
     issue: Doc<'issues'>
+    /** the new task's text, which its writer holds */
+    description: string
     actor: Doc<'profiles'>
     now: string
     preload?: NotifyPreload
@@ -2076,7 +2079,7 @@ export async function notifyIssueInsert(
   const profiles = preload?.profiles ?? new Map()
   const visibility: RecipientSight = preload?.visibility ?? new Map()
   const trims = newItemTrims()
-  const mentioned = await mentionedIn(ctx, issue.description ?? '', profiles, issue.org_id)
+  const mentioned = await mentionedIn(ctx, a.description, profiles, issue.org_id)
   const notices = inlineRoom(ctx)
   await tellMentioned(notices.ctx, {
     issue,
@@ -2163,7 +2166,10 @@ export async function notifyIssueInsert(
 /* ---------------------------------------------------------- notify: update
  * notify_issue_update (0114:196-352). Diffs ONLY the trigger's column list;
  * a write that changes nothing in it must not post. Callers hand the STORED
- * before/after rows, for the remaining-clear side-effect write too. A
+ * before/after rows, for the remaining-clear side-effect write too, except
+ * that a write that changes the description hands both with their text
+ * (model/descriptions.ts withText, textsOf), which the stored rows stop
+ * holding in the third release of the description move. A
  * group's calculated dates are never stored, so a subtask moving its span
  * sends the group's followers nothing.
  *
@@ -2231,15 +2237,17 @@ export async function notifyIssueUpdate(
 
   // @mentions newly added to the description notify regardless of
   // subscribers, and subscribe the person to what they were pulled into. An
-  // unchanged description adds none, so a bulk write of dates skips the scan
-  const oldMentions =
-    after.description === before.description ? [] : mentionIds(before.description ?? '')
-  const newMentions =
-    after.description === before.description
-      ? []
-      : (await mentionedIn(ctx, after.description ?? '', profiles, after.org_id)).filter(
-          (p) => !oldMentions.includes(p.id),
-        )
+  // unchanged description adds none, so a bulk write of dates skips the
+  // scan. A write that changes the description passes both documents with
+  // their text (model/descriptions.ts textsOf).
+  const texts = textsOf(before, after)
+  const described = texts.after !== texts.before
+  const oldMentions = described ? mentionIds(texts.before) : []
+  const newMentions = described
+    ? (await mentionedIn(ctx, texts.after, profiles, after.org_id)).filter(
+        (p) => !oldMentions.includes(p.id),
+      )
+    : []
   // mentions and followers share the room the write leaves its notices
   const notices = inlineRoom(ctx)
   await tellMentioned(notices.ctx, {
@@ -2315,7 +2323,7 @@ export async function notifyIssueUpdate(
   if (after.title !== before.title) {
     parts.push(`Title: “${before.title}” → “${after.title}”`)
   }
-  if (after.description !== before.description) {
+  if (described) {
     parts.push('Description updated')
   }
   if (after.due_date !== before.due_date) {

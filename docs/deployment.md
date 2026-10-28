@@ -601,20 +601,30 @@ until the one-time `internal/descriptionsBackfill` gives it one. Run the
 backfill on every hosted deployment once it serves that release, as the
 module's header says. Read its dry run first, then run it, and call it
 again with the `cursor` it answers until it answers `done`. The second
-release reads the table and ships only once a dry run on development,
-staging, production and the demo reports zero `missing`, `differ`,
-`duplicates`, `orphans` and `skipped`. Its `waiting` rows belong to a
-Deleted items item or a teardown that is still running and deletes them.
+release reads the table: every reader takes a task's text from its first
+row, or from its first row that holds the task's project and archived
+state when a rollback left more than one, and only a task without a row
+reads `issues.description`. It ships to
+production only once a dry run on development, staging, production and the
+demo reports zero `missing`, `differ`, `duplicates`, `orphans` and
+`skipped`, because from then on a row that differs from its task is what
+people see. Its `waiting` rows belong to a Deleted items item or a teardown
+that is still running and deletes them. Writers in the second release still
+keep both copies, so it can be rolled back to the first release, which
+reads `issues.description`, without losing a description.
 A rollback past the first release deploys, because Convex leaves a table
 the schema does not list alone, but the earlier code writes tasks without
 their rows and changes descriptions without them. After rolling forward
 again, run the backfill with `"repair": true`, which also rewrites
 differing rows from `issues.description`, deletes extra rows and deletes
-rows whose task is gone. Every call that is not a dry run adds an audit
+rows whose task is gone. Once the second release serves, it shows the row
+such earlier code left stale, so run the dry run and that repair before
+anyone relies on the text. Every call that is not a dry run adds an audit
 row with its counts and the `cursor` to go on from, also when it fails
-partway. The third
-release clears `issues.description`, and no earlier release can show the
-descriptions after that, so it is a rollback floor.
+partway. The third release clears `issues.description`. A rollback from it
+to the second release still shows every description, because the second
+reads the rows, but no earlier release can show them, so the second
+release is the third's rollback floor.
 
 Each description row also holds copies of its task's project and archived
 state (`project_id`, `archived_at`), and the table has the

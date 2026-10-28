@@ -8,9 +8,10 @@
  * reference to it as a parent is left out. Only a deleted item that is not
  * ready leaves tasks in issues under an absent project, so the issues
  * section reads each task's parent only while the organization has one, on
- * the smaller page the joined sections use. No signed URLs are
- * persisted here: clients mint existing file-gateway URLs immediately before
- * fetching bytes. */
+ * a smaller page still. Each task's text comes from its description rows
+ * (model/descriptions.ts descriptionOf), two documents at most a row, so the
+ * issues section reads a smaller page too. No signed URLs are persisted here: clients mint
+ * existing file-gateway URLs immediately before fetching bytes. */
 
 import type { PaginationResult } from 'convex/server'
 import { v } from 'convex/values'
@@ -25,6 +26,7 @@ import {
   type OrgExportRow,
   type OrgExportSection,
 } from './lib/orgExport'
+import { descriptionOf } from './model/descriptions'
 import { countersOf } from './model/orgs'
 import { stampRow } from './model/syncStamps'
 
@@ -33,11 +35,20 @@ const PAGE_SIZE = 100
  * related documents at Convex's 1 MiB document cap stay inside its 16 MiB
  * read limit with the page itself. */
 const JOINED_PAGE_SIZE = 10
-/* An issues or issue_links page read while a project item is in flight.
- * Each row can also read a task's project, a parent or target task and its
- * project, each up to Convex's 1 MiB document limit, so 4 rows plus the
- * page's own rows stay under the 16 MiB read limit. */
-const IN_FLIGHT_ISSUES_PAGE_SIZE = 4
+/* An issues page, whose rows each read the task's text, two description
+ * rows at most of up to Convex's 1 MiB document limit: 6 rows read 12 MiB
+ * beside the page's own rows. */
+const ISSUES_PAGE_SIZE = 6
+/* An issue_links page read while a project item is in flight. Each row can
+ * also read its target task and the target's project, each up to Convex's
+ * 1 MiB document limit, so 4 rows plus the page's own rows stay under the
+ * 16 MiB read limit. */
+const IN_FLIGHT_LINKS_PAGE_SIZE = 4
+/* An issues page read while a project item is in flight. Each row can also
+ * read the task's project, its parent and the parent's project, and its
+ * text, two description rows at most, five documents of up to 1 MiB, so 2
+ * rows plus the page's own rows stay under the 16 MiB read limit. */
+const IN_FLIGHT_ISSUES_PAGE_SIZE = 2
 const PAGE_BYTES = 1024 * 1024
 const JOINED_SECTIONS: ReadonlySet<OrgExportSection> = new Set([
   'team_members',
@@ -73,9 +84,12 @@ type PagedSection = Exclude<OrgExportSection, 'organizations'>
  * can widen the scope. Children use only their verified parent's UUID.
  * `pageSize` is JOINED_PAGE_SIZE when each row costs another read. Endpoint
  * validation reads another document per row, and for a link also the
- * target's project, once per page, and an issues page in flight reads each
- * task's parent on a page of IN_FLIGHT_ISSUES_PAGE_SIZE. A task can carry a large description, so these pages need
- * headroom beyond the pagination byte budget for the source rows themselves. */
+ * target's project, once per page. An issues page reads each task's text on
+ * a page of ISSUES_PAGE_SIZE, and while a project item is in flight also
+ * each task's parent on a page of IN_FLIGHT_ISSUES_PAGE_SIZE, and a links
+ * page then each target's project on one of IN_FLIGHT_LINKS_PAGE_SIZE. A task can carry a large
+ * description, so these pages need headroom beyond the pagination byte
+ * budget for the source rows themselves. */
 async function readPage(
   ctx: QueryCtx,
   section: PagedSection,
@@ -330,11 +344,16 @@ export const page = orgQuery({
     const inFlight =
       (section === 'issues' || section === 'issue_links') && (await hasItemInFlight(ctx, orgId))
     const checkParents = section === 'issues' && inFlight
-    const pageSize = inFlight
-      ? IN_FLIGHT_ISSUES_PAGE_SIZE
-      : JOINED_SECTIONS.has(section)
-        ? JOINED_PAGE_SIZE
-        : PAGE_SIZE
+    const pageSize =
+      section === 'issues'
+        ? inFlight
+          ? IN_FLIGHT_ISSUES_PAGE_SIZE
+          : ISSUES_PAGE_SIZE
+        : inFlight
+          ? IN_FLIGHT_LINKS_PAGE_SIZE
+          : JOINED_SECTIONS.has(section)
+            ? JOINED_PAGE_SIZE
+            : PAGE_SIZE
     const result = await readPage(ctx, section, scope, cursor, pageSize)
     const rows: OrgExportRow[] = []
     for (const doc of result.page) {
@@ -353,6 +372,9 @@ export const page = orgQuery({
       }
       if (checkParents && typeof row.parent_id === 'string' && !(await liveParent(row.parent_id)))
         delete row.parent_id
+      // a task, the one row with a title, takes its text from its
+      // description row
+      if ('title' in doc) row.description = await descriptionOf(ctx.db, doc)
       if (await hasOwnedEndpoint(ctx, section, row, orgId, inFlight ? liveProject : undefined))
         rows.push(row)
     }

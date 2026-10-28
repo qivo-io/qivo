@@ -29,7 +29,7 @@ import {
 } from '../lib/limits'
 import { ARCHIVED_DETACH, STALLED_MS } from '../model/deletedItems'
 import { DROPPED_IMAGES_MAX, DROPPED_KEEP_MS, IMAGE_NOT_ATTACHED } from '../model/descriptionImages'
-import { insertTask } from '../model/descriptions'
+import { insertTask, patchTask } from '../model/descriptions'
 import { MOVE_TOO_LARGE, PARENT_DELETED_SINCE } from '../model/issues'
 import { INLINE_TRIMS, ITEM_UNREAD_CAP, notifyCommentInsert } from '../model/messages'
 import {
@@ -1024,13 +1024,14 @@ describe('the attachment, link and label limits', () => {
     await saveDescription(fx, issue, quoted)
     expect((await row(fx.t, issue.id)).description).toBe(quoted)
     // a reference the saved text already has, such as one to an image
-    // deleted since, stays through a save of other text
+    // deleted since, stays through a save of other text. Both copies hold
+    // the saved text, and the save reads it from the description row.
     await fx.t.run(async (ctx) => {
       const row = await ctx.db
         .query('issues')
         .withIndex('by_uuid', (q) => q.eq('id', issue.id))
         .unique()
-      if (row !== null) await ctx.db.patch(row._id, { description: text })
+      if (row !== null) await patchTask(ctx.db, row, { description: text })
     })
     await saveDescription(fx, issue, `${text} and more`)
     expect((await row(fx.t, issue.id)).description).toBe(`${text} and more`)

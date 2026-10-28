@@ -85,7 +85,8 @@ async function deleteImage(
 }
 
 /**
- * Settles the images of `issue` for a save of its description as
+ * Settles the images of `issue` for a save of its description from
+ * `before`, the text it shows now (model/descriptions.ts descriptionOf), to
  * `description` by `me` at `now`, before the task row is written: drops
  * the inline images the save takes out and those no saved text named for
  * ORPHAN_AFTER_MS, brings back dropped ones it shows again, and deletes
@@ -104,13 +105,14 @@ export async function settleDescriptionImages(
   a: {
     me: Doc<'profiles'>
     issue: Doc<'issues'>
+    before: string
     description: string
     now: string
     provenance?: string
   },
 ): Promise<void> {
   const { issue, now } = a
-  const before = imageRefs(issue.description ?? '')
+  const before = imageRefs(a.before)
   const after = imageRefs(a.description)
   const shown = shownImages(a.description)
   const rows = await ctx.db
@@ -124,7 +126,7 @@ export async function settleDescriptionImages(
   let shownBefore: Set<string> | undefined
   for (const id of shown) {
     if (byId.has(id)) continue
-    shownBefore ??= shownImages(issue.description ?? '')
+    shownBefore ??= shownImages(a.before)
     if (!shownBefore.has(id)) throw rule(IMAGE_NOT_ATTACHED)
   }
   const log = (
