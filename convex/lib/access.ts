@@ -577,8 +577,8 @@ export function projectLevelsOf(
  * instead of once a project (OWN_READS), so tasks spread over thousands of
  * projects do not cost a window two more ranges a project. `read` holds
  * projects the read already read. The workspace parts
- * (lib/workspaceParts.ts) and the inbox reads (model/inboxReads.ts) apply
- * this one rule. */
+ * (lib/workspaceParts.ts), the inbox reads (model/inboxReads.ts) and the
+ * task window (lib/taskWindow.ts) apply this one rule. */
 export function accessOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -598,6 +598,9 @@ export function accessOf(
     /** Whether the caller can see the project with this id
      * (canSeeProject). */
     visible,
+    /** The caller's level on the project with this id (projectLevel), null
+     * where they cannot see it. */
+    level: (id: string) => levels.level(id),
     /** Whether the project with this id is one of the organization's and
      * is not archived (lib/liveTasks.ts liveIn). */
     live: async (id: string) => {
