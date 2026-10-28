@@ -1357,7 +1357,14 @@ export type MachineUpdate = MachineNarration & {
    * (restoreLeavesParent). */
   parentChosen?: boolean
 }
-export type MachineMove = MachineNarration & { later?: LaterPeople; laterParent?: string | null }
+export type MachineMove = MachineNarration & {
+  later?: LaterPeople
+  laterParent?: string | null
+  /** The caller answers with the task's full read, which reads its active
+   * subtasks again (lib/core.ts taskOut), as REST's PATCH does. MCP's
+   * update_task answers with the task's id alone. */
+  answerReadsSubtasks?: boolean
+}
 
 /**
  * The assignee and reviewer that a later write of the same machine update
@@ -1953,7 +1960,7 @@ export const MOVE_SUBTREE_HOLDER_RULE =
  * then read again by its own write (model/descriptions.ts patchTask). So
  * about 60 subtasks with descriptions at TEXT_MAX of three-byte characters
  * fit in one request while issues.description holds the text too, and
- * about 50 active ones in a REST or MCP move, whose answer reads them again.
+ * about 50 active ones in a REST move, whose answer reads them again.
  * A larger family is refused with MOVE_TOO_LARGE. */
 
 /* Per-call cache from a project id to its top-level project id, null for a
@@ -2187,11 +2194,14 @@ export async function moveIssueCore(
     if (!profile?.active) continue
     if (!(await canSeeProject(ctx, profile, target))) throw rule(MOVE_HOLDER_RULE)
   }
-  // A machine caller answers with the task's full read, which reads its
-  // active subtasks again (lib/core.ts taskOut), so the move leaves room
-  // for that read. An archived task's read walks under a ceiling instead.
+  // A caller that answers with the task's full read, which reads its
+  // active subtasks again (MachineMove.answerReadsSubtasks), gets a move
+  // that leaves room for that read. An archived task's read walks under a
+  // ceiling instead.
   const answer =
-    a.machine !== undefined && issue.archived_at === undefined && below !== undefined
+    a.machine?.answerReadsSubtasks === true &&
+    issue.archived_at === undefined &&
+    below !== undefined
       ? below
           .filter((c) => c.archived_at === undefined)
           .reduce((sum, c) => sum + getDocumentSize(c), 0)

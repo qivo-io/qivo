@@ -2098,6 +2098,8 @@ export const updateIssue = internalMutation({
       now,
       provenance: PROVENANCE,
       expected: a.expected,
+      // the answer names the task and the fields it changed, and reads nothing
+      answerReadsSubtasks: false,
     })
     return pretty({ id: issue.id, key: issueKey(issue.num), updated })
   },
