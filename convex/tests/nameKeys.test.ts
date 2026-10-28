@@ -571,15 +571,45 @@ describe('Deleted items', () => {
   it('writes a project back with the keys of the current names', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await t.run((ctx) =>
-      ctx.db.insert('project_team_access', {
+    // keyed with the names they have now, but for one sub-project stored
+    // before keys, which comes back with one too
+    await t.run(async (ctx) => {
+      for (const p of [f.meta, f.sub]) await ctx.db.patch(p._id, { name_key: nameKey(p.name) })
+      for (const grant of await ctx.db
+        .query('project_access')
+        .withIndex('by_project', (q) => q.eq('project_id', f.meta.id))
+        .collect()) {
+        const person = await byId(ctx, 'profiles', grant.profile_id)
+        await ctx.db.patch(grant._id, { name_key: nameKey(person!.name) })
+      }
+      await ctx.db.insert('project_team_access', {
         project_id: f.meta.id,
         team_id: f.team.id,
         level: 'viewer',
-      }),
-    )
+        name_key: nameKey(f.team.name),
+      })
+    })
     await as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.meta.id })
     await runSteps(t)
+    const stored = await t.run(async (ctx) =>
+      (await ctx.db.query('deleted_rows').collect()).flatMap(({ row }) =>
+        row.table === 'projects' ||
+        row.table === 'project_access' ||
+        row.table === 'project_team_access'
+          ? [[row.table, row.doc.name_key ?? null]]
+          : [],
+      ),
+    )
+    expect(stored.sort()).toEqual(
+      [
+        ['projects', 'testbed platform'],
+        ['projects', 'firmware'],
+        ['projects', null],
+        ['project_access', 'guest'],
+        ['project_access', 'viewer'],
+        ['project_team_access', 'hardware'],
+      ].sort(),
+    )
     // renamed while the project, its grants and its share are stored
     await renamePerson(t, f, f.guest.id, 'Gästa')
     await renameTeam(t, f, f.team.id, 'Hårdvara')
@@ -713,6 +743,31 @@ describe('copies after a rename', () => {
 
     await runSteps(t)
     expect(Object.values(await copiesOf(t, person.id)).flat()).toEqual(Array(4).fill('resumed'))
+    expect(await jobOf(t, 'profiles', person.id)).toBeNull()
+  })
+
+  it('restarts a job whose step was dropped when the next rename comes first', async () => {
+    NAME_COPIES.inline = 1
+    const t = newT()
+    const f = await withOrg(t)
+    const person = await plantBusyPerson(t, f, 2)
+    await renamePerson(t, f, person.id, 'Dropped')
+    const dropped = (await jobOf(t, 'profiles', person.id))!
+    await t.run((ctx) => ctx.scheduler.cancel(dropped.scheduled_id!))
+    // the next rename comes before recovery would see the row stalled
+    vi.setSystemTime(START + 1000)
+    await renamePerson(t, f, person.id, 'Restarted')
+    const restarted = (await jobOf(t, 'profiles', person.id))!
+    expect(restarted._id).toBe(dropped._id)
+    expect(restarted.scheduled_id).not.toBe(dropped.scheduled_id)
+    expect(restarted.progress_at).toBe(new Date(START + 1000).toISOString())
+    const next = await t.run((ctx) => ctx.db.system.get(restarted.scheduled_id!))
+    expect(next?.state.kind).toBe('pending')
+    const rows = await t.run((ctx) => ctx.db.query('name_copies').collect())
+    expect(rows.filter((row) => row.source_id === person.id)).toHaveLength(1)
+
+    await runSteps(t)
+    expect(Object.values(await copiesOf(t, person.id)).flat()).toEqual(Array(4).fill('restarted'))
     expect(await jobOf(t, 'profiles', person.id)).toBeNull()
   })
 
