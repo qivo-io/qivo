@@ -525,6 +525,53 @@ describe('readBatch', () => {
     expect(after.rows).toEqual(someKeys.slice(0, 5))
     expect(after.at).toEqual(through)
   })
+
+  it('answers a batch that reached `through` as complete when the budget ends there too', async () => {
+    const t = newT()
+    const orgId = uuid()
+    await plantKeys(t, orgId, someKeys.slice(0, 10))
+    const k05 = await t.run(async (ctx) =>
+      ctx.db
+        .query('labels')
+        .withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId).eq('name_lower', 'k05'))
+        .unique(),
+    )
+    const through = { key: 'k05', tie: [k05?._creationTime ?? 0, k05?._id ?? ''] }
+    // a ceiling of six documents fills at k05, the sixth label
+    const filled = await t.run(async (ctx) => {
+      const m = await ctx.meta.getTransactionMetrics()
+      return await readBatch(ctx, {
+        stream: indexAfter(labelIndex(ctx, orgId), null),
+        keep: async (label: Doc<'labels'>) => label.name_lower,
+        limit: 100,
+        through,
+        ceiling: { ranges: 1e9, documents: m.documentsRead.used + 6, bytes: 1e12 },
+      })
+    })
+    expect(filled).toMatchObject({ rows: someKeys.slice(0, 6), ended: false, stopped: false })
+    expect(filled.at).toEqual(through)
+    // a stream that stops right after the row at `through`
+    const rows: [string, number][] = [
+      ['a', 1],
+      ['b', 1],
+      ['c', 1],
+    ]
+    const stopped = await t.run((ctx) =>
+      readBatch(ctx, {
+        stream: () => memory('m', rows, {}, 2),
+        keep: async (row: Row) => row.name,
+        limit: 100,
+        through: { key: 'b', tie: [1] },
+        ceiling: { ranges: 1e9, documents: 1e9, bytes: 1e12 },
+      }),
+    )
+    expect(stopped).toEqual({
+      rows: ['a', 'b'],
+      at: { key: 'b', tie: [1] },
+      ended: false,
+      stopped: false,
+    })
+  })
 })
 
 describe('readGuard', () => {

@@ -206,6 +206,19 @@ describe('labels.settingsPage', () => {
     expect(read.slice(0, -1).every((b) => b.stopped)).toBe(true)
     // a batch that found nothing before the budget ended still goes on
     expect(read.some((b) => b.rows.length === 0 && b.next !== null)).toBe(true)
+
+    // each budget-stopped batch kept live between its cursors is complete,
+    // as the same reads end at its own end, so the app has nothing to split
+    let after: string | undefined
+    for (const batch of read.slice(0, -1)) {
+      const live = await settings(t, f.admin, f.org.id, {
+        search: 'needle',
+        after,
+        through: batch.next ?? '',
+      })
+      expect(live).toMatchObject({ rows: batch.rows, next: batch.next, stopped: false })
+      after = batch.next ?? undefined
+    }
   })
 
   it('moves forward by one label a call when the request has no room left', async () => {

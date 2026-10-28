@@ -291,7 +291,9 @@ export type NamedBatch<Out> = {
  * guard says, so a caller that follows `at` always moves forward, also in a
  * request that has almost no room left. It never answers `ended` for a batch
  * the guard stopped. A position past `through` answers `through` as `at`, so
- * a batch kept live between two cursors ends at its own.
+ * a batch kept live between two cursors ends at its own, and a batch that
+ * read the row at `through` is complete, never stopped, also when the guard
+ * ends it right there.
  */
 export async function readBatch<Row extends GenericDocument, Out>(
   ctx: QueryCtx,
@@ -310,6 +312,8 @@ export async function readBatch<Row extends GenericDocument, Out>(
   const rows: Out[] = []
   let at: NamedAt | null = null
   const stream = o.stream(async () => (await guard.range()) || !moved)[Symbol.asyncIterator]()
+  // whether the batch has read the row at `through`, which completes it
+  const reached = (last: NamedAt) => o.through !== null && compareNamed(last, o.through) >= 0
   try {
     for (;;) {
       const step = await stream.next()
@@ -317,7 +321,7 @@ export async function readBatch<Row extends GenericDocument, Out>(
       if (step.done === true) return { rows, at, ended: true, stopped: false }
       if (step.value === STOPPED) {
         if (at === null) throw new Error('a batch reads its first row whatever the guard says')
-        return { rows, at, ended: false, stopped: !full }
+        return { rows, at, ended: false, stopped: !full && !reached(at) }
       }
       await guard.document(step.value.row)
       if (o.through !== null && compareNamed(step.value.at, o.through) > 0) {
@@ -328,7 +332,9 @@ export async function readBatch<Row extends GenericDocument, Out>(
       at = step.value.at
       const kept = await o.keep(step.value.row, guard)
       if (kept !== null) rows.push(kept)
-      if (guard.full) return { rows, at, ended: false, stopped: rows.length < o.limit }
+      if (guard.full) {
+        return { rows, at, ended: false, stopped: rows.length < o.limit && !reached(at) }
+      }
     }
   } finally {
     await stream.return?.()
