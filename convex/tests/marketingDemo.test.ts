@@ -1683,14 +1683,62 @@ describe('marketing demo Deleted items', () => {
     expect(refusal.data.reason).toBe('demo_id_collision')
     // a task the demo itself created with the id since the wipe and deleted
     // for good passes the check before a wipe, which lets it go, but a seed
-    // step refuses it
+    // check step refuses it, naming the demo as its holder
     await t.run(async (ctx) => {
       await ctx.db.delete(used)
       await ctx.db.insert('used_ids', { table: 'issues', row_id: reserved, org_id })
     })
     await checkReserved(t)
-    await expectRefusal(seed(t, NEXT_ANCHOR), 'rule', /work changed during the seed; use reset/)
+    const own = await expectRefusal(
+      seed(t, NEXT_ANCHOR),
+      'conflict',
+      /reserved task id is still taken by this demo/,
+    )
+    expect(own.data.reason).toBe('demo_id_taken')
     // a reset lets it go and seeds again
+    await reset(t, NEXT_ANCHOR)
+    expect(await usedIds(t, org_id)).toHaveLength(
+      MARKETING_DEMO.issues.length + MARKETING_DEMO.projects.length,
+    )
+  }, 120_000)
+
+  it('refuses at a check step, before it writes, a reserved task id a pending detach kept through the wipe', async () => {
+    const t = newAuthT()
+    const { org_id } = await seeded(t)
+    const reserved = await demoId(`issue:${MARKETING_DEMO.issues[0].key}`)
+    const detach = await t.run((ctx) =>
+      ctx.db.insert('archived_detaches', {
+        parent_id: reserved,
+        actor_id: uuid(),
+        deleted_at: NOW,
+        progress_at: NOW,
+        attempts: 0,
+      }),
+    )
+    await wipe(t)
+    expect(await usedIds(t, org_id)).toMatchObject([{ row_id: reserved, kept: expect.any(Number) }])
+    const refusal = await expectRefusal(
+      seed(t, NEXT_ANCHOR),
+      'conflict',
+      /reserved task id is still taken by this demo/,
+    )
+    expect(refusal.data.reason).toBe('demo_id_taken')
+    // the seed wrote nothing
+    expect(await t.query(inspectRef, TARGET)).toMatchObject({
+      counts: { projects: 0, subprojects: 0, tasks: 0 },
+    })
+    for (const table of ['teams', 'labels'] as const)
+      expect(
+        await t.run((ctx) =>
+          ctx.db
+            .query(table)
+            .withIndex('by_org', (q) => q.eq('org_id', org_id))
+            .collect(),
+        ),
+        table,
+      ).toEqual([])
+    // once the detach ended, a reset lets the id go and seeds
+    await t.run((ctx) => ctx.db.delete(detach))
     await reset(t, NEXT_ANCHOR)
     expect(await usedIds(t, org_id)).toHaveLength(
       MARKETING_DEMO.issues.length + MARKETING_DEMO.projects.length,

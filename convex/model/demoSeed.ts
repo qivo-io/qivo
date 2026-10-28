@@ -166,9 +166,11 @@ export const SEED_ROW_MISSING = {
 } as const
 
 /** The refusal of a seeded task or project id that used_ids holds
- * (schema.ts): one the seed wrote before that a wipe has not let go, or
- * another organization's. A reset wipes first, which lets the demo's own go
- * (model/usedIds.ts releaseUsedIds). */
+ * (schema.ts). A Northstar seed's check steps refuse every row of a
+ * reserved id first, before the seed writes anything
+ * (internal/marketingDemo.ts assertReserved), so it meets only a row
+ * written between those steps and the one that writes the id. A public
+ * demo's ids are new to it. */
 export const SEED_ID_USED =
   'marketing demo: a seeded task or project id was used before; use reset to replace it'
 

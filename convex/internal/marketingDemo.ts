@@ -467,22 +467,41 @@ export const RESERVED_PARTS = Math.ceil(RESERVED.length / RESERVED_PART)
  * anything moved to Deleted items. */
 const CHANGED_DURING_SEED = 'marketing demo: work changed during the seed; use reset to replace it'
 
+/* Where a reserved-id check runs: before a reset's wipe, in a demo that
+ * may hold its own uuids (`held`); in a seed's check steps, after the first
+ * seed call proved the demo empty and let its used ids go (`empty`); or in
+ * a work step, which writes these very rows (`absent`). */
+type ReservedCheck = 'held' | 'empty' | 'absent'
+
+/* The refusal of a seed check step whose task or project id the demo
+ * itself still holds in used_ids after its wipe: a row the wipe kept,
+ * because something outside the demo, such as a detach of archived
+ * subtasks, still names it, or one a backfill wrote since. */
+const takenByDemo = (what: string) =>
+  conflict(
+    `marketing demo: reserved ${what} id is still taken by this demo, kept by its wipe or recorded since; use reset once nothing else names it`,
+    'demo_id_taken',
+  )
+
 /* Refuses when a uuid of `items` belongs to another organization, live or
  * in its Deleted items, or for a task or project, used by one before
  * (schema.ts used_ids). All app UUIDs are globally unique, so the seed must
  * fail on a matching key in another tenant before it writes anything, and a
  * reset before its wipe deletes anything (checkReserved). A uuid the demo
- * holds itself passes, unless `absent`: a work step, which writes these very
- * rows into a demo its setup proved empty, refuses one the demo already
- * holds (CHANGED_DURING_SEED), since writing it again would duplicate it,
- * and a task or project id the demo used since its wipe, which the seed
- * may not take again. */
+ * holds itself passes before a wipe (`held`). A seed's check step refuses a
+ * task or project id the demo still holds in used_ids (takenByDemo), so a
+ * seed refuses before it writes anything. A work step, which writes these
+ * very rows into a demo its setup proved empty, refuses one the demo
+ * already holds (CHANGED_DURING_SEED), since writing it again would
+ * duplicate it, and a task or project id the demo used since its wipe,
+ * which the seed may not take again. */
 async function assertReserved(
   ctx: QueryCtx,
   org: Doc<'organizations'>,
   items: readonly (typeof RESERVED)[number][],
-  absent = false,
+  check: ReservedCheck,
 ): Promise<void> {
+  const absent = check === 'absent'
   // The organization of a live comment's or link's task or a live
   // milestone's project, which can be in Deleted items while a delete's
   // steps have not moved that comment, link or milestone yet.
@@ -539,8 +558,10 @@ async function assertReserved(
     }
     if (item.kind === 'project' || item.kind === 'issue') {
       // an id a task or project held before keeps a used_ids row (schema.ts),
-      // one per organization. Another organization's refuses for good, and
-      // the demo's own refuses only a work step, since a wipe lets it go
+      // one per organization. Another organization's refuses for good. The
+      // demo's own passes before a wipe, which lets it go, and refuses a
+      // seed's steps: a check step names the demo as its holder, and a work
+      // step says the work changed
       const used = await ctx.db
         .query('used_ids')
         .withIndex('by_row', (q) =>
@@ -548,6 +569,7 @@ async function assertReserved(
         )
         .take(2)
       require(used.every((row) => row.org_id === org.id), collision)
+      require(used.length === 0 || check !== 'empty', takenByDemo(what))
       require(used.length === 0 || !absent, rule(CHANGED_DURING_SEED))
     }
     if (trashTable === undefined) continue
@@ -564,8 +586,13 @@ async function assertReserved(
 }
 
 /* Part `part` of the reserved-id check (RESERVED_PARTS). */
-const assertReservedPart = (ctx: QueryCtx, org: Doc<'organizations'>, part: number) =>
-  assertReserved(ctx, org, RESERVED.slice(part * RESERVED_PART, (part + 1) * RESERVED_PART))
+const assertReservedPart = (
+  ctx: QueryCtx,
+  org: Doc<'organizations'>,
+  part: number,
+  check: ReservedCheck,
+) =>
+  assertReserved(ctx, org, RESERVED.slice(part * RESERVED_PART, (part + 1) * RESERVED_PART), check)
 
 /* The reserved uuids Northstar step `step` writes. */
 function reservedFor(step: NorthstarStep): (typeof RESERVED)[number][] {
@@ -714,7 +741,7 @@ export const checkReserved = internalQuery({
       'marketing demo: unknown check part',
     ))
     const { org } = await owned(ctx)
-    await assertReservedPart(ctx, org, args.part)
+    await assertReservedPart(ctx, org, args.part, 'held')
     return { parts: RESERVED_PARTS }
   },
 })
@@ -832,7 +859,7 @@ async function seedStep(
     seed.layout === SEED_LAYOUT &&
     anchor !== undefined &&
     step !== undefined, rule(RESET_TO_CHANGE))
-  if (step.kind === 'check') await assertReservedPart(ctx, owner.org, step.part)
+  if (step.kind === 'check') await assertReservedPart(ctx, owner.org, step.part, 'empty')
   else if (step.kind === 'usage') await seedUsage(ctx, owner.org, seed.now)
   else {
     // Between two calls the app can change the demo. Setup resets the
@@ -842,7 +869,7 @@ async function seedStep(
     if (step.step.kind === 'setup')
       require(await holdsNoWork(ctx, owner.org.id), rule(ADDED_AFTER_WIPE))
     else require(!(await holdsTrash(ctx, owner.org.id)), rule(CHANGED_DURING_SEED))
-    await assertReserved(ctx, owner.org, reservedFor(step.step), true)
+    await assertReserved(ctx, owner.org, reservedFor(step.step), 'absent')
     await writeNorthstarStep(ctx, { ...owner, namespace: KEY, anchor, now: seed.now }, step.step)
   }
   const next = seed.step + 1

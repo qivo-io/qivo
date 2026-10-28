@@ -61,8 +61,8 @@
  * changes nothing a person sees, except that an id it records stays taken
  * once its task or project is deleted for good, as the ids of those created
  * since this release do. A Northstar wipe between a page and its batch can
- * leave the row of a task the wipe let go, which the next seed refuses;
- * running reset again lets it go.
+ * leave the row of a task the wipe let go, which the next seed's check
+ * steps refuse before it writes anything; running reset again lets it go.
  *
  * Earlier releases guarded each table keyed by a task id against a new task
  * that takes a freed id. Once a dry run on every deployment reports zero in
