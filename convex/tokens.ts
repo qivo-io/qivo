@@ -46,7 +46,7 @@ import {
 } from './lib/functions'
 import { limitedText } from './lib/limitRules'
 import { LIMITS } from './lib/limits'
-import { nameKey } from './lib/nameKey'
+import { named } from './lib/nameKey'
 import { logActivity } from './model/activity'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
@@ -188,8 +188,7 @@ export const createAgentKey = orgMutation({
         id,
         profile_id: agent.id,
         org_id: agent.org_id,
-        name: keyName,
-        name_key: nameKey(keyName),
+        ...named(keyName),
         key_prefix,
         key_hash,
         created_by: ctx.me.id,
@@ -306,8 +305,7 @@ export const createMcpToken = authedMutation({
         id,
         profile_id,
         org_id: seat.org_id,
-        name: tokenName,
-        name_key: nameKey(tokenName),
+        ...named(tokenName),
         token_prefix,
         token_hash,
         access,

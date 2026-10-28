@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { LIMITS, NAME_MAX, TEXT_MAX } from '../lib/limits'
+import { named, nameKey } from '../lib/nameKey'
 import {
   activityFor,
   NOW,
@@ -141,6 +142,46 @@ describe('internal/overCapRows', () => {
     // an address is a person's to correct, so it stays as stored
     expect(after.email).toBe(email)
     expect(summary((await fix(t, true)).rows)).toEqual(['profiles.email reported'])
+  })
+
+  it('gives a cut key or token name the name key of its new form', async () => {
+    const t = newT()
+    const f = await setup(t)
+    const long = `Déploy ${'n'.repeat(72)}😀`
+    await t.run(async (ctx) => {
+      await ctx.db.insert('agent_keys', {
+        id: uuid(),
+        profile_id: f.agent.id,
+        org_id: f.org.id,
+        ...named(long),
+        key_prefix: 'qva_012...abcde',
+        key_hash: 'a'.repeat(64),
+        created_at: NOW,
+      })
+      // a token stored before keys existed gets one too
+      await ctx.db.insert('mcp_tokens', {
+        id: uuid(),
+        profile_id: f.user.id,
+        name: long,
+        token_prefix: 'qvt_0123456',
+        token_hash: 'b'.repeat(64),
+        created_at: NOW,
+      })
+    })
+    expect(summary((await fix(t, false)).rows)).toEqual([
+      'agent_keys.name fixed',
+      'mcp_tokens.name fixed',
+    ])
+    const rows = await t.run(async (ctx) => [
+      ...(await ctx.db.query('agent_keys').collect()),
+      ...(await ctx.db.query('mcp_tokens').collect()),
+    ])
+    const cut = `Déploy ${'n'.repeat(72)}`
+    expect(rows.map((row) => [row.name, row.name_key])).toEqual([
+      [cut, nameKey(cut)],
+      [cut, nameKey(cut)],
+    ])
+    expect(nameKey(cut)).not.toBe(nameKey(long))
   })
 
   it('never cuts a long text, and trims a task description without activity', async () => {

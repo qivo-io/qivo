@@ -41,7 +41,7 @@ import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { LIMITS } from '../lib/limits'
-import { nameKey } from '../lib/nameKey'
+import { named } from '../lib/nameKey'
 import { newUuid } from '../model/orgs'
 
 const HASH_RE = /^[0-9a-f]{64}$/
@@ -146,8 +146,7 @@ export const mintCredential = internalMutation({
           id,
           profile_id: profile.id,
           org_id: profile.org_id,
-          name,
-          name_key: nameKey(name),
+          ...named(name),
           key_prefix: a.key_prefix,
           key_hash: PENDING + a.key_hash,
           created_at: now,
@@ -164,8 +163,7 @@ export const mintCredential = internalMutation({
           id,
           profile_id: profile.id,
           org_id: profile.org_id,
-          name,
-          name_key: nameKey(name),
+          ...named(name),
           token_prefix: a.key_prefix,
           token_hash: PENDING + a.key_hash,
           access: a.access,
@@ -253,9 +251,9 @@ export const deleteNamedCredentials = internalMutation({
   handler: async (ctx, a): Promise<{ deleted: number }> => {
     refuseProduction('machine/testing')
     if (a.name.trim() === '') throw badRequest('a credential name is required')
-    const named = (await profileCredentials(ctx, a.profile_id)).filter((row) => row.name === a.name)
-    for (const row of named) await ctx.db.delete(row._id)
-    return { deleted: named.length }
+    const rows = (await profileCredentials(ctx, a.profile_id)).filter((row) => row.name === a.name)
+    for (const row of rows) await ctx.db.delete(row._id)
+    return { deleted: rows.length }
   },
 })
 

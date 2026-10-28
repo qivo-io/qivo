@@ -52,10 +52,11 @@
  *
  * The fix trims each over-long name and cuts it to its limit without
  * splitting an emoji (cutText); a file name keeps its extension. A cut
- * profile, team or project name gets the name key of its new form, and the
- * copies of a profile's or team's follow it (model/nameKeys.ts). It lowers
- * remaining hours to the cap, stores each task description trimmed, and
- * rewrites an address to its punycode form (asciiEmail). A label or address
+ * profile, team, project, agent key or personal token name gets the name key
+ * of its new form, and the copies of a profile's or team's follow it
+ * (model/nameKeys.ts). It lowers remaining hours to the cap, stores each
+ * task description trimmed, and rewrites an address to its punycode form
+ * (asciiEmail). A label or address
  * whose fixed form another row of its organization already has is skipped,
  * for a person to rename or merge. It never cuts a task description, comment
  * or project description, because a cut can break its markdown, and never
@@ -294,7 +295,12 @@ async function walk(
       rows.push(...found.rows)
       if (found.patch === null || write === null) continue
       const { name } = found.patch
-      const keyed = table === 'projects' || table === 'teams' || table === 'profiles'
+      const keyed =
+        table === 'projects' ||
+        table === 'teams' ||
+        table === 'profiles' ||
+        table === 'agent_keys' ||
+        table === 'mcp_tokens'
       if (typeof name === 'string' && keyed) found.patch.name_key = nameKey(name)
       await write.db.patch(table, _id, found.patch)
       if (typeof name === 'string' && (table === 'teams' || table === 'profiles'))
