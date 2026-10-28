@@ -213,6 +213,40 @@ describe('a settings field’s draft', () => {
     ).toEqual({ value: 'Northstar Labs', by: LEO })
   })
 
+  it('keeps a draft typed back to its base when its saves are refused before the other value shows', () => {
+    const steps = [
+      { type: 'edit', text: 'Northstar Robotics' },
+      { type: 'send', seq: 1, value: 'Northstar Robotics' },
+      { type: 'saved', value: 'Northstar Robotics' },
+      { type: 'edit', text: 'Northstar Robotics AB' },
+      { type: 'send', seq: 2, value: 'Northstar Robotics AB' },
+      { type: 'saved', value: 'Northstar Robotics AB' },
+      // typed back to the original while both saves are in flight
+      { type: 'edit', text: 'Northstar' },
+      { type: 'refused', seq: 1, value: 'Northstar Robotics', seen: 'Northstar', by: null },
+      {
+        type: 'refused',
+        seq: 2,
+        value: 'Northstar Robotics AB',
+        seen: 'Northstar Robotics',
+        by: null,
+      },
+    ] satisfies Step<string>[]
+    // the paints go before the other change arrives
+    const back = run(TRIMMED, 'Northstar', ...steps, { type: 'saved', value: 'Northstar' })
+    expect(back.draft).toBe('Northstar')
+    expect(back.conflict).toBeNull()
+    expect(draftUnsaved(back, TRIMMED)).toBe(true)
+    // leaving the field leaves the kept draft alone
+    const left = draftReduce(back, { key: KEY, type: 'showSaved' }, TRIMMED)
+    expect(left.draft).toBe('Northstar')
+    for (const s of [left, run(TRIMMED, 'Northstar', ...steps)]) {
+      const arrived = draftReduce(s, { key: KEY, type: 'saved', value: 'Northstar Labs' }, TRIMMED)
+      expect(shown(arrived)).toBe('Northstar')
+      expect(arrived.conflict).toEqual({ value: 'Northstar Labs', by: null })
+    }
+  })
+
   it('keeps a draft refused for another reason unsaved against its base', () => {
     const s = run(
       TRIMMED,

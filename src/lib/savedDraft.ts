@@ -60,8 +60,9 @@ export type DraftState<T> = {
       a refusal then does not bring back. */
   dropped: number
   conflict: DraftConflict<T> | null
-  /** Who wrote the value a refused save found, until that value shows.
-      Undefined when no refusal waits. */
+  /** Who wrote the value a save refused over another change found, until
+      that value shows. Undefined when no such refusal waits. While one
+      waits, the draft it kept stays, also one that reads as its base. */
   refusedBy: Writer | undefined
   /** The base and values of older saves refused while a newer one was in
       flight. The newer save began from their value, which the server never
@@ -114,9 +115,11 @@ export const draftText = <T>(s: DraftState<T>, form: DraftForm<T>): string =>
   s.draft ?? form.text(s.saved)
 
 /** Whether the field in state `s` holds typed text that is not saved: a
-    draft that differs from its base, or one that waits on a conflict. */
+    draft that differs from its base, or one that waits on a conflict or on
+    the value a refusal found. */
 export const draftUnsaved = <T>(s: DraftState<T>, form: DraftForm<T>): boolean =>
-  s.draft !== null && (s.conflict !== null || !form.same(s.draft, form.text(s.base)))
+  s.draft !== null &&
+  (s.conflict !== null || s.refusedBy !== undefined || !form.same(s.draft, form.text(s.base)))
 
 /** State `s` after action `a`. An action for another key changes nothing. */
 export function draftReduce<T>(
@@ -153,6 +156,14 @@ export function draftReduce<T>(
           chained: null,
         }
         return s.draft !== null && reads(s.draft, a.value) ? untouched(acked) : acked
+      }
+      // a refusal over another change waits for the value the server keeps:
+      // the draft it kept stays through the base, which shows again as the
+      // refused paint goes, and meets the next value as a conflict
+      if (s.draft !== null && s.refusedBy !== undefined) {
+        if (same(a.value, s.base)) return { ...next, base: a.value }
+        if (reads(s.draft, a.value)) return untouched(next)
+        return { ...next, conflict: { value: a.value, by: s.refusedBy }, refusedBy: undefined }
       }
       // an untouched field follows, as does a draft that reads as the new
       // value, which it then simply is, or as its base, unless a conflict
@@ -220,7 +231,10 @@ export function draftReduce<T>(
     case 'discard':
       return untouched({ ...s, sending: [], dropped: s.seq, chained: null })
     case 'showSaved':
-      return s.draft === null ? s : untouched(s)
+      // a draft a refusal kept stays while it waits, though it reads as the
+      // saved value, which is still the base until the server's value shows
+      if (s.draft === null || (s.refusedBy !== undefined && reads(s.draft, s.saved))) return s
+      return untouched(s)
     case 'keepMine':
       return { ...s, base: s.saved, conflict: null, refusedBy: undefined }
   }
