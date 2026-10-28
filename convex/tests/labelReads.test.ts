@@ -36,6 +36,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  plantProject,
   plantSeat,
   type T,
   uuid,
@@ -570,11 +571,16 @@ describe('canWriteOrgLabels', () => {
           f.otherAdmin,
         ]
         for (const me of callers) {
-          const answer = await canWriteOrgLabels(ctx, me)
-          expect(answer, `${name}: ${me.name} as ${me.org_role} ${me.kind}`).toBe(
-            await oldRule(ctx, me),
-          )
-          if (me.id === subject.id && me.org_role === 'user') seen.add(`${name}: ${answer}`)
+          // projects looked up one by one, and from the top-level projects
+          for (const lookups of [DEFAULT_WRITE_READ.lookups, 0]) {
+            LABEL_WRITE_READ.lookups = lookups
+            const answer = await canWriteOrgLabels(ctx, me)
+            expect(
+              answer,
+              `${name}: ${me.name} as ${me.org_role} ${me.kind}, lookups ${lookups}`,
+            ).toBe(await oldRule(ctx, me))
+            if (me.id === subject.id && me.org_role === 'user') seen.add(`${name}: ${answer}`)
+          }
         }
       })
     }
@@ -595,6 +601,47 @@ describe('canWriteOrgLabels', () => {
     })
     for (const [name, answer, expected] of answers) expect(answer, name).toBe(expected)
     expect(answers.some(([, answer]) => answer === true)).toBe(true)
+  })
+
+  it("finds User through a later team, however many projects an earlier team's shares name", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await staffSeat(t, f, 'All staff, then Design')
+    const subs = await Promise.all(
+      Array.from({ length: 12 }, () =>
+        plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }),
+      ),
+    )
+    await t.run(async (ctx) => {
+      // "All staff", joined first, shares every sub-project with User and
+      // proves nothing; "Design" shares a top-level meta with User
+      for (const [name, projects] of [
+        ['All staff', subs.map((sub) => sub.id)],
+        ['Design', [f.hidden.id]],
+      ] as const) {
+        const team = uuid()
+        await ctx.db.insert('teams', {
+          id: team,
+          org_id: f.org.id,
+          name,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', { team_id: team, profile_id: me.id, is_leader: false })
+        for (const project_id of projects) {
+          await ctx.db.insert('project_team_access', { project_id, team_id: team, level: 'user' })
+        }
+      }
+      await ctx.db.patch(f.hidden._id, { lead_id: undefined })
+    })
+    expect(await t.run((ctx) => oldRule(ctx, me))).toBe(true)
+    // a cap on the person's own rows that the two memberships fit, under
+    // lookups one by one and under the organization's top-level projects
+    LABEL_WRITE_READ.rows = 3
+    for (const lookups of [DEFAULT_WRITE_READ.lookups, 4]) {
+      LABEL_WRITE_READ.lookups = lookups
+      expect(await t.run((ctx) => canWriteOrgLabels(ctx, me)), `lookups ${lookups}`).toBe(true)
+    }
   })
 
   it('gives no rights through a meta under another meta, which no writer makes', async () => {
@@ -956,16 +1003,68 @@ describe('real limits', () => {
     expect(searched).toMatchObject({ can_create: null, rows: [], stopped: true })
   }, 300_000)
 
+  it('finds User through Design after an All staff team shared on 2,100 sub-projects', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const me = await staffSeat(t, f, 'All staff, then Design')
+    const subs: string[] = []
+    for (let from = 0; from < 2100; from += 700) {
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 700; i++) {
+          const id = uuid()
+          await ctx.db.insert('projects', {
+            id,
+            org_id: f.org.id,
+            type: 'project',
+            parent_id: f.meta.id,
+            key: `S${i}`,
+            name: `Sub-project ${i}`,
+            description: '',
+            sort_order: i,
+            num: 100 + i,
+            track_delay: false,
+            created_at: NOW,
+          })
+          subs.push(id)
+        }
+      })
+    }
+    const allStaff = uuid()
+    await t.run(async (ctx) => {
+      await ctx.db.insert('teams', {
+        id: allStaff,
+        org_id: f.org.id,
+        name: 'All staff',
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('team_members', {
+        team_id: allStaff,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      for (const project_id of subs) {
+        await ctx.db.insert('project_team_access', { project_id, team_id: allStaff, level: 'user' })
+      }
+    })
+    await plantTeams(t, f, me, 1, f.hidden.id)
+    const check = await measured(t, (ctx) => canWriteOrgLabels(ctx, me))
+    console.log('canWriteOrgLabels through Design after 2,100 All staff shares', check)
+    expect(check.out).toBe(true)
+    expect((await picker(t, me, f.org.id)).can_create).toBe(true)
+  }, 300_000)
+
   it("reads the caller's rights once in a REST or MCP create whose proof takes most of the request", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // a proof past 700 shared teams, three ranges each, more than half of
-    // Convex's 4,096, under a ceiling that lets one check read them
+    // a proof past 1,050 shared teams, two ranges each (the team and its
+    // shares), more than half of Convex's 4,096, under a ceiling that lets
+    // one check read them
     LABEL_WRITE_READ.ranges = 3000
-    await plantTeams(t, f, f.agent, 700, f.sub.id)
+    await plantTeams(t, f, f.agent, 1050, f.sub.id)
     await plantTeams(t, f, f.agent, 1, f.meta.id)
     const proof = await measured(t, (ctx) => canWriteOrgLabels(ctx, f.agent))
-    console.log('canWriteOrgLabels past 700 shared teams', proof)
+    console.log('canWriteOrgLabels past 1,050 shared teams', proof)
     expect(proof.out).toBe(true)
     expect(proof.read.ranges).toBeGreaterThan(2100)
     const SECRET = `qva_${'labelone'.repeat(6)}`

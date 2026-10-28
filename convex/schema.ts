@@ -136,6 +136,10 @@ const projectsTable = defineTable({
   .index('by_org_key', ['org_id', 'key'])
   .index('by_org_num', ['org_id', 'num'])
   .index('by_parent', ['parent_id'])
+  // an organization's top-level projects (parent_id absent), which the label
+  // write check reads once to tell a meta from a sub-project
+  // (lib/access.ts canWriteOrgLabels)
+  .index('by_org_parent', ['org_id', 'parent_id'])
   .index('by_team', ['team_id'])
   .index('by_lead', ['lead_id']) // projects_lead_idx — removeProfile's SET NULL
   // The nightly archive pages the live projects (archived_at absent).
