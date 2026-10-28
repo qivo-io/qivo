@@ -421,16 +421,18 @@ describe('the one way to write a grant, a share or a lead', () => {
    * declaration, the shape a direct delete takes; a declaration runs from
    * one line that starts one to the next. Any `.delete(` after the read
    * counts, whatever its receiver is called, across a line break and on a
-   * parenthesized receiver, except on a Set or Map the same declaration
-   * makes with `new`, such as a set of the ids it read. Only the helpers and
-   * the teardowns, which delete the reach rows themselves, may. */
+   * parenthesized receiver, except on a local Set or Map the same
+   * declaration makes with `new` on one line, such as a set of the ids it
+   * read. A set declared over several lines counts as a writer, which fails
+   * closed. Only the helpers and the teardowns, which delete the reach rows
+   * themselves, may. */
   const READ =
     /\.query\(\s*['"]project_(team_)?access['"]|tagged\(\s*['"]project_(team_)?access['"]|Doc<\s*['"]project_(team_)?access['"]\s*>/g
-  // the receiver's last name, as `ids` in ids.delete(, or `)` after a call
-  // or parentheses, as in uncountedWriter(ctx.db).delete( and (o.db ?? ctx.db).delete(
-  const DELETE = /([\w$]+|\))\s*\.\s*delete\(/g
-  // its type may span lines, but holds no `=`
-  const COLLECTION = /\b(?:const|let)\s+([\w$]+)\b[^=]*=\s*new\s+(?:Set|Map)\b/g
+  // the receiver: a local name, as `ids` in ids.delete(, a property, as
+  // `.db` in ctx.db.delete(, or `)` after a call or parentheses, as in
+  // uncountedWriter(ctx.db).delete( and (o.db ?? ctx.db).delete(
+  const DELETE = /(\.?[\w$]+|\))\s*\.\s*delete\(/g
+  const COLLECTION = /\b(?:const|let)\s+([\w$]+)\b[^=\n]*=\s*new\s+(?:Set|Map)\b/g
   const START = /^(\}|export |async function |function |const |type |\/\*)/gm
   const deletesGrants = (source: string) =>
     [...source.matchAll(READ)].some((read) => {
@@ -486,9 +488,16 @@ describe('the one way to write a grant, a share or a lead', () => {
     // a parenthesized writer, as model/projectNav.ts's (o.db ?? ctx.db)
     expect(deletesGrants(`${read} await (writer ?? ctx.db).delete(row._id)`)).toBe(true)
     expect(deletesGrants(`${read} await (ctx.db).delete(row._id)`)).toBe(true)
-    // a set whose type spans lines
+    // a set declared over lines counts, and so does a name a set took but
+    // the writer reassigned, or the db property beside a set named db
     const typed = 'const ids: Set<\n    string\n  > = new Set()\n  '
-    expect(deletesGrants(`${typed}${read} ids.delete(row.project_id)`)).toBe(false)
+    expect(deletesGrants(`${typed}${read} ids.delete(row.project_id)`)).toBe(true)
+    const late = "let db: MutationCtx['db']\n  const ids = new Set<string>()\n  db = ctx.db\n  "
+    expect(deletesGrants(`${late}${read} await db.delete(row._id)`)).toBe(true)
+    expect(deletesGrants(`const db = new Map()\n  ${read} await ctx.db.delete(row._id)`)).toBe(true)
+    // a set made in a loop
+    const loop = 'for (const team of teams) {\n    const ids = new Set<string>()\n    '
+    expect(deletesGrants(`${loop}${read} ids.delete(row.project_id)\n  }`)).toBe(false)
     const others = Object.entries(sources)
       .filter(([path, source]) => !TEARDOWNS.has(path) && deletesGrants(source))
       .map(([path]) => path)
