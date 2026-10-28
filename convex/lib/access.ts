@@ -82,7 +82,7 @@ const higherLevel = (a: AccessLevel | null, b: AccessLevel | null): AccessLevel 
 
 // Guests participate through individual invitations, never through teams.
 // Positively enumerate membership roles so future roles fail closed.
-const receivesTeamAccess = (me: Doc<'profiles'>): boolean =>
+export const receivesTeamAccess = (me: Doc<'profiles'>): boolean =>
   isOrgStaff(me) || me.org_role === 'viewer'
 
 async function teamGrantOn(ctx: QueryCtx, me: Doc<'profiles'>, root: Doc<'projects'>) {

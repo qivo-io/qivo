@@ -273,6 +273,42 @@ async function grantsOn(t: T, f: OrgFixture, who: Doc<'profiles'>, count: number
     })
 }
 
+/* A team that `who` belongs to, shared on `count` top-level projects, in
+ * transactions of 1,000. */
+async function teamOn(t: T, f: OrgFixture, who: Doc<'profiles'>, count: number): Promise<void> {
+  const team = uuid()
+  await t.run(async (ctx) => {
+    await ctx.db.insert('teams', {
+      id: team,
+      org_id: f.org.id,
+      name: 'Everywhere',
+      track_delay_default: false,
+      created_at: NOW,
+    })
+    await ctx.db.insert('team_members', { team_id: team, profile_id: who.id, is_leader: false })
+  })
+  for (let at = 0; at < count; at += 1000)
+    await t.run(async (ctx) => {
+      for (let i = at; i < Math.min(count, at + 1000); i++) {
+        const id = uuid()
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'meta',
+          key: `T${i}`,
+          name: `Team project ${i}`,
+          description: '',
+          sort_order: 70_000 + i,
+          num: 70_000 + i,
+          track_delay: false,
+          created_at: NOW,
+          window_key: uuid().slice(0, 8),
+        })
+        await ctx.db.insert('project_team_access', { project_id: id, team_id: team, level: 'user' })
+      }
+    })
+}
+
 /* `parents` top-level projects of `children` sub-projects each, with a
  * milestone on each parent. `who` holds a grant only on each parent's last
  * sub-project, so the parents show to them for navigation only, and a check
@@ -1378,6 +1414,27 @@ describe('under Convex limits', () => {
     const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 1)
     const guest = as(t, f.guest)
     // the check asks the one sub-project, not every grant of the guest
+    expect(
+      await guest.query(api.milestones.section, {
+        from: MONDAY,
+        side: 'upcoming',
+        limit: 10,
+        projects: ids,
+      }),
+    ).toMatchObject({ rows: [rowOf(milestones[0])] })
+    expect(await guest.query(api.milestones.get, { id: milestones[0].id })).toMatchObject({
+      can_write: false,
+    })
+  })
+
+  it('shows a parent of 100 sub-projects to a guest whose old team is shared on 2,000 projects', async () => {
+    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+    const f = await withOrg(t)
+    // a membership left from before guests lost team access; the team's
+    // shares can never reach the guest, so the check does not read them
+    await teamOn(t, f, f.guest, 2000)
+    const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 100)
+    const guest = as(t, f.guest)
     expect(
       await guest.query(api.milestones.section, {
         from: MONDAY,

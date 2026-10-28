@@ -38,6 +38,7 @@ import {
   hasProjectLevel,
   levelRank,
   projectLevelsOf,
+  receivesTeamAccess,
   rootMetaOf,
 } from '../lib/access'
 import { type ReadCeiling, readsUnder, roomOf } from '../lib/archivedTasks'
@@ -871,7 +872,8 @@ export const MILESTONE_NAV = { children: 64 }
  * grants. This check reads a project's first MILESTONE_NAV.children
  * sub-projects and one more. A project with no more than that asks each of
  * them in turn. A larger one looks for its sub-projects among `me`'s own
- * grants, team shares and led projects, read once for every project asked.
+ * grants, team shares and led projects, read once for every project asked,
+ * the team shares only for a role that receives team access.
  * Either way projectLevelsOf judges each sub-project it asks about (its
  * level without navigation), so the rule stays the access layer's. Every
  * read is counted under `ceiling` or follows a look at it, and past the
@@ -909,14 +911,18 @@ function navigationOf(
           return true
         },
       )
+      // a team share reaches only a role the access layer gives team
+      // access, so a guest's memberships, which can be left from before,
+      // are not read
       const teams: string[] = []
-      await each(
-        ctx.db.query('team_members').withIndex('by_profile', (q) => q.eq('profile_id', me.id)),
-        (membership) => {
-          teams.push(membership.team_id)
-          return true
-        },
-      )
+      if (receivesTeamAccess(me))
+        await each(
+          ctx.db.query('team_members').withIndex('by_profile', (q) => q.eq('profile_id', me.id)),
+          (membership) => {
+            teams.push(membership.team_id)
+            return true
+          },
+        )
       for (const team of teams)
         await each(
           ctx.db.query('project_team_access').withIndex('by_team', (q) => q.eq('team_id', team)),
