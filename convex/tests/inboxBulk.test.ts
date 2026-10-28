@@ -174,10 +174,7 @@ describe('bulkReach', () => {
     expect(done).toMatchObject({ marked: 1, hasMore: false, before: reach[1].before })
     expect((await reachOf(t, second, 'read')).seats[1]).toMatchObject({ reach: 'one' })
     // without the budget, Remove all read finds the message just marked
-    expect((await reachOf(t, second, 'remove')).seats.map((s) => s.reach)).toEqual([
-      'none',
-      'one',
-    ])
+    expect((await reachOf(t, second, 'remove')).seats.map((s) => s.reach)).toEqual(['none', 'one'])
   })
 
   it('refuses a caller without a sign-in', async () => {
@@ -245,11 +242,24 @@ async function plantItem(
   item: { unread: number; read: number },
   end: number,
 ) {
+  const task = await plantTask(ctx, f, end)
+  const count = item.unread + item.read
+  for (let i = 0; i < count; i++)
+    await plantLong(edits, f, task, {
+      read: i >= item.unread,
+      minute: end - count + i,
+      woke: end,
+      fresh: i === 0,
+    })
+}
+
+/* A task with the longest title, numbered `num`. */
+async function plantTask(ctx: MutationCtx, f: OrgFixture, num: number) {
   const task = {
     id: uuid(),
     org_id: f.org.id,
     project_id: f.sub.id,
-    num: end,
+    num,
     title: wide(LIMITS.title.max),
     description: '',
     status: 'todo' as const,
@@ -260,29 +270,71 @@ async function plantItem(
     window_key: newWindowKey(),
   }
   await insertTask(ctx.db, task, 'restore')
-  const count = item.unread + item.read
-  for (let i = 0; i < count; i++) {
-    const read = i >= item.unread
-    await edits.insert(
-      {
-        id: uuid(),
-        org_id: f.org.id,
-        recipient_id: f.admin.id,
-        actor_id: f.user.id,
-        issue_id: task.id,
-        issue_title: task.title,
-        kind: 'change',
-        detail: LONGEST_DETAIL,
-        created_at: at(end - count + i),
-        // a woken item's stamp and the item cap's count, which an unread
-        // message can carry too
-        woke_at: at(end),
-        ...(read ? { read_at: NOW } : { dropped: 1_000_000 }),
-      },
-      f.sub.id,
-      i === 0,
-    )
-  }
+  return task
+}
+
+/* One message to the fixture's admin about `task` with the longest detail,
+ * read or unread, at `minute`, with the wake stamp of its item at minute
+ * `woke` (a wake stamps every message of an item alike); `fresh` for the
+ * first message of its item. */
+async function plantLong(
+  edits: ReturnType<typeof itemEdits>,
+  f: OrgFixture,
+  task: { id: string; title: string },
+  m: { read: boolean; minute: number; woke: number; fresh: boolean },
+) {
+  await edits.insert(
+    {
+      id: uuid(),
+      org_id: f.org.id,
+      recipient_id: f.admin.id,
+      actor_id: f.user.id,
+      issue_id: task.id,
+      issue_title: task.title,
+      kind: 'change',
+      detail: LONGEST_DETAIL,
+      created_at: at(m.minute),
+      // a woken item's stamp and the item cap's count, which an unread
+      // message can carry too
+      woke_at: at(m.woke),
+      ...(m.read ? { read_at: NOW } : { dropped: 1_000_000 }),
+    },
+    f.sub.id,
+    m.fresh,
+  )
+}
+
+/** The fixture's admin's inbox as the costliest Mark all as read batch
+ * meets it: `n` items, each with an older unread message, a newer unread
+ * one and its newest message read, as an item keeps them
+ * (model/messages.ts pruneReadMessages). Every older message is stored
+ * before every newer one, so a batch takes only older ones. The batch then
+ * reads each marked message four times (its range, its patch, the prune's
+ * read and its delete) and, per item, the newer unread message, which the
+ * prune seeks, and the read one. */
+async function plantInterleaved(t: T, f: OrgFixture, n: number): Promise<Doc<'profiles'>> {
+  const tasks: { id: string; title: string }[] = []
+  for (const [pass, offset] of [
+    ['older', 0],
+    ['newer', 10_000],
+    ['read', 20_000],
+  ] as const)
+    for (let start = 0; start < n; start += 32)
+      await t.run(async (ctx) => {
+        const edits = itemEdits(ctx)
+        await edits.state(f.admin.id, 'ensure')
+        for (let i = start; i < Math.min(n, start + 32); i++) {
+          if (pass === 'older') tasks.push(await plantTask(ctx, f, i + 1))
+          await plantLong(edits, f, tasks[i], {
+            read: pass === 'read',
+            minute: offset + i,
+            woke: 30_000 + i,
+            fresh: pass === 'older',
+          })
+        }
+        await edits.flush()
+      })
+  return f.admin
 }
 
 /* Convex's limits for one transaction (docs.convex.dev/production/state/limits). */
@@ -326,6 +378,20 @@ const removeBatch = async (ctx: MutationCtx, me: Doc<'profiles'>) =>
   (await removeReadMessages(ctx, me)).removed.length
 
 describe('one batch at INBOX_BATCH', { timeout: 120_000 }, () => {
+  it('stays below a quarter of every limit in its worst case, an older unread message in each item', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const who = await plantInterleaved(t, f, INBOX_BATCH)
+    const { changed, used } = await measure(t, who, markBatch)
+    expect(changed).toBe(INBOX_BATCH)
+    console.info(
+      `Mark all as read, ${INBOX_BATCH} items of older unread, newer unread, newest read:`,
+      used,
+    )
+    expectQuarter(used)
+    expect(await drift(t)).toEqual([])
+  })
+
   it('stays below a quarter of every limit when it marks one message in each of its items', async () => {
     const t = newT()
     const f = await withOrg(t)

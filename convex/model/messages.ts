@@ -1062,19 +1062,24 @@ export async function removeMessages(
  * while hasMore is true. Measured in convex/tests/inboxBulk.test.ts, with
  * every message as long as a change notice can be (the longest title and
  * names in a three-byte script, about 3.9 KB), so that one batch stays
- * below a quarter of each of Convex's transaction limits. The worst case
- * is Mark all as read on one message in each of INBOX_BATCH items whose
- * newest message is already read: the batch reads each marked message four
- * times (the range, its patch, the prune's read and its delete), about
- * 19.5 KB a message, and writes it and its item's row. At 200 that batch
- * read 3.96 MB in 1,403 documents and 604 index ranges and wrote 600
- * documents and 0.85 MB, which is 94% of a quarter of the 16 MiB read
- * limit. At 256 it read 4.99 MB, over a quarter, and 215 is the most that
- * fits. Items of 51 messages read 3.0 MB, and Remove all read of each
- * item's newest message 2.4 MB. These are convex-test's counts, which
- * count the document a patch or a delete reads; a hosted deployment was
- * not measured. */
-export const INBOX_BATCH = 200
+ * below a quarter of each of Convex's transaction limits. The worst case is
+ * Mark all as read on one older unread message in each of INBOX_BATCH
+ * items that also hold a newer unread message outside the batch and a
+ * newest read one: the batch reads each marked message four times (the
+ * range, its patch, the prune's read and its delete), the newer unread
+ * message the prune seeks and the read one, about 23.6 KB a marked message,
+ * so 177 is the most that fits. One run at 160 measured, in bytes read,
+ * documents read, index ranges, documents written and bytes written:
+ *   - that worst case: 3.77 MB, 1,284, 484, 480 and 0.68 MB, 90% of a
+ *     quarter of the 16 MiB read limit;
+ *   - one unread message in each item, its newest read: 3.17 MB, 1,123,
+ *     484, 480 and 0.68 MB;
+ *   - items of 51 messages: 2.43 MB, 655, 16, 324 and 0.61 MB;
+ *   - Remove all read of each item's newest message: 1.96 MB, 802, 483,
+ *     320 and 0.08 MB.
+ * These are convex-test's counts, which count the document a patch or a
+ * delete reads; a hosted deployment was not measured. */
+export const INBOX_BATCH = 160
 
 /** The two bulk inbox actions: Mark all as read (`read`) and Remove all
  * read (`remove`). */

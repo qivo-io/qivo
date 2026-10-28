@@ -48,7 +48,7 @@ import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
 /* The most rows one bulk inbox batch changes, convex/model/messages.ts
    INBOX_BATCH, which this worker cannot import with the server code. */
-const INBOX_BATCH = 200
+const INBOX_BATCH = 160
 const parameters = new URLSearchParams(self.name)
 const option = (name, fallback) => {
   const value = parameters.get(name)

@@ -2352,7 +2352,7 @@ call.`), or with `all: true` to every item:
 
 The result is `{ "action": "read", "tasks": ["QN-3"], "has_more": false }`,
 where `tasks` lists the items the call changed. With `all`, each call
-changes up to 200 messages; repeat it while `has_more` is `true`. Like the
+changes up to 160 messages; repeat it while `has_more` is `true`. Like the
 app's bulk actions, `all` also reaches messages about tasks that are not
 listed, archived ones and those you can no longer read, but the result names
 only tasks you can read. A task ref you cannot read refuses the whole call
