@@ -90,17 +90,37 @@ private demo signs you in as Nora and does not support external agent keys ([Pri
 organization in one table: each member's personal tokens and connected apps
 and every agent key. Each row shows the person, kind, whether it can make
 changes or only read, the expiry of a token that has one, its last use and
-its calls in the selected period. The summary above it shows the period's
-calls against the plan's included calls. Choose an earlier period to see its
-calls. An earlier paid period shows the allowance of the seats it was billed
-for, and other earlier periods show only their calls. Credentials and calls
-of people who left the organization stay listed as **Removed user**, and
-deleted credentials as **deleted**. So does a connection to an app that no
-longer exists in Qivo, which can never act again.
+its calls in the selected period. Credentials with calls come first, most
+calls first, then the ones without calls by name. The table shows 25
+credentials at a time. **Next** and **Previous** move through the whole
+list, and the line above the table names the rows on screen, such as
+26–50. The summary above it shows the whole organization's calls in the
+period against the plan's included calls, whichever page you are on.
+Choose an earlier period to see its calls. An earlier paid period shows the
+allowance of the seats it was billed for, and other earlier periods show
+only their calls. Credentials and calls of people who left the organization
+stay listed as **Removed user**, and deleted credentials as **deleted**. So
+does a connection to an app that no longer exists in Qivo, which can never
+act again.
 
 Filter by kind, by **Active** or **All**, by person, or by name, prefix or
-person. Revoked and expired credentials stay listed because their calls in
-the period still count. **Refresh** reads current figures.
+person. Qivo applies the filters and the search to the whole list, not
+only the page on screen, and every filter change starts again at the first
+page. The person filter is a list you can search, with your own account
+right after **Everyone**. A person you choose stays chosen, even in a period where they have
+no credentials, and the page then says so. When one page has to look
+through many credentials that do not match, it shows what it found and says
+that Qivo checked part of the list; **Next** continues with the rest. After
+an update, the page can say that API access is not ready yet while Qivo
+prepares the organization's credentials and usage. Revoked and expired
+credentials stay listed because their calls in the period still count.
+**Refresh** reads current figures, and calls made while you browse can move
+a credential to another page until you refresh.
+
+**View credentials** beside an account on [Billing](#billing-and-free-access)
+opens API access on that account and Billing's usage period, with every
+kind and state and no search. If that period is no longer available, the
+page says so and **Show the current period** changes it.
 
 **Revoke** asks for confirmation and stops the credential at once, including
 its task event subscriptions. The person sees a token or connected app
@@ -215,8 +235,8 @@ last billed count, and the Billing page says it passed the limit. Email
 organization ([Limits](./limits.md)).
 
 Billing lists active and inactive accounts and guests with their own billing.
-It also shows shared storage and API allowances, API usage by account and
-credential, and storage by project. **Refresh** reads current usage. Files in
+It also shows shared storage and API allowances, API usage by account, each
+with **View credentials**, and storage by project. **Refresh** reads current usage. Files in
 Deleted items are not billed as storage
 ([Deleted items](./how-work-is-organized.md#deleted-items)). In the private
 demo, they still count toward its 50 MiB upload allowance until they are
