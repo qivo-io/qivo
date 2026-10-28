@@ -27,8 +27,10 @@
  *               not leave, but they can no longer change its milestones.
  *               Its other sub-projects are reported on their own.
  *   unchecked   a top-level project they would see only through one of
- *               its sub-projects, if at all, whose sub-projects are more
- *               than SUBS allows a page to read. Check it by hand. Also,
+ *               its sub-projects, if at all, when its sub-projects (SUBS)
+ *               or the admin's own grants, team memberships and team
+ *               shares (OWN) are more than a page reads to tell. Check it
+ *               by hand. Also,
  *               once in each phase and without an admin or project, an
  *               organization with more than ADMINS_MOST admins, which the
  *               report leaves out.
@@ -97,7 +99,10 @@
  * and the first FINDINGS_MOST findings. A call stops after RUN.ms, well
  * inside Convex's action time limit, and then answers a `cursor`; call it
  * again with `"cursor"` set to it until the cursor is null. The counts of a
- * call that goes on from a cursor add to those of the call before it. With
+ * call that goes on from a cursor add to those of the call before it. A
+ * page that fails ends the call with its counts so far, `failed` set to the
+ * error and the cursor of that page, so a call from it with a smaller
+ * `page_size` can go on, or the operator can look into what it names. With
  * the private helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/adminAccessReport:check '{"phase": "projects"}'
@@ -117,7 +122,7 @@
  * times, so its cursor can point into an organization's projects, into one
  * project's admins and into one admin's tasks, follows, tokens and apps. */
 import { makeFunctionReference } from 'convex/server'
-import { getDocumentSize, v } from 'convex/values'
+import { getDocumentSize, type Value, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import { internalAction, internalQuery, type QueryCtx } from '../_generated/server'
 import { projectLevelsOf, tokenExpired } from '../lib/access'
@@ -135,22 +140,36 @@ const PAGE = { projects: 4_000, work: 2_000, machine: 2_000 }
 /** The share of Convex's limits for one transaction a page uses before it
  * ends at its next row. The rest holds what a page reads past its last
  * check, which is one task of at most Convex's 1 MiB document limit, or one
- * admin's first navigation answer of the page (SUBS) with all their grants,
- * team memberships and their teams' shares. Tests lower it. */
+ * admin's first navigation answer of the page. That answer reads the
+ * admin's own rows twice (OWN), the organization's teams once
+ * (lib/access.ts OWN_READS, at most 4,000 rows and 512 KiB) and the
+ * parent's sub-projects twice (SUBS). Tests lower it. */
 export const ROOM = { share: 0.5 }
 
 /** The most sub-projects of one parent, and their bytes as Convex counts a
  * document's size, a page reads to tell whether an admin sees a top-level
- * project only for navigation. lib/access.ts projectLevelsOf reads every
- * sub-project of the parent for that, once for each admin without a level
- * of their own on it, so one answer must fit beside the admin's own rows in
- * the half of the limits a page leaves past its room (ROOM). 2 MiB is a
- * quarter of that half's 8 MiB, and 1,000 documents a sixteenth of its
- * 16,000. A sub-project holds a name of at most 80 characters and a
- * description of at most 500, at most about 2.5 KiB, and may hold a legacy
- * icon of any length, which the byte bound covers. A parent with more is
- * `unchecked`. Tests lower them. */
+ * project only for navigation. This report reads them first, then
+ * lib/access.ts projectLevelsOf reads every one of them again for that,
+ * once for each admin without a level of their own on it, so one answer
+ * reads them twice beside the admin's own rows, in the half of the limits a
+ * page leaves past its room (ROOM). Twice 2 MiB is half of that half's 8
+ * MiB, and twice 1,000 documents an eighth of its 16,000. A sub-project
+ * holds a name of at most 80 characters and a description of at most 500,
+ * at most about 2.5 KiB, and may hold a legacy icon of any length, which the
+ * byte bound covers. A parent with more is `unchecked`. Tests lower them. */
 export const SUBS = { most: 1_000, bytes: 2 * MIB }
+
+/** The most of an admin's own rows, their grants, team memberships and the
+ * shares of those teams, a page reads before it asks whether the admin sees
+ * a top-level project for navigation, with their bytes and the most teams.
+ * lib/access.ts projectLevelsOf reads all of those rows for that with no
+ * bound, the first time a page asks about the admin, so this report counts
+ * them first with bounded reads and leaves the project `unchecked` past
+ * any bound. In the half of the limits a page leaves past its room (ROOM),
+ * the count and that read take twice 4,000 documents and twice 1 MiB, and
+ * about three index ranges a team, so 1,500 for 500 teams, beside the
+ * organization's teams (at most 4,000 rows) and SUBS. Tests lower them. */
+export const OWN = { rows: 4_000, bytes: MIB, teams: 500 }
 
 /** The most admins of one organization a page reads, each a profile of at
  * most about 1.5 KiB (a name of at most 80 characters and an email of at
@@ -366,6 +385,7 @@ type Page = {
   admins: Map<string, Promise<Doc<'profiles'>[]>>
   levels: Map<string, Levels>
   subsFit: Map<string, Promise<boolean>>
+  ownFits: Map<string, Promise<boolean>>
 }
 
 const newPage = (ctx: QueryCtx, size: number): Page => ({
@@ -379,6 +399,7 @@ const newPage = (ctx: QueryCtx, size: number): Page => ({
   admins: new Map(),
   levels: new Map(),
   subsFit: new Map(),
+  ownFits: new Map(),
 })
 
 /** Whether `page` ends before its next row: once it got further, past its
@@ -456,6 +477,70 @@ function subsFit(page: Page, parent: Doc<'projects'>): Promise<boolean> {
   return known
 }
 
+/** Whether `admin`'s own rows, which lib/access.ts projectLevelsOf reads
+ * all of the first time it asks whether they see a parent for navigation,
+ * are within OWN. Their grants, their team memberships and the shares of
+ * each of those teams, read once a page, and only as far as the first row
+ * past a bound. */
+function ownFits(page: Page, admin: Doc<'profiles'>): Promise<boolean> {
+  let known = page.ownFits.get(admin.id)
+  if (known === undefined) {
+    known = (async () => {
+      const { db } = page.ctx
+      let rows = 0
+      let bytes = 0
+      /* counts `query`'s rows, answering false at the first past OWN */
+      const fits = async <R extends Record<string, Value>>(
+        query: AsyncIterable<R>,
+        each: (row: R) => void = () => {},
+      ) => {
+        for await (const row of query) {
+          rows += 1
+          bytes += getDocumentSize(row)
+          if (rows > OWN.rows || bytes > OWN.bytes) return false
+          each(row)
+        }
+        return true
+      }
+      const teams: string[] = []
+      if (
+        !(await fits(
+          db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', admin.id)),
+        )) ||
+        !(await fits(
+          db.query('team_members').withIndex('by_profile', (q) => q.eq('profile_id', admin.id)),
+          (membership) => teams.push(membership.team_id),
+        )) ||
+        teams.length > OWN.teams
+      )
+        return false
+      for (const teamId of teams) {
+        const shares = db
+          .query('project_team_access')
+          .withIndex('by_team', (q) => q.eq('team_id', teamId))
+        if (!(await fits(shares))) return false
+      }
+      return true
+    })()
+    page.ownFits.set(admin.id, known)
+  }
+  return known
+}
+
+/** Whether `admin` sees top-level project `project`, on which they hold no
+ * level of their own, for navigation to one of its sub-projects, by
+ * `levels`, their ordinary levels, or null when the reads that tell would
+ * pass SUBS or OWN. */
+async function seesForNavigation(
+  page: Page,
+  admin: Doc<'profiles'>,
+  levels: Levels,
+  project: Doc<'projects'>,
+): Promise<boolean | null> {
+  if (!(await ownFits(page, admin)) || !(await subsFit(page, project))) return null
+  return (await levels.level(project.id)) !== null
+}
+
 /** The top-level project of `project` when both are in one meta tree of
  * organization `orgId`, where its admins reach it today, else null. With
  * `live`, also null when either is archived. It reads the parent through
@@ -522,7 +607,8 @@ async function judgeProject(
   }
   // a top-level project may still show for navigation to a sub-project
   if (project.id === root.id) {
-    if (!(await subsFit(page, project))) {
+    const navigates = await seesForNavigation(page, admin, levels, project)
+    if (navigates === null) {
       page.findings.push({
         kind: 'unchecked',
         org_id: project.org_id,
@@ -532,7 +618,7 @@ async function judgeProject(
       })
       return
     }
-    if ((await levels.level(project.id)) !== null) {
+    if (navigates) {
       page.findings.push({ kind: 'navigation_only', ...where })
       return
     }
@@ -903,7 +989,9 @@ const checkRef = makeFunctionReference<
  * checked, how many findings of each kind it made, with the kept pairs,
  * and the first FINDINGS_MOST findings, with `listed_all` false when it
  * left some out. Past RUN.ms it stops after a page, one at least, and
- * answers the `cursor` to go on from, null once every phase is done. */
+ * answers the `cursor` to go on from, null once every phase is done. A page
+ * that throws ends the call with what it counted before, the error in
+ * `failed` and that page's cursor; `failed` is null otherwise. */
 export const run = internalAction({
   args: {
     cursor: v.optional(v.union(v.string(), v.null())),
@@ -918,6 +1006,7 @@ export const run = internalAction({
     findings: Finding[]
     listed_all: boolean
     cursor: string | null
+    failed: string | null
   }> => {
     const until = Date.now() + RUN.ms
     const counts = Object.fromEntries([...KINDS, 'kept'].map((kind) => [kind, 0])) as Record<
@@ -927,17 +1016,24 @@ export const run = internalAction({
     const findings: Finding[] = []
     let checked = 0
     let total = 0
-    let cursor = from ?? null
-    let phase: Phase = cursor === null ? 'projects' : phaseOf(cursor)
-    const report = () => ({
+    // the cursor of the next page, which names its phase
+    let cursor: string | null = from ?? JSON.stringify({ phase: 'projects' })
+    let phase = phaseOf(cursor)
+    const report = (failed: string | null = null) => ({
       checked,
       counts,
       findings,
       listed_all: findings.length === total,
       cursor,
+      failed,
     })
     for (;;) {
-      const page: PageResult = await ctx.runQuery(checkRef, { phase, cursor, page_size })
+      let page: PageResult
+      try {
+        page = await ctx.runQuery(checkRef, { phase, cursor, page_size })
+      } catch (e) {
+        return report(e instanceof Error ? e.message : String(e))
+      }
       checked += page.checked
       counts.kept += page.kept
       for (const finding of page.findings) {

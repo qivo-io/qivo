@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { ordinaryOf, ROOM, RUN, reportPage, SUBS } from '../internal/adminAccessReport'
+import { OWN, ordinaryOf, ROOM, RUN, reportPage, SUBS } from '../internal/adminAccessReport'
 import {
   accessRowsOf,
   canLeadProjects,
@@ -394,6 +394,42 @@ describe('the projects phase', () => {
     }
     expect(await findingsOf(t, 'projects')).not.toContainEqual(unchecked)
   })
+
+  it("leaves a top-level project unchecked when the admin's own rows pass what a page reads", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the fixture's admin is in one team; give them two grants and that
+    // team two shares, five rows in all, on sub-projects of TBED
+    await grant(t, f.sub, f.admin, 'user')
+    await grant(t, f.sub2, f.admin, 'viewer')
+    await t.run(async (ctx) => {
+      for (const project of [f.sub, f.sub2])
+        await ctx.db.insert('project_team_access', {
+          project_id: project.id,
+          team_id: f.team.id,
+          level: 'viewer',
+        })
+    })
+    try {
+      for (const [bound, tops] of [
+        [{ rows: 5 }, ['navigation_only', 'leaves']],
+        [{ rows: 4 }, ['unchecked', 'unchecked']],
+        [{ bytes: 100 }, ['unchecked', 'unchecked']],
+        [{ teams: 0 }, ['unchecked', 'unchecked']],
+      ] as const) {
+        Object.assign(OWN, { rows: 4_000, bytes: 1024 * 1024, teams: 500 }, bound)
+        // the top-level projects need navigation to tell, and the
+        // sub-projects they hold a level on are judged as before
+        expect(await projectKinds(t, f.admin.id)).toEqual({
+          [f.meta.id]: tops[0],
+          [f.hidden.id]: tops[1],
+          [f.sub2.id]: 'read_only',
+        })
+      }
+    } finally {
+      Object.assign(OWN, { rows: 4_000, bytes: 1024 * 1024, teams: 500 })
+    }
+  })
 })
 
 describe("an admin's ordinary level", () => {
@@ -761,6 +797,33 @@ describe('paging', () => {
       ).toBe(count)
     expect(lines([...first.findings, ...second.findings])).toEqual(lines(whole.findings))
     expect(whole.listed_all).toBe(true)
+    expect(whole.failed).toBeNull()
+  })
+
+  it('keeps the counts and the cursor of a page that fails', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // two grants of one person on one project, which lib/access.ts refuses
+    // to read, on a sub-project created after every other project
+    const broken = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+    })
+    for (const level of ['user', 'viewer'] as const) await grant(t, broken, f.admin, level)
+    const result = await t.action(report.run, { page_size: 1 })
+    expect(result.failed).toEqual(expect.any(String))
+    // what the pages before it found is kept: the admin keeps none of the
+    // four projects before it, and the other organization's admin theirs
+    expect(result.checked).toBeGreaterThanOrEqual(4)
+    expect(result.counts.kept).toBe(0)
+    expect(result.findings).toHaveLength(result.checked)
+    const at = JSON.parse(result.cursor ?? 'null')
+    expect(at).toMatchObject({ phase: 'projects', org: f.org.id })
+    // the page it names fails again, and the one before it did not
+    await expect(
+      t.query(report.check, { phase: 'projects', cursor: result.cursor, page_size: 1 }),
+    ).rejects.toThrow()
   })
 })
 
@@ -870,6 +933,75 @@ async function measuredPages(t: T, phase: Phase, size: number): Promise<Measured
 }
 
 describe('within Convex limits', () => {
+  it("ends a projects page without a limit error past an admin's 33,000 team shares", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const inTeams = await plantAdmin(t, f, { name: 'In teams' })
+    // 11 top-level projects of 30 sub-projects each, every sub-project
+    // shared with each of 100 teams the admin belongs to
+    const subs: string[] = []
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 11; n++) {
+        const parent = uuid()
+        const row = (id: string, num: number, parent_id?: string) =>
+          ctx.db.insert('projects', {
+            id,
+            org_id: f.org.id,
+            type: parent_id === undefined ? 'meta' : 'project',
+            parent_id,
+            key: `K${num}`,
+            name: `Project ${num}`,
+            description: '',
+            sort_order: num,
+            num,
+            track_delay: false,
+            created_at: NOW,
+            window_key: newWindowKey(),
+          })
+        await row(parent, 1_000 + n * 50)
+        for (let s = 1; s <= 30; s++) {
+          const id = uuid()
+          subs.push(id)
+          await row(id, 1_000 + n * 50 + s, parent)
+        }
+      }
+    })
+    const teams = await t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let team = 0; team < 100; team++) {
+        const team_id = await newTeam(ctx, f.org.id)
+        await ctx.db.insert('team_members', { team_id, profile_id: inTeams.id, is_leader: false })
+        ids.push(team_id)
+      }
+      return ids
+    })
+    for (let at = 0; at < teams.length; at += 25)
+      await t.run(async (ctx) => {
+        for (const team_id of teams.slice(at, at + 25))
+          for (const project_id of subs)
+            await ctx.db.insert('project_team_access', { project_id, team_id, level: 'user' })
+      })
+    const pages = await measuredPages(t, 'projects', 1_000_000)
+    const findings = pages.flatMap(({ page }) => page.findings)
+    // the admin keeps every sub-project those teams share, and every
+    // top-level project, TBED and SKNK included, is left for a check by hand
+    const mine = findings.filter((found) => found.profile_id === inTeams.id)
+    expect(mine.filter((found) => found.kind === 'unchecked')).toHaveLength(11 + 2)
+    expect(lines(mine.filter((found) => found.kind !== 'unchecked'))).toEqual(
+      lines(
+        [f.sub, f.sub2].map((p) => ({
+          kind: 'leaves',
+          org_id: f.org.id,
+          profile_id: inTeams.id,
+          project_id: p.id,
+          key: p.key,
+          top_level_id: f.meta.id,
+        })),
+      ),
+    )
+    for (const { metrics } of pages.slice(0, -1)) expect(usedPast(metrics, ROOM.share)).toBe(true)
+  }, 300_000)
+
   it('ends each projects page by its room over 3 admins and 2,000 projects', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
