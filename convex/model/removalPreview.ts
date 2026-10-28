@@ -22,7 +22,7 @@
  * the number, title and holder of a lost task only in a project they can
  * see, and only a count of the others. */
 
-import { ConvexError, type Infer, v } from 'convex/values'
+import { ConvexError, getConvexSize, type Infer, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
@@ -76,10 +76,19 @@ export const vRemovalChange = v.union(
 
 export type RemovalChange = Infer<typeof vRemovalChange>
 
-/** How many held tasks the caller may read the preview lists, by task
- * number. 100 rows fill the removal window's scroll box several times over;
- * items_total counts them all. Tests change it. */
-export const PREVIEW = { items: 100 }
+/** The bounds of one answer. `items`: how many held tasks the caller may
+ * read the preview lists, by task number; 100 fill the removal window's
+ * scroll box several times over, and items_total counts them all.
+ * `changerProjects`: how many of the projects one person can still change
+ * it names, as many as the window's Keep text names before it counts the
+ * rest. `bytes`: the most one answer holds, as Convex sizes a value
+ * (getConvexSize). 1 MiB is many times what the window shows, and an
+ * answer past Convex's own limit would fail instead of answering, so a
+ * larger one answers too_large. Tests change them. */
+export const PREVIEW = { items: 100, changerProjects: 3, bytes: 1024 * 1024 }
+
+/* Convex's limit on the elements of one array in a value. */
+const ARRAY_MAX = 8192
 
 /** A project as the preview names it. */
 export type ProjectRef = { id: string; name: string; key: string; parent_id: string | null }
@@ -90,11 +99,14 @@ export type ProjectRef = { id: string; name: string; key: string; parent_id: str
  * tasks. `keep` and `reassign` say whether the removal window's two choices
  * would pass the write's rules, and with which sentence the write would
  * refuse them. `keep.targets` are the projects Keep as Viewer would grant
- * Viewer on, and `keep.changers` the listed projects and sub-projects each
- * person can still change once the access is gone, for the window's Keep
- * text. Both leave out a project the caller neither sees nor manages as an
- * organization admin, whose name the caller does not know; the caller then
- * cannot keep anyone as Viewer there, so Keep as Viewer is refused. */
+ * Viewer on, and `keep.changers` name, for each person who can still change
+ * a listed project or one of its sub-projects once the access is gone, the
+ * first PREVIEW.changerProjects such projects and how many more there are
+ * (`more`), for the window's Keep text. Both give project ids, and
+ * `projects` names each project they give once. Both leave out a project
+ * the caller neither sees nor manages as an organization admin, whose name
+ * the caller does not know; the caller then cannot keep anyone as Viewer
+ * there, so Keep as Viewer is refused. */
 export type RemovalEffect = {
   pending: boolean
   leave_only: boolean
@@ -115,9 +127,10 @@ export type RemovalEffect = {
   }[]
   items_total: number
   hidden: number
+  projects: ProjectRef[]
   keep: {
-    targets: ProjectRef[]
-    changers: { id: string; projects: ProjectRef[] }[]
+    targets: string[]
+    changers: { id: string; projects: string[]; more: number }[]
     allowed: boolean
     refusal: string | null
   }
@@ -127,7 +140,8 @@ export type RemovalEffect = {
 /** The preview's answer. `unavailable`: the project, team or person is not
  * one of the organization's. `refused`: the write would refuse the removal
  * itself, with its sentence. `too_large`: working out who loses sight would
- * not fit in one request (REMOVAL_FULL). */
+ * not fit in one request, or the answer would pass PREVIEW.bytes or hold a
+ * list longer than Convex allows (REMOVAL_FULL). */
 export type RemovalPreview =
   | { state: 'unavailable' }
   | { state: 'refused'; message: string }
@@ -242,6 +256,17 @@ const projectRef = (p: Doc<'projects'>): ProjectRef => ({
   parent_id: p.parent_id ?? null,
 })
 
+/* Whether `effect` fits in one answer: no list past ARRAY_MAX, and the
+ * whole within PREVIEW.bytes. A changer names at most
+ * PREVIEW.changerProjects projects. */
+function fits(effect: RemovalEffect): boolean {
+  const { people, items, projects, keep } = effect
+  return (
+    [people, items, projects, keep.targets, keep.changers].every((l) => l.length <= ARRAY_MAX) &&
+    getConvexSize(effect) <= PREVIEW.bytes
+  )
+}
+
 /* Projects in the app's stored order. */
 const bySortOrder = (a: Doc<'projects'>, b: Doc<'projects'>) =>
   a.sort_order - b.sort_order || a.id.localeCompare(b.id)
@@ -266,7 +291,10 @@ export async function previewRemoval(
     const plan = await planOf(ctx, me, change)
     if (plan === 'unavailable') return { state: 'unavailable' }
     if (plan === null) return { state: 'ok', ...nothing(readOnly) }
-    return { state: 'ok', ...(await withinRoom(() => effectOf(ctx, me, plan, readOnly))) }
+    const effect = await withinRoom(() => effectOf(ctx, me, plan, readOnly))
+    // an answer too large to send says so, as one too large to work out does
+    if (!fits(effect)) return { state: 'too_large', message: REMOVAL_FULL }
+    return { state: 'ok', ...effect }
   } catch (e) {
     const answer = answerOf(e)
     if (answer === null) throw e
@@ -287,6 +315,7 @@ function nothing(readOnly: string | null): RemovalEffect {
     items: [],
     items_total: 0,
     hidden: 0,
+    projects: [],
     keep: { targets: [], changers: [], ...settles },
     reassign: settles,
   }
@@ -381,13 +410,20 @@ async function effectOf(
         known(p),
     )
     .sort(bySortOrder)
+  // each project the answer names, once
+  const named = new Map(listed.map((p) => [p.id, p]))
   const changers = people.flatMap((person) => {
     const levels = found.after.get(person.id)
-    const projects = shown.filter((p) => {
+    const changes = shown.filter((p) => {
       const level = levels?.levelOf(p) ?? null
       return level === 'user' || level === 'lead'
     })
-    return projects.length > 0 ? [{ id: person.id, projects: projects.map(projectRef) }] : []
+    if (changes.length === 0) return []
+    const first = changes.slice(0, PREVIEW.changerProjects)
+    for (const p of first) named.set(p.id, p)
+    return [
+      { id: person.id, projects: first.map((p) => p.id), more: changes.length - first.length },
+    ]
   })
 
   // Reassign: the caller needs Edit on every lost task's project once the
@@ -419,8 +455,9 @@ async function effectOf(
     })),
     items_total: readable.length,
     hidden: new Set(lost.filter((h) => !sees(h.project)).map((h) => h.task.id)).size,
+    projects: [...named.values()].sort(bySortOrder).map(projectRef),
     keep: {
-      targets: listed.map(projectRef),
+      targets: listed.map((p) => p.id),
       changers,
       allowed: keepAllowed,
       refusal: keepAllowed

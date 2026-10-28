@@ -11,7 +11,7 @@
  * project whose grant went. */
 /// <reference types="vite/client" />
 
-import { ConvexError } from 'convex/values'
+import { ConvexError, getConvexSize } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -202,9 +202,7 @@ async function expectParity<S extends Scenario>(build: () => Promise<S>): Promis
   if (kp.keep.allowed) {
     if (!('ok' in kept)) throw new Error(`keeping them as Viewers was refused: ${kept.refused}`)
     const added = (await viewerGrants(k.t)).filter((g) => !grants.has(g)).map((g) => g.split(' '))
-    expect(new Set(added.map(([project]) => project))).toEqual(
-      new Set(kp.keep.targets.map((x) => x.id)),
-    )
+    expect(new Set(added.map(([project]) => project))).toEqual(new Set(kp.keep.targets))
     expect(new Set(added.map(([, profile]) => profile))).toEqual(
       new Set(kp.people.map((x) => x.id)),
     )
@@ -284,6 +282,9 @@ async function base(t: T = newT()) {
 }
 
 const names = (p: Ok) => p.people.map((x) => x.name)
+/* The keys of the projects with these ids, as the answer names them. */
+const keys = (p: Ok, ids: readonly string[]) =>
+  ids.map((id) => p.projects.find((x) => x.id === id)?.key)
 const titles = (p: Ok) => p.items.map((i) => i.title)
 
 describe('the removal preview and the write it previews', () => {
@@ -322,19 +323,17 @@ describe('the removal preview and the write it previews', () => {
     expect(p.items.map((i) => i.role)).toEqual(['assignee', 'reviewer'])
     expect(p.tasks).toBe(2)
     expect(p.keep).toEqual({
-      targets: [{ id: s.f.meta.id, name: s.f.meta.name, key: s.f.meta.key, parent_id: null }],
+      targets: [s.f.meta.id],
       // she can still change Board rev, as the window's Keep text says
-      changers: [
-        {
-          id: s.pia.id,
-          projects: [
-            { id: s.f.sub2.id, name: s.f.sub2.name, key: s.f.sub2.key, parent_id: s.f.meta.id },
-          ],
-        },
-      ],
+      changers: [{ id: s.pia.id, projects: [s.f.sub2.id], more: 0 }],
       allowed: true,
       refusal: null,
     })
+    // each project the answer names, once, in the app's order
+    expect(p.projects).toEqual([
+      { id: s.f.meta.id, name: s.f.meta.name, key: s.f.meta.key, parent_id: null },
+      { id: s.f.sub2.id, name: s.f.sub2.name, key: s.f.sub2.key, parent_id: s.f.meta.id },
+    ])
     expect(p.reassign).toEqual({ allowed: true, refusal: null })
     expect(p.leave_only).toBe(false)
   })
@@ -355,7 +354,7 @@ describe('the removal preview and the write it previews', () => {
       }
     })
     expect(titles(p)).toEqual(['In Firmware'])
-    expect(p.keep.targets.map((x) => x.id)).toEqual([s.f.sub.id])
+    expect(p.keep.targets).toEqual([s.f.sub.id])
     expect(p.keep.changers).toEqual([])
     expect(p.keep.allowed).toBe(true)
   })
@@ -405,7 +404,7 @@ describe('the removal preview and the write it previews', () => {
       }
     })
     expect(names(p)).toEqual(['Mia'])
-    expect(p.keep.targets.map((x) => x.id)).toEqual([s.f.sub.id])
+    expect(p.keep.targets).toEqual([s.f.sub.id])
   })
 
   /* Hardware shares TBED; Mia, a member, holds open tasks in Firmware and
@@ -452,7 +451,7 @@ describe('the removal preview and the write it previews', () => {
     expect(names(p)).toEqual(['Mia'])
     expect(titles(p)).toEqual(['Firmware work', 'Board review'])
     // the team shared the parent, so the Viewer grant goes there
-    expect(p.keep.targets.map((x) => x.id)).toEqual([s.f.meta.id])
+    expect(p.keep.targets).toEqual([s.f.meta.id])
     expect(p.keep.allowed).toBe(true)
     expect(p.reassign.allowed).toBe(true)
   })
@@ -483,7 +482,7 @@ describe('the removal preview and the write it previews', () => {
       }
     })
     expect(names(p)).toEqual(['Mia', 'Sam'])
-    expect(new Set(p.keep.targets.map((x) => x.id))).toEqual(new Set([s.f.meta.id, s.f.hidden.id]))
+    expect(new Set(p.keep.targets)).toEqual(new Set([s.f.meta.id, s.f.hidden.id]))
   })
 
   it("follows the write's refusals when a team leader removes a member from projects they cannot manage", async () => {
@@ -616,6 +615,7 @@ describe('the removal preview and the write it previews', () => {
       items: [],
       items_total: 0,
       hidden: 0,
+      projects: [],
       keep: { targets: [], changers: [], allowed: true, refusal: null },
       reassign: { allowed: true, refusal: null },
     }
@@ -662,11 +662,8 @@ describe('the removal preview on Northstar', () => {
     // sub-projects they lead
     expect(names(p)).toEqual(['Aisha Rahman', 'Emil Strand'])
     expect(p.tasks).toBe(5)
-    expect(p.keep.targets.map((x) => x.key)).toEqual(['SENS'])
-    expect(p.keep.changers.map((c) => c.projects.map((x) => x.key))).toEqual([
-      ['FW'],
-      ['MECH', 'MFG'],
-    ])
+    expect(keys(p, p.keep.targets)).toEqual(['SENS'])
+    expect(p.keep.changers.map((c) => keys(p, c.projects))).toEqual([['FW'], ['MECH', 'MFG']])
   })
 
   it('previews Leo leaving Northstar Hardware', async () => {
@@ -691,7 +688,7 @@ describe('the removal preview on Northstar', () => {
     // Release tasks leave his sight
     expect(names(p)).toEqual(['Ben Carter'])
     expect(p.tasks).toBe(2)
-    expect(p.keep.targets.map((x) => x.key)).toEqual(['CLOUD'])
+    expect(keys(p, p.keep.targets)).toEqual(['CLOUD'])
   })
 })
 
@@ -711,6 +708,24 @@ describe('what the removal preview lists', () => {
       expect(p.tasks).toBe(5)
     } finally {
       PREVIEW.items = 100
+    }
+  })
+
+  it('answers too_large rather than an answer past PREVIEW.bytes', async () => {
+    const b = await base()
+    const pia = await b.person('Pia')
+    await b.grant(b.f.meta, pia)
+    await b.task(b.f.sub, { title: 'Held', assignee_id: pia.id })
+    const change = { kind: 'user_grant', project_id: b.f.meta.id, user_id: pia.id } as const
+    const size = getConvexSize(await previewOk(b.t, b.f.admin, change))
+    PREVIEW.bytes = size - 100
+    try {
+      expect(await preview(b.t, b.f.admin, change)).toEqual({
+        state: 'too_large',
+        message: REMOVAL_FULL,
+      })
+    } finally {
+      PREVIEW.bytes = 1024 * 1024
     }
   })
 
@@ -742,7 +757,7 @@ describe('what the removal preview lists', () => {
       expect(p).toMatchObject({ people: [{ name: 'Mia' }], tasks: 2, items: [], items_total: 0 })
       expect(p.hidden).toBe(2)
       // the admin still manages TBED, so may know its name and keep Mia
-      expect(p.keep).toMatchObject({ targets: [{ id: b.f.meta.id }], allowed: true })
+      expect(p.keep).toMatchObject({ targets: [b.f.meta.id], allowed: true })
       expect(p.reassign).toEqual({ allowed: false, refusal: NO_WRITE_ACCESS })
     } finally {
       spy.mockRestore()
@@ -1135,6 +1150,114 @@ describe("the removal preview inside Convex's limits", () => {
   it('previews a team deletion and a member removal of 1,000 members holding 2,000 open tasks', async () => {
     await previewCrowd(1000, 2)
   }, 300_000)
+
+  it("bounds Keep's changers when many people can still change many projects", async () => {
+    // Team Wide shares two top-level projects of 500 sub-projects each. Each
+    // of its 200 members keeps User on one of them through a grant of their
+    // own and holds a task in the other. Without a bound, the answer named
+    // 501 projects for each of them, 100,200 project rows and about 20 MB.
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const wide = uuid()
+    const metas = [uuid(), uuid()]
+    const firstSubs: string[] = []
+    const project = (id: string, n: number, extra: Partial<Doc<'projects'>>) => ({
+      id,
+      org_id: f.org.id,
+      type: 'meta' as const,
+      key: `W${n}`,
+      name: `Wide ${n}`,
+      description: '',
+      sort_order: n,
+      num: n,
+      track_delay: false,
+      created_at: NOW,
+      ...extra,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('teams', {
+        id: wide,
+        org_id: f.org.id,
+        name: 'Wide',
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      for (const [m, id] of metas.entries()) {
+        await ctx.db.insert('projects', project(id, 100 + m, {}))
+        await ctx.db.insert('project_team_access', { project_id: id, team_id: wide, level: 'user' })
+      }
+    })
+    for (const [m, parent_id] of metas.entries())
+      await t.run(async (ctx) => {
+        for (let i = 0; i < 500; i++) {
+          const id = uuid()
+          await ctx.db.insert(
+            'projects',
+            project(id, 1000 + m * 500 + i, { type: 'project', parent_id }),
+          )
+          if (i === 0) firstSubs.push(id)
+        }
+      })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 200; i++) {
+        const id = uuid()
+        await ctx.db.insert('profiles', {
+          id,
+          org_id: f.org.id,
+          name: `w${i}`,
+          initials: 'WW',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          plannable_hours: 40,
+          accepted_at: NOW,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', { team_id: wide, profile_id: id, is_leader: false })
+        await ctx.db.insert('project_access', {
+          project_id: metas[i % 2],
+          profile_id: id,
+          level: 'user',
+        })
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: f.org.id,
+          project_id: firstSubs[1 - (i % 2)],
+          num: 5000 + i,
+          title: `Task ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          assignee_id: id,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+      }
+    })
+    const change = { kind: 'delete_team', team_id: wide } as const
+    const p = await previewOk(t, f.admin, change)
+    expect(p.people).toHaveLength(200)
+    expect(p.keep.targets).toEqual(metas)
+    // every one of them still changes a parent and its 500 sub-projects
+    expect(p.keep.changers).toHaveLength(200)
+    for (const c of p.keep.changers) {
+      expect(c.projects).toHaveLength(PREVIEW.changerProjects)
+      expect(c.projects.length + c.more).toBe(501)
+    }
+    // the parents and the first sub-projects of each, once
+    expect(p.projects).toHaveLength(2 + 2 * (PREVIEW.changerProjects - 1))
+    const m = await measured(t, (ctx) => previewRemoval(ctx, f.admin, change))
+    console.info("Keep's changers over 2 x 501 projects", {
+      answer_bytes: getConvexSize(m.answer as RemovalPreview),
+      ranges: m.ranges,
+      documents: m.documents,
+      bytes: m.bytes,
+    })
+    // its people and changers, about 360 bytes for each of the 200
+    expect(getConvexSize(m.answer as RemovalPreview)).toBeLessThan(128 * 1024)
+  }, 120_000)
 
   it('answers too_large for a member removal past the room, which its write refuses too', async () => {
     const t = newT({ transactionLimits: true })
