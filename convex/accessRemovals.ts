@@ -10,11 +10,12 @@ import { previewRemoval, vRemovalChange } from './model/removalPreview'
 /**
  * What removing `change` would do, worked out without writing: the people
  * who would lose sight of open tasks they are assigned to or reviewing, the
- * tasks among those the caller may read (at most PREVIEW.items, by task
- * number, with items_total), how many are in projects the caller cannot see
- * (`hidden`, a count without ids, numbers or titles), and whether keeping
- * those people as Viewers or reassigning their tasks would pass the write's
- * rules, with the write's sentence when not. The write itself reports how
+ * holdings among those the caller may read (one row per task, person and
+ * role, for at most PREVIEW.items tasks by task number, with items_total
+ * counting every such holding), how many tasks are in projects the caller
+ * cannot see (`hidden`, a count without ids, numbers or titles), and
+ * whether keeping those people as Viewers or reassigning their tasks would
+ * pass the write's rules, with the write's sentence when not. The write itself reports how
  * many tasks it stranded (projects.removeAccess `stranded`), so `hidden`
  * tells the caller nothing new.
  *

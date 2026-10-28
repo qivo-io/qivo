@@ -693,18 +693,33 @@ describe('the removal preview on Northstar', () => {
 })
 
 describe('what the removal preview lists', () => {
-  it('lists at most PREVIEW.items holdings by task number and counts them all', async () => {
+  it('lists the holdings of at most PREVIEW.items tasks by number, never splitting a task, and counts them all', async () => {
     const b = await base()
-    const pia = await b.person('Pia')
-    await b.grant(b.f.meta, pia)
+    await b.share(b.f.meta, b.f.team.id)
+    const mia = await b.person('Mia')
+    const noah = await b.person('Noah')
+    for (const m of [mia, noah]) await b.join(b.f.team.id, m)
     for (const num of [905, 901, 904, 902, 903])
-      await b.task(b.f.sub, { num, title: `Task ${num}`, assignee_id: pia.id })
-    const change = { kind: 'user_grant', project_id: b.f.meta.id, user_id: pia.id } as const
+      await b.task(b.f.sub, {
+        num,
+        title: `Task ${num}`,
+        assignee_id: mia.id,
+        // Noah reviews the third task listed, and the one past the cap
+        ...(num === 903 || num === 904 ? { status: 'review' as const, reviewer_id: noah.id } : {}),
+      })
+    const change = { kind: 'team_grant', project_id: b.f.meta.id, team_id: b.f.team.id } as const
     PREVIEW.items = 3
     try {
       const p = await previewOk(b.t, b.f.admin, change)
-      expect(p.items.map((i) => i.num)).toEqual([901, 902, 903])
-      expect(p.items_total).toBe(5)
+      // three tasks, the third with both its holdings
+      expect(p.items.map((i) => `${i.num} ${i.role}`)).toEqual([
+        '901 assignee',
+        '902 assignee',
+        '903 assignee',
+        '903 reviewer',
+      ])
+      // every holding, and every task once
+      expect(p.items_total).toBe(7)
       expect(p.tasks).toBe(5)
     } finally {
       PREVIEW.items = 100

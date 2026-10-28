@@ -76,9 +76,9 @@ export const vRemovalChange = v.union(
 
 export type RemovalChange = Infer<typeof vRemovalChange>
 
-/** The bounds of one answer. `items`: how many held tasks the caller may
- * read the preview lists, by task number; 100 fill the removal window's
- * scroll box several times over, and items_total counts them all.
+/** The bounds of one answer. `items`: of how many held tasks the caller
+ * may read the preview lists the holdings, by task number; 100 fill the
+ * removal window's scroll box several times over.
  * `changerProjects`: how many of the projects one person can still change
  * it names, as many as the window's Keep text names before it counts the
  * rest. `bytes`: the most one answer holds, as Convex sizes a value
@@ -94,9 +94,12 @@ const ARRAY_MAX = 8192
 export type ProjectRef = { id: string; name: string; key: string; parent_id: string | null }
 
 /** What the removal would do. `people` lose sight of at least one open task
- * they hold, `tasks` counts those tasks once each, `items` lists the
- * holdings in projects the caller can see and `hidden` counts the other
- * tasks. `keep` and `reassign` say whether the removal window's two choices
+ * they hold, and `tasks` counts those tasks once each. A holding is one
+ * person's role on one such task, so a task can have two. `items` lists the
+ * holdings of the first PREVIEW.items such tasks in projects the caller can
+ * see, by task number, never only some of one task's holdings;
+ * `items_total` counts every holding the caller can see, and `hidden` the
+ * tasks in projects the caller cannot see. `keep` and `reassign` say whether the removal window's two choices
  * would pass the write's rules, and with which sentence the write would
  * refuse them. `keep.targets` are the projects Keep as Viewer would grant
  * Viewer on, and `keep.changers` name, for each person who can still change
@@ -367,6 +370,14 @@ async function effectOf(
         a.role.localeCompare(b.role) ||
         a.profile_id.localeCompare(b.profile_id),
     )
+  // the holdings of the first PREVIEW.items tasks, each task's together
+  const rows: Lost[] = []
+  const rowTasks = new Set<string>()
+  for (const h of readable) {
+    if (!rowTasks.has(h.task.id) && rowTasks.size === PREVIEW.items) break
+    rowTasks.add(h.task.id)
+    rows.push(h)
+  }
   const people = [...new Set(lost.map((h) => h.profile_id))]
     .flatMap((id) => plan.people.get(id) ?? [])
     .map((p) => ({ p, key: p.name_key ?? nameKey(p.name) }))
@@ -445,7 +456,7 @@ async function effectOf(
     leave_only: readOnly !== null,
     people: people.map((p) => ({ id: p.id, name: p.name, kind: p.kind, org_role: p.org_role })),
     tasks,
-    items: readable.slice(0, PREVIEW.items).map((h) => ({
+    items: rows.map((h) => ({
       task_id: h.task.id,
       num: h.task.num,
       title: h.task.title,
