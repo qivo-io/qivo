@@ -1,17 +1,25 @@
 /* What the API access page (panels/settings/ApiAccessSettings.tsx) shows for
-   the server's list (convex/apiAccess.ts): labels, filters and the revoke
-   window's sentence. Pure, so they are tested without rendering. Dates follow
-   the organization's date format (lib/dates.ts). */
+   the server's answers (convex/apiAccess.ts): labels, the count line and the
+   revoke window's sentence. Pure, so they are tested without rendering. Dates
+   follow the organization's date format (lib/dates.ts). */
 import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../../convex/_generated/api'
 import { fmtDateYear } from './dates'
-import { matchesAllWords } from './search'
 import { expiryLabel, lastDay } from './tokenExpiry'
 
-export type ApiAccessList = FunctionReturnType<typeof api.apiAccess.list>
-export type ApiCredentialRow = ApiAccessList['credentials'][number]
-export type ApiUsagePeriod = ApiAccessList['periods'][number]
+export type ApiAccessSummaryAnswer = FunctionReturnType<typeof api.apiAccess.summary>
+export type ApiAccessFigures = Extract<ApiAccessSummaryAnswer, { state: 'ready' }>
+export type ApiUsagePeriod = ApiAccessSummaryAnswer['periods'][number]
+export type ApiAccessPageAnswer = FunctionReturnType<typeof api.apiAccess.page>
+export type ApiAccessPageRows = Extract<ApiAccessPageAnswer, { state: 'ready' }>
+export type ApiCredentialRow = ApiAccessPageRows['rows'][number]
+export type ApiAccessPerson = NonNullable<ApiAccessPageRows['person']>
+export type ApiAccessPeopleAnswer = FunctionReturnType<typeof api.apiAccess.people>
 export type ApiCredentialKind = ApiCredentialRow['table']
+
+/** What Billing's View credentials hands to API access: the organization,
+    the account and the usage period of the report it showed. */
+export type ApiAccessEntry = { org_id: string; profile_id: string; period_key: string }
 
 export const KIND_LABEL: Record<ApiCredentialKind, string> = {
   mcp_tokens: 'Personal token',
@@ -28,11 +36,13 @@ export const KIND_ICON: Record<ApiCredentialKind, string> = {
 
 export const ACCESS_LABEL = { read: 'Read only', write: 'Can make changes' } as const
 
-/** The page's filters. `person` is a profile id, or '' for everyone. */
+/** The page's filters as the server applies them. `person` is the chosen
+    profile, with its name once known, or null for everyone; `search` is the
+    text sent, trimmed. */
 export type ApiAccessFilters = {
   kind: 'all' | ApiCredentialKind
   state: 'active' | 'all'
-  person: string
+  person: { id: string; name?: string } | null
   search: string
 }
 
@@ -64,7 +74,10 @@ export function periodLabel(period: ApiUsagePeriod, now: Date): string {
 /** The line under the summary bar: the plan's allowance per seat, then the
     price of calls above it, or why the period's calls are not charged. Null
     without a plan, when the page shows only the count. */
-export function planLine(summary: ApiAccessList['summary'], period: ApiUsagePeriod): string | null {
+export function planLine(
+  summary: ApiAccessFigures['summary'],
+  period: ApiUsagePeriod,
+): string | null {
   const plan = summary.plan
   if (!plan) return null
   const shared = `${plan.api_calls_per_seat.toLocaleString()} calls per seat, shared by the organization.`
@@ -136,39 +149,12 @@ export function expiryNote(row: ApiCredentialRow, now: Date): string | null {
   return text ? `expires ${soon ? text.toLowerCase() : text}` : null
 }
 
-/** The rows that pass every filter, in the server's order (calls, then name). */
-export function filterCredentials(
-  rows: readonly ApiCredentialRow[],
-  filters: ApiAccessFilters,
-): ApiCredentialRow[] {
-  return rows.filter(
-    (row) =>
-      (filters.kind === 'all' || row.table === filters.kind) &&
-      (filters.state === 'all' || row.state === 'active') &&
-      (filters.person === '' || row.profile_id === filters.person) &&
-      matchesAllWords(
-        [row.name, row.prefix ?? '', credentialPrefix(row) ?? '', row.person].join('\n'),
-        filters.search,
-      ),
-  )
-}
-
-/** The person select's choices: the viewer first, then people, then agents,
-    each alphabetical, then people who left the organization. */
-export function personOptions(
-  rows: readonly ApiCredentialRow[],
-  me: string,
-): { id: string; label: string }[] {
-  const people = new Map<string, ApiCredentialRow>()
-  for (const row of rows) if (!people.has(row.profile_id)) people.set(row.profile_id, row)
-  const rank = (row: ApiCredentialRow) =>
-    row.profile_id === me ? 0 : row.person === 'Removed user' ? 3 : row.agent ? 2 : 1
-  return [...people.values()]
-    .sort((a, b) => rank(a) - rank(b) || a.person.localeCompare(b.person))
-    .map((row) => ({
-      id: row.profile_id,
-      label: row.profile_id === me ? `${row.person} (you)` : row.person,
-    }))
+/** The count line: the rows on screen as positions in the list, "26–50",
+    or "26" for one row. Convex keeps no count, so there is no total. Null
+    for no rows. `first` is how many rows the pages before this one held. */
+export function rangeLabel(first: number, count: number): string | null {
+  if (count <= 0) return null
+  return count === 1 ? `${first + 1}` : `${first + 1}–${first + count}`
 }
 
 /** The revoke window's sentence, which says what stops and what the owner

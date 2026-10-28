@@ -5,8 +5,9 @@
  * person in name order. New rows get them when they are inserted (tokens.ts,
  * machine/testing.ts, oauthConnections.ts). A row whose keys differ from
  * what its profile and name give gets them again, so a run also repairs
- * those. Nothing reads the keys yet; the readers that will page by them
- * check first that no row is left without them (schema.ts).
+ * those. API access pages by them (apiAccess.ts page), and checks first
+ * that no row of its scope is left without them (schema.ts), answering that
+ * it is not ready until then.
  *
  * An agent key or personal token whose profile is gone has no organization
  * to take. Only a profile removal leaves such rows, and its background steps

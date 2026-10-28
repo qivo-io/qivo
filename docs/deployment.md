@@ -872,15 +872,18 @@ until `remaining` reports 0 on every page, and then deploy the later commit.
 
 Every agent key and personal token holds its owner's organization and a
 `name_key`, and every OAuth connection a `name_key` (`convex/lib/nameKey.ts`),
-which API access is to page them by. Every API usage row holds a rank
+which API access pages them by. Every API usage row holds a rank
 (`neg_calls` and `name_key`), and the transaction that records a call also
 counts it on its account's `billing_usage_accounts` row and, in a calendar
 month, on the organization's `billing_month_totals`. A row stored before
 the release that added them has none until the one-time
 `internal/credentialKeysBackfill` and `internal/usageRanksBackfill` give it
-them, and the next call of a credential ranks its row as well. Nothing reads
-them yet. Run both backfills on every hosted deployment once it serves that
-release, as the modules' headers say. Read each dry run first, then run it.
+them, and the next call of a credential ranks its row as well. API access
+reads them. Until both backfills report nothing left, it says it is not
+ready to list credentials, and a calendar month whose rows are not all
+ranked shows its total as not available yet. Run both backfills on every
+hosted deployment once it serves that release, as the modules' headers say.
+Read each dry run first, then run it.
 A call that does not finish in about five minutes answers where to go on:
 `internal/credentialKeysBackfill` a `table` and a `cursor`, which can be
 null where a table starts, and `internal/usageRanksBackfill` a `cursor`.

@@ -144,8 +144,10 @@ adminStats:orgPage query internal {"type":"object","value":{"cursor":{"fieldType
 adminStats:orgPart query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"part":{"fieldType":{"type":"union","value":[{"type":"literal","value":"profiles"},{"type":"literal","value":"stamps"},{"type":"literal","value":"teams"},{"type":"literal","value":"projects"},{"type":"literal","value":"issues"},{"type":"literal","value":"activity"},{"type":"literal","value":"deleted"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 adminStats:platformStats action public {"type":"object","value":{}}
 adminStats:tablePage query internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"organizations"},{"type":"literal","value":"profiles"},{"type":"literal","value":"teams"},{"type":"literal","value":"projects"},{"type":"literal","value":"issues"},{"type":"literal","value":"activity_events"},{"type":"literal","value":"team_members"},{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"},{"type":"literal","value":"issue_links"},{"type":"literal","value":"milestones"},{"type":"literal","value":"org_counters"},{"type":"literal","value":"sync_stamps"},{"type":"literal","value":"deleted_rows"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"window":{"fieldType":{"type":"object","value":{"cutoff30":{"fieldType":{"type":"string"},"optional":false},"cutoff84":{"fieldType":{"type":"string"},"optional":false}}},"optional":true}}}
-apiAccess:list query public {"type":"object","value":{"period":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+apiAccess:page query public {"type":"object","value":{"period":{"fieldType":{"type":"string"},"optional":true},"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"all"},{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"state":{"fieldType":{"type":"union","value":[{"type":"literal","value":"all"},{"type":"literal","value":"active"}]},"optional":false},"person":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+apiAccess:people query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 apiAccess:revoke mutation public {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"agent_keys"},{"type":"literal","value":"mcp_tokens"},{"type":"literal","value":"oauth_connections"}]},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+apiAccess:summary query public {"type":"object","value":{"period":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:beginDemoUploadWork mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:cancelUpload mutation public {"type":"object","value":{"ticket_id":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:clearForDeletedLogin mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -770,10 +772,16 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // caller's org entitlement. Checkout and portal re-check admin identity in
   // orgAction and remain available during billing recovery/read-only access.
   billing: { summary: 'orgQuery', usageReport: 'orgAction', status: 'orgQuery' },
-  // API access lists every member's credentials for an org admin (checked in
-  // the handler) and revokes any of them; revoking only takes access away, so
-  // it stays open to admins during a billing pause.
-  apiAccess: { list: 'orgQuery', revoke: 'accessRemovalMutation' },
+  // API access pages every member's credentials, their period figures and
+  // the person filter's people for an org admin (checked in the handlers)
+  // and revokes any of them; revoking only takes access away, so it stays
+  // open to admins during a billing pause.
+  apiAccess: {
+    summary: 'orgQuery',
+    page: 'orgQuery',
+    people: 'orgQuery',
+    revoke: 'accessRemovalMutation',
+  },
   billingActions: {
     checkout: 'orgAction',
     portal: 'orgAction',

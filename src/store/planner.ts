@@ -4732,6 +4732,8 @@ export type McpTokenChoice = {
 }
 /** The credential tables an admin can revoke from on API access. */
 export type ApiCredentialTable = FunctionArgs<typeof api.apiAccess.revoke>['table']
+/** What one API access page asks for (P.apiAccessPage). */
+export type ApiAccessPageArgs = Omit<FunctionArgs<typeof api.apiAccess.page>, 'org_id'>
 
 /* The toolbar filter row's state — one shape for every view that renders it
    and for P.passesFilters, the one predicate they share. `mine` and
@@ -7897,18 +7899,45 @@ export const PLANNER = {
   },
 
   /* ---- API access (Settings → Organization → API access) ----
-     An admin's list of every credential in the home organization with its
-     calls in one usage period. Fetched on demand: each API call changes the
-     rows, so a subscription would re-render on every call. Null when the
-     list could not be loaded. */
-  listApiAccess: async (period?: string) => {
+     An admin's view of every credential in the home organization with its
+     calls in one usage period, read on demand: the period list and figures,
+     one page of credentials, and the people the person filter offers. Each
+     API call changes the rows, so a subscription would re-render on every
+     call. Each answers null when the read failed. */
+  apiAccessSummary: async (period?: string) => {
     try {
-      return await convex.query(api.apiAccess.list, {
+      return await convex.query(api.apiAccess.summary, {
         org_id: HOME_ORG,
         ...(period === undefined ? {} : { period }),
       })
     } catch (e) {
-      console.error('[qivo] API access list failed:', e)
+      console.error('[qivo] API access summary failed:', e)
+      return null
+    }
+  },
+
+  /** One page of credentials for `args`: the period, the filters, the
+      search and the cursor of the page's start (apiAccess.page). */
+  apiAccessPage: async (args: ApiAccessPageArgs) => {
+    try {
+      return await convex.query(api.apiAccess.page, { org_id: HOME_ORG, ...args })
+    } catch (e) {
+      console.error('[qivo] API access page failed:', e)
+      return null
+    }
+  },
+
+  /** One batch of the people the person filter offers, matching `search`,
+      from `cursor`, an earlier batch's `next`, or from the start. */
+  apiAccessPeople: async (search: string, cursor: string | null) => {
+    try {
+      return await convex.query(api.apiAccess.people, {
+        org_id: HOME_ORG,
+        ...(search === '' ? {} : { search }),
+        ...(cursor === null ? {} : { cursor }),
+      })
+    } catch (e) {
+      console.error('[qivo] API access people failed:', e)
       return null
     }
   },
@@ -7956,7 +7985,7 @@ export const PLANNER = {
   /* ---- personal MCP tokens (Settings → Your preferences) ----
      Same on-demand pattern. The owner manages their own tokens here
      (authedMutations, no org_id) and nothing narrates; an organization admin
-     can also list and revoke them on API access (listApiAccess above). */
+     can also list and revoke them on API access (apiAccessPage above). */
   listMcpTokens: async () => {
     try {
       return await convex.query(api.tokens.listMcpTokens, {})

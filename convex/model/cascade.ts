@@ -240,8 +240,11 @@ type AccessTable =
  * left after the profile row is gone grant nothing, because every reader
  * asks with a live profile or drops ids without one:
  * - agent_keys, mcp_tokens: machine/auth.ts lookupCredential refuses a
- *   credential whose profile is gone, and the lists read through live
- *   seats (tokens.ts, apiAccess.ts).
+ *   credential whose profile is gone, and the owner's own list reads
+ *   through the live seat (tokens.ts). API access reads them by
+ *   organization, so it meets those left behind: it skips them, or lists
+ *   them as deleted under Removed user while they have calls in the period
+ *   (apiAccess.ts page).
  * - team_members, project_access: lib/access.ts asks by a resolved
  *   profile, and the snapshot sends only rows whose profile it sends. A
  *   membership left still counts in its team's member count until a

@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
-  type ApiAccessFilters,
   type ApiCredentialRow,
   type ApiUsagePeriod,
   credentialPrefix,
   expiryNote,
-  filterCredentials,
   lastUsedLabel,
   periodLabel,
-  personOptions,
   planLine,
+  rangeLabel,
   revokeSentence,
   stateTag,
 } from './apiAccess'
@@ -28,6 +26,7 @@ const row = (name: string, patch: Partial<ApiCredentialRow> = {}): ApiCredential
   profile_id: 'daniel',
   person: 'Daniel Berg',
   agent: false,
+  removed: false,
   access: 'write',
   expires_at: null,
   last_used_at: null,
@@ -135,48 +134,14 @@ describe('API access labels', () => {
   })
 })
 
-describe('API access filters', () => {
-  const rows = [
-    row('Cursor', { calls: 18 }),
-    row('Claude', { table: 'oauth_connections', profile_id: 'me', person: 'Aisha Khan' }),
-    row('GitHub Actions', {
-      table: 'agent_keys',
-      prefix: 'qva_2...22222',
-      profile_id: 'relay',
-      person: 'Release bot',
-      agent: true,
-    }),
-    row('Cursor, old', { state: 'revoked' }),
-    row('Raycast', { profile_id: 'elin', person: 'Elin Sand', state: 'inactive' }),
-    row('Night job', { profile_id: 'gone', person: 'Removed user', state: 'deleted' }),
-  ]
-  const all: ApiAccessFilters = { kind: 'all', state: 'all', person: '', search: '' }
-  const names = (filters: Partial<ApiAccessFilters>) =>
-    filterCredentials(rows, { ...all, ...filters }).map((r) => r.name)
-
-  it('narrows by kind, state, person and search, and keeps the server order', () => {
-    expect(names({})).toEqual(rows.map((r) => r.name))
-    expect(names({ kind: 'agent_keys' })).toEqual(['GitHub Actions'])
-    expect(names({ kind: 'oauth_connections' })).toEqual(['Claude'])
-    // Active leaves out ended credentials and inactive accounts
-    expect(names({ state: 'active' })).toEqual(['Cursor', 'Claude', 'GitHub Actions'])
-    expect(names({ person: 'daniel' })).toEqual(['Cursor', 'Cursor, old'])
-    // search matches the name, the prefix and the person, every word
-    expect(names({ search: 'cursor old' })).toEqual(['Cursor, old'])
-    expect(names({ search: '22222' })).toEqual(['GitHub Actions'])
-    expect(names({ search: 'elin' })).toEqual(['Raycast'])
-    expect(names({ search: 'zapier' })).toEqual([])
-    expect(names({ kind: 'agent_keys', person: 'daniel' })).toEqual([])
-  })
-
-  it('offers the viewer first, then people, agents and people who left', () => {
-    expect(personOptions(rows, 'me')).toEqual([
-      { id: 'me', label: 'Aisha Khan (you)' },
-      { id: 'daniel', label: 'Daniel Berg' },
-      { id: 'elin', label: 'Elin Sand' },
-      { id: 'relay', label: 'Release bot' },
-      { id: 'gone', label: 'Removed user' },
-    ])
+describe('the count line', () => {
+  it('names the rows on screen by their places in the list, with no total', () => {
+    expect(rangeLabel(0, 25)).toBe('1–25')
+    expect(rangeLabel(25, 25)).toBe('26–50')
+    // a page the read budget stopped early holds fewer rows
+    expect(rangeLabel(50, 7)).toBe('51–57')
+    expect(rangeLabel(57, 1)).toBe('58')
+    expect(rangeLabel(0, 0)).toBeNull()
   })
 })
 
