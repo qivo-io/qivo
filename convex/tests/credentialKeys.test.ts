@@ -326,10 +326,9 @@ describe('internal/credentialKeysBackfill', () => {
     credentialKeys.RUN.ms = 0
     const totals = { agent_keys: 0, mcp_tokens: 0, oauth_connections: 0, orphans: 0 }
     let calls = 0
-    for (
-      let from: { table?: 'agent_keys' | 'mcp_tokens' | 'oauth_connections'; cursor?: string } = {};
-      ;
-    ) {
+    // each answer goes back unchanged, a null cursor where a table starts too
+    const answers: { table: string | null; cursor: string | null }[] = []
+    for (let from = {}; ; ) {
       const got = await t.action(internal.internal.credentialKeysBackfill.run, {
         dry_run: false,
         ...from,
@@ -337,9 +336,11 @@ describe('internal/credentialKeysBackfill', () => {
       calls++
       for (const key of Object.keys(totals) as (keyof typeof totals)[]) totals[key] += got[key]
       if (got.done) break
-      from = { table: got.table ?? undefined, cursor: got.cursor ?? undefined }
+      answers.push({ table: got.table, cursor: got.cursor })
+      from = { table: got.table, cursor: got.cursor }
     }
     expect(calls).toBeGreaterThan(3)
+    expect(answers.some((answer) => answer.cursor === null && answer.table !== null)).toBe(true)
     expect(totals).toEqual({ agent_keys: 2, mcp_tokens: 2, oauth_connections: 2, orphans: 1 })
     expect((await audits(t)).length).toBe(calls)
 
@@ -383,5 +384,62 @@ describe('internal/credentialKeysBackfill', () => {
     expect(
       await t.action(internal.internal.credentialKeysBackfill.run, { dry_run: false }),
     ).toMatchObject({ agent_keys: 0, mcp_tokens: 0, oauth_connections: 0, orphans: 1, done: true })
+  })
+
+  it('refuses a cursor without the table it was answered with', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await legacy(t, f)
+    credentialKeys.BACKFILL_PAGE.rows = 1
+    credentialKeys.RUN.ms = 0
+    const first = await t.action(internal.internal.credentialKeysBackfill.run, { dry_run: true })
+    expect(first).toMatchObject({ done: false, table: 'agent_keys', cursor: expect.any(String) })
+    for (const table of [undefined, null])
+      await expect(
+        t.action(internal.internal.credentialKeysBackfill.run, {
+          dry_run: true,
+          table,
+          cursor: first.cursor,
+        }),
+      ).rejects.toThrow(/goes back with the table/)
+    // no cursor, or a null one, starts from the first table
+    expect(
+      await t.action(internal.internal.credentialKeysBackfill.run, {
+        dry_run: true,
+        table: null,
+        cursor: null,
+      }),
+    ).toMatchObject({ agent_keys: 1, table: 'agent_keys' })
+  })
+
+  it('records what committed and answers the page to read again when a step fails', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await legacy(t, f)
+    // a second profile with the agent's id, which no read of it accepts
+    const twin = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...agent } = f.agent
+      return await ctx.db.insert('profiles', agent)
+    })
+    const failed = await t.action(internal.internal.credentialKeysBackfill.run, {
+      dry_run: false,
+    })
+    expect(failed).toMatchObject({
+      agent_keys: 0,
+      done: false,
+      table: 'agent_keys',
+      cursor: null,
+      error: expect.any(String),
+    })
+    expect(await audits(t)).toMatchObject([{ detail: { agent_keys: 0, mcp_tokens: 0 } }])
+    await t.run((ctx) => ctx.db.delete(twin))
+    expect(
+      await t.action(internal.internal.credentialKeysBackfill.run, {
+        dry_run: false,
+        table: failed.table,
+        cursor: failed.cursor,
+      }),
+    ).toMatchObject({ agent_keys: 2, mcp_tokens: 2, oauth_connections: 2, done: true })
+    expect(await audits(t)).toHaveLength(2)
   })
 })

@@ -668,11 +668,15 @@ the release that added them has none until the one-time
 them, and the next call of a credential ranks its row as well. Nothing reads
 them yet. Run both backfills on every hosted deployment once it serves that
 release, as the modules' headers say. Read each dry run first, then run it.
-A call that does not finish in about five minutes answers a `cursor`; call
-it again with the same arguments and that `cursor` until it answers `done`.
-Then check that a second dry run of each reports nothing left and that
-`internal/usageRanksBackfill:check` reports no unranked bucket and no
-difference. The check also lists calendar months that hold a total in
+A call that does not finish in about five minutes answers where to go on:
+`internal/credentialKeysBackfill` a `table` and a `cursor`, which can be
+null where a table starts, and `internal/usageRanksBackfill` a `cursor`.
+Call it again with the same arguments and what it answered, unchanged,
+until it answers `done`. A call that answers an `error` kept what it wrote
+before, and its `cursor` reads that page again. Then check that a second dry
+run of each reports nothing left and that
+`internal/usageRanksBackfill:check`, which goes on from its `cursor` the
+same way, reports no unranked bucket and no difference. The check also lists calendar months that hold a total in
 `billing_usage_totals`, which v0.1.14 and v0.1.15 wrote and which counts
 only the calls of those releases. Earlier releases do not accept the fields
 or the two tables, and the first credential or call stored after the deploy

@@ -29,36 +29,44 @@
  * the keys and check again:
  *   "$H" staging npx convex run internal/credentialKeysBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/credentialKeysBackfill:run '{"dry_run": false}'
- * A call stops after RUN.ms, well inside Convex's action time limit, and
- * then answers `done: false` with a `table` and a `cursor`. Call it again
- * with the same arguments and those two until `done` is true.
+ * A call stops between two steps once RUN.ms has passed, well inside
+ * Convex's action time limit, and then answers `done: false` with a `table`
+ * and a `cursor`. Call it again with the same arguments and both of those,
+ * unchanged, until `done` is true. The cursor is null where a table starts,
+ * and a cursor without its table is refused. A run reads each page in a
+ * query and writes only the rows that need keys, each read again by id in a
+ * small batch, so the credentials every API call stamps stay out of its
+ * transactions. A page or batch that fails ends the call with `error`, after
+ * the audit row of what committed, and the `table` and `cursor` of the page
+ * to read again.
  *
  * On the demo, whose stored key cannot run internal functions, the private
  * with-temp-deploy-key helper runs each command with a short-lived key:
  * `remaining` needs deployment:functions:runInternalQueries and `run`, an
  * internal action, deployment:functions:runInternalActions.
  *
- * A call that writes adds one platform_audit_log row (action
+ * A call that is not a dry run adds one platform_audit_log row (action
  * 'credential_keys_backfill', actor 'system') with its counts. The results
  * hold counts only, never a credential's name or hash. Running it again is
  * safe, and a clean deployment reports zeros. It writes no activity, sends
  * no task event and changes nothing a person sees. */
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
-import type { Doc } from '../_generated/dataModel'
-import type { MutationCtx, QueryCtx } from '../_generated/server'
+import type { Doc, Id } from '../_generated/dataModel'
+import type { QueryCtx } from '../_generated/server'
 import { internalAction, internalMutation, internalQuery } from '../_generated/server'
 import { byId } from '../lib/db'
+import { badRequest } from '../lib/functions'
 import { MIB } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { audit as writeAudit } from '../model/admin'
 
-/** Rows per page of each table, for the check and for each step of the
- * run, and the bytes one page may read. A credential row is a few hundred
- * bytes, and a page reads at most one profile per row and writes at most one
- * patch per row, inside Convex's 4,096 index ranges and 16,000 writes. Tests
- * lower them. */
-export const BACKFILL_PAGE = { rows: 500, bytes: 4 * MIB }
+/** Rows per page of each table, the bytes one page may read, and the rows
+ * one batch of the run writes. A credential row is a few hundred bytes, and
+ * a page reads at most one profile per row, a few hundred bytes more. A
+ * batch reads each row again and its profile, and writes one patch per row.
+ * Tests lower them. */
+export const BACKFILL_PAGE = { rows: 500, bytes: 4 * MIB, batch: 100 }
 
 /** How long one call of run goes on before it answers where to go on from.
  * Tests lower it. */
@@ -67,9 +75,19 @@ export const RUN = { ms: 5 * 60_000 }
 const TABLES = ['agent_keys', 'mcp_tokens', 'oauth_connections'] as const
 type KeyedTable = (typeof TABLES)[number]
 const vTable = v.union(...TABLES.map((table) => v.literal(table)))
+const vCredentialId = v.union(v.id('agent_keys'), v.id('mcp_tokens'), v.id('oauth_connections'))
+type CredentialId = Id<KeyedTable>
 
-/** What one page found, and where the next one starts. */
-type PageResult = { rows: number; orphans: number; cursor: string; done: boolean }
+/** What one page found: how many rows have keys that are missing or differ,
+ * which rows those are, how many have no profile, and where the next page
+ * starts. */
+type PageResult = {
+  rows: number
+  orphans: number
+  stale: CredentialId[]
+  cursor: string
+  done: boolean
+}
 
 /** The keys a credential row should hold, or null for an agent key or
  * personal token whose profile is gone. */
@@ -88,58 +106,55 @@ async function keysOf(
   return owner === null ? null : { org_id: owner.org_id, name_key: nameKey(row.name) }
 }
 
-/* One page of `table` from `cursor`: how many rows have keys that are
- * missing or differ, and how many have no profile to take an organization
- * from, and, unless `write` is null, gives each its keys. The check and the
- * run share it, so both find the same rows. The page is read in creation
- * order, which the keys do not change, so the cursor stays valid. */
-async function walk(
-  ctx: QueryCtx,
-  table: KeyedTable,
-  cursor: string | null,
-  write: MutationCtx | null,
-): Promise<PageResult> {
+/** Whether `row` holds keys other than `keys`. */
+const isStale = (row: Doc<KeyedTable>, keys: { org_id?: string; name_key: string }): boolean =>
+  row.name_key !== keys.name_key || ('org_id' in keys && row.org_id !== keys.org_id)
+
+/* One page of `table` from `cursor`, read without writing: the rows whose
+ * keys are missing or differ, and the rows without a profile to take an
+ * organization from. The check and the run share it, so both find the same
+ * rows. The page is read in creation order, which the keys do not change,
+ * so the cursor stays valid. */
+async function walk(ctx: QueryCtx, table: KeyedTable, cursor: string | null): Promise<PageResult> {
   const page = await ctx.db.query(table).paginate({
     cursor,
     numItems: BACKFILL_PAGE.rows,
     maximumBytesRead: BACKFILL_PAGE.bytes,
   })
   const profiles = new Map<string, Promise<Doc<'profiles'> | null>>()
-  let rows = 0
+  const stale: CredentialId[] = []
   let orphans = 0
   for (const row of page.page) {
     const keys = await keysOf(ctx, row, profiles)
-    if (keys === null) {
-      orphans++
-      continue
-    }
-    const stale = row.name_key !== keys.name_key || ('org_id' in keys && row.org_id !== keys.org_id)
-    if (!stale) continue
-    rows++
-    if (write !== null) await write.db.patch(row._id, keys)
+    if (keys === null) orphans++
+    else if (isStale(row, keys)) stale.push(row._id)
   }
-  return { rows, orphans, cursor: page.continueCursor, done: page.isDone }
+  return { rows: stale.length, orphans, stale, cursor: page.continueCursor, done: page.isDone }
 }
 
-const pageRef = makeFunctionReference<
-  'mutation',
-  { table: KeyedTable; dry_run: boolean; cursor: string | null },
-  PageResult
->('internal/credentialKeysBackfill:page')
+/** One page of `table` and the rows on it that need keys (walk). */
+export const scan = internalQuery({
+  args: { table: vTable, cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { table, cursor }): Promise<PageResult> => await walk(ctx, table, cursor),
+})
 
-/** The counts a run adds up, per table. */
-type Counts = Record<KeyedTable, number> & { orphans: number }
-
-const auditRef = makeFunctionReference<'mutation', Counts, null>(
-  'internal/credentialKeysBackfill:audit',
-)
-
-/** One page in its own transaction: gives the keys, or only counts the rows
- * without them with `dry_run`. */
-export const page = internalMutation({
-  args: { table: vTable, dry_run: v.boolean(), cursor: v.union(v.string(), v.null()) },
-  handler: async (ctx, { table, dry_run, cursor }): Promise<PageResult> =>
-    await walk(ctx, table, cursor, dry_run ? null : ctx),
+/** Gives each of the rows `ids` the keys it needs, reading it again, and
+ * answers how many it changed. A row gone, without a profile or with its
+ * keys already is left alone. */
+export const fix = internalMutation({
+  args: { ids: v.array(vCredentialId) },
+  handler: async (ctx, { ids }): Promise<number> => {
+    const profiles = new Map<string, Promise<Doc<'profiles'> | null>>()
+    let fixed = 0
+    for (const id of ids) {
+      const row = await ctx.db.get(id)
+      const keys = row === null ? null : await keysOf(ctx, row, profiles)
+      if (row === null || keys === null || !isStale(row, keys)) continue
+      await ctx.db.patch(id, keys)
+      fixed++
+    }
+    return fixed
+  },
 })
 
 /** Counts, without writing, the rows of one page of `table` whose keys are
@@ -147,11 +162,16 @@ export const page = internalMutation({
  * then call again with the returned `cursor` until `done`. */
 export const remaining = internalQuery({
   args: { table: vTable, cursor: v.optional(v.union(v.string(), v.null())) },
-  handler: async (ctx, { table, cursor }): Promise<PageResult> =>
-    await walk(ctx, table, cursor ?? null, null),
+  handler: async (ctx, { table, cursor }) => {
+    const { stale: _ids, ...counts } = await walk(ctx, table, cursor ?? null)
+    return counts
+  },
 })
 
-/** Records a call that wrote, with its counts. */
+/** The counts a run adds up, per table. */
+type Counts = Record<KeyedTable, number> & { orphans: number }
+
+/** Records a call that was not a dry run, with its counts. */
 export const audit = internalMutation({
   args: {
     agent_keys: v.number(),
@@ -169,32 +189,72 @@ export const audit = internalMutation({
   },
 })
 
+const scanRef = makeFunctionReference<
+  'query',
+  { table: KeyedTable; cursor: string | null },
+  PageResult
+>('internal/credentialKeysBackfill:scan')
+const fixRef = makeFunctionReference<'mutation', { ids: CredentialId[] }, number>(
+  'internal/credentialKeysBackfill:fix',
+)
+const auditRef = makeFunctionReference<'mutation', Counts, null>(
+  'internal/credentialKeysBackfill:audit',
+)
+
 /** Walks the pages of every table from `table` and `cursor` on, or from the
  * start, and reports per table how many rows it gave keys, or would give
- * them, and how many it left without a profile. Past RUN.ms it answers the
- * `table` and `cursor` to go on from, else `done`. A call that wrote ends
- * with its audit row. */
+ * them, and how many it left without a profile. Between any two steps past
+ * RUN.ms, once it has written a batch or read a page with nothing to write,
+ * it answers the `table` and `cursor` to go on from, else `done`. A page or
+ * batch that fails ends the call with `error` and the page to read again. A
+ * call that is not a dry run ends with its audit row of what committed. */
 export const run = internalAction({
-  args: { dry_run: v.boolean(), table: v.optional(vTable), cursor: v.optional(v.string()) },
-  handler: async (ctx, { dry_run, table: from, cursor: at }) => {
+  args: {
+    dry_run: v.boolean(),
+    table: v.optional(v.union(vTable, v.null())),
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  handler: async (ctx, { dry_run, table, cursor: at }) => {
+    const from = table ?? undefined
+    if (from === undefined && at !== undefined && at !== null)
+      throw badRequest('a cursor goes back with the table it was answered with')
     const until = Date.now() + RUN.ms
     const counts: Counts = { agent_keys: 0, mcp_tokens: 0, oauth_connections: 0, orphans: 0 }
     let next: { table: KeyedTable; cursor: string | null } | null = null
-    let paged = false
+    let error: string | null = null
+    // Every call gets through one batch, or one page with nothing to write,
+    // before it may stop, so each call moves the walk on.
+    let progressed = false
+    const late = () => progressed && Date.now() >= until
     walking: for (const table of TABLES.slice(from === undefined ? 0 : TABLES.indexOf(from))) {
       let cursor: string | null = table === from ? (at ?? null) : null
       for (;;) {
-        // every call gets through at least one page
-        if (paged && Date.now() >= until) {
+        if (late()) {
           next = { table, cursor }
           break walking
         }
-        const result: PageResult = await ctx.runMutation(pageRef, { table, dry_run, cursor })
-        paged = true
-        counts[table] += result.rows
-        counts.orphans += result.orphans
-        if (result.done) break
-        cursor = result.cursor
+        try {
+          const page: PageResult = await ctx.runQuery(scanRef, { table, cursor })
+          counts.orphans += page.orphans
+          if (dry_run) counts[table] += page.rows
+          for (let i = 0; !dry_run && i < page.stale.length; i += BACKFILL_PAGE.batch) {
+            if (late()) {
+              next = { table, cursor }
+              break walking
+            }
+            const ids = page.stale.slice(i, i + BACKFILL_PAGE.batch)
+            counts[table] += await ctx.runMutation(fixRef, { ids })
+            progressed = true
+          }
+          progressed = true
+          if (page.done) break
+          cursor = page.cursor
+        } catch (failure) {
+          // what committed stays; the page is read again from its start
+          error = failure instanceof Error ? failure.message : String(failure)
+          next = { table, cursor }
+          break walking
+        }
       }
     }
     if (!dry_run) await ctx.runMutation(auditRef, counts)
@@ -204,6 +264,7 @@ export const run = internalAction({
       done: next === null,
       table: next?.table ?? null,
       cursor: next?.cursor ?? null,
+      ...(error === null ? {} : { error }),
     }
   },
 })
