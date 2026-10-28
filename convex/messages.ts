@@ -12,7 +12,8 @@
  * pre-filters anyway), so a probe learns nothing and a stale id is not an
  * error. An item action reads only the caller's own item
  * (model/messages.ts itemMessages), and a task without one, or an unknown
- * task id, changes nothing.
+ * task id, changes nothing and raises nothing, except that snoozeItem
+ * still refuses an `until` that snooze refuses.
  *
  * Each write is a model/messages.ts function the machine inbox
  * (machine/discussion.ts) runs too. markRead then restores 0109's invariant
@@ -137,17 +138,25 @@ const vThrough = v.number()
 /* Marks the caller's item about one task read. It marks the unread
  * messages stored up to `through`, or all of them without it, so a message
  * stored after the caller's view stays unread, a notice that carries an
- * earlier time included. The prune then
- * keeps the item's newest message (model/messages.ts markMessagesRead),
- * which is that later arrival when there is one. An item holds at most
- * ITEM_UNREAD_CAP + 1 (51) messages, but one stored before the cap keeps
- * more until arrivals or internal/inboxItemsBackfill trim it, at most
- * BUILD.pair_rows (1,000) once the backfill built it. On such an item this
- * patches up to 1,000 rows and the prune deletes up to 999, about 2,000 of
- * Convex's 16,000 writes, and it reads each message up to four times (the
- * item, the patch, the prune's read and its delete). With messages of about
- * 1.3 KB that is about 1.3 MB written and 5.3 MB read
- * (convex/tests/inboxReads.test.ts), inside 16 MiB. */
+ * earlier time included. The prune then keeps the item's newest message
+ * (model/messages.ts markMessagesRead), which is that later message when
+ * there is one. That message keeps the dropped count the item cap moved
+ * onto it (schema.ts messages.dropped), as markRead leaves it: a trim after
+ * the caller's view can also have dropped messages stored after it, which
+ * the count cannot tell apart, so the count stays until that message is
+ * read.
+ *
+ * An item kept at the cap holds at most ITEM_UNREAD_CAP + 1 (51) messages.
+ * One stored before the cap holds more. The backfill builds an item of up
+ * to BUILD.pair_rows (1,000) messages as it is and trims only larger ones,
+ * an arrival trims at most ITEM_TRIM_STEP (50), and on a seat not built yet
+ * the item can be larger still, as it is for markRead's prune and for
+ * snooze, which read the whole item too. A 1,000-message item costs about
+ * 2,000 of Convex's 16,000 writes (1,000 patches and 999 deletes by the
+ * prune), and each message is read up to four times (the item, the patch,
+ * the prune's read and its delete): about 1.3 MB written and 5.3 MB read
+ * at about 1.3 KB a message (convex/tests/inboxReads.test.ts), so an item
+ * of about 3,000 such messages would pass Convex's 16 MiB read. */
 export const readItem = orgMutation({
   args: { issue_id: v.string(), through: v.optional(vThrough) },
   handler: async (ctx, { issue_id, through }) => {
@@ -172,7 +181,9 @@ export const unreadItem = orgMutation({
 
 /* Removes the caller's item about one task, the messages stored up to
  * `through` or all of them without it, so a message stored after the
- * caller's view stays as the item's only one. */
+ * caller's view stays as the item's only one. That message keeps the
+ * dropped count the item cap moved onto it, as for readItem. Its size
+ * bounds are readItem's. */
 export const removeItem = orgMutation({
   args: { issue_id: v.string(), through: v.optional(vThrough) },
   handler: async (ctx, { issue_id, through }) => {
@@ -183,7 +194,9 @@ export const removeItem = orgMutation({
 
 /* Snoozes the caller's item about one task until `until`, or with null
  * lifts its snooze now, with snooze's checks, refusals and scheduled wake
- * (model/messages.ts snoozeMessages). */
+ * (model/messages.ts snoozeMessages). An `until` that snooze refuses, in
+ * the past or past LIMITS.snooze, is refused also when the caller holds no
+ * item about the task, as snooze refuses it with no ids. */
 export const snoozeItem = orgMutation({
   args: { issue_id: v.string(), until: v.union(v.string(), v.null()) },
   handler: async (ctx, { issue_id, until }) => {

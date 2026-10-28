@@ -748,6 +748,33 @@ describe('the item actions', () => {
     expect(await drift(t)).toEqual([])
   })
 
+  it('a later message keeps the cap’s dropped count after a partial readItem, until it is read', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const guest = as(t, f.guest)
+    const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    for (let i = 0; i < ITEM_UNREAD_CAP + 3; i++)
+      await post(t, f, { to: f.guest, task: a, minute: i, kind: 'comment' })
+    const view = await itemFor(t, f, f.guest, a.id)
+    if (view.state !== 'ok' || view.item === null) throw new Error('no item')
+    expect(view.item).toMatchObject({ unread_count: ITEM_UNREAD_CAP, dropped: 3 })
+    // the arrival trims one more and carries the whole count
+    const later = (await post(t, f, { to: f.guest, task: a, minute: 100, kind: 'comment' }))!
+    await guest.mutation(api.messages.readItem, {
+      org_id: f.org.id,
+      issue_id: a.id,
+      through: view.item.through,
+    })
+    expect(await pairRows(t, f.guest.id, a.id)).toEqual([
+      expect.objectContaining({ id: later.id, dropped: 4 }),
+    ])
+    expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({ unread_count: 1, dropped: 4 })
+    expect(await drift(t)).toEqual([])
+    await guest.mutation(api.messages.readItem, { org_id: f.org.id, issue_id: a.id })
+    expect(await storedItem(t, f.guest.id, a.id)).toMatchObject({ unread_count: 0, dropped: 0 })
+    expect(await drift(t)).toEqual([])
+  })
+
   it('readItem and removeItem leave out a later notice that carries an earlier time or a lower id', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -878,6 +905,16 @@ describe('the item actions', () => {
     await post(t, f, { to: f.guest, task: a, minute: 2 })
     const snooze = (until: string | null) =>
       guest.mutation(api.messages.snoozeItem, { org_id: f.org.id, issue_id: a.id, until })
+    // a time snooze refuses is refused without an item too
+    await expectRefusal(
+      guest.mutation(api.messages.snoozeItem, {
+        org_id: f.org.id,
+        issue_id: uuid(),
+        until: new Date(START - DAY).toISOString(),
+      }),
+      'bad_request',
+      /until must be in the future/,
+    )
     await expectRefusal(
       snooze(new Date(START - DAY).toISOString()),
       'bad_request',
