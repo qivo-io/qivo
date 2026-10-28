@@ -2322,8 +2322,12 @@ export async function applyTaskUpdate(
   },
 ): Promise<Doc<'issues'>> {
   const { me, now, provenance } = a
-  // the text, read once for the check and the field write when the update
-  // writes it; no step before that write changes it
+  // the text readers showed when the request began, read once for the
+  // check and the field write when the update writes it. A move before that
+  // write rewrites the description row from issues.description when the
+  // copies differ, which only a rollback leaves (model/descriptions.ts
+  // patchTask); the field write then still narrates from the text the
+  // request saw.
   const text = 'description' in a.patch ? await descriptionOf(ctx.db, a.issue) : undefined
   // against the task as it is before the move changes it
   await assertTaskExpected(ctx, {

@@ -11,12 +11,13 @@
  *
  * Readers read issue_descriptions from the second release, this one: a
  * task's text is its first row's, and only a task without a row reads
- * issues.description (model/descriptions.ts descriptionOf). Main Search
- * reads the search_description index. Each ships to production only once a
- * dry run on every deployment (development, staging, production and the
- * demo) reports zero `missing`, `differ`, `duplicates`, `orphans` and
- * `skipped` (docs/deployment.md), because a reader shows a row that
- * differs from its task, not the task's text. The third release stops
+ * issues.description (model/descriptions.ts descriptionOf). It ships to
+ * production only once a dry run on every deployment (development, staging,
+ * production and the demo) reports zero `missing`, `differ`, `duplicates`,
+ * `orphans` and `skipped` (docs/deployment.md), because a reader shows a row
+ * that differs from its task, not the task's text. Main Search's
+ * description matches, which a later stage reads through the
+ * search_description index, follow the same rule. The third release stops
  * writing issues.description and clears it; a rollback from it to this
  * release still shows every description, and one to the first release does
  * not.

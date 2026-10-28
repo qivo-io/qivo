@@ -2166,7 +2166,10 @@ export async function notifyIssueInsert(
 /* ---------------------------------------------------------- notify: update
  * notify_issue_update (0114:196-352). Diffs ONLY the trigger's column list;
  * a write that changes nothing in it must not post. Callers hand the STORED
- * before/after rows, for the remaining-clear side-effect write too. A
+ * before/after rows, for the remaining-clear side-effect write too, except
+ * that a write that changes the description hands both with their text
+ * (model/descriptions.ts withText, textsOf), which the stored rows stop
+ * holding in the third release of the description move. A
  * group's calculated dates are never stored, so a subtask moving its span
  * sends the group's followers nothing.
  *

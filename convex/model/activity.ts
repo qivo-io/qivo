@@ -95,7 +95,9 @@ const DIFF_FIELDS = [
 /** Whether a task write changed anything its history narrates: a DIFF_FIELDS
  * column, the parent or the archive state. It compares the stored rows, so a
  * trimmed title, cleanRemaining and the unchanged-parent drop count as no
- * change. */
+ * change. A write that changes the description passes both rows with their
+ * text (model/descriptions.ts textsOf), and every other write the stored
+ * rows on both sides, so their descriptions compare equal. */
 export function narratedChange(before: Doc<'issues'>, after: Doc<'issues'>): boolean {
   return (
     DIFF_FIELDS.some(([col]) => (before[col] ?? '') !== (after[col] ?? '')) ||
@@ -137,7 +139,8 @@ export const signedDetail = (
 ): string | undefined => (provenance === undefined ? detail : machineDetail(detail, provenance))
 
 // Narrate stored before/after values, resolving profile names when available.
-// No changed narratable fields means no detail string.
+// No changed narratable fields means no detail string. A write that changes
+// the description passes both rows with their text, as narratedChange says.
 export function issueChanges(
   before: Doc<'issues'>,
   after: Doc<'issues'>,

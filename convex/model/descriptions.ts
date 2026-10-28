@@ -14,11 +14,12 @@
  * scripts/check-task-reads.mjs fails on any other read of
  * issues.description. Writers keep the first release's rule: every path
  * that writes a row takes the text from the task row while it holds one,
- * and only then from the row. Every release writes issues.description and
- * the first writes only it, so the task row holds the freshest text. So
- * readers prove the rows on every deployment while the task row still
- * holds a copy, and a rollback to the first release, which reads only
- * issues.description, loses nothing. The third release stops writing
+ * and only then from the row. Every release so far writes
+ * issues.description, and the releases from before the table write only
+ * it, so the task row holds the freshest text. So readers prove the rows on
+ * every deployment while the task row still holds a copy, and a rollback to
+ * the first release of the move, which reads only issues.description,
+ * loses nothing. The third release stops writing
  * issues.description and clears it; a rollback from it to this release
  * still shows every description, because this one reads the rows.
  *
