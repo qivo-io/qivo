@@ -22,6 +22,7 @@ import {
   parseArchiveCursor,
 } from '../lib/archivedTasks'
 import {
+  DESCRIPTION_READS_RESERVE,
   LABEL_READS_RESERVE,
   LABEL_TASK_READS,
   PAGE_TOO_LARGE,
@@ -292,12 +293,17 @@ describe('active task lists read active tasks only', () => {
       })
     })
     // each task's own assignments, and each label's active ones, as a
-    // search of many tasks reads them, with a reserve that fits this
+    // search of many tasks reads them, with reserves that fit this
     // request's 100 documents
     for (const reads of [LABEL_TASK_READS.reads, 0]) {
-      const before = { reads: LABEL_TASK_READS.reads, documents: LABEL_READS_RESERVE.documents }
+      const before = {
+        reads: LABEL_TASK_READS.reads,
+        documents: LABEL_READS_RESERVE.documents,
+        texts: DESCRIPTION_READS_RESERVE.documents,
+      }
       LABEL_TASK_READS.reads = reads
       LABEL_READS_RESERVE.documents = 16
+      DESCRIPTION_READS_RESERVE.documents = 32
       try {
         const rest = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', search: 'bug' })
         expect(rest.map((row) => row.id)).toEqual([plain.id, restored.id])
@@ -306,6 +312,7 @@ describe('active task lists read active tasks only', () => {
       } finally {
         LABEL_TASK_READS.reads = before.reads
         LABEL_READS_RESERVE.documents = before.documents
+        DESCRIPTION_READS_RESERVE.documents = before.texts
       }
     }
   })

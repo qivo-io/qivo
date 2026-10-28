@@ -481,6 +481,7 @@ async function writeStep(
       // These are explicitly imported fixtures. Atlas is the import actor;
       // reporter is separate attribution, never a forged creator history.
       const windowKey = newWindowKey()
+      const description = cleanDescription(i.description)
       const issueDocId = await insertTask(
         ctx.db,
         {
@@ -490,7 +491,7 @@ async function writeStep(
           project_id: projectIds[i.project],
           num: index + 1,
           title: i.title,
-          description: cleanDescription(i.description),
+          description,
           status: i.status,
           priority: i.priority,
           assignee_id: i.assignee ? personIds[i.assignee] : undefined,
@@ -550,7 +551,14 @@ async function writeStep(
       require(issue !== null, rule(SEED_ROW_MISSING.task))
       inserted.push(issue)
       shared.tasks.set(i.key, issue)
-      await notifyIssueInsert(ctx, { issue, actor: atlas, now, preload, skipTaskEvent: true })
+      await notifyIssueInsert(ctx, {
+        issue,
+        description,
+        actor: atlas,
+        now,
+        preload,
+        skipTaskEvent: true,
+      })
     }
     // one read of the counters for the step's tasks, not one per task,
     // which also counts the labels just put on them (model/labelCounts.ts)

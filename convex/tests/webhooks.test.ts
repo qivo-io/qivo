@@ -256,7 +256,7 @@ describe('durable task events', () => {
       await f.subscribe(name)
     await f.t.run(async (ctx) => {
       const a = { issue: f.issue, actor: f.fx.user, now: new Date().toISOString() }
-      await notifyIssueInsert(ctx, a)
+      await notifyIssueInsert(ctx, { ...a, description: '' })
       await notifyCommentInsert(ctx, { ...a, comment: { body: 'A comment with private content' } })
     })
     await flushWebhookEvents(f.t)

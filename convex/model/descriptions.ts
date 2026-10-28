@@ -5,12 +5,29 @@
  * only this file writes issue_descriptions. scripts/check-task-writes.mjs
  * fails on any other such write.
  *
- * In this release issues.description stays the source of truth. Readers
- * read it, and a task stored before the table, which has no row until
- * internal/descriptionsBackfill gives it one, reads as it did. A release
- * before this one can run again after it and change issues.description
- * without the row, so every path here takes the text from the task row
- * while it holds one, and only then from the row.
+ * In this release, the second of the move, readers and writers follow
+ * different rules. Every reader takes a task's text from its first
+ * description row in creation order (descriptionOf, withText,
+ * descriptionsOf), and only a task without a row, which
+ * internal/descriptionsBackfill has not reached, reads issues.description.
+ * Only this file reads either copy for a reader, and
+ * scripts/check-task-reads.mjs fails on any other read of
+ * issues.description. Writers keep the first release's rule: every path
+ * that writes a row takes the text from the task row while it holds one,
+ * and only then from the row. Every release writes issues.description and
+ * the first writes only it, so the task row holds the freshest text. So
+ * readers prove the rows on every deployment while the task row still
+ * holds a copy, and a rollback to the first release, which reads only
+ * issues.description, loses nothing. The third release stops writing
+ * issues.description and clears it; a rollback from it to this release
+ * still shows every description, because this one reads the rows.
+ *
+ * A write that changes or checks a task's description passes the task with
+ * its text (withText) as its before and after documents, and every other
+ * write passes the stored rows on both sides, so the activity diff, the
+ * mention diff and a webhook's changed fields (textsOf) see a description
+ * change only where a write made one, also once the third release has
+ * cleared issues.description.
  *
  * A row names its task and copies its organization, project and archived
  * state, so main Search can filter descriptions by them (schema.ts
@@ -36,12 +53,84 @@ import type { WithoutSystemFields } from 'convex/server'
 import type { ConvexError } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import type { ReadCeiling } from '../lib/archivedTasks'
 import { insertUnique, insertUsed } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { Refusal } from '../lib/functions'
+import { DOCUMENT_MAX_BYTES } from './comments'
 
 type Reader = QueryCtx['db']
 type Writer = MutationCtx['db']
+
+/** A task with its text (descriptionOf) in `description`, in memory only,
+ * as a write that changes or checks the description passes it on. */
+export type TaskWithText = Doc<'issues'> & { description: string }
+
+/** The text of task `task` as readers show it: the text of its first
+ * description row in creation order, else issues.description for a task
+ * the backfill has not given a row, else ''. One by_issue range and at most
+ * one document. A second row, which a rollback can leave and the backfill's
+ * repair deletes, is never read. */
+export async function descriptionOf(
+  db: Reader,
+  task: Pick<Doc<'issues'>, 'id' | 'description'>,
+): Promise<string> {
+  const row = await db
+    .query('issue_descriptions')
+    .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+    .first()
+  return row?.description ?? task.description ?? ''
+}
+
+/** `task` with its text (descriptionOf) in `description`, in memory only.
+ * The cores that pass whole task documents on use it, for a write that
+ * changes or checks the description. It writes nothing; Deleted items
+ * stores a task through withDescription instead. */
+export async function withText(db: Reader, task: Doc<'issues'>): Promise<TaskWithText> {
+  return { ...task, description: await descriptionOf(db, task) }
+}
+
+/** The texts of `tasks` (descriptionOf) by task id, or null when `room` ran
+ * out before every one was read. `room` is the transaction's totals that
+ * the reads stay within (ctx.meta.getTransactionMetrics), every document a
+ * caller read before counted. It reads a few at a time, never more than
+ * the ranges, documents and bytes left under `room` could hold with every
+ * row at Convex's document size limit, so it never passes `room`, and each
+ * caller keeps its own answer once it runs out: a cut window, a refusal or
+ * a shorter page. */
+export async function descriptionsOf(
+  ctx: QueryCtx,
+  tasks: readonly Pick<Doc<'issues'>, 'id' | 'description'>[],
+  room: ReadCeiling,
+): Promise<Map<string, string> | null> {
+  const out = new Map<string, string>()
+  for (let at = 0; at < tasks.length; ) {
+    const m = await ctx.meta.getTransactionMetrics()
+    const fits = Math.min(
+      room.ranges - m.databaseQueries.used,
+      room.documents - m.documentsRead.used,
+      Math.floor((room.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
+    )
+    if (fits <= 0) return null
+    const step = tasks.slice(at, at + fits)
+    const texts = await Promise.all(step.map((task) => descriptionOf(ctx.db, task)))
+    for (const [i, task] of step.entries()) out.set(task.id, texts[i])
+    at += step.length
+  }
+  return out
+}
+
+/** The texts of a task write's `before` and `after` documents, '' for none.
+ * A write that changes or checks the description passes both with their
+ * text (withText), and every other write passes the stored rows on both
+ * sides, so the texts differ only when the write changed them. */
+export const textsOf = (
+  before: Doc<'issues'>,
+  after: Doc<'issues'>,
+): { before: string; after: string } => ({
+  before: before.description ?? '',
+  after: after.description ?? '',
+})
 
 /** The fields of a task row a write sets, its description among them. */
 export type TaskFields = Partial<WithoutSystemFields<Doc<'issues'>>>

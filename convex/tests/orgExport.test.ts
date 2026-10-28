@@ -588,7 +588,7 @@ describe('organization export', () => {
     )
   })
 
-  it('reads the parents of a page of tasks only while a deleted item is in flight, four tasks a page then', async () => {
+  it('reads the parents of a page of tasks only while a deleted item is in flight, three tasks a page then', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     // 100 parents with descriptions from before the 20,000-character cap,
@@ -629,9 +629,10 @@ describe('organization export', () => {
     expect(exported.size).toBe(100)
     for (const [index, id] of children.entries())
       expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
-    expect((await firstChildPage()).rows.length).toBeGreaterThan(10)
+    // a page holds ten tasks, each read with its description row
+    expect((await firstChildPage()).rows).toHaveLength(10)
 
-    // While a project item is in flight, a page holds ten tasks and reads
+    // While a project item is in flight, a page holds three tasks and reads
     // their parents, so the one parent under the moving project is left out.
     const moving = await plantProject(t, {
       org_id: f.org.id,
@@ -650,7 +651,7 @@ describe('organization export', () => {
     await plantProjectItem(t, moving, 'moving')
     await t.run((ctx) => ctx.db.delete(moving._id))
     const inFlight = await firstChildPage()
-    expect(inFlight.rows).toHaveLength(4)
+    expect(inFlight.rows).toHaveLength(3)
     expect(inFlight.isDone).toBe(false)
     exported = childRows(await readAll(caller, f.org.id, 'issues'))
     expect(exported.size).toBe(100)

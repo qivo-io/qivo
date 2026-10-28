@@ -70,6 +70,7 @@ import { limitedText } from './lib/limitRules'
 import { LIMITS } from './lib/limits'
 import { assertArchiveReasonRoom, postArchiveReason } from './model/comments'
 import { cleanReason, moveTasksToTrash } from './model/deletedItems'
+import { descriptionOf } from './model/descriptions'
 import {
   archiveIssueCore,
   assertCanEdit,
@@ -89,12 +90,16 @@ type MeCtx = QueryCtx & { me: Doc<'profiles'> }
 
 /* System fields stay internal; optional columns come back ABSENT, like the
  * workspace's rows. relations_marked (the archive steps' bookkeeping) and
- * window_key (where the app's windows place the task) stay internal too. */
+ * window_key (where the app's windows place the task) stay internal too.
+ * The text stays out: the app reads only the number, the parent's number
+ * and the archive answer from a write, and the text is the task's
+ * description row (model/descriptions.ts), which archivedFor reads. */
 const pub = ({
   _id,
   _creationTime,
   relations_marked: _marks,
   window_key: _window,
+  description: _description,
   ...row
 }: Doc<'issues'>) => row
 
@@ -255,6 +260,8 @@ export const archivedFor = authedQuery({
           .collect()
         return {
           ...(await pubFor(ctx, me, issue, seen)),
+          // the old page searched it
+          description: await descriptionOf(ctx.db, issue),
           is_group: await hasSubtasks(ctx, issue),
           label_ids: issueLabels.map((label) => label.label_id),
         }
@@ -324,8 +331,10 @@ export const update = orgMutation({
     await assertWritable(ctx, issue.project_id)
     // the parent pair goes with parent_id
     const next = 'parent_id' in patch ? { ...patch, has_hidden_parent: null } : patch
-    await assertTaskExpected(ctx, { me: ctx.me, issue, view: 'app', expected, next })
-    const after = await updateIssueCore(ctx, { me: ctx.me, issue, patch, now })
+    // the text, read once for the check and the write when the edit writes it
+    const text = 'description' in patch ? await descriptionOf(ctx.db, issue) : undefined
+    await assertTaskExpected(ctx, { me: ctx.me, issue, view: 'app', expected, next, text })
+    const after = await updateIssueCore(ctx, { me: ctx.me, issue, patch, now, text })
     return await pubFor(ctx, ctx.me, after)
   },
 })
