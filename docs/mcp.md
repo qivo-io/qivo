@@ -527,8 +527,9 @@ otherwise still work. A credential refused for another reason, such as a
 revoked key or a connection whose browser session ended, keeps its `401`.
 An organization admin restores editing through **Settings → Organization →
 Billing**, where they can subscribe, open the customer portal and inspect
-usage by account and key or OAuth connection. **API access** shows each
-credential's calls in the current or an earlier period. MCP does not expose
+usage by account, each with **View credentials**, which opens **API
+access** on that account. **API access** shows each credential's calls in
+the current or an earlier period. MCP does not expose
 billing subscription management tools. While writes are paused, an
 organization admin can still revoke any credential on **API access**, revoke
 or delete agent keys and make users Inactive in the app, and people can still
