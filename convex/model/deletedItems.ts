@@ -154,6 +154,7 @@ import {
   insertGrant,
   insertShare,
   type ProjectRead,
+  type ReachProject,
   reachFollows,
   syncLeads,
   syncReach,
@@ -2969,7 +2970,10 @@ async function revealProjects(run: Run): Promise<void> {
     run.item.parent_project_id === undefined
       ? null
       : await byId(run.ctx, 'projects', run.item.parent_project_id)
+  if (parent !== null) run.budget.bytes -= estimateDocumentBytes(parent)
   const top = docs.find((p) => p.id === run.item.target_id) ?? null
+  // the projects as the reveal writes them, which the leads' rows read
+  const written = new Map<string, ReachProject>()
   for (const [index, row] of rows.entries()) {
     const stored = docs[index]
     const project = {
@@ -2981,16 +2985,24 @@ async function revealProjects(run: Run): Promise<void> {
     await insertUsed(uncountedWriter(run.ctx.db), 'projects', project, 'restore')
     await tallyRow(run.ctx, 'projects', null, project)
     await run.ctx.db.delete(row._id)
+    written.set(project.id, project)
     run.budget.rows -= 1
     run.budget.bytes -= estimateDocumentBytes(row)
   }
   // Once every project is in, the reach rows of each stored lead follow the
   // lead the reveal wrote, which a role change since restore_access can
-  // have dropped or brought back (cleanProject).
+  // have dropped or brought back (cleanProject). They read the projects
+  // from what the reveal wrote and the outside parent it read, so a
+  // sub-project costs no read of its top-level project, which a legacy icon
+  // can make near 1 MiB; the reveal runs whole in one transaction.
+  const read =
+    (ctx: QueryCtx): ProjectRead =>
+    async (id) =>
+      written.get(id) ?? (id === parent?.id ? parent : await byId(ctx, 'projects', id))
   for (const stored of docs)
     if (stored.lead_id !== undefined) {
       const lead = stored.lead_id
-      await syncReachOf(run, (ctx) => syncLeads(ctx, stored.id, [lead]))
+      await syncReachOf(run, (ctx) => syncLeads(ctx, stored.id, [lead], read(ctx)))
     }
 }
 

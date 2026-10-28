@@ -1084,6 +1084,42 @@ describe('a restore and the work around it', () => {
     await expectAll(t, f)
   })
 
+  it('reveals many sub-projects with leads under a parent with a large legacy icon', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await ready(t)
+    const org_id = f.org.id
+    // a legacy icon on the top-level project, under the size a stored row
+    // may hold, and 24 sub-projects with a lead of their own each
+    await t.run(async (ctx) => {
+      const row = await byId(ctx, 'projects', f.meta.id)
+      if (row !== null) await ctx.db.patch(row._id, { icon: 'i'.repeat(950_000) })
+    })
+    for (let i = 0; i < 22; i++)
+      await plantProject(t, {
+        org_id,
+        type: 'project',
+        parent_id: f.meta.id,
+        lead_id: f.user.id,
+      })
+    await backfill(t, false)
+    await as(t, f.user).mutation(api.projects.deleteDeep, { org_id, id: f.meta.id })
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    expect(item.projects).toHaveLength(25)
+    await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
+    await runSteps(t)
+    // the reveal and every step after it finished
+    expect(await jobFor(t, item.id)).toBeNull()
+    expect(await t.run((ctx) => byId(ctx, 'deleted_items', item.id))).toBeNull()
+    // the check reads the parent for each person and project in one
+    // transaction, so the icon goes first
+    await t.run(async (ctx) => {
+      const row = await byId(ctx, 'projects', f.meta.id)
+      if (row !== null) await ctx.db.patch(row._id, { icon: undefined })
+    })
+    await expectAll(t, f)
+  }, 120_000)
+
   it('deletes the rows of a stuck restoring item it purges', async () => {
     const t = newT()
     const { f, item } = await halfRestored(t)
