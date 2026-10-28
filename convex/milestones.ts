@@ -31,6 +31,9 @@ import { calendarDay, dateShaped } from './model/taskValues'
 /** A milestone as the app holds it, as the projects part sends it. */
 type MilestoneRow = Omit<Doc<'milestones'>, '_id' | '_creationTime'>
 
+/* A position a batch answers as `next`, to pass back as `after`. */
+const vPosition = v.object({ week: v.string(), key: v.string(), id: v.string() })
+
 /* `projects` when it names at most MILESTONE_READ.projects ids. */
 function projectsArg(projects: readonly string[]): readonly string[] {
   if (projects.length > MILESTONE_READ.projects)
@@ -89,7 +92,7 @@ export const section = authedQuery({
     from: v.string(),
     side: v.union(v.literal('upcoming'), v.literal('past')),
     search: v.optional(v.string()),
-    after: v.optional(v.object({ week: v.string(), key: v.string(), id: v.string() })),
+    after: v.optional(vPosition),
     limit: v.number(),
   },
   handler: async (
@@ -132,14 +135,24 @@ export const section = authedQuery({
  * upcoming order, as the Roadmap draws its window (from its first week's
  * first day to the day after its last week) and Team sync this week and
  * next. `to` comes after `from`, at most LIMITS.roadmapWeeks.max weeks
- * later. Projects are read as `section` reads them. `stopped` is null when
- * every milestone in the range is there, or the stored day the read reached
- * when its budget ran out first, and the rows are then every milestone
- * stored before that day.
+ * later. Projects are read as `section` reads them. `next` and `stopped` are
+ * null when every milestone in the range is there. When the read's budget
+ * ran out first, the rows are every milestone up to the position `next`
+ * names, `stopped` is its stored day, and a call with `after: next` and the
+ * same projects and days goes on from there, without answering a milestone
+ * twice or skipping one.
  */
 export const between = authedQuery({
-  args: { projects: v.array(v.string()), from: v.string(), to: v.string() },
-  handler: async (ctx, a): Promise<{ rows: MilestoneRow[]; stopped: string | null }> => {
+  args: {
+    projects: v.array(v.string()),
+    from: v.string(),
+    to: v.string(),
+    after: v.optional(vPosition),
+  },
+  handler: async (
+    ctx,
+    a,
+  ): Promise<{ rows: MilestoneRow[]; next: MilestonePosition | null; stopped: string | null }> => {
     const projects = projectsArg(a.projects)
     const from = dayArg('from', a.from)
     const to = dayArg('to', a.to)
@@ -147,14 +160,13 @@ export const between = authedQuery({
     const weeks = LIMITS.roadmapWeeks.max
     if (to > shiftDay(from, 7 * weeks))
       throw badRequest(`to can be at most ${weeks} weeks after from`)
+    const after = a.after === undefined ? null : afterArg(a.after)
     const batch = await readMilestones(
       ctx,
       await milestoneProjects(ctx, ctx.myProfiles, projects),
-      { span: { from, to, order: 'asc' }, after: null, search: '', limit: Infinity },
+      { span: { from, to, order: 'asc' }, after, search: '', limit: Infinity },
     )
-    const { stopped } = batch
-    const rows = stopped === null ? batch.rows : batch.rows.filter((row) => row.week < stopped)
-    return { rows: rows.map(rowOf), stopped }
+    return { rows: batch.rows.map(rowOf), next: batch.next, stopped: batch.stopped }
   },
 })
 

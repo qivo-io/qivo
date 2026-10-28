@@ -18,6 +18,7 @@ import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import {
   MILESTONE_READ,
   MILESTONE_READ_TOO_LARGE,
+  type MilestonePosition,
   milestoneProjects,
   readMilestones,
 } from '../model/milestones'
@@ -48,6 +49,8 @@ const MONDAY = '2026-06-01'
 
 type SectionArgs = FunctionArgs<typeof api.milestones.section>
 type Section = FunctionReturnType<typeof api.milestones.section>
+type RangeArgs = FunctionArgs<typeof api.milestones.between>
+type Range = FunctionReturnType<typeof api.milestones.between>
 type Caller = ReturnType<typeof as>
 
 const READ = { ...MILESTONE_READ }
@@ -94,10 +97,16 @@ async function plantMany(
   return out
 }
 
-/* The reads' order: stored day, then name key, then id. */
-const compared = (a: Doc<'milestones'>, b: Doc<'milestones'>): number => {
-  const x = [a.week, nameKey(a.name), a.id]
-  const y = [b.week, nameKey(b.name), b.id]
+/* A milestone or a position as the reads order it: stored day, then name
+ * key, then id. */
+type Placed = Pick<Doc<'milestones'>, 'week' | 'name' | 'id'> | MilestonePosition
+const orderOf = (m: Placed) =>
+  'key' in m ? [m.week, m.key, m.id] : [m.week, nameKey(m.name), m.id]
+
+/* The reads' order. */
+const compared = (a: Placed, b: Placed): number => {
+  const x = orderOf(a)
+  const y = orderOf(b)
   for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1
   return 0
 }
@@ -122,6 +131,26 @@ async function walk(
     after = batch.next
   }
   throw new Error('a section did not end within 500 batches')
+}
+
+/* Every batch of a range from its start, following `next`. */
+async function walkRange(
+  caller: Caller,
+  args: Omit<RangeArgs, 'after'>,
+): Promise<{ ids: string[]; batches: Range[] }> {
+  const batches: Range[] = []
+  let after: RangeArgs['after']
+  for (let round = 0; round < 500; round++) {
+    const batch = await caller.query(api.milestones.between, {
+      ...args,
+      ...(after === undefined ? {} : { after }),
+    })
+    batches.push(batch)
+    if (batch.next === null)
+      return { ids: batches.flatMap((b) => b.rows.map((r) => r.id)), batches }
+    after = batch.next
+  }
+  throw new Error('a range did not end within 500 batches')
 }
 
 /* `count` top-level projects of the fixture's organization, each shared with
@@ -606,7 +635,7 @@ describe('a section', () => {
           from: MONDAY,
           to: plus(MONDAY, 7),
         }),
-      ).toEqual({ rows: [], stopped: null })
+      ).toEqual({ rows: [], next: null, stopped: null })
     }
   })
 })
@@ -644,7 +673,7 @@ describe('a range of days', () => {
     )
   })
 
-  it('stops at a day under a lowered budget, with every milestone before it', async () => {
+  it('stops under a lowered budget at a position, and goes on from it to every milestone once', async () => {
     const t = newT()
     const f = await withOrg(t)
     const rows = await plantMany(t, [
@@ -660,15 +689,18 @@ describe('a range of days', () => {
       })),
     ])
     MILESTONE_READ.documents = 30
-    const range = await as(t, f.user).query(api.milestones.between, {
+    const { ids, batches } = await walkRange(as(t, f.user), {
       projects: [f.meta.id, f.hidden.id],
       from: MONDAY,
       to: plus(MONDAY, 7 * 260),
     })
-    const stopped = range.stopped
-    if (stopped === null) throw new Error('the range read every milestone')
-    expect(stopped > MONDAY).toBe(true)
-    expect(range.rows.map((r) => r.id)).toEqual(ascending(rows.filter((m) => m.week < stopped)))
+    expect(ids).toEqual(ascending(rows))
+    expect(batches.length).toBeGreaterThan(1)
+    for (const { rows: answered, next, stopped } of batches.slice(0, -1)) {
+      if (next === null) throw new Error('a stopped range has no next')
+      expect(stopped).toBe(next.week)
+      for (const row of answered) expect(compared(row, next)).toBeLessThanOrEqual(0)
+    }
   })
 
   it('leaves the access checks before the read out of its budget', async () => {
@@ -755,7 +787,7 @@ describe('Team sync', () => {
       from: MONDAY,
       to: plus(MONDAY, 14),
     })
-    expect(ahead).toEqual({ rows: [thisWeek, nextWeek].map(rowOf), stopped: null })
+    expect(ahead).toEqual({ rows: [thisWeek, nextWeek].map(rowOf), next: null, stopped: null })
   })
 })
 
@@ -852,7 +884,7 @@ describe('refusals', () => {
     )
     expect(
       await user.query(api.milestones.between, { ...range, to: plus(MONDAY, 7 * 260) }),
-    ).toEqual({ rows: [], stopped: null })
+    ).toEqual({ rows: [], next: null, stopped: null })
   })
 
   it('refuses a caller who is not signed in', async () => {
@@ -1047,8 +1079,8 @@ describe('under Convex limits', () => {
       const args = { projects, from: MONDAY, to: plus(MONDAY, 7 * 260) }
       const range = await as(t, f.user).query(api.milestones.between, args)
       expect(range.stopped === null).toBe(completes)
-      const before = range.stopped
-      const want = before === null ? rows : rows.filter((m) => m.week < before)
+      const until = range.next
+      const want = until === null ? rows : rows.filter((m) => compared(m, until) <= 0)
       expect(range.rows.map((r) => r.id)).toEqual(ascending(want))
       const inline = await measured(t, f.user, projects, {
         span: { from: MONDAY, to: args.to, order: 'asc' },
