@@ -32,7 +32,10 @@
  * its next team, step or page, and then answers `done: false` with a
  * `cursor`, which can point inside a team's count. Call it again with the
  * same arguments and `"cursor"` set to it until `done` is true. Each call
- * reports the teams it went through.
+ * reports the teams it went through. A dry run checks the time between
+ * every two pages of a team's count too: a team whose count the deadline
+ * cuts short is listed as unchecked (`unchecked_teams`), never as settled or
+ * differing, and the next call goes on with the next team.
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
@@ -297,12 +300,15 @@ const DRY_TRIES = 3
  * the count, which its row's revision shows even for a write another undid;
  * it counts again while one did, at most DRY_TRIES times, and no more once
  * `late` answers true. Answers the count, the state read after it, null
- * once the team is gone, and whether nothing moved (`settled`). */
+ * once the team is gone, and whether nothing moved (`settled`). It asks
+ * `late` between every two pages, and answers null when that says true in
+ * the middle of the count: the team is then unchecked, as no partial count
+ * says anything. */
 export async function dryCount(
   ctx: Pick<ActionCtx, 'runQuery'>,
   before: TeamState,
   late: () => boolean = () => false,
-): Promise<{ members: number; state: TeamState | null; settled: boolean }> {
+): Promise<{ members: number; state: TeamState | null; settled: boolean } | null> {
   let state = before
   for (let tries = 1; ; tries++) {
     let members = 0
@@ -312,6 +318,7 @@ export async function dryCount(
       if (got === null) break
       members += got.members
       after = got.through
+      if (late()) return null
     }
     const now = await ctx.runQuery(stateRef, { team_id: state.team_id })
     // stateOf builds both, so their keys come in the same order
@@ -333,10 +340,11 @@ export async function dryCount(
  * COUNT_PAGE.listed of them, lists the teams counted already whose counts
  * their memberships do not give (`differ`, `differing` in all), the teams
  * whose state writes kept moving (`unsettled_teams`, `unsettled` in all)
- * and those with a count left unfinished (`running_teams`, `running` in
- * all), which it cannot check and a recount starts again, and counts the
- * orphan rows. A call that is no dry run ends with its audit row, also when
- * a step throws. */
+ * those with a count left unfinished (`running_teams`, `running` in all),
+ * which it cannot check and a recount starts again, and those whose count
+ * the deadline cut short (`unchecked_teams`, `unchecked` in all), for a
+ * later dry run to check, and counts the orphan rows. A call that is no dry
+ * run ends with its audit row, also when a step throws. */
 export const run = internalAction({
   args: { dry_run: v.boolean(), recount: v.optional(v.boolean()), cursor: v.optional(vPosition) },
   handler: async (ctx, { dry_run, recount = false, cursor: from }) => {
@@ -346,9 +354,11 @@ export const run = internalAction({
     const differ: { team_id: string; org_id: string; members: number; stored: number }[] = []
     const unsettledTeams: string[] = []
     const runningTeams: string[] = []
+    const uncheckedTeams: string[] = []
     let differing = 0
     let unsettled = 0
     let running = 0
+    let unchecked = 0
     let at: Position = from ?? { table: 'teams', cursor: null }
     let done = false
     const pastDeadline = () => Date.now() >= until
@@ -360,7 +370,13 @@ export const run = internalAction({
     let here: { id: string; started?: true } | undefined
     /** A dry run of one team. */
     const dryTeam = async (team: TeamState): Promise<void> => {
-      const { members, state, settled } = await dryCount(ctx, team, pastDeadline)
+      const counted = await dryCount(ctx, team, pastDeadline)
+      // one whose count the deadline cut short, and the call goes on
+      if (counted === null) {
+        if (unchecked++ < COUNT_PAGE.listed) uncheckedTeams.push(team.team_id)
+        return
+      }
+      const { members, state, settled } = counted
       if (state === null) return
       const report = { team_id: team.team_id, org_id: team.org_id, members }
       if (state.counting) {
@@ -464,6 +480,8 @@ export const run = internalAction({
       unsettled_teams: unsettledTeams,
       running,
       running_teams: runningTeams,
+      unchecked,
+      unchecked_teams: uncheckedTeams,
       done,
       cursor: done ? null : at,
     }

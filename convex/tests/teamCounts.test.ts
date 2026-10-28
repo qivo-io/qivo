@@ -405,22 +405,92 @@ describe('team counts', () => {
       return now
     }
     const once = await dryCount(racing(1), await fresh())
-    expect(once.settled).toBe(true)
+    expect(once?.settled).toBe(true)
     expect(reads).toBe(2)
-    expect(once.members).toBe(once.state?.stored)
+    expect(once?.members).toBe(once?.state?.stored)
     // a change undone before the read leaves the count where it was, and
     // the row's revision still makes it count again
     const undone = await dryCount(racing(1, true), await fresh())
-    expect(undone.settled).toBe(true)
+    expect(undone?.settled).toBe(true)
     expect(reads).toBe(2)
-    expect((await dryCount(racing(Number.POSITIVE_INFINITY), await fresh())).settled).toBe(false)
-    expect((await dryCount(racing(Number.POSITIVE_INFINITY, true), await fresh())).settled).toBe(
+    expect((await dryCount(racing(Number.POSITIVE_INFINITY), await fresh()))?.settled).toBe(false)
+    expect((await dryCount(racing(Number.POSITIVE_INFINITY, true), await fresh()))?.settled).toBe(
       false,
     )
-    // a call out of time does not count again
-    const late = await dryCount(racing(Number.POSITIVE_INFINITY), await fresh(), () => true)
-    expect(late.settled).toBe(false)
+    // a call out of time between two tries does not count again
+    if (!member) {
+      member = true
+      await add(t, f, team, f.user.id)
+    }
+    let checks = 0
+    const timed = racing(Number.POSITIVE_INFINITY)
+    const late = await dryCount(
+      {
+        runQuery: async (query, ...args) => {
+          if (getFunctionName(query) === 'internal/teamCountsBackfill:check') checks++
+          return await timed.runQuery(query, ...args)
+        },
+      },
+      await fresh(),
+      // past the deadline once the first try has read all of its pages
+      () => checks >= 2,
+    )
+    expect(late?.settled).toBe(false)
     expect(reads).toBe(1)
+  })
+
+  it('a dry run whose deadline passes inside a team lists it unchecked and goes on with the next', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    Object.assign(COUNT_PAGE, { members: 1 })
+    const team = await plantTeam(t, f.org.id, 'Planted')
+    await plantMembers(t, team.id, [f.user.id, f.viewer.id, f.admin.id])
+    const other = await plantTeam(t, f.otherOrg.id, 'Empty')
+    await calls(t, { dry_run: false })
+    // a count an earlier release left wrong, which a whole count finds
+    const row = await t.run((ctx) => teamCountRow(ctx, team.id))
+    await t.run((ctx) => ctx.db.patch(row?._id ?? ('' as never), { members: 9 }))
+    expect((await calls(t, { dry_run: true })).flatMap((call) => call.differ)).toEqual([
+      { team_id: team.id, org_id: f.org.id, members: 3, stored: 9 },
+    ])
+
+    const before = await t.query(internal.internal.teamCountsBackfill.state, { team_id: team.id })
+    if (before === null) throw new Error('the team is gone')
+    let queries = 0
+    /** dryCount over `t`, past its deadline from the `at`th query on. */
+    const cut = async (at: number) => {
+      queries = 0
+      return await dryCount(
+        {
+          runQuery: async (query, ...args) => {
+            queries++
+            return await t.query(makeFunctionReference<'query'>(getFunctionName(query)), args[0])
+          },
+        },
+        before,
+        () => queries >= at,
+      )
+    }
+    expect((await cut(Number.POSITIVE_INFINITY))?.members).toBe(3)
+    const whole = queries
+    // three pages, their end and the state read after
+    expect(whole).toBe(5)
+    // a deadline that passes in the middle of the count leaves it unchecked;
+    // one that passes with its last page still checks it
+    for (let at = 1; at < whole - 1; at++) expect(await cut(at), `query ${at}`).toBeNull()
+    expect((await cut(whole - 1))?.members).toBe(3)
+
+    // a call past its time: the team is unchecked, never settled or
+    // differing, and the next call goes on with the next team
+    Object.assign(RUN, { ms: 0 })
+    const got = await calls(t, { dry_run: true })
+    const listed = got.flatMap((call) => call.unchecked_teams)
+    expect(got[0]).toMatchObject({ differing: 0, unsettled: 0, counted: 0 })
+    expect(listed).toContain(team.id)
+    expect(listed).not.toContain(other.id)
+    expect(got.flatMap((call) => call.differ)).toEqual([])
+    expect(got.flatMap((call) => call.to_count).map((t) => t.team_id)).not.toContain(team.id)
+    expect(got.reduce((n, call) => n + call.teams, 0)).toBe(3)
   })
 
   it('a call past its time answers a cursor, inside a team too, and the calls from it go through every team once', async () => {
@@ -433,7 +503,11 @@ describe('team counts', () => {
     for (const dry_run of [true, false]) {
       const got = await calls(t, { dry_run })
       expect(got.length).toBeGreaterThan(2)
-      expect(got.reduce((n, call) => n + call.counted, 0)).toBe(2)
+      // a dry run past its time reads each team's members in part, and
+      // lists the team unchecked
+      expect(got.reduce((n, call) => n + call.counted, 0)).toBe(dry_run ? 0 : 2)
+      if (dry_run)
+        expect(got.flatMap((call) => call.unchecked_teams)).toEqual([f.team.id, other.id])
       expect(got.reduce((n, call) => n + call.teams, 0)).toBe(2)
       const stops = got.flatMap((call) =>
         call.cursor?.table === 'teams' && call.cursor.team !== undefined ? [call.cursor.team] : [],

@@ -35,9 +35,11 @@
  * its next organization, step or page, and then answers `done: false` with
  * a `cursor`, which can point inside an organization. Call it again with
  * the same arguments and `"cursor"` set to it until `done` is true. Each
- * call reports the organizations it went through. A dry run checks the time
- * between organizations, and reads each one whole in the call that starts
- * it.
+ * call reports the organizations it went through. A dry run checks the
+ * time between every two pages too: an organization whose read the deadline
+ * cuts short is listed as unchecked (`unchecked_orgs`), never as settled or
+ * differing, and the next call goes on with the next organization, so a
+ * dry run over one too large for a call checks it in none.
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
@@ -390,8 +392,13 @@ const auditRef = makeFunctionReference<
  * counts it. */
 type Stored = { labels: Map<string, StoredLabel>; running: boolean }
 
-/** Reads every label of the organization with its stored count. */
-async function storedOf(ctx: Pick<ActionCtx, 'runQuery'>, orgId: string): Promise<Stored> {
+/** Reads every label of the organization with its stored count, or
+ * answers null when `late` answers true before its last page. */
+async function storedOf(
+  ctx: Pick<ActionCtx, 'runQuery'>,
+  orgId: string,
+  late: () => boolean,
+): Promise<Stored | null> {
   const labels = new Map<string, StoredLabel>()
   let running = false
   let cursor: string | null = null
@@ -400,6 +407,7 @@ async function storedOf(ctx: Pick<ActionCtx, 'runQuery'>, orgId: string): Promis
     for (const { label_id, ...stored } of page.labels) labels.set(label_id, stored)
     running ||= page.running
     if (page.done) return { labels, running }
+    if (late()) return null
     cursor = page.cursor
   }
 }
@@ -425,13 +433,21 @@ const DRY_TRIES = 3
  * moved these across the count (`same`); it counts again while one did, at
  * most DRY_TRIES times, and no more once `late` answers true. Answers the
  * counts by label, the tasks read, the stored counts read after them and
- * whether nothing moved (`settled`). */
+ * whether nothing moved (`settled`). It asks `late` between every two
+ * pages, and answers null when that says true in the middle of a read: the
+ * organization is then unchecked, as no partial count says anything. */
 export async function dryCount(
   ctx: Pick<ActionCtx, 'runQuery'>,
   orgId: string,
   late: () => boolean = () => false,
-): Promise<{ counts: Map<string, number>; tasks: number; stored: Stored; settled: boolean }> {
-  let before = await storedOf(ctx, orgId)
+): Promise<{
+  counts: Map<string, number>
+  tasks: number
+  stored: Stored
+  settled: boolean
+} | null> {
+  let before = await storedOf(ctx, orgId, late)
+  if (before === null) return null
   for (let tries = 1; ; tries++) {
     const counts = new Map<string, number>()
     let tasks = 0
@@ -442,8 +458,10 @@ export async function dryCount(
       for (const [labelId, n] of got.uses) counts.set(labelId, (counts.get(labelId) ?? 0) + n)
       tasks += got.tasks
       after = got.through
+      if (late()) return null
     }
-    const stored = await storedOf(ctx, orgId)
+    const stored = await storedOf(ctx, orgId, late)
+    if (stored === null) return null
     const settled = same(before, stored)
     if (settled || tries === DRY_TRIES || late()) return { counts, tasks, stored, settled }
     before = stored
@@ -461,9 +479,11 @@ export async function dryCount(
  * run would count, lists up to COUNT_PAGE.listed of them in `to_count`,
  * lists the counted labels whose counts their tasks do not give in
  * `differ` (`differing` in all), the organizations whose counts writes kept
- * moving in `unsettled_orgs` (`unsettled` in all), and those a run counts
- * now in `running_orgs` (`running` in all), whose counts it cannot check
- * and which a recount starts again, and counts the orphan rows. A call that
+ * moving in `unsettled_orgs` (`unsettled` in all), those a run counts now
+ * in `running_orgs` (`running` in all), whose counts it cannot check and
+ * which a recount starts again, and those whose read the deadline cut short
+ * in `unchecked_orgs` (`unchecked` in all), for a later dry run to check,
+ * and counts the orphan rows. A call that
  * is no dry run ends with its audit row, also when a step throws. */
 export const run = internalAction({
   args: { dry_run: v.boolean(), recount: v.optional(v.boolean()), cursor: v.optional(vPosition) },
@@ -480,9 +500,11 @@ export const run = internalAction({
     const differ: { org_id: string; label_id: string; active_tasks: number; stored: number }[] = []
     const unsettledOrgs: string[] = []
     const runningOrgs: string[] = []
+    const uncheckedOrgs: string[] = []
     let differing = 0
     let unsettled = 0
     let running = 0
+    let unchecked = 0
     let at: Position = from ?? { table: 'organizations', cursor: null }
     let done = false
     const pastDeadline = () => Date.now() >= until
@@ -492,9 +514,15 @@ export const run = internalAction({
     // where the call is inside the organization it works on, for the audit
     // row of a call a step ends with an error
     let here: Inside | undefined
-    /** A dry run of one organization. */
+    /** A dry run of one organization. One whose read the deadline cut
+     * short is unchecked, and the call goes on with the next. */
     const dryOrg = async (org_id: string): Promise<void> => {
-      const { counts, tasks, stored, settled } = await dryCount(ctx, org_id, pastDeadline)
+      const counted = await dryCount(ctx, org_id, pastDeadline)
+      if (counted === null) {
+        if (unchecked++ < COUNT_PAGE.listed) uncheckedOrgs.push(org_id)
+        return
+      }
+      const { counts, tasks, stored, settled } = counted
       if (stored.running) {
         if (running++ < COUNT_PAGE.listed) runningOrgs.push(org_id)
       } else if (!settled) {
@@ -625,6 +653,8 @@ export const run = internalAction({
       unsettled_orgs: unsettledOrgs,
       running,
       running_orgs: runningOrgs,
+      unchecked,
+      unchecked_orgs: uncheckedOrgs,
       done,
       cursor: done ? null : at,
     }
