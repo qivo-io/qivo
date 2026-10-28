@@ -252,8 +252,9 @@ Useful field rules:
   the app shows no verdict; it is judged on today's date in UTC.
   `last_comment_at` is when the task was last commented on, or `null`. `get_project` and
   `GET /v1/projects/{ref}` add `completion`, the Overview's done and total
-  tasks. If a task list asks for a smaller limit, its rows' newest comments
-  and parents were too large to read at once; retry with a smaller `limit`. If it says
+  tasks. If a task list asks for a smaller limit, its rows' descriptions,
+  newest comments and parents were too large to read at once; retry with a
+  smaller `limit`. If it says
   the organization's active tasks are too large to list, or that it has too
   many projects, teams or labels, a smaller `limit` does not help.
 

@@ -1756,6 +1756,14 @@ boundary it can differ from the app, which uses the browser's time zone.
 `null` when it has none. Editing a comment does not change it, and deleting
 the newest one makes the one before it the newest.
 
+Each row's `description` and `last_comment_at` are one read each, besides
+the task. A `list_tasks` page whose descriptions, comments and parents do
+not fit in one request is refused with `this page of tasks is too large to
+read at once; ask for a smaller limit`, and a smaller `limit` helps. A
+search of active tasks whose descriptions do not fit is refused with `this
+search reads too many task descriptions to answer in one request; name a
+project or add a filter`.
+
 `get_task` adds eight fields, which name only tasks you can read:
 
 ```json
@@ -1806,18 +1814,23 @@ default, and one that is not a whole number from 1 to 200 is refused with
 `search` holds at most 200 characters, on active and archived lists alike,
 and a longer one is refused with `a search must be at most 200 characters.
 Search for fewer words.` Each row's
-`last_comment_at` reads the task's newest comment, and a row whose parent is
-in an archived project reads that parent. When those reads do not fit in
-one request beside the rest of the page, the call is refused
-with `this page of tasks is too large to read at once; ask for a smaller
-limit`; call again with a smaller `limit`. A list also reads every active
+`description` reads the task's description and its `last_comment_at` the
+task's newest comment, and a row whose parent is in an archived project
+reads that parent. When those reads do not fit in one request beside the
+rest of the page, as for a page of many long descriptions, the call is
+refused with `this page of tasks is too large to read at once; ask for a
+smaller limit`; call again with a smaller `limit`. A list also reads every active
 task in the organization's active projects, or every active task of the
 organization when it names an archived project or the organization has more
 than 1,000 active projects. When those alone leave no
 room for a single comment, the call is refused with `this organization's active tasks are too large to list in one request; archive done tasks and finished projects so fewer stay active`, and a smaller `limit`
 does not help. When the call instead runs out of index reads, which follow
 the active projects, your team memberships and the labels a search matches,
-it is refused with `this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words`. A `search` whose label names it would have
+it is refused with `this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words`. A `search` of active tasks reads the
+descriptions of the tasks its other fields do not match, and one that would
+have to read too many at once is refused with `this search reads too many
+task descriptions to answer in one request; name a project or add a
+filter`. A `search` whose label names it would have
 to read for too many tasks at once is refused with `this search reads too
 many label assignments to answer in one request; name a project or add a
 filter`.

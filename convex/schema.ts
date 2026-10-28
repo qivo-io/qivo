@@ -217,10 +217,12 @@ const issuesTable = defineTable({
   num: v.number(), // org-scoped, assigned by counter, immutable
   title: v.string(), // LIMITS.title (lib/limits.ts), trimmed
   // Markdown, LIMITS.description (lib/limits.ts), trimmed; '' for none.
-  // Moving to issue_descriptions (below): every writer still sets it, and
-  // every reader reads it, until the third release of that move clears it.
-  // Optional for good, because deleted_rows checks its stored copies, which
-  // keep the text, against this validator.
+  // Moving to issue_descriptions (below): every writer still sets it until
+  // the third release of that move clears it, and readers read the
+  // description row, this only for a task without one
+  // (scripts/check-task-reads.mjs fails on any other read). Optional for
+  // good, because deleted_rows checks its stored copies, which keep the
+  // text, against this validator.
   description: v.optional(v.string()),
   status: vIssueStatus,
   priority: vIssuePriority,
@@ -1402,15 +1404,19 @@ export default defineSchema({
    * items has no row once they have run, and a restore writes the row again
    * from the restored task (model/deletedItems.ts).
    *
-   * The move takes three releases. In the first, this one, every writer
-   * keeps both copies and every reader still reads issues.description, the
-   * source of truth; internal/descriptionsBackfill gives older tasks their
-   * rows. The second reads this table, falling back to issues.description
-   * for a task without a row, and ships only once a dry run of that
-   * backfill on every deployment reports zero missing, differing,
-   * duplicate, orphaned and skipped rows (docs/deployment.md). The third
-   * stops writing issues.description and clears it, after which an earlier
-   * release no longer shows the descriptions, so it cannot be rolled back.
+   * The move takes three releases. In the first, every writer keeps both
+   * copies and every reader reads issues.description, the source of truth;
+   * internal/descriptionsBackfill gives older tasks their rows. The second,
+   * this one, reads this table: every reader takes a task's text from its
+   * first row in creation order, and only a task without a row reads
+   * issues.description (model/descriptions.ts descriptionOf). Writers still
+   * keep both copies, so a rollback to the first release loses nothing. It
+   * ships only once a dry run of that backfill on every deployment reports
+   * zero missing, differing, duplicate, orphaned and skipped rows
+   * (docs/deployment.md). The third stops writing issues.description and
+   * clears it. A rollback from it to this release still shows every
+   * description, because this one reads the rows; one to the first release
+   * no longer does, so the second is the third's rollback floor.
    *
    * The project and archived copies came after the table, in the same
    * release or a later one. A row holds them once project_id is present
