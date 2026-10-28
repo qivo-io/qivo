@@ -43,6 +43,7 @@ export const AUDIT_ACTION_LABELS = {
   usage_month: 'Stored monthly usage',
   live_counts_backfill: 'Counted live tasks and projects',
   window_keys_backfill: 'Gave tasks and projects their window keys',
+  descriptions_backfill: 'Gave tasks their description rows',
   panorama_library_image_added: 'Added Unsplash image to the library',
   panorama_manual_image_added: 'Uploaded image to the library',
   panorama_image_approved: 'Approved background image',

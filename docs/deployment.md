@@ -591,6 +591,24 @@ organization holds them from its start, so the release that added them is
 a rollback floor for the backend as soon as it deploys (see Rollback and
 hotfixes). Roll forward instead.
 
+Task descriptions are moving from `issues.description` into the
+`issue_descriptions` table, one row per live task, in three releases. In
+the first, every write of a task keeps both copies and every reader still
+reads `issues.description`. A task stored before that release has no row
+until the one-time `internal/descriptionsBackfill` gives it one. Run the
+backfill on every hosted deployment once it serves that release, as the
+module's header says. Read its dry run first, then run it, and call it
+again with the `cursor` it answers until it answers `done`. The second
+release reads the table and ships only once a dry run on development,
+staging, production and the demo reports zero `missing`, `differ`,
+`duplicates` and `orphans`. A rollback past the first release deploys,
+because Convex leaves a table the schema does not list alone, but the
+earlier code writes tasks without their rows. After rolling forward again,
+run the backfill with `"repair": true`, which also rewrites differing rows
+from `issues.description` and deletes rows whose task is gone. The third
+release clears `issues.description`, and no earlier release can show the
+descriptions after that, so it is a rollback floor.
+
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
 deploy. Roll forward instead. Later releases no longer accept those fields,

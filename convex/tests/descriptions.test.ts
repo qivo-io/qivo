@@ -1,11 +1,14 @@
 /* Task descriptions in issue_descriptions (schema.ts, model/descriptions.ts),
  * the first of three releases. Every writer keeps exactly one row per live
- * task equal to issues.description. Each case also checks a write that
- * must leave the rows as they were. scripts/check-task-writes.test.mjs
- * covers the check that no other code writes them. */
+ * task equal to issues.description, and internal/descriptionsBackfill gives
+ * older tasks their rows, reports what differs and mends it. Each case also
+ * checks a write that must leave the rows as they were. scripts/
+ * check-task-writes.test.mjs covers the check that no other code writes
+ * them. */
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
+import { PAGE, RUN } from '../internal/descriptionsBackfill'
 import { newWindowKey } from '../lib/db'
 import { LIMITS } from '../lib/limits'
 import { deleteOrgDeep } from '../model/cascade'
@@ -35,6 +38,12 @@ import {
 } from './trash.setup'
 
 installTrashTimers()
+const DEFAULT_PAGE = { ...PAGE }
+const DEFAULT_RUN = { ...RUN }
+afterEach(() => {
+  Object.assign(PAGE, DEFAULT_PAGE)
+  Object.assign(RUN, DEFAULT_RUN)
+})
 
 /** withOrg with the agent able to write the fixture's sub-projects, for
  * REST and MCP. */
@@ -376,5 +385,196 @@ describe('teardowns', () => {
       torn_down: true,
     })
     expect(await expectDescriptions(t)).toBe(3)
+  })
+})
+
+/* ------------------------------------------------------------- backfill */
+
+type RunArgs = {
+  dry_run: boolean
+  repair?: boolean
+  cursor?: { phase: 'tasks' | 'rows'; after: number }
+}
+const backfill = (t: T, args: RunArgs) => t.action(internal.internal.descriptionsBackfill.run, args)
+
+/** Every row of the two tables, to show a call wrote nothing. */
+const snapshot = (t: T) =>
+  t.run(async (ctx) => ({
+    tasks: await ctx.db.query('issues').collect(),
+    rows: await ctx.db.query('issue_descriptions').collect(),
+  }))
+
+const audits = (t: T) =>
+  t.run(async (ctx) =>
+    (await ctx.db.query('platform_audit_log').collect()).filter(
+      (row) => row.action === 'descriptions_backfill',
+    ),
+  )
+
+/** One task of each kind the backfill finds, and one it leaves alone. */
+async function plantKinds(t: T, f: OrgFixture) {
+  const fine = (
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: 'Fine' })
+  ).id
+  const missing = await plantOldTask(t, f, 'Missing')
+  const differs = (
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: 'Truth' })
+  ).id
+  const doubled = (
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: 'Twice' })
+  ).id
+  const orphan = uuid()
+  await t.run(async (ctx) => {
+    const [row] = await ctx.db
+      .query('issue_descriptions')
+      .withIndex('by_issue', (q) => q.eq('issue_id', differs))
+      .collect()
+    await ctx.db.patch(row._id, { description: 'Stale' })
+    await ctx.db.insert('issue_descriptions', {
+      issue_id: doubled,
+      org_id: f.org.id,
+      description: 'Twice',
+    })
+    await ctx.db.insert('issue_descriptions', {
+      issue_id: orphan,
+      org_id: f.org.id,
+      description: 'Gone',
+    })
+  })
+  return { fine, missing, differs, doubled, orphan }
+}
+
+describe('the backfill', () => {
+  it('reports in its dry run and writes nothing', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const k = await plantKinds(t, f)
+    const before = await snapshot(t)
+    const report = await backfill(t, { dry_run: true })
+    expect(report).toMatchObject({
+      tasks: 4,
+      missing: 1,
+      differ: 1,
+      duplicates: 1,
+      orphans: 1,
+      missing_ids: [k.missing],
+      differ_ids: [k.differs],
+      duplicate_ids: [k.doubled],
+      orphan_ids: [k.orphan],
+      done: true,
+      cursor: null,
+    })
+    expect(await snapshot(t)).toEqual(before)
+    expect(await audits(t)).toEqual([])
+  })
+
+  it('inserts missing rows, mends the rest only with repair, and then reports zeros', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const k = await plantKinds(t, f)
+    const run = await backfill(t, { dry_run: false })
+    expect(run).toMatchObject({ missing: 1, differ: 1, duplicates: 1, orphans: 1, done: true })
+    expect((await rowsOf(t, k.missing))[0].description).toBe('Missing')
+    // without repair the rest stays, for a person to read first
+    expect(await backfill(t, { dry_run: true })).toMatchObject({
+      missing: 0,
+      differ: 1,
+      duplicates: 1,
+      orphans: 1,
+    })
+    expect((await audits(t)).map((row) => row.detail)).toEqual([
+      { repair: false, tasks: 4, missing: 1, differ: 1, duplicates: 1, orphans: 1 },
+    ])
+
+    await backfill(t, { dry_run: false, repair: true })
+    expect((await rowsOf(t, k.differs))[0].description).toBe('Truth')
+    expect(await rowsOf(t, k.doubled)).toHaveLength(1)
+    expect(await rowsOf(t, k.orphan)).toEqual([])
+    expect(await expectDescriptions(t)).toBe(4)
+    const zeros = { missing: 0, differ: 0, duplicates: 0, orphans: 0 }
+    expect(await backfill(t, { dry_run: true })).toMatchObject({ tasks: 4, ...zeros })
+
+    // running again changes nothing but its audit row
+    const settled = await snapshot(t)
+    expect(await backfill(t, { dry_run: false, repair: true })).toMatchObject(zeros)
+    expect(await snapshot(t)).toEqual(settled)
+    expect(await audits(t)).toHaveLength(3)
+  })
+
+  it('reads pages within its bytes, two documents a row, and goes on from its cursor', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // six tasks of about 300 KB, each with a row of the same size
+    const big = 'x'.repeat(300_000)
+    for (let i = 0; i < 6; i++)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: `${i}${big}` })
+    const check = (after: number) =>
+      t.query(internal.internal.descriptionsBackfill.check, { phase: 'tasks', after })
+    // At 1 MiB a page, the first read takes one row, which leaves room for
+    // one more, and then the page has read past its bytes
+    Object.assign(PAGE, { bytes: 1024 * 1024 })
+    const pages: number[] = []
+    for (let after = 0, done = false; !done; ) {
+      const page = await check(after)
+      pages.push(page.tasks)
+      after = page.after
+      done = page.done
+    }
+    expect(pages).toEqual([2, 2, 2, 0])
+    // the same rows in pages of PAGE.rows
+    Object.assign(PAGE, { rows: 4, bytes: 8 * 1024 * 1024 })
+    const first = await check(0)
+    expect({ tasks: first.tasks, done: first.done }).toEqual({ tasks: 4, done: false })
+
+    // a call stops after RUN.ms with a cursor, and the next goes on from it
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('issue_descriptions').collect())
+        await ctx.db.delete(row._id)
+    })
+    Object.assign(PAGE, { rows: 2 })
+    Object.assign(RUN, { ms: 0 })
+    const calls: number[] = []
+    let cursor: RunArgs['cursor']
+    for (;;) {
+      const result = await backfill(t, { dry_run: false, cursor })
+      calls.push(result.missing)
+      if (result.done) break
+      cursor = result.cursor ?? undefined
+      expect(calls.length).toBeLessThan(10)
+    }
+    expect(calls.reduce((sum, n) => sum + n, 0)).toBe(6)
+    expect(calls.length).toBeGreaterThan(2)
+    expect(await expectDescriptions(t)).toBe(6)
+  })
+
+  it('stays exact while the writers change tasks between its pages', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const olds: string[] = []
+    for (let i = 0; i < 4; i++) olds.push(await plantOldTask(t, f, `Old ${i}`))
+    Object.assign(PAGE, { rows: 1 })
+    Object.assign(RUN, { ms: 0 })
+    // the first page gives the first task its row
+    const first = await backfill(t, { dry_run: false })
+    expect(first.missing).toBe(1)
+    // between pages: an edit of a task the run has passed, one of a task
+    // it has not reached, a delete and a new task
+    await edit(t, f, olds[0], { description: 'Edited after its page' })
+    await edit(t, f, olds[2], { description: 'Edited before its page' })
+    await deleteTask(t, f, olds[3])
+    await runSteps(t)
+    await create(t, f, { description: 'Created meanwhile' })
+    let cursor = first.cursor ?? undefined
+    for (let calls = 0; cursor !== undefined; calls++) {
+      expect(calls).toBeLessThan(20)
+      cursor = (await backfill(t, { dry_run: false, cursor })).cursor ?? undefined
+    }
+    expect(await expectDescriptions(t, f.org.id)).toBe(4)
+    expect(await backfill(t, { dry_run: true })).toMatchObject({
+      missing: 0,
+      differ: 0,
+      duplicates: 0,
+      orphans: 0,
+    })
   })
 })

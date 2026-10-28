@@ -44,6 +44,7 @@ import type * as identity from "../identity.js";
 import type * as internal_demoCleanup from "../internal/demoCleanup.js";
 import type * as internal_demoMetrics from "../internal/demoMetrics.js";
 import type * as internal_demoTest from "../internal/demoTest.js";
+import type * as internal_descriptionsBackfill from "../internal/descriptionsBackfill.js";
 import type * as internal_guestOrg from "../internal/guestOrg.js";
 import type * as internal_liveCountsBackfill from "../internal/liveCountsBackfill.js";
 import type * as internal_marketingDemo from "../internal/marketingDemo.js";
@@ -253,6 +254,7 @@ declare const fullApi: ApiFromModules<{
   "internal/demoCleanup": typeof internal_demoCleanup;
   "internal/demoMetrics": typeof internal_demoMetrics;
   "internal/demoTest": typeof internal_demoTest;
+  "internal/descriptionsBackfill": typeof internal_descriptionsBackfill;
   "internal/guestOrg": typeof internal_guestOrg;
   "internal/liveCountsBackfill": typeof internal_liveCountsBackfill;
   "internal/marketingDemo": typeof internal_marketingDemo;
