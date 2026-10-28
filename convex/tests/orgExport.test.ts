@@ -66,8 +66,9 @@ const EXCLUDED_TABLES = [
   // The eraser's restore witness, deployment state.
   'restore_watch',
   'marketing_demo',
-  // A copy of each task's description, which the issues section carries
-  // while every writer keeps both (model/descriptions.ts).
+  // Each task's description, which the issues section carries as its
+  // task's text (model/descriptions.ts descriptionOf), so it needs no
+  // section of its own.
   'issue_descriptions',
   'issue_subscriptions',
   'messages',
