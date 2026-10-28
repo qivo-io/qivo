@@ -259,11 +259,11 @@ describe('the writers keep one equal row per task', () => {
   it("the over-cap fix's pages read each task's description row, within Convex's limits", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // 80 untrimmed descriptions of 20,000 three-byte characters in both
-    // copies, about 9 MiB a copy, and 12 rows near Convex's 1 MiB document
-    // limit beside task rows without text, as the third release leaves
-    // them. A page that read every row of its tasks at once would pass
-    // 16 MiB.
+    // 20 rows near Convex's 1 MiB document limit beside task rows without
+    // text, as the third release leaves them, planted first, then 80
+    // untrimmed descriptions of 20,000 three-byte characters in both
+    // copies, about 4.6 MiB a copy. A page of the first tasks by their own
+    // bytes, which are small, that read each one's row would pass 16 MiB.
     const text = '中'.repeat(LIMITS.description.max)
     const task = (i: number, description?: string) => ({
       id: uuid(),
@@ -279,19 +279,10 @@ describe('the writers keep one equal row per task', () => {
       updated_at: NOW,
       window_key: newWindowKey(),
     })
-    const trimmed: string[] = []
-    for (let from = 0; from < 80; from += 10)
-      await t.run(async (ctx) => {
-        for (let i = from; i < from + 10; i++) {
-          const doc = task(i, `${text}  `)
-          await insertTask(ctx.db, doc, 'restore')
-          trimmed.push(doc.id)
-        }
-      })
     const large = '0123456789'.repeat(100_000)
-    for (let from = 80; from < 92; from += 6)
+    for (let from = 0; from < 20; from += 5)
       await t.run(async (ctx) => {
-        for (let i = from; i < from + 6; i++) {
+        for (let i = from; i < from + 5; i++) {
           const doc = task(i)
           await ctx.db.insert('issues', doc)
           await ctx.db.insert('issue_descriptions', {
@@ -302,10 +293,19 @@ describe('the writers keep one equal row per task', () => {
           })
         }
       })
+    const trimmed: string[] = []
+    for (let from = 20; from < 100; from += 10)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 10; i++) {
+          const doc = task(i, `${text}  `)
+          await insertTask(ctx.db, doc, 'restore')
+          trimmed.push(doc.id)
+        }
+      })
     const { counts } = await t.action(internal.internal.overCapRows.fix, { dry_run: false })
     expect(counts['issues.description fixed']).toBe(80)
     // a trim leaves those over TEXT_MAX, for a person to shorten
-    expect(counts['issues.description reported']).toBe(12)
+    expect(counts['issues.description reported']).toBe(20)
     for (const id of trimmed) {
       expect((await rowsOf(t, id)).map((row) => row.description)).toEqual([text])
       expect((await liveTask(t, id))?.description).toBe(text)
