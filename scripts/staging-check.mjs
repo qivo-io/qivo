@@ -461,8 +461,12 @@ export function rateLimitWait(header) {
 
 /** One authenticated request. A 429 waits once, for its Retry-After seconds
  *  and one more (rateLimitWait), at most WAITS.rateLimit (61 seconds). That
- *  happens only when something else uses the same profile at the same time
- *  or the deployment's own limit is reached. A read that answers a
+ *  happens only when something else uses the same profile at the same time,
+ *  the deployment's own limit is reached, or a profile posts more than
+ *  LIMITS.commentRate.max comments on one task in 60 seconds, the comment
+ *  posting rate, whose Retry-After is the seconds until its oldest post
+ *  there stops counting. threadPageChecks paces its posts to stay inside
+ *  that rate. A read that answers a
  *  server error (5xx) or fails on the network is sent once more after
  *  WAITS.readRetry (two seconds), with a NOTE, because a read changes
  *  nothing. A write answered with the 503 of a write conflict or time out,
@@ -490,7 +494,7 @@ export async function send(profile, url, init, { read = false } = {}) {
     if (response.status === 429 && !waited) {
       waited = true
       const wait = Math.min(WAITS.rateLimit, rateLimitWait(response.headers.get('Retry-After')))
-      say('NOTE', 'rate-limit', `${profile} hit the request limit; waiting ${wait / 1000} seconds`)
+      say('NOTE', 'rate-limit', `${profile} hit a rate limit; waiting ${wait / 1000} seconds`)
       await response.arrayBuffer().catch(() => {})
       await sleep(wait)
       continue
@@ -2698,11 +2702,19 @@ async function threadPageChecks() {
     })
     run.created.push(task)
     const count = THREAD_PAGE.comments + 10
-    for (let n = 1; n <= count; n++)
+    // One profile posts at most LIMITS.commentRate.max comments on a task in
+    // any 60 seconds, so each post past them waits until the post that many
+    // before it is a minute old, timed from after its answer, with a margin.
+    const posted = []
+    for (let n = 1; n <= count; n++) {
+      const earlier = posted[posted.length - LIMITS.commentRate.max]
+      if (earlier !== undefined) await sleep(Math.max(0, earlier + 61_000 - Date.now()))
       comments.push(
         (await restOk(w, 'POST', `/tasks/${task.key}/comments`, { body: `${run.tag} thread ${n}` }))
           .id,
       )
+      posted.push(Date.now())
+    }
     // Each label a PATCH adds or removes writes its own history row, so
     // putting all of them on and taking them off again fills the history
     // with few requests.
