@@ -330,17 +330,42 @@ export const nextOrg = internalQuery({
   },
 })
 
-/** The organization's first usage bucket key after `after`, or null. */
+/** The organization's first bucket key after `after` that its usage rows,
+ * account rows or month totals name, or null. A bucket with aggregate rows
+ * and no usage rows is checked too, so rows left there show as differences
+ * from the rows they count, which are none. */
 export const nextBucket = internalQuery({
   args: { org_id: v.string(), after: v.union(v.string(), v.null()) },
   handler: async (ctx, { org_id, after }): Promise<string | null> => {
-    const row = await ctx.db
-      .query('billing_usage')
-      .withIndex('by_org_period', (q) =>
-        after === null ? q.eq('org_id', org_id) : q.eq('org_id', org_id).gt('period_start', after),
-      )
-      .first()
-    return row?.period_start ?? null
+    const firsts = await Promise.all([
+      ctx.db
+        .query('billing_usage')
+        .withIndex('by_org_period', (q) =>
+          after === null
+            ? q.eq('org_id', org_id)
+            : q.eq('org_id', org_id).gt('period_start', after),
+        )
+        .first(),
+      ctx.db
+        .query('billing_usage_accounts')
+        .withIndex('by_org_period_profile', (q) =>
+          after === null
+            ? q.eq('org_id', org_id)
+            : q.eq('org_id', org_id).gt('period_start', after),
+        )
+        .first(),
+      ctx.db
+        .query('billing_month_totals')
+        .withIndex('by_org_period_shard', (q) =>
+          after === null
+            ? q.eq('org_id', org_id)
+            : q.eq('org_id', org_id).gt('period_start', after),
+        )
+        .first(),
+    ])
+    // bucket keys are ASCII, so this order is the index order
+    const keys = firsts.flatMap((row) => (row === null ? [] : [row.period_start])).sort()
+    return keys[0] ?? null
   },
 })
 
@@ -510,7 +535,10 @@ const goneOrgsRef = makeFunctionReference<
 >('internal/usageRanksBackfill:goneOrgs')
 
 /** Checks every usage bucket of every organization from `cursor` on, and
- * writes nothing. A bucket with an unranked row is only counted
+ * writes nothing. A bucket is any period that usage rows, account rows or
+ * month totals name (nextBucket), so aggregate rows left in a period
+ * without usage rows show as differences. A bucket with an unranked row is
+ * only counted
  * (`unranked`), since its aggregates are not complete until a run. For every
  * other bucket it lists the account rows whose calls differ from their
  * ranked usage rows (`differing_account_rows`), each compared in one

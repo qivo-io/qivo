@@ -615,6 +615,48 @@ describe('internal/usageRanksBackfill', () => {
     })
   })
 
+  it('reports aggregate rows left in a period that no usage row names', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await call(t, f.user, 'mcp_tokens:a')
+    await t.run(async (ctx) => {
+      // an account row and a month total in August, and an account row in an
+      // older ISO period, none of them backed by usage rows
+      for (const [period_start, calls] of [
+        [AUGUST, 3],
+        [FREE, 2],
+      ] as const)
+        await ctx.db.insert('billing_usage_accounts', {
+          org_id: f.org.id,
+          period_start,
+          profile_id: f.user.id,
+          calls,
+        })
+      await ctx.db.insert('billing_month_totals', {
+        org_id: f.org.id,
+        period_start: AUGUST,
+        shard: monthShard(f.user.id),
+        calls: 3,
+        writes: 1,
+      })
+    })
+    const result = await check(t)
+    expect(result).toMatchObject({
+      buckets: 3,
+      unranked: 0,
+      differing_accounts: 2,
+      differing_totals: 2,
+    })
+    expect(result.differing_account_rows).toEqual([
+      { org_id: f.org.id, period: FREE, profile_id: f.user.id, stored: 2, rows: 0 },
+      { org_id: f.org.id, period: AUGUST, profile_id: f.user.id, stored: 3, rows: 0 },
+    ])
+    expect(result.differing_total_buckets).toEqual([
+      { org_id: f.org.id, period: FREE, total: 0, accounts: 2, rows: 0 },
+      { org_id: f.org.id, period: AUGUST, total: 3, accounts: 3, rows: 0 },
+    ])
+  })
+
   it('lists each gone organization once, past the listed ones too', async () => {
     const t = newT()
     const f = await withOrg(t)
