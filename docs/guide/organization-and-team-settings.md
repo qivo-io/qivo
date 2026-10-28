@@ -169,9 +169,9 @@ Only an organization admin can change the address. Before saving, note:
 - The change takes effect immediately. Old links stop working, with no redirect.
 - The old address becomes available for another organization to claim.
 - Taken or reserved addresses cannot be saved. Qivo explains the refusal.
-- If someone else changes the address while you edit it, the field shows
-  their address and **Save** waits until you choose **Use saved** or
-  **Keep mine**.
+- If someone else changes the address while you edit it, your text stays,
+  the line under the field shows their address, and **Save** waits until
+  you choose **Use saved** or **Keep mine**.
 - The organization's change history records the old address, new address and
   person who changed it. Organization admins find it in the
   [export](#export-data).
