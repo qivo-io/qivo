@@ -403,6 +403,10 @@ describe('the organization address', () => {
     expect(field.value).toBe('testbed-ab')
     expect(conflict()?.textContent).toContain('Leo Martins changed it to “testbed-labs”.')
     expect(container.querySelector('[data-org-slug-error]')).toBeNull()
+    // Use saved takes the refusal away with the draft it was about
+    await click(button('Use saved'))
+    expect(field.value).toBe('testbed-labs')
+    expect(container.querySelector('[data-org-slug-error]')).toBeNull()
   })
 
   it('says why a save was refused before the other change arrived', async () => {
@@ -555,6 +559,27 @@ describe('your name', () => {
     expect(last('profiles:setDisplayName').args).toMatchObject({
       expected: { profile_id: me, name: 'Planner Two' },
     })
+  })
+
+  it('shows no refusal after Use saved drops the draft it was about', async () => {
+    await open(nameField)
+    const field = find('[data-account-name]')
+    await type(field, 'Planner Prime')
+    await click(find<HTMLButtonElement>('[data-account-name-save]'))
+    await elsewhere((s) => {
+      s.profiles[0].name = 'Planner Two'
+    })
+    await refuseChanged('profiles:setDisplayName', {
+      record: 'profile',
+      id: me,
+      field: 'name',
+      by: null,
+    })
+    expect(conflict()).not.toBeNull()
+    expect(container.querySelector('[data-account-name-error]')).toBeNull()
+    await click(button('Use saved'))
+    expect(field.value).toBe('Planner Two')
+    expect(container.querySelector('[data-account-name-error]')).toBeNull()
   })
 
   it('takes its own saved name as no conflict, also with more typed before it arrives', async () => {

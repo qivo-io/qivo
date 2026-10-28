@@ -199,8 +199,9 @@ export function NameField({ me }: { me: Pick<UserVM, 'id' | 'name'> }) {
         </Button>
       </div>
       <DraftConflictLine draft={draft} text={(name) => name} />
-      {/* the conflict says what the refusal would, with Use saved and Keep mine */}
-      {err && !draft.conflict && (
+      {/* a refusal is about the draft it kept, and the conflict line says
+          what it would, with Use saved and Keep mine */}
+      {err && draft.unsaved && !draft.conflict && (
         <div
           data-account-name-error
           className="[font-size:var(--fs-sm)] [color:var(--danger)] [margin-top:8px] [line-height:1.5]"
