@@ -41,6 +41,7 @@ import { vCredentialAccess } from '../lib/enums'
 import { badRequest, notFound } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { LIMITS } from '../lib/limits'
+import { nameKey } from '../lib/nameKey'
 import { newUuid } from '../model/orgs'
 
 const HASH_RE = /^[0-9a-f]{64}$/
@@ -144,7 +145,9 @@ export const mintCredential = internalMutation({
         {
           id,
           profile_id: profile.id,
+          org_id: profile.org_id,
           name,
+          name_key: nameKey(name),
           key_prefix: a.key_prefix,
           key_hash: PENDING + a.key_hash,
           created_at: now,
@@ -160,7 +163,9 @@ export const mintCredential = internalMutation({
         {
           id,
           profile_id: profile.id,
+          org_id: profile.org_id,
           name,
+          name_key: nameKey(name),
           token_prefix: a.key_prefix,
           token_hash: PENDING + a.key_hash,
           access: a.access,

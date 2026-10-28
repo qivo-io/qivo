@@ -41,6 +41,7 @@ export const AUDIT_ACTION_LABELS = {
   sweep_read_messages: 'Deleted old read messages',
   reap_orphans: 'Checked for files nothing refers to',
   usage_month: 'Stored monthly usage',
+  credential_keys_backfill: 'Gave API credentials their organization and name keys',
   live_counts_backfill: 'Counted live tasks and projects',
   window_keys_backfill: 'Gave tasks and projects their window keys',
   descriptions_backfill: 'Gave tasks their description rows',

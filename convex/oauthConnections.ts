@@ -10,6 +10,7 @@ import { findAuthUser, findOAuthClient, loginBanned } from './lib/access'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import { authedMutation, authedQuery, badRequest, forbidden, notFound } from './lib/functions'
+import { nameKey } from './lib/nameKey'
 import {
   canonicalOAuthQuery,
   clientDisplayName,
@@ -21,6 +22,13 @@ import {
 } from './lib/oauth'
 import { authorizationHash } from './lib/oauthProvider'
 import { newUuid } from './model/orgs'
+
+/** A new connection's client name as stored, with its key (schema.ts
+ * oauth_connections name_key). */
+const clientNamed = (name: string | undefined) => {
+  const client_name = clientDisplayName(name)
+  return { client_name, name_key: nameKey(client_name) }
+}
 
 export const getContext = authedMutation({
   args: { oauth_query: v.string() },
@@ -61,7 +69,7 @@ export const getContext = authedMutation({
         profile_id: profile.id,
         org_id: org.id,
         client_id: query.get('client_id') || '',
-        client_name: clientDisplayName(client.client_name),
+        ...clientNamed(client.client_name),
         resource: mcpResource(),
         requested_scopes: (query.get('scope') || '').split(' ').filter(Boolean),
         scopes: [],
@@ -182,7 +190,7 @@ export const ensure = internalMutation({
         profile_id: home.id,
         org_id: home.org_id,
         client_id: args.clientId,
-        client_name: clientDisplayName(args.clientName),
+        ...clientNamed(args.clientName),
         resource: args.resource,
         requested_scopes: args.requestedScopes,
         scopes: [],

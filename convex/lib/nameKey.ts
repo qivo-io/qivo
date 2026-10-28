@@ -1,6 +1,7 @@
 /* The name key is the form of a name that name-ordered lists sort and search
  * by (schema.ts `name_key` on profiles, teams, projects and the rows that
- * copy a profile's or a team's). Lists order by the key's bytes, as Convex
+ * copy a profile's or a team's, and on agent keys, personal tokens, connected
+ * apps and the usage rows that name a credential). Lists order by the key's bytes, as Convex
  * orders strings in an index (UTF-8), with an id to break ties, so the order
  * differs slightly from the browser's localeCompare for some scripts. It has
  * no server-only imports, so the app can import it to normalize a search term

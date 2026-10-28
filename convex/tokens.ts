@@ -46,6 +46,7 @@ import {
 } from './lib/functions'
 import { limitedText } from './lib/limitRules'
 import { LIMITS } from './lib/limits'
+import { nameKey } from './lib/nameKey'
 import { logActivity } from './model/activity'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
@@ -98,10 +99,17 @@ const pubToken = (t: Doc<'mcp_tokens'>) => ({
 const byCreatedDesc = <R extends { createdAt: string }>(rows: R[]): R[] =>
   rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
 
-const isMine = (myProfiles: Map<string, Doc<'profiles'>>, profileId: string): boolean => {
-  for (const p of myProfiles.values()) if (p.id === profileId) return true
-  return false
+/** The caller's own seat with id `profileId`, if it is one. */
+const ownSeat = (
+  myProfiles: Map<string, Doc<'profiles'>>,
+  profileId: string,
+): Doc<'profiles'> | undefined => {
+  for (const p of myProfiles.values()) if (p.id === profileId) return p
+  return undefined
 }
+
+const isMine = (myProfiles: Map<string, Doc<'profiles'>>, profileId: string): boolean =>
+  ownSeat(myProfiles, profileId) !== undefined
 
 /* ------------------------------------------------------------- agent keys
  * agent_keys policies (0100:66-84): every operation requires admin of the
@@ -179,7 +187,9 @@ export const createAgentKey = orgMutation({
       {
         id,
         profile_id: agent.id,
+        org_id: agent.org_id,
         name: keyName,
+        name_key: nameKey(keyName),
         key_prefix,
         key_hash,
         created_by: ctx.me.id,
@@ -273,7 +283,8 @@ export const createMcpToken = authedMutation({
     refuseDemoFeature()
     assertNewRowId(id)
     const now = new Date().toISOString()
-    if (!isMine(ctx.myProfiles, profile_id)) throw notFound('profile not found')
+    const seat = ownSeat(ctx.myProfiles, profile_id)
+    if (seat === undefined) throw notFound('profile not found')
     const tokenName = credentialName(name, 'token')
     if (!HASH_RE.test(token_hash)) throw badRequest('a token hash is 64 lowercase hex characters')
     if (!TOKEN_PREFIX_RE.test(token_prefix)) {
@@ -294,7 +305,9 @@ export const createMcpToken = authedMutation({
       {
         id,
         profile_id,
+        org_id: seat.org_id,
         name: tokenName,
+        name_key: nameKey(tokenName),
         token_prefix,
         token_hash,
         access,

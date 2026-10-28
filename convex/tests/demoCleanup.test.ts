@@ -462,10 +462,13 @@ describe('public Northstar provisioning and bounded deletion', () => {
           .withIndex('by_org', (q) => q.eq('org_id', a.org_id!))
           .collect()
       ).find((p) => p.kind === 'agent')!
+      // with the organization and name keys every writer now stores
+      const named = { name: 'Defensive cleanup fixture', name_key: 'defensive cleanup fixture' }
       await ctx.db.insert('agent_keys', {
         id: uuid(),
         profile_id: agent.id,
-        name: 'Defensive cleanup fixture',
+        org_id: a.org_id!,
+        ...named,
         key_prefix: 'qva_test',
         key_hash: 'a'.repeat(64),
         created_by: profile.id,
@@ -474,7 +477,8 @@ describe('public Northstar provisioning and bounded deletion', () => {
       await ctx.db.insert('mcp_tokens', {
         id: uuid(),
         profile_id: profile.id,
-        name: 'Defensive cleanup fixture',
+        org_id: a.org_id!,
+        ...named,
         token_prefix: 'qvt_test',
         token_hash: 'b'.repeat(64),
         access: 'read',
@@ -489,6 +493,7 @@ describe('public Northstar provisioning and bounded deletion', () => {
         org_id: a.org_id!,
         client_id: 'demo-cleanup-client',
         client_name: 'Defensive fixture',
+        name_key: 'defensive fixture',
         resource: 'https://demo.invalid/mcp',
         requested_scopes: [],
         scopes: [],

@@ -1736,10 +1736,22 @@ export default defineSchema({
     // excluded from the snapshot query on purpose (0036)
   }).index('by_profile', ['profile_id']),
 
+  /* `org_id` and `name_key` on agent keys and personal tokens are
+   * server-owned and written with the row: the owner profile's organization,
+   * which never changes, and the name as name-ordered lists sort and search
+   * it (lib/nameKey.ts), which never changes either, because a credential
+   * cannot be renamed. API access pages read them by organization or by
+   * person in name order. Never sent to clients, REST, MCP, webhooks or the
+   * export. A row stored before they existed has neither until
+   * internal/credentialKeysBackfill gives it both, so a reader that pages by
+   * organization first checks that no row is left without an org_id (one
+   * read of by_org_name with org_id undefined). */
   agent_keys: defineTable({
     id: v.string(),
     profile_id: v.string(), // always a kind='agent' profile
+    org_id: v.optional(v.string()), // the agent's
     name: v.string(),
+    name_key: v.optional(v.string()),
     key_prefix: v.string(), // safe first/last fingerprint of the qva_ secret, display only
     // sha256 hex, unique-checked on by_hash; secret never stored. A pending
     // test credential holds 'pending:' + the hash (machine/testing.ts).
@@ -1752,12 +1764,17 @@ export default defineSchema({
     .index('by_uuid', ['id'])
     .index('by_profile', ['profile_id'])
     .index('by_hash', ['key_hash'])
-    .index('by_created_by', ['created_by']), // removeProfile's SET NULL
+    .index('by_created_by', ['created_by']) // removeProfile's SET NULL
+    // API access: the organization's keys, or one agent's, in name order
+    .index('by_org_name', ['org_id', 'name_key', 'id'])
+    .index('by_profile_name', ['profile_id', 'name_key', 'id']),
 
   mcp_tokens: defineTable({
     id: v.string(),
     profile_id: v.string(),
+    org_id: v.optional(v.string()), // the owner profile's, as on agent_keys
     name: v.string(),
+    name_key: v.optional(v.string()), // as on agent_keys
     token_prefix: v.string(), // first chars of the qvt_ secret, display only
     // sha256 hex, unique-checked on by_hash; secret never stored. A pending
     // test credential holds 'pending:' + the hash (machine/testing.ts).
@@ -1777,8 +1794,12 @@ export default defineSchema({
     revoked_by_admin: v.optional(v.literal(true)),
   })
     .index('by_uuid', ['id'])
+    // also the owner's own list, newest first: insertion order is created_at order
     .index('by_profile', ['profile_id'])
-    .index('by_hash', ['token_hash']),
+    .index('by_hash', ['token_hash'])
+    // API access: the organization's tokens, or one person's, in name order
+    .index('by_org_name', ['org_id', 'name_key', 'id'])
+    .index('by_profile_name', ['profile_id', 'name_key', 'id']),
 
   // One immutable authorization transaction, bound to the consenting home seat.
   // Revocation is permanent; reconnecting creates a different transaction/id.
@@ -1790,6 +1811,14 @@ export default defineSchema({
     org_id: v.string(),
     client_id: v.string(),
     client_name: v.string(),
+    // client_name as name-ordered lists sort and search it (lib/nameKey.ts),
+    // server-owned and written with the row, unfinished authorizations
+    // included; client_name never changes. Never sent to clients or the
+    // export. A row stored before it existed has none until
+    // internal/credentialKeysBackfill gives it one, so a reader that pages
+    // in name order first checks that none of its organization's rows is
+    // left without one (one read of by_org_name with name_key undefined).
+    name_key: v.optional(v.string()),
     resource: v.string(),
     requested_scopes: v.array(v.string()),
     scopes: v.array(v.string()),
@@ -1811,7 +1840,16 @@ export default defineSchema({
     .index('by_profile', ['profile_id'])
     // OAuth client cleanup keeps a client with an approved connection or a
     // pending authorization (oauthRegistrations.ts).
-    .index('by_client', ['client_id', 'approved_at', 'authorization_expires_at']),
+    .index('by_client', ['client_id', 'approved_at', 'authorization_expires_at'])
+    // API access: the organization's connections, or one person's, in name
+    // order. Unfinished authorizations are in these ranges too; readers skip
+    // the rows without approved_at.
+    .index('by_org_name', ['org_id', 'name_key', 'id'])
+    .index('by_profile_name', ['profile_id', 'name_key', 'id'])
+    // The login's connected apps, newest approval first. A range from
+    // approved_at '' reads approved connections only, so the unfinished
+    // authorizations every consent attempt leaves are never read.
+    .index('by_auth_user_approved', ['auth_user_id', 'approved_at']),
 
   // Retained hash tombstones catch replay even after the provider deletes its
   // code/refresh rows. Never store a bearer credential here. A used refresh
