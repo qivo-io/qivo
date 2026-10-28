@@ -1952,8 +1952,9 @@ export const MOVE_SUBTREE_HOLDER_RULE =
  * the move and once by its write, and so is its description row, found and
  * then read again by its own write (model/descriptions.ts patchTask). So
  * about 60 subtasks with descriptions at TEXT_MAX of three-byte characters
- * fit in one request while issues.description holds the text too. A larger
- * family is refused with MOVE_TOO_LARGE. */
+ * fit in one request while issues.description holds the text too, and
+ * about 50 active ones in a REST or MCP move, whose answer reads them again.
+ * A larger family is refused with MOVE_TOO_LARGE. */
 
 /* Per-call cache from a project id to its top-level project id, null for a
  * missing project. */
@@ -2186,9 +2187,18 @@ export async function moveIssueCore(
     if (!profile?.active) continue
     if (!(await canSeeProject(ctx, profile, target))) throw rule(MOVE_HOLDER_RULE)
   }
+  // A machine caller answers with the task's full read, which reads its
+  // active subtasks again (lib/core.ts taskOut), so the move leaves room
+  // for that read. An archived task's read walks under a ceiling instead.
+  const answer =
+    a.machine !== undefined && issue.archived_at === undefined && below !== undefined
+      ? below
+          .filter((c) => c.archived_at === undefined)
+          .reduce((sum, c) => sum + getDocumentSize(c), 0)
+      : 0
   const before = { ...issue }
   // the task and its description row (model/descriptions.ts)
-  await assertStepRoom(ctx, patchCost(issue), MOVE_TOO_LARGE)
+  await assertStepRoom(ctx, patchCost(issue), MOVE_TOO_LARGE, answer)
   await patchTask(ctx.db, issue, w)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   // the stored-byte totals follow the task and every subtask it carries, at
@@ -2196,7 +2206,7 @@ export async function moveIssueCore(
   // (model/storageTotals.ts), before the room checks of the carry below
   await moveTaskFiles(ctx, [issue, ...carried], target)
   for (const row of carried) {
-    await assertStepRoom(ctx, patchCost(row), MOVE_TOO_LARGE)
+    await assertStepRoom(ctx, patchCost(row), MOVE_TOO_LARGE, answer)
     // a carried subtask's stamps change as the task's above; the row as it
     // lands is built from the patch rather than read again, which would
     // read every carried subtask a second time

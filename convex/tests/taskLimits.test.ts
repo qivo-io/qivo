@@ -574,6 +574,24 @@ describe('a move that carries archived subtasks', () => {
     for (const t of [parent, ...kids]) expect((await row(fx.t, t.id)).project_id).toBe(fx.sub.id)
   }, 120_000)
 
+  it('refuses a REST move whose answer could not read its active subtasks again, which the app moves', async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    const parent = await task(fx, { title: 'Long family' })
+    // the move fits, but the answer reads the 58 active subtasks again
+    // (lib/core.ts taskOut), past Convex's 16 MiB of reads
+    const kids = await plantLong(fx, parent, { active: 58, archived: 0 })
+    const dest = await elsewhere(fx)
+    await refused(restMove(fx, parent, dest), 'rule', MOVE_TOO_LARGE)
+    for (const t of [parent, ...kids]) expect((await row(fx.t, t.id)).project_id).toBe(fx.sub.id)
+    // the app's answer is the task alone
+    await as(fx.t, fx.admin).mutation(api.issues.move, {
+      org_id: fx.org.id,
+      id: parent.id,
+      project_id: dest.id,
+    })
+    for (const t of [parent, ...kids]) expect((await row(fx.t, t.id)).project_id).toBe(dest.id)
+  }, 120_000)
+
   it(`refuses a move of ${LIMITS.moveSubtree.max} such subtasks with what to do, on every surface`, async () => {
     const fx = await setup(newT({ transactionLimits: true }))
     const parent = await task(fx, { title: 'Longer family' })

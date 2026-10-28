@@ -1894,7 +1894,7 @@ cannot move to another top-level project (otherwise `this task has more than
 200 subtasks, archived ones included, and a move to another project carries
 them all. Restore some archived subtasks and remove them from this task
 first, or move it within its project.`). A move whose task and subtasks are
-too large for one call, such as about 60 or more subtasks whose
+too large for one call, such as about 50 or more active subtasks whose
 descriptions hold 20,000 characters of a script that takes three bytes a
 character, such as Japanese, is refused with `this task and its subtasks
 are too large to move to another project in one request; remove some
