@@ -778,9 +778,13 @@ release writes messages without keeping the rows, so after a deployment ran
 one, a dry run lists the profiles whose rows differ, `"rebuild": true`
 builds every profile's rows again, and a run deletes the rows of the
 profiles that release removed. Such a release leaves the rows stale while
-`inbox_state` still says built, which the reads take as complete, so a
-deployment that ran a release from before PR 299 must run the backfill with
-`"rebuild": true` before it serves a release whose app shows these reads.
+`inbox_state` still says built, which the reads take as complete. So a
+deployment that went back to a release from before PR 299 after serving PR
+299 or a later one reads a new dry run once it serves a later release
+again, and when that dry run reports rows that differ, are missing or are
+extra, runs the backfill with `"rebuild": true` until it answers `done`
+before it serves a release whose app shows these reads. A deployment that
+never served a release from before PR 299 after PR 299 needs no rebuild.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
