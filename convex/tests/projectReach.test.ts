@@ -1105,6 +1105,23 @@ describe('the backfill', () => {
     await expect(backfill(t, false, first.cursor ?? undefined)).rejects.toThrow('other dry_run')
   })
 
+  it('walks projects with icons near 1 MiB inside the limits of a transaction', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // legacy icons, each project a document near Convex's 1 MiB, without
+    // an archive state, so every row walked is patched and read again
+    for (let i = 0; i < 12; i++)
+      await plantProject(t, { org_id: f.org.id, lead_id: f.user.id, icon: 'i'.repeat(1_020_000) })
+    let got = await backfill(t, false)
+    for (let calls = 0; !got.done; calls++) {
+      expect(got.error).toBeUndefined()
+      expect(calls).toBeLessThan(20)
+      got = await backfill(t, false, got.cursor ?? undefined)
+    }
+    expect(got.error).toBeUndefined()
+    await expectAll(t, f)
+  }, 120_000)
+
   it('stamps an organization created since this release at its creation', async () => {
     const t = newT()
     const orgId = uuid()

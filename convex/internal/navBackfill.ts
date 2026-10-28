@@ -98,10 +98,14 @@ import {
 } from '../model/projectNav'
 
 /** What one step may spend before it ends: rows walked, index ranges read
- * or written, and bytes read, and the most organizations a run lists. A
- * recompute reads about ten ranges and at most three documents of any
- * size (a project, its top-level project and a team), so the step that
- * ends at these bounds stays inside Convex's 4,096 ranges and 16 MiB.
+ * or written, and bytes read, and the most organizations a run lists.
+ * Convex reads a document again to patch or delete it, so those writes
+ * count as a range and the document's bytes too. One row's work reads about
+ * ten ranges and at most five documents of any size: the row itself, a
+ * project, its top-level project, a team and the project its archive state
+ * patches, each up to Convex's 1 MiB. A step checks these bounds before
+ * each row, so the one it starts past them leaves room for that work: at
+ * most 8 MiB and 5 MiB more, inside Convex's 4,096 ranges and 16 MiB.
  * Tests lower them. */
 export const NAV_STEP = { rows: 200, ranges: 2000, bytes: 8 * MIB, listed: 100 }
 
@@ -192,7 +196,12 @@ async function walk(
     }
     if (write !== null) {
       await applyReach(write, changes)
-      spent.ranges += changes.length
+      // an insert reads nothing; a patch or delete reads its row again
+      for (const { row } of changes)
+        if (row !== null) {
+          spent.ranges += 1
+          spent.bytes += estimateDocumentBytes(row)
+        }
     }
   }
   const project = async (row: Doc<'projects'>) => {
@@ -205,7 +214,9 @@ async function walk(
       orgs.add(row.org_id)
       if (write !== null) {
         await write.db.patch(row._id, { archive_state: state })
+        // the patch reads the whole project again, a legacy icon included
         spent.ranges += 1
+        spent.bytes += estimateDocumentBytes(row)
       }
     }
     if (row.lead_id !== undefined) await reach(grantee.profile(row.lead_id), row.id)
