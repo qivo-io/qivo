@@ -1,7 +1,8 @@
 /* Tests of name keys, covering the normalizer (lib/nameKey.ts), every
  * writer that stores a key or a copy of one, the copies a rename brings in
  * line in its own transaction and in background steps (model/nameKeys.ts,
- * nameCopies.ts) and the readiness stamp (org_ready).
+ * nameCopies.ts), the readiness stamp (org_ready) and the backfill
+ * (internal/nameKeysBackfill.ts).
  *
  * withOrg plants its rows without keys, as rows stored before this release
  * are. Fake timers keep every scheduled step from running until a test
@@ -12,6 +13,7 @@ import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { KEY_PAGE, RUN } from '../internal/nameKeysBackfill'
 import { byId } from '../lib/db'
 import { nameKey } from '../lib/nameKey'
 import type { OrgExportPage, OrgExportSection } from '../lib/orgExport'
@@ -36,6 +38,8 @@ import { assertNoDanglingRefs } from './refs.setup'
 
 const START = Date.parse('2026-05-04T10:00:00.000Z')
 const COPY_DEFAULTS = { ...NAME_COPIES }
+const PAGE_DEFAULTS = { ...KEY_PAGE }
+const RUN_DEFAULTS = { ...RUN }
 const OPERATOR = { auth_user_id: 'operator-login', email: 'operator@platform.test' }
 
 beforeEach(() => {
@@ -44,6 +48,8 @@ beforeEach(() => {
 })
 afterEach(() => {
   Object.assign(NAME_COPIES, COPY_DEFAULTS)
+  Object.assign(KEY_PAGE, PAGE_DEFAULTS)
+  Object.assign(RUN, RUN_DEFAULTS)
   vi.clearAllTimers()
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -807,5 +813,161 @@ describe('readiness', () => {
       expect(exported.rows.length).toBeGreaterThan(0)
       for (const row of exported.rows) expect(row).not.toHaveProperty('name_key')
     }
+  })
+})
+
+describe('the backfill', () => {
+  const run = (t: T, args: { dry_run: boolean; recheck?: boolean; cursor?: string }) =>
+    t.action(internal.internal.nameKeysBackfill.run, args)
+  const zero = { missing: 0, stale: 0 }
+
+  it('reports without writing, then keys and stamps every organization', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const dry = await run(t, { dry_run: true })
+    expect(dry).toMatchObject({
+      dry_run: true,
+      orgs: 2,
+      stamped: 0,
+      at_least: false,
+      done: true,
+      cursor: null,
+      keys: {
+        // five people and an agent here, an admin in the other organization
+        profiles: { missing: 6, stale: 0 },
+        teams: { missing: 1, stale: 0 },
+        projects: { missing: 5, stale: 0 },
+        team_members: { missing: 2, stale: 0 },
+        project_access: { missing: 2, stale: 0 },
+        project_team_access: zero,
+      },
+    })
+    expect(dry.unstamped?.sort()).toEqual([f.org.id, f.otherOrg.id].sort())
+    expect(dry.to_fix.map((o) => o.org_id).sort()).toEqual([f.org.id, f.otherOrg.id].sort())
+    // a dry run writes nothing
+    expect((await keysOf(t, f.org.id)).profiles.every((p) => p.stored === undefined)).toBe(true)
+    expect(await t.run((ctx) => ctx.db.query('org_ready').collect())).toEqual([])
+
+    const done = await run(t, { dry_run: false })
+    expect(done).toMatchObject({ dry_run: false, orgs: 2, stamped: 2, done: true })
+    expect(done.keys).toEqual(dry.keys)
+    await expectExact(t, f.org.id)
+    await expectExact(t, f.otherOrg.id)
+    expect(await t.run((ctx) => nameKeysReady(ctx, f.org.id))).toBe(true)
+    expect(await t.run((ctx) => nameKeysReady(ctx, f.otherOrg.id))).toBe(true)
+    const audit = await t.run((ctx) =>
+      ctx.db
+        .query('platform_audit_log')
+        .filter((q) => q.eq(q.field('action'), 'name_keys_backfill'))
+        .collect(),
+    )
+    expect(audit.map((row) => [row.actor_email, row.detail])).toEqual([
+      ['system', { orgs: 2, stamped: 2, missing: 16, stale: 0 }],
+    ])
+
+    const again = await run(t, { dry_run: true })
+    expect(Object.values(again.keys)).toEqual(Array(6).fill(zero))
+    expect(again.unstamped).toEqual([])
+    expect(again.to_fix).toEqual([])
+    // a run finds the organizations stamped and walks none
+    expect(await run(t, { dry_run: false })).toMatchObject({ orgs: 0, stamped: 0 })
+    await assertNoDanglingRefs(t, 'after the name key backfill')
+  })
+
+  it('finds stale keys and mends them in a stamped organization only on a recheck', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await run(t, { dry_run: false })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(f.viewer._id, { name_key: 'not the name' })
+      const member = await ctx.db
+        .query('team_members')
+        .withIndex('by_profile', (q) => q.eq('profile_id', f.admin.id))
+        .unique()
+      await ctx.db.patch(member!._id, { name_key: 'stale' })
+    })
+    const dry = await run(t, { dry_run: true })
+    expect(dry.keys.profiles).toEqual({ missing: 0, stale: 1 })
+    expect(dry.keys.team_members).toEqual({ missing: 0, stale: 1 })
+    expect(dry.to_fix).toEqual([{ org_id: f.org.id, missing: 0, stale: 2 }])
+    await run(t, { dry_run: false })
+    expect((await profileOf(t, f.viewer.id))?.name_key).toBe('not the name')
+    expect(await run(t, { dry_run: false, recheck: true })).toMatchObject({ orgs: 2, stamped: 0 })
+    await expectExact(t, f.org.id)
+  })
+
+  it('finishes a person with more copies than one page brings in line', async () => {
+    KEY_PAGE.copies = 3
+    KEY_PAGE.rows = 2
+    const t = newT()
+    const f = await withOrg(t)
+    const person = await plantBusyPerson(t, f, 4)
+    const dry = await run(t, { dry_run: true })
+    // the dry run counts no more copies a page than one step brings in line
+    expect(dry.at_least).toBe(true)
+    expect(dry.keys.team_members.missing + dry.keys.project_access.missing).toBeLessThan(10)
+    await run(t, { dry_run: false })
+    expect(await copiesOf(t, person.id)).toEqual({
+      team_members: Array(4).fill('busy person'),
+      project_access: Array(4).fill('busy person'),
+    })
+    await expectExact(t, f.org.id)
+    expect((await run(t, { dry_run: true })).at_least).toBe(false)
+  })
+
+  it('answers a cursor when its time runs out and goes on from it', async () => {
+    RUN.orgs = 1
+    RUN.ms = 0
+    const t = newT()
+    const f = await withOrg(t)
+    const first = await run(t, { dry_run: false })
+    expect(first).toMatchObject({ orgs: 1, stamped: 1, done: false })
+    const second = await run(t, { dry_run: false, cursor: first.cursor! })
+    expect(second).toMatchObject({ orgs: 1, stamped: 1 })
+    let last = second
+    while (!last.done) last = await run(t, { dry_run: false, cursor: last.cursor! })
+    expect(await t.run((ctx) => nameKeysReady(ctx, f.org.id))).toBe(true)
+    expect(await t.run((ctx) => nameKeysReady(ctx, f.otherOrg.id))).toBe(true)
+  })
+
+  it('leaves the copies of a removed person alone and keys rows written while it runs', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a membership whose profile is gone, waiting for its cleanup
+    const gone = uuid()
+    await t.run((ctx) =>
+      ctx.db.insert('team_members', { team_id: f.team.id, profile_id: gone, is_leader: false }),
+    )
+    // one page of each table at a time, and a rename between two of them
+    KEY_PAGE.rows = 1
+    const page = (cursor: string | null) =>
+      t.mutation(internal.internal.nameKeysBackfill.step, {
+        org_id: f.org.id,
+        table: 'profiles',
+        cursor,
+      })
+    const first = await page(null)
+    expect(first.done).toBe(false)
+    await renamePerson(t, f, f.admin.id, 'Renamed Admin')
+    let at = first.cursor
+    for (;;) {
+      const got = await page(at)
+      if (got.done) break
+      at = got.cursor
+    }
+    expect((await profileOf(t, f.admin.id))?.name_key).toBe('renamed admin')
+    expect((await copiesOf(t, f.admin.id)).team_members).toEqual(['renamed admin'])
+    const orphan = await t.run((ctx) =>
+      ctx.db
+        .query('team_members')
+        .withIndex('by_profile', (q) => q.eq('profile_id', gone))
+        .unique(),
+    )
+    expect(orphan?.name_key).toBeUndefined()
+    const check = await t.query(internal.internal.nameKeysBackfill.check, {
+      org_id: f.org.id,
+      table: 'profiles',
+    })
+    expect(check.keys.team_members).toEqual(zero)
   })
 })

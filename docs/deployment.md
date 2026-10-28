@@ -613,6 +613,26 @@ row with its counts and the `cursor` to go on from, also when it fails
 partway. The third
 release clears `issues.description`, and no earlier release can show the
 descriptions after that, so it is a rollback floor.
+Every person, team and project has a `name_key`, the form of its name that
+lists in name order sort and search by (`convex/lib/nameKey.ts`), and every
+team membership, project grant and team share holds a copy of its person's
+or team's key. Every write keeps them: a rename brings the copies in line in
+its own transaction and in background steps, and a restore from Deleted
+items computes them again from the current names. A row stored before the
+release that added them has none until the one-time
+`internal/nameKeysBackfill` gives it one. The backfill stamps each
+organization it finishes in `org_ready`, and an organization created since
+that release is stamped at its creation. A list that reads in name order
+refuses an organization without the stamp instead of leaving rows out. Run
+the backfill on every hosted deployment once it serves that release, as the
+module's header says. Read its dry run first, then run it. A call that does
+not finish in about five minutes answers a `cursor`; call it again with the
+same arguments and that `cursor` until it answers `done`, and check that a
+second dry run reports no missing or stale keys. Earlier releases do not
+accept the fields or the `org_ready` and `name_copies` tables, and every new
+organization writes its `org_ready` row, so the release that added them is a
+rollback floor for the backend as soon as it deploys (see Rollback and
+hotfixes). Roll forward instead.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
