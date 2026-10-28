@@ -123,21 +123,27 @@ async function plantItems(
     const made = await t.run(async (ctx) => {
       const rows: Doc<'issues'>[] = []
       for (let i = from; i < Math.min(n, from + chunk); i++) {
-        const _id = await insertTask(ctx.db, {
-          id: uuid(),
-          org_id: f.org.id,
-          project_id: projectId,
-          num: planted++,
-          title: `Item ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-          window_key: newWindowKey(),
-          ...task,
-        })
+        // with its description row and the used_ids row of its id, as every
+        // writer stores a task
+        const _id = await insertTask(
+          ctx.db,
+          {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: projectId,
+            num: planted++,
+            title: `Item ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            window_key: newWindowKey(),
+            ...task,
+          },
+          'restore',
+        )
         const issue = (await ctx.db.get(_id)) as Doc<'issues'>
         await postMessage(ctx, {
           org_id: f.org.id,
