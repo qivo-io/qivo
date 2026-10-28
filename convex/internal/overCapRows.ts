@@ -61,12 +61,14 @@
  * reported for a person to shorten or correct. A task description or comment
  * over TEXT_MAX must be shortened (over REST or MCP) before anyone edits it
  * in the app, because the app parses only up to TEXT_MAX. The fix writes no
- * activity. A task's description row (model/descriptions.ts) gets the
- * trimmed description with its task row. Running it again is safe, and a
- * deployment that needs nothing reports no rows. */
+ * activity. A task's trimmed description is stored with its description
+ * row (model/descriptions.ts) in a transaction of its own (describe), so a
+ * page never reads a description row, whose bytes its maximumBytesRead
+ * would not count. Running it again is safe, and a deployment that needs
+ * nothing reports no rows. */
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
 import {
   internalAction,
   internalMutation,
@@ -76,7 +78,7 @@ import {
 } from '../_generated/server'
 import { cleanEmail } from '../lib/email'
 import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits'
-import { patchTask, type TaskFields } from '../model/descriptions'
+import { patchTask } from '../model/descriptions'
 
 /** Rows per page and the bytes one page may read; a page can end early.
  * `page_size` lowers the rows per page, for tests of a walk over pages. */
@@ -134,13 +136,19 @@ type Outcome = 'fixed' | 'would_fix' | 'skipped' | 'reported'
 type Found = { table: string; id: string; field: string; length: number; outcome: Outcome }
 
 /** What one page found, and where the next one starts. */
-type PageResult = { rows: Found[]; cursor: string; done: boolean }
+/** What one page found, where the next one starts, and the tasks whose
+ * descriptions the fix stores trimmed after the page (describe). */
+type PageResult = { rows: Found[]; cursor: string; done: boolean; describe?: Id<'issues'>[] }
 
 const pageRef = makeFunctionReference<
   'mutation',
   { phase: Phase; dry_run: boolean; cursor: string | null; page_size?: number },
   PageResult
 >('internal/overCapRows:page')
+
+const describeRef = makeFunctionReference<'mutation', { id: Id<'issues'> }, null>(
+  'internal/overCapRows:describe',
+)
 
 /** `value` as the fix stores it: trimmed and cut to `max` UTF-16 units, with
  * no space left at the end of the cut. */
@@ -341,17 +349,18 @@ async function walk(
   }
   if (phase === 'issues') {
     const page = await ctx.db.query('issues').paginate(opts)
+    const describe: Id<'issues'>[] = []
     for (const doc of page.page) {
       const { _id, _creationTime, ...body } = doc
       const found = sorted('issues', _id, storedChanges({ table: 'issues', doc: body }), write)
       rows.push(...found.rows)
-      // the task's description row takes a trimmed description too
-      // (model/descriptions.ts). It holds what the task row holds, so these
-      // reads add at most the bytes the page read.
-      if (found.patch !== null && write !== null)
-        await patchTask(write.db, doc, found.patch as TaskFields)
+      if (found.patch === null || write === null) continue
+      const { remaining_hours, description } = found.patch
+      if (typeof remaining_hours === 'number')
+        await write.db.patch('issues', _id, { remaining_hours })
+      if (typeof description === 'string') describe.push(_id)
     }
-    return { rows, cursor: page.continueCursor, done: page.isDone }
+    return { rows, cursor: page.continueCursor, done: page.isDone, describe }
   }
   const table = phase
   const page = await ctx.db.query(table).paginate(opts)
@@ -367,7 +376,8 @@ async function walk(
 const vPageSize = v.optional(v.number())
 
 /** One page of one phase in its own transaction: fixes the rows that break a
- * rule, or only reports them with `dry_run`. */
+ * rule, or only reports them with `dry_run`. It answers the tasks whose
+ * descriptions `fix` stores trimmed after it (describe). */
 export const page = internalMutation({
   args: {
     phase: vPhase,
@@ -377,6 +387,22 @@ export const page = internalMutation({
   },
   handler: async (ctx, { phase, dry_run, cursor, page_size }): Promise<PageResult> =>
     await walk(ctx, phase, cursor, dry_run ? null : ctx, page_size),
+})
+
+/** Stores the description of task `id` trimmed, with its description row
+ * (model/descriptions.ts), once a page of the fix found it untrimmed. A
+ * description that a trim leaves over TEXT_MAX, or that changed since,
+ * stays as it is. */
+export const describe = internalMutation({
+  args: { id: v.id('issues') },
+  handler: async (ctx, { id }): Promise<null> => {
+    const task = await ctx.db.get(id)
+    if (task?.description === undefined) return null
+    const description = trimMarkdown(task.description)
+    if (description !== task.description && description.length <= TEXT_MAX)
+      await patchTask(ctx.db, task, { description })
+    return null
+  },
 })
 
 /** Reports, without writing, the rows of one page of `phase` that break a
@@ -422,6 +448,8 @@ export const fix = internalAction({
           cursor,
           page_size,
         })
+        // each in its own transaction, so a page reads no description row
+        for (const id of result.describe ?? []) await ctx.runMutation(describeRef, { id })
         for (const row of result.rows) {
           const key = `${row.table}.${row.field} ${row.outcome}`
           counts[key] = (counts[key] ?? 0) + 1

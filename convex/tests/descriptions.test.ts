@@ -13,7 +13,7 @@ import { newWindowKey } from '../lib/db'
 import { LIMITS } from '../lib/limits'
 import { deleteOrgDeep } from '../model/cascade'
 import { TRASH_BUDGET } from '../model/deletedItems'
-import { putDescription } from '../model/descriptions'
+import { insertTask, putDescription } from '../model/descriptions'
 import { wipeWorkStep } from '../model/orgDeletion'
 import {
   as,
@@ -247,6 +247,37 @@ describe('the writers keep one equal row per task', () => {
     expect((await liveTask(t, task.id))?.description).toBe('Untrimmed')
     expect(await expectDescriptions(t, f.org.id)).toBe(1)
   })
+
+  it("the over-cap fix's pages read no description row, within Convex's limits", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // 80 untrimmed descriptions of 20,000 three-byte characters: a page
+    // reads 4 MiB of them, and their rows, read and patched there, would
+    // take it past 16 MiB
+    const text = '中'.repeat(LIMITS.description.max)
+    for (let from = 0; from < 80; from += 10)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 10; i++)
+          await insertTask(ctx.db, {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            num: 5000 + i,
+            title: 'Untrimmed',
+            description: `${text}  `,
+            status: 'todo',
+            priority: 'low',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            window_key: newWindowKey(),
+          })
+      })
+    await t.action(internal.internal.overCapRows.fix, { dry_run: false })
+    expect(await expectDescriptions(t, f.org.id)).toBe(80)
+    const rows = await t.run((ctx) => ctx.db.query('issue_descriptions').collect())
+    expect(rows.every((row) => row.description === text)).toBe(true)
+  }, 120_000)
 })
 
 /** Gives the description row of task `id` the text `description`, as an
