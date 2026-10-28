@@ -366,7 +366,8 @@ export function PlannableHoursInput({
     'plannable hours',
     !canEdit || user.isAgent,
   )
-  // a number refused on blur stays typed and marked until it changes
+  // a number refused on blur stays typed and marked until it changes, or
+  // its draft goes (Use saved, Discard)
   const [refused, setRefused] = useStateS(false)
   // Agents have unlimited capacity and cannot receive a weekly-hour value.
   if (user.isAgent) {
@@ -416,7 +417,7 @@ export function PlannableHoursInput({
             step={1}
             data-plannable-for={user.id}
             aria-label={`Plannable hours per week for ${user.name}`}
-            aria-invalid={refused || undefined}
+            aria-invalid={(refused && draft.unsaved) || undefined}
             aria-describedby={draft.conflict ? draft.conflictId : undefined}
             value={draft.text}
             disabled={!canEdit}

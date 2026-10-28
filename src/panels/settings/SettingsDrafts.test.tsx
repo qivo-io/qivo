@@ -457,6 +457,43 @@ describe('default plannable hours', () => {
     expect(leaveGuard.hasUnsaved()).toBe(false)
   })
 
+  it('takes the refused mark away with the draft on Use saved', async () => {
+    await open(() => <pages.general.OrgGeneralPage setPage={vi.fn()} />)
+    const field = find('[data-org-plannable]')
+    await type(field, '0')
+    await blur(field)
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    await elsewhere((s) => {
+      s.orgs[0].default_plannable_hours = 36
+    })
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    await click(button('Use saved'))
+    expect(field.value).toBe('36')
+    expect(field.getAttribute('aria-invalid')).toBeNull()
+  })
+
+  it('takes a person’s refused hours and their mark away on a Discard', async () => {
+    const { PlannableHoursInput } = await import('./UserControls')
+    const scope = leaveGuard.createUnsentScope()
+    await open(() => {
+      const leo = store.P.user(LEO)
+      return leo ? (
+        <leaveGuard.UnsentScopeContext.Provider value={scope}>
+          <PlannableHoursInput user={leo} canEdit />
+        </leaveGuard.UnsentScopeContext.Provider>
+      ) : null
+    })
+    const field = find(`[data-plannable-for="${LEO}"]`)
+    await type(field, '0')
+    await blur(field)
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    expect(scope.held()).toEqual(['plannable hours'])
+    await act(async () => scope.discard())
+    expect(field.value).toBe('40')
+    expect(field.getAttribute('aria-invalid')).toBeNull()
+    expect(sent()).toEqual([])
+  })
+
   it('sends the stored limit as the one seen while the organization stores no attachment limit', async () => {
     delete snap.orgs[0].max_attachment_mb
     await open(() => <pages.general.OrgGeneralPage setPage={vi.fn()} />)

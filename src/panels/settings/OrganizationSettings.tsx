@@ -301,7 +301,8 @@ function OrgNumberField({
 }) {
   const form = wholeNumber<number>(fallback)
   const draft = useSavedDraft(`${P.org.id}:${field}`, value, form, what, disabled)
-  // a number refused on blur stays typed and marked until the field changes
+  // a number refused on blur stays typed and marked until the field changes,
+  // or its draft goes (Use saved, Discard)
   const [refused, setRefused] = useStateS(false)
   const commit = () => {
     if (disabled) return
@@ -327,7 +328,7 @@ function OrgNumberField({
           step={1}
           {...{ [probe]: '' }}
           aria-label={label}
-          aria-invalid={refused || undefined}
+          aria-invalid={(refused && draft.unsaved) || undefined}
           aria-describedby={draft.conflict ? draft.conflictId : undefined}
           value={draft.text}
           disabled={disabled}
