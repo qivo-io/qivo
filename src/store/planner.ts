@@ -403,13 +403,22 @@ let historyWatched: { task: string; org: string } | null = null
 let historyEpoch = 0
 /* The last page the history's subscription delivered (threadHistory), its
    newest rows, oldest first in insertion order, the task window's changes
-   under All. null until the first delivery, and while no window shows All,
-   since the history is dropped whenever its subscription stops. */
+   under All. null until the first delivery since the history started over
+   (resetHistory), which it does when the last window leaves All and when
+   another task opens. A re-init of the parts (stopParts) keeps it until the
+   new subscription delivers. */
 let historySnap: Row<'activity_events'>[] | null = null
 /* The watched task's history older than that page, oldest first: earlier
    pages (P.loadEarlierHistory) and rows that left the page as newer ones
-   arrived. Server truth like historySnap, but not live, so a row someone's
-   change hides from the person stays until the history loads again. */
+   arrived. Server truth like historySnap, but not live: only the live page
+   runs again when what the person may see changes. A row loaded earlier
+   that the person stops receiving, after a grant ends or a task it names
+   moves or goes, stays on screen until the history loads again (Comments
+   and back to All, or the task opened again). Those rows came while the
+   person could see them, so nothing new shows. The store does not re-read
+   the loaded pages, since no change it hears of covers every input of the
+   server's rule (lib/activityVisibility.ts memberSeesActivity): a task a
+   row names can move or go where the person never sees it. */
 let olderEvents: Row<'activity_events'>[] = []
 /* Whether the watched task's first history row is loaded, so nothing is
    earlier, and how the last load of an earlier page of history went. */
