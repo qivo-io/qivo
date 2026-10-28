@@ -1137,8 +1137,8 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
 
   it("a fan-out works out its followers' sight once per project, however many follow", async () => {
     // every follower in this transaction, as a background step tells them
-    // with the same code (FOLLOWER_FANOUT)
-    Object.assign(FOLLOWER_FANOUT, { inline: 1000 })
+    // with the same code (FOLLOWER_FANOUT), with room for all of them
+    Object.assign(FOLLOWER_FANOUT, { inline: 1000, inlineRoom: 10_000 })
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -1203,8 +1203,9 @@ describe('notifyCommentInsert (model — composed by phase 5 comments.create)', 
     expect(await messagesFor(t, followers[0], issue.id)).toHaveLength(1)
     expect(await messagesFor(t, followers[239], issue.id)).toHaveLength(1)
     expect(await messagesFor(t, followers[240], issue.id)).toHaveLength(0)
-    // each follower's message and inbox item, and their own grants and
-    // team memberships; one check per follower read about 20 ranges each
+    // each follower's message, inbox item, its inbox_items row and build
+    // state, and their own grants and team memberships; one check per
+    // follower read about 20 ranges each
     expect(ranges).toBeLessThan(241 * 6)
   })
 

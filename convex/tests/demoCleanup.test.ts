@@ -184,6 +184,9 @@ const APP_OWNED: TableNames[] = [
   'messages',
   // when the read-message sweep next visits a profile, deleted with it
   'message_sweeps',
+  // an inbox's items and their build state, deleted after its messages
+  'inbox_items',
+  'inbox_state',
   'user_prefs',
   'sync_stamps',
   'mcp_tokens',

@@ -176,6 +176,7 @@ import type * as model_descriptionImages from "../model/descriptionImages.js";
 import type * as model_descriptions from "../model/descriptions.js";
 import type * as model_expected from "../model/expected.js";
 import type * as model_fileHolds from "../model/fileHolds.js";
+import type * as model_inboxItems from "../model/inboxItems.js";
 import type * as model_issues from "../model/issues.js";
 import type * as model_labelCounts from "../model/labelCounts.js";
 import type * as model_labels from "../model/labels.js";
@@ -401,6 +402,7 @@ declare const fullApi: ApiFromModules<{
   "model/descriptions": typeof model_descriptions;
   "model/expected": typeof model_expected;
   "model/fileHolds": typeof model_fileHolds;
+  "model/inboxItems": typeof model_inboxItems;
   "model/issues": typeof model_issues;
   "model/labelCounts": typeof model_labelCounts;
   "model/labels": typeof model_labels;

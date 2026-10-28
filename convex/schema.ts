@@ -1947,6 +1947,8 @@ export default defineSchema({
     .index('by_until', ['until'])
     .index('by_org', ['org_id']),
 
+  // Every insert, patch and delete of a message goes through an ItemEdits
+  // (model/inboxItems.ts), which keeps the item's inbox_items row.
   messages: defineTable({
     id: v.string(),
     org_id: v.string(),
@@ -2025,6 +2027,77 @@ export default defineSchema({
   message_sweep_seeds: defineTable({
     seeded_at: v.string(), // ISO instant, the run's start
   }),
+
+  // One row per inbox item, the (recipient, task) pair of messages the app
+  // lists as one row, holding what a page of items, its filters and the
+  // capped unread count need without reading the messages. Every field is
+  // a function of the pair's messages (model/inboxItems.ts itemOf), and
+  // every message write keeps it so once the recipient's inbox_state says
+  // the pair is built. The row goes when the item's last message goes, and
+  // never comes back with a restore, as messages do not. No reader uses it
+  // yet: the app, REST and MCP read the messages until every deployment
+  // has run internal/inboxItemsBackfill.
+  inbox_items: defineTable({
+    recipient_id: v.string(),
+    issue_id: v.string(),
+    // The task's project when the row was last written, absent when the task
+    // was not live then. A move re-keys it, inline up to a budget and then in
+    // background steps (model/inboxItems.ts rekeyItems), so readers check it
+    // against the task.
+    project_id: v.optional(v.string()),
+    // The list order: the newest message's created_at, or woke_at when the
+    // item returned from a snooze later, as the app's `ts` (store/viewModels.ts
+    // shapeMessageGroup).
+    sort_at: v.string(),
+    // The newest message by (created_at, id), the order the prune keeps.
+    latest_id: v.string(),
+    latest_at: v.string(), // its created_at
+    unread: v.boolean(), // unread_count > 0, for the indexes
+    unread_count: v.number(),
+    // The item's dropped counts summed over its unread messages (schema.ts
+    // messages.dropped), the earlier updates the item cap deleted.
+    dropped: v.number(),
+    // Messages of each kind, which the Inbox kind filter reads. Their sum is
+    // the item's message count, so an item at zero is deleted.
+    mentions: v.number(),
+    changes: v.number(),
+    comments: v.number(),
+    snoozed: v.boolean(), // snoozed_until is set, for the indexes
+    snoozed_until: v.optional(v.string()), // the newest message's
+    // The latest wake's stamp while one of its messages remains, and how
+    // many do, so sort_at follows when the last of them goes. A wake stamps
+    // every message of the item alike.
+    woke_at: v.optional(v.string()),
+    woke_rows: v.number(),
+  })
+    .index('by_recipient_issue', ['recipient_id', 'issue_id'])
+    // a task's items, for the teardowns and the move's re-key, which reads
+    // only those whose project_id differs from the task's
+    .index('by_issue_project', ['issue_id', 'project_id'])
+    // a page of the list, newest or oldest first, snoozed items as their own
+    // range
+    .index('by_recipient_list', ['recipient_id', 'snoozed', 'sort_at', 'issue_id'])
+    // Unread only
+    .index('by_recipient_unread_list', ['recipient_id', 'snoozed', 'unread', 'sort_at', 'issue_id'])
+    // the capped unread count, which skips a project it may not count with
+    // one seek
+    .index('by_recipient_unread_project', ['recipient_id', 'unread', 'snoozed', 'project_id']),
+
+  // Whether a profile's inbox_items rows are complete, at most one row per
+  // profile. internal/inboxItemsBackfill builds a profile's items in task id
+  // order and records the last task it built in `built_through`, then sets
+  // `built`. A message write keeps an item only while this row covers its
+  // task, and the backfill reads the messages it builds from in the same
+  // transaction that moves the row, so Convex orders every write before or
+  // after a build and no change is lost or counted twice. A profile with no
+  // row has no complete items, except that the first message to a profile
+  // without messages adds the row, built (model/inboxItems.ts
+  // ensureInboxState). Deleted with its profile.
+  inbox_state: defineTable({
+    profile_id: v.string(),
+    built: v.boolean(),
+    built_through: v.optional(v.string()), // an issue_id, while built is false
+  }).index('by_profile', ['profile_id']),
 
   user_prefs: defineTable({
     profile_id: v.string(),

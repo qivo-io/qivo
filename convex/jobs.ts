@@ -65,6 +65,7 @@ import { deletionBegun } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { audit } from './model/admin'
 import { scheduleMarkClears } from './model/archiveMarks'
+import { itemEdits } from './model/inboxItems'
 import {
   ITEM_UNREAD_CAP,
   lowerSweepDue,
@@ -705,10 +706,12 @@ async function sweepProfile(
           .lte('read_at', cutoff),
       )
       .take(budget + 1)
+    const edits = itemEdits(ctx)
     for (const m of expired.slice(0, budget)) {
-      await ctx.db.delete(m._id)
+      await edits.delete(m)
       deleted += 1
     }
+    await edits.flush()
     if (expired.length > budget) return { deleted, more: true }
     due = await oldestDue(ctx, profileId, days)
   }

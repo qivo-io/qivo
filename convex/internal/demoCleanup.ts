@@ -22,6 +22,7 @@ import { clearOrgTrash } from '../model/deletedItems'
 import { recordDemoCreated } from '../model/demoMetrics'
 import { drainDemoUploads } from '../model/demoUploads'
 import { eraseFile } from '../model/fileHolds'
+import { recipientItems, stateRows, taskItems } from '../model/inboxItems'
 import { deleteLabelCount } from '../model/labelCounts'
 import { deleteOrgBookkeeping, tallyRow } from '../model/orgs'
 import { uncountFile } from '../model/storageTotals'
@@ -186,6 +187,8 @@ async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
       ))
     )
       return false
+    // the inbox items after their messages (model/inboxItems.ts)
+    if (!(await drain(ctx, budget, (n) => taskItems(ctx, id).take(n)))) return false
     if (
       !(await drain(
         ctx,
@@ -393,6 +396,10 @@ async function profileRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
       ))
     )
       return false
+    // the inbox items and their build state after the messages
+    // (model/inboxItems.ts)
+    if (!(await drain(ctx, budget, (n) => recipientItems(ctx, id).take(n)))) return false
+    if (!(await drain(ctx, budget, (n) => stateRows(ctx, id).take(n)))) return false
     if (
       !(await drain(ctx, budget, (n) =>
         ctx.db

@@ -21,6 +21,7 @@ import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import type { TaskPatch } from './descriptions'
 import { releaseFile } from './fileHolds'
+import { recipientItems, stateRows } from './inboxItems'
 import { deleteSweepRow } from './messages'
 import { deleteOrgBookkeeping } from './orgs'
 import { deleteStamp } from './syncStamps'
@@ -431,7 +432,8 @@ export async function removeProfile(
  * ordered deletes with ON DELETE CASCADE under issues (comments,
  * issue_labels, issue_subscriptions, issue_attachments) and profiles
  * (user_prefs, agent_keys, mcp_tokens, messages via recipient); each is
- * explicit here, right after its parent.
+ * explicit here, right after its parent, as are a profile's inbox items and
+ * their build state after its messages (model/inboxItems.ts).
  * Deliberately NOT swept, because none of it is org-scoped: Better Auth
  * users (a login may hold seats elsewhere — adminAuth.deleteOrphanLogin is
  * the operator's tool once no profile references it), the appearance tables
@@ -663,6 +665,8 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       .withIndex('by_recipient', (q) => q.eq('recipient_id', pr.id))
       .collect())
       await ctx.db.delete(m._id)
+    for (const item of await recipientItems(ctx, pr.id).collect()) await ctx.db.delete(item._id)
+    for (const state of await stateRows(ctx, pr.id).collect()) await ctx.db.delete(state._id)
     await deleteProfileRateLimit(ctx, pr.id)
     await ctx.db.delete(pr._id)
     await releaseFile(ctx, pr.avatar_storage_id)

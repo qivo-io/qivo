@@ -21,7 +21,10 @@
  * An archived task's messages are read for every recipient. postMessage
  * stores news about one already read, the archive paths schedule
  * readArchivedTaskMessages and readArchivedProjectMessages for the rest, and
- * mark unread and snooze refuse such a task (refuseArchivedItems). */
+ * mark unread and snooze refuse such a task (refuseArchivedItems).
+ *
+ * Every message write here goes through an ItemEdits (model/inboxItems.ts),
+ * which keeps the item's inbox_items row equal to what its messages make. */
 
 import { makeFunctionReference } from 'convex/server'
 import { type Infer, v } from 'convex/values'
@@ -42,6 +45,7 @@ import { mentionIds } from '../lib/mentions'
 import { reviewerOwns, taskOwnerId } from '../lib/review'
 import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { scheduleArchiveMarks } from './archiveMarks'
+import { type ItemEdits, itemEdits, type Written } from './inboxItems'
 import { newUuid } from './orgs'
 import { messageRetentionDays } from './people'
 import { emitTaskEvent } from './taskEvents'
@@ -103,6 +107,7 @@ export async function wakeSnoozedItem(
     (r) => r.snoozed_until !== undefined && (a.until === undefined || r.snoozed_until === a.until),
   )
   if (rows.length === 0) return 0
+  const edits = itemEdits(ctx)
   const issue = await byId(ctx, 'issues', a.issue_id)
   const project = issue === null ? null : await byId(ctx, 'projects', issue.project_id)
   if (
@@ -112,8 +117,9 @@ export async function wakeSnoozedItem(
     project.archived_at === undefined
   ) {
     for (const r of rows) {
-      await ctx.db.patch(r._id, { snoozed_until: undefined, read_at: undefined, woke_at: now })
+      await edits.patch(r, { snoozed_until: undefined, read_at: undefined, woke_at: now })
     }
+    await edits.flush()
     return rows.length
   }
   // Messages about an archived task stay read (see "archived tasks" below),
@@ -131,15 +137,16 @@ export async function wakeSnoozedItem(
     if (r._id === newest._id) {
       if (!waking.has(r._id)) continue
       const readAt = r.read_at ?? now
-      await ctx.db.patch(r._id, { snoozed_until: undefined, read_at: readAt })
+      await edits.patch(r, { snoozed_until: undefined, read_at: readAt })
       await noteSweepable(ctx, a.recipient_id, readAt)
     } else if (waking.has(r._id) || r.read_at !== undefined) {
-      await ctx.db.delete(r._id)
+      await edits.delete(r)
     } else {
       continue
     }
     written += 1
   }
+  await edits.flush()
   return written
 }
 
@@ -231,14 +238,18 @@ function oldestFirst(
  * Newest = max by (created_at desc, id desc) — raw string compare, the same
  * total order as the client's isNewer mirror (planner.ts), so client and
  * server keep the same survivor. The one exception to "every UNREAD
- * message" is the item cap below (trimUnreadMessages). */
+ * message" is the item cap below (trimUnreadMessages). A writer passes its
+ * `edits` (model/inboxItems.ts), which it flushes; without one the prune
+ * flushes its own. */
 export async function pruneReadMessages(
   ctx: MutationCtx,
   a: { recipient_id: string; issue_id: string },
   preloaded?: Doc<'messages'>[],
+  edits?: ItemEdits,
 ): Promise<void> {
   const rows = preloaded ?? (await pairRows(ctx, a))
   if (rows.length === 0) return
+  const own = edits ?? itemEdits(ctx)
   let newest = rows[0]
   for (const r of rows) {
     if (
@@ -249,8 +260,9 @@ export async function pruneReadMessages(
     }
   }
   for (const r of rows) {
-    if (r._id !== newest._id && r.read_at !== undefined) await ctx.db.delete(r._id)
+    if (r._id !== newest._id && r.read_at !== undefined) await own.delete(r)
   }
+  if (edits === undefined) await own.flush()
 }
 
 /* -------------------------------------------------------------- item cap
@@ -312,16 +324,17 @@ const itemStart = (ctx: MutationCtx, a: { recipient_id: string; issue_id: string
  * own when the item is longer than `unread`, and moves the total to the
  * holder. This is
  * separate from retention, and the nightly sweep still never deletes an
- * unread row. */
+ * unread row. Returns how many rows it deleted. */
 async function trimRows(
   ctx: MutationCtx,
-  unread: readonly Pick<Doc<'messages'>, '_id' | 'kind' | 'dropped'>[],
+  edits: ItemEdits,
+  unread: readonly Written[],
   pair: { recipient_id: string; issue_id: string },
-  holder: Pick<Doc<'messages'>, '_id' | 'dropped'>,
+  holder: Written,
   arrival?: Id<'messages'>,
-): Promise<void> {
+): Promise<number> {
   const excess = Math.min(unread.length - ITEM_UNREAD_CAP, ITEM_TRIM_STEP)
-  if (excess <= 0) return
+  if (excess <= 0) return 0
   // The count's last holder is the newest unread row before this one. In an
   // item longer than `unread` reaches, it lies past it, so it is read here.
   const prior = (
@@ -335,7 +348,7 @@ async function trimRows(
   ).find((r) => r.read_at === undefined && r._id !== holder._id)
   const outside = prior?.dropped && !unread.some((r) => r._id === prior._id) ? prior : undefined
   const first = unread[0]
-  const newestOfKind = new Map<MessageKind, Pick<Doc<'messages'>, '_id' | 'kind'>>()
+  const newestOfKind = new Map<MessageKind, Written>()
   for (const r of unread) newestOfKind.set(r.kind, r)
   const kept = new Set([first._id, holder._id, ...[...newestOfKind.values()].map((r) => r._id)])
   if (arrival !== undefined) kept.add(arrival)
@@ -346,26 +359,28 @@ async function trimRows(
   for (const r of unread) {
     if (gone.size === excess) break
     if (kept.has(r._id)) continue
-    await ctx.db.delete(r._id)
+    await edits.delete(r)
     gone.add(r._id)
   }
-  if (gone.size === 0) return
+  if (gone.size === 0) return 0
   // the counts move to the holder: clear them on the other rows that stay
   for (const r of unread) {
     if (r._id !== holder._id && r.dropped && !gone.has(r._id))
-      await ctx.db.patch(r._id, { dropped: undefined })
+      await edits.patch(r, { dropped: undefined })
   }
-  if (outside !== undefined) await ctx.db.patch(outside._id, { dropped: undefined })
-  await ctx.db.patch(holder._id, { dropped: total + gone.size })
+  if (outside !== undefined) await edits.patch(outside, { dropped: undefined })
+  await edits.patch(holder, { dropped: total + gone.size })
+  return gone.size
 }
 
 /** Trims one item toward ITEM_UNREAD_CAP (trimRows), reading its first
  * TRIM_READ unread rows and its newest unread row, which holds the count.
- * The background trim step runs it. */
+ * The background trim step and the inbox items backfill run it. Returns how
+ * many rows it deleted. */
 export async function trimUnreadMessages(
   ctx: MutationCtx,
   a: { recipient_id: string; issue_id: string },
-): Promise<void> {
+): Promise<number> {
   const unread = await ctx.db
     .query('messages')
     .withIndex('by_recipient_issue_read_order', (q) =>
@@ -383,7 +398,11 @@ export async function trimUnreadMessages(
       .order('desc')
       .take(2)
   ).find((r) => r.read_at === undefined)
-  if (holder !== undefined) await trimRows(ctx, unread, a, holder)
+  if (holder === undefined) return 0
+  const edits = itemEdits(ctx)
+  const gone = await trimRows(ctx, edits, unread, a, holder)
+  await edits.flush()
+  return gone
 }
 
 /* ---------------------------------------------------------------- preload
@@ -428,6 +447,13 @@ export type NotifyPreload = {
    * notices arrive moments later. New owners' follows stay in the save;
    * mentions are told in it while its notice room lasts (tellMentioned). */
   deferFollowers?: true
+  /* Set by a bulk writer whose only message writes are its notices, the
+   * Northstar seed: every notice it posts keeps its inbox item through this
+   * one ItemEdits (model/inboxItems.ts), which reads each recipient's build
+   * state and each item once, and the writer flushes it after its notices.
+   * Another message write in the same transaction would have to go
+   * through it too. */
+  items?: ItemEdits
 }
 
 /** Builds an empty preload with the `projects` the caller already read. Use
@@ -589,6 +615,7 @@ export async function postMessage(
     recipient?: Doc<'profiles'>
     visibility?: RecipientSight
     trims?: ItemTrims
+    items?: ItemEdits
   },
 ): Promise<boolean> {
   if (m.actor_id !== undefined && m.recipient_id === m.actor_id) return false
@@ -636,7 +663,13 @@ export async function postMessage(
     created_at: m.now,
     read_at: archived ? m.now : undefined,
   }
-  const inserted = await ctx.db.insert('messages', row)
+  // the item's row (model/inboxItems.ts), and the recipient's build state
+  // read before the insert, which adds a built one to an empty inbox. A
+  // bulk writer's shared ItemEdits (NotifyPreload.items) is flushed by it.
+  const edits = m.items ?? itemEdits(ctx)
+  await edits.state(m.recipient_id, 'ensure')
+  const inserted = await edits.insert(row, issue.project_id, rows.length === 0)
+  const arrived = { ...row, _id: inserted }
   // News wakes a snoozed item: the arrival is the news, so the older rows
   // only drop the snooze (no woke_at — the new row's created_at floats and
   // announces the item), and the scheduled wake later finds nothing to do.
@@ -647,7 +680,7 @@ export async function postMessage(
   if (rows[0]?.snoozed_until !== undefined) {
     for (const r of await pairRows(ctx, pair)) {
       if (r.snoozed_until === undefined) continue
-      await ctx.db.patch(r._id, { snoozed_until: undefined })
+      await edits.patch(r, { snoozed_until: undefined })
       if (r.read_at !== undefined && (sweepable === undefined || r.read_at < sweepable)) {
         sweepable = r.read_at
       }
@@ -661,12 +694,13 @@ export async function postMessage(
   // archived task can outlive newer unread rows of its item until the
   // archive's background step marks them read and prunes the item
   // (readArchivedTaskMessages).
-  let newest: Pick<Doc<'messages'>, 'created_at' | 'id'> = row
+  let newest: Written = arrived
   for (const r of read) if (oldestFirst(newest, r) < 0) newest = r
-  for (const r of read) if (r !== newest) await ctx.db.delete(r._id)
-  if (newest !== row && row.read_at !== undefined) await ctx.db.delete(inserted)
+  for (const r of read) if (r !== newest) await edits.delete(r)
+  if (newest !== arrived && row.read_at !== undefined) await edits.delete(arrived)
   if (!inline) {
     m.trims?.later.push(m.recipient_id)
+    if (m.items === undefined) await edits.flush()
     return true
   }
   if (m.trims !== undefined) m.trims.inline += 1
@@ -675,7 +709,6 @@ export async function postMessage(
   // stamped with its write's time, may not be at the end of
   // the newest unread row by insertion holds the item's dropped count: the
   // arrival, or the latest unread row before it when it is stored read
-  const arrived = { ...row, _id: inserted }
   const latest = unread.reduce<(typeof unread)[number] | undefined>(
     (best, r) => (best === undefined || r._creationTime > best._creationTime ? r : best),
     undefined,
@@ -684,11 +717,13 @@ export async function postMessage(
   if (holder !== undefined)
     await trimRows(
       ctx,
+      edits,
       row.read_at === undefined ? [...unread, arrived].sort(oldestFirst) : unread,
       pair,
       holder,
       inserted,
     )
+  if (m.items === undefined) await edits.flush()
   return true
 }
 
@@ -892,15 +927,17 @@ export async function markMessagesRead(
   rows: readonly Doc<'messages'>[],
   now: string,
 ): Promise<Set<string>> {
+  const edits = itemEdits(ctx)
   const issues = new Set<string>()
   for (const row of rows) {
     if (row.read_at !== undefined) continue
-    await ctx.db.patch(row._id, { read_at: now })
+    await edits.patch(row, { read_at: now })
     issues.add(row.issue_id)
   }
   for (const issue_id of issues) {
-    await pruneReadMessages(ctx, { recipient_id: me.id, issue_id })
+    await pruneReadMessages(ctx, { recipient_id: me.id, issue_id }, undefined, edits)
   }
+  await edits.flush()
   if (issues.size > 0) await noteSweepable(ctx, me, now)
   return issues
 }
@@ -963,12 +1000,14 @@ export async function markMessagesUnread(
     me,
     rows.map((row) => row.issue_id),
   )
+  const edits = itemEdits(ctx)
   const issues = new Set<string>()
   for (const row of rows) {
     if (row.read_at === undefined || hidden.has(row.issue_id)) continue
-    await ctx.db.patch(row._id, { read_at: undefined })
+    await edits.patch(row, { read_at: undefined })
     issues.add(row.issue_id)
   }
+  await edits.flush()
   return issues
 }
 
@@ -977,11 +1016,13 @@ export async function removeMessages(
   ctx: MutationCtx,
   rows: readonly Doc<'messages'>[],
 ): Promise<Set<string>> {
+  const edits = itemEdits(ctx)
   const issues = new Set<string>()
   for (const row of rows) {
-    await ctx.db.delete(row._id)
+    await edits.delete(row)
     issues.add(row.issue_id)
   }
+  await edits.flush()
   return issues
 }
 
@@ -997,6 +1038,7 @@ const INBOX_BATCH = 256
  * not grow with the item. */
 async function pruneStampedItem(
   ctx: MutationCtx,
+  edits: ItemEdits,
   a: { recipient_id: string; issue_id: string },
   stamped: number,
 ): Promise<void> {
@@ -1022,7 +1064,7 @@ async function pruneStampedItem(
       newest = row
   }
   for (const row of read) {
-    if (row._id !== newest._id) await ctx.db.delete(row._id)
+    if (row._id !== newest._id) await edits.delete(row)
   }
 }
 
@@ -1064,10 +1106,12 @@ export async function markAllMessagesRead(
     )
     .take(INBOX_BATCH + 1)
   const batch = rows.slice(0, INBOX_BATCH)
-  for (const row of batch) await ctx.db.patch(row._id, { read_at: now })
+  const edits = itemEdits(ctx)
+  for (const row of batch) await edits.patch(row, { read_at: now })
   for (const issue_id of new Set(batch.map((row) => row.issue_id))) {
-    await pruneStampedItem(ctx, { recipient_id: me.id, issue_id }, INBOX_BATCH)
+    await pruneStampedItem(ctx, edits, { recipient_id: me.id, issue_id }, INBOX_BATCH)
   }
+  await edits.flush()
   if (batch.length > 0) await noteSweepable(ctx, me, now)
   return { marked: batch, hasMore: rows.length > INBOX_BATCH, before: cutoff }
 }
@@ -1090,7 +1134,9 @@ export async function removeReadMessages(
     )
     .take(INBOX_BATCH + 1)
   const batch = rows.slice(0, INBOX_BATCH)
-  for (const row of batch) await ctx.db.delete(row._id)
+  const edits = itemEdits(ctx)
+  for (const row of batch) await edits.delete(row)
+  await edits.flush()
   return { removed: batch, hasMore: rows.length > INBOX_BATCH }
 }
 
@@ -1135,6 +1181,7 @@ export async function snoozeMessages(
     if (ms > Date.now() + MAX_SNOOZE_MS) throw rule(LIMITS.snooze.refusal)
     at = new Date(ms).toISOString() // normalized, so the wake's equality holds
   }
+  const edits = itemEdits(ctx)
   const changed = new Set<string>()
   for (const issue_id of new Set(rows.map((row) => row.issue_id))) {
     if (hidden.has(issue_id)) continue
@@ -1143,17 +1190,18 @@ export async function snoozeMessages(
     if (at === null) {
       for (const row of item) {
         if (row.snoozed_until === undefined) continue
-        await ctx.db.patch(row._id, { snoozed_until: undefined, read_at: undefined })
+        await edits.patch(row, { snoozed_until: undefined, read_at: undefined })
         changed.add(issue_id)
       }
       continue
     }
     for (const row of item) {
-      await ctx.db.patch(row._id, { snoozed_until: at, read_at: undefined, woke_at: undefined })
+      await edits.patch(row, { snoozed_until: at, read_at: undefined, woke_at: undefined })
     }
     if (item.length > 0) changed.add(issue_id)
     await ctx.scheduler.runAt(Date.parse(at), wakeRef, { ...pair, until: at })
   }
+  await edits.flush()
   return changed
 }
 
@@ -1190,8 +1238,13 @@ export async function snoozeMessages(
  * (refuseArchivedItems), so no inbox write reopens what the steps marked.
  * Mark read and remove still work on it. */
 
-/** The most rows one archived-read step marks read. */
-export const ARCHIVED_READ_BATCH = 500
+/** The most rows one archived-read step marks read. A row of its own
+ * recipient costs up to six index ranges: two for its item's prune, two for
+ * the recipient's sweep row and two for the recipient's build state and
+ * the item's row (model/inboxItems.ts). With the two each task costs, a
+ * step over ARCHIVED_READ_TASKS tasks then reads about 3,000 of Convex's
+ * 4,096 ranges (convex/tests/inboxItems.test.ts measures it). */
+export const ARCHIVED_READ_BATCH = 330
 
 /** The most tasks one archived-read step visits. scheduleArchivedReads gives
  * each step at most this many task ids, and a project walk stops after this
@@ -1255,6 +1308,7 @@ const stepLimit = (limit: number | undefined, fallback: number): number =>
  * the next step. */
 async function readTaskMessages(
   ctx: MutationCtx,
+  edits: ItemEdits,
   issueId: string,
   now: string,
   budget: number,
@@ -1266,7 +1320,7 @@ async function readTaskMessages(
     .take(budget + 1)
   const touched = unread.slice(0, budget)
   for (const row of touched) {
-    await ctx.db.patch(row._id, { read_at: now, snoozed_until: undefined })
+    await edits.patch(row, { read_at: now, snoozed_until: undefined })
   }
   let more = unread.length > budget
   if (!more) {
@@ -1281,13 +1335,13 @@ async function readTaskMessages(
       .take(room + 1)
     more = snoozed.length > room
     for (const row of snoozed.slice(0, room)) {
-      await ctx.db.patch(row._id, { snoozed_until: undefined })
+      await edits.patch(row, { snoozed_until: undefined })
       touched.push(row)
     }
   }
   for (const row of touched) noteEarliest(earliest, row.recipient_id, row.read_at ?? now)
   for (const recipient_id of new Set(touched.map((row) => row.recipient_id))) {
-    await pruneStampedItem(ctx, { recipient_id, issue_id: issueId }, budget)
+    await pruneStampedItem(ctx, edits, { recipient_id, issue_id: issueId }, budget)
   }
   return { marked: touched.length, more }
 }
@@ -1323,6 +1377,7 @@ export async function readArchivedTaskMessages(
   }
   let rest: readonly string[] = []
   const earliest = new Map<string, string>()
+  const edits = itemEdits(ctx)
   for (const [i, issueId] of a.issues.entries()) {
     if (budget === 0) {
       rest = a.issues.slice(i)
@@ -1336,13 +1391,14 @@ export async function readArchivedTaskMessages(
     ) {
       continue
     }
-    const step = await readTaskMessages(ctx, issue.id, a.now, budget, earliest)
+    const step = await readTaskMessages(ctx, edits, issue.id, a.now, budget, earliest)
     budget -= step.marked
     if (step.more) {
       rest = a.issues.slice(i)
       break
     }
   }
+  await edits.flush()
   await noteSweepables(ctx, earliest)
   if (rest.length > 0) {
     await ctx.scheduler.runAfter(0, readArchivedTasksRef, { issues: [...rest], batch: a.batch })
@@ -1389,18 +1445,20 @@ export async function readArchivedProjectMessages(
     })
   let unfinished = false
   const earliest = new Map<string, string>()
+  const edits = itemEdits(ctx)
   for (const task of page.page) {
     if (budget === 0) {
       unfinished = true
       break
     }
-    const step = await readTaskMessages(ctx, task.id, a.now, budget, earliest)
+    const step = await readTaskMessages(ctx, edits, task.id, a.now, budget, earliest)
     budget -= step.marked
     if (step.more) {
       unfinished = true
       break
     }
   }
+  await edits.flush()
   await noteSweepables(ctx, earliest)
   if (!unfinished && page.isDone) return
   await ctx.scheduler.runAfter(0, readArchivedProjectRef, {
@@ -1459,15 +1517,21 @@ async function mentionedIn(
  * A follower costs about two index ranges, a few writes and about a
  * millisecond, so a task followed by some thousands of people before
  * LIMITS.followers.max existed passed Convex's 4,096 ranges, and a bulk save of
- * tasks with many followers passed its 1 s. A task gains no followers past
- * LIMITS.followers.max now, besides owners who still follow. A follower whose item
- * holds snoozed rows also costs one write for each row the notice wakes
- * (postMessage), up to ITEM_UNREAD_CAP + 1, so a step stops once it has made
- * `stepRoom` database calls and leaves the rest to the next. The writing
- * transaction stops at `inlineRoom`, less, because the write itself came
- * first, and hands the rest to a step the same way; the people it mentions
- * count toward the same room (tellMentioned). Tests lower these. */
-export const FOLLOWER_FANOUT = { inline: 128, step: 256, stepRoom: 2000, inlineRoom: 1000 }
+ * tasks with many followers passed its 1 s. Keeping the follower's inbox
+ * item (model/inboxItems.ts) adds two ranges and a write, and for someone
+ * without a message yet one range and one write more: in tests a follower
+ * of a comment read 4 to 6 ranges and wrote 2 or 3 rows. A task gains no
+ * followers past LIMITS.followers.max now, besides owners who still follow.
+ * A follower whose item holds snoozed rows also costs one write for each
+ * row the notice wakes (postMessage), up to ITEM_UNREAD_CAP + 1, so a step
+ * stops once it has made `stepRoom` database calls and leaves the rest to
+ * the next. The writing transaction stops at `inlineRoom`, less, because
+ * the write itself came first, and hands the rest to a step the same way;
+ * the people it mentions count toward the same room (tellMentioned). The
+ * room holds the first `inline` followers even when none has a message yet,
+ * so a task at LIMITS.followers.max tells them all in the write. Tests
+ * lower these. */
+export const FOLLOWER_FANOUT = { inline: 128, step: 256, stepRoom: 2000, inlineRoom: 1250 }
 
 /** What a fan-out tells every follower, before each reader's own lines. A
  * change carries its parts, its assignment and reviewer lines with the
@@ -1580,6 +1644,7 @@ async function tellFollowers(
     profiles: ProfileCache
     visibility: RecipientSight
     trims: ItemTrims
+    items?: ItemEdits
     guard?: () => Promise<void>
     room: () => boolean
   },
@@ -1616,6 +1681,7 @@ async function tellFollowers(
       recipient,
       visibility: cx.visibility,
       trims: cx.trims,
+      items: cx.items,
     })
   }
   return handled
@@ -1763,6 +1829,7 @@ async function tellMentioned(
     mentioned: readonly Doc<'profiles'>[]
     visibility: RecipientSight
     trims: ItemTrims
+    items?: ItemEdits
     room: () => boolean
     guard?: () => Promise<void>
   },
@@ -1798,6 +1865,7 @@ async function tellMentioned(
       recipient: m,
       visibility: a.visibility,
       trims: a.trims,
+      items: a.items,
     })
   }
   if (later.length > 0)
@@ -1943,6 +2011,7 @@ export async function notifyIssueInsert(
     mentioned,
     visibility,
     trims,
+    items: preload?.items,
     room: notices.room,
   })
   if (issue.assignee_id !== undefined) {
@@ -1974,6 +2043,7 @@ export async function notifyIssueInsert(
           recipient: assignee,
           visibility,
           trims,
+          items: preload?.items,
         })
       }
     }
@@ -2006,6 +2076,7 @@ export async function notifyIssueInsert(
           recipient: reviewer,
           visibility,
           trims,
+          items: preload?.items,
         })
       }
     }
@@ -2104,6 +2175,7 @@ export async function notifyIssueUpdate(
     mentioned: newMentions,
     visibility,
     trims,
+    items: preload?.items,
     room: notices.room,
     guard: preload?.guard,
   })
@@ -2289,6 +2361,7 @@ export async function notifyIssueUpdate(
       profiles,
       visibility,
       trims,
+      items: preload?.items,
       guard: preload?.guard,
       room: notices.room,
     },
@@ -2334,6 +2407,7 @@ export async function notifyCommentInsert(
     mentioned,
     visibility,
     trims,
+    items: preload?.items,
     room: notices.room,
   })
   await subscribeToIssue(ctx, {
@@ -2361,7 +2435,17 @@ export async function notifyCommentInsert(
     },
     subs,
     FOLLOWER_FANOUT.inline,
-    { issue, project, also: [], parent: [], profiles, visibility, trims, room: notices.room },
+    {
+      issue,
+      project,
+      also: [],
+      parent: [],
+      profiles,
+      visibility,
+      trims,
+      items: preload?.items,
+      room: notices.room,
+    },
   )
   await scheduleItemTrims(ctx, issue.id, trims)
 }
