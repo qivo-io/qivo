@@ -25,6 +25,7 @@ import { byId, newWindowKey } from '../lib/db'
 import { ACCESS_LEVELS, type AccessLevel } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
 import { insertTask } from '../model/descriptions'
+import schema from '../schema'
 import { newTeam, SHAPES } from './accessShapes.setup'
 import {
   NOW,
@@ -40,7 +41,6 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
-import schema from '../schema'
 import { plantNorthstar } from './northstar.setup'
 
 type Phase = Parameters<typeof reportPage>[1]
