@@ -9,7 +9,8 @@
  *                    and the helpers that insert an organization with its
  *                    org_counters and org_ready rows and delete them
  *   live counts      the active tasks and live projects the app's windows
- *                    read (org_counters), kept by tallyRow
+ *                    read (org_counters), kept by tallyRow, which also
+ *                    moves the label usage counts (model/labelCounts.ts)
  *   column defaults  including the organization-wide upload cap
  *   last admin       an org may never lose its last admin
  *   last team        an org may never lose its last team
@@ -44,9 +45,17 @@ import {
   TEXT,
   TEXT_OR_NULL,
 } from './expected'
+import {
+  insertLabelCount,
+  labelCountRun,
+  type TaskAfter,
+  type TaskBefore,
+  tallyTaskLabels,
+} from './labelCounts'
 import { readyRow } from './nameKeys'
 import { assertProfileExpected } from './people'
 import { deleteOrgTotals, startOrgTotals } from './storageTotals'
+import { countingOrg, countMemberRemoved, insertTeamCount } from './teamCounts'
 
 /* Web Crypto exists in the Convex isolate (and the edge-runtime VM), but
  * convex/tsconfig's lib is ESNext only, which does not declare the global. */
@@ -330,7 +339,10 @@ export async function insertOrgRows(
  * its numbers until then (lib/idWindows.ts startWindows). The counts share
  * the row with the numbers, so archives, restores and deletes in one
  * organization conflict with each other and with its creates, as its
- * creates already did, and Convex runs the one that lost again. */
+ * creates already did, and Convex runs the one that lost again. A write of
+ * tasks also moves the label usage counts of their labels
+ * (model/labelCounts.ts tallyTaskLabels), which count the same active
+ * tasks. */
 
 export type LiveCounts = Pick<Doc<'org_counters'>, 'active_tasks' | 'live_projects'>
 
@@ -344,6 +356,16 @@ export const liveCountsOf = (row: Doc<'org_counters'> | null): LiveCounts =>
 /** A task or project as tallyRow reads it. */
 type Tallied = Pick<Doc<'issues'>, 'org_id' | 'num' | 'archived_at'>
 
+/** One write of a task: the stored task before it, with its position for
+ * the label counts, and the task after it. */
+type TaskWrite = readonly [
+  before: (Tallied & TaskBefore) | null,
+  after: (Tallied & TaskAfter) | null,
+]
+
+/** One write of a project. */
+type ProjectWrite = readonly [before: Tallied | null, after: Tallied | null]
+
 /** Whether the windows read `row` of `table`, a task while it is active and
  * a project while it exists. */
 const tallied = (table: 'issues' | 'projects', row: Tallied | null) =>
@@ -355,12 +377,26 @@ const tallied = (table: 'issues' | 'projects', row: Tallied | null) =>
  * patch). Reads each organization's counters once, and a write that changes
  * neither count costs nothing. Counts an organization has not got stay
  * absent, and while internal/liveCountsBackfill counts them, a row numbered
- * past where it has counted waits for the backfill. */
+ * past where it has counted waits for the backfill. Writes of tasks also
+ * move the counts of the labels the tasks carry when this runs
+ * (model/labelCounts.ts tallyTaskLabels). An assignment a caller inserts or
+ * deletes while its task is live moves them through tallyAssignment. */
+export async function tallyRows(
+  ctx: MutationCtx,
+  table: 'issues',
+  writes: readonly TaskWrite[],
+): Promise<void>
+export async function tallyRows(
+  ctx: MutationCtx,
+  table: 'projects',
+  writes: readonly ProjectWrite[],
+): Promise<void>
 export async function tallyRows(
   ctx: MutationCtx,
   table: 'issues' | 'projects',
-  writes: readonly (readonly [before: Tallied | null, after: Tallied | null])[],
+  writes: readonly (TaskWrite | ProjectWrite)[],
 ): Promise<void> {
+  if (table === 'issues') await tallyTaskLabels(ctx, writes as readonly TaskWrite[])
   const field = table === 'issues' ? 'active_tasks' : 'live_projects'
   const kind = table === 'issues' ? 'tasks' : 'projects'
   const moves = new Map<string, { num: number; by: number }[]>()
@@ -381,24 +417,43 @@ export async function tallyRows(
 }
 
 /** tallyRows for one write. */
-export const tallyRow = (
+export function tallyRow(
   ctx: MutationCtx,
-  table: 'issues' | 'projects',
+  table: 'issues',
+  before: TaskWrite[0],
+  after: TaskWrite[1],
+): Promise<void>
+export function tallyRow(
+  ctx: MutationCtx,
+  table: 'projects',
   before: Tallied | null,
   after: Tallied | null,
-): Promise<void> => tallyRows(ctx, table, [[before, after]])
+): Promise<void>
+export function tallyRow(
+  ctx: MutationCtx,
+  table: 'issues' | 'projects',
+  before: TaskWrite[0] | Tallied | null,
+  after: TaskWrite[1] | Tallied | null,
+): Promise<void> {
+  // the overloads above pair each table with its rows
+  return table === 'issues'
+    ? tallyRows(ctx, table, [[before, after] as TaskWrite])
+    : tallyRows(ctx, table, [[before, after]])
+}
 
-/** Deletes the organization's org_counters and org_ready rows and its
- * stored-byte totals row (model/storageTotals.ts), if any. Every
- * organization delete (model/cascade.ts deleteOrgDeep, the last step of
- * model/orgDeletion.ts, the demo purge) calls it before it deletes the
- * organization row. */
+/** Deletes the organization's org_counters and org_ready rows, its
+ * stored-byte totals row (model/storageTotals.ts) and its running label
+ * count (label_count_runs), if any. Every organization delete
+ * (model/cascade.ts deleteOrgDeep, the last step of model/orgDeletion.ts,
+ * the demo purge) calls it before it deletes the organization row. */
 export async function deleteOrgBookkeeping(ctx: MutationCtx, orgId: string): Promise<void> {
   const counters = await countersRow(ctx, orgId)
   if (counters !== null) await ctx.db.delete(counters._id)
   const ready = await readyRow(ctx, orgId)
   if (ready !== null) await ctx.db.delete(ready._id)
   await deleteOrgTotals(ctx, orgId)
+  const run = await labelCountRun(ctx, orgId)
+  if (run !== null) await ctx.db.delete(run._id)
 }
 
 /* ------------------------------------------------------------------ defaults
@@ -446,14 +501,16 @@ export async function createStarterLabels(
   { org_id, now }: { org_id: string; now: string },
 ): Promise<void> {
   for (const label of DEFAULT_LABELS) {
+    const id = newUuid()
     await ctx.db.insert('labels', {
-      id: newUuid(),
+      id,
       org_id,
       name: label.name,
       name_lower: label.name.toLowerCase(),
       color: label.color,
       created_at: now,
     })
+    await insertLabelCount(ctx, { id, org_id })
   }
 }
 
@@ -478,6 +535,7 @@ export async function createStarterTeam(
 ): Promise<string> {
   const teamId = newUuid()
   await ctx.db.insert('teams', { id: teamId, org_id, ...named(name), ...newTeamDefaults(now) })
+  let members = 0
   if (leader !== undefined) {
     await ctx.db.insert('team_members', {
       team_id: teamId,
@@ -485,19 +543,27 @@ export async function createStarterTeam(
       is_leader: true,
       name_key: nameKey(leader.name),
     })
+    // the leader as stored, whose role decides whether it counts
+    if (countingOrg(await byId(ctx, 'profiles', leader.id)) === org_id) members = 1
   }
+  await insertTeamCount(ctx, { id: teamId, org_id }, members)
   return teamId
 }
 
 /* A guest is never a team member (teams.addMember). When a seat becomes a
  * guest its memberships end, leadership included. A team may be left
- * without a leader; organization admins still run it (teams.setLeader). */
-export async function leaveAllTeams(ctx: MutationCtx, profileId: string): Promise<void> {
+ * without a leader; organization admins still run it (teams.setLeader).
+ * `profile` is the seat as it was before the change, so the team counts
+ * lose the memberships it counted in (model/teamCounts.ts). */
+export async function leaveAllTeams(ctx: MutationCtx, profile: Doc<'profiles'>): Promise<void> {
   const rows = await ctx.db
     .query('team_members')
-    .withIndex('by_profile', (q) => q.eq('profile_id', profileId))
+    .withIndex('by_profile', (q) => q.eq('profile_id', profile.id))
     .collect()
-  for (const row of rows) await ctx.db.delete(row._id)
+  for (const row of rows) {
+    await ctx.db.delete(row._id)
+    await countMemberRemoved(ctx, row, countingOrg(profile))
+  }
 }
 
 /* profiles_last_admin_update / _delete (0099:286-323): the last admin who can

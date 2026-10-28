@@ -59,6 +59,13 @@ import {
   removeAndSettle,
   withinRoom,
 } from './projectAccess'
+import {
+  countingOrg,
+  countingOrgOf,
+  countMemberAdded,
+  countMemberRemoved,
+  insertTeamCount,
+} from './teamCounts'
 
 /* Refuses with LIMITS.teamDeleteRows' sentence a team deletion that changes
  * more than LIMITS.teamDeleteRows.max memberships, project shares and legacy
@@ -214,6 +221,7 @@ export async function createTeamCore(
   )
   const team = await ctx.db.get(_id)
   if (team === null) throw notFound('team not found')
+  await insertTeamCount(ctx, team, 0)
   return team
 }
 
@@ -332,6 +340,7 @@ export async function addTeamMemberCore(
     is_leader: false,
     name_key: nameKey(member.name),
   })
+  await countMemberAdded(ctx, team.id, countingOrg(member))
   await logActivity(ctx, {
     org_id: team.org_id,
     actor_id: me.id,
@@ -469,12 +478,18 @@ export async function removeTeamMemberCore(
   const member = await byId(ctx, 'profiles', a.profileId)
   const people = new Map<string, Doc<'profiles'>>()
   if (member !== null && member.org_id === team.org_id) people.set(member.id, member)
+  // a removed person's membership that waits for its cleanup counts
+  // through the removal (model/teamCounts.ts)
+  const countedIn = member === null ? await countingOrgOf(ctx, a.profileId) : countingOrg(member)
   const reach = await withinRoom(() => teamReach(ctx, team))
   const settled = await removeAndSettle(ctx, {
     me,
     people,
     projects: reach.projects,
-    remove: () => ctx.db.delete(row._id),
+    remove: async () => {
+      await ctx.db.delete(row._id)
+      await countMemberRemoved(ctx, row, countedIn)
+    },
     held: a.held,
     viewerOn: (project) => viewerProjectFor(ctx, reach.shared, project),
     now,

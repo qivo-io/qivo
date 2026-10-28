@@ -71,7 +71,7 @@ import {
   scheduleArchivedReads,
   wakeSnoozedItem,
 } from './model/messages'
-import { DEFAULT_ARCHIVE_DAYS, tallyRows } from './model/orgs'
+import { DEFAULT_ARCHIVE_DAYS, tallyRow } from './model/orgs'
 import { messageRetentionDays } from './model/people'
 import { emitTaskEvent } from './model/taskEvents'
 
@@ -348,16 +348,12 @@ async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg |
       before: task,
       now: a.now,
     })
+    // within the leg's measure, as each task's labels move their counts
+    await tallyRow(ctx, 'issues', task, { ...task, archived_at: a.now })
     patched.push(task)
   }
-  if (patched.length > 0) {
-    await tallyRows(
-      ctx,
-      'issues',
-      patched.map((task) => [task, { ...task, archived_at: a.now }] as const),
-    )
+  if (patched.length > 0)
     await scheduleArchivedReads(ctx, { issues: patched.map((task) => task.id) })
-  }
   const archived = a.archived + patched.length
   // The same page again. The tasks archived here have left its range.
   if (full) return { ...a, archived }

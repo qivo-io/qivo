@@ -34,7 +34,10 @@ import { readWorkspace, type Workspace } from '../lib/workspaceJoin'
 import { type ActivityEntry, insertActivity } from '../model/activity'
 import { insertTask } from '../model/descriptions'
 import { ERASE_TIMERS, noteRestore } from '../model/fileHolds'
+import { activeTaskCount } from '../model/labelCounts'
 import { countersOf, countersRow, type OrgCounters } from '../model/orgs'
+import { memberCount } from '../model/teamCounts'
+import { teamJson } from '../model/teams'
 import schema from '../schema'
 
 export type T = TestConvex<typeof schema>
@@ -895,6 +898,57 @@ export async function expectDescriptions(t: T, orgId?: string): Promise<number> 
   const kept = (task: Doc<'issues'>) => `${task.org_id}:${task.id}:${task.description ?? ''}`
   expect(rows.map(held).sort()).toEqual(tasks.map(kept).sort())
   return tasks.length
+}
+
+/** Expects every label_counts and team_counts row of organization `orgId`
+ * to name a label or team the organization still has, and each count a
+ * reader may show (model/labelCounts.ts activeTaskCount,
+ * model/teamCounts.ts memberCount) to be the one its rows give, or none.
+ * Answers how many it found shown. */
+export async function expectListCounts(t: T, orgId: string): Promise<number> {
+  const found = await t.run(async (ctx) => {
+    const out: { what: string; shown: number | null; rows: number | null }[] = []
+    const labels = ctx.db.query('label_counts').withIndex('by_org', (q) => q.eq('org_id', orgId))
+    for await (const row of labels) {
+      const label = await ctx.db
+        .query('labels')
+        .withIndex('by_uuid', (q) => q.eq('id', row.label_id))
+        .unique()
+      if (label === null || label.org_id !== orgId) {
+        out.push({ what: `label ${row.label_id}`, shown: row.active_tasks, rows: null })
+        continue
+      }
+      let rows = 0
+      const uses = ctx.db
+        .query('issue_labels')
+        .withIndex('by_label', (q) => q.eq('label_id', label.id))
+      for await (const use of uses) {
+        const task = await ctx.db
+          .query('issues')
+          .withIndex('by_uuid', (q) => q.eq('id', use.issue_id))
+          .unique()
+        if (task !== null && task.archived_at === undefined) rows++
+      }
+      out.push({ what: `label ${label.id}`, shown: await activeTaskCount(ctx, label), rows })
+    }
+    const teams = ctx.db.query('team_counts').withIndex('by_org', (q) => q.eq('org_id', orgId))
+    for await (const row of teams) {
+      const team = await ctx.db
+        .query('teams')
+        .withIndex('by_uuid', (q) => q.eq('id', row.team_id))
+        .unique()
+      if (team === null || team.org_id !== orgId) {
+        out.push({ what: `team ${row.team_id}`, shown: row.members, rows: null })
+        continue
+      }
+      const rows = (await teamJson(ctx, team)).members.length
+      out.push({ what: `team ${team.id}`, shown: await memberCount(ctx, team), rows })
+    }
+    return out
+  })
+  const wrong = found.filter((f) => f.rows === null || (f.shown !== null && f.shown !== f.rows))
+  expect(wrong).toEqual([])
+  return found.filter((f) => f.shown !== null).length
 }
 
 /** Overwrites the organization's stored counters, for fixtures that plant

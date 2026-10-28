@@ -48,6 +48,7 @@ import {
   TASK_HOLDERS,
 } from './model/cascade'
 import { estimateDocumentBytes } from './model/demoMetrics'
+import { countingOrgOf } from './model/teamCounts'
 
 /** A row whose last step committed longer ago than this is restarted. */
 export const STALLED_MS = 60_000
@@ -130,7 +131,9 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
   // transaction left
   access: [
     {
-      sweep: (ctx, profileId, budget) => deleteAccessRows(ctx, profileId, budget),
+      // memberships the removal row still counts leave their teams' counts
+      sweep: async (ctx, profileId, budget) =>
+        deleteAccessRows(ctx, profileId, budget, await countingOrgOf(ctx, profileId)),
       remains: accessRowsRemain,
     },
   ],

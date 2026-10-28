@@ -1137,6 +1137,33 @@ export default defineSchema({
     // the memberships a rename brings in line, as project_access by_profile_name
     .index('by_profile_name', ['profile_id', 'name_key']),
 
+  // One team's member count (model/teamCounts.ts), for Settings > Teams, the
+  // team page and the REST and MCP team summaries, kept off the team row,
+  // which every member's catalog and many permission reads load. `members`
+  // counts the team's team_members rows whose profile exists in the team's
+  // organization and is not a guest, as model/teams.ts teamJson lists them:
+  // inactive people, agents and viewers count, and a guest's membership
+  // left from before the guest rule does not. A membership a profile
+  // removal left for its background steps still counts until a step deletes
+  // it (profile_removals.counted_org_id). Every write of a membership moves
+  // the count in its own transaction. A team has no row until
+  // internal/teamCountsBackfill counts it, and teams created since this
+  // release start with one. While the backfill counts a team, `through`
+  // holds the _creationTime of the last membership it counted, and a write
+  // moves the count only for a membership at or below it. `revision` goes
+  // up with every write of the row, so a dry run sees a change that ends
+  // where it began. No reader uses the count yet; one is to show it only
+  // for a row without `through` (memberCount), never a missing row as zero.
+  team_counts: defineTable({
+    team_id: v.string(),
+    org_id: v.string(),
+    members: v.number(),
+    through: v.optional(v.number()),
+    revision: v.number(),
+  })
+    .index('by_team', ['team_id'])
+    .index('by_org', ['org_id']),
+
   profiles: defineTable({
     id: v.string(),
     auth_user_id: v.optional(v.string()), // Better Auth user id; absent = unclaimed seat
@@ -1202,6 +1229,11 @@ export default defineSchema({
     phase: vRemovalPhase,
     progress_at: v.string(), // the last committed step; recovery restarts a stalled row
     scheduled_id: v.optional(v.id('_scheduled_functions')), // the next step
+    // Set when the profile was no guest and memberships outlived the
+    // removal's own transaction: the organization whose team_counts still
+    // count them. The access phase takes each one off its team's count as
+    // it deletes it (model/teamCounts.ts countingOrgOf).
+    counted_org_id: v.optional(v.string()),
   })
     .index('by_profile', ['profile_id'])
     .index('by_progress', ['progress_at']),
@@ -1273,6 +1305,45 @@ export default defineSchema({
     .index('by_uuid', ['id'])
     .index('by_org', ['org_id'])
     .index('by_org_name_lower', ['org_id', 'name_lower']),
+
+  // One label's use on active tasks (model/labelCounts.ts), for Settings >
+  // Labels and its delete confirmation, kept off the label row, which every
+  // member's catalog loads. `active_tasks` counts the live tasks without
+  // archived_at that carry the label, each once, since a task holds a label
+  // at most once. Done tasks the nightly archive has not reached count, and
+  // so do tasks in archived projects, because archiving a project stamps
+  // none of its tasks; org_counters counts active tasks the same way.
+  // Deleted items hold no live task, and deleting a label deletes its row.
+  // Every write of an assignment, and every write that adds, deletes,
+  // archives or restores a task (model/orgs.ts tallyRows), moves the counts
+  // in its own transaction. A label has no row until
+  // internal/labelCountsBackfill counts its organization, and labels created
+  // since this release start with one. `revision` goes up with every write
+  // of the row, so a dry run sees a change that ends where it began. No
+  // reader uses the count yet; one is to show it only while its
+  // organization has no label_count_runs row (activeTaskCount), never a
+  // missing row as zero.
+  label_counts: defineTable({
+    label_id: v.string(),
+    org_id: v.string(),
+    active_tasks: v.number(),
+    revision: v.number(),
+  })
+    .index('by_label', ['label_id'])
+    .index('by_org', ['org_id']),
+
+  // An organization whose label counts internal/labelCountsBackfill is
+  // counting. It first sets every label's row to zero (`counting` false),
+  // then reads the active tasks in _creationTime order. `through` holds the
+  // _creationTime of the last task it counted, below every task until the
+  // first; a write moves a count only for a task at or below it. A recount
+  // sets a row it finds back to that start. The row is deleted once every
+  // task is counted, and with the organization.
+  label_count_runs: defineTable({
+    org_id: v.string(),
+    counting: v.boolean(),
+    through: v.number(),
+  }).index('by_org', ['org_id']),
 
   issue_labels: issueLabelsTable,
 

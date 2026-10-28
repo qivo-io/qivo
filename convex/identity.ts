@@ -120,7 +120,7 @@ export async function claimSeatsForLogin(
       ...(role === seat.org_role ? {} : { org_role: role, can_create_projects: undefined }),
     })
     // Guests never belong to teams; nobody is present to refuse a sign-in.
-    if (role === 'guest') await leaveAllTeams(ctx, seat.id)
+    if (role === 'guest') await leaveAllTeams(ctx, seat)
     adopted += 1
     changedOrgId = seat.org_id
     // An invited org admin who arrives as a guest stops counting as an admin.
@@ -281,7 +281,7 @@ export const acceptInvitation = authedMutation({
       ...(role === seat.org_role ? {} : { org_role: role, can_create_projects: undefined }),
     })
     // Guests never belong to teams.
-    if (role === 'guest') await leaveAllTeams(ctx, seat.id)
+    if (role === 'guest') await leaveAllTeams(ctx, seat)
     if (role !== seat.org_role) {
       await markBillingMembershipChanged(
         ctx,

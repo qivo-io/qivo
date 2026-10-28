@@ -52,8 +52,10 @@ import { budgetSpent, REMOVAL_BUDGET, type RemovalBudget, sweep } from './cascad
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import { releaseFile } from './fileHolds'
+import { deleteLabelCount } from './labelCounts'
 import { deleteOrgBookkeeping, tallyRow } from './orgs'
 import { uncountFile } from './storageTotals'
+import { deleteTeamCount } from './teamCounts'
 
 type Row = { _id: Id<TableNames> }
 
@@ -104,12 +106,31 @@ async function inOrder(steps: (() => Promise<boolean>)[]): Promise<boolean> {
   return true
 }
 
-/** Profiles with everything that hangs off them, then their pictures,
- * then any Team sync stamp row left without its profile (a rollback or a
- * manual edit can leave one), which finish() refuses to leave behind. A
- * read-message sweep row names no organization, so one left without its
- * profile stays until it falls due and the sweep deletes it (jobs.ts). */
+/** The organization's team member counts, before the profiles phase
+ * deletes the memberships they count, and its label usage counts, before
+ * the tasks phase deletes the tasks they count. A count that is gone reads
+ * as not counted (model/teamCounts.ts, model/labelCounts.ts), so none
+ * reads wrong while the rows it counts go over many steps. */
+const countRows = (
+  ctx: MutationCtx,
+  orgId: string,
+  budget: RemovalBudget,
+  table: 'team_counts' | 'label_counts',
+) =>
+  drain(
+    ctx,
+    budget,
+    ctx.db.query(table).withIndex('by_org', (q) => q.eq('org_id', orgId)),
+  )
+
+/** The member counts, then profiles with everything that hangs off them,
+ * then their pictures, then any Team sync stamp row left without its
+ * profile (a rollback or a manual edit can leave one), which finish()
+ * refuses to leave behind. A read-message sweep row names no organization,
+ * so one left without its profile stays until it falls due and the sweep
+ * deletes it (jobs.ts). */
 const profileRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+  (await countRows(ctx, orgId, budget, 'team_counts')) &&
   (await profilesWithRows(ctx, orgId, budget)) &&
   (await drain(
     ctx,
@@ -329,13 +350,14 @@ async function trashRows(ctx: MutationCtx, orgId: string, budget: RemovalBudget)
   return done
 }
 
-/** Tasks with their links, labels, subscriptions, comments, messages,
- * files, comment counts and post logs, then the description rows they leave
- * (model/descriptions.ts) and any comment count or post log of the
- * organization that names no task, such as one a rollback to a release
- * before counts left. */
+/** The label usage counts (countRows), then tasks with their links,
+ * labels, subscriptions, comments, messages, files, comment counts and post
+ * logs, then the description rows they leave (model/descriptions.ts) and
+ * any comment count or post log of the organization that names no task,
+ * such as one a rollback to a release before counts left. */
 const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
+    () => countRows(ctx, orgId, budget, 'label_counts'),
     () => liveTasks(ctx, orgId, budget),
     ...(['issue_descriptions', 'task_comment_counts', 'comment_rates'] as const).map(
       (table) => () =>
@@ -460,14 +482,25 @@ const projectRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     { before: (project) => tallyRow(ctx, 'projects', project, null) },
   )
 
-/** Teams with their members and project grants. */
-const teamRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+/** A parent's first child range, which deletes its count row (`remove`,
+ * true when it found one) as one row of `budget`, so the count reads as not
+ * counted while the parent's rows go over several steps. It runs in each
+ * step that reaches the parent, the one that deletes the parent included,
+ * so a count a backfill wrote between two steps goes with the parent too. */
+const countFirst = (budget: RemovalBudget, remove: () => Promise<boolean>) => async () => {
+  if (await remove()) budget.rows -= 1
+  return true
+}
+
+/* Each team with its members and project grants (teamRows). */
+const teamsWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
     budget,
     ctx.db.query('teams').withIndex('by_org', (q) => q.eq('org_id', orgId)),
     (team) =>
       inOrder([
+        countFirst(budget, () => deleteTeamCount(ctx, team.id)),
         () =>
           drain(
             ctx,
@@ -485,19 +518,51 @@ const teamRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
       ]),
   )
 
-/** Labels with any task labels left on them. */
-const labelRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+/** Teams with their members and project grants, each team's member count
+ * first (countFirst, model/teamCounts.ts), then any count an earlier
+ * release left after deleting its team. */
+const teamRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+  inOrder([
+    () => teamsWithRows(ctx, orgId, budget),
+    () =>
+      drain(
+        ctx,
+        budget,
+        ctx.db.query('team_counts').withIndex('by_org', (q) => q.eq('org_id', orgId)),
+      ),
+  ])
+
+/* Each label with any task labels left on it (labelRows). */
+const labelsWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   parents(
     ctx,
     budget,
     ctx.db.query('labels').withIndex('by_org', (q) => q.eq('org_id', orgId)),
     (label) =>
+      inOrder([
+        countFirst(budget, () => deleteLabelCount(ctx, label.id)),
+        () =>
+          drain(
+            ctx,
+            budget,
+            ctx.db.query('issue_labels').withIndex('by_label', (q) => q.eq('label_id', label.id)),
+          ),
+      ]),
+  )
+
+/** Labels with any task labels left on them, each label's usage count
+ * first (countFirst, model/labelCounts.ts), then any count an earlier
+ * release left after deleting its label. */
+const labelRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+  inOrder([
+    () => labelsWithRows(ctx, orgId, budget),
+    () =>
       drain(
         ctx,
         budget,
-        ctx.db.query('issue_labels').withIndex('by_label', (q) => q.eq('label_id', label.id)),
+        ctx.db.query('label_counts').withIndex('by_org', (q) => q.eq('org_id', orgId)),
       ),
-  )
+  ])
 
 /** The organization's activity history. */
 const activityRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
@@ -607,6 +672,8 @@ async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<v
     'sync_stamps',
     'task_comment_counts',
     'comment_rates',
+    'label_counts',
+    'team_counts',
   ] as const)
     require((await ctx.db
       .query(table)
@@ -703,6 +770,10 @@ export async function deleteOrgStep(
   let phase: OrgRemovalPhase = removal.phase
   while (!budgetSpent(budget)) {
     if (phase === 'finish') {
+      // Counts an earlier release left when it deleted their labels and
+      // teams past their phases, which finish() refuses to leave behind.
+      if (!(await countRows(ctx, removal.org_id, budget, 'label_counts'))) break
+      if (!(await countRows(ctx, removal.org_id, budget, 'team_counts'))) break
       // The organization goes first, so every call through access the
       // profiles phase deleted hears that it is being deleted until it is
       // gone. What that phase recorded (removed_access) goes after, over as

@@ -14,6 +14,7 @@ import {
   chargeFilteredReads,
   countersFor,
   expectDescriptions,
+  expectListCounts,
   expectLiveCounts,
   expectRefusal,
   newT,
@@ -98,8 +99,9 @@ async function rows(t: T, orgId: string) {
 }
 
 /** Deletes `receipt`'s demo batch by batch, as its scheduled purges would,
- * running `afterBatch` after each, and returns the phase each batch started
- * in. */
+ * running `afterBatch` after each, between two checks of the organization's
+ * label and team counts (expectListCounts), and returns the phase each
+ * batch started in. */
 async function deleteDemo(
   t: T,
   receipt: Doc<'demo_sessions'>,
@@ -120,7 +122,9 @@ async function deleteDemo(
     const orgId = receipt.org_id
     if (orgId !== undefined && (await t.run((ctx) => countersRow(ctx, orgId))) !== null)
       await expectLiveCounts(t, orgId)
+    if (orgId !== undefined) await expectListCounts(t, orgId)
     await afterBatch?.()
+    if (orgId !== undefined) await expectListCounts(t, orgId)
     const progress = await t.run((ctx) => ctx.db.get(receipt._id))
     if (progress?.cleanup_phase === 'uploads') {
       vi.setSystemTime(
@@ -161,6 +165,11 @@ const APP_OWNED: TableNames[] = [
   'webhook_subscriptions',
   'webhook_deliveries',
   'team_members',
+  // member and label usage counts, deleted with their team and label
+  'team_counts',
+  'label_counts',
+  // a label count the backfill runs, deleted with the organization
+  'label_count_runs',
   'project_access',
   'project_team_access',
   'milestones',
@@ -296,6 +305,93 @@ afterEach(() => {
 })
 
 describe('public Northstar provisioning and bounded deletion', () => {
+  it('keeps every label and team count right or gone while a demo is deleted and a backfill runs', async () => {
+    const t = testBackend()
+    const a = await makeDemo(t)
+    const orgId = a.org_id as string
+    // shown from the seed's start
+    expect(await expectListCounts(t, orgId)).toBeGreaterThan(0)
+    let cursor: string | null = null
+    await deleteDemo(t, a, async () => {
+      // a label and team count step, as a backfill run meanwhile would take
+      const got: { done: boolean; cursor: string | null } = await t.mutation(
+        makeFunctionReference<'mutation', { org_id: string; cursor: string | null }>(
+          'internal/labelCountsBackfill:step',
+        ),
+        { org_id: orgId, cursor },
+      )
+      cursor = got.done ? null : got.cursor
+      const teams = await t.run((ctx) =>
+        ctx.db
+          .query('teams')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .collect(),
+      )
+      for (const { id } of teams)
+        await t.mutation(
+          makeFunctionReference<'mutation', { team_id: string }>(
+            'internal/teamCountsBackfill:step',
+          ),
+          { team_id: id },
+        )
+    })
+    expect(await t.run((ctx) => ctx.db.get(a._id))).toBeNull()
+    for (const table of ['label_counts', 'team_counts', 'label_count_runs'] as const)
+      expect(
+        (await t.run((ctx) => ctx.db.query(table).collect())).filter((r) => r.org_id === orgId),
+        table,
+      ).toEqual([])
+  })
+
+  it('deletes the counts an earlier release left after the labels and teams phases', async () => {
+    const t = testBackend()
+    const a = await makeDemo(t)
+    const orgId = a.org_id as string
+    await t.run((ctx) => ctx.db.patch(a._id, { status: 'deleting' }))
+    let planted = false
+    for (let n = 0; n < 80 && (await t.run((ctx) => ctx.db.get(a._id))) !== null; n++) {
+      await t.mutation(purge, { demo_id: a.id })
+      const progress = await t.run((ctx) => ctx.db.get(a._id))
+      const phase = progress?.cleanup_phase ?? 'sessions'
+      if (!planted && ['activity', 'webhooks', 'account', 'uploads'].includes(phase)) {
+        planted = true
+        // an earlier release ran the labels and teams phases, deleting
+        // labels and teams without their counts: more than one batch of them
+        await t.run(async (ctx) => {
+          for (let i = 0; i < 40; i++) {
+            await ctx.db.insert('label_counts', {
+              label_id: uuid(),
+              org_id: orgId,
+              active_tasks: 0,
+              revision: 0,
+            })
+            await ctx.db.insert('team_counts', {
+              team_id: uuid(),
+              org_id: orgId,
+              members: 0,
+              revision: 0,
+            })
+          }
+        })
+      }
+      if (phase === 'uploads')
+        vi.setSystemTime(
+          Math.max(
+            Date.now() + 5000,
+            progress?.cleanup_file_after ?? 0,
+            progress?.cleanup_file_wait_until ?? 0,
+          ),
+        )
+    }
+    expect(planted).toBe(true)
+    expect(await t.run((ctx) => ctx.db.get(a._id))).toBeNull()
+    for (const table of ['label_counts', 'team_counts'] as const)
+      expect(
+        (await t.run((ctx) => ctx.db.query(table).collect())).filter((r) => r.org_id === orgId),
+        table,
+      ).toEqual([])
+  })
+
   it('classifies every application and Better Auth table', () => {
     const all = [...APP_OWNED, ...APP_SHARED]
     expect(new Set(all).size).toBe(all.length)
