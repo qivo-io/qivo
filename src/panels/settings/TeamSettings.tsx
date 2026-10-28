@@ -69,11 +69,12 @@ export function TeamPage({
         {canManage ? (
           <TextField
             label="Team name"
+            record={teamId}
             value={teamName}
             limit={LIMITS.teamName}
-            onCommit={(v) => {
+            onCommit={(v, save) => {
               // the toast waits for the server, so a refusal never reads as done
-              void P.updateTeam(ws, { name: v }).then((saved) => {
+              void P.updateTeam(ws, { name: v }, save.as('name')).then((saved) => {
                 if (saved) window.showToast?.('Team renamed')
               })
             }}

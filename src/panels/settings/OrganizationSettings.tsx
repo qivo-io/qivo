@@ -1,5 +1,10 @@
 /* Organization identity, access rules and shared display defaults. */
-import { useEffect as useEffectS, useRef as useRefS, useState as useStateS } from 'react'
+import {
+  type ReactNode,
+  useEffect as useEffectS,
+  useRef as useRefS,
+  useState as useStateS,
+} from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -9,43 +14,46 @@ import { Seg } from '../../components/qivo'
 import { PageTitle, SettingsField, SettingsSection } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { limitSentence, overLimit, wholeIn } from '../../lib/fieldLimits'
-import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { creatorPhrase, projectCreatorsIn } from '../../lib/projectCreators'
+import { ADDRESS, type DraftSave, useSavedDraft, wholeNumber } from '../../lib/savedDraft'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
 import type { OrgPatch, OrgVM } from '../../store/planner'
 import { P } from '../../store/planner'
 import { OrganizationDeletion } from '../OrganizationDeletion'
 import { OrganizationExport } from '../OrganizationExport'
-import { TextField } from './controls'
+import { DraftConflictLine, TextField } from './controls'
 
 // Address changes need an explicit save and an inline refusal. The store checks
-// the format locally; reserved names remain a server-owned rule.
+// the format locally; reserved names remain a server-owned rule. A draft
+// stays against the address it began from (lib/savedDraft.ts), and Save
+// waits while an address changed elsewhere shows under the field.
 function OrgAddressField() {
   // from the live origin, so it reads truthfully in dev and on previews rather
   // than promising a production domain this build may not be served from
   const stem = `${location.host}/app/`
-  const current = P.org.slug || ''
-  const [v, setV] = useStateS(current)
+  const draft = useSavedDraft(`${P.org.id}:slug`, P.org.slug || '', ADDRESS, 'address')
   const [err, setErr] = useStateS('')
   const [busy, setBusy] = useStateS(false)
-  useEffectS(() => {
-    setV(P.org.slug || '')
-    setErr('')
-  }, [P.org.slug])
+  // a refusal was about the address it found; a new one makes it old news
+  useEffectS(() => setErr(''), [P.org.slug])
   // compared as the store will save it, so surrounding spaces are no change
-  const next = v.trim()
-  const dirty = next !== current
+  const next = draft.text.trim()
+  const changed = !draft.isSaved(next)
   const tooLong = overLimit(LIMITS.slug, next)
-  useUpdateBlocker(dirty || busy)
-  useUnsaved(dirty, 'address')
+  useUpdateBlocker(busy)
   const save = async () => {
-    if (busy || !dirty || tooLong) return
+    if (busy || !changed || tooLong || draft.conflict) return
     setBusy(true)
-    const e = await P.setOrgSlug(next)
+    const saving = draft.save(next.toLowerCase())
+    const e = await P.setOrgSlug(next, saving.as('slug'))
     setBusy(false)
     setErr(e || '')
-    if (!e) window.showToast?.(`Address changed to ${stem}${next}`)
+    if (e) saving.refused()
+    else {
+      saving.accepted()
+      window.showToast?.(`Address changed to ${stem}${next}`)
+    }
   }
   return (
     <SettingsField
@@ -57,8 +65,10 @@ function OrgAddressField() {
         <span className="min-w-0 break-all text-base text-text-2 !font-mono">{stem}</span>
         <LimitedInput
           limit={LIMITS.slug}
-          value={v}
+          value={draft.text}
           data-org-slug
+          aria-label="Address"
+          aria-describedby={draft.conflict ? draft.conflictId : undefined}
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
@@ -66,12 +76,12 @@ function OrgAddressField() {
           // uppercase letter rather than folding it, so pasting the company
           // name would otherwise bounce for a reason the hint does not cover
           onChange={(e) => {
-            setV(e.target.value.toLowerCase())
+            draft.edit(e.target.value.toLowerCase())
             setErr('')
           }}
           // show the saved address again when only spaces differ
           onBlur={() => {
-            if (!dirty) setV(current)
+            if (!changed) draft.showSaved()
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
@@ -85,14 +95,16 @@ function OrgAddressField() {
         <Button
           type="button"
           data-org-slug-save
-          disabled={busy || !dirty || tooLong}
+          disabled={busy || !changed || tooLong || !!draft.conflict}
           onClick={() => void save()}
           className="shrink-0"
         >
           {busy ? 'Saving…' : 'Save'}
         </Button>
       </div>
-      {err && (
+      <DraftConflictLine draft={draft} text={(slug) => slug} />
+      {/* the conflict says what the refusal would, with Use saved and Keep mine */}
+      {err && !draft.conflict && (
         <div
           data-org-slug-error
           className="[font-size:var(--fs-sm)] [color:var(--danger)] [margin-top:8px] [line-height:1.5]"
@@ -253,38 +265,104 @@ function ProjectCreatorsField({ setPage }: { setPage: (page: string) => void }) 
   )
 }
 
+/** A whole number of the organization's that saves on blur and on Enter,
+    such as the attachment limit, `field` of its row. What the person types
+    is a draft against the number it began from (lib/savedDraft.ts), and
+    `onCommit` passes `save` to the store. A number outside `limit` stays
+    typed and marked with the limit's sentence until it changes, an empty
+    field puts the saved number back, and a number changed elsewhere while
+    the person types shows under the field, which then saves nothing until
+    they choose. `fallback` shows while nothing is stored. `what` names it
+    in the close warning. */
+function OrgNumberField({
+  field,
+  label,
+  value,
+  fallback,
+  limit,
+  what,
+  unit,
+  hint,
+  disabled = false,
+  probe,
+  onCommit,
+}: {
+  field: string
+  label: string
+  value: number
+  fallback: number
+  limit: Limit
+  what: string
+  unit: string
+  hint?: ReactNode
+  disabled?: boolean
+  probe: string
+  onCommit: (n: number, save: DraftSave<number>) => void
+}) {
+  const form = wholeNumber<number>(fallback)
+  const draft = useSavedDraft(`${P.org.id}:${field}`, value, form, what, disabled)
+  // a number refused on blur stays typed and marked until the field changes
+  const [refused, setRefused] = useStateS(false)
+  const commit = () => {
+    if (disabled) return
+    const raw = draft.text.trim()
+    if (!raw || draft.isSaved(raw)) return draft.showSaved()
+    const n = wholeIn(limit, raw)
+    if (n === null) {
+      setRefused(true)
+      window.showToast?.(limitSentence(limit), 'error')
+      return
+    }
+    // a conflict waits for Use saved or Keep mine; a pause keeps the number
+    if (draft.conflict || P.refusePausedEdit()) return
+    onCommit(n, draft.save(n))
+  }
+  return (
+    <SettingsField label={label} width={400} hint={hint}>
+      <div className="flex items-center gap-2">
+        <Input
+          type="number"
+          min={limit.min}
+          max={limit.max}
+          step={1}
+          {...{ [probe]: '' }}
+          aria-label={label}
+          aria-invalid={refused || undefined}
+          aria-describedby={draft.conflict ? draft.conflictId : undefined}
+          value={draft.text}
+          disabled={disabled}
+          onChange={(e) => {
+            setRefused(false)
+            draft.edit(e.target.value)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
+          onBlur={commit}
+          className="h-control w-15 bg-surface-1 px-2.5 text-base font-sans"
+        />
+        <span className="text-base text-text-2">{unit}</span>
+      </div>
+      <DraftConflictLine draft={draft} text={form.text} />
+    </SettingsField>
+  )
+}
+
 export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void }) {
   const canManage = P.isAdmin()
-  // numbers typed and not yet saved (the fields save on blur)
-  const attachmentUnsaved = useFieldUnsaved(
-    P.editsPaused,
-    `${P.org.maxAttachmentMb}`,
-    'attachment size',
-  )
-  const plannableUnsaved = useFieldUnsaved(
-    P.editsPaused,
-    `${P.org.defaultPlannableHours}`,
-    'plannable hours',
-  )
-  // a number refused on blur stays typed and marked until that field changes
-  const [attachmentRefused, setAttachmentRefused] = useStateS(false)
-  const [plannableRefused, setPlannableRefused] = useStateS(false)
-  const refuse = (mark: (refused: boolean) => void, limit: Limit) => {
-    mark(true)
-    window.showToast?.(limitSentence(limit), 'error')
-  }
   return (
     <>
       <PageTitle>Organization</PageTitle>
       <SettingsSection title="Name and address">
         <TextField
           label="Organization name"
+          record={P.org.id}
           value={P.org.name}
           limit={LIMITS.orgName}
           probe="data-org-name"
-          onCommit={(v) => {
+          onCommit={(v, save) => {
             // the toast waits for the server, so a refusal never reads as done
-            void P.setOrg({ name: v }).then((saved) => {
+            void P.setOrg({ name: v }, undefined, save.as('name')).then((saved) => {
               if (saved) window.showToast?.('Organization renamed')
             })
           }}
@@ -292,52 +370,29 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
         <OrgAddressField />
       </SettingsSection>
       <SettingsSection title="Access and limits">
-        <SettingsField
+        <OrgNumberField
+          field="max_attachment_mb"
           label="Max attachment size"
-          width={400}
+          value={P.org.maxAttachmentMb}
+          fallback={LIMITS.attachmentLimit.max}
+          limit={LIMITS.attachmentLimit}
+          what="attachment size"
+          unit="MiB per file"
+          probe="data-org-attachment-limit"
+          disabled={!canManage}
           hint={
             canManage
               ? `${LIMITS.attachmentLimit.min}–${LIMITS.attachmentLimit.max} MiB, including description images. Existing files are unaffected.`
               : 'Only an organization admin can change the attachment limit.'
           }
-        >
-          <div className="flex items-center gap-2">
-            <Input
-              type="number"
-              min={LIMITS.attachmentLimit.min}
-              max={LIMITS.attachmentLimit.max}
-              step={1}
-              data-org-attachment-limit
-              aria-label="Max attachment size"
-              aria-invalid={attachmentRefused || undefined}
-              {...attachmentUnsaved}
-              key={`attachment${P.org.maxAttachmentMb}`}
-              defaultValue={P.org.maxAttachmentMb ?? LIMITS.attachmentLimit.max}
-              disabled={!canManage}
-              onChange={() => setAttachmentRefused(false)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur()
-              }}
-              onBlur={(e) => {
-                if (!canManage) return
-                const current = P.org.maxAttachmentMb ?? LIMITS.attachmentLimit.max
-                const raw = e.currentTarget.value.trim()
-                if (!raw) {
-                  e.currentTarget.value = String(current)
-                  return
-                }
-                const mib = wholeIn(LIMITS.attachmentLimit, raw)
-                if (mib === null) return refuse(setAttachmentRefused, LIMITS.attachmentLimit)
-                if (mib === current) return
-                void P.setOrg({ maxAttachmentMb: mib }).then((saved) => {
-                  if (saved) window.showToast?.(`Attachment limit set to ${mib} MiB`)
-                })
-              }}
-              className="h-control w-15 bg-surface-1 px-2.5 text-base font-sans"
-            />
-            <span className="text-base text-text-2">MiB per file</span>
-          </div>
-        </SettingsField>
+          onCommit={(mib, save) => {
+            void P.setOrg({ maxAttachmentMb: mib }, undefined, save.as('max_attachment_mb')).then(
+              (saved) => {
+                if (saved) window.showToast?.(`Attachment limit set to ${mib} MiB`)
+              },
+            )
+          }}
+        />
       </SettingsSection>
       <SettingsSection title="Calendar">
         <SettingsField label="Date format" width={330}>
@@ -380,44 +435,25 @@ export function OrgGeneralPage({ setPage }: { setPage: (page: string) => void })
       </SettingsSection>
       <SettingsSection title="People">
         <ProjectCreatorsField setPage={setPage} />
-        <SettingsField label="Default plannable hours per week" width={400}>
-          <div className="[display:flex] [align-items:center] [gap:8px]">
-            <Input
-              type="number"
-              min={LIMITS.plannableHours.min}
-              max={LIMITS.plannableHours.max}
-              step={1}
-              data-org-plannable
-              aria-label="Default plannable hours per week"
-              aria-invalid={plannableRefused || undefined}
-              {...plannableUnsaved}
-              key={`dph${P.org.defaultPlannableHours}`}
-              defaultValue={P.org.defaultPlannableHours || DEFAULT_PLANNABLE_HOURS}
-              onChange={() => setPlannableRefused(false)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur()
-              }}
-              onBlur={(e) => {
-                const cur = P.org.defaultPlannableHours || DEFAULT_PLANNABLE_HOURS
-                const raw = e.target.value.trim()
-                if (!raw) {
-                  e.target.value = String(cur)
-                  return
-                }
-                const h = wholeIn(LIMITS.plannableHours, raw)
-                if (h === null) return refuse(setPlannableRefused, LIMITS.plannableHours)
-                if (h === cur) return
-                void P.setOrg({ defaultPlannableHours: h }).then((saved) => {
-                  if (saved) window.showToast?.(`New users start on ${h} h per week`)
-                })
-              }}
-              className="h-control w-15 bg-surface-1 px-2.5 text-base font-sans"
-            />
-            <span className="[font-size:var(--fs-base)] [color:var(--text-2)]">
-              h per week, for new users
-            </span>
-          </div>
-        </SettingsField>
+        <OrgNumberField
+          field="default_plannable_hours"
+          label="Default plannable hours per week"
+          value={P.org.defaultPlannableHours}
+          fallback={DEFAULT_PLANNABLE_HOURS}
+          limit={LIMITS.plannableHours}
+          what="plannable hours"
+          unit="h per week, for new users"
+          probe="data-org-plannable"
+          onCommit={(h, save) => {
+            void P.setOrg(
+              { defaultPlannableHours: h },
+              undefined,
+              save.as('default_plannable_hours'),
+            ).then((saved) => {
+              if (saved) window.showToast?.(`New users start on ${h} h per week`)
+            })
+          }}
+        />
       </SettingsSection>
       {canManage && <OrganizationExport key={P.org.id} orgId={P.org.id} />}
       {canManage && !DEMO_MODE && (

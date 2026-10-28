@@ -671,12 +671,13 @@ function ProjectSettingsFields({
       <SettingsSection title={isMeta ? 'Project' : 'Sub-project'}>
         <TextField
           label="Name"
+          record={proj.id}
           value={proj.name}
           limit={LIMITS.projectName}
           disabled={!isLead}
-          onCommit={(v) => {
+          onCommit={(v, save) => {
             // the toast waits for the server, so a refusal never reads as done
-            void P.updateProject(proj.id, { name: v }).then((saved) => {
+            void P.updateProject(proj.id, { name: v }, save.as('name')).then((saved) => {
               if (saved) window.showToast?.(`Renamed to “${v}”`)
             })
           }}
@@ -684,11 +685,14 @@ function ProjectSettingsFields({
         {isMeta && (
           <TextField
             label="Description"
+            record={proj.id}
             multiline
             limit={LIMITS.projectDescription}
             value={proj.description || ''}
             disabled={!isLead}
-            onCommit={(v) => P.updateProject(proj.id, { description: v })}
+            onCommit={(v, save) =>
+              P.updateProject(proj.id, { description: v }, save.as('description'))
+            }
             width={520}
           />
         )}
