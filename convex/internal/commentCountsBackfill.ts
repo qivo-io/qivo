@@ -24,9 +24,10 @@
  * it reports how many a run would count and the comments they hold, the
  * tasks counted already whose counts their threads do not give (`differ`),
  * the tasks that hold LIMITS.comments.max comments or more (`full`), the
- * counts the recovery gave up on (`stuck`), and the count rows that name no
- * live or deleted task of their organization (`drift`), with ids and counts
- * only. A task whose thread changed while it counted is counted again, and
+ * counts the recovery gave up on (`stuck`), the count rows that name no
+ * live or deleted task of their organization (`drift`), and the tasks in
+ * Deleted items whose count no live comment backs any more (`held`), with
+ * ids and counts only. A task whose thread changed while it counted is counted again, and
  * one that kept changing is listed as unsettled, to check again with a
  * later dry run. With the private helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
@@ -49,16 +50,19 @@
  *
  * A run counts the tasks not counted yet, finishes the counts under way,
  * stuck ones included, deletes the drifting rows, and leaves exact counts as
- * they are. `"recount": true` counts every task again, to mend counts a dry
- * run lists as differing. After a rollback to a release before counts, whose
- * posts, deletes and Deleted items moves move no count, read a dry run and
- * run it with `"recount": true`. Each call that wrote adds one
+ * they are. `"recount": true` counts every live task again, to mend counts
+ * a dry run lists as differing, and deletes the count of every task in
+ * Deleted items, so a restore counts its thread again from the start
+ * (model/commentLimits.ts beginCount) rather than adding the comments it
+ * writes back to a count they never left. After a rollback to a release
+ * before counts, whose posts, deletes and Deleted items moves move no
+ * count, read a dry run and run it with `"recount": true`. Each call that wrote adds one
  * platform_audit_log row (action 'comment_counts_backfill', actor 'system')
  * with its totals and the cursor to go on from, also when a step fails, and
  * then the call fails. Running it again is safe. It writes no activity,
  * sends no task event and changes nothing a person sees, except that a post
  * on a task it counted no longer counts the thread first. Tasks in Deleted
- * items are left alone; a restore counts them. */
+ * items are not counted; a restore counts one without a row. */
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -121,10 +125,11 @@ type TaskPage = { tasks: TaskState[]; through: number; done: boolean }
 type DryCount = { after: number; count: number; mark: Mark; tries: number }
 
 /** Where a count row stands against its task: `live` and `stored` (in
- * Deleted items) in the row's organization, or drifting, `other_org` when
- * the id now names a live task of another organization and `orphan` when it
- * names no task. */
-type RowWhere = 'live' | 'stored' | 'other_org' | 'orphan'
+ * Deleted items) in the row's organization, `held` for a stored task whose
+ * count no live comment of it backs, as a move under a release before
+ * counts leaves it, or drifting, `other_org` when the id now names a live
+ * task of another organization and `orphan` when it names no task. */
+type RowWhere = 'live' | 'stored' | 'held' | 'other_org' | 'orphan'
 
 /** A page of an organization's count rows, and the _creationTime it read
  * through. */
@@ -267,9 +272,18 @@ async function whereIs(
     .query('deleted_rows')
     .withIndex('by_row', (q) => q.eq('table', 'issues').eq('row_id', row.issue_id))
     .first()
+  const bytes = stored === null ? 0 : getDocumentSize(stored)
+  if (stored?.org_id !== row.org_id) return { where: 'orphan', bytes }
+  if (row.count === 0) return { where: 'stored', bytes }
+  // a move takes the comments out of the count as they leave, so a count
+  // with none of them left in the live tables is drift
+  const left = await ctx.db
+    .query('comments')
+    .withIndex('by_issue', (q) => q.eq('issue_id', row.issue_id))
+    .first()
   return {
-    where: stored?.org_id === row.org_id ? 'stored' : 'orphan',
-    bytes: stored === null ? 0 : getDocumentSize(stored),
+    where: left === null ? 'held' : 'stored',
+    bytes: bytes + (left === null ? 0 : getDocumentSize(left)),
   }
 }
 
@@ -326,7 +340,23 @@ export const dropRow = internalMutation({
     const row = await countRow(ctx, issue_id)
     if (row === null || row.org_id !== org_id) return false
     const { where } = await whereIs(ctx, row)
-    if (where === 'live' || where === 'stored') return false
+    if (where !== 'other_org' && where !== 'orphan') return false
+    await ctx.db.delete(row._id)
+    return true
+  },
+})
+
+/** Deletes organization `org_id`'s count row of `issue_id` while its task
+ * is in Deleted items, for a recount: a restore then counts the task's
+ * thread again from the start (model/commentLimits.ts beginCount), whatever
+ * a release before counts did to it meanwhile. Answers whether it did. */
+export const clearHeld = internalMutation({
+  args: { org_id: v.string(), issue_id: v.string() },
+  handler: async (ctx, { org_id, issue_id }): Promise<boolean> => {
+    const row = await countRow(ctx, issue_id)
+    if (row === null || row.org_id !== org_id) return false
+    const { where } = await whereIs(ctx, row)
+    if (where !== 'stored' && where !== 'held') return false
     await ctx.db.delete(row._id)
     return true
   },
@@ -366,6 +396,7 @@ export const audit = internalMutation({
     comments: v.number(),
     full: v.number(),
     dropped: v.number(),
+    cleared: v.number(),
     cursor: v.union(v.string(), v.null()),
     failed: v.optional(v.string()),
   },
@@ -406,6 +437,11 @@ const stepRef = makeFunctionReference<
 const dropRowRef = makeFunctionReference<'mutation', { org_id: string; issue_id: string }, boolean>(
   'internal/commentCountsBackfill:dropRow',
 )
+const clearHeldRef = makeFunctionReference<
+  'mutation',
+  { org_id: string; issue_id: string },
+  boolean
+>('internal/commentCountsBackfill:clearHeld')
 const auditRef = makeFunctionReference<
   'mutation',
   {
@@ -413,6 +449,7 @@ const auditRef = makeFunctionReference<
     comments: number
     full: number
     dropped: number
+    cleared: number
     cursor: string | null
     failed?: string
   },
@@ -443,8 +480,11 @@ const sameMark = (a: Mark, b: Mark): boolean => a.revision === b.revision && a.n
  * tasks and deletes those that drift. Answers how many tasks it counted and
  * the comments they hold, and lists up to TASK_PAGE.listed of the tasks with
  * LIMITS.comments.max comments or more (`full_tasks`, `full` in all), of the
- * stuck counts (`stuck_tasks`, `stuck` in all) and of the drifting rows
- * (`drift_rows`, `drift` in all; `dropped` deleted). Past RUN.ms it stops
+ * stuck counts (`stuck_tasks`, `stuck` in all), of the drifting rows
+ * (`drift_rows`, `drift` in all; `dropped` deleted) and of the tasks in
+ * Deleted items whose count no live comment backs (`held_rows`, `held` in
+ * all). A recount also deletes the count of every task in Deleted items
+ * (`cleared`), so its restore counts the thread again. Past RUN.ms it stops
  * between two steps or pages, after one at least, and answers the `cursor`
  * to go on from, else `done`. A dry run writes nothing. It counts each
  * task's thread in queries of their own, again while its Mark moved (at most
@@ -458,13 +498,24 @@ export const run = internalAction({
   args: { dry_run: v.boolean(), recount: v.optional(v.boolean()), cursor: v.optional(v.string()) },
   handler: async (ctx, { dry_run, recount = false, cursor: from }) => {
     const until = Date.now() + RUN.ms
-    const totals = { orgs: 0, tasks: 0, counted: 0, comments: 0, full: 0, stuck: 0, dropped: 0 }
+    const totals = {
+      orgs: 0,
+      tasks: 0,
+      counted: 0,
+      comments: 0,
+      full: 0,
+      stuck: 0,
+      dropped: 0,
+      cleared: 0,
+    }
     const toCount: TaskReport[] = []
     const full: TaskReport[] = []
     const stuckTasks: string[] = []
     const differ: (TaskReport & { stored: number })[] = []
     const unsettledTasks: string[] = []
     const driftRows: { issue_id: string; org_id: string; where: RowWhere }[] = []
+    const heldRows: { issue_id: string; org_id: string }[] = []
+    let held = 0
     let differing = 0
     let unsettled = 0
     let drift = 0
@@ -590,13 +641,17 @@ export const run = internalAction({
         if (late()) return pos
         const page = await ctx.runQuery(rowPageRef, { org_id: orgId, after: pos.after })
         for (const row of page.rows) {
-          if (row.where === 'live' || row.where === 'stored') continue
-          listed(driftRows, ++drift, { issue_id: row.issue_id, org_id: orgId, where: row.where })
-          if (
-            !dry_run &&
-            (await ctx.runMutation(dropRowRef, { org_id: orgId, issue_id: row.issue_id }))
-          )
-            totals.dropped++
+          const target = { org_id: orgId, issue_id: row.issue_id }
+          if (row.where === 'held') listed(heldRows, ++held, target)
+          if (row.where === 'stored' || row.where === 'held') {
+            // a release before counts may have moved its comments uncounted
+            if (!dry_run && recount && (await ctx.runMutation(clearHeldRef, target)))
+              totals.cleared++
+            continue
+          }
+          if (row.where === 'live') continue
+          listed(driftRows, ++drift, { ...target, where: row.where })
+          if (!dry_run && (await ctx.runMutation(dropRowRef, target))) totals.dropped++
         }
         pos = { org: orgId, phase: 'rows', after: page.through }
         resume = pos
@@ -617,6 +672,8 @@ export const run = internalAction({
       unsettled_tasks: unsettledTasks,
       drift,
       drift_rows: driftRows,
+      held,
+      held_rows: heldRows,
       done,
       cursor: done || resume === null ? null : JSON.stringify(resume),
     })
@@ -626,6 +683,7 @@ export const run = internalAction({
         comments: totals.comments,
         full: totals.full,
         dropped: totals.dropped,
+        cleared: totals.cleared,
         cursor: resume === null ? null : JSON.stringify(resume),
         ...(failed === undefined ? {} : { failed }),
       })

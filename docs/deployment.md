@@ -691,9 +691,11 @@ cursors to `done`, answers `counted: 0`, `stuck: 0` and `drift: 0`. A
 rollback past that release deploys, because Convex keeps the rows of tables
 the schema no longer lists, but the earlier release posts, deletes and moves
 comments without counting them. After rolling forward again, read a dry run
-and run the backfill with `"recount": true`, which counts every task again,
-counts the tasks that release created and deletes rows that name no task of
-their organization any more.
+and run the backfill with `"recount": true`, which counts every live task
+again, counts the tasks that release created, deletes rows that name no task
+of their organization any more, and deletes the counts of tasks in Deleted
+items, which a move under that release left in place, so a restore counts
+their threads again from the start.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to

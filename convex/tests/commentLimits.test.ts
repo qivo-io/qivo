@@ -1172,6 +1172,47 @@ describe('the backfill, call by call', () => {
     expect(error).toHaveBeenCalled()
   })
 
+  it('recounts a task a release before counts moved to Deleted items, so its restore counts it once', async () => {
+    const fx = await setup()
+    const rolled = await createTask(fx.t, fx, 'Moved under the release before')
+    const kept = await createTask(fx.t, fx, 'Moved under this release')
+    await plantComments(fx, 6, { task: rolled, counted: true })
+    await plantComments(fx, 4, { task: kept, counted: true })
+    for (const task of [rolled, kept]) await deleteTask(fx.t, fx, task.id)
+    await runSteps(fx.t)
+    expect(await countOf(fx.t, kept.id)).toBe(0)
+    // the release before moved the comments out without counting them out
+    await fx.t.run(async (ctx) => {
+      const row = await countRow(ctx, rolled.id)
+      if (row !== null) await ctx.db.patch(row._id, { count: 6 })
+    })
+    const run = (args: { dry_run: boolean; recount?: boolean }) =>
+      fx.t.action(internal.internal.commentCountsBackfill.run, args)
+    expect(await run({ dry_run: true })).toMatchObject({
+      held: 1,
+      held_rows: [{ issue_id: rolled.id, org_id: fx.org.id }],
+      drift: 0,
+    })
+    // a run leaves it; a recount clears the counts of both stored tasks
+    expect(await run({ dry_run: false })).toMatchObject({ held: 1, cleared: 0 })
+    expect(await countOf(fx.t, rolled.id)).toBe(6)
+    expect(await run({ dry_run: false, recount: true })).toMatchObject({ held: 1, cleared: 2 })
+    for (const task of [rolled, kept]) expect(await counter(fx.t, task.id)).toBeNull()
+    await as(fx.t, fx.user).mutation(api.deletedItems.restore, {
+      org_id: fx.org.id,
+      ids: [(await itemFor(fx.t, rolled.id)).id, (await itemFor(fx.t, kept.id)).id],
+    })
+    await runSteps(fx.t)
+    expect(await stateOf(fx.t, rolled.id)).toEqual({ count: 6, counting: false })
+    expect(await stateOf(fx.t, kept.id)).toEqual({ count: 4, counting: false })
+    expect(await run({ dry_run: true })).toMatchObject({
+      held: 0,
+      counted: 0,
+      differing: 0,
+      drift: 0,
+    })
+  })
+
   it('deletes the count rows a rollback can leave that name no task of their organization', async () => {
     const fx = await setup()
     const stored = await createTask(fx.t, fx, 'In Deleted items')
