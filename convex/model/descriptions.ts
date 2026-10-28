@@ -209,13 +209,20 @@ export type RangeStep = 'read' | 'missing' | 'done' | 'full'
  * range rather than one. Of a task's rows the first in the range that holds
  * its copies is the one shownRow takes.
  *
- * A project's range starts at the creation time of the first task it is
- * read for, since a task's rows are created with it or after it, so it
- * skips the rows of the tasks before, which a caller read already. A task
- * whose project's range ends without such a row, one without a row, one
- * whose rows' copies are stale, which only a rollback leaves, or one whose
- * row is older than it, kept from a task deleted for good that held its id,
- * is `missing`, for the caller to read on its own.
+ * A project's range starts at the earliest creation time of the project's
+ * tasks among `tasks`, which list order need not follow (a restored task
+ * keeps its created_at and gets a new creation time). Every row of a task is
+ * created in the transaction that inserts the task or later: insertTask
+ * writes it after the task row, patchTask and the backfill insert or patch
+ * the rows a task has, and a Deleted items restore inserts the task anew
+ * once the item's steps deleted its rows. So the range holds every row of
+ * the tasks it is read for, and skips the rows of the tasks before them,
+ * which a caller read one by one. Only a row left by a task deleted for good
+ * before used_ids recorded its id could be older, if a create took that id
+ * (schema.ts issue_descriptions). A task whose project's range ends without
+ * a row holding its copies, such as that one, one without a row or one
+ * whose rows' copies are stale, which only a rollback leaves, is `missing`,
+ * for the caller to read on its own.
  *
  * A step is one index range, read a row at a time, and it checks `room`
  * before the range and as its rows add up, so it passes `room` by one row
@@ -227,6 +234,13 @@ export function projectTextReader(
   texts: Map<string, string>,
 ): { step(enough: () => boolean): Promise<RangeStep> } {
   const wanted = new Map(tasks.map((task) => [task.id, task]))
+  // where each project's range starts: its tasks' earliest creation time
+  const starts = new Map<string, number>()
+  for (const task of tasks)
+    starts.set(
+      task.project_id,
+      Math.min(starts.get(task.project_id) ?? task._creationTime, task._creationTime),
+    )
   // where each project's range goes on from: the creation time read
   // through, the rows of that time read already, and whether it ended
   const ranges = new Map<
@@ -244,7 +258,7 @@ export function projectTextReader(
       const project = first.project_id
       let range = ranges.get(project)
       if (range === undefined) {
-        range = { from: first._creationTime, seen: new Set(), done: false }
+        range = { from: starts.get(project) ?? first._creationTime, seen: new Set(), done: false }
         ranges.set(project, range)
       }
       if (range.done) return 'missing'

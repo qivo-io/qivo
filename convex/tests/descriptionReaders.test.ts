@@ -952,9 +952,12 @@ describe('real limits', () => {
     ).toEqual([ids[1500]])
     const quokka = await restMetrics(t, f, { limit: 1, search: 'quokka' })
     expect(quokka.refused).toBeNull()
-    // TEXT_TASK_READS rows one by one, then the range again up to the page,
-    // about 11 MiB, where the range over every row passes 16 MiB
-    expect(quokka.mib).toBeLessThan(12)
+    // TEXT_TASK_READS rows one by one, then the range up to the page, which
+    // starts past the rows read one by one, where the range over every row
+    // passes 16 MiB
+    expect(quokka.mib).toBeLessThan(10)
+    // the 3,000 tasks, 1,000 rows one by one and about 500 in the range
+    expect(quokka.documents).toBeLessThan(3000 + 1000 + 700)
   }, 300_000)
 
   it("a REST search past TEXT_TASK_READS reads its candidates' projects, not an archived project's history", async () => {
@@ -1154,6 +1157,48 @@ describe('real limits', () => {
       TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
     }
   }, 300_000)
+
+  it('a REST search past TEXT_TASK_READS reads the rows of a task listed after a restored one', async () => {
+    const t = newT()
+    const f = await machineOrg(t)
+    // B is created first and listed second; its first row, then A, listed
+    // first as a restored task keeps its created_at, then B's second row,
+    // both holding B's copies
+    const row = (doc: ReturnType<typeof taskDoc>, description: string) => ({
+      issue_id: doc.id,
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      description,
+    })
+    const b = taskDoc(f, 82_001, undefined, { created_at: '2026-01-02T00:00:00.000Z' })
+    const a = taskDoc(f, 82_000, undefined, { created_at: '2026-01-01T00:00:00.000Z' })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('issues', b)
+      await ctx.db.insert('issue_descriptions', row(b, 'Wire the walrus'))
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('issues', a)
+      await ctx.db.insert('issue_descriptions', row(a, 'Wire the board'))
+    })
+    await t.run((ctx) => ctx.db.insert('issue_descriptions', row(b, 'Wire the zephyr')))
+    const agent = { callerId: f.agent.id, access: 'read' as const }
+    const got = await t.query(internal.machine.rest.getIssue, {
+      ...agent,
+      today: TODAY,
+      ref: b.id,
+    })
+    expect(got.description).toBe('Wire the walrus')
+    TEXT_TASK_READS.reads = 0
+    try {
+      // the search reads B's first row, as every other reader does
+      expect(await restTasks(t, { ...agent, search: 'zephyr' })).toEqual([])
+      expect(
+        (await restTasks(t, { ...agent, search: 'walrus' })).map((r) => [r.id, r.description]),
+      ).toEqual([[b.id, 'Wire the walrus']])
+    } finally {
+      TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
+    }
+  })
 
   it('a REST search refuses with its sentence when the descriptions do not fit, and with the list sentence when nothing does', async () => {
     const t = newT({ transactionLimits: true })
