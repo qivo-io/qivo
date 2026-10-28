@@ -1067,6 +1067,23 @@ describe('a restore and the work around it', () => {
     await expectAll(t, f)
   })
 
+  it('writes again after the reveal a row whose copy differs from the revealed project', async () => {
+    const t = newT()
+    const { f } = await halfRestored(t)
+    // a copy that went stale while Firmware waited for its reveal
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('project_reach').collect())
+        if (row.grantee_id === f.pia.id && row.project_id === f.sub.id)
+          await ctx.db.patch(row._id, { live: false, name_key: 'stale' })
+    })
+    await runSteps(t)
+    expect((await rowsOf(t, f.pia.id)).find((row) => row.project_id === f.sub.id)).toMatchObject({
+      live: true,
+      name_key: nameKey(f.sub.name),
+    })
+    await expectAll(t, f)
+  })
+
   it('deletes the rows of a stuck restoring item it purges', async () => {
     const t = newT()
     const { f, item } = await halfRestored(t)

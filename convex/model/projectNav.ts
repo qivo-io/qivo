@@ -78,9 +78,27 @@ const rowOn = (ctx: QueryCtx, g: Grantee, projectId: string) =>
     )
     .first()
 
-/** Whether the grantee holds a reach row on project `projectId`. */
-export const hasReach = async (ctx: QueryCtx, g: Grantee, projectId: string): Promise<boolean> =>
-  (await rowOn(ctx, g, projectId)) !== null
+/** Whether the grantee holds a reach row on live project `project` whose
+ * copies are the project's: its organization, kind, top-level project,
+ * name key, key and live state. A row that does not, or no row, needs a
+ * recompute (syncReach); whether it reaches the whole tree depends on the
+ * sources, which this does not read. */
+export async function reachFollows(
+  ctx: QueryCtx,
+  g: Grantee,
+  project: ReachProject,
+): Promise<boolean> {
+  const row = await rowOn(ctx, g, project.id)
+  return (
+    row !== null &&
+    row.org_id === project.org_id &&
+    row.kind === (project.parent_id === undefined ? 'root' : 'child') &&
+    row.root_id === (project.parent_id ?? project.id) &&
+    row.name_key === nameKey(project.name) &&
+    row.key === project.key &&
+    row.live === (project.archived_at === undefined)
+  )
+}
 
 /** The organization of the grantee, or null when its profile or team is
  * gone. */

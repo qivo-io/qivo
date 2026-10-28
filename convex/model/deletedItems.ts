@@ -151,10 +151,10 @@ import {
   archiveStateOf,
   type Grantee,
   grantee,
-  hasReach,
   insertGrant,
   insertShare,
   type ProjectRead,
+  reachFollows,
   syncLeads,
   syncReach,
 } from './projectNav'
@@ -2820,11 +2820,27 @@ async function restoreAccess(run: Run): Promise<boolean> {
  * an admin removed since must stay removed. A job the release before left
  * past its reveal wrote its grants back here, so without `granted` this
  * writes back each one still missing on a live project first. A stored row
- * whose grantee holds no reach row on the project, live now, gets its rows
- * written (model/projectNav.ts syncReach), as for a job an earlier release
- * left past restore_access, which wrote grants back without them; a row
- * restore_access wrote costs one read. */
+ * whose grantee holds no reach row on the project, live now, or one whose
+ * copies differ from it (model/projectNav.ts reachFollows), gets its rows
+ * written again (syncReach), as for a job an earlier release left past
+ * restore_access, which wrote grants back without them; a row that follows
+ * the project costs one read, and each project is read once a step. */
 async function restoreGrants(run: Run): Promise<boolean> {
+  // each project the step reads, once, its bytes charged to the budget
+  const projects = new Map<string, Promise<Doc<'projects'> | null>>()
+  const project = (id: string) => {
+    let read = projects.get(id)
+    if (read === undefined) {
+      read = (async () => {
+        const cost = { ranges: 0, bytes: 0 }
+        const doc = await byId(measured(run.ctx, cost), 'projects', id)
+        run.budget.bytes -= cost.bytes
+        return doc
+      })()
+      projects.set(id, read)
+    }
+    return read
+  }
   for (const table of GRANT_TABLES) {
     const done = await drain(
       run.budget,
@@ -2832,17 +2848,15 @@ async function restoreGrants(run: Run): Promise<boolean> {
         .query('deleted_rows')
         .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table)),
       async (row) => {
-        if (!run.state.granted && (await byId(run.ctx, 'projects', row.owner_id)) !== null)
-          await writeGrantBack(run, row)
-        // the grantee's reach rows on the project, which restore_access
-        // wrote, else written now: an earlier release wrote grants back
-        // without them
+        const live = await project(row.owner_id)
+        if (!run.state.granted && live !== null) await writeGrantBack(run, row)
+        // the grantee's reach rows on the project, live now, which
+        // restore_access wrote from the stored copy. They are written again
+        // where they are missing, as for a job an earlier release left past
+        // restore_access, or where a copy differs from the project the
+        // reveal wrote.
         const g = granteeOfStored(row)
-        if (
-          g !== null &&
-          !(await hasReach(run.ctx, g, row.owner_id)) &&
-          (await byId(run.ctx, 'projects', row.owner_id)) !== null
-        )
+        if (g !== null && live !== null && !(await reachFollows(run.ctx, g, live)))
           await syncReachOf(run, (ctx) => syncReach(ctx, g, row.owner_id))
         await run.ctx.db.delete(row._id)
       },
