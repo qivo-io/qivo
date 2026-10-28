@@ -20,10 +20,9 @@ export const BULK_SEATS = 2
 export type BulkStop = Readonly<{ org: string; done: number; reason: string; paused: boolean }>
 
 /** Why an action needs the keep-open notice: a seat has more than one
-    batch to do (`many`), more seats have work than run at once (`seats`),
-    or bulkReach did not answer, so nothing says how much there is
-    (`unknown`). */
-export type BulkWhy = 'many' | 'seats' | 'unknown'
+    batch to do (`many`), or more seats have work than run at once
+    (`seats`). */
+export type BulkWhy = 'many' | 'seats'
 
 /** A bulk Inbox action (P.inboxBulk). It lives in the store, not in the
     Inbox, so leaving the Inbox loses nothing once the action runs. A press
@@ -87,11 +86,9 @@ export const bulkName = (action: BulkAction) => WORDS[action].name
 export function bulkNoticeText(bulk: InboxBulk): string {
   const { name, covers } = WORDS[bulk.action]
   const why =
-    bulk.why === 'unknown'
-      ? `Qivo could not check how many ${covers} ${name} covers, so it may run in several steps.`
-      : bulk.why === 'seats'
-        ? `${name} covers ${covers} in ${bulk.seats} organizations and runs in steps.`
-        : `${name} covers many ${covers} and runs in steps.`
+    bulk.why === 'seats'
+      ? `${name} covers ${covers} in ${bulk.seats} organizations and runs in steps.`
+      : `${name} covers many ${covers} and runs in steps.`
   return `${why} Keep Qivo open until it finishes. Closing or reloading Qivo stops it, and the steps already done stay done.`
 }
 
@@ -110,6 +107,14 @@ export const bulkDoneText = (bulk: InboxBulk): string =>
   bulk.action === 'read'
     ? `Marked ${rows('read', bulk.done)} as read.`
     : `Removed ${rows('remove', bulk.done)}.`
+
+/** The toast of a press that could not learn how much `action` has to do
+    (messages.bulkReach failed or did not answer in time), so it changed
+    nothing. */
+export function bulkUncheckedText(action: BulkAction): string {
+  const { name, covers } = WORDS[action]
+  return `Couldn't check how many ${covers} ${name} covers, so nothing changed. Try again.`
+}
 
 /* "a", "a and b", "a, b and c". */
 const listed = (items: readonly string[]) =>

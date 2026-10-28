@@ -279,9 +279,11 @@ you lost access to.
 These actions leave tasks, comments and open drafts intact. The list's
 context menu offers them even when a filter shows no messages.
 
-Both actions work in steps of up to 160 messages. When an action needs more
-than one round, Qivo says so before it starts, and the toolbar shows how many
-messages it has handled. Keep Qivo open until it finishes. You can switch to
+Both actions work in steps of up to 160 messages. Before it starts, Qivo
+checks how many messages each organization has for the action; if it cannot
+check, for example while the connection is slow, it changes nothing and asks
+you to try again. When an action needs more than one round, Qivo says so
+before it starts, and the toolbar shows how many messages it has handled. Keep Qivo open until it finishes. You can switch to
 another view meanwhile, and Qivo tells you when it is done. Closing or
 reloading Qivo stops it. The steps already done stay done, and if you start
 the action again, it works on the messages as they are then, with a new

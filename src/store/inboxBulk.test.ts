@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { bulkName, bulkNoticeText, bulkStopText, type InboxBulk } from './inboxBulk'
+import {
+  bulkName,
+  bulkNoticeText,
+  bulkStopText,
+  bulkUncheckedText,
+  type InboxBulk,
+} from './inboxBulk'
 
 /* The sentences of a bulk Inbox action (store/inboxBulk.ts): the notice
    names why the action runs in steps, and every sentence names the action
@@ -28,8 +34,14 @@ describe('the keep-open notice', () => {
     expect(bulkNoticeText(bulk({ why: 'seats', seats: 3 }))).toBe(
       `Mark all as read covers messages in 3 organizations and runs in steps. ${KEEP}`,
     )
-    expect(bulkNoticeText(bulk({ action: 'remove', why: 'unknown' }))).toBe(
-      `Qivo could not check how many read notifications Remove all read notifications covers, so it may run in several steps. ${KEEP}`,
+    expect(bulkNoticeText(bulk({ action: 'remove', why: 'many' }))).toBe(
+      `Remove all read notifications covers many read notifications and runs in steps. ${KEEP}`,
+    )
+  })
+
+  it('says a press changed nothing when it could not learn how much there is', () => {
+    expect(bulkUncheckedText('read')).toBe(
+      "Couldn't check how many messages Mark all as read covers, so nothing changed. Try again.",
     )
   })
 

@@ -166,6 +166,7 @@ import {
   bulkDoneText,
   bulkName,
   bulkStopText,
+  bulkUncheckedText,
   type InboxBulk,
 } from './inboxBulk'
 import type { Row } from './rows'
@@ -4282,9 +4283,9 @@ let noticeHost: NoticeHost | null = null
    later run that finishes there takes them away. */
 const stopToasts = new Set<string>()
 
-/** How long a press of a bulk Inbox action waits for messages.bulkReach
-    before it plans without the answer, so a connection that drops while it
-    asks does not hold the buttons disabled. */
+/** How long a press of a bulk Inbox action waits for messages.bulkReach,
+    so a connection that drops while it asks does not hold the buttons
+    disabled. */
 const REACH_WAIT_MS = 10_000
 
 /** Sets P.inboxBulk and shows it in the Inbox. */
@@ -4297,13 +4298,11 @@ function setInboxBulk(next: InboxBulk | null) {
     not come within REACH_WAIT_MS. */
 async function askReach(action: BulkAction) {
   let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), REACH_WAIT_MS)
+  })
   try {
-    const answer = await Promise.race([
-      convex.query(api.messages.bulkReach, { action }),
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), REACH_WAIT_MS)
-      }),
-    ])
+    const answer = await Promise.race([convex.query(api.messages.bulkReach, { action }), late])
     return answer && Array.isArray(answer.seats) ? answer : null
   } catch (error) {
     console.error('[qivo] could not ask how much an Inbox action has to do:', error)
@@ -4313,33 +4312,21 @@ async function askReach(action: BulkAction) {
   }
 }
 
-/** One seat a bulk Inbox action sends batches to, with the cutoff its first
-    Mark all as read batch passes, when bulkReach answered one. */
+/** One seat a bulk Inbox action sends batches to, with the cutoff
+    bulkReach answered for it at the press, which every Mark all as read
+    batch there passes. */
 type BulkSeat = { org: string; before?: number }
 
-/** The seats a bulk Inbox action has work in, in seat order, whether it
-    needs more than one round and why (InboxBulk.why): a seat with more
-    than one batch, or more seats with work than BULK_SEATS. A seat
-    bulkReach answers `none` for still goes when the press changes rows
-    loaded there (`pressed`), which an inbox write still on its way, such as
-    a read mark, can leave uncounted. Without `reach` every seat goes, and
-    the action counts as long, because nothing says which seats have
-    work. */
-function planBulk(reach: Awaited<ReturnType<typeof askReach>>, pressed: Map<string, string[]>) {
-  if (reach === null)
-    return {
-      seats: [...myProfiles.keys()].map((org): BulkSeat => ({ org })),
-      long: true,
-      why: 'unknown' as const,
-    }
+/** The seats bulkReach says a bulk Inbox action has work in, in seat
+    order, each with its cutoff, whether the action needs more than one
+    round and why (InboxBulk.why): a seat with more than one batch, or more
+    seats with work than BULK_SEATS. */
+function planBulk(reach: NonNullable<Awaited<ReturnType<typeof askReach>>>) {
   const answered = new Map(reach.seats.map((seat) => [seat.org_id, seat]))
   // a seat the server did not list holds no active seat there
   const seats = [...myProfiles.keys()].flatMap((org): BulkSeat[] => {
     const seat = answered.get(org)
-    if (seat === undefined) return []
-    if (seat.reach !== 'none') return [{ org, before: seat.before }]
-    // its first batch then chooses the cutoff, after the write before it
-    return pressed.has(org) ? [{ org }] : []
+    return seat === undefined || seat.reach === 'none' ? [] : [{ org, before: seat.before }]
   })
   const many = seats.some(({ org }) => answered.get(org)?.reach === 'many')
   const long = many || seats.length > BULK_SEATS
@@ -4361,18 +4348,18 @@ function dropStopToast(key: string) {
 
 /* Runs bulk Inbox action `action` (Mark all as read or Remove all read)
    with its progress in P.inboxBulk. It asks messages.bulkReach first and
-   skips the seats with nothing to do. With `ask`, an action of more than
-   one round waits for the keep-open notice (P.answerInboxNotice) and sends
-   nothing when the person cancels it or no Inbox shows it
-   (P.hostInboxNotice). Then the `messages` it reached when pressed show
+   skips the seats with nothing to do. When the answer does not come within
+   REACH_WAIT_MS, or the question fails, it changes nothing and says so,
+   because only bulkReach gives each seat its cutoff. With `ask`, an action
+   of more than one round waits for the keep-open notice
+   (P.answerInboxNotice) and sends nothing when the person cancels it or no
+   Inbox shows it (P.hostInboxNotice). Then the `messages` it reached when pressed show
    `paint`, under one umbrella layer per seat, and the `flags` it clears
    under one more; rows that arrived later stay as they are, as the press's
    cutoff leaves them out. At most BULK_SEATS seats send `batch` at once,
-   each until an answer has no more, and each batch keeps a layer, `named`,
-   for the rows its answer names (`keep`). A seat of Mark all as read
-   without a cutoff from the press sends its first batch when the action
-   starts, whatever its turn, so the server never chooses a seat's cutoff
-   after the start.
+   each until an answer has no more, every Mark all as read batch with its
+   seat's cutoff from the press, and each batch keeps a layer, `named`, for
+   the rows its answer names (`keep`).
    A seat's umbrella goes when its batches end, so a refused or paused batch
    takes back only the rows no accepted batch named, and the seat stops
    while the others go on. The pause (refusedAsPaused) stops every seat,
@@ -4421,8 +4408,13 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
       stops: [],
     }
     setInboxBulk(bulk)
-    const plan = planBulk(await askReach(action), pressed)
+    const reach = await askReach(action)
     if (!live()) return
+    if (reach === null) {
+      setInboxBulk(null)
+      return toast(bulkUncheckedText(action))
+    }
+    const plan = planBulk(reach)
     // the pause may have begun while bulkReach was asked
     if (plan.seats.length === 0 || refusePausedWrite(a.ref)) return setInboxBulk(null)
     bulk = { ...bulk, long: plan.long, why: plan.why, seats: plan.seats.length }
@@ -4448,16 +4440,6 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
     bulk = { ...bulk, state: 'running' }
     setInboxBulk(bulk)
     const keep = (answer: R) => a.named(answer.ids)
-    // a seat without a cutoff from the press sends its first batch now,
-    // whatever its turn; its seat awaits the answer and handles a refusal
-    const early = new Map<string, Promise<R>>()
-    if (action === 'read')
-      for (const seat of plan.seats)
-        if (seat.before === undefined) {
-          const sent = batch(seat, null, keep)
-          sent.catch(() => {})
-          early.set(seat.org, sent)
-        }
     const stops: BulkStop[] = []
     const finished: string[] = []
     // the pause's sentence once a batch met it, which stops every seat
@@ -4470,13 +4452,12 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
       let done = 0
       try {
         while (live()) {
-          const first = previous === null ? early.get(seat.org) : undefined
-          if (first === undefined && paused !== null) {
+          if (paused !== null) {
             stops.push({ org: seat.org, done, reason: paused, paused: true })
             bulk = { ...bulk, stops: [...stops] }
             return setInboxBulk(bulk)
           }
-          previous = await (first ?? batch(seat, previous, keep))
+          previous = await batch(seat, previous, keep)
           if (!live()) return
           done += a.count(previous)
           bulk = {

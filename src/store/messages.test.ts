@@ -156,6 +156,8 @@ describe('bulk notification actions through the client store', () => {
   // lets the notice open now
   let unhost: () => void
   let hostReady: boolean
+  // holds bulkReach's answer until the test opens it
+  let reachGate: Promise<void> | null
 
   beforeEach(async () => {
     vi.resetModules()
@@ -168,12 +170,14 @@ describe('bulk notification actions through the client store', () => {
     requests = []
     reach = null
     hostReady = true
+    reachGate = null
     paintFault.next = false
-    network.query.mockImplementation((ref, args) => {
-      if (getFunctionName(ref) !== 'messages:bulkReach') return Promise.resolve(null)
-      if (reach === 'fail') return Promise.reject(new Error('offline'))
-      if (reach === 'never') return new Promise(() => {})
-      return Promise.resolve(structuredClone(reach ?? reachOf(snap, args.action)))
+    network.query.mockImplementation(async (ref, args) => {
+      if (getFunctionName(ref) !== 'messages:bulkReach') return null
+      if (reachGate) await reachGate
+      if (reach === 'fail') throw new Error('offline')
+      if (reach === 'never') return await new Promise(() => {})
+      return structuredClone(reach ?? reachOf(snap, args.action))
     })
     network.onUpdate.mockImplementation((_ref, _args, next) => {
       publish = next
@@ -218,6 +222,8 @@ describe('bulk notification actions through the client store', () => {
   }
 
   afterEach(() => {
+    // also after a test on fake timers that failed before it put them back
+    vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
     vi.unstubAllEnvs()
@@ -259,9 +265,9 @@ describe('bulk notification actions through the client store', () => {
     // nothing changes before bulkReach answers
     expect(P.unreadMessages).toBe(2)
     expect(P.inboxBulk).toMatchObject({ action: 'read', state: 'asking' })
+    await asked()
     expect(reachAsked()).toBe(1)
     expect(network.query).toHaveBeenCalledWith(expect.anything(), { action: 'read' })
-    await asked()
     expect(P.unreadMessages).toBe(0)
     expect(P.messageGroups).toHaveLength(4)
     expect(P.messages).toHaveLength(4)
@@ -590,13 +596,9 @@ describe('bulk notification actions through the client store', () => {
     ['a seat with more than one batch', [['one'], ['many']], true],
     ['more seats with work than run at once', [['one'], ['one'], ['one']], true],
     ['two seats of one batch', [['one'], ['one']], false],
-    ['an answer that failed', 'fail', true],
   ] as const)('shows the keep-open notice for %s: %s', async (_case, answer, notice) => {
-    if (answer !== 'fail' && answer.length === 3) thirdSeat()
-    reach =
-      answer === 'fail'
-        ? 'fail'
-        : { seats: answer.map(([r], i) => ({ org_id: snap.orgs[i].id, reach: r, before: 4 })) }
+    if (answer.length === 3) thirdSeat()
+    reach = { seats: answer.map(([r], i) => ({ org_id: snap.orgs[i].id, reach: r, before: 4 })) }
     const marking = P.markAllMessagesRead(true)
     await asked()
     if (!notice) {
@@ -611,10 +613,7 @@ describe('bulk notification actions through the client store', () => {
     P.answerInboxNotice(true)
     await asked()
     expect(P.inboxBulk?.state).toBe('running')
-    // a failed question sends every seat, each without a cutoff
-    expect(requests.map((request) => request.args.before)).toEqual(
-      answer === 'fail' ? [undefined, undefined] : expect.arrayContaining([4]),
-    )
+    expect(requests.map((request) => request.args.before)).toEqual([4, 4])
     // every seat's batch, the third once a slot is free
     const answered = new Set<Pending>()
     await vi.waitFor(() => {
@@ -673,7 +672,7 @@ describe('bulk notification actions through the client store', () => {
     vi.resetModules()
     vi.stubEnv('VITE_APP_MODE', 'demo')
     vi.stubGlobal('window', { showToast, clearTimeout })
-    reach = 'fail'
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many', before: 5 })) }
     const store = await import('./planner')
     P = store.P
     await store.initStore()
@@ -950,29 +949,66 @@ describe('bulk notification actions through the client store', () => {
     return answered.size
   }
 
-  it('sends every seat its first batch at the start when bulkReach failed, so no queued seat picks a later cutoff', async () => {
+  it.each(['fail', 'never'] as const)(
+    'writes nothing and toasts once when bulkReach answers %s',
+    async (answer) => {
+      thirdSeat()
+      await asked()
+      vi.useFakeTimers()
+      try {
+        reach = answer
+        const unread = P.unreadMessages
+        expect(unread).toBe(3)
+        const marking = P.markAllMessagesRead(true)
+        await vi.advanceTimersByTimeAsync(answer === 'fail' ? 1 : 9_999)
+        if (answer === 'never') {
+          expect(P.inboxBulk?.state).toBe('asking')
+          await vi.advanceTimersByTimeAsync(1)
+        }
+        await marking
+        expect(P.inboxBulk).toBeNull()
+        expect(requests).toEqual([])
+        expect(P.unreadMessages).toBe(unread)
+        expect(showToast).toHaveBeenCalledOnce()
+        expect(showToast).toHaveBeenCalledWith(
+          "Couldn't check how many messages Mark all as read covers, so nothing changed. Try again.",
+          'error',
+        )
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
+
+  it('keeps three seats to two batches in flight, each with its cutoff from the press', async () => {
     const third = thirdSeat()
-    reach = 'fail'
-    const marking = P.markAllMessagesRead(true)
+    reach = {
+      seats: snap.orgs.map((org, i) => ({ org_id: org.id, reach: 'many', before: 40 + i })),
+    }
+    const marking = P.markAllMessagesRead()
     await asked()
-    expect(P.inboxBulk).toMatchObject({ state: 'notice', why: 'unknown' })
-    P.answerInboxNotice(true)
-    await asked()
-    // all three first batches go at once, none with a cutoff, so the server
-    // chooses each one at the start
-    expect(requests.map((r) => [r.args.org_id, r.args.before])).toEqual(
-      snap.orgs.map((org) => [org.id, undefined]),
-    )
-    expect(requests.map((r) => r.args.org_id)).toContain(third)
-    // later batches keep to two seats at once
-    for (const request of requests) request.resolve({ marked: 200, hasMore: true, before: 9 })
-    await vi.waitFor(() => expect(requests).toHaveLength(5))
-    await asked()
-    expect(requests).toHaveLength(5)
-    expect(requests.slice(3).map((r) => r.args.before)).toEqual([9, 9])
-    await answerAll(() => ({ marked: 1, hasMore: false, before: 9 }))
+    const answered = new Set<Pending>()
+    let most = 0
+    for (let rounds = 0; rounds < 20 && answered.size < requests.length; rounds++) {
+      const open = requests.filter((r) => !answered.has(r))
+      most = Math.max(most, open.length)
+      // each seat answers twice with more to do, then no more
+      const request = open[0]
+      answered.add(request)
+      const seen = requests.filter((r) => r.args.org_id === request.args.org_id).length
+      request.resolve({ marked: 1, hasMore: seen < 3, before: request.args.before })
+      await asked()
+    }
     await marking
-    expect(P.inboxBulk).toMatchObject({ state: 'finished', done: 603, seatsDone: 3 })
+    expect(most).toBe(2)
+    expect(requests).toHaveLength(9)
+    // every batch carries its seat's cutoff from the press
+    for (const request of requests)
+      expect(request.args.before).toBe(
+        40 + snap.orgs.findIndex((org) => org.id === request.args.org_id),
+      )
+    expect(requests.map((r) => r.args.org_id)).toContain(third)
+    expect(P.inboxBulk).toMatchObject({ state: 'finished', done: 9, seatsDone: 3 })
   })
 
   it('gives a seat past the server budget the cutoff of the press, also when it is queued', async () => {
@@ -995,24 +1031,6 @@ describe('bulk notification actions through the client store', () => {
     await marking
   })
 
-  it('plans without bulkReach when it never answers, after REACH_WAIT_MS', async () => {
-    vi.useFakeTimers()
-    try {
-      reach = 'never'
-      const marking = P.markAllMessagesRead(true)
-      await vi.advanceTimersByTimeAsync(9_999)
-      expect(P.inboxBulk?.state).toBe('asking')
-      await vi.advanceTimersByTimeAsync(1)
-      expect(P.inboxBulk).toMatchObject({ state: 'notice', why: 'unknown', seats: 2 })
-      P.answerInboxNotice(false)
-      await marking
-      expect(P.inboxBulk).toBeNull()
-      expect(requests).toEqual([])
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
   it('paints read only the rows loaded at the press, not those that arrive while the notice is open', async () => {
     reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many', before: 5 })) }
     const marking = P.markAllMessagesRead(true)
@@ -1029,29 +1047,6 @@ describe('bulk notification actions through the client store', () => {
     expect(P.unreadMessages).toBe(1)
     await answerAll((r) => ({ marked: 1, ids: [], hasMore: false, before: r.args.before }))
     await marking
-  })
-
-  it('keeps a seat bulkReach left out while a read mark there is still on its way', async () => {
-    const seat = snap.orgs[1].id
-    // the seat's only read message goes, so the server holds none read there
-    snap.messages = snap.messages.filter((m) => m.org_id !== seat || !m.read_at)
-    snap.readMessageCount = 2
-    publish(structuredClone(snap))
-    const unread = snap.messages.find((m) => m.org_id === seat && !m.read_at)!
-    P.markMessagesRead([unread.id])
-    expect(requests.map((r) => r.name)).toEqual(['messages:markRead'])
-    // the server has not taken the read mark when bulkReach answers
-    const removal = P.deleteReadMessages()
-    await asked()
-    expect(requests.map((r) => [r.name, r.args.org_id])).toEqual([
-      ['messages:markRead', seat],
-      ['messages:removeRead', snap.orgs[0].id],
-      ['messages:removeRead', seat],
-    ])
-    expect(P.messages.find((m) => m.id === unread.id)).toBeUndefined()
-    requests[0].resolve(null)
-    await answerAll(() => ({ removed: 1, hasMore: false }))
-    await removal
   })
 
   it('stops every seat at a pause with one toast, the queued one before it sends anything', async () => {
