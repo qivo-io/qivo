@@ -164,8 +164,30 @@ async function post(
   })
 }
 
-const backfill = (t: T, args: { dry_run: boolean; cursor?: string }) =>
+const backfill = (t: T, args: { dry_run: boolean; rebuild?: boolean; cursor?: string | null }) =>
   t.action(internal.internal.inboxItemsBackfill.run, args)
+
+/* Calls the backfill until it answers done, passing each cursor back as it
+ * came, and answers every call's result. */
+async function backfillAll(t: T, args: { dry_run: boolean; rebuild?: boolean }) {
+  const calls = []
+  let cursor: string | null = null
+  for (let n = 0; n < 500; n++) {
+    const got = await backfill(t, { ...args, cursor })
+    calls.push(got)
+    if (got.done) {
+      expect(got.cursor).toBeNull()
+      return calls
+    }
+    expect(got.cursor).not.toBeNull()
+    cursor = got.cursor
+  }
+  throw new Error('the backfill did not finish in 500 calls')
+}
+
+/* The sum of `field` over the calls' results. */
+const sum = <K extends string>(calls: Record<K, number>[], field: K) =>
+  calls.reduce((n, c) => n + c[field], 0)
 
 const check = (t: T, profile_id: string, after?: string) =>
   t.query(internal.internal.inboxItemsBackfill.check, { profile_id, after })
@@ -1090,6 +1112,82 @@ describe('the build gate', () => {
     expect(await drift(t)).toEqual([])
   })
 
+  it('a half-built profile whose messages all went is due until a step marks it built', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [a, b, c] = await tasks(t, f, 3)
+    for (const task of [a, b, c])
+      await plantMessage(t, { org_id: f.org.id, recipient_id: f.user.id, issue_id: task.id })
+    BUILD.pairs = 1
+    await t.mutation(internal.internal.inboxItemsBackfill.step, { profile_id: f.user.id })
+    expect(await stateOf(t, f.user.id)).toMatchObject({ built: false, built_through: a.id })
+    await t.run(async (ctx) =>
+      removeMessages(ctx, await ctx.db.query('messages').collect()).then(() => null),
+    )
+    // no message left, but the profile is not built
+    expect(await t.query(internal.internal.inboxItemsBackfill.remaining, {})).toMatchObject({
+      profiles: 1,
+      listed: [{ profile_id: f.user.id, has_state: true, has_messages: false }],
+    })
+    expect(await backfill(t, { dry_run: false })).toMatchObject({ profiles: 1, done: true })
+    expect(await stateOf(t, f.user.id)).toMatchObject({ built: true })
+    expect(await t.query(internal.internal.inboxItemsBackfill.remaining, {})).toMatchObject({
+      profiles: 0,
+    })
+    // a later message about a task past the old built_through keeps its item
+    await post(t, f, { to: f.user, task: c, minute: 1 })
+    expect(await itemOfPair(t, f.user.id, c.id)).toMatchObject({ unread_count: 1 })
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('a step keeps built_through until the rows no message makes are gone, a few a step', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const list = await tasks(t, f, 6)
+    for (const task of [list[3], list[5]])
+      await plantMessage(t, { org_id: f.org.id, recipient_id: f.user.id, issue_id: task.id })
+    // rows from a build before: three below the first task with messages and
+    // one between the two, whose messages are gone, and a stale row for the
+    // last task, which a write between steps leaves alone, because the
+    // state does not cover it yet
+    await t.run(async (ctx) => {
+      for (const task of [list[0], list[1], list[2], list[4], list[5]])
+        await ctx.db.insert('inbox_items', {
+          recipient_id: f.user.id,
+          issue_id: task.id,
+          project_id: f.sub.id,
+          sort_at: NOW,
+          latest_id: uuid(),
+          latest_at: NOW,
+          unread: true,
+          unread_count: 9,
+          dropped: 0,
+          mentions: 0,
+          changes: 9,
+          comments: 0,
+          snoozed: false,
+          woke_rows: 0,
+        })
+      await ctx.db.insert('inbox_state', { profile_id: f.user.id, built: false })
+    })
+    BUILD.pairs = 1
+    const step = () =>
+      t.mutation(internal.internal.inboxItemsBackfill.step, { profile_id: f.user.id })
+    const states: (string | undefined)[] = []
+    for (let n = 0; n < 20; n++) {
+      const got = await step()
+      const state = await stateOf(t, f.user.id)
+      states.push(state?.built ? 'built' : state?.built_through)
+      if (n === 0) await post(t, f, { to: f.user, task: list[5], minute: 1 })
+      if (got.done) break
+    }
+    // one stale row a step: the state holds until the three are gone
+    expect(states).toEqual([undefined, undefined, list[3].id, list[5].id, 'built'])
+    expect(await t.run((ctx) => ctx.db.query('inbox_items').collect())).toHaveLength(2)
+    expect(await itemOfPair(t, f.user.id, list[5].id)).toMatchObject({ unread_count: 2 })
+    expect(await drift(t)).toEqual([])
+  })
+
   it('one ItemEdits shared by many messages reads each item once, in its one flush', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -1154,9 +1252,13 @@ describe('the backfill', () => {
       dry_run: true,
       profiles: 2,
       items: 6,
+      build: 6,
       messages: 9,
+      differing: 0,
       oversized: 0,
+      orphan_rows: 0,
       done: true,
+      cursor: null,
     })
     expect(await t.run((ctx) => ctx.db.query('inbox_items').collect())).toEqual([])
     expect(await t.run((ctx) => ctx.db.query('inbox_state').collect())).toEqual([])
@@ -1180,25 +1282,198 @@ describe('the backfill', () => {
       })
   })
 
-  it('goes on from a cursor past RUN.ms and in steps of a few bytes, and still builds every item', async () => {
+  it('a dry run, a run and a rebuild resume inside a profile past RUN.ms and each finish', async () => {
     const t = newT()
     const f = await withOrg(t)
     await legacy(t, f)
+    const one = await backfill(t, { dry_run: true })
     Object.assign(RUN, { ms: 0, profiles: 1 })
-    BUILD.bytes = 1
-    let cursor: string | undefined
-    let calls = 0
-    for (;;) {
-      const got = await backfill(t, { dry_run: false, cursor })
-      calls++
-      if (got.done) break
-      cursor = got.cursor ?? undefined
-    }
-    expect(calls).toBeGreaterThan(2)
+    Object.assign(BUILD, { pairs: 1, room: 0 })
+    // the dry run counts every item once over all its calls
+    const dry = await backfillAll(t, { dry_run: true })
+    expect(dry.length).toBeGreaterThan(3)
+    for (const field of ['profiles', 'items', 'build', 'messages'] as const)
+      expect(sum(dry, field)).toBe(one[field])
+    const run = await backfillAll(t, { dry_run: false })
+    expect(run.length).toBeGreaterThan(3)
+    expect(sum(run, 'items')).toBe(6)
     expect(await drift(t)).toEqual([])
-    expect(await t.query(internal.internal.inboxItemsBackfill.remaining, {})).toMatchObject({
-      profiles: 0,
+    // a rebuild resets each profile once: its build only moves on
+    await t.run(async (ctx) => {
+      for (const item of await ctx.db.query('inbox_items').collect())
+        await ctx.db.patch(item._id, { unread_count: 7 })
     })
+    const through = new Map<string, string[]>()
+    let cursor: string | null = null
+    for (let n = 0; n < 100; n++) {
+      const got = await backfill(t, { dry_run: false, rebuild: true, cursor })
+      for (const p of [f.user, f.guest]) {
+        const state = await stateOf(t, p.id)
+        const seen = through.get(p.id) ?? []
+        seen.push(state?.built ? 'built' : (state?.built_through ?? ''))
+        through.set(p.id, seen)
+      }
+      if (got.done) break
+      cursor = got.cursor
+    }
+    for (const seen of through.values()) {
+      const started = seen.findIndex((x) => x !== 'built')
+      const after = seen.slice(started)
+      // after its reset, a profile's build never starts over
+      expect(after.filter((x, i) => i > 0 && x === '' && after[i - 1] !== '')).toEqual([])
+      expect(seen.at(-1)).toBe('built')
+    }
+    expect(await drift(t)).toEqual([])
+    // one audit row for each call that wrote, the last with no cursor
+    const audit = await t.run((ctx) => ctx.db.query('platform_audit_log').collect())
+    expect(audit.at(-1)).toMatchObject({ detail: { rebuild: true, cursor: null } })
+    // a cursor the run did not answer is refused
+    await expect(backfill(t, { dry_run: true, cursor: 'nonsense' })).rejects.toThrow(/cursor/)
+  })
+
+  it('records what committed in its audit row when a step throws', async () => {
+    // a step reads one whole item at least, so an item larger than the
+    // limit makes the second profile's step throw
+    const t = newT({ transactionLimits: { documentsRead: 50 } })
+    const f = await withOrg(t)
+    const small = `00000000-0000-4000-8000-${'1'.repeat(12)}`
+    const big = `00000000-0000-4000-8000-${'2'.repeat(12)}`
+    for (const id of [small, big])
+      await t.run(async (ctx) => {
+        await ctx.db.insert('profiles', {
+          id,
+          org_id: f.org.id,
+          name: `Reader ${id.slice(-1)}`,
+          initials: 'RE',
+          color: '#7a7ad0',
+          org_role: 'admin',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+      })
+    const [task] = await tasks(t, f, 1)
+    await plantMessage(t, { org_id: f.org.id, recipient_id: small, issue_id: task.id })
+    for (let i = 0; i < 60; i++)
+      await plantMessage(t, { org_id: f.org.id, recipient_id: big, issue_id: task.id })
+    await expect(backfill(t, { dry_run: false })).rejects.toThrow(/documents/)
+    const audit = await t.run((ctx) => ctx.db.query('platform_audit_log').collect())
+    expect(audit).toHaveLength(1)
+    expect(audit[0].detail).toMatchObject({
+      items: 1,
+      cursor: expect.stringContaining(small),
+      error: expect.stringMatching(/documents/),
+    })
+    expect(await stateOf(t, small)).toMatchObject({ built: true })
+    expect(await stateOf(t, big)).toBeNull()
+  })
+
+  it('finds and deletes the rows of profiles that are gone, inside one in steps', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const list = await tasks(t, f, 3)
+    // before every live profile, so the steps meet it first
+    const gone = `00000000-0000-4000-8000-${'0'.repeat(11)}1`
+    // rows an earlier release left when it removed a profile
+    await t.run(async (ctx) => {
+      for (const task of list)
+        await ctx.db.insert('inbox_items', {
+          recipient_id: gone,
+          issue_id: task.id,
+          project_id: f.sub.id,
+          sort_at: NOW,
+          latest_id: uuid(),
+          latest_at: NOW,
+          unread: false,
+          unread_count: 0,
+          dropped: 0,
+          mentions: 0,
+          changes: 1,
+          comments: 0,
+          snoozed: false,
+          woke_rows: 0,
+        })
+      await ctx.db.insert('inbox_state', { profile_id: gone, built: true })
+    })
+    await post(t, f, { to: f.user, task: list[0], minute: 1 })
+    expect(await backfill(t, { dry_run: true })).toMatchObject({ orphan_rows: 4, orphans: [gone] })
+    Object.assign(RUN, { ms: 0 })
+    Object.assign(BUILD, { pairs: 1, room: 0 })
+    const dry = await backfillAll(t, { dry_run: true })
+    expect(sum(dry, 'orphan_rows')).toBe(4)
+    // a run that stops inside the gone profile, which someone then creates
+    // again, leaves the rows to the new profile's own build
+    const first = await backfill(t, { dry_run: false })
+    expect(first).toMatchObject({ done: false, orphan_rows: 1 })
+    expect(first.cursor).toContain(gone)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('profiles', {
+        id: gone,
+        org_id: f.org.id,
+        name: 'Same id',
+        initials: 'SI',
+        color: '#7a7ad0',
+        org_role: 'admin',
+        active: true,
+        kind: 'person',
+        created_at: NOW,
+      })
+    })
+    const rest = await backfill(t, { dry_run: false, cursor: first.cursor })
+    expect(rest).toMatchObject({ orphan_rows: 0 })
+    expect(
+      (await t.run((ctx) => ctx.db.query('inbox_items').collect())).filter(
+        (i) => i.recipient_id === gone,
+      ),
+    ).toHaveLength(2)
+    // with the profile gone again, a run deletes them all
+    await t.run(async (ctx) => {
+      const p = await byId(ctx, 'profiles', gone)
+      if (p) await ctx.db.delete(p._id)
+    })
+    const run = await backfillAll(t, { dry_run: false })
+    expect(sum(run, 'orphan_rows')).toBe(3)
+    const left = await t.run(async (ctx) => [
+      ...(await ctx.db.query('inbox_items').collect()).map((i) => i.recipient_id),
+      ...(await ctx.db.query('inbox_state').collect()).map((s) => s.profile_id),
+    ])
+    expect(left).toEqual([f.user.id, f.user.id])
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('a dry run finds rows an earlier release left behind its messages, and a rebuild mends them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const [a, b] = await tasks(t, f)
+    await post(t, f, { to: f.user, task: a, minute: 1 })
+    await post(t, f, { to: f.guest, task: a, minute: 1 })
+    expect(await backfill(t, { dry_run: true })).toMatchObject({ differing: 0, drifted: [] })
+    // an earlier release wrote messages without their items
+    await plantMessage(t, { org_id: f.org.id, recipient_id: f.user.id, issue_id: a.id })
+    await plantMessage(t, { org_id: f.org.id, recipient_id: f.user.id, issue_id: b.id })
+    expect(await backfill(t, { dry_run: true })).toMatchObject({
+      differing: 1,
+      missing: 1,
+      drifted: [f.user.id],
+    })
+    await backfill(t, { dry_run: false, rebuild: true })
+    expect(await backfill(t, { dry_run: true })).toMatchObject({
+      differing: 0,
+      missing: 0,
+      extra: 0,
+      drifted: [],
+    })
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('a rebuild resets no profile that is gone', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.mutation(internal.internal.inboxItemsBackfill.reset, { profile_id: uuid() })
+    await t.mutation(internal.internal.inboxItemsBackfill.reset, { profile_id: f.user.id })
+    expect(
+      (await t.run((ctx) => ctx.db.query('inbox_state').collect())).map((s) => s.profile_id),
+    ).toEqual([f.user.id])
   })
 
   it('trims an item too large for one step toward the cap first, and lists one it cannot shrink', async () => {

@@ -739,11 +739,13 @@ person whose first message comes later has them from that message on. Run
 the backfill on every hosted deployment once it serves that release, as the
 module's header says: read its dry run first, then run it, calling it again
 with its `cursor` until it answers `done`. Then check that `remaining`
-reports no profile on any page, and spot-check profiles with `check`. A
-later release may read the rows only once every deployment reports that.
-An earlier release writes messages without keeping the rows, so after a
-deployment ran one, `check` lists the rows that differ and
-`"rebuild": true` builds every profile's rows again.
+reports no profile on any page and that a new dry run reports no rows that
+differ, are missing, are extra or belong to removed profiles. A later
+release may read the rows only once every deployment reports that. An
+earlier release writes messages without keeping the rows, so after a
+deployment ran one, a dry run lists the profiles whose rows differ,
+`"rebuild": true` builds every profile's rows again, and a run deletes the
+rows of the profiles that release removed.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
