@@ -73,19 +73,22 @@ unsent asks first ([App updates](./qivo-in-one-minute.md#app-updates)). If the c
 after you are signed out or lose access to the organization, the thread says
 so with **Retry** instead of looking empty, and the comments already on screen
 stay. A task that was deleted or hidden from you shows an empty thread
-instead. The changes under **All** load with the comments and behave the same
-way.
-**Comments** is the default filter; **All** adds changes such as assignments,
-status moves, dates, labels and attachments. A task keeps all its changes.
-**All** opens at the newest 500 changes beside the loaded comments, and
-**Show earlier activity** above the oldest row loads earlier comments and
-changes together. Until the first comment and the first change are loaded,
+instead.
+**Comments** is the default filter, and loads no changes. **All** adds changes
+such as assignments, status moves, dates, labels and attachments, which Qivo
+loads when you choose **All**, starting with the newest 50. Until they arrive
+the thread says **Loading activity…**, and if they cannot load it says so with
+**Retry** instead of showing the comments alone. Going back to **Comments**
+stops loading changes. A task keeps all its changes. **Show earlier activity**
+above the oldest row loads earlier comments and up to 50 earlier changes
+together. Until the first comment and the first change are loaded,
 **All** shows only the rows since the later of the oldest loaded comment and
 the oldest loaded change, so it never shows comments beside a gap in the
 changes, or changes beside a gap in the comments. Field-change entries show before and after
 values, including short description excerpts. A **New** line marks unread
 activity, and sits at the top of the loaded comments when the first unread one
-is earlier ([Your inbox](./working-together.md#your-inbox)).
+is earlier ([Your inbox](./working-together.md#your-inbox)). Under **Comments**,
+unread changes show as a note at the end of the thread that points to **All**.
 
 You can edit or delete your own comments. Project leads can moderate other
 people's comments. The edit indicator shows when and by whom a comment changed,
