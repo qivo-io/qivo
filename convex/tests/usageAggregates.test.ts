@@ -292,7 +292,7 @@ describe('API usage aggregates', () => {
         period_start: MONTH,
         calls: 10 + i,
       })
-    // the run's steps: a page read in a query, then its rows ranked by id
+    // the run's steps, a page read in a query and then its rows ranked by id
     const scan = (cursor: string | null) =>
       t.query(internal.internal.usageRanksBackfill.scan, { cursor })
     const fix = async (ids: Id<'billing_usage'>[]) =>
@@ -655,7 +655,7 @@ describe('internal/usageRanksBackfill', () => {
   type CheckAnswer = FunctionReturnType<typeof internal.internal.usageRanksBackfill.check>
 
   /** `check` called again with each cursor it answers, unchanged, until
-   * done: the counts and lists of all calls together, and every cursor. */
+   * done. It answers the counts and lists of all calls together, and every cursor. */
   async function checkInCalls(t: T, between?: (cursor: CheckCursor) => Promise<void>) {
     const totals: Record<string, number> = {}
     const lists: Record<string, unknown[]> = {}
@@ -734,7 +734,7 @@ describe('internal/usageRanksBackfill', () => {
     const split = await checkInCalls(t, async (cursor) => {
       if (touched || cursor.bucket?.start == null) return
       touched = true
-      // one call fewer, then one more: the same total, but two writes
+      // one call fewer, then one more, for the same total after two writes
       const row = (await all(t, 'billing_usage')).find((r) => r.profile_id === f.user.id)
       if (row === undefined) throw new Error('the usage row vanished')
       await t.run((ctx) => writeUsageRow(ctx, row, row, row.calls - 1, row.credential_name))

@@ -381,8 +381,8 @@ export async function periodCalls(
 }
 
 /** A count of the writes to bucket `period`'s aggregates of organization
- * `orgId` that only grows while the organization exists: a month's shard
- * writes, or another bucket's calls and account writes on its
+ * `orgId` that only grows while the organization exists. It is a month's
+ * shard writes, or another bucket's calls and account writes on its
  * billing_usage_totals row (addRankedCalls), -1 without that row. Two equal
  * reads mean no aggregate of the bucket was written between them. */
 export async function bucketRevision(

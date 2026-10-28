@@ -59,7 +59,7 @@
  * (action 'usage_ranks_backfill', actor 'system') with its counts. The
  * results hold counts and organization, profile and bucket ids only. Running
  * it again is safe, and a clean deployment reports zeros. It writes no
- * activity, sends no task event and changes nothing a person sees: the
+ * activity, sends no task event and changes nothing a person sees. The
  * Billing and API access pages still sum the usage rows. */
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize, type Infer, v } from 'convex/values'
@@ -293,8 +293,8 @@ const vAggregate = v.union(...AGGREGATES.map((table) => v.literal(table)))
 
 /** Where a check goes on. `after_org` is the last organization it finished
  * and `org` the one under way, in id order, with `period`, the last of its
- * buckets finished, and `bucket`, the one under way: its state when it
- * began, and how far its sums of ranked usage rows and of account rows got.
+ * buckets finished, and `bucket`, the one under way, with its state when it
+ * began and how far its sums of ranked usage rows and of account rows got.
  * `gone`, once every organization is checked, is the scan for gone
  * organizations' rows, by table and the last organization id read. */
 const vCheckCursor = v.object({
@@ -394,8 +394,8 @@ type AccountsPage = {
 
 /** The bucket's account rows after profile `after`, each compared in this
  * one transaction with the sum of its profile's ranked usage rows in the
- * bucket: their calls together, those that differ, and those with more than
- * BACKFILL_PAGE.accountRows usage rows, which it leaves unchecked. It stops
+ * bucket. It answers their calls together, those that differ, and those with
+ * more than BACKFILL_PAGE.accountRows usage rows, which it leaves unchecked. It stops
  * after BACKFILL_PAGE.accounts accounts, or once the documents it read,
  * account and usage rows alike, reach BACKFILL_PAGE.reads or
  * BACKFILL_PAGE.bytes, and answers the last profile it checked. */
