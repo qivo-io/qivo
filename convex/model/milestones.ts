@@ -711,6 +711,13 @@ const scopeCeiling = (m: TransactionMetrics): ReadCeiling => {
   }
 }
 
+/* How many projects the check of a read's projects asks the level of at
+ * once, between two looks at its reads. A project's check reads its team
+ * shares one by one while projectLevelsOf cannot read the caller's own at
+ * once (lib/access.ts OWN_READS), so a batch passes the ceiling by at most
+ * the shares of this many projects. */
+const SCOPE_BATCH = 8
+
 /** The reason of the refusal of a milestone read whose projects need more
  * reads than one request allows (milestoneProjects). */
 export const MILESTONE_READ_TOO_LARGE = 'milestone_read_too_large'
@@ -848,14 +855,15 @@ function dayBounds(
  * the app shows its milestones read-only.
  *
  * The check reads within MILESTONE_SCOPE (scopeCeiling). It first asks every
- * project's level without navigation, a few reads a project, and then, one
- * project at a time, whether a top-level project the caller holds no level
- * on shows for navigation, which reads all its sub-projects. Before each of
- * those it looks at the reads so far, and past the ceiling it refuses the
- * whole read (MILESTONE_READ_TOO_LARGE) instead of answering for part of the
- * projects, so the caller can ask for fewer. One navigation check can pass
- * the ceiling by the sub-projects of its project, as any access check of
- * that project reads them.
+ * project's level without navigation, SCOPE_BATCH projects at a time, and
+ * then, one project at a time, whether a top-level project the caller holds
+ * no level on shows for navigation, which reads all its sub-projects. Before
+ * each batch and each navigation check it looks at the reads so far, and
+ * past the ceiling it refuses the whole read (MILESTONE_READ_TOO_LARGE)
+ * instead of answering for part of the projects, so the caller can ask for
+ * fewer. It can pass the ceiling by one batch's checks, whose team shares
+ * projectLevelsOf may read project by project, or by one navigation check's
+ * sub-projects, as any access check of those projects reads them.
  */
 export async function milestoneProjects(
   ctx: QueryCtx,
@@ -876,21 +884,24 @@ export async function milestoneProjects(
     const me = myProfiles.get(orgId)
     if (me === undefined) continue
     const levels = projectLevelsOf(ctx, me, projects)
-    const found = await Promise.all(
-      projects.map(async (project) => {
-        if (project.archived_at !== undefined) return null
-        if ((await levels.level(project.id, false)) === null) {
-          if (project.parent_id === undefined)
-            navigation.push({ at: unique.indexOf(project.id), project, levels })
-          return null
-        }
-        // a project the caller can see is top-level or directly under one
-        const root =
-          project.parent_id === undefined ? project : await levels.project(project.parent_id)
-        return root === null || root.archived_at !== undefined ? null : root.id
-      }),
-    )
-    for (const id of found) if (id !== null) roots.add(id)
+    for (let at = 0; at < projects.length; at += SCOPE_BATCH) {
+      if (!(await readsUnder(ctx, ceiling))) throw readTooLarge()
+      const found = await Promise.all(
+        projects.slice(at, at + SCOPE_BATCH).map(async (project) => {
+          if (project.archived_at !== undefined) return null
+          if ((await levels.level(project.id, false)) === null) {
+            if (project.parent_id === undefined)
+              navigation.push({ at: unique.indexOf(project.id), project, levels })
+            return null
+          }
+          // a project the caller can see is top-level or directly under one
+          const root =
+            project.parent_id === undefined ? project : await levels.project(project.parent_id)
+          return root === null || root.archived_at !== undefined ? null : root.id
+        }),
+      )
+      for (const id of found) if (id !== null) roots.add(id)
+    }
   }
   for (const { project, levels } of navigation.sort((a, b) => a.at - b.at)) {
     if (!(await readsUnder(ctx, ceiling))) throw readTooLarge()

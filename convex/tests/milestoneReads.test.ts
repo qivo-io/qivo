@@ -189,6 +189,61 @@ async function shared(t: T, f: OrgFixture, count: number): Promise<string[]> {
   })
 }
 
+/* `projects` top-level projects, each shared with each of `teams` teams that
+ * `f.user` belongs to, with a milestone on the first. Their shares are more
+ * than projectLevelsOf reads at once (lib/access.ts OWN_READS.rows), so a
+ * check reads each project's shares one by one. */
+async function sharedWithTeams(
+  t: T,
+  f: OrgFixture,
+  projects: number,
+  teams: number,
+): Promise<{ ids: string[]; milestone: Doc<'milestones'> }> {
+  return await t.run(async (ctx) => {
+    const teamIds: string[] = []
+    for (let i = 0; i < teams; i++) {
+      const id = uuid()
+      await ctx.db.insert('teams', {
+        id,
+        org_id: f.org.id,
+        name: `Team ${i}`,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('team_members', { team_id: id, profile_id: f.user.id, is_leader: false })
+      teamIds.push(id)
+    }
+    const ids: string[] = []
+    for (let i = 0; i < projects; i++) {
+      const id = uuid()
+      await ctx.db.insert('projects', {
+        id,
+        org_id: f.org.id,
+        type: 'meta',
+        key: `S${i}`,
+        name: `Shared ${i}`,
+        description: '',
+        sort_order: 2000 + i,
+        num: 2000 + i,
+        track_delay: false,
+        created_at: NOW,
+        window_key: uuid().slice(0, 8),
+      })
+      for (const team_id of teamIds)
+        await ctx.db.insert('project_team_access', { project_id: id, team_id, level: 'user' })
+      ids.push(id)
+    }
+    const _id = await ctx.db.insert('milestones', {
+      id: uuid(),
+      project_id: ids[0],
+      name: 'Shared milestone',
+      week: MONDAY,
+      created_at: NOW,
+    })
+    return { ids, milestone: (await ctx.db.get(_id)) as Doc<'milestones'> }
+  })
+}
+
 /* `parents` top-level projects of `children` sub-projects each, with a
  * milestone on each parent. `who` holds a grant only on each parent's last
  * sub-project, so the parents show to them for navigation only, and a check
@@ -1100,6 +1155,29 @@ describe('under Convex limits', () => {
     // without room to open every project the read is refused
     const e = await expectRefusal(read(2), 'rule', /Choose fewer projects/)
     expect(e.data.reason).toBe(MILESTONE_READ_TOO_LARGE)
+  })
+
+  it('refuses a read whose projects are shared with more teams than the request can check', async () => {
+    const t = newT({ transactionLimits: { documentsRead: 1500 } })
+    const f = await withOrg(t)
+    const { ids, milestone } = await sharedWithTeams(t, f, 30, 60)
+    const user = as(t, f.user)
+    const section = { from: MONDAY, side: 'upcoming' as const, limit: 10 }
+    // eight projects' 480 shares fit
+    const eight = await user.query(api.milestones.section, {
+      ...section,
+      projects: ids.slice(0, 8),
+    })
+    expect(eight.rows).toEqual([rowOf(milestone)])
+    // thirty projects' 1,800 shares pass the request's 1,500 documents, so
+    // the check stops between two batches and refuses
+    for (const call of [
+      user.query(api.milestones.section, { ...section, projects: ids }),
+      user.query(api.milestones.between, { projects: ids, from: MONDAY, to: plus(MONDAY, 7) }),
+    ]) {
+      const e = await expectRefusal(call, 'rule', /Choose fewer projects/)
+      expect(e.data.reason).toBe(MILESTONE_READ_TOO_LARGE)
+    }
   })
 
   it('refuses a read whose navigation-only parents need more reads than the request allows', async () => {
