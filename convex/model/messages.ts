@@ -1266,7 +1266,7 @@ export async function snoozeMessages(
  * about 3,000 (convex/tests/inboxItems.test.ts measures both). */
 export const ARCHIVED_READ_BATCH = 330
 
-/** The most tasks one archived-read step visits. scheduleArchivedReads gives
+/** The most tasks one archived-read step visits. scheduleTaskReads gives
  * each step at most this many task ids, and a project walk stops after this
  * many tasks, because each task costs index ranges whether or not it holds
  * a row to mark. */
@@ -1299,14 +1299,25 @@ export async function scheduleArchivedReads(
   a: { issues?: readonly string[]; projects?: readonly string[] },
 ): Promise<void> {
   const issues = a.issues ?? []
+  await scheduleTaskReads(ctx, issues)
+  await scheduleArchiveMarks(ctx, issues)
+  for (const project_id of a.projects ?? []) {
+    await ctx.scheduler.runAfter(0, readArchivedProjectRef, { project_id })
+  }
+}
+
+/** Schedules readArchivedTaskMessages over the tasks `issues`,
+ * ARCHIVED_READ_TASKS of them a step, without the archive marks that
+ * scheduleArchivedReads adds. internal/archivedReadsBackfill calls it for
+ * tasks archived before the archive paths marked their messages read. */
+export async function scheduleTaskReads(
+  ctx: MutationCtx,
+  issues: readonly string[],
+): Promise<void> {
   for (let i = 0; i < issues.length; i += ARCHIVED_READ_TASKS) {
     await ctx.scheduler.runAfter(0, readArchivedTasksRef, {
       issues: issues.slice(i, i + ARCHIVED_READ_TASKS),
     })
-  }
-  await scheduleArchiveMarks(ctx, issues)
-  for (const project_id of a.projects ?? []) {
-    await ctx.scheduler.runAfter(0, readArchivedProjectRef, { project_id })
   }
 }
 

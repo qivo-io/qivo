@@ -45,6 +45,7 @@ export const AUDIT_ACTION_LABELS = {
   usage_ranks_backfill: 'Ranked API usage and counted it per account and month',
   live_counts_backfill: 'Counted live tasks and projects',
   inbox_items_backfill: 'Built inbox items from messages',
+  archived_reads_backfill: 'Marked read the messages of tasks archived before that was automatic',
   window_keys_backfill: 'Gave tasks and projects their window keys',
   descriptions_backfill: 'Gave tasks their description rows',
   name_keys_backfill: 'Gave people, teams and projects their name keys',

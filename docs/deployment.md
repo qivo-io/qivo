@@ -786,6 +786,19 @@ extra, runs the backfill with `"rebuild": true` until it answers `done`
 before it serves a release whose app shows these reads. A deployment that
 never served a release from before PR 299 after PR 299 needs no rebuild.
 
+Unread messages about tasks archived before the archive marked them read
+(commit `c311ec8`, 2026-10-15) stay unread, and the unread summary in
+`convex/inbox.ts` reads such a task for each of these items on every run,
+so many of them keep a person's summary incomplete for good. Run the
+one-time `internal/archivedReadsBackfill` on every hosted deployment once it
+serves the release that adds it, as the module's header says: read its dry
+run first, then run it, calling it again with its `org_id` and `cursor`
+until it answers `done`, wait for the read steps it schedules, and check
+that a new dry run reports no tasks. It marks the messages of archived
+tasks only. Active tasks in an archived project keep theirs, which the
+summary skips with the project without reading them. Running it again is
+safe.
+
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to
 deploy. Roll forward instead. Later releases no longer accept those fields,

@@ -43,6 +43,7 @@ import type * as files from "../files.js";
 import type * as http from "../http.js";
 import type * as identity from "../identity.js";
 import type * as inbox from "../inbox.js";
+import type * as internal_archivedReadsBackfill from "../internal/archivedReadsBackfill.js";
 import type * as internal_commentCountsBackfill from "../internal/commentCountsBackfill.js";
 import type * as internal_credentialKeysBackfill from "../internal/credentialKeysBackfill.js";
 import type * as internal_demoCleanup from "../internal/demoCleanup.js";
@@ -274,6 +275,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   identity: typeof identity;
   inbox: typeof inbox;
+  "internal/archivedReadsBackfill": typeof internal_archivedReadsBackfill;
   "internal/commentCountsBackfill": typeof internal_commentCountsBackfill;
   "internal/credentialKeysBackfill": typeof internal_credentialKeysBackfill;
   "internal/demoCleanup": typeof internal_demoCleanup;
