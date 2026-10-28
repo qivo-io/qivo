@@ -21,7 +21,7 @@ import { milestoneWeekTaken, WEEK_START_REFUSALS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import { TRASH_BUDGET } from '../model/deletedItems'
 import { MILESTONE_WEEK_TAKEN } from '../model/milestones'
-import { WEEKDAY_NAMES, weekDays, weekPhrase } from '../model/orgs'
+import { dayLabel, WEEKDAY_NAMES, weekDays, weekPhrase } from '../model/orgs'
 import {
   as,
   expectRefusal,
@@ -972,6 +972,41 @@ describe('the activation audit', () => {
     expect(report.counts).toMatchObject({ unchecked: 1, duplicate_week: 1 })
     expect(report.findings.find((x) => x.kind === 'unchecked')?.project_id).toBe(crowded.id)
   }, 60_000)
+})
+
+describe('the sentences that name a week and a day', () => {
+  const settings = (date_format: string, week_start: number) => ({
+    date_format,
+    week_start,
+    week_one_rule: 'first4day',
+  })
+  it.each([
+    ['YYYY-MM-DD', 1, '2026-05-13', 'the week of 2026-05-11 (W20)', '2026-05-13'],
+    ['D MMM YYYY', 0, '2026-05-13', 'the week of 10 May 2026 (W19)', '13 May 2026'],
+    ['MM/DD/YYYY', 6, '2026-05-13', 'the week of 05/09/2026 (W19)', '05/13/2026'],
+    ['MMM D, YYYY', 1, '2027-01-01', 'the week of Dec 28, 2026 (W53)', 'Jan 1, 2027'],
+    // a day that does not exist reads as the day it overflows to
+    ['DD.MM.YYYY', 3, '2026-02-31', 'the week of 25.02.2026 (W9)', '03.03.2026'],
+    // a format Qivo does not know reads as YYYY-MM-DD
+    ['iso', 1, '2026-05-13', 'the week of 2026-05-11 (W20)', '2026-05-13'],
+  ])('%s from weekday %i names %s', (format, start, day, phrase, label) => {
+    expect(weekPhrase(day, settings(format, start))).toBe(phrase)
+    expect(dayLabel(day, settings(format, start))).toBe(label)
+  })
+
+  it('reads the first week of year 0000 from 0000-01-01', () => {
+    // 0000-01-01 is a Saturday, so the Monday week holding it starts in year -1
+    expect(weekDays('0000-01-01', { week_start: 1 })).toEqual({
+      first: '0000-01-01',
+      last: '0000-01-02',
+    })
+    expect(weekPhrase('0000-01-01', settings('DD/MM/YYYY', 1))).toMatch(
+      /^the week of 01\/01\/0000 \(W\d+\)$/,
+    )
+    expect(weekPhrase('9999-12-31', settings('YYYY-MM-DD', 1))).toMatch(
+      /^the week of 9999-12-27 \(W\d+\)$/,
+    )
+  })
 })
 
 describe('the Northstar data under every first day of the week', () => {

@@ -744,5 +744,8 @@ export function dayLabel(day: string, s: WeekSettings): string {
  * and its week number. */
 export function weekPhrase(day: string, s: WeekSettings): string {
   const start = weekStartOf(parseISODate(day), weekStartDay(s))
-  return `the week of ${fmtFull(start, s.date_format)} (W${weekNumberOf(start, s).num})`
+  // the first week of year 0000 begins in year -1, which YYYY cannot write,
+  // so it reads from 0000-01-01 as weekDays cuts it
+  const first = start.getUTCFullYear() < 0 ? utcDay(0, 0, 1) : start
+  return `the week of ${fmtFull(first, s.date_format)} (W${weekNumberOf(start, s).num})`
 }

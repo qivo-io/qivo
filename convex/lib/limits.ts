@@ -369,7 +369,9 @@ export const LIMITS = {
   },
   // One milestone a calendar week of the organization for each top-level
   // project, a milestone named on a sub-project included
-  // (model/milestones.ts assertWeekFree).
+  // (model/milestones.ts assertWeekFree). The check allows exactly one, as
+  // it refuses when any other milestone holds the week, so `max` documents
+  // the rule and a change of it needs a change of weekHolder.
   milestonesPerWeek: {
     label: 'Milestones per project week',
     group: 'tasks',
