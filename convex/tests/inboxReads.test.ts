@@ -189,6 +189,7 @@ describe('the unread summary', () => {
     }
     // the seed leaves unread items, so the comparison counts something
     expect(total).toBeGreaterThan(0)
+    expect(await drift(t)).toEqual([])
   })
 
   it('is exact up to 99, says more than 99 from 100, and reads no task past the cap', async () => {
@@ -358,6 +359,7 @@ describe('the unread summary', () => {
       unread_more: false,
       complete: false,
     })
+    expect(await drift(t)).toEqual([])
   })
 
   it('stops part way with a count below the true one when the room is lowered', async () => {
@@ -371,6 +373,7 @@ describe('the unread summary', () => {
     expect(cut.unread_more).toBe(false)
     expect(cut.unread_count).toBeGreaterThan(0)
     expect(cut.unread_count).toBeLessThan(60)
+    expect(await drift(t)).toEqual([])
   })
 
   it('reads less than half of Convex’s limits for 100 tasks with the largest descriptions', async () => {
@@ -385,6 +388,7 @@ describe('the unread summary', () => {
     expect(read.bytes).toBeLessThan(8 * 1024 * 1024)
     expect(read.ranges).toBeLessThan(2048)
     expect(read.documents).toBeLessThan(16_000)
+    expect(await drift(t)).toEqual([])
   })
 
   it('adds up the seats of one login and says which are not ready', async () => {
