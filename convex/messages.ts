@@ -1,11 +1,13 @@
 /* Inbox writes (phase 5): read_at, snoozed_until and delete, the client's
- * WHOLE message write surface. Rows are created only by model/messages'
- * notify family, and everything else is immutable by not appearing in any
- * validator. The app's current Inbox names the rows by message id
- * (markRead, markUnread, remove, snooze), the bulk actions take none
- * (markAllRead, removeRead), and the item actions name one item by its
- * task (readItem, unreadItem, removeItem, snoozeItem), so a row the app did
- * not load is reached too. Open old clients keep calling the id actions.
+ * WHOLE message write surface, and bulkReach, the one read here, which
+ * says before a bulk action starts how much it has to do. Rows are created
+ * only by model/messages' notify family, and everything else is immutable
+ * by not appearing in any validator. The app's current Inbox names the
+ * rows by message id (markRead, markUnread, remove, snooze), the bulk
+ * actions take none (markAllRead, removeRead), and the item actions name
+ * one item by its task (readItem, unreadItem, removeItem, snoozeItem), so a
+ * row the app did not load is reached too. Open old clients keep calling
+ * the id actions.
  *
  * Own rows only, silently: the RLS filter's successor (model/messages.ts
  * ownMessages) skips non-own and unknown ids without a trace (the client
@@ -21,14 +23,15 @@
  * statement trigger fired once per pair. markUnread prunes nothing.
  * markUnread and snooze refuse a message about an archived task.
  * markAllRead visits bounded batches beyond the snapshot cap, keeping the
- * first batch's server-selected cutoff. There is no boot
+ * first batch's server-selected cutoff, which the app asks bulkReach for
+ * when the person presses the action. There is no boot
  * sweep_my_read_messages; the nightly sweep is phase 9's cron. The internal
  * readArchivedTasks and readArchivedProject steps mark an archived task's
  * messages read for every recipient. */
 
 import { v } from 'convex/values'
 import { internalMutation } from './_generated/server'
-import { orgMutation } from './lib/functions'
+import { authedQuery, orgMutation } from './lib/functions'
 import { rekeyStep } from './model/inboxItems'
 import {
   itemMessages,
@@ -40,6 +43,7 @@ import {
   ownMessages,
   readArchivedProjectMessages,
   readArchivedTaskMessages,
+  readBulkReach,
   removeMessages,
   removeReadMessages,
   snoozeMessages,
@@ -76,6 +80,24 @@ export const markAllRead = orgMutation({
       before: done.before,
     }
   },
+})
+
+/* How much Mark all as read (`read`) or Remove all read (`remove`) has to
+ * do in each of the caller's seats: `none`, `one` batch or `many`, and for
+ * Mark all as read the cutoff (`before`) a first markAllRead call would
+ * choose now (model/messages.ts readBulkReach). The app asks it once when
+ * the person presses the action, never as a subscription, which would run
+ * again on every message write. It warns before an action of more than one
+ * round, skips the seats with nothing to do, and passes each seat's
+ * `before` to its first markAllRead call, so a seat that waits for a free
+ * slot stops at what had arrived at the press. It reads at most
+ * INBOX_BATCH + 2 messages a seat and answers `many` for the seats past
+ * its budget. */
+export const bulkReach = authedQuery({
+  args: { action: v.union(v.literal('read'), v.literal('remove')) },
+  handler: async (ctx, { action }) => ({
+    seats: await readBulkReach(ctx, [...ctx.myProfiles.values()], action),
+  }),
 })
 
 /* P.markMessagesUnread, the same column the other way. A message about an

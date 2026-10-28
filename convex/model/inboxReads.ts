@@ -21,6 +21,7 @@ import type { QueryCtx } from '../_generated/server'
 import { accessOf } from '../lib/access'
 import { byId, usedMoreThan } from '../lib/db'
 import { itemRow, seatReady } from './inboxItems'
+import { bulkRows } from './messages'
 
 /** The bounds of the unread summary. It counts at most `most` items, so the
  * badge can say "more than 99". It asks how much the transaction has read
@@ -97,22 +98,14 @@ export type SeatSummary = {
 }
 
 /* Seat `me`'s line of the summary, four index ranges at most. The flags
- * read one unsnoozed message each, unread or read, which includes messages
- * about tasks the seat cannot see, as markAllMessagesRead and
- * removeReadMessages reach those too (model/messages.ts). */
+ * read the first message of the range each action walks (model/messages.ts
+ * bulkRows), which includes messages about tasks the seat cannot see, as
+ * markAllMessagesRead and removeReadMessages reach those too. */
 async function seatLine(ctx: QueryCtx, me: Doc<'profiles'>): Promise<SeatSummary> {
-  const awake = (read: boolean) =>
-    ctx.db
-      .query('messages')
-      .withIndex('by_recipient_snoozed_read', (q) => {
-        const seat = q.eq('recipient_id', me.id).eq('snoozed_until', undefined)
-        return read ? seat.gt('read_at', undefined) : seat.eq('read_at', undefined)
-      })
-      .first()
   const [ready, unread, read] = await Promise.all([
     seatReady(ctx, me.id),
-    awake(false),
-    awake(true),
+    bulkRows(ctx, me.id, 'read').first(),
+    bulkRows(ctx, me.id, 'remove').first(),
   ])
   return {
     org_id: me.org_id,
