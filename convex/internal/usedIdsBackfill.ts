@@ -11,9 +11,13 @@
  * `projects`), their Deleted items copies (`stored_issues`,
  * `stored_projects`, deleted_rows), each stored task's light row
  * (`deleted_tasks`) and the projects each project item names
- * (`project_items`, deleted_items). A purge that stopped partway can leave
- * either of the last two after the copy is gone, while rows keyed by the id
- * still wait for its steps. A stored task is in two sources and a stored
+ * (`project_items`, deleted_items). The last two can name an id after its
+ * stored copy is gone. A split of a task item that stopped partway can
+ * leave a subtask's deleted_tasks row, with some of its other stored rows,
+ * once its stored copy is gone, as can a purge that a release before this
+ * one left partway; this release's purge deletes the deleted_tasks row
+ * before the copy. A project item names its projects until its purge ends,
+ * after their stored copies. A stored task is in two sources and a stored
  * project in up to two, so a dry run can count one id in each. An id freed
  * before this release is in none of them, so it is unknown and stays free
  * for a new task or project, as does an id an earlier release created and

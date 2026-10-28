@@ -2,8 +2,9 @@
  * task and project id, the room check of bulk writers and window keys.
  * Serializable mutations make check-then-insert safe: two concurrent
  * insertUnique calls on the same key conflict and one retries, re-running
- * the check, and so do two inserts of one task or project id, through the
- * used_ids range both read. */
+ * the check. So do two inserts of one task or project id by any path, in
+ * one organization or two, since each reads the used_ids range of the id
+ * that the other writes its row into (claimId). */
 
 import type {
   GenericDatabaseReader,
