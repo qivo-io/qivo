@@ -1167,13 +1167,14 @@ async function sameOrgTeamMembers(ctx: QueryCtx, teamId: string, orgId: string):
  * their team memberships and the shares of those teams. A grant or a
  * membership exists for each project or team someone gave the person, so
  * real people hold far fewer. Each row adds at most one lookup of a project
- * or a team, so 2,000 rows with their lookups read at most 4,000 documents
- * of a few hundred bytes to about 1 KB, an eighth of Convex's 32,000 and well
- * under its 16 MiB. A membership also opens one range for its team's shares,
- * so when most rows are memberships the ranges can pass NAMED_READ's 2,000
- * (lib/namedPages.ts), and the read guard stops the check first. A person
- * with 2,000 viewer grants and no proof gets null, not a limit error. Tests
- * lower it. */
+ * or a team, so 2,000 rows with their lookups read at most 4,000 documents,
+ * an eighth of Convex's 32,000; a grant or membership is about 0.2 KB, and
+ * the read guard counts every document at its size. A membership also opens
+ * one range for its team's shares, so when most rows are memberships the
+ * ranges can pass NAMED_READ's 2,000 (lib/namedPages.ts), and the read guard
+ * stops the check first. A person with 2,000 viewer grants and no proof
+ * reads 2,000 rows, about 350 KB in three ranges, and gets false; one more
+ * grant gets null, not a limit error. Tests lower it. */
 export const LABEL_WRITE_READ = { rows: 2000 }
 
 /**

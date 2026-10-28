@@ -43,7 +43,10 @@ import {
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
 
 /** A label as the app's label lists show it. */
-type LabelRow = { id: string; name: string; color: string }
+type LabelRow = ReturnType<typeof labelJson>
+
+/** A label as Settings > Labels shows it, with its usage. */
+type SettingsRow = LabelRow & { active_tasks: number | null }
 
 /** The arguments of a label list: an optional search, and the cursors of
  * the batch's start (`after`, none for the first batch) and, to keep a
@@ -71,11 +74,11 @@ export const settingsPage = orgQuery({
     ctx,
     a,
   ): Promise<{
-    rows: (LabelRow & { active_tasks: number | null })[]
+    rows: SettingsRow[]
     next: string | null
     stopped: boolean
     counting: boolean
-    exact: (LabelRow & { active_tasks: number | null }) | null
+    exact: SettingsRow | null
   }> => {
     if (!canManageOrgLabels(ctx.me)) {
       throw forbidden('only organization admins see the label list with its usage')
