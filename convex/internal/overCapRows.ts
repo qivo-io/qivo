@@ -70,12 +70,14 @@
  * in the app, because the app parses only up to TEXT_MAX. The fix writes no
  * activity. A task's description is the text readers show, its description
  * row's (model/descriptions.ts descriptionOf), and its trimmed form is
- * stored in both copies in a transaction of its own (describe). The issues
- * phase reads each task's row too, which can come close to Convex's
- * document size limit, so it pages by creation time with a cursor of its
- * own, in steps by bytes (taskPage), rather than by a paginate cursor.
- * Running it again is safe, and a deployment that needs nothing reports no
- * rows. */
+ * stored in both copies in a transaction of its own (describe). A task
+ * whose task row holds a different text, which only a rollback leaves, is
+ * skipped for internal/descriptionsBackfill's repair, so no fresher edit is
+ * lost. The issues phase reads each task's description row too, which can
+ * come close to Convex's document size limit, so it walks the tasks by id
+ * with a cursor of its own, in steps by bytes (taskPage), rather than by a
+ * paginate cursor. Running it again is safe, and a deployment that needs
+ * nothing reports no rows. */
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -90,13 +92,14 @@ import { cleanEmail } from '../lib/email'
 import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
-import { descriptionOf, patchTask } from '../model/descriptions'
+import { patchTask, textCopiesOf } from '../model/descriptions'
 import { copyNameKey, inlineBudget } from '../model/nameKeys'
 import { patchRows } from '../model/projectNav'
 import { renameProjectTotals } from '../model/storageTotals'
 
 /** Rows per page and the bytes one page may read; a page can end early.
- * `page_size` lowers the rows per page, for tests of a walk over pages. */
+ * `page_size` lowers the rows per page, for tests of a walk over pages; it
+ * counts as a whole number from 1 to PAGE. */
 const PAGE = 500
 const PAGE_BYTES = 4 * 1024 * 1024
 
@@ -106,9 +109,12 @@ const PAGE_BYTES = 4 * 1024 * 1024
  * the long names left on the page wait until a person shortens those. */
 const REPORTS = 4
 
-/** The documents of up to Convex's size limit one task of the issues phase
- * can read: its row, its description row, and its row again when the fix
- * patches its hours (taskPage). */
+/** The bytes one page of the issues phase reads before it ends, besides one
+ * last task (taskPage), and the documents of up to Convex's size limit one
+ * task can read: its row, its description row, and its row again when the
+ * fix patches its hours. A page so reads at most 15 MiB, and a step of the
+ * page reads 4 tasks while little of it is spent. */
+const TASK_PAGE_BYTES = 12 * 1024 * 1024
 const TASK_DOCUMENTS = 3
 
 /** The tables whose `name` counts NAME_MAX UTF-16 units. */
@@ -253,64 +259,62 @@ function taskChanges(hours: number | undefined, text: string): Change[] {
   return changes
 }
 
-/** One page of the issues phase after `cursor`, the creation time the page
- * before read through, as text. Each task reads its text from its
- * description row (model/descriptions.ts descriptionOf), and a page reads
- * no more tasks at a time than its unspent bytes could hold at
- * TASK_DOCUMENTS of Convex's document size limit a task, so it stays inside
- * Convex's 16 MiB of reads. It ends at `pageSize` tasks or PAGE_BYTES, with
- * every task of its last creation time, should two share one. The fix
- * changes no creation time, so the cursor stays valid. */
+/** One page of the issues phase after `cursor`, the id of the last task the
+ * page before read, in id order, which holds no ties. Each task reads its
+ * text from its description row (model/descriptions.ts textCopiesOf), and a
+ * page reads no more tasks at a time than its unspent TASK_PAGE_BYTES could
+ * hold at TASK_DOCUMENTS of Convex's document size limit a task, and one
+ * while less is left, so it stays inside Convex's 16 MiB of reads. It ends
+ * at `pageSize` tasks, at most PAGE, so its index ranges stay far inside
+ * Convex's 4,096. A task whose copies differ is skipped. A task inserted
+ * meanwhile may land before the cursor and go unread; such a task's text
+ * is stored trimmed already. */
 async function taskPage(
   ctx: QueryCtx,
   cursor: string | null,
   write: MutationCtx | null,
   pageSize: number,
 ): Promise<PageResult> {
-  const after = cursor === null ? 0 : Number(cursor)
-  if (!Number.isFinite(after)) throw new Error('the issues phase takes the cursor a page answered')
+  const after = cursor === null ? null : ctx.db.normalizeId('issues', cursor)
+  if (cursor !== null && after === null)
+    throw new Error('the issues phase takes the cursor a page of it answered')
   const start = (await ctx.meta.getTransactionMetrics()).bytesRead.used
   const rows: Found[] = []
   const describe: Id<'issues'>[] = []
   let through = after
   let read = 0
+  const result = (done: boolean): PageResult => ({
+    rows,
+    cursor: through ?? '',
+    done,
+    describe,
+  })
   for (;;) {
     const spent = (await ctx.meta.getTransactionMetrics()).bytesRead.used - start
-    if (read >= pageSize || spent >= PAGE_BYTES)
-      return { rows, cursor: String(through), done: false, describe }
-    const fits = Math.floor((PAGE_BYTES - spent) / (TASK_DOCUMENTS * DOCUMENT_MAX_BYTES))
+    if (read >= pageSize || spent >= TASK_PAGE_BYTES) return result(false)
+    const fits = Math.floor((TASK_PAGE_BYTES - spent) / (TASK_DOCUMENTS * DOCUMENT_MAX_BYTES))
     const want = Math.min(pageSize - read, Math.max(1, fits))
     const from = through
-    const part = await ctx.db
+    const tasks = await ctx.db
       .query('issues')
-      .withIndex('by_creation_time', (q) => q.gt('_creationTime', from))
+      .withIndex('by_id', (q) => (from === null ? q : q.gt('_id', from)))
       .take(want)
-    const last = part.at(-1)?._creationTime
-    if (last === undefined) return { rows, cursor: String(through), done: true, describe }
-    const tail =
-      part.length < want
-        ? []
-        : await ctx.db
-            .query('issues')
-            .withIndex('by_creation_time', (q) => q.eq('_creationTime', last))
-            .collect()
-    const tasks = [
-      ...part.filter((task) => task._creationTime < last || tail.length === 0),
-      ...tail,
-    ]
     for (const task of tasks) {
-      const changes = taskChanges(task.remaining_hours, await descriptionOf(ctx.db, task))
-      const found = sorted('issues', task._id, changes, write)
+      const { text, differs } = await textCopiesOf(ctx.db, task)
+      const found = sorted('issues', task._id, taskChanges(task.remaining_hours, text), write)
+      // the backfill's repair brings the copies together first
+      if (differs)
+        for (const row of found.rows) if (row.field === 'description') row.outcome = 'skipped'
       rows.push(...found.rows)
       if (found.patch === null || write === null) continue
       const { remaining_hours, description } = found.patch
       if (typeof remaining_hours === 'number')
         await write.db.patch('issues', task._id, { remaining_hours })
-      if (typeof description === 'string') describe.push(task._id)
+      if (typeof description === 'string' && !differs) describe.push(task._id)
     }
     read += tasks.length
-    through = last
-    if (part.length < want) return { rows, cursor: String(through), done: true, describe }
+    through = tasks.at(-1)?._id ?? through
+    if (tasks.length < want) return result(true)
   }
 }
 
@@ -345,8 +349,9 @@ async function walk(
   phase: Phase,
   cursor: string | null,
   write: MutationCtx | null,
-  pageSize = PAGE,
+  asked = PAGE,
 ): Promise<PageResult> {
+  const pageSize = Number.isFinite(asked) ? Math.max(1, Math.min(PAGE, Math.floor(asked))) : PAGE
   const opts = { cursor, numItems: pageSize, maximumBytesRead: PAGE_BYTES }
   const rows: Found[] = []
   if (isDeleted(phase)) {
@@ -536,14 +541,16 @@ export const page = internalMutation({
 
 /** Stores the description of task `id` trimmed in both copies
  * (model/descriptions.ts patchTask), once a page of the fix found its text
- * (descriptionOf) untrimmed. A description that a trim leaves over
- * TEXT_MAX, or that changed since, stays as it is. */
+ * (textCopiesOf) untrimmed. A description that a trim leaves over
+ * TEXT_MAX, or that changed since, stays as it is, and so does one whose
+ * copies differ, as the page leaves it. */
 export const describe = internalMutation({
   args: { id: v.id('issues') },
   handler: async (ctx, { id }): Promise<null> => {
     const task = await ctx.db.get(id)
     if (task === null) return null
-    const text = await descriptionOf(ctx.db, task)
+    const { text, differs } = await textCopiesOf(ctx.db, task)
+    if (differs) return null
     const description = trimMarkdown(text)
     if (description !== text && description.length <= TEXT_MAX)
       await patchTask(ctx.db, task, { description })

@@ -82,6 +82,27 @@ export async function descriptionOf(
   return row?.description ?? task.description ?? ''
 }
 
+/** The text readers show for `task` (descriptionOf), and whether its task
+ * row holds a different one, which only a rollback leaves: a release from
+ * before the table that changed issues.description without the row. A
+ * writer then takes the task row's text (patchTask), so a tool that rewrites
+ * the text it read from the row would lose that edit; it leaves such a task
+ * to internal/descriptionsBackfill's repair. One by_issue range and at most
+ * one document. */
+export async function textCopiesOf(
+  db: Reader,
+  task: Pick<Doc<'issues'>, 'id' | 'description'>,
+): Promise<{ text: string; differs: boolean }> {
+  const row = await db
+    .query('issue_descriptions')
+    .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+    .first()
+  return {
+    text: row?.description ?? task.description ?? '',
+    differs: row !== null && task.description !== undefined && task.description !== row.description,
+  }
+}
+
 /** `task` with its text (descriptionOf) in `description`, in memory only.
  * The cores that pass whole task documents on use it, for a write that
  * changes or checks the description. It writes nothing; Deleted items

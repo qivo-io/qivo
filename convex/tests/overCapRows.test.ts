@@ -448,6 +448,62 @@ describe('internal/overCapRows', () => {
     expect(await names()).toEqual([cut, cut])
   })
 
+  it('walks the issues phase by task id a page of one or two at a time, each task once', async () => {
+    const t = newT()
+    const f = await setup(t)
+    const tasks = []
+    for (let i = 0; i < 5; i++)
+      tasks.push(
+        await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: `Task ${i}  ` }),
+      )
+    for (const page_size of [1, 2]) {
+      const seen: string[] = []
+      let cursor: string | null = null
+      for (let pages = 0; ; pages++) {
+        expect(pages).toBeLessThan(10)
+        const page: { rows: { id: string }[]; cursor: string; done: boolean } = await t.query(
+          internal.internal.overCapRows.check,
+          { phase: 'issues', cursor, page_size },
+        )
+        expect(page.rows.length).toBeLessThanOrEqual(page_size)
+        seen.push(...page.rows.map((row) => row.id))
+        if (page.done) break
+        cursor = page.cursor
+      }
+      expect(seen.sort()).toEqual(tasks.map((task) => task._id).sort())
+    }
+    // a cursor no page answered is refused rather than read as a position
+    await expect(
+      t.query(internal.internal.overCapRows.check, { phase: 'issues', cursor: 'not a task id' }),
+    ).rejects.toThrow(/takes the cursor a page of it answered/)
+  })
+
+  it('skips a task whose task row holds a different text, and keeps that fresher text', async () => {
+    const t = newT()
+    const f = await setup(t)
+    // an earlier release edited the task row alone, untrimmed
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      description: 'Stale row  ',
+    })
+    await t.run((ctx) => ctx.db.patch(task._id, { description: 'Fresh edit  ' }))
+    expect(summary((await fix(t, true)).rows)).toEqual(['issues.description skipped'])
+    expect(summary((await fix(t, false)).rows)).toEqual(['issues.description skipped'])
+    // describe on its own leaves it too
+    await t.mutation(internal.internal.overCapRows.describe, { id: task._id })
+    const stored = await t.run(async (ctx) => ({
+      task: (await ctx.db.get(task._id))?.description,
+      row: (
+        await ctx.db
+          .query('issue_descriptions')
+          .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+          .first()
+      )?.description,
+    }))
+    expect(stored).toEqual({ task: 'Fresh edit  ', row: 'Stale row  ' })
+  })
+
   it('walks every page of a phase', async () => {
     const t = newT()
     const f = await setup(t)
