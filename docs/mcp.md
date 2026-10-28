@@ -1630,12 +1630,13 @@ its organization, whose weeks begin on the organization's first day of the
 week, and a milestone named on a sub-project counts for its top-level
 project. `set_milestone` that adds a milestone, or changes a `date`, into a
 week that already holds another of the project's milestones is refused with
-a sentence that names the week and that milestone, such as `this project
-already has the milestone “Launch” in the week of 2026-11-02 (W45), and a
-project can have at most 1 milestone a week. Pick another week, or move that
-milestone first.`, and changes nothing. A move within the milestone's own
-week, or a rename, is not refused. Different projects can each have a
-milestone in the same week.
+a sentence that names the week, in the organization's date format, and that
+milestone, such as `this project already has the milestone “Launch” in the
+week of 2026-11-02 (W45), and a project can have at most 1 milestone a week.
+Pick another week, or move that milestone first.`, and changes nothing. A
+rename is not refused, and neither is a move within the milestone's own
+week, unless another milestone stored before the rule shares that week.
+Different projects can each have a milestone in the same week.
 
 Creating, renaming, archiving and restoring a project, handing over its lead,
 changing its access and changing its milestones write the app's activity

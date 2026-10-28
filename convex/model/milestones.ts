@@ -515,12 +515,13 @@ export async function assertMilestoneExpected(
 /**
  * Renames or moves a milestone the caller may change (changeableMilestone)
  * and narrates it. A move into a week another milestone of the project holds
- * is refused (assertWeekFree); a move within its own week and a rename are
- * not. The verb names what actually CHANGED, so a pure rename
- * does not read as a move (bc022c2:3536-3562, trap T15). A submit that
- * changes neither the name nor the week is validated, then changes and
- * narrates nothing, although the app's dialog always sends both fields.
- * Older rows may say 'updated milestone' for such a submit.
+ * is refused (assertWeekFree). A rename is not checked, and a move within
+ * the milestone's own week passes unless another milestone, stored there
+ * before the rule, shares that week. The verb names what actually CHANGED,
+ * so a pure rename does not read as a move (bc022c2:3536-3562, trap T15).
+ * A submit that changes neither the name nor the week is validated, then
+ * changes and narrates nothing, although the app's dialog always sends both
+ * fields. Older rows may say 'updated milestone' for such a submit.
  */
 export async function updateMilestoneCore(
   ctx: MutationCtx,

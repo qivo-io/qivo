@@ -59,6 +59,13 @@ lines. Narrow columns shorten the labels.
 Plans use whole weeks. Bars snap to weeks, while due-date markers retain
 exact dates.
 
+The one-milestone-a-week rule counts each project's weeks in the calendar of
+the organization that owns the project. If you work as a guest in another
+organization whose weeks start on another day than your own, the Roadmap
+still shows your organization's weeks. A week that looks free there can then
+hold one of the project's milestones in its owner's calendar, and Qivo
+refuses a milestone moved into it, naming that week in the owner's dates.
+
 ## Scheduling by hand
 
 With edit access, drag a bar to move it or drag either edge to resize it.

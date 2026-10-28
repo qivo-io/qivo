@@ -802,8 +802,10 @@ already holds another of the project's milestones is a `400` that names the
 week and that milestone, such as `this project already has the milestone
 “Launch” in the week of 2026-11-02 (W45), and a project can have at most 1
 milestone a week. Pick another week, or move that milestone first.`, in the
-organization's date format, and changes nothing. A `PATCH` that moves a
-milestone within its own week, or only renames it, is not refused. Two
+organization's date format, and changes nothing. A `PATCH` that only
+renames a milestone is not refused, and neither is one that moves it within
+its own week, unless another milestone stored before the rule shares that
+week. Two
 requests that claim the same week at the same time cannot both succeed.
 Different projects can each have a milestone in the same week. `POST` answers `201` and `PATCH` `200` with
 `{"id", "name", "date", "project_id"}`, where `project_id` is the top-level project;

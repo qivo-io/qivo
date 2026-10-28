@@ -44,7 +44,10 @@ settings](./organization-and-team-settings.md)). Adding or moving a
 milestone into a week that already has one is refused with the name of the
 milestone there, and the window keeps the name and date you entered. Move
 or delete that milestone, or pick another week. Different projects can each
-have a milestone in the same week.
+have a milestone in the same week. The weeks are those of the organization
+that owns the project. A guest whose own organization starts weeks on
+another day sees week labels in their own calendar, so a refusal can name a
+week whose dates differ from the ones shown.
 
 When a scope has no task to summarize, for example a project without
 sub-projects or My view with nothing assigned to you, Overview says why. If
