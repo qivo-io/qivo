@@ -143,9 +143,14 @@ export function draftReduce<T>(
         const acked = { ...mine, base: a.value, conflict: null, refusedBy: undefined }
         return s.draft !== null && reads(s.draft, a.value) ? untouched(acked) : acked
       }
-      // an untouched field follows, as does a draft that reads as its base
-      // or as the new value, which it then simply is
-      if (s.draft === null || reads(s.draft, s.base) || reads(s.draft, a.value))
+      // an untouched field follows, as does a draft that reads as the new
+      // value, which it then simply is, or as its base, unless a conflict
+      // waits: then only Use saved or Keep mine lets the draft go
+      if (
+        s.draft === null ||
+        reads(s.draft, a.value) ||
+        (s.conflict === null && reads(s.draft, s.base))
+      )
         return untouched(next)
       // back to the value the draft began from: nothing conflicts now
       if (same(a.value, s.base)) return { ...next, base: a.value, conflict: null }

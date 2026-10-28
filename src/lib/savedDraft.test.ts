@@ -194,6 +194,23 @@ describe('a settings field’s draft', () => {
     expect(draftUnsaved(kept, TRIMMED)).toBe(true)
   })
 
+  it('keeps a draft typed back to its base while a conflict waits', () => {
+    const s = run(
+      TRIMMED,
+      'Northstar',
+      { type: 'edit', text: 'Northstar Robotics' },
+      { type: 'saved', value: 'Northstar Labs' },
+      // the person types the old name again, and chooses nothing
+      { type: 'edit', text: 'Northstar' },
+      { type: 'saved', value: 'Northstar Group' },
+    )
+    expect(shown(s)).toBe('Northstar')
+    expect(s.conflict).toEqual({ value: 'Northstar Group', by: null })
+    expect(draftUnsaved(s, TRIMMED)).toBe(true)
+    // only a choice lets it go
+    expect(shown(draftReduce(s, { key: KEY, type: 'discard' }, TRIMMED))).toBe('Northstar Group')
+  })
+
   it('takes a saved value equal to the draft as the draft saved', () => {
     const s = run(
       TRIMMED,
