@@ -2083,9 +2083,12 @@ function IssueDetail({
     { rows: comments, whole: P.commentsLoaded && P.commentsEarlier === 'none' },
     { rows: history, whole: P.historyLoaded && P.historyEarlier === 'none' },
   )
+  // The comment being edited in place stays whatever the window, so neither
+  // choosing All nor the history arriving unmounts its editor with the
+  // draft in it.
   const spine = all
     ? mergeSpine(
-        comments.filter((c) => c.ts >= from.start),
+        comments.filter((c) => c.ts >= from.start || c.id === editingComment),
         history.filter((e) => e.ts >= from.start),
       )
     : mergeSpine(comments, [])

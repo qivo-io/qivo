@@ -30,6 +30,7 @@ vi.mock('../lib/auth', () => ({
 }))
 
 type Page = { comments: Row<'comments'>[]; earlier: boolean }
+type History = { events: Row<'activity_events'>[]; earlier: boolean; next: string | null }
 type Planner = typeof import('../store/planner')['P']
 type Detail = typeof import('./IssueDetail')
 type Answer = { resolve: (value: null) => void; reject: (reason: unknown) => void }
@@ -45,6 +46,8 @@ let container: HTMLDivElement
 let root: Root
 let me: string
 let deliver: (page: Page) => void
+// the history's subscription, which runs only under All, while it does
+let deliverHistory: ((page: History) => void) | null
 let fail: (e: unknown) => void
 let subscriptions: number
 let writes: { name: string; answer: Answer }[]
@@ -81,10 +84,16 @@ async function load(description = '') {
   })
   subscriptions = 0
   writes = []
+  deliverHistory = null
   network.onUpdate.mockImplementation((ref, _args, next, onError) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
-    else if (name === 'snapshot:threadComments') {
+    else if (name === 'snapshot:threadHistory') {
+      deliverHistory = next
+      return () => {
+        if (deliverHistory === next) deliverHistory = null
+      }
+    } else if (name === 'snapshot:threadComments') {
       subscriptions++
       deliver = (page) => next(page)
       fail = (e) => onError(e)
@@ -335,6 +344,50 @@ describe('comment drafts in the task window', { timeout: 20_000 }, () => {
     await act(async () => writes[1].answer.resolve(null))
     expect(editing()).toBeNull()
     expect(thread()).toEqual(['Check 1', 'Check 2 rerun', 'Check 3'])
+  })
+
+  it('keeps an edit open with its text when All is chosen before the history arrives', async () => {
+    await load()
+    await open()
+    await act(async () => deliver({ comments: range(1, 4), earlier: false }))
+    const edit = document.querySelector<HTMLButtonElement>(
+      `[data-comment="${comment(2).id}"] [aria-label="Edit comment"]`,
+    )
+    await act(async () => edit?.click())
+    const editor = await editorOf('Edit comment')
+    await act(async () => editor.commands.insertContent(' rerun'))
+    await click('All')
+    // the history is on its way, and the comments wait beside it
+    expect(spineText()).toContain('Loading activity…')
+    expect(editing()).not.toBeNull()
+    expect(editor.getText()).toBe('Check 2 rerun')
+    // newer changes than every comment, with more before them: the window
+    // starts after the comment being edited, which stays
+    const change = (n: number): Row<'activity_events'> => ({
+      id: `event-${n}`,
+      org_id: P.org.id,
+      ts: at(n),
+      actor_id: me,
+      verb: 'moved',
+      target_type: 'issue',
+      target_id: 'task-a',
+      label: 'QN-27',
+      detail: 'To Do → In Progress',
+    })
+    const send = deliverHistory
+    if (!send) throw new Error('the history is not subscribed')
+    await act(async () =>
+      send({ events: [change(10), change(11)], earlier: true, next: 'event-10' }),
+    )
+    const shown = [...document.querySelectorAll('[data-comment]')].map((row) =>
+      row.getAttribute('data-comment'),
+    )
+    expect(shown).toEqual([comment(2).id])
+    expect(editing()).not.toBeNull()
+    expect(editor.getText()).toBe('Check 2 rerun')
+    await click('Save')
+    await act(async () => writes[0].answer.resolve(null))
+    expect(editing()).toBeNull()
   })
 
   it('turns Comment and Save off while the text is over its limit', async () => {
