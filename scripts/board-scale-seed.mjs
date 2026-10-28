@@ -3,7 +3,8 @@
  *
  *   QIVO_FIXTURE_LOCAL=true QIVO_LOCAL_ADMIN_KEY=… \
  *     node scripts/board-scale-seed.mjs --local --deployment local-<name>-<port> \
- *       --url http://127.0.0.1:<port> [--site-url http://localhost:5199] [--tasks 10000]
+ *       --url http://127.0.0.1:<port> [--site-url http://localhost:5199] [--tasks 10000] \
+ *       [--inbox 600]
  *
  * It takes the same loopback-only target as `marketing-demo.mjs --local`, and
  * the same refusals: no deploy key, no staging, production or demo
@@ -19,7 +20,19 @@
  * workspace: every status, a parent with three subtasks every 25th task, a
  * due date every 7th (every other one past), a pause every 31st, a title of
  * the most characters a title holds (LIMITS.title) every 13th and no owner
- * every 11th. */
+ * every 11th.
+ *
+ * `--inbox <n>` then gives Nora n inbox items, for checking the Inbox and
+ * its bulk actions at scale: on each of the first n seeded tasks that are
+ * not archived it posts, through comments:create, one comment that mentions
+ * her. A mention about an archived task would arrive read, so those are
+ * skipped. Each comment comes from one of the task's sub-project owners who
+ * has a login and is not Nora, acting as that login the way the seed acts
+ * as Nora, because Nora's mention of herself writes no message and an agent
+ * has no login. Each comment's id comes from its task's id, so a rerun
+ * posts only on the tasks that have none yet, and a larger --inbox adds
+ * items for the next tasks. */
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -93,6 +106,18 @@ const TAILS = [
 ]
 /* What a seeded task's description says, with its number. */
 const MARK = 'Seeded by board-scale-seed as task'
+/* What the --inbox comments ask Nora after the mention, in Northstar's
+   words. */
+const ASKS = [
+  'can you confirm this before the pilot review?',
+  'this needs your sign-off before we order parts.',
+  'could you check the numbers here against the reference instrument?',
+  'the beta checklist depends on this, can you take a look?',
+  'is this still the plan for the three pilot offices?',
+]
+/* The refusal of a comment whose id is taken (convex/model/comments.ts),
+   which a rerun meets on the tasks it already posted on. */
+const COMMENT_TAKEN = 'a comment with this id already exists'
 /* The most seeded tasks. The app's workspace parts read an organization of
    this size in windows (convex/workspace.ts), each far inside Convex's
    limits, and this keeps the seed's own run a few hours at most. */
@@ -102,7 +127,7 @@ const ref = (name) => makeFunctionReference(name)
 
 /** The options, or a DemoCliError naming what is wrong. */
 export function parseSeedArgs(args) {
-  const options = { target: null, tasks: 10_000 }
+  const options = { target: null, tasks: 10_000, inbox: 0 }
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     const value = () => {
@@ -116,13 +141,51 @@ export function parseSeedArgs(args) {
     else if (arg === '--url') options.url = value()
     else if (arg === '--site-url') options.siteUrl = value()
     else if (arg === '--tasks') options.tasks = Number(value())
+    else if (arg === '--inbox') options.inbox = Number(value())
     else throw new DemoCliError(`Unknown option ${arg}.`)
   }
   if (options.target !== 'local')
     throw new DemoCliError('board-scale-seed writes to a disposable --local backend only.')
   if (!Number.isInteger(options.tasks) || options.tasks < 1 || options.tasks > MOST_TASKS)
     throw new DemoCliError(`--tasks takes a whole number from 1 to ${MOST_TASKS}.`)
+  if (!Number.isInteger(options.inbox) || options.inbox < 0 || options.inbox > options.tasks)
+    throw new DemoCliError('--inbox takes a whole number from 0 up to the --tasks count.')
   return options
+}
+
+/** The id of the --inbox comment on task `taskId`: the same for every run,
+    so a second create of it is refused as taken. A lowercase UUID, as the
+    server requires of a new row's id. */
+export function inboxCommentId(taskId) {
+  const hex = createHash('sha256').update(`board-scale-seed inbox ${taskId}`).digest('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
+
+/** The --inbox comments for `count` of the seeded tasks `present`
+    (seededTasks), in seeded order, skipping archived tasks: each with its
+    task, the person who posts it, chosen from `posters` (the people with a
+    login and not Nora who own work in each project), and its body, which
+    mentions `nora`. A task whose project has no such person is skipped. */
+export function planInbox(count, present, posters, nora) {
+  const out = []
+  for (const n of [...present.keys()].sort((a, b) => a - b)) {
+    if (out.length === count) break
+    const { task } = present.get(n)
+    if (task.archived_at) continue
+    const people = posters.get(task.project_id) ?? []
+    if (!people.length) continue
+    out.push({
+      task,
+      poster: people[n % people.length],
+      fields: {
+        id: inboxCommentId(task.id),
+        org_id: task.org_id,
+        issue_id: task.id,
+        body: `@[${nora.name}](user:${nora.id}) ${ASKS[n % ASKS.length]}`,
+      },
+    })
+  }
+  return out
 }
 
 /** A date `days` from today, as the app stores due dates. */
@@ -234,11 +297,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   })
   const actor = people.page.find((profile) => profile.email === ACTOR && profile.auth_user_id)
   if (!actor) throw new DemoCliError('Seed Northstar first: marketing-demo.mjs seed --local.')
-  client.setAdminAuth(target.key, {
-    subject: actor.auth_user_id,
-    issuer: 'board-scale-seed',
-    tokenIdentifier: `board-scale-seed|${actor.auth_user_id}`,
-  })
+  client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
   const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
   if (!org) throw new DemoCliError('Nora cannot see Northstar; seed it again.')
@@ -318,7 +377,79 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
     }
   }
   log(`Done: ${made} seeded tasks added in Northstar on ${target.url}.`)
+  if (options.inbox > 0)
+    await seedInbox(options.inbox, { client, target, people: people.page, actor, org, log })
 }
+
+/* Posts the --inbox comments (planInbox) on the seeded tasks as they are
+   now, which `client` reads as Nora, each comment as its poster's login. */
+async function seedInbox(count, { client, target, people, actor, org, log }) {
+  const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
+  const joined = (name) =>
+    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const live = new Set(
+    joined('projects')
+      .filter((project) => project.type === 'project' && !project.archived_at)
+      .map((project) => project.id),
+  )
+  const issues = joined('issues').filter((issue) => live.has(issue.project_id))
+  // the people with a login, other than Nora, who own work in each project
+  const logins = new Map(
+    people
+      .filter(
+        (p) =>
+          p.org_id === org &&
+          p.auth_user_id &&
+          p.id !== actor.id &&
+          p.active !== false &&
+          p.org_role !== 'viewer',
+      )
+      .map((p) => [p.id, p]),
+  )
+  const posters = new Map()
+  for (const issue of issues) {
+    const poster = logins.get(issue.assignee_id)
+    if (!poster) continue
+    const list = posters.get(issue.project_id) ?? []
+    if (!list.includes(poster)) list.push(poster)
+    posters.set(issue.project_id, list)
+  }
+  const nora = people.find((p) => p.id === actor.id)
+  const plan = planInbox(count, seededTasks(issues), posters, nora)
+  if (plan.length < count)
+    log(`Only ${plan.length} seeded tasks can hold an inbox item for Nora; posting on those.`)
+  const clients = new Map()
+  const clientOf = (poster) => {
+    let as = clients.get(poster.auth_user_id)
+    if (!as) {
+      as = new ConvexHttpClient(target.url, { logger: false })
+      as.setAdminAuth(target.key, identityOf(poster.auth_user_id))
+      clients.set(poster.auth_user_id, as)
+    }
+    return as
+  }
+  let posted = 0
+  for (const { task, poster, fields } of plan) {
+    try {
+      await clientOf(poster).mutation(ref('comments:create'), fields)
+    } catch (error) {
+      // a rerun meets the comments it posted before
+      if (error.data?.message === COMMENT_TAKEN) continue
+      throw new DemoCliError(
+        `comments:create refused a comment on "${task.title}": ${error.data?.message ?? error.message}`,
+      )
+    }
+    if (++posted % 100 === 0) log(`${posted} inbox comments posted`)
+  }
+  log(`Done: ${posted} inbox comments posted for Nora, ${plan.length - posted} there before.`)
+}
+
+/** The identity the local admin key acts with as login `subject`. */
+const identityOf = (subject) => ({
+  subject,
+  issuer: 'board-scale-seed',
+  tokenIdentifier: `board-scale-seed|${subject}`,
+})
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {

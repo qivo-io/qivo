@@ -2,26 +2,38 @@ import { getFunctionName } from 'convex/server'
 import { describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../convex/lib/limits'
 import {
+  inboxCommentId,
   parseSeedArgs,
+  planInbox,
   planSeed,
   runBoardScaleSeed,
   seededTask,
   seededTasks,
 } from './board-scale-seed.mjs'
 
-/* A local backend the seed talks to: Nora, Northstar with one sub-project,
-   the tasks `fake.issues` holds, in the workspace parts, and every mutation
-   it receives. */
-const fake = vi.hoisted(() => ({ issues: [], calls: [] }))
+/* A local backend the seed talks to: Nora and the people in `fake.people`,
+   Northstar with one sub-project, the tasks `fake.issues` holds, in the
+   workspace parts, and every mutation it receives, with the login it came
+   as. A comment whose id `fake.comments` holds is refused as taken. */
+const fake = vi.hoisted(() => ({ issues: [], calls: [], people: [], comments: new Set() }))
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
-    setAdminAuth() {}
+    setAdminAuth(_key, identity) {
+      this.login = identity?.subject
+    }
     async query(ref) {
       const name = getFunctionName(ref)
       if (name === '_system/cli/tableData')
         return {
           page: [
-            { email: 'nora@demo.qivo.io', auth_user_id: 'nora-login', id: 'nora', org_id: 'org' },
+            {
+              email: 'nora@demo.qivo.io',
+              auth_user_id: 'nora-login',
+              id: 'nora',
+              name: 'Nora Lindqvist',
+              org_id: 'org',
+            },
+            ...fake.people,
           ],
         }
       // the workspace parts (convex/workspace.ts), one window of each kind
@@ -61,7 +73,14 @@ vi.mock('convex/browser', () => ({
       }[name]
     }
     async mutation(ref, fields) {
-      fake.calls.push([getFunctionName(ref), fields])
+      const name = getFunctionName(ref)
+      fake.calls.push([name, fields, this.login])
+      if (name !== 'comments:create') return
+      if (fake.comments.has(fields.id))
+        throw Object.assign(new Error('taken'), {
+          data: { message: 'a comment with this id already exists' },
+        })
+      fake.comments.add(fields.id)
     }
   },
 }))
@@ -77,6 +96,14 @@ describe('board-scale-seed', () => {
       tasks: 500,
     })
     expect(parseSeedArgs(local).tasks).toBe(10_000)
+  })
+
+  it('takes an inbox count up to the task count', () => {
+    expect(parseSeedArgs([...local, '--tasks', '1300', '--inbox', '600']).inbox).toBe(600)
+    expect(parseSeedArgs(local).inbox).toBe(0)
+    expect(() => parseSeedArgs([...local, '--tasks', '100', '--inbox', '101'])).toThrow(/--inbox/)
+    expect(() => parseSeedArgs([...local, '--inbox', '-1'])).toThrow(/--inbox/)
+    expect(() => parseSeedArgs([...local, '--inbox', '2.5'])).toThrow(/--inbox/)
   })
 
   it('refuses anything but a disposable local backend before it connects', async () => {
@@ -296,5 +323,91 @@ describe('a rerun of board-scale-seed', () => {
       detach_parent: true,
     })
     expect(fake.calls[4][1]).toEqual({ id: 'task26', org_id: 'org', patch: { parent_id: parent } })
+  })
+})
+
+describe('board-scale-seed --inbox', () => {
+  const sub = (n, more = {}) => ({
+    ...seededTask(n, 'org', 'sub', n % 2 ? 'ana' : 'bo'),
+    id: `task${n}`,
+    parent_id: null,
+    ...more,
+  })
+  const people = [
+    { id: 'ana', name: 'Ana', auth_user_id: 'ana-login', org_id: 'org', org_role: 'user' },
+    { id: 'bo', name: 'Bo', auth_user_id: 'bo-login', org_id: 'org', org_role: 'admin' },
+    // an agent has no login, and a viewer cannot comment
+    { id: 'relay', name: 'Relay', org_id: 'org', org_role: 'user' },
+    { id: 'vi', name: 'Vi', auth_user_id: 'vi-login', org_id: 'org', org_role: 'viewer' },
+  ]
+
+  it('mentions Nora on the first tasks that are not archived, each as an owner with a login', () => {
+    const present = seededTasks([
+      sub(2),
+      sub(0),
+      sub(1, { archived_at: '2026-10-01T00:00:00.000Z' }),
+      sub(3),
+      { ...sub(4), project_id: 'empty' },
+    ])
+    const posters = new Map([['sub', people.slice(0, 2)]])
+    const plan = planInbox(3, present, posters, { id: 'nora-id', name: 'Nora Lindqvist' })
+    expect(plan.map(({ task, poster }) => [task.id, poster.id])).toEqual([
+      ['task0', 'ana'],
+      ['task2', 'ana'],
+      ['task3', 'bo'],
+    ])
+    for (const { fields, task } of plan) {
+      expect(fields).toMatchObject({
+        id: inboxCommentId(task.id),
+        issue_id: task.id,
+        org_id: 'org',
+      })
+      expect(fields.body).toMatch(/^@\[Nora Lindqvist\]\(user:nora-id\) \S/)
+    }
+    // the same task always gets the same comment id, a lowercase UUID
+    expect(inboxCommentId('task0')).toBe(inboxCommentId('task0'))
+    expect(inboxCommentId('task0')).not.toBe(inboxCommentId('task1'))
+    expect(inboxCommentId('task0')).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    )
+  })
+
+  it('posts as the owners, never Nora, a viewer or an agent, and a rerun adds only what is missing', async () => {
+    fake.people = people
+    fake.issues = Array.from({ length: 6 }, (_, n) =>
+      sub(n, { assignee_id: ['ana', 'bo', 'relay', 'vi', 'nora', 'ana'][n] }),
+    )
+    fake.comments = new Set()
+    fake.calls = []
+    const lines = []
+    await runBoardScaleSeed([...local, '--tasks', '6', '--inbox', '4'], {
+      env,
+      log: (line) => lines.push(line),
+    })
+    const comments = () => fake.calls.filter(([name]) => name === 'comments:create')
+    expect(comments().map(([, fields, login]) => [fields.issue_id, login])).toEqual([
+      ['task0', 'ana-login'],
+      ['task1', 'bo-login'],
+      ['task2', 'ana-login'],
+      ['task3', 'bo-login'],
+    ])
+    expect(lines.at(-1)).toBe('Done: 4 inbox comments posted for Nora, 0 there before.')
+    // a larger count posts on the next tasks only
+    fake.calls = []
+    await runBoardScaleSeed([...local, '--tasks', '6', '--inbox', '6'], {
+      env,
+      log: (line) => lines.push(line),
+    })
+    expect(comments().map(([, fields]) => fields.issue_id)).toEqual([
+      'task0',
+      'task1',
+      'task2',
+      'task3',
+      'task4',
+      'task5',
+    ])
+    expect(fake.comments.size).toBe(6)
+    expect(lines.at(-1)).toBe('Done: 2 inbox comments posted for Nora, 4 there before.')
+    fake.people = []
   })
 })
