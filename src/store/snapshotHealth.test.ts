@@ -402,13 +402,8 @@ describe('snapshot trouble', () => {
   it('keeps a comment saved while Try again starts every part afresh until the new thread answers', async () => {
     await boot()
     const { P } = store
-    const page = {
-      comments: [],
-      earlier: false,
-      events: [],
-      events_earlier: false,
-      events_next: null,
-    }
+    // a threadComments page
+    const page = { comments: [], earlier: false }
     P.watchComments('task-a')
     await settle()
     threads[0].deliver(structuredClone(page))
