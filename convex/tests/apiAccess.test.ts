@@ -810,6 +810,22 @@ describe('apiAccess.page', () => {
     ).toEqual(['Café sync'])
   })
 
+  it('finds a connected app by the client id its row shows, as well as by the full id', async () => {
+    const t = newT()
+    const f = await fixture(t)
+    await t.run((ctx) =>
+      plantConnection(ctx, uuid(), f.viewer, 'Linear', { client_id: '4f1c2b7d9e0a1c3fa90e' }),
+    )
+    await runInAuth(t, (ctx) =>
+      ctx.db.insert('oauthClient', { clientId: '4f1c2b7d9e0a1c3fa90e', redirectUris: [] }),
+    )
+    // the row shows "client 4f1c…a90e" (lib/clientLabel.ts)
+    for (const search of ['4f1c…a90e', 'client 4f1c', '4f1c2b7d9e0a', 'a90e'])
+      expect(await names(t, f, { search })).toEqual(['Linear'])
+    // "client" names every connected app the page lists
+    expect(await names(t, f, { search: 'client' })).toEqual(['Claude', 'ChatGPT', 'Linear'])
+  })
+
   it('resolves the person directly: a member, a removed account named by usage, or unknown', async () => {
     const t = newT()
     const f = await fixture(t)

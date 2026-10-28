@@ -37,6 +37,7 @@ import { credentialAccess, findOAuthClient, tokenExpired } from './lib/access'
 import { openCursorText, sealCursorText } from './lib/archiveCursorSeal'
 import type { ReadCeiling } from './lib/archivedTasks'
 import { billingEnabled, subscriptionFor } from './lib/billingAccess'
+import { clientLabel } from './lib/clientLabel'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import type { CredentialAccess } from './lib/enums'
@@ -604,9 +605,19 @@ type PageAsk = {
 }
 
 /* Whether `row` passes the search: its name, prefix (token prefix, agent
- * key fingerprint or OAuth client id) and person, each as a name key. */
+ * key fingerprint or OAuth client id, also as the row shows it,
+ * lib/clientLabel.ts) and person, each as a name key. */
 const searched = (ask: PageAsk, row: ApiCredential): boolean =>
-  ask.matches([row.name, row.prefix ?? '', row.person].map(nameKey).join('\n'))
+  ask.matches(
+    [
+      row.name,
+      row.prefix ?? '',
+      row.table === 'oauth_connections' && row.prefix !== null ? clientLabel(row.prefix) : '',
+      row.person,
+    ]
+      .map(nameKey)
+      .join('\n'),
+  )
 
 const passesState = (ask: PageAsk, row: ApiCredential): boolean =>
   ask.state === 'all' || row.state === 'active'
@@ -1119,8 +1130,9 @@ const vState = v.union(v.literal('all'), v.literal('active'))
  * the credentials without calls by name key and credential id. `kind` keeps
  * one table, `state` 'active' only working credentials, `person` one
  * profile's credentials, and `search` those whose name, prefix (token
- * prefix, agent key fingerprint or OAuth client id) or person holds every
- * whitespace-separated fragment of it, ignoring case and accents
+ * prefix, agent key fingerprint, or OAuth client id in full and as the row
+ * shows it) or person holds every whitespace-separated fragment of it,
+ * ignoring case and accents
  * (lib/search.ts allWordsMatcher over lib/nameKey.ts nameKey). `cursor` is
  * an earlier page's `next`, for the same period, filters and search.
  *

@@ -4,6 +4,7 @@
    follow the organization's date format (lib/dates.ts). */
 import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../../convex/_generated/api'
+import { clientLabel } from '../../convex/lib/clientLabel'
 import { fmtDateYear } from './dates'
 import { expiryLabel, lastDay } from './tokenExpiry'
 
@@ -113,9 +114,7 @@ export function lastUsedLabel(iso: string | null, now: Date): string {
     credential has none. */
 export function credentialPrefix(row: ApiCredentialRow): string | null {
   if (row.prefix === null) return null
-  if (row.table !== 'oauth_connections') return row.prefix
-  const id = row.prefix
-  return `client ${id.length > 12 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id}`
+  return row.table === 'oauth_connections' ? clientLabel(row.prefix) : row.prefix
 }
 
 /** The tag beside the prefix for a credential that does not work: "revoked
