@@ -1486,6 +1486,70 @@ describe('the backfill', () => {
     }
   })
 
+  it('goes on inside the profile it stopped in when a profile is created before it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+    const person = (profileId: string) =>
+      t.run(async (ctx) => {
+        await ctx.db.insert('profiles', {
+          id: profileId,
+          org_id: f.org.id,
+          name: `Person ${profileId.slice(-2)}`,
+          initials: 'PE',
+          color: '#7a7ad0',
+          org_role: 'admin',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+      })
+    // the first profile, with nothing to do, and the third, with three items
+    await person(id(10))
+    await person(id(30))
+    for (const task of await tasks(t, f, 3))
+      await plantMessage(t, { org_id: f.org.id, recipient_id: id(30), issue_id: task.id })
+    const whole = await backfill(t, { dry_run: true })
+    Object.assign(RUN, { ms: 0, profiles: 1 })
+    Object.assign(BUILD, { pairs: 1, room: 0 })
+    // calls until one stops inside the third profile
+    const start = async (rebuild: boolean) => {
+      const calls = []
+      let cursor: string | null = null
+      for (;;) {
+        const got = await backfill(t, { dry_run: !rebuild, rebuild, cursor })
+        calls.push(got)
+        cursor = got.cursor
+        if (cursor?.includes(id(30))) return { calls, cursor }
+      }
+    }
+    const dry = await start(false)
+    // a profile between the first and the third, created meanwhile
+    await person(id(20))
+    let cursor: string | null = dry.cursor
+    for (let n = 0; n < 50 && cursor !== null; n++) {
+      const got = await backfill(t, { dry_run: true, cursor })
+      dry.calls.push(got)
+      cursor = got.cursor
+    }
+    expect(sum(dry.calls, 'items')).toBe(whole.items)
+    // a rebuild resets the third profile once, however the pages move
+    await backfillAll(t, { dry_run: false })
+    const rebuilt = await start(true)
+    expect(await stateOf(t, id(30))).toMatchObject({ built: false })
+    const through = (await stateOf(t, id(30)))?.built_through
+    expect(through).toBeDefined()
+    await person(id(25))
+    const next = await backfill(t, { dry_run: false, rebuild: true, cursor: rebuilt.cursor })
+    const state = await stateOf(t, id(30))
+    // it went on from where it was, rather than from its first task again
+    expect(state?.built || (state?.built_through ?? '') > (through ?? '')).toBe(true)
+    let more: string | null = next.cursor
+    for (let n = 0; n < 50 && more !== null; n++)
+      more = (await backfill(t, { dry_run: false, rebuild: true, cursor: more })).cursor
+    expect(await drift(t)).toEqual([])
+  })
+
   it('a check counts every row no message makes, however many there are', async () => {
     const t = newT()
     const f = await withOrg(t)

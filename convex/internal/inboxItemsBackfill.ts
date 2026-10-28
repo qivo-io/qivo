@@ -318,6 +318,15 @@ export const profilePage = internalQuery({
   handler: async (ctx, { after }) => await profilesAfter(ctx, after),
 })
 
+/** One profile with its state, or null when it is gone. */
+export const profileState = internalQuery({
+  args: { profile_id: v.string() },
+  handler: async (ctx, { profile_id }): Promise<ProfileState | null> => {
+    const profile = await byId(ctx, 'profiles', profile_id)
+    return profile === null ? null : await stateOf(ctx, profile)
+  },
+})
+
 /** Whether a profile still needs a build: its items are not complete and it
  * has messages or a state. A half-built profile whose messages are all gone
  * still needs its last step, which deletes the rows left and marks it
@@ -588,6 +597,9 @@ const profilePageRef = makeFunctionReference<
   { after: string | null },
   { profiles: ProfileState[]; done: boolean }
 >('internal/inboxItemsBackfill:profilePage')
+const profileStateRef = makeFunctionReference<'query', { profile_id: string }, ProfileState | null>(
+  'internal/inboxItemsBackfill:profileState',
+)
 const checkRef = makeFunctionReference<'query', { profile_id: string; after?: string }, Checked>(
   'internal/inboxItemsBackfill:check',
 )
@@ -776,6 +788,17 @@ export const run = internalAction({
     try {
       phases: for (;;) {
         if (late()) break
+        if (pos.phase === 'profiles' && pos.at !== undefined) {
+          // the profile a call stopped inside goes on first, by id, before
+          // the pages after the last profile finished, so a profile created
+          // between them meanwhile cannot take its place; such a new one
+          // needs no build (model/inboxItems.ts ensureInboxState)
+          const profile = await ctx.runQuery(profileStateRef, { profile_id: pos.at.id })
+          if (profile !== null && wanted(profile) && !(await visit(profile))) break
+          pos = { phase: 'profiles', after: pos.at.id }
+          worked = true
+          continue
+        }
         if (pos.phase === 'profiles') {
           const page = await ctx.runQuery(profilePageRef, { after: pos.after })
           for (const profile of page.profiles) {
