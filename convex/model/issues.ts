@@ -59,7 +59,8 @@
  * `badRequest` sentences name machine fields where useful to API callers.
  * Both surfaces call the work items tasks and their children subtasks. */
 
-import { v } from 'convex/values'
+import type { TransactionMetrics } from 'convex/server'
+import { getDocumentSize, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
@@ -544,7 +545,9 @@ function chainSight(ctx: QueryCtx, chain: readonly Doc<'issues'>[], bulk?: BulkU
  * transaction. The walk asks every `every` queries or rows, and sooner once
  * the rows since it last asked may hold `bytes`. Past `room` the change is
  * refused with SUBTREE_TOO_LARGE rather than failing on one of Convex's
- * limits for one transaction. Tests lower these. */
+ * limits for one transaction. Before each task a change patches, it is
+ * refused already when that patch would take it past `room`
+ * (assertStepRoom). Tests lower these. */
 export const SUBTREE_ROOM = { room: 0.9, every: 64, bytes: 512 * 1024 }
 
 /** The refusal of a change whose task and subtasks are too large for one
@@ -587,12 +590,44 @@ function roomCheck(ctx: QueryCtx, refusal = SUBTREE_TOO_LARGE): (bytes?: number)
 const subtaskBytes = (task: Doc<'issues'>): number =>
   3 * (task.title.length + (task.description?.length ?? 0)) + 1024
 
-/* An upper estimate of what patching a task reads for roomCheck
- * (model/descriptions.ts patchTask): the task row again, and its
- * description row twice, as it is found and as its patch reads it again.
- * Neither is larger than the task row while issues.description holds the
- * text. */
-const patchBytes = (task: Doc<'issues'>): number => 3 * subtaskBytes(task)
+/* The bytes one step of a change reads and writes. */
+type StepCost = { reads: number; writes: number }
+
+/* What patching task `task` reads and writes (model/descriptions.ts
+ * patchTask): the task row again and its description row twice, as it is
+ * found and as its write reads it again, and both rows written. Neither
+ * row is larger than the task row while issues.description holds the
+ * text, so a task stored before the caps, which can come close to Convex's
+ * document size limit, costs about three times that limit in reads. */
+const patchCost = (task: Doc<'issues'>): StepCost => {
+  const size = getDocumentSize(task)
+  return { reads: 3 * size, writes: 2 * size }
+}
+
+/* Refuses with `refusal` unless the transaction can take one more step
+ * that costs `step`, and `reserve` bytes of reads after the change, and
+ * still stay within SUBTREE_ROOM's `room` of each of Convex's limits. Run
+ * before each task a change patches: one step can read more than the
+ * share of the limits that `room` keeps back for the rest of the change,
+ * so asking only whether the transaction has passed `room` (assertRoom)
+ * could let the step pass Convex's limit. */
+async function assertStepRoom(
+  ctx: QueryCtx,
+  step: StepCost,
+  refusal: string,
+  reserve = 0,
+): Promise<void> {
+  const metrics = await ctx.meta.getTransactionMetrics()
+  const more: Partial<Record<keyof TransactionMetrics, number>> = {
+    bytesRead: step.reads + reserve,
+    bytesWritten: step.writes,
+  }
+  const full = (Object.keys(metrics) as Array<keyof TransactionMetrics>).some((key) => {
+    const { used, remaining } = metrics[key]
+    return used + (more[key] ?? 0) > (used + remaining) * SUBTREE_ROOM.room
+  })
+  if (full) throw rule(refusal)
+}
 
 /* The active subtasks of the task `parentId`, one by_parent_archived range,
  * at most LIMITS.subtasks.max rows. */
@@ -2153,6 +2188,7 @@ export async function moveIssueCore(
   }
   const before = { ...issue }
   // the task and its description row (model/descriptions.ts)
+  await assertStepRoom(ctx, patchCost(issue), MOVE_TOO_LARGE)
   await patchTask(ctx.db, issue, w)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   // the stored-byte totals follow the task and every subtask it carries, at
@@ -2160,7 +2196,7 @@ export async function moveIssueCore(
   // (model/storageTotals.ts), before the room checks of the carry below
   await moveTaskFiles(ctx, [issue, ...carried], target)
   for (const row of carried) {
-    await assertRoom(ctx, MOVE_TOO_LARGE)
+    await assertStepRoom(ctx, patchCost(row), MOVE_TOO_LARGE)
     // a carried subtask's stamps change as the task's above; the row as it
     // lands is built from the patch rather than read again, which would
     // read every carried subtask a second time
@@ -2296,7 +2332,7 @@ async function archiveSubtree(
     if (!editable) throw rule(ARCHIVE_CASCADE_RULE)
   }
   for (const c of kids) {
-    await room(patchBytes(c))
+    await assertStepRoom(ctx, patchCost(c), SUBTREE_TOO_LARGE)
     await patchTask(ctx.db, c, { archived_at: now, updated_at: now })
     // built from the patch rather than read again, which would read every
     // subtask a second time

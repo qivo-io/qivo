@@ -1004,6 +1004,48 @@ describe("the copies at Convex's limits", () => {
     for (const kid of moved) expect(kid.project_id).toBe(away.id)
     expect(await expectDescriptions(t, f.org.id)).toBe(2 + 30 + LIMITS.subtasks.max)
   }, 300_000)
+
+  it('refuses a subtree of descriptions stored before the caps before one patch could pass the read limit', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const away = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    // five subtasks with descriptions of about 1 MiB from before the caps:
+    // the change reads them in about 5 MiB, and each patch reads about
+    // 3 MiB more, its task again and its row twice, so the fourth would pass
+    // 16 MiB though the transaction had used less than 90 percent before it
+    const legacy = 'x'.repeat(1_040_000)
+    const root = await plantIssue(t, base)
+    for (let i = 0; i < 5; i++)
+      await plantIssue(t, { ...base, parent_id: root.id, description: legacy })
+    const before = await snapshot(t)
+    const archive = await expectRefusal(
+      as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: root.id }),
+      'rule',
+    )
+    expect(archive.data.message).toBe(SUBTREE_TOO_LARGE)
+    const move = await expectRefusal(
+      as(t, f.admin).mutation(api.issues.move, {
+        org_id: f.org.id,
+        id: root.id,
+        project_id: away.id,
+      }),
+      'rule',
+    )
+    expect(move.data.message).toBe(MOVE_TOO_LARGE)
+    expect(await snapshot(t)).toEqual(before)
+    // two such subtasks archive with their rows
+    const small = await plantIssue(t, base)
+    const kids: string[] = []
+    for (let i = 0; i < 2; i++)
+      kids.push((await plantIssue(t, { ...base, parent_id: small.id, description: legacy })).id)
+    await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: small.id })
+    for (const id of kids) expect((await rowOf(t, id)).archived_at).toBeDefined()
+  }, 120_000)
 })
 
 /* ------------------------------------------------------------- backfill */
