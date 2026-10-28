@@ -42,7 +42,7 @@ import {
   postArchiveReason,
 } from '../model/comments'
 import type { Via } from '../model/deletedItems'
-import { descriptionOf, descriptionsOf, projectTextsOf } from '../model/descriptions'
+import { descriptionOf, descriptionsOf, projectTextReader } from '../model/descriptions'
 import {
   assertLive,
   assertTaskExpected,
@@ -523,8 +523,8 @@ export const DESCRIPTION_READS_RESERVE = {
 
 /** How many tasks' description rows a search reads one by one, in the
  * order the list answers, before it reads the active description rows of
- * the rest's projects, one range a project, instead (model/descriptions.ts
- * projectTextsOf). Tests lower it. */
+ * the rest's projects in chunks instead (model/descriptions.ts
+ * projectTextReader). Tests lower it. */
 export const TEXT_TASK_READS = { reads: 1000 }
 
 /** The refusal for a search whose task descriptions do not fit in one
@@ -541,10 +541,12 @@ export const DESCRIPTIONS_TOO_LARGE =
  * matches among them, and stops once the leading tasks hold `want`. The
  * first TEXT_TASK_READS it reads one range a task (model/descriptions.ts
  * descriptionsOf); past them it reads the active rows of the rest's
- * projects (projectTextsOf), checking after each text whether the page is
- * complete, and then the texts those ranges did not hold one by one, all
+ * projects a chunk at a time, each from the project of the first task still
+ * without a text (projectTextReader), checking after each chunk whether the
+ * page is complete, and a task no range holds a row for on its own, all
  * within the request's room less `reserve`, which a step of texts read one
- * by one may pass by one task's text, within COMMENT_READS_RESERVE. A search whose texts do not fit
+ * by one may pass by one task's text, within COMMENT_READS_RESERVE. A
+ * search whose texts do not fit
  * is refused with DESCRIPTIONS_TOO_LARGE, so no answer leaves a text
  * unread, and one that has no room left for the first text with the
  * sentence of what the list read before (ACTIVE_TASKS_TOO_LARGE or
@@ -582,9 +584,25 @@ async function searchedTexts(
     return end === found.length || matched >= want
   }
   let reads = 0
-  let ranged = false
+  let ranges: ReturnType<typeof projectTextReader> | null = null
+  // the first read is checked for room, so a search that never had any
+  // says what the list read before
+  let checked = false
   while (!settle()) {
-    if (reads === 0) await assertTextRoom(ctx, room)
+    if (!checked) {
+      await assertTextRoom(ctx, room)
+      checked = true
+    }
+    if (ranges !== null) {
+      const step = await ranges.step()
+      if (step === 'full') throw badRequest(DESCRIPTIONS_TOO_LARGE)
+      if (step === 'read') continue
+      // no range holds the text of the task the page waits on
+      const read = await descriptionsOf(ctx, [found[end]], room, steps)
+      if (read === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)
+      for (const [id, text] of read) texts.set(id, text)
+      continue
+    }
     // the next tasks without a text, as many as could still complete the
     // page with the matches between them
     const next: Doc<'issues'>[] = []
@@ -598,11 +616,9 @@ async function searchedTexts(
       if (plain(task) || (text !== undefined && described(task, text))) between++
       else if (text === undefined) next.push(task)
     }
-    if (!ranged && reads + next.length > TEXT_TASK_READS.reads) {
-      ranged = true
+    if (reads + next.length > TEXT_TASK_READS.reads) {
       const rest = found.slice(end).filter((task) => !plain(task) && !texts.has(task.id))
-      if (!(await projectTextsOf(ctx, rest, room, texts, settle)))
-        throw badRequest(DESCRIPTIONS_TOO_LARGE)
+      ranges = projectTextReader(ctx, rest, room, texts)
       continue
     }
     const read = await descriptionsOf(ctx, next, room, steps)
@@ -750,7 +766,7 @@ async function listedActiveTasks(
  * tasks the other fields miss without them and the labels, in list order,
  * and only until the tasks read hold the page (searchedTexts): one range a
  * task for the first TEXT_TASK_READS, then the active descriptions of the
- * rest's projects, one range a project. A search whose descriptions do not fit in one
+ * rest's projects in chunks, in list order. A search whose descriptions do not fit in one
  * request is refused with DESCRIPTIONS_TOO_LARGE. Label names are read only
  * for the tasks of those that still miss (activeLabelNames), and a search
  * whose label assignments do not fit in one request is refused with

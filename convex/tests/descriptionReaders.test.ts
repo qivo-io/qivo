@@ -920,7 +920,9 @@ describe('real limits', () => {
     expect(broad.documents).toBeLessThan(4000 + 300)
     const rare = await restMetrics(t, f, { limit: 20, search: 'QN-10001' })
     expect(rare.refused).toBeNull()
-    expect(rare.ranges).toBeLessThan(TEXT_TASK_READS.reads + 200)
+    // one range a task for TEXT_TASK_READS, then one a chunk of 32 rows,
+    // far from one a task
+    expect(rare.ranges).toBeLessThan(1500)
   }, 300_000)
 
   it('a REST search of one row stops reading once its page is complete, before descriptions that would not fit', async () => {
@@ -993,6 +995,51 @@ describe('real limits', () => {
       expect((await restTasks(t, { ...agent, search: 'QN-10007' })).map((row) => row.id)).toEqual([
         ids[7],
       ])
+    } finally {
+      TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
+    }
+  }, 300_000)
+
+  it('a REST search past TEXT_TASK_READS follows its tasks across projects and stops at its page', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // in list order: a task in one project that misses, the match in the
+    // other project, then 1,000 tasks back in the first project with rows of
+    // 16 KiB, 16 MiB in all, which reading a project to its end before the
+    // next would read
+    const plant = (num: number, project_id: string, text: string) => ({
+      doc: taskDoc(f, num, undefined, { project_id }),
+      text,
+    })
+    const firstTwo = [
+      plant(70_000, f.sub.id, 'Wire the board'),
+      plant(70_001, f.sub2.id, 'Wire the zephyr'),
+    ]
+    const tail = Array.from({ length: 1000 }, (_, i) =>
+      plant(70_002 + i, f.sub.id, `Notes ${i} `.padEnd(16 * 1024, 'n')),
+    )
+    const all = [...firstTwo, ...tail]
+    for (let from = 0; from < all.length; from += 200)
+      await t.run(async (ctx) => {
+        for (const { doc, text } of all.slice(from, from + 200)) {
+          await ctx.db.insert('issues', doc)
+          await ctx.db.insert('issue_descriptions', {
+            issue_id: doc.id,
+            org_id: f.org.id,
+            project_id: doc.project_id,
+            description: text,
+          })
+        }
+      })
+    TEXT_TASK_READS.reads = 0
+    try {
+      const agent = { callerId: f.agent.id, access: 'read' as const }
+      expect(
+        (await restTasks(t, { ...agent, search: 'zephyr', limit: '1' })).map((row) => row.id),
+      ).toEqual([firstTwo[1].doc.id])
+      const metrics = await restMetrics(t, f, { limit: 1, search: 'zephyr' })
+      // one chunk of the first project, not its 16 MiB
+      expect(metrics.mib).toBeLessThan(2)
     } finally {
       TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
     }

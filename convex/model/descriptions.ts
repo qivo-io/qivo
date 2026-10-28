@@ -80,7 +80,7 @@ type TextOwner = Owner & Pick<Doc<'issues'>, 'description'>
  * the copies on the first row (patchTask), so that is the first row, unless
  * a rollback left the first row's copies stale beside a second row; then
  * this is the row the active range of the task's project holds too
- * (projectTextsOf), so every reader takes the same one. It reads two rows at
+ * (projectTextReader), so every reader takes the same one. It reads two rows at
  * most, so TEXT_DOCUMENTS is a true bound. A task with three or more rows,
  * which repeated rollbacks leave and internal/descriptionsBackfill reports
  * as a duplicate, may read differently there when only a later row holds
@@ -179,60 +179,109 @@ export async function descriptionsOf(
   return out
 }
 
-/** Adds to `texts` the text of each of `tasks` (descriptionOf) that the
- * active description rows of its project hold (by_project_archived), one
- * range a project, the projects in the order `tasks` first names them. A
- * caller that needs most of a project's rows so pays one range and each row
- * once, rather than one range a task. The range holds the rows of every
- * active task of the project, so a caller that needs a few reads them
- * through descriptionsOf instead. Of a task's rows the first in the range
- * that holds its copies is the one shownRow takes. A task the ranges hold
- * no such row for, one without a row or whose rows' copies are stale, which
- * only a rollback leaves, is left out, for the caller to read on its own.
- * After each text it adds it asks `enough`, and it stops once that answers
- * true. It checks `room` before each range and as its rows add up, so it
- * passes `room` by one row at most. Answers false when `room` ran out
- * first. */
-export async function projectTextsOf(
+/* How many new rows one step of a project's range reads at most
+ * (projectTextReader), so a step reads little past the rows a page needs. */
+const TEXT_RANGE_ROWS = 64
+
+/** What one step of a projectTextReader did: read a chunk of rows, found
+ * the first task without a text in no range, which the caller reads on its
+ * own, found every task with a text, or found no room. */
+export type RangeStep = 'read' | 'missing' | 'done' | 'full'
+
+/** A reader that adds to `texts` the text of each of `tasks`, in the order
+ * the caller answers them, that the active description rows of its project
+ * hold (by_project_archived). A caller that needs most of a project's rows
+ * so pays a range a chunk of rows rather than one a task; one that needs a
+ * few reads them through descriptionsOf instead. Each step reads the next
+ * chunk of TEXT_RANGE_ROWS rows at most from the project of the first of
+ * `tasks` still without a text, going on where that project's last chunk
+ * ended, so the reads follow the tasks' order across projects and a caller
+ * that stops once its tasks are settled reads little past them. Of a
+ * task's rows the first in the range that holds its copies is the one
+ * shownRow takes. A project's range starts at the creation time of the
+ * first task it is read for, since a task's rows are created with it or
+ * after it, so it skips the rows of the tasks before, which a caller read
+ * already. A task whose project's range ends without such a row, one
+ * without a row, one whose rows' copies are stale, which only a rollback
+ * leaves, or one whose row is older than it, kept from a task deleted for
+ * good that held its id, is `missing`, for the caller to read on its own. A
+ * step is one index range, read a row at a time, and it checks `room` before
+ * the range and as its rows add up, so it passes `room` by one row at
+ * most. */
+export function projectTextReader(
   ctx: QueryCtx,
-  tasks: readonly TextOwner[],
+  tasks: readonly (TextOwner & Pick<Doc<'issues'>, '_creationTime'>)[],
   room: ReadCeiling,
   texts: Map<string, string>,
-  enough: () => boolean,
-): Promise<boolean> {
+): { step(): Promise<RangeStep> } {
   const wanted = new Map(tasks.map((task) => [task.id, task]))
-  const projects = [...new Set(tasks.map((task) => task.project_id))]
-  // the rows the reads left under `room` hold at Convex's size limit,
-  // counted down and asked again once spent
-  let allowance = 0
-  const spend = async (): Promise<boolean> => {
-    if (--allowance >= 0) return true
-    const m = await ctx.meta.getTransactionMetrics()
-    allowance = Math.min(
-      room.documents - m.documentsRead.used,
-      Math.floor((room.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
-    )
-    return allowance-- > 0
-  }
-  for (const projectId of projects) {
-    const m = await ctx.meta.getTransactionMetrics()
-    if (room.ranges - m.databaseQueries.used < 1) return false
-    if (!(await spend())) return false
-    const rows = ctx.db
-      .query('issue_descriptions')
-      .withIndex('by_project_archived', (q) =>
-        q.eq('project_id', projectId).eq('archived_at', undefined),
-      )
-    for await (const row of rows) {
-      const task = wanted.get(row.issue_id)
-      if (task !== undefined && !texts.has(task.id) && holdsCopies(row, task)) {
-        texts.set(task.id, row.description)
-        if (enough()) return true
+  // where each project's range goes on from: the creation time read
+  // through, the rows of that time read already, and whether it ended
+  const ranges = new Map<
+    string,
+    { from: number; seen: Set<Id<'issue_descriptions'>>; done: boolean }
+  >()
+  // tasks before `next` have a text
+  let next = 0
+  return {
+    async step() {
+      while (next < tasks.length && texts.has(tasks[next].id)) next++
+      const first = tasks[next]
+      if (first === undefined) return 'done'
+      let range = ranges.get(first.project_id)
+      if (range === undefined) {
+        range = { from: first._creationTime, seen: new Set(), done: false }
+        ranges.set(first.project_id, range)
       }
-      if (!(await spend())) return false
-    }
+      if (range.done) return 'missing'
+      const m = await ctx.meta.getTransactionMetrics()
+      if (room.ranges - m.databaseQueries.used < 1) return 'full'
+      // the rows the reads left under `room` hold at Convex's size limit,
+      // counted down and asked again once spent
+      let allowance = 0
+      const spend = async (): Promise<boolean> => {
+        if (--allowance >= 0) return true
+        const now = await ctx.meta.getTransactionMetrics()
+        allowance = Math.min(
+          room.documents - now.documentsRead.used,
+          Math.floor((room.bytes - now.bytesRead.used) / DOCUMENT_MAX_BYTES),
+        )
+        return allowance-- > 0
+      }
+      if (!(await spend())) return 'full'
+      const { from, seen } = range
+      const read = ctx.db
+        .query('issue_descriptions')
+        .withIndex('by_project_archived', (q) =>
+          q
+            .eq('project_id', first.project_id)
+            .eq('archived_at', undefined)
+            .gte('_creationTime', from),
+        )
+      // the rows at the last new row's time, which the next step starts with
+      let last: number | undefined
+      let tied: Id<'issue_descriptions'>[] = []
+      let fresh = 0
+      for await (const row of read) {
+        if (!seen.has(row._id)) {
+          const task = wanted.get(row.issue_id)
+          if (task !== undefined && !texts.has(task.id) && holdsCopies(row, task))
+            texts.set(task.id, row.description)
+          if (row._creationTime !== last) tied = []
+          last = row._creationTime
+          tied.push(row._id)
+          if (++fresh >= TEXT_RANGE_ROWS) {
+            range.seen = new Set([...(last === from ? seen : []), ...tied])
+            range.from = last
+            return 'read'
+          }
+        }
+        if (!(await spend())) return 'full'
+      }
+      range.done = true
+      return 'read'
+    },
   }
-  return true
 }
 
 /** The texts of a task write's `before` and `after` documents, '' for none.
