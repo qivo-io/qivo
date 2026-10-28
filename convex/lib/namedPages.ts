@@ -3,20 +3,23 @@
  * picker lists of Settings and the REST and MCP lists. A list is one index,
  * or a merge of several (mergeNamed), in the order of a name key (a label's
  * name_lower, a profile's or a team's name_key, lib/nameKey.ts) and then of
- * the field the index orders equal keys by, the tie: the id for the name
- * indexes that end in one, _creationTime for an index that ends in nothing
- * else. Convex orders index strings by their UTF-8 bytes, which is code
- * point order (compareKeys), so the order differs from JavaScript's `<` for
- * characters past the Basic Multilingual Plane and from the browser's
+ * the fields the index orders equal keys by, the tie: the id or profile_id
+ * for the name indexes that end in one, and _creationTime and _id, Convex's
+ * implicit last fields, for an index that ends in nothing else. Convex does
+ * not promise distinct creation times, so a tie on _creationTime alone could
+ * skip a row. Positions compare as Convex orders values (compareNamed), with
+ * strings in UTF-8 byte order, so the order differs from JavaScript's `<`
+ * for characters past the Basic Multilingual Plane and from the browser's
  * localeCompare.
  *
  * A position names a place in that order, just after the row with its key
  * and tie, so a batch reads only what follows it, however long the list, and
  * a row created, renamed or deleted between batches lands where its name puts
- * it. A position resumes as two index ranges, the rest of its key and then
- * every greater key (indexAfter). Callers get positions sealed together with
- * the list and its scope (namedCursor, lib/archiveCursorSeal.ts), so a cursor
- * is opaque and opens only for the list and scope it came from.
+ * it. Each list names the index ranges that hold everything past a position
+ * (NamedIndex), and indexAfter leaves out any row they hold that is not past
+ * it. Callers get positions sealed together with the list and its scope
+ * (namedCursor, lib/archiveCursorSeal.ts), so a cursor is opaque and opens
+ * only for the list and scope it came from.
  *
  * A batch (readBatch) reads rows in order and keeps those its caller wants,
  * under a read guard (readGuard) that counts every index range and document
@@ -32,18 +35,20 @@
  * ARCHIVE_RESERVE reads model/comments.ts when it loads. */
 
 import type { GenericDocument, TransactionMetric } from 'convex/server'
-import { getDocumentSize } from 'convex/values'
+import { compareValues, getDocumentSize } from 'convex/values'
 import type { QueryCtx } from '../_generated/server'
 import { openCursorText, sealCursorText } from './archiveCursorSeal'
 import type { ReadCeiling } from './archivedTasks'
 
 /* ------------------------------------------------------------- the order */
 
+/** The fields an index orders equal name keys by, in index order. */
+export type NamedTie = readonly (number | string)[]
+
 /** A place in a name-ordered list, just after the row with this `key`, the
- * list's name key, and this `tie`, the field its index orders equal keys by.
- * Keys need not be unique: rows stored with one key before a list's names
- * were unique still page, one tie at a time. */
-export type NamedAt<Tie extends number | string = number | string> = { key: string; tie: Tie }
+ * list's name key, and this `tie`. Keys need not be unique: rows stored with
+ * one key before a list's names were unique still page, one tie at a time. */
+export type NamedAt<Tie extends NamedTie = NamedTie> = { key: string; tie: Tie }
 
 /** A row of a name-ordered list with its position. */
 export type Named<Row> = { row: Row; at: NamedAt }
@@ -56,69 +61,49 @@ export const STOPPED = 'stopped'
  * STOPPED. */
 export type NamedStream<Row> = AsyncIterable<Named<Row> | typeof STOPPED>
 
-/* A UTF-16 unit moved so that units compare in code point order. Only
- * characters past U+FFFF use surrogates, so surrogates go above every other
- * unit, and U+E000 to U+FFFF move down into the space they leave. */
-const codePointRank = (unit: number): number =>
-  unit >= 0xe000 ? unit - 0x800 : unit >= 0xd800 ? unit + 0x2000 : unit
-
-/** Compares two keys in code point order, which is the order of their UTF-8
- * bytes and so the order of an index. JavaScript's `<` compares UTF-16 units
- * instead and puts a character past U+FFFF before one in U+E000 to U+FFFF.
- * Answers a negative number, 0 or a positive number. */
-export function compareKeys(a: string, b: string): number {
-  const n = Math.min(a.length, b.length)
-  for (let i = 0; i < n; i++) {
-    const x = a.charCodeAt(i)
-    const y = b.charCodeAt(i)
-    if (x !== y) return codePointRank(x) - codePointRank(y)
-  }
-  return a.length - b.length
-}
-
-/* Ties in index order: numbers by value, strings as keys, and numbers
- * before strings, as Convex orders types. One list never mixes them. */
-function compareTies(a: number | string, b: number | string): number {
-  if (typeof a === 'number') return typeof b === 'number' ? a - b : -1
-  return typeof b === 'number' ? 1 : compareKeys(a, b)
-}
-
-/** Compares two positions in index order, by key and then by tie. Every
- * comparison of positions in this module goes through it, since a merge or a
- * `through` check that disagreed with the index would skip rows. */
+/** Compares two positions as an index orders them, key first and then the
+ * tie's fields, with Convex's own order of values (compareValues), which
+ * compares strings by their UTF-8 bytes. JavaScript's `<` compares UTF-16
+ * units instead and puts a character past U+FFFF before one in U+E000 to
+ * U+FFFF. Every comparison of positions in this module goes through it,
+ * since a merge or a `through` check that disagreed with the index would
+ * skip rows. Answers a negative number, 0 or a positive number. */
 export const compareNamed = (a: NamedAt, b: NamedAt): number =>
-  compareKeys(a.key, b.key) || compareTies(a.tie, b.tie)
+  compareValues([a.key, ...a.tie], [b.key, ...b.tie])
 
 /* ----------------------------------------------------------- the streams */
 
-/** One index read in name order: the whole list from its start, the rows
- * with a position's key and a greater tie, the rows with a greater key, and
- * the position of a row. */
-export type NamedIndex<Row, Tie extends number | string> = {
+/** One index read in name order: the whole list from its start; the index
+ * ranges, in order, that hold every row past a position, such as the rest of
+ * its key and then every greater key, which may also hold rows at or before
+ * it; and the position of a row. */
+export type NamedIndex<Row, Tie extends NamedTie> = {
   all: () => AsyncIterable<Row>
-  sameKey: (at: NamedAt<Tie>) => AsyncIterable<Row>
-  pastKey: (at: NamedAt<Tie>) => AsyncIterable<Row>
+  after: (at: NamedAt<Tie>) => readonly (() => AsyncIterable<Row>)[]
   at: (row: Row) => NamedAt<Tie>
 }
 
 /** The rows of `index` after `after`, or from its start, as a stream for
- * readBatch. It reads one index range from the start, or two after a
- * position, each opened only once the one before it is read to its end, and
- * only when `mayOpen` agrees; when it does not, the stream hands out STOPPED
- * and ends. */
-export function indexAfter<Row, Tie extends number | string>(
+ * readBatch. It reads the index's ranges in turn, each opened only once the
+ * one before it is read to its end, and only when `mayOpen` agrees; when it
+ * does not, the stream hands out STOPPED and ends. A row a range holds that
+ * is not past `after`, such as one created at the same instant before it,
+ * is read and left out. */
+export function indexAfter<Row, Tie extends NamedTie>(
   index: NamedIndex<Row, Tie>,
   after: NamedAt<Tie> | null,
 ): (mayOpen: () => Promise<boolean>) => NamedStream<Row> {
-  const ranges =
-    after === null ? [index.all] : [() => index.sameKey(after), () => index.pastKey(after)]
+  const ranges = after === null ? [index.all] : index.after(after)
   return async function* (mayOpen) {
     for (const range of ranges) {
       if (!(await mayOpen())) {
         yield STOPPED
         return
       }
-      for await (const row of range()) yield { row, at: index.at(row) }
+      for await (const row of range()) {
+        const at = index.at(row)
+        if (after === null || compareNamed(at, after) > 0) yield { row, at }
+      }
     }
   }
 }
@@ -186,18 +171,21 @@ export const NAMED_READ: ReadCeiling = { ranges: 2000, documents: 8000, bytes: 4
  * documents at Convex's 1 MiB size limit. */
 export const NAMED_RESERVE: ReadCeiling = { ranges: 16, documents: 64, bytes: 4 * 1024 * 1024 }
 
-/** The ceiling of one call, as transaction totals: NAMED_READ past what the
- * request has read so far, never more than the request has left less
- * NAMED_RESERVE. Reads after this point count against it, also those made
- * before a walk starts. */
-export async function namedCeiling(ctx: QueryCtx): Promise<ReadCeiling> {
+/** A ceiling as transaction totals: `share` past what the request has read
+ * so far, NAMED_READ for a walk of a list, never more than the request has
+ * left less NAMED_RESERVE. Reads after this point count against it, also
+ * those made before a walk starts. */
+export async function namedCeiling(
+  ctx: QueryCtx,
+  share: ReadCeiling = NAMED_READ,
+): Promise<ReadCeiling> {
   const m = await ctx.meta.getTransactionMetrics()
-  const under = (metric: TransactionMetric, share: number, reserve: number) =>
-    Math.min(metric.used + share, metric.used + metric.remaining - reserve)
+  const under = (metric: TransactionMetric, more: number, reserve: number) =>
+    Math.min(metric.used + more, metric.used + metric.remaining - reserve)
   return {
-    ranges: under(m.databaseQueries, NAMED_READ.ranges, NAMED_RESERVE.ranges),
-    documents: under(m.documentsRead, NAMED_READ.documents, NAMED_RESERVE.documents),
-    bytes: under(m.bytesRead, NAMED_READ.bytes, NAMED_RESERVE.bytes),
+    ranges: under(m.databaseQueries, share.ranges, NAMED_RESERVE.ranges),
+    documents: under(m.documentsRead, share.documents, NAMED_RESERVE.documents),
+    bytes: under(m.bytesRead, share.bytes, NAMED_RESERVE.bytes),
   }
 }
 
@@ -354,8 +342,13 @@ const CURSOR_VERSION = 1
 
 /* The most a position takes as JSON, its key and its tie: a key of a few KB,
  * since a name key of NAME_MAX units can take 2,640 bytes, and JSON writes a
- * control character as six. */
+ * control character as six, and a tie of a time and an id or two. The scope,
+ * whose normalized search NFKD can make many times longer than the search,
+ * counts on its own (openNamedCursor). */
 const POSITION_BYTES = 8 * 1024
+
+/* The most fields a tie has. */
+const TIE_FIELDS = 4
 
 /* The tag GCM-SIV adds to a sealed text (lib/archiveCursorSeal.ts). */
 const TAG_BYTES = 16
@@ -363,18 +356,23 @@ const TAG_BYTES = 16
 /** `at` as a cursor of the list named `list` with scope `scope`, such as an
  * organization's id and a normalized search: a versioned JSON array of the
  * list, the scope and the position, sealed (lib/archiveCursorSeal.ts), so it
- * shows nothing and opens only for that list and scope (openNamedCursor). */
+ * shows nothing and opens only for that list and scope (openNamedCursor). A
+ * tie holds at most four fields. */
 export async function namedCursor(
   list: string,
   scope: readonly string[],
   at: NamedAt,
 ): Promise<string> {
+  if (at.tie.length > TIE_FIELDS) throw new Error('a tie holds at most four fields')
   return await sealCursorText(JSON.stringify([CURSOR_VERSION, list, scope, [at.key, at.tie]]))
 }
 
 /** The position `text` names, or null when it is not a cursor namedCursor
  * wrote for `list` and `scope`: it does not open, it names another list or
- * scope, or it is longer than any such cursor can be. Callers refuse null. */
+ * scope, or it is longer than any such cursor can be, a bound that grows
+ * with the scope, so a long normalized search never makes the server refuse
+ * its own cursor. Callers refuse null, and check that the tie has the fields
+ * their index orders by. */
 export async function openNamedCursor(
   text: string,
   list: string,
@@ -398,6 +396,11 @@ export async function openNamedCursor(
   if (JSON.stringify(from) !== JSON.stringify(scope)) return null
   if (!Array.isArray(at) || at.length !== 2) return null
   const [key, tie] = at as unknown[]
-  if (typeof key !== 'string') return null
-  return typeof tie === 'number' || typeof tie === 'string' ? { key, tie } : null
+  if (typeof key !== 'string' || !Array.isArray(tie) || tie.length > TIE_FIELDS) return null
+  const fields: (number | string)[] = []
+  for (const field of tie as unknown[]) {
+    if (typeof field !== 'number' && typeof field !== 'string') return null
+    fields.push(field)
+  }
+  return { key, tie: fields }
 }

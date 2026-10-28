@@ -9,21 +9,23 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { archiveCursorText, ceilingGuard } from '../lib/archivedTasks'
 import {
-  compareKeys,
   compareNamed,
   indexAfter,
   mergeNamed,
   NAMED_READ,
   type Named,
   type NamedAt,
+  type NamedBatch,
   type NamedIndex,
   type NamedStream,
+  type NamedTie,
   namedCursor,
   openNamedCursor,
   readBatch,
   readGuard,
   STOPPED,
 } from '../lib/namedPages'
+import { type LabelTie, labelIndex } from '../model/labels'
 import { NOW, newT, type T, uuid } from './helpers.setup'
 
 /* Cursors are sealed with a key derived from BETTER_AUTH_SECRET
@@ -52,22 +54,6 @@ const plantKeys = (t: T, orgId: string, keys: readonly string[]) =>
     }
   })
 
-/* The labels of `orgId` as a NamedIndex, as model/labels.ts reads them. */
-const labels = (ctx: QueryCtx, orgId: string): NamedIndex<Doc<'labels'>, number> => ({
-  all: () => ctx.db.query('labels').withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId)),
-  sameKey: (at) =>
-    ctx.db
-      .query('labels')
-      .withIndex('by_org_name_lower', (q) =>
-        q.eq('org_id', orgId).eq('name_lower', at.key).gt('_creationTime', at.tie),
-      ),
-  pastKey: (at) =>
-    ctx.db
-      .query('labels')
-      .withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId).gt('name_lower', at.key)),
-  at: (label) => ({ key: label.name_lower, tie: label._creationTime }),
-})
-
 /* Keys that differ only past their first character: characters past U+FFFF
  * (surrogate pairs in UTF-16) against characters in U+E000 to U+FFFF, where
  * JavaScript's `<` and UTF-8 byte order disagree, and the edges around them. */
@@ -89,12 +75,12 @@ const TRICKY = [
 async function walk(t: T, orgId: string, limit: number, through: NamedAt | null = null) {
   const keys: string[] = []
   const batches: { ended: boolean; stopped: boolean; n: number }[] = []
-  let after: NamedAt<number> | null = null
+  let after: NamedAt<LabelTie> | null = null
   for (let round = 0; round < 1000; round++) {
     const batch = await t.run(async (ctx) => {
       const ceiling = { ranges: 1e9, documents: 1e9, bytes: 1e12 }
       return await readBatch(ctx, {
-        stream: indexAfter(labels(ctx, orgId), after),
+        stream: indexAfter(labelIndex(ctx, orgId), after),
         keep: async (label: Doc<'labels'>) => label.name_lower,
         limit,
         through,
@@ -105,10 +91,19 @@ async function walk(t: T, orgId: string, limit: number, through: NamedAt | null 
     batches.push({ ended: batch.ended, stopped: batch.stopped, n: batch.rows.length })
     if (batch.ended) return { keys, batches }
     if (through !== null && compareNamed(batch.at, through) === 0) return { keys, batches }
-    after = { key: batch.at.key, tie: Number(batch.at.tie) }
+    after = labelAt(batch.at)
   }
   throw new Error('the walk did not end')
 }
+
+/* A position readBatch reached in a label list, with its tie's types. */
+const labelAt = (at: NamedAt): NamedAt<LabelTie> => ({
+  key: at.key,
+  tie: [Number(at.tie[0]), String(at.tie[1])],
+})
+
+/* Keys in index order, as positions without a tie. */
+const byKey = (a: string, b: string) => compareNamed({ key: a, tie: [] }, { key: b, tie: [] })
 
 describe('the order', () => {
   it('compares keys as the index orders them, unlike JavaScript', async () => {
@@ -123,20 +118,20 @@ describe('the order', () => {
           .collect()
       ).map((label) => label.name_lower),
     )
-    expect([...TRICKY].sort(compareKeys)).toEqual(indexed)
+    expect([...TRICKY].sort(byKey)).toEqual(indexed)
     // JavaScript's own order puts the face before the fullwidth A, the index after it
     const [face, fullwidth] = ['a\u{1F600}', 'a\u{FF21}']
     expect([...TRICKY].sort()).not.toEqual(indexed)
     expect(indexed.indexOf(fullwidth)).toBeLessThan(indexed.indexOf(face))
     expect(face < fullwidth).toBe(true)
-    expect(compareKeys(face, fullwidth)).toBeGreaterThan(0)
+    expect(byKey(face, fullwidth)).toBeGreaterThan(0)
   })
 
   it('pages through those keys one row a batch and through a cursor in their midst', async () => {
     const t = newT()
     const orgId = uuid()
     await plantKeys(t, orgId, TRICKY)
-    const sorted = [...TRICKY].sort(compareKeys)
+    const sorted = [...TRICKY].sort(byKey)
     for (const limit of [1, 2, 3, 25]) {
       expect((await walk(t, orgId, limit)).keys, `limit ${limit}`).toEqual(sorted)
     }
@@ -147,18 +142,66 @@ describe('the order', () => {
         .withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId).eq('name_lower', 'a\u{1F600}'))
         .unique(),
     )
-    const through = { key: 'a\u{1F600}', tie: astral?._creationTime ?? 0 }
+    const through = { key: 'a\u{1F600}', tie: [astral?._creationTime ?? 0, astral?._id ?? ''] }
     const upTo = await walk(t, orgId, 100, through)
     expect(upTo.keys).toEqual(sorted.slice(0, sorted.indexOf('a\u{1F600}') + 1))
     expect(upTo.keys).toContain('a\u{FF21}')
   })
 
-  it('orders equal keys by their tie, numbers before strings', () => {
-    expect(compareNamed({ key: 'x', tie: 2 }, { key: 'x', tie: 10 })).toBeLessThan(0)
-    expect(compareNamed({ key: 'x', tie: 'b' }, { key: 'x', tie: 'a' })).toBeGreaterThan(0)
-    expect(compareNamed({ key: 'x', tie: 9 }, { key: 'x', tie: 'a' })).toBeLessThan(0)
-    expect(compareNamed({ key: 'w', tie: 9 }, { key: 'x', tie: 1 })).toBeLessThan(0)
-    expect(compareNamed({ key: 'x', tie: 1 }, { key: 'x', tie: 1 })).toBe(0)
+  it('orders equal keys by their tie, field by field, numbers before strings', () => {
+    const at = (key: string, ...tie: NamedTie) => ({ key, tie })
+    expect(compareNamed(at('x', 2), at('x', 10))).toBeLessThan(0)
+    expect(compareNamed(at('x', 'b'), at('x', 'a'))).toBeGreaterThan(0)
+    expect(compareNamed(at('x', 9), at('x', 'a'))).toBeLessThan(0)
+    expect(compareNamed(at('w', 9), at('x', 1))).toBeLessThan(0)
+    expect(compareNamed(at('x', 1, 'b'), at('x', 1, 'c'))).toBeLessThan(0)
+    expect(compareNamed(at('x', 1, 'z'), at('x', 2, 'a'))).toBeLessThan(0)
+    expect(compareNamed(at('x', 1, 'a'), at('x', 1, 'a'))).toBe(0)
+  })
+
+  it('resumes inside a creation instant that rows of one key share', async () => {
+    // rows as an index holds them: key, creation time, id
+    type Entry = { key: string; time: number; id: string }
+    const entries: Entry[] = [
+      { key: 'k', time: 1, id: 'a' },
+      { key: 'k', time: 1, id: 'b' },
+      { key: 'k', time: 1, id: 'c' },
+      { key: 'k', time: 2, id: 'a' },
+      { key: 'l', time: 1, id: 'a' },
+    ]
+    const range = (keep: (e: Entry) => boolean) =>
+      async function* () {
+        for (const e of entries) if (keep(e)) yield e
+      }
+    // the three ranges model/labels.ts labelIndex reads after a position
+    const index: NamedIndex<Entry, readonly [number, string]> = {
+      all: range(() => true),
+      after: ({ key, tie: [time] }) => [
+        range((e) => e.key === key && e.time === time),
+        range((e) => e.key === key && e.time > time),
+        range((e) => e.key > key),
+      ],
+      at: (e) => ({ key: e.key, tie: [e.time, e.id] }),
+    }
+    const t = newT()
+    const seen: string[] = []
+    let after: NamedAt<readonly [number, string]> | null = null
+    for (let round = 0; round < 10; round++) {
+      const from: NamedAt<readonly [number, string]> | null = after
+      const batch: NamedBatch<string> = await t.run((ctx) =>
+        readBatch(ctx, {
+          stream: indexAfter(index, from),
+          keep: async (e: Entry) => `${e.key}${e.time}${e.id}`,
+          limit: 1,
+          through: null,
+          ceiling: { ranges: 1e9, documents: 1e9, bytes: 1e12 },
+        }),
+      )
+      seen.push(...batch.rows)
+      if (batch.ended) break
+      after = { key: batch.at.key, tie: [Number(batch.at.tie[0]), String(batch.at.tie[1])] }
+    }
+    expect(seen).toEqual(['k1a', 'k1b', 'k1c', 'k2a', 'l1a'])
   })
 })
 
@@ -183,7 +226,7 @@ function memory(
         return
       }
       pulled[from]++
-      yield { row: { name: key, from }, at: { key, tie } } satisfies Named<Row>
+      yield { row: { name: key, from }, at: { key, tie: [tie] } } satisfies Named<Row>
     }
   })()
 }
@@ -301,14 +344,14 @@ describe('readBatch', () => {
       )
     expect(await read(25)).toEqual({
       rows: ['a', 'b'],
-      at: { key: 'b', tie: 1 },
+      at: { key: 'b', tie: [1] },
       ended: false,
       stopped: true,
     })
     // a full batch whose peek stops is full, not stopped, and not the end
     expect(await read(2)).toEqual({
       rows: ['a', 'b'],
-      at: { key: 'b', tie: 1 },
+      at: { key: 'b', tie: [1] },
       ended: false,
       stopped: false,
     })
@@ -334,13 +377,13 @@ describe('readBatch', () => {
     const orgId = uuid()
     await plantKeys(t, orgId, someKeys)
     const seen: string[] = []
-    let after: NamedAt<number> | null = null
+    let after: NamedAt<LabelTie> | null = null
     let calls = 0
     for (;;) {
       calls++
       const batch = await t.run((ctx) =>
         readBatch(ctx, {
-          stream: indexAfter(labels(ctx, orgId), after),
+          stream: indexAfter(labelIndex(ctx, orgId), after),
           keep: async (label: Doc<'labels'>) => label.name_lower,
           limit: 25,
           through: null,
@@ -352,7 +395,7 @@ describe('readBatch', () => {
       if (batch.ended) break
       expect(batch.stopped).toBe(true)
       expect(batch.rows).toHaveLength(1)
-      after = { key: batch.at.key, tie: Number(batch.at.tie) }
+      after = labelAt(batch.at)
     }
     expect(seen).toEqual(someKeys)
     // one row a call, and a last call that finds the end
@@ -366,7 +409,7 @@ describe('readBatch', () => {
     const batch = await t.run(async (ctx) => {
       const m = await ctx.meta.getTransactionMetrics()
       return await readBatch(ctx, {
-        stream: indexAfter(labels(ctx, orgId), null),
+        stream: indexAfter(labelIndex(ctx, orgId), null),
         // every row looks up two labels, which the ceiling's ranges count
         keep: async (label: Doc<'labels'>, guard) => {
           for (let i = 0; i < 2; i++) {
@@ -411,7 +454,7 @@ describe('readBatch', () => {
       }
       const m = await real()
       const batch = await readBatch(ctx, {
-        stream: indexAfter(labels(ctx, orgId), null),
+        stream: indexAfter(labelIndex(ctx, orgId), null),
         keep: async () => null,
         limit: 25,
         through: null,
@@ -432,7 +475,7 @@ describe('readBatch', () => {
         bytes: after.bytesRead.used + NAMED_READ.bytes,
       })
       await old.range()
-      for await (const _label of labels(ctx, orgId).all()) await old.document()
+      for await (const _label of labelIndex(ctx, orgId).all()) await old.document()
       return { sized, old: n }
     })
     console.log(
@@ -453,10 +496,10 @@ describe('readBatch', () => {
         .withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId).eq('name_lower', 'k05'))
         .unique(),
     )
-    const through = { key: 'k05', tie: k05?._creationTime ?? 0 }
+    const through = { key: 'k05', tie: [k05?._creationTime ?? 0, k05?._id ?? ''] }
     const batch = await t.run((ctx) =>
       readBatch(ctx, {
-        stream: indexAfter(labels(ctx, orgId), null),
+        stream: indexAfter(labelIndex(ctx, orgId), null),
         keep: async (label: Doc<'labels'>) => label.name_lower,
         limit: 100,
         through,
@@ -471,7 +514,7 @@ describe('readBatch', () => {
     })
     const after = await t.run((ctx) =>
       readBatch(ctx, {
-        stream: indexAfter(labels(ctx, orgId), null),
+        stream: indexAfter(labelIndex(ctx, orgId), null),
         keep: async (label: Doc<'labels'>) => label.name_lower,
         limit: 100,
         through,
@@ -507,7 +550,7 @@ describe('readGuard', () => {
 /* ----------------------------------------------------------- the cursors */
 
 describe('named cursors', () => {
-  const at = { key: 'café \u{1F600}', tie: 1767225600000.123 }
+  const at = { key: 'café \u{1F600}', tie: [1767225600000.123, 'a-label-id'] }
 
   it('open for their own list and scope only', async () => {
     const text = await namedCursor('labels.settings', ['org', 'cafe'], at)
@@ -517,8 +560,12 @@ describe('named cursors', () => {
     expect(await openNamedCursor(text, 'labels.picker', ['org', 'cafe'])).toBeNull()
     expect(await openNamedCursor(text, 'labels.settings', ['other', 'cafe'])).toBeNull()
     expect(await openNamedCursor(text, 'labels.settings', ['org', 'caf'])).toBeNull()
-    const id = await namedCursor('people', ['org'], { key: 'ann', tie: 'a-uuid' })
-    expect(await openNamedCursor(id, 'people', ['org'])).toEqual({ key: 'ann', tie: 'a-uuid' })
+    const id = await namedCursor('people', ['org'], { key: 'ann', tie: ['a-uuid'] })
+    expect(await openNamedCursor(id, 'people', ['org'])).toEqual({ key: 'ann', tie: ['a-uuid'] })
+    // a tie of more than four fields is never written
+    await expect(
+      namedCursor('people', ['org'], { key: 'ann', tie: [1, 2, 3, 4, 5] }),
+    ).rejects.toThrow()
   })
 
   it('refuse a changed, malformed, archive or overlong text', async () => {
@@ -539,7 +586,7 @@ describe('named cursors', () => {
       expect(await openNamedCursor(bad, 'labels.picker', scope), bad.slice(0, 40)).toBeNull()
     }
     // a key of a few KB still opens
-    const long = { key: '\u{1F600}'.repeat(1000), tie: 5 }
+    const long = { key: '\u{1F600}'.repeat(1000), tie: [5] }
     const big = await namedCursor('labels.picker', scope, long)
     expect(await openNamedCursor(big, 'labels.picker', scope)).toEqual(long)
   })

@@ -41,12 +41,24 @@ import { deleteLabelCount, insertLabelCount, tallyAssignment } from './labelCoun
 export const LABEL_RIGHTS_UNCHECKED =
   'you belong to too many projects and teams for Qivo to check in one request whether you may create labels; an organization admin can create this label'
 
+declare const checkedCreator: unique symbol
+
+/** What assertLabelCreator answers for a profile it let add labels, which a
+ * caller that checks early passes to createLabelCore, so one create reads the
+ * caller's rights once. Only assertLabelCreator makes one. */
+export type LabelCreator = { readonly profile_id: string; readonly [checkedCreator]: true }
+
 /** Refuses a caller who may not add labels to the organization's list, and
- * one whose rights the check could not finish reading (LABEL_RIGHTS_UNCHECKED). */
-export async function assertLabelCreator(ctx: QueryCtx, me: Doc<'profiles'>): Promise<void> {
+ * one whose rights the check could not finish reading (LABEL_RIGHTS_UNCHECKED).
+ * Answers the proof that `me` may, for createLabelCore. */
+export async function assertLabelCreator(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+): Promise<LabelCreator> {
   const may = await canWriteOrgLabels(ctx, me)
   if (may === null) throw rule(LABEL_RIGHTS_UNCHECKED)
   if (!may) throw forbidden('no label access in this organization')
+  return { profile_id: me.id } as LabelCreator
 }
 
 /** Refuses a caller who may not rename, recolor or delete labels. Checked
@@ -107,23 +119,36 @@ export async function listLabelsCore(ctx: QueryCtx, orgId: string): Promise<Doc<
   return rows.sort((a, b) => a.name_lower.localeCompare(b.name_lower) || a.id.localeCompare(b.id))
 }
 
-/* The labels of the organization `orgId` in the order of by_org_name_lower:
- * name_lower, then _creationTime, the index's implicit last field, so labels
- * stored with one name_lower before names were unique page one by one. */
-const labelIndex = (ctx: QueryCtx, orgId: string): NamedIndex<Doc<'labels'>, number> => ({
-  all: () => ctx.db.query('labels').withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId)),
-  sameKey: (at) =>
-    ctx.db
-      .query('labels')
-      .withIndex('by_org_name_lower', (q) =>
-        q.eq('org_id', orgId).eq('name_lower', at.key).gt('_creationTime', at.tie),
-      ),
-  pastKey: (at) =>
-    ctx.db
-      .query('labels')
-      .withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId).gt('name_lower', at.key)),
-  at: (label) => ({ key: label.name_lower, tie: label._creationTime }),
-})
+/** A label's place in name order: its time and id after its name_lower. */
+export type LabelTie = readonly [created: number, id: string]
+
+/** The labels of the organization `orgId` in the order of by_org_name_lower:
+ * name_lower, then _creationTime and _id, the index's implicit last fields.
+ * Labels stored with one name_lower before names were unique page one by
+ * one, and so would two that also share a creation time, which Convex does
+ * not promise distinct. After a position it reads the rest of its instant,
+ * leaving out the ids not past it (lib/namedPages.ts indexAfter), the rest
+ * of its name, then every greater name, as lib/archivedTasks.ts
+ * projectArchive reads the archive. */
+export function labelIndex(ctx: QueryCtx, orgId: string): NamedIndex<Doc<'labels'>, LabelTie> {
+  const labels = () => ctx.db.query('labels')
+  return {
+    all: () => labels().withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId)),
+    after: ({ key, tie: [created] }) => [
+      () =>
+        labels().withIndex('by_org_name_lower', (q) =>
+          q.eq('org_id', orgId).eq('name_lower', key).eq('_creationTime', created),
+        ),
+      () =>
+        labels().withIndex('by_org_name_lower', (q) =>
+          q.eq('org_id', orgId).eq('name_lower', key).gt('_creationTime', created),
+        ),
+      () =>
+        labels().withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId).gt('name_lower', key)),
+    ],
+    at: (label) => ({ key: label.name_lower, tie: [label._creationTime, label._id] }),
+  }
+}
 
 /** The app's label lists, which cursors name (lib/namedPages.ts): Settings >
  * Labels (labels.settingsPage) and the task label picker (labels.picker). */
@@ -142,8 +167,8 @@ export type LabelListAsk = {
   /** the search, trimmed */
   search: string
   scope: readonly string[]
-  after: NamedAt<number> | null
-  through: NamedAt<number> | null
+  after: NamedAt<LabelTie> | null
+  through: NamedAt<LabelTie> | null
 }
 
 /**
@@ -162,11 +187,19 @@ export async function labelListAsk(
 ): Promise<LabelListAsk> {
   const search = limitedText(LIMITS.search, a.search ?? '')
   const scope = [orgId, nameKey(search)]
-  const open = async (text: string | undefined): Promise<NamedAt<number> | null> => {
+  const open = async (text: string | undefined): Promise<NamedAt<LabelTie> | null> => {
     if (text === undefined) return null
     const at = await openNamedCursor(text, list, scope)
-    if (at === null || typeof at.tie !== 'number') throw badRequest(NOT_LABEL_CURSOR)
-    return { key: at.key, tie: at.tie }
+    const [created, id] = at?.tie ?? []
+    if (
+      at === null ||
+      at.tie.length !== 2 ||
+      typeof created !== 'number' ||
+      typeof id !== 'string'
+    ) {
+      throw badRequest(NOT_LABEL_CURSOR)
+    }
+    return { key: at.key, tie: [created, id] }
   }
   const after = await open(a.after)
   const through = await open(a.through)
@@ -269,7 +302,10 @@ export async function findLabel(
  * app's client-made id; machine callers pass a new one. Refuses an id that
  * is not a lowercase UUID (lib/db.ts assertNewRowId), a caller who may not
  * add labels, a blank or long name, a color that is not #rrggbb, a used id
- * and a name the organization already has in any case.
+ * and a name the organization already has in any case. A caller that ran
+ * assertLabelCreator for `me` first, such as REST and MCP before they read
+ * the request, passes its answer as `creator`, and the rights are not read
+ * again.
  */
 export async function createLabelCore(
   ctx: MutationCtx,
@@ -280,11 +316,13 @@ export async function createLabelCore(
     color: string
     now: string
     provenance?: string
+    creator?: LabelCreator
   },
 ): Promise<Doc<'labels'>> {
   const { me, id, now } = a
   assertNewRowId(id)
-  await assertLabelCreator(ctx, me)
+  if (a.creator === undefined) await assertLabelCreator(ctx, me)
+  else if (a.creator.profile_id !== me.id) throw new Error('a label creator is checked for itself')
   const name = labelName(a.name)
   const color = labelColor(a.color)
   // A deleted label's id stays taken until its assignments are gone, or the

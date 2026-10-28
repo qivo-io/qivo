@@ -8,7 +8,6 @@ import type { ConvexError } from 'convex/values'
 import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import type { ReadCeiling } from './archivedTasks'
 import { byId } from './db'
 import { type AccessLevel, type CredentialAccess, LEVEL_RANK, type OrgRole } from './enums'
 import { badRequest, forbidden, notFound, type Refusal } from './functions'
@@ -1162,20 +1161,28 @@ async function sameOrgTeamMembers(ctx: QueryCtx, teamId: string, orgId: string):
   return members.map((member) => member.profile_id)
 }
 
-/** How many of the person's own rows canWriteOrgLabels reads before it
- * answers that it could not finish: the projects they lead, their grants,
- * their team memberships and the shares of those teams. A grant or a
- * membership exists for each project or team someone gave the person, so
- * real people hold far fewer. Each row adds at most one lookup of a project
- * or a team, so 2,000 rows with their lookups read at most 4,000 documents,
- * an eighth of Convex's 32,000; a grant or membership is about 0.2 KB, and
- * the read guard counts every document at its size. A membership also opens
- * one range for its team's shares, so when most rows are memberships the
- * ranges can pass NAMED_READ's 2,000 (lib/namedPages.ts), and the read guard
- * stops the check first. A person with 2,000 viewer grants and no proof
- * reads 2,000 rows, about 350 KB in three ranges, and gets false; one more
- * grant gets null, not a limit error. Tests lower it. */
-export const LABEL_WRITE_READ = { rows: 2000 }
+/** What canWriteOrgLabels reads before it answers that it could not
+ * finish, counted from its own start: `rows` of the person's own rows (the
+ * projects they lead, their grants, their team memberships and the shares of
+ * those teams), and a read ceiling of its own for those rows with their
+ * lookups. A grant or a membership exists for each project or team someone
+ * gave the person, so real people hold far fewer rows. Each row adds at most
+ * one lookup of a project or a team, and a membership one more range for its
+ * team's shares, so the rows' cost in ranges is one to three a row and the
+ * ceiling's 1,500 ranges usually ends the check first. The task label picker
+ * runs the check and then a walk of NAMED_READ (lib/namedPages.ts), so the
+ * two read at most 1,500 + 2,000 ranges, 6,000 + 8,000 documents and
+ * 4 + 4 MiB, inside Convex's 4,096 ranges, 32,000 documents and 16 MiB with
+ * room for the call's other reads and NAMED_RESERVE. A person with 2,000
+ * viewer grants and no proof reads 2,000 rows, about 350 KB in three ranges,
+ * and gets false; one more grant gets null, not a limit error. Tests lower
+ * these. */
+export const LABEL_WRITE_READ = {
+  rows: 2000,
+  ranges: 1500,
+  documents: 6000,
+  bytes: 4 * 1024 * 1024,
+}
 
 /**
  * Whether `me` may add labels to the organization's list: true, false, or
@@ -1188,18 +1195,18 @@ export const LABEL_WRITE_READ = { rows: 2000 }
  * Grants and shares on sub-projects, and `viewer` ones, never count. This is
  * the rule of projectLevelsForOrg over every meta, read from the person's
  * own rows only, and it stops at the first proof. It answers null past
- * LABEL_WRITE_READ rows or once its read guard finds `ceiling` reached
- * (lib/namedPages.ts namedCeiling by default), in a mutation too. Renaming,
- * recoloring and deleting follow canManageOrgLabels.
+ * LABEL_WRITE_READ's rows or once its read guard finds LABEL_WRITE_READ's
+ * ceiling reached, counted from the check's start and never past the
+ * request's room less NAMED_RESERVE (lib/namedPages.ts namedCeiling), in a
+ * mutation too. Renaming, recoloring and deleting follow canManageOrgLabels.
  */
 export async function canWriteOrgLabels(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
-  ceiling?: ReadCeiling,
 ): Promise<boolean | null> {
   if (!isOrgStaff(me)) return false
   if (me.org_role === 'admin') return true
-  const guard = readGuard(ctx, ceiling ?? (await namedCeiling(ctx)))
+  const guard = readGuard(ctx, await namedCeiling(ctx, LABEL_WRITE_READ))
   let rows = 0
   // counts one of the person's own rows, and answers whether the check may go on
   const counted = async (row: GenericDocument) =>

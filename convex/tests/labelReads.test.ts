@@ -661,52 +661,12 @@ describe('canWriteOrgLabels', () => {
       'rule',
       new RegExp(LABEL_RIGHTS_UNCHECKED.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
     )
-    const http = t as unknown as {
-      fetch(
-        path: string,
-        init: { method: string; headers: Record<string, string>; body: string },
-      ): Promise<{ status: number; text(): Promise<string> }>
-    }
-    const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
-      http.fetch(path, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${SECRET}`,
-          'Content-Type': 'application/json',
-          ...headers,
-        },
-        body: JSON.stringify(body),
-      })
-    const rest = await post('/v1/labels', { name: 'New', color: '#4C9AFF' })
+    const rest = await post(t, SECRET, '/v1/labels', { name: 'New', color: '#4C9AFF' })
     expect({ status: rest.status, text: await rest.text() }).toEqual({
       status: 400,
       text: JSON.stringify({ error: LABEL_RIGHTS_UNCHECKED }),
     })
-    const mcp = await post(
-      '/mcp',
-      {
-        jsonrpc: '2.0',
-        method: 'tools/call',
-        params: {
-          name: 'set_label',
-          arguments: { name: 'New', color: '#4C9AFF' },
-          _meta: {
-            'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-            'io.modelcontextprotocol/clientInfo': { name: 'label-reads', version: '1.0.0' },
-            'io.modelcontextprotocol/clientCapabilities': {},
-          },
-        },
-        id: 1,
-      },
-      {
-        Accept: 'application/json, text/event-stream',
-        'MCP-Protocol-Version': '2026-07-28',
-        'Mcp-Method': 'tools/call',
-        'Mcp-Name': 'set_label',
-      },
-    )
-    expect(mcp.status).toBe(200)
-    expect((JSON.parse(await mcp.text()) as { result: unknown }).result).toMatchObject({
+    expect(await mcpTool(t, SECRET, 'set_label', { name: 'New', color: '#4C9AFF' })).toMatchObject({
       content: [{ type: 'text', text: LABEL_RIGHTS_UNCHECKED }],
       isError: true,
     })
@@ -733,7 +693,7 @@ describe('canWriteOrgLabels', () => {
       }
     })
     expect(await t.run((ctx) => canWriteOrgLabels(ctx, member))).toBe(false)
-    NAMED_READ.ranges = 6
+    LABEL_WRITE_READ.ranges = 6
     expect(await t.run((ctx) => canWriteOrgLabels(ctx, member))).toBeNull()
   })
 })
@@ -970,5 +930,139 @@ describe('real limits', () => {
     const pickerBatch = await picker(t, person, f.org.id)
     expect(pickerBatch).toMatchObject({ can_create: null })
     expect(pickerBatch.rows).toHaveLength(LIST_BATCH)
+
+    // staff in about LABEL_WRITE_READ.rows teams, each sharing a sub-project
+    // as User, which costs three ranges a membership and proves nothing: the
+    // check stops at its own ceiling, and a picker search that reads the
+    // walk's whole share after it still answers inside the limits
+    const member = await staffSeat(t, f, 'Member of many')
+    await plantTeams(t, f, member, 2000, f.sub.id)
+    const both = await measured(t, async (ctx) => {
+      const may = await canWriteOrgLabels(ctx, member)
+      const checked = await ctx.meta.getTransactionMetrics()
+      const ask = await labelListAsk('labels.picker', f.org.id, { search: 'nomatch' })
+      const batch = await labelBatch(ctx, ask, {
+        ceiling: await namedCeiling(ctx),
+        row: async (label) => labelJson(label),
+      })
+      return { may, checkRanges: checked.databaseQueries.used, stopped: batch.stopped }
+    })
+    console.log('canWriteOrgLabels over 2,000 shared teams, then a picker search', both)
+    expect(both.out).toMatchObject({ may: null, stopped: true })
+    expect(both.out.checkRanges).toBeLessThanOrEqual(LABEL_WRITE_READ.ranges + 4)
+    expect(both.read.ranges).toBeLessThan(4096 - 16)
+    const searched = await picker(t, member, f.org.id, { search: 'nomatch' })
+    expect(searched).toMatchObject({ can_create: null, rows: [], stopped: true })
+  }, 300_000)
+
+  it("reads the caller's rights once in a REST or MCP create whose proof takes most of the request", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // a proof past 700 shared teams, three ranges each, more than half of
+    // Convex's 4,096, under a ceiling that lets one check read them
+    LABEL_WRITE_READ.ranges = 3000
+    await plantTeams(t, f, f.agent, 700, f.sub.id)
+    await plantTeams(t, f, f.agent, 1, f.meta.id)
+    const proof = await measured(t, (ctx) => canWriteOrgLabels(ctx, f.agent))
+    console.log('canWriteOrgLabels past 700 shared teams', proof)
+    expect(proof.out).toBe(true)
+    expect(proof.read.ranges).toBeGreaterThan(2100)
+    const SECRET = `qva_${'labelone'.repeat(6)}`
+    const key_hash = await sha256hex(SECRET)
+    await t.run((ctx) =>
+      ctx.db.insert('agent_keys', {
+        id: uuid(),
+        profile_id: f.agent.id,
+        name: 'drive',
+        key_prefix: SECRET.slice(0, 11),
+        key_hash,
+        created_at: NOW,
+      }),
+    )
+    const rest = await post(t, SECRET, '/v1/labels', { name: 'Once', color: '#4C9AFF' })
+    expect(rest.status, await rest.text()).toBe(201)
+    const mcp = await mcpTool(t, SECRET, 'set_label', { name: 'Twice', color: '#4C9AFF' })
+    expect(mcp).not.toHaveProperty('isError')
+    const names = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('labels')
+          .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+          .collect()
+      ).map((label) => label.name),
+    )
+    expect(names.sort()).toEqual(['Once', 'Twice'])
   }, 300_000)
 })
+
+/** `n` teams of the fixture's organization that `me` belongs to, each
+ * sharing the project `projectId` with User access. */
+async function plantTeams(t: T, f: OrgFixture, me: Doc<'profiles'>, n: number, projectId: string) {
+  for (let from = 0; from < n; from += 1000) {
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(n, from + 1000); i++) {
+        const team = uuid()
+        await ctx.db.insert('teams', {
+          id: team,
+          org_id: f.org.id,
+          name: `Team ${i}`,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', { team_id: team, profile_id: me.id, is_leader: false })
+        await ctx.db.insert('project_team_access', {
+          project_id: projectId,
+          team_id: team,
+          level: 'user',
+        })
+      }
+    })
+  }
+}
+
+/* The HTTP door of `t`, which convex-test has and its type leaves out. */
+type Http = {
+  fetch(
+    path: string,
+    init: { method: string; headers: Record<string, string>; body: string },
+  ): Promise<{ status: number; text(): Promise<string> }>
+}
+
+/** A POST of `body` as JSON to `path` with the bearer `secret`. */
+const post = (t: T, secret: string, path: string, body: unknown, headers = {}) =>
+  (t as unknown as Http).fetch(path, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  })
+
+/** The result of one MCP tool call over HTTP with the bearer `secret`. */
+async function mcpTool(t: T, secret: string, name: string, args: Record<string, unknown>) {
+  const res = await post(
+    t,
+    secret,
+    '/mcp',
+    {
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: {
+        name,
+        arguments: args,
+        _meta: {
+          'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+          'io.modelcontextprotocol/clientInfo': { name: 'label-reads', version: '1.0.0' },
+          'io.modelcontextprotocol/clientCapabilities': {},
+        },
+      },
+      id: 1,
+    },
+    {
+      Accept: 'application/json, text/event-stream',
+      'MCP-Protocol-Version': '2026-07-28',
+      'Mcp-Method': 'tools/call',
+      'Mcp-Name': name,
+    },
+  )
+  expect(res.status).toBe(200)
+  return (JSON.parse(await res.text()) as { result: Record<string, unknown> }).result
+}

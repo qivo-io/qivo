@@ -1065,10 +1065,11 @@ export const createLabel = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, keyName: vKeyName, body: v.string() },
   handler: async (ctx, a): Promise<RestLabelJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    await assertLabelCreator(ctx, me)
+    const creator = await assertLabelCreator(ctx, me)
     const f = labelFields(needJson(a.body), true)
     const label = await createLabelCore(ctx, {
       me,
+      creator,
       id: newUuid(),
       name: f.name as string,
       color: f.color as string,

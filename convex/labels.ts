@@ -123,12 +123,11 @@ export const picker = orgQuery({
     can_create?: boolean | null
   }> => {
     const ask = await labelListAsk('labels.picker', ctx.me.org_id, a)
-    const ceiling = await namedCeiling(ctx)
-    // first, so a long search cannot leave the check without room
-    const can_create =
-      ask.after === null ? await canWriteOrgLabels(ctx, ctx.me, ceiling) : undefined
+    // the check under its own ceiling, then the walk under one counted from
+    // after it (lib/access.ts LABEL_WRITE_READ)
+    const can_create = ask.after === null ? await canWriteOrgLabels(ctx, ctx.me) : undefined
     const batch = await labelBatch(ctx, ask, {
-      ceiling,
+      ceiling: await namedCeiling(ctx),
       row: async (label) => labelJson(label),
     })
     return can_create === undefined ? batch : { ...batch, can_create }
