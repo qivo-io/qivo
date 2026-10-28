@@ -14,7 +14,12 @@ import type { Doc } from '../_generated/dataModel'
 import { LIMITS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { rowOf } from '../lib/workspaceParts'
-import { MILESTONE_READ, milestoneProjects, readMilestones } from '../model/milestones'
+import {
+  MILESTONE_READ,
+  MILESTONE_READ_TOO_LARGE,
+  milestoneProjects,
+  readMilestones,
+} from '../model/milestones'
 import {
   as,
   expectRefusal,
@@ -147,6 +152,57 @@ async function shared(t: T, f: OrgFixture, count: number): Promise<string[]> {
     }
     return ids
   })
+}
+
+/* `parents` top-level projects of `children` sub-projects each, with a
+ * milestone on each parent. `who` holds a grant only on each parent's last
+ * sub-project, so the parents show to them for navigation only, and a check
+ * of each reads all its sub-projects. */
+async function navigationOnly(
+  t: T,
+  f: OrgFixture,
+  who: Doc<'profiles'>,
+  parents: number,
+  children: number,
+): Promise<{ ids: string[]; milestones: Doc<'milestones'>[] }> {
+  const ids: string[] = []
+  const milestones: Doc<'milestones'>[] = []
+  for (let p = 0; p < parents; p++)
+    await t.run(async (ctx) => {
+      const project = (extra: Partial<Doc<'projects'>>, n: number) => ({
+        id: uuid(),
+        org_id: f.org.id,
+        type: 'meta' as const,
+        key: `N${p}X${n}`,
+        name: `Nav ${p} ${n}`,
+        description: '',
+        sort_order: n,
+        num: 10_000 * (p + 1) + n,
+        track_delay: false,
+        created_at: NOW,
+        window_key: uuid().slice(0, 8),
+        ...extra,
+      })
+      const parent = project({}, 0)
+      await ctx.db.insert('projects', parent)
+      let last = ''
+      for (let c = 1; c <= children; c++) {
+        const child = project({ type: 'project', parent_id: parent.id }, c)
+        await ctx.db.insert('projects', child)
+        last = child.id
+      }
+      await ctx.db.insert('project_access', { project_id: last, profile_id: who.id, level: 'user' })
+      const _id = await ctx.db.insert('milestones', {
+        id: uuid(),
+        project_id: parent.id,
+        name: `Nav milestone ${p}`,
+        week: plus(MONDAY, p),
+        created_at: NOW,
+      })
+      milestones.push((await ctx.db.get(_id)) as Doc<'milestones'>)
+      ids.push(parent.id)
+    })
+  return { ids, milestones }
 }
 
 /* `f.user`'s guest seat in the other organization, with User access on its
@@ -823,6 +879,26 @@ const measured = (
   })
 
 describe('under Convex limits', () => {
+  it('refuses a read whose navigation-only parents need more reads than the request allows', async () => {
+    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+    const f = await withOrg(t)
+    const { ids, milestones } = await navigationOnly(t, f, f.guest, 5, 600)
+    const guest = as(t, f.guest)
+    const section = { from: MONDAY, side: 'upcoming' as const, limit: 10 }
+    // two of them fit, and their milestones are listed read-only
+    const two = await guest.query(api.milestones.section, { ...section, projects: ids.slice(0, 2) })
+    expect(two.rows.map((r) => r.id)).toEqual(ascending(milestones.slice(0, 2)))
+    // five would read 3,000 sub-projects, past the request's 2,500
+    // documents, so the check stops before it would and refuses
+    for (const call of [
+      guest.query(api.milestones.section, { ...section, projects: ids }),
+      guest.query(api.milestones.between, { projects: ids, from: MONDAY, to: plus(MONDAY, 7) }),
+    ]) {
+      const e = await expectRefusal(call, 'rule', /Choose fewer projects/)
+      expect(e.data.reason).toBe(MILESTONE_READ_TOO_LARGE)
+    }
+  })
+
   it.for([
     { per: 30, completes: true },
     { per: 45, completes: false },

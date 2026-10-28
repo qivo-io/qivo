@@ -29,6 +29,7 @@
  * top-level projects in one order, a batch at a time and inside a read
  * budget, and visibleMilestone answers one milestone by id. */
 
+import type { TransactionMetric, TransactionMetrics } from 'convex/server'
 import { ConvexError, v } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -40,7 +41,13 @@ import {
   projectLevelsOf,
   rootMetaOf,
 } from '../lib/access'
-import { type CeilingGuard, ceilingGuard, type ReadCeiling, roomOf } from '../lib/archivedTasks'
+import {
+  type CeilingGuard,
+  ceilingGuard,
+  type ReadCeiling,
+  readsUnder,
+  roomOf,
+} from '../lib/archivedTasks'
 import { assertNewRowId, byId, insertUnique, usedMoreThan } from '../lib/db'
 import type { DeletedItemState } from '../lib/enums'
 import { trimmedForm } from '../lib/fieldPrints'
@@ -685,6 +692,42 @@ const MILESTONE_RESERVE: ReadCeiling = { ranges: 0, documents: 1, bytes: DOCUMEN
  * megabytes. */
 const FIRST_DAYS_TOO_LARGE = 'the first milestones of these projects do not fit in one read'
 
+/** The share of the request the check of a read's projects
+ * (milestoneProjects) may read, counted from the check's start, as
+ * MILESTONE_READ is for the read after it. Tests lower these. */
+export const MILESTONE_SCOPE: ReadCeiling = {
+  ranges: 2000,
+  documents: 8000,
+  bytes: 4 * 1024 * 1024,
+}
+
+/* The ceiling of a check of projects that starts at `m`: MILESTONE_SCOPE
+ * past what the transaction has read, and at most half of what the request
+ * has left, so the read after it and one navigation check past the ceiling
+ * still fit. */
+const scopeCeiling = (m: TransactionMetrics): ReadCeiling => {
+  const share = (metric: TransactionMetric, more: number) =>
+    metric.used + Math.min(more, Math.floor(metric.remaining / 2))
+  return {
+    ranges: share(m.databaseQueries, MILESTONE_SCOPE.ranges),
+    documents: share(m.documentsRead, MILESTONE_SCOPE.documents),
+    bytes: share(m.bytesRead, MILESTONE_SCOPE.bytes),
+  }
+}
+
+/** The reason of the refusal of a milestone read whose projects need more
+ * reads than one request allows (milestoneProjects). */
+export const MILESTONE_READ_TOO_LARGE = 'milestone_read_too_large'
+
+/* That refusal. The caller can ask again for fewer projects. */
+const readTooLarge = (): ConvexError<Refusal> =>
+  new ConvexError<Refusal>({
+    code: 'rule',
+    reason: MILESTONE_READ_TOO_LARGE,
+    message:
+      'these projects need more reads than one request allows, so Qivo cannot show their milestones at once. Choose fewer projects.',
+  })
+
 /** A place in a milestone order, just after the milestone with this stored
  * day (`week`), name key (lib/nameKey.ts) and id. */
 export type MilestonePosition = { week: string; key: string; id: string }
@@ -760,26 +803,44 @@ function dayBounds(
  * answer tells nothing about projects the caller cannot list. A top-level
  * project the caller sees only to reach one of its sub-projects counts, as
  * the app shows its milestones read-only.
+ *
+ * The check reads within MILESTONE_SCOPE (scopeCeiling). It first asks every
+ * project's level without navigation, a few reads a project, and then, one
+ * project at a time, whether a top-level project the caller holds no level
+ * on shows for navigation, which reads all its sub-projects. Before each of
+ * those it looks at the reads so far, and past the ceiling it refuses the
+ * whole read (MILESTONE_READ_TOO_LARGE) instead of answering for part of the
+ * projects, so the caller can ask for fewer. One navigation check can pass
+ * the ceiling by the sub-projects of its project, as any access check of
+ * that project reads them.
  */
 export async function milestoneProjects(
   ctx: QueryCtx,
   myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
   ids: readonly string[],
 ): Promise<string[]> {
-  const named = await Promise.all([...new Set(ids)].map((id) => byId(ctx, 'projects', id)))
+  const ceiling = scopeCeiling(await ctx.meta.getTransactionMetrics())
+  const unique = [...new Set(ids)]
+  const named = await Promise.all(unique.map((id) => byId(ctx, 'projects', id)))
   const bySeat = new Map<string, Doc<'projects'>[]>()
   for (const project of named)
     if (project !== null && myProfiles.has(project.org_id))
       bySeat.set(project.org_id, [...(bySeat.get(project.org_id) ?? []), project])
   const roots = new Set<string>()
+  // the top-level projects the caller holds no level on, in the order named
+  const navigation: { at: number; project: Doc<'projects'>; levels: ProjectLevels }[] = []
   for (const [orgId, projects] of bySeat) {
     const me = myProfiles.get(orgId)
     if (me === undefined) continue
     const levels = projectLevelsOf(ctx, me, projects)
     const found = await Promise.all(
       projects.map(async (project) => {
-        if (project.archived_at !== undefined || (await levels.level(project.id)) === null)
+        if (project.archived_at !== undefined) return null
+        if ((await levels.level(project.id, false)) === null) {
+          if (project.parent_id === undefined)
+            navigation.push({ at: unique.indexOf(project.id), project, levels })
           return null
+        }
         // a project the caller can see is top-level or directly under one
         const root =
           project.parent_id === undefined ? project : await levels.project(project.parent_id)
@@ -788,8 +849,15 @@ export async function milestoneProjects(
     )
     for (const id of found) if (id !== null) roots.add(id)
   }
+  for (const { project, levels } of navigation.sort((a, b) => a.at - b.at)) {
+    if (!(await readsUnder(ctx, ceiling))) throw readTooLarge()
+    if ((await levels.level(project.id)) !== null) roots.add(project.id)
+  }
   return [...roots]
 }
+
+/* The levels of one seat (lib/access.ts projectLevelsOf). */
+type ProjectLevels = ReturnType<typeof projectLevelsOf>
 
 /* Whether one of the projects `projectIds` holds a milestone the app shows
  * before `day`, read newest first until the first, under `guard`. */
