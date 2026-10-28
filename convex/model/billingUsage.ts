@@ -223,7 +223,9 @@ export const isMonthKey = (key: string): boolean => MONTH_KEY.test(key)
  * billing_usage_accounts row, and for a calendar month the organization's
  * total on the profile's shard (billing_month_totals). Either row is
  * inserted when missing. A paid, pending or older ISO-keyed bucket keeps its
- * total in billing_usage_totals, which recordApiCall counts itself. */
+ * total in billing_usage_totals, which recordApiCall counts itself; this
+ * counts the write in that row's account_writes. Every write here thus moves
+ * a count that only grows (bucketRevision). */
 async function addRankedCalls(
   ctx: MutationCtx,
   orgId: string,
@@ -246,7 +248,15 @@ async function addRankedCalls(
       profile_id: profileId,
       calls,
     })
-  if (!isMonthKey(period)) return
+  if (!isMonthKey(period)) {
+    const totals = await ctx.db
+      .query('billing_usage_totals')
+      .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', period))
+      .unique()
+    // a bucket's first call inserts the row after this, with its calls
+    if (totals) await ctx.db.patch(totals._id, { account_writes: (totals.account_writes ?? 0) + 1 })
+    return
+  }
   const shard = monthShard(profileId)
   const total = await ctx.db
     .query('billing_month_totals')
@@ -254,13 +264,14 @@ async function addRankedCalls(
       q.eq('org_id', orgId).eq('period_start', period).eq('shard', shard),
     )
     .unique()
-  if (total) await ctx.db.patch(total._id, { calls: total.calls + calls })
+  if (total) await ctx.db.patch(total._id, { calls: total.calls + calls, writes: total.writes + 1 })
   else
     await ctx.db.insert('billing_month_totals', {
       org_id: orgId,
       period_start: period,
       shard,
       calls,
+      writes: 1,
     })
 }
 
@@ -367,6 +378,30 @@ export async function periodCalls(
     .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', period))
     .first()
   return used === null ? 0 : null
+}
+
+/** A count of the writes to bucket `period`'s aggregates of organization
+ * `orgId` that only grows while the organization exists: a month's shard
+ * writes, or another bucket's calls and account writes on its
+ * billing_usage_totals row (addRankedCalls), -1 without that row. Two equal
+ * reads mean no aggregate of the bucket was written between them. */
+export async function bucketRevision(
+  ctx: QueryCtx,
+  orgId: string,
+  period: string,
+): Promise<number> {
+  if (isMonthKey(period)) {
+    const shards = await ctx.db
+      .query('billing_month_totals')
+      .withIndex('by_org_period_shard', (q) => q.eq('org_id', orgId).eq('period_start', period))
+      .take(MONTH_TOTAL_SHARDS)
+    return shards.reduce((sum, row) => sum + row.writes, 0)
+  }
+  const totals = await ctx.db
+    .query('billing_usage_totals')
+    .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', period))
+    .unique()
+  return totals === null ? -1 : totals.calls + (totals.account_writes ?? 0)
 }
 
 /** Fixed minute windows use one stable row per subject. A denied call returns

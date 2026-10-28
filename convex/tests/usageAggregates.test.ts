@@ -18,9 +18,11 @@
  * seed are pinned where the rest of their rows are (orgRemovals.test.ts,
  * cascade.test.ts, marketingDemo.test.ts). */
 
+import type { FunctionReturnType } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
+import type { CheckCursor } from '../internal/usageRanksBackfill'
 import * as usageRanks from '../internal/usageRanksBackfill'
 import { nameKey } from '../lib/nameKey'
 import { sha256hex } from '../machine/auth'
@@ -30,6 +32,7 @@ import {
   periodCalls,
   recordApiCall,
   usageRanked,
+  writeUsageRow,
 } from '../model/billingUsage'
 import { as, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
 
@@ -289,20 +292,29 @@ describe('API usage aggregates', () => {
         period_start: MONTH,
         calls: 10 + i,
       })
-    const page = (cursor: string | null) =>
-      t.mutation(internal.internal.usageRanksBackfill.page, { dry_run: false, cursor })
-    let next = await page(null) // ranks the first legacy row
+    // the run's steps: a page read in a query, then its rows ranked by id
+    const scan = (cursor: string | null) =>
+      t.query(internal.internal.usageRanksBackfill.scan, { cursor })
+    const fix = async (ids: Id<'billing_usage'>[]) =>
+      await t.mutation(internal.internal.usageRanksBackfill.fix, { ids })
+    let next = await scan(null) // finds the first legacy row
+    await call(t, f.admin, 'mcp_tokens:legacy-0') // ranks it between the read and the write
+    expect(await fix(next.stale)).toEqual({ rows: 0, calls: 0 })
     await call(t, f.viewer, 'mcp_tokens:legacy-2') // absorbs a row the run has not reached
-    await call(t, f.admin, 'mcp_tokens:legacy-0') // adds one to a row the run ranked
-    next = await page(next.cursor)
+    next = await scan(next.cursor)
+    expect(await fix(next.stale)).toEqual({ rows: 1, calls: 11 })
+    await call(t, f.admin, 'mcp_tokens:legacy-0') // adds one to a row already ranked
     // calls in parallel, which convex-test runs one after another in any order
     await Promise.all(
       Array.from({ length: 24 }, (_, i) =>
         call(t, people[i % people.length], `mcp_tokens:${['legacy-1', 'new-a', 'new-b'][i % 3]}`),
       ),
     )
-    while (!next.done) next = await page(next.cursor)
-    expect(await expectExact(t, f.org.id, MONTH)).toBe(10 + 11 + 12 + 13 + 2 + 24)
+    while (!next.done) {
+      next = await scan(next.cursor)
+      await fix(next.stale)
+    }
+    expect(await expectExact(t, f.org.id, MONTH)).toBe(10 + 11 + 12 + 13 + 3 + 24)
     // a second pass finds nothing left
     expect(
       await t.action(internal.internal.usageRanksBackfill.run, { dry_run: true }),
@@ -360,15 +372,16 @@ describe('API usage aggregates', () => {
   })
 
   it('spreads a month total over its shards by profile', () => {
-    const shards = new Set<number>()
-    for (let i = 0; i < 200; i++) {
-      const id = uuid()
-      const shard = monthShard(id)
-      expect(shard).toBe(monthShard(id))
+    // fixed ids, so the spread never depends on chance
+    const ids = Array.from(
+      { length: 64 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    )
+    const shards = ids.map(monthShard)
+    expect(ids.map(monthShard)).toEqual(shards)
+    for (const shard of shards)
       expect(Number.isInteger(shard) && shard >= 0 && shard < MONTH_TOTAL_SHARDS).toBe(true)
-      shards.add(shard)
-    }
-    expect(shards.size).toBe(MONTH_TOTAL_SHARDS)
+    expect(new Set(shards).size).toBe(MONTH_TOTAL_SHARDS)
   })
 
   it('never lets a new seat take the id of a removed account its usage still names', async () => {
@@ -582,8 +595,11 @@ describe('internal/usageRanksBackfill', () => {
       differing_account_rows: [
         { org_id: f.org.id, period: MONTH, profile_id: f.user.id, stored: 3, rows: 5 },
       ],
-      // the shards and the account rows still agree with each other
-      differing_totals: 0,
+      // the shards and the account rows still agree, but not the rows
+      differing_totals: 1,
+      differing_total_buckets: [
+        { org_id: f.org.id, period: MONTH, total: 4, accounts: 4, rows: 6 },
+      ],
     })
     await t.action(internal.internal.usageRanksBackfill.run, { dry_run: false })
     expect(await expectExact(t, f.org.id, MONTH)).toBe(6)
@@ -593,51 +609,187 @@ describe('internal/usageRanksBackfill', () => {
     await t.run((ctx) => ctx.db.patch(shard._id, { calls: shard.calls + 1 }))
     expect(await check(t)).toMatchObject({
       differing_totals: 1,
-      differing_total_buckets: [{ org_id: f.org.id, period: MONTH, total: 7, accounts: 6 }],
+      differing_total_buckets: [
+        { org_id: f.org.id, period: MONTH, total: 7, accounts: 6, rows: 6 },
+      ],
     })
   })
 
-  it('lists the aggregates a deleted organization left', async () => {
+  it('lists each gone organization once, past the listed ones too', async () => {
     const t = newT()
     const f = await withOrg(t)
     await call(t, f.user, 'mcp_tokens:a')
-    const gone = uuid()
+    usageRanks.BACKFILL_PAGE.listed = 1
+    usageRanks.RUN.orgs = 1
+    const gone = [uuid(), uuid(), uuid()]
     await t.run(async (ctx) => {
-      await ctx.db.insert('billing_usage_accounts', {
-        org_id: gone,
-        period_start: MONTH,
-        profile_id: uuid(),
-        calls: 3,
-      })
-      await ctx.db.insert('billing_month_totals', {
-        org_id: gone,
-        period_start: MONTH,
-        shard: 0,
-        calls: 3,
-      })
+      // the first in both tables, the second in accounts, the third in totals
+      for (const org_id of gone.slice(0, 2))
+        await ctx.db.insert('billing_usage_accounts', {
+          org_id,
+          period_start: MONTH,
+          profile_id: uuid(),
+          calls: 3,
+        })
+      for (const org_id of [gone[0], gone[2]])
+        await ctx.db.insert('billing_month_totals', {
+          org_id,
+          period_start: MONTH,
+          shard: 0,
+          calls: 3,
+          writes: 1,
+        })
     })
-    expect(await check(t)).toMatchObject({
+    const result = await check(t)
+    expect(result).toMatchObject({
       buckets: 1,
       differing_accounts: 0,
       differing_totals: 0,
-      gone_orgs: 1,
-      gone_org_ids: [gone],
+      gone_orgs: 3,
+      done: true,
     })
+    expect(result.gone_org_ids).toHaveLength(1)
+    expect(gone).toContain(result.gone_org_ids[0])
   })
 
-  it('resumes the check from its cursor', async () => {
+  type CheckAnswer = FunctionReturnType<typeof internal.internal.usageRanksBackfill.check>
+
+  /** `check` called again with each cursor it answers, unchanged, until
+   * done: the counts and lists of all calls together, and every cursor. */
+  async function checkInCalls(t: T, between?: (cursor: CheckCursor) => Promise<void>) {
+    const totals: Record<string, number> = {}
+    const lists: Record<string, unknown[]> = {}
+    const cursors: CheckCursor[] = []
+    for (let cursor: CheckCursor | null = null; ; ) {
+      const got: CheckAnswer = await t.action(internal.internal.usageRanksBackfill.check, {
+        cursor,
+      })
+      for (const [key, value] of Object.entries(got))
+        if (typeof value === 'number') totals[key] = (totals[key] ?? 0) + value
+        else if (Array.isArray(value)) lists[key] = [...(lists[key] ?? []), ...value]
+      if (got.done) return { totals, lists, cursors }
+      cursor = got.cursor
+      if (cursor === null) throw new Error('an unfinished check answered no cursor')
+      cursors.push(cursor)
+      await between?.(cursor)
+    }
+  }
+
+  it('stops between any two queries, inside an organization and a bucket, and goes on from there', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await call(t, f.user, 'mcp_tokens:a')
+    await paidPeriod(t, f)
+    for (const profile of [f.admin, f.user, f.viewer])
+      await call(t, profile, `mcp_tokens:${profile.id}`)
+    // once the provider subscription is gone, calls count in September's month
+    await t.run(async (ctx) => {
+      for (const sub of await ctx.db.query('billing_subscriptions').collect())
+        await ctx.db.patch(sub._id, { polar_subscription_id: undefined })
+    })
+    for (const profile of [f.user, f.agent]) await call(t, profile, `mcp_tokens:${profile.id}`)
     await call(t, f.otherAdmin, 'mcp_tokens:e')
+    await t.run((ctx) =>
+      ctx.db.insert('billing_usage_accounts', {
+        org_id: uuid(),
+        period_start: MONTH,
+        profile_id: uuid(),
+        calls: 1,
+      }),
+    )
+    const whole = await check(t)
+
+    usageRanks.BACKFILL_PAGE.rows = 1
+    usageRanks.BACKFILL_PAGE.accounts = 1
     usageRanks.RUN.orgs = 1
     usageRanks.RUN.ms = 0
-    const first = await check(t)
-    expect(first).toMatchObject({ orgs: 1, done: false })
-    const second = await t.action(internal.internal.usageRanksBackfill.check, {
-      cursor: first.cursor ?? undefined,
+    const split = await checkInCalls(t)
+    // one query a call, so it stopped inside every step
+    expect(split.cursors.some((c) => c.org !== null && c.bucket?.start != null)).toBe(true)
+    expect(split.cursors.some((c) => c.bucket !== null && c.bucket.rows_cursor !== null)).toBe(true)
+    expect(split.cursors.some((c) => c.bucket !== null && c.bucket.accounts_after !== null)).toBe(
+      true,
+    )
+    expect(split.cursors.some((c) => c.gone !== null)).toBe(true)
+    expect(whole).toMatchObject({ orgs: 2, buckets: 3, gone_orgs: 1, done: true })
+    for (const key of [
+      'orgs',
+      'buckets',
+      'unranked',
+      'differing_accounts',
+      'differing_totals',
+      'unsettled',
+      'gone_orgs',
+    ])
+      expect(split.totals[key], key).toBe(whole[key as keyof typeof whole])
+  })
+
+  it('lists a bucket written while it was read, even when its total comes back', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (let i = 0; i < 3; i++) await call(t, f.user, 'mcp_tokens:a')
+    await call(t, f.agent, 'agent_keys:c')
+    usageRanks.BACKFILL_PAGE.rows = 1
+    usageRanks.RUN.ms = 0
+    let touched = false
+    const split = await checkInCalls(t, async (cursor) => {
+      if (touched || cursor.bucket?.start == null) return
+      touched = true
+      // one call fewer, then one more: the same total, but two writes
+      const row = (await all(t, 'billing_usage')).find((r) => r.profile_id === f.user.id)
+      if (row === undefined) throw new Error('the usage row vanished')
+      await t.run((ctx) => writeUsageRow(ctx, row, row, row.calls - 1, row.credential_name))
+      await call(t, f.user, 'mcp_tokens:a')
     })
-    expect(second).toMatchObject({ orgs: 1 })
-    expect(first.buckets + second.buckets).toBe(2)
+    expect(touched).toBe(true)
+    expect(split.totals).toMatchObject({ buckets: 1, unsettled: 1, differing_totals: 0 })
+    expect(split.lists.unsettled_buckets).toEqual([{ org_id: f.org.id, period: MONTH }])
+    // read again with nothing moving, it is settled and exact
+    usageRanks.RUN.ms = defaults.run.ms
+    expect(await check(t)).toMatchObject({ unsettled: 0, differing_totals: 0, done: true })
+  })
+
+  it('records what committed and answers the page to read again when a batch fails', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantLegacyUsage(t, {
+      org_id: f.org.id,
+      profile_id: f.user.id,
+      credential_id: 'mcp_tokens:a',
+      period_start: MONTH,
+      calls: 5,
+    })
+    await plantLegacyUsage(t, {
+      org_id: f.org.id,
+      profile_id: f.agent.id,
+      credential_id: 'agent_keys:c',
+      period_start: MONTH,
+      calls: 4,
+    })
+    // two account rows for one account, which no write to it accepts
+    const twins = await t.run(async (ctx) => {
+      const row = { org_id: f.org.id, period_start: MONTH, profile_id: f.agent.id, calls: 0 }
+      return [
+        await ctx.db.insert('billing_usage_accounts', row),
+        await ctx.db.insert('billing_usage_accounts', row),
+      ]
+    })
+    usageRanks.BACKFILL_PAGE.rows = 1
+    const failed = await t.action(internal.internal.usageRanksBackfill.run, { dry_run: false })
+    expect(failed).toMatchObject({
+      rows: 1,
+      calls: 5,
+      done: false,
+      cursor: expect.any(String),
+      error: expect.any(String),
+    })
+    expect(await audits(t)).toMatchObject([{ detail: { rows: 1, calls: 5 } }])
+    await t.run((ctx) => ctx.db.delete(twins[1]))
+    expect(
+      await t.action(internal.internal.usageRanksBackfill.run, {
+        dry_run: false,
+        cursor: failed.cursor,
+      }),
+    ).toMatchObject({ rows: 1, calls: 4, done: true })
+    expect(await expectExact(t, f.org.id, MONTH)).toBe(9)
   })
 })

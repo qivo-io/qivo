@@ -795,6 +795,11 @@ export default defineSchema({
     period_start: v.string(),
     calls: v.number(),
     reported_api_blocks: v.number(),
+    // How many times the bucket's account rows were written
+    // (model/billingUsage.ts addRankedCalls). It only grows, so with `calls`
+    // it tells internal/usageRanksBackfill's check whether any write landed
+    // while it read the bucket. Absent until the first such write.
+    account_writes: v.optional(v.number()),
   }).index('by_org_period', ['org_id', 'period_start']),
 
   // One account's calls in one usage bucket, every credential of the
@@ -826,6 +831,9 @@ export default defineSchema({
     period_start: v.string(), // 'month:YYYY-MM'
     shard: v.number(),
     calls: v.number(),
+    // how many times this row was written, which only grows, as
+    // billing_usage_totals account_writes
+    writes: v.number(),
   }).index('by_org_period_shard', ['org_id', 'period_start', 'shard']),
 
   // Durable outbox. Provider event external_id is this id, so a timeout and
