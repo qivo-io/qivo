@@ -1050,6 +1050,23 @@ describe('a restore and the work around it', () => {
     await expectReachExact(t)
   })
 
+  it('leaves the rows of a sub-project its restore has not revealed when its parent is archived', async () => {
+    const t = newT()
+    const { f, pia } = await halfRestored(t)
+    const org_id = f.org.id
+    const onSub = async () => (await rowsOf(t, f.pia.id)).find((row) => row.project_id === f.sub.id)
+    // the parent goes to the archive with its other sub-project and back,
+    // while Firmware waits for its reveal
+    await as(t, f.user).mutation(api.projects.archive, { org_id, id: f.meta.id })
+    expect(await onSub()).toMatchObject({ live: true })
+    vi.setSystemTime(Date.now() + 60_000)
+    await as(t, f.user).mutation(api.projects.unarchive, { org_id, id: f.meta.id })
+    expect(await rowsOf(t, f.pia.id)).toEqual(pia)
+    await runSteps(t)
+    expect(await onSub()).toMatchObject({ live: true })
+    await expectAll(t, f)
+  })
+
   it('deletes the rows of a stuck restoring item it purges', async () => {
     const t = newT()
     const { f, item } = await halfRestored(t)

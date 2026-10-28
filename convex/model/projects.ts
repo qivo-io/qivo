@@ -804,11 +804,16 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
   const subs = project.type === 'meta' ? await treeSubProjects(ctx, project.id, budget) : []
   const carried = subs.filter((s) => s.archived_at === undefined)
   const archived = [project.id, ...carried.map((s) => s.id)]
-  // the project's rows, and the live child rows under it, which are those
-  // of the sub-projects it carries
+  // the project's rows, and the live child rows of the sub-projects it
+  // carries; a sub-project a restore from Deleted items has not revealed
+  // yet holds live child rows under it too, which follow its stored copy
+  // and stay as they are
   const reach = await treeRows(ctx, project.org_id, [project.id], budget)
-  if (subs.length > 0)
-    reach.push(...(await childRows(ctx, project.org_id, project.id, true, budget)))
+  if (subs.length > 0) {
+    const ids = new Set(carried.map((s) => s.id))
+    for (const row of await childRows(ctx, project.org_id, project.id, true, budget))
+      if (ids.has(row.project_id)) reach.push(row)
+  }
   const parent =
     project.parent_id === undefined ? null : await byId(ctx, 'projects', project.parent_id)
   for (const s of subs) {
