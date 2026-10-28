@@ -397,9 +397,8 @@ let commentsSnap: Row<'comments'>[] | null = null
 const historyOwners = new Set<object>()
 /* The task and organization of the history the parts watch, or null. */
 let historyWatched: { task: string; org: string } | null = null
-/* Moves on whenever the history starts over (resetHistory) or a live page
-   no longer meets what was loaded (receiveHistory), so an earlier page
-   asked for before that is dropped when it answers. */
+/* Moves on whenever the history starts over (resetHistory), so an earlier
+   page asked for before that is dropped when it answers. */
 let historyEpoch = 0
 /* The last page the history's subscription delivered (threadHistory), its
    newest rows, oldest first in insertion order, the task window's changes
@@ -429,23 +428,6 @@ let historyLoad: 'idle' | 'loading' | 'failed' = 'idle'
    when the history start is loaded). A page can skip rows the person does
    not receive, so this can be a row the thread does not show. */
 let historyNext: string | null = null
-/* The history loaded before a live page that no longer meets it, because
-   more changes arrived between two deliveries than a page holds: its rows
-   no newer than that page, oldest first, the row it read on before and
-   whether it reached the start. The thread shows only the live page and
-   the pages read back from it (fillHistoryGap) until one of them meets
-   these rows, which then join above them. null without such a gap. */
-let strandedHistory: {
-  rows: Row<'activity_events'>[]
-  next: string | null
-  start: boolean
-} | null = null
-
-/** How many pages the store reads back from a live page that no longer
-    meets the loaded history before it drops what was loaded, as the
-    history starts over: 500 rows, as many as the window's live page held
-    before it shrank to 50. */
-export const HISTORY_GAP_PAGES = 10
 /* The watched thread's comments older than the live window, oldest first in
    thread order. They are earlier pages (P.loadEarlierComments) and comments
    that left the window as newer ones arrived. Server truth like
@@ -548,110 +530,32 @@ function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }):
    end and move to olderEvents, so the history a reader loaded stays. A
    page whose first row is in olderEvents reaches back into what was
    loaded, and one that again holds no row repeats the last. Neither moves
-   historyNext, which stays older than every row they hold. Any other page
-   starts the history over from the page: one that no longer meets the
-   last because more rows arrived between two deliveries than it holds, or
-   one that changed at its old end because what the person sees changed.
-   The rows loaded before that are no newer than its first row wait aside
-   (strandedHistory) while the store reads back to them, and newer ones not
-   on it are gone. Answers whether rows wait, so the caller starts that read
-   (fillHistoryGap). */
+   historyNext, which stays older than every row they hold. Any other page,
+   one that no longer meets the last because more rows arrived between two
+   deliveries than it holds, or one that gained rows at its old end because
+   what the person sees changed, starts the history over from the page. */
 function receiveHistory(page: {
   events: Row<'activity_events'>[]
   earlier: boolean
   next: string | null
-}): boolean {
+}) {
   const first = historySnap === null
   const prev = historySnap ?? []
   const restart = () => {
     olderEvents = []
     historyStart = !page.earlier
     historyNext = page.next
-    strandedHistory = null
   }
   const head = page.events[0]
   const at = head ? prev.findIndex((r) => r.id === head.id) : -1
   const back = head ? olderEvents.findIndex((r) => r.id === head.id) : -1
-  let gap = false
   if (first || !page.earlier) restart()
   else if (at !== -1) {
     const known = new Set(olderEvents.map((r) => r.id))
     olderEvents = [...olderEvents, ...prev.slice(0, at).filter((r) => !known.has(r.id))]
   } else if (back !== -1) olderEvents = olderEvents.slice(0, back)
-  else if (head !== undefined || prev.length > 0) {
-    // reading back from the page reaches only rows no newer than its first
-    const onPage = new Set(page.events.map((r) => r.id))
-    const until = head ? Date.parse(head.ts) : Number.POSITIVE_INFINITY
-    const kept = [...olderEvents, ...prev].filter(
-      (r) => !onPage.has(r.id) && Date.parse(r.ts) <= until,
-    )
-    const before = { next: historyNext, start: historyStart }
-    restart()
-    if (kept.length > 0) {
-      strandedHistory = { rows: kept, ...before }
-      // an earlier page asked for before this would land above the gap
-      historyEpoch++
-      gap = true
-    }
-  }
+  else if (head !== undefined || prev.length > 0) restart()
   historySnap = page.events
-  return gap
-}
-
-/* Reads the watched task's history back from its live page, a page at a
-   time (snapshot.historyBefore), after a delivery that no longer met what
-   was loaded (strandedHistory), so the rows loaded before join the thread
-   again without a gap. It stops at the first page that holds one of them,
-   and adds them above the pages it read; or at the start of the history, or
-   after HISTORY_GAP_PAGES pages, when it drops them, as the history starts
-   over. Meanwhile the thread shows the live page and the pages read so far,
-   and an earlier load waits for it (historyLoad 'loading'). A failed read
-   drops them too and shows as historyEarlier 'failed'. A newer gap or the
-   history starting over ends it. Never throws. */
-async function fillHistoryGap() {
-  const gap = strandedHistory
-  const issueUuid = watchedComments
-  const epoch = historyEpoch
-  const row = issueUuid ? rows.issues.get(issueUuid) : undefined
-  const current = () =>
-    strandedHistory === gap && watchedComments === issueUuid && historyEpoch === epoch
-  const end = (load: typeof historyLoad) => {
-    strandedHistory = null
-    historyLoad = load
-    repaint({ thread: true })
-  }
-  if (!gap || !issueUuid || !row) return end('idle')
-  historyLoad = 'loading'
-  repaint({ thread: true })
-  const waiting = new Set(gap.rows.map((r) => r.id))
-  for (let pages = 0; pages < HISTORY_GAP_PAGES && historyNext && !historyStart; pages++) {
-    let page: FunctionReturnType<typeof api.snapshot.historyBefore>
-    try {
-      page = await convex.query(api.snapshot.historyBefore, {
-        org_id: row.org_id,
-        issue_id: issueUuid,
-        before: historyNext,
-      })
-    } catch (e) {
-      if (!current()) return
-      console.error('[qivo] the history between two deliveries failed to load:', e)
-      return end('failed')
-    }
-    if (!current()) return
-    const known = new Set([...olderEvents, ...(historySnap ?? [])].map((r) => r.id))
-    const added = anchor(page.events.filter((r) => !known.has(r.id)))
-    if (added.some((r) => waiting.has(r.id))) {
-      olderEvents = [...gap.rows, ...added.filter((r) => !waiting.has(r.id)), ...olderEvents]
-      historyNext = gap.next
-      historyStart = gap.start
-      return end('idle')
-    }
-    olderEvents = [...added, ...olderEvents]
-    historyNext = page.next
-    if (!page.earlier) historyStart = true
-    repaint({ thread: true })
-  }
-  end('idle')
 }
 
 /* Drops the watched task's history and starts it over, empty until its
@@ -661,7 +565,6 @@ function resetHistory() {
   historyEpoch++
   historySnap = null
   olderEvents = []
-  strandedHistory = null
   historyNext = null
   historyStart = false
   historyLoad = 'idle'
@@ -869,13 +772,9 @@ function historyNews(news: SideNews) {
     }
     historySnap = []
     olderEvents = []
-    strandedHistory = null
     historyNext = null
     historyStart = true
-  } else if (
-    receiveHistory(anchor(news.value as FunctionReturnType<typeof api.snapshot.threadHistory>))
-  )
-    void fillHistoryGap()
+  } else receiveHistory(anchor(news.value as FunctionReturnType<typeof api.snapshot.threadHistory>))
   PLANNER.historyFailure = 'none'
   owe('thread')
 }
