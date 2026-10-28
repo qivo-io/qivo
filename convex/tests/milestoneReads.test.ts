@@ -14,6 +14,7 @@ import type { Doc } from '../_generated/dataModel'
 import { LIMITS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { rowOf } from '../lib/workspaceParts'
+import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import {
   MILESTONE_READ,
   MILESTONE_READ_TOO_LARGE,
@@ -382,6 +383,34 @@ describe('a section', () => {
     ])
     expect(second).toMatchObject({ next: null, stopped: null })
     expect('past' in second).toBe(false)
+  })
+
+  it('pages past a milestone whose id, made before 2026-10-19, is not a UUID', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plant(t, f.meta.id, MONDAY, 'First')
+    await t.run((ctx) =>
+      ctx.db.insert('milestones', {
+        id: 'legacy-milestone-1',
+        project_id: f.meta.id,
+        name: 'Legacy',
+        week: plus(MONDAY, 7),
+        created_at: NOW,
+      }),
+    )
+    await plant(t, f.meta.id, plus(MONDAY, 14), 'Last')
+    for (const side of ['upcoming', 'past'] as const) {
+      const { batches } = await walk(as(t, f.user), {
+        projects: [f.meta.id],
+        from: side === 'upcoming' ? MONDAY : plus(MONDAY, 21),
+        side,
+        limit: 1,
+      })
+      const names = batches.flatMap((b) => b.rows.map((r) => r.name))
+      expect(names).toEqual(
+        side === 'upcoming' ? ['First', 'Legacy', 'Last'] : ['Last', 'Legacy', 'First'],
+      )
+    }
   })
 
   it('searches every fragment in any order, ignoring case and accents, across the whole section', async () => {
@@ -780,7 +809,8 @@ describe('refusals', () => {
     )
     for (const after of [
       { week: 'soon', key: 'x', id: uuid() },
-      { week: MONDAY, key: 'x', id: 'not-an-id' },
+      { week: MONDAY, key: 'x', id: 'x'.repeat(DOCUMENT_MAX_BYTES + 1) },
+      { week: MONDAY, key: 'x'.repeat(DOCUMENT_MAX_BYTES + 1), id: uuid() },
     ])
       await expectRefusal(
         user.query(api.milestones.section, { ...base, after }),

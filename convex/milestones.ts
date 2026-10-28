@@ -13,11 +13,11 @@
 
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
-import { UUID } from './lib/core'
 import { authedQuery, badRequest } from './lib/functions'
 import { limitedText } from './lib/limitRules'
 import { LIMITS } from './lib/limits'
 import { rowOf } from './lib/workspaceParts'
+import { DOCUMENT_MAX_BYTES } from './model/comments'
 import {
   MILESTONE_READ,
   type MilestonePosition,
@@ -47,9 +47,16 @@ const dayArg = (name: string, value: string): string =>
 
 /* `after` when it has the shape of a position a batch answers. Its day is
  * checked for shape only, as a day stored before 2026-10-16 can be one that
- * does not exist. */
+ * does not exist. Its key and id may be any text of at most
+ * DOCUMENT_MAX_BYTES characters. A milestone made before 2026-10-19 can
+ * have an id that is not a UUID, no stored id is longer, and a name key is
+ * longer only for a name of more than 50,000 characters. */
 function afterArg(after: MilestonePosition): MilestonePosition {
-  if (!dateShaped(after.week) || !UUID.test(after.id))
+  if (
+    !dateShaped(after.week) ||
+    after.key.length > DOCUMENT_MAX_BYTES ||
+    after.id.length > DOCUMENT_MAX_BYTES
+  )
     throw badRequest('after must be the next of an earlier batch')
   return after
 }
