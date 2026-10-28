@@ -116,7 +116,7 @@ async function batches<B extends { rows: { name: string }[]; next: string | null
 ): Promise<B[]> {
   const out: B[] = []
   let after: string | undefined
-  for (let round = 0; round < 10_000; round++) {
+  for (let round = 0; round < 1_000; round++) {
     const batch = await read(after)
     out.push(batch)
     if (batch.next === null) return out
@@ -883,6 +883,7 @@ describe('real limits', () => {
     let after: string | undefined
     const calls: (Read & { stopped: boolean })[] = []
     for (;;) {
+      if (calls.length > 10) throw new Error('the search did not reach the end')
       const b = await measured(t, (ctx) =>
         settingsBatch(ctx, f.org.id, { search: 'nomatch', after }),
       )

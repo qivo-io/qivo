@@ -380,7 +380,8 @@ describe('readBatch', () => {
     let after: NamedAt<LabelTie> | null = null
     let calls = 0
     for (;;) {
-      calls++
+      // a batch that does not move forward would loop here
+      if (++calls > 2 * someKeys.length) throw new Error('the batches did not move forward')
       const batch = await t.run((ctx) =>
         readBatch(ctx, {
           stream: indexAfter(labelIndex(ctx, orgId), after),
