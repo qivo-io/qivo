@@ -18,9 +18,10 @@ import { previewRemoval, vRemovalChange } from './model/removalPreview'
  * pass the write's rules, with the write's sentence when not. Reassigning
  * is answered for a new holder who can take every task once the access is
  * gone; the write checks the new holder first, so another one is refused
- * with the sentence about them (model/removalPreview.ts RemovalEffect). The write itself reports how
- * many tasks it stranded (projects.removeAccess `stranded`), so `hidden`
- * tells the caller nothing new.
+ * with the sentence about them (model/removalPreview.ts RemovalEffect).
+ * The write itself reports how many tasks it stranded
+ * (projects.removeAccess `stranded`), so `hidden` tells the caller nothing
+ * new.
  *
  * A one-shot read: the app fetches it when a removal starts and again before
  * it submits, and never subscribes, because one call can read a few
@@ -31,16 +32,16 @@ import { previewRemoval, vRemovalChange } from './model/removalPreview'
  * write's sentence when the write would refuse the removal itself, and
  * `too_large` when working out who loses sight would not fit in one
  * request, or its answer would not (model/removalPreview.ts PREVIEW.bytes),
- * with model/projectAccess.ts REMOVAL_FULL. Every list is
- * bounded: each project it names appears once, and each person who can still
- * change projects names a few of them and counts the rest.
+ * with model/projectAccess.ts REMOVAL_FULL. Every list is bounded: each
+ * project it names appears once, and each person who can still change
+ * projects names a few of them and counts the rest.
  *
  * The preview and the write agree on who loses sight of which tasks and,
- * but for the checks of a new holder, on the rules each choice meets, but
- * not always on the room one request leaves, either way
- * (model/removalPreview.ts). A grant or member removal
- * that leaves the tasks reads what the preview reads but the caller's
- * sight, so after a too_large it is likely to refuse with the same
+ * save the checks of a new holder, on the rules each choice meets. They do
+ * not always agree on the room one request leaves, either way
+ * (model/removalPreview.ts). A grant or member removal that leaves the
+ * tasks reads what the preview reads, without the caller's sight and the
+ * Keep checks, so after a too_large it is likely to refuse with the same
  * sentence, though it may go through. A team deletion that leaves the
  * tasks does not read them at all (model/teams.ts deleteTeamCore), so it
  * goes ahead and strands them without a list. Keeping people as Viewers or

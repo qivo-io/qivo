@@ -89,12 +89,11 @@ export const vRemovalChange = v.union(
 
 export type RemovalChange = Infer<typeof vRemovalChange>
 
-/** The bounds of one answer. `items`: of how many held tasks the caller
- * may read the preview lists the holdings, by task number; 100 fill the
- * removal window's scroll box several times over.
- * `changerProjects`: how many of the projects one person can still change
- * it names, as many as the window's Keep text names before it counts the
- * rest. `bytes`: the most one answer holds, as Convex sizes a value
+/** The bounds of one answer. `items`: for how many held tasks the caller
+ * may read the preview lists their holdings, by task number; 100 fill the
+ * removal window's scroll box several times over. `changerProjects`: how
+ * many of the projects one person can still change it names, as many as
+ * the window's Keep text names before it counts the rest. `bytes`: the most one answer holds, as Convex sizes a value
  * (getConvexSize). 1 MiB is many times what the window shows, and an
  * answer past Convex's own limit would fail instead of answering, so a
  * larger one answers too_large. Tests change them. */
@@ -123,10 +122,11 @@ export type ProjectRef = { id: string; name: string; key: string; parent_id: str
  * HELD_TASKS_REFUSED; the window offers only new holders who pass. The
  * preview leaves the new holder out because those checks read their access
  * as it is before the removal, which may be one of its people.
- * `keep.targets` are the projects Keep as Viewer would grant
- * Viewer on, and `keep.changers` name, for each person who can still change
- * a listed project or one of its sub-projects once the access is gone, the
- * first PREVIEW.changerProjects such projects and how many more there are
+ *
+ * `keep.targets` are the projects Keep as Viewer would grant Viewer on, and
+ * `keep.changers` name, for each person who can still change a listed
+ * project or one of its sub-projects once the access is gone, the first
+ * PREVIEW.changerProjects such projects and how many more there are
  * (`more`), for the window's Keep text. Both give project ids, and
  * `projects` names each project they give once. Both leave out a project
  * the caller neither sees nor manages as an organization admin, whose name
