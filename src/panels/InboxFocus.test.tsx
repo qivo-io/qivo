@@ -499,6 +499,81 @@ describe('Inbox bulk actions that take more than one round', { timeout: 20_000 }
     expect(window.showToast).toHaveBeenCalledWith('Marked 3 messages as read.', 'success')
   })
 
+  it('closes the notice on Escape, sends nothing, keeps the Inbox and gives focus back', async () => {
+    await openInbox(3)
+    reach = 'many'
+    await press(markAllButton())
+    await settle()
+    expect(notice()).not.toBeNull()
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      )
+    })
+    await settle()
+    expect(notice()).toBeNull()
+    expect(sentMarks()).toEqual([])
+    expect(onExit).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(markAllButton())
+  })
+
+  it('runs from the row menu after Confirm and gives focus to the first row still listed', async () => {
+    const uuids = await openInbox(3)
+    reach = 'many'
+    const held = holdMarkAllRead()
+    await openRowMenu(uuids[2])
+    await press(document.querySelector<HTMLElement>('[data-msg-menu-mark-all-read]'))
+    await settle()
+    expect(notice()).not.toBeNull()
+    // the menu that opened it is gone
+    expect(document.querySelector('[data-msg-menu]')).toBeNull()
+    await press(document.querySelector<HTMLElement>('[data-inbox-notice-confirm]'))
+    await settle()
+    expect(notice()).toBeNull()
+    expect(sentMarks()).toHaveLength(1)
+    expect(focused()).toBe(`row ${uuids[0]}`)
+    await act(async () =>
+      held[0].answer({ marked: 3, ids: ['message-0', 'message-1', 'message-2'], hasMore: false }),
+    )
+    await settle()
+    expect(progress()?.textContent).toBe('')
+    expect(focused()).toBe(`row ${uuids[0]}`)
+  })
+
+  it('gives focus back once an action answered before the notice finished closing', async () => {
+    const uuids = await openInbox(3)
+    reach = 'many'
+    // every batch answers at once, so the action ends as the notice closes
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'messages:markAllRead'
+        ? { marked: 3, ids: ['message-0', 'message-1', 'message-2'], hasMore: false, before: 1 }
+        : null,
+    )
+    await press(markAllButton())
+    await settle()
+    await press(document.querySelector<HTMLElement>('[data-inbox-notice-confirm]'))
+    await settle()
+    expect(notice()).toBeNull()
+    expect(window.showToast).toHaveBeenCalledWith('Marked 3 messages as read.', 'success')
+    // the button stays disabled with nothing unread, so the first row has it
+    expect(markAllButton()?.disabled).toBe(true)
+    expect(focused()).toBe(`row ${uuids[0]}`)
+  })
+
+  it('gives focus to the first row at once after a row menu press, before bulkReach answers', async () => {
+    const uuids = await openInbox(3)
+    let open: () => void = () => {}
+    reachGate = new Promise((resolve) => {
+      open = resolve
+    })
+    await openRowMenu(uuids[2])
+    await press(document.querySelector<HTMLElement>('[data-msg-menu-mark-all-read]'))
+    await settle()
+    expect(focused()).toBe(`row ${uuids[0]}`)
+    await act(async () => open())
+    await settle()
+  })
+
   it('does not open the notice over a field the person types in, and ends the action', async () => {
     await openInbox(3)
     reach = 'many'

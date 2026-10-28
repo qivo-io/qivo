@@ -48,7 +48,13 @@ import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '
 import { type UnreadStart, unreadStart } from '../lib/spine'
 import { useMobile } from '../lib/useMobile'
 import { OUT_OF_USE } from '../lib/viewHidden'
-import { type BulkAction, bulkBusy, bulkName, bulkProgressText } from '../store/inboxBulk'
+import {
+  type BulkAction,
+  bulkBusy,
+  bulkName,
+  bulkNoticeText,
+  bulkProgressText,
+} from '../store/inboxBulk'
 import { type MessageGroupVM, type MessageVM, P } from '../store/planner'
 import { usePlannerVersion } from '../store/usePlannerVersion'
 import { IssueDetail } from './IssueDetail'
@@ -406,8 +412,10 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const hasUnreadMessages = P.canMarkAllRead
   const runBulkAction = (action: BulkAction) => {
     if (bulkRuns || (action === 'read' ? !hasUnreadMessages : !hasReadMessages)) return
-    // from the row menu, focus goes to the first row still listed; from the
-    // toolbar, back to its button once the action ends
+    // from the row menu, focus goes to the first row still listed, at once
+    // and again once the paint shows; from the toolbar, back to its button
+    // once the action ends
+    if (menu) menuRows.current = { id: null, ids: [] }
     bulkFrom.current = menu ? 'menu' : action
     setMenu(null)
     // a long action asks first (the keep-open notice below)
@@ -1189,42 +1197,46 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
       )}
 
       {/* The keep-open notice of a bulk action that takes more than one
-          round (P.answerInboxNotice). Cancel sends nothing. */}
+          round (P.answerInboxNotice). Cancel sends nothing. It renders
+          only while it asks, so it closes at once, without a fade: a
+          fading notice would still hold focus as the action goes on, and
+          lose the words of what it asked. */}
       <AlertDialog
         open={bulk?.state === 'notice'}
         onOpenChange={(open) => {
           if (!open) P.answerInboxNotice(false)
         }}
       >
-        <AlertDialogContent
-          data-inbox-notice
-          onCloseAutoFocus={(event) => {
-            // back to what opened it after Cancel; once the action runs,
-            // the toolbar's button stays disabled until it ends
-            event.preventDefault()
-            const from = bulkFrom.current
-            if (!from) return
-            if (!bulkBusy(P.inboxBulk)) {
-              bulkFrom.current = null
-              focusAfterBulk(from)
-            } else if (from === 'menu') focusRowAfter({ id: null, ids: [] })
-          }}
-        >
-          <AlertDialogHeader>
-            <AlertDialogTitle>Keep Qivo open</AlertDialogTitle>
-            <AlertDialogDescription>
-              {bulkName(bulk?.action ?? 'read')} covers many messages and runs in steps. Keep Qivo
-              open until it finishes. Closing or reloading Qivo stops it, and the steps already done
-              stay done.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-inbox-notice-cancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction data-inbox-notice-confirm onClick={() => P.answerInboxNotice(true)}>
-              {bulkName(bulk?.action ?? 'read')}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
+        {bulk?.state === 'notice' && (
+          <AlertDialogContent
+            data-inbox-notice
+            onCloseAutoFocus={(event) => {
+              // back to what opened it after Cancel, or once the action
+              // ended; while it runs, the toolbar's button stays disabled
+              event.preventDefault()
+              const from = bulkFrom.current
+              if (!from) return
+              if (!bulkBusy(P.inboxBulk)) {
+                bulkFrom.current = null
+                focusAfterBulk(from)
+              } else if (from === 'menu') focusRowAfter({ id: null, ids: [] })
+            }}
+          >
+            <AlertDialogHeader>
+              <AlertDialogTitle>Keep Qivo open</AlertDialogTitle>
+              <AlertDialogDescription>{bulkNoticeText(bulk)}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-inbox-notice-cancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                data-inbox-notice-confirm
+                onClick={() => P.answerInboxNotice(true)}
+              >
+                {bulkName(bulk.action)}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        )}
       </AlertDialog>
 
       {/* The popped-out window: the same component, floating, on the same task
