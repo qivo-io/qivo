@@ -34,8 +34,9 @@
  *
  * Left alone, as deleteOrgDeep leaves them: Better Auth logins (a login may
  * hold seats elsewhere), per-login appearance and roadmap history, pending
- * profile_removals and label_removals rows (their own steps finish), the
- * platform audit log, webhook receipts that only name provider ids, and any
+ * profile_removals and label_removals rows (their own steps finish), pending
+ * name_copies rows (a step deletes its row once the profile or team it names
+ * is gone, nameCopies.ts), the platform audit log, webhook receipts that only name provider ids, and any
  * activity_retention or comment_counts row an earlier release left, tables
  * the schema no longer lists. */
 

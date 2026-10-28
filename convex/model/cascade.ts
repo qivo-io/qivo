@@ -413,7 +413,9 @@ export async function removeProfile(
  * earlier release left, tables the schema no longer lists. Pending profile_removals rows
  * are also left alone. Their background steps still delete the removed
  * profiles' keys, tokens, preferences, inboxes and OAuth connections, which
- * this sweep only reaches through live profiles. Deleted items go first, whatever state they are in,
+ * this sweep only reaches through live profiles. So are pending name_copies
+ * rows. A step deletes its row once the profile or team it names is gone
+ * (nameCopies.ts). Deleted items go first, whatever state they are in,
  * with the rows they still kept in the live tables and their bytes
  * (model/deletedItems.ts clearOrgTrash); tasks a moving project left behind
  * are then gone too. No narration: nothing is left to read it. */
