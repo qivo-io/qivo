@@ -40,11 +40,27 @@ import {
 } from './trash.setup'
 
 installTrashTimers()
+
+/* The row ids whose used_ids row the backfill's batches fail to write
+ * (keepUsedId below), as a batch that fails partway would. */
+const faults = vi.hoisted(() => ({ keep: new Set<string>() }))
+
+vi.mock('../lib/db', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../lib/db')>()
+  return {
+    ...real,
+    keepUsedId: async (...a: Parameters<typeof real.keepUsedId>) => {
+      if (faults.keep.has(a[2])) throw new Error('a planted write failure')
+      return await real.keepUsedId(...a)
+    },
+  }
+})
 const DEFAULT_PAGE = structuredClone(BACKFILL_PAGE)
 const DEFAULT_RUN = { ...RUN }
 afterEach(() => {
   Object.assign(BACKFILL_PAGE, structuredClone(DEFAULT_PAGE))
   Object.assign(RUN, DEFAULT_RUN)
+  faults.keep.clear()
 })
 
 const ALREADY = /with this id already exists/
@@ -650,13 +666,15 @@ describe('internal/usedIdsBackfill', () => {
     const stored = uuid()
     const halfPurged = uuid()
     const project = uuid()
+    const storedProject = uuid()
     const itemProject = uuid()
     for (const id of [...live, stored, halfPurged]) await createTask(t, f.user, f.sub.id, id)
-    await createProject(t, f.admin, project, f.meta.id)
-    await createProject(t, f.admin, itemProject, f.meta.id)
+    for (const id of [project, storedProject, itemProject])
+      await createProject(t, f.admin, id, f.meta.id)
     await deleteTask(t, f, stored)
     await deleteTask(t, f, halfPurged)
-    await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: itemProject })
+    for (const id of [storedProject, itemProject])
+      await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id: f.org.id, id })
     await runSteps(t)
     const other = uuid()
     await createTask(t, f.otherAdmin, (await otherSub(t, f)).id, other)
@@ -685,7 +703,7 @@ describe('internal/usedIdsBackfill', () => {
       })
       for (const row of await ctx.db.query('used_ids').collect()) await ctx.db.delete(row._id)
     })
-    return { live, stored, halfPurged, project, itemProject, other }
+    return { live, stored, halfPurged, project, storedProject, itemProject, other }
   }
 
   /** The used_ids rows by `table:id:org`. */
@@ -712,9 +730,10 @@ describe('internal/usedIdsBackfill', () => {
       issues: live.issues.length,
       projects: live.projects.length,
       stored_issues: 1,
-      stored_projects: 0,
+      stored_projects: 1,
       deleted_tasks: 2,
-      project_items: 1,
+      // both project items, the stored project's and the half-purged one's
+      project_items: 2,
       orphans: 1,
     })
     const remaining = await t.query(internal.internal.usedIdsBackfill.remaining, {
@@ -725,8 +744,10 @@ describe('internal/usedIdsBackfill', () => {
     expect(ran).toMatchObject({
       issues: live.issues.length,
       projects: live.projects.length,
-      // the stored task is in deleted_tasks too, and recorded once
+      // the stored task is in deleted_tasks too, and the stored project in
+      // its project item, and each is recorded once
       stored_issues: 1,
+      stored_projects: 1,
       deleted_tasks: 1,
       project_items: 1,
       orphans: 1,
@@ -737,6 +758,7 @@ describe('internal/usedIdsBackfill', () => {
         ...live.projects,
         `issues:${w.stored}:${f.org.id}`,
         `issues:${w.halfPurged}:${f.org.id}`,
+        `projects:${w.storedProject}:${f.org.id}`,
         `projects:${w.itemProject}:${f.org.id}`,
       ].sort(),
     )
@@ -745,7 +767,14 @@ describe('internal/usedIdsBackfill', () => {
     // nothing is left, and a second run writes nothing
     expect(await backfill(t, true)).toMatchObject({ issues: 0, projects: 0, deleted_tasks: 0 })
     const again = await backfill(t, false)
-    for (const source of ['issues', 'projects', 'stored_issues', 'deleted_tasks', 'project_items'])
+    for (const source of [
+      'issues',
+      'projects',
+      'stored_issues',
+      'stored_projects',
+      'deleted_tasks',
+      'project_items',
+    ])
       expect(again[source]).toBe(0)
     // the recorded ids are refused now
     await expectRefusal(createTask(t, f.user, f.sub.id, w.halfPurged), 'bad_request', ALREADY)
@@ -814,5 +843,97 @@ describe('internal/usedIdsBackfill', () => {
       action: 'used_ids_backfill',
       detail: { done: false, source: 'projects', cursor: 'not a cursor' },
     })
+  })
+
+  it("stops inside a page of a project item's projects, and the next call writes the rest of it", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const top = uuid()
+    const subs = [uuid(), uuid(), uuid()]
+    await createProject(t, f.admin, top)
+    for (const id of subs) await createProject(t, f.admin, id, top)
+    await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: top })
+    await runSteps(t)
+    // a purge that stopped after the stored projects went, from before
+    // used_ids, so only the project item names them
+    await t.run(async (ctx) => {
+      for (const id of [top, ...subs]) {
+        const copy = await ctx.db
+          .query('deleted_rows')
+          .withIndex('by_row', (q) => q.eq('table', 'projects').eq('row_id', id))
+          .unique()
+        if (copy !== null) await ctx.db.delete(copy._id)
+      }
+    })
+    for (const id of [top, ...subs]) await forgetUsedId(t, id)
+    Object.assign(RUN, { ms: 0 })
+    BACKFILL_PAGE.rows.project_items = 1
+    BACKFILL_PAGE.batch = 1
+    const first = await t.action(internal.internal.usedIdsBackfill.run, {
+      dry_run: false,
+      source: 'project_items',
+    })
+    // one batch of the one page, which the call then answers to read again
+    expect(first).toMatchObject({
+      done: false,
+      source: 'project_items',
+      cursor: null,
+      project_items: 1,
+    })
+    Object.assign(RUN, DEFAULT_RUN)
+    const rest = await t.action(internal.internal.usedIdsBackfill.run, {
+      dry_run: false,
+      source: first.source,
+      cursor: first.cursor,
+    })
+    expect(rest).toMatchObject({ done: true, project_items: 3 })
+    for (const id of [top, ...subs])
+      expect(await usedOf(t, id)).toMatchObject([{ table: 'projects', org_id: f.org.id }])
+  })
+
+  it('leaves a use whose organization is gone by the time its batch writes it', async () => {
+    const t = newT()
+    expect(
+      await t.mutation(internal.internal.usedIdsBackfill.fix, {
+        uses: [{ table: 'issues', row_id: uuid(), org_id: uuid() }],
+      }),
+    ).toEqual({ written: 0, orphans: 1 })
+    expect(await t.run((ctx) => ctx.db.query('used_ids').collect())).toEqual([])
+  })
+
+  it('keeps and audits the batches before one that fails, and reads that page again', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const ids = [uuid(), uuid(), uuid()]
+    for (const id of ids) await createTask(t, f.user, f.sub.id, id)
+    for (const id of ids) await forgetUsedId(t, id)
+    BACKFILL_PAGE.batch = 1
+    // the second of the page's three ids fails to write
+    const order = (await t.run((ctx) => ctx.db.query('issues').collect()))
+      .map((task) => task.id)
+      .filter((id) => ids.includes(id))
+    faults.keep.add(order[1])
+    const failed = await t.action(internal.internal.usedIdsBackfill.run, {
+      dry_run: false,
+      source: 'issues',
+    })
+    expect(failed).toMatchObject({ done: false, source: 'issues', cursor: null, issues: 1 })
+    expect(failed.error).toMatch(/a planted write failure/)
+    expect(await usedOf(t, order[0])).toHaveLength(1)
+    expect(await usedOf(t, order[1])).toEqual([])
+    const audits = await t.run((ctx) => ctx.db.query('platform_audit_log').collect())
+    expect(audits.at(-1)).toMatchObject({
+      action: 'used_ids_backfill',
+      detail: { issues: 1, done: false, source: 'issues', cursor: null },
+    })
+    // once the write works, the same page goes on
+    faults.keep.clear()
+    const rest = await t.action(internal.internal.usedIdsBackfill.run, {
+      dry_run: false,
+      source: failed.source,
+      cursor: failed.cursor,
+    })
+    expect(rest).toMatchObject({ done: true, issues: 2 })
+    for (const id of ids) expect(await usedOf(t, id)).toHaveLength(1)
   })
 })
