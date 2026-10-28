@@ -854,11 +854,13 @@ export async function listActiveIssuesCore(
   // a page of one row that the page's own reads fill cannot be smaller, so
   // it gets the sentence of what the list read before (pageReads)
   const smaller = page.length > 1 ? PAGE_TOO_LARGE : null
+  // a text can read two rows (model/descriptions.ts TEXT_DOCUMENTS)
   const read = await pageReads(
     ctx,
     unread,
     (task) => descriptionOf(ctx.db, task),
     absent.size > 0 ? smaller : null,
+    2,
   )
   for (const [i, task] of unread.entries()) texts.set(task.id, read[i])
   const lastComments = await lastCommentTimes(
@@ -912,10 +914,11 @@ export const ACTIVE_LIST_TOO_WIDE =
   'this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words'
 
 /* `read` of each of `items`, in order, for an active page. Each read is one
- * index range and at most one document, and they run a few at a time, never
- * more than the request's unspent room could hold at Convex's document size
- * limit, so they pass that room by one document at most and the request
- * stays inside its limits. When the room runs out first, the page is
+ * index range and at most `documents` documents, and they run a few at a
+ * time, never more than the request's unspent room could hold with each
+ * document at Convex's document size limit, so they pass that room by one
+ * read at most, which `documents` times COMMENT_READS_RESERVE holds, and
+ * the request stays inside its limits. When the room runs out first, the page is
  * refused with PAGE_TOO_LARGE, or with `first` when no room was left before
  * the first read. A null `first` names what the list read before the page:
  * ACTIVE_TASKS_TOO_LARGE when documents or bytes ran out, else
@@ -925,20 +928,24 @@ async function pageReads<T, R>(
   items: readonly T[],
   read: (item: T) => Promise<R>,
   first: string | null,
+  documents = 1,
 ): Promise<R[]> {
   const out: R[] = []
   while (out.length < items.length) {
     const m = await ctx.meta.getTransactionMetrics()
     const ranges = m.databaseQueries.remaining - COMMENT_READS_RESERVE.ranges
-    const documents = m.documentsRead.remaining - COMMENT_READS_RESERVE.documents
-    const bytes = m.bytesRead.remaining - COMMENT_READS_RESERVE.bytes
-    if (ranges <= 0 || documents <= 0 || bytes <= 0) {
+    const docs = m.documentsRead.remaining - documents * COMMENT_READS_RESERVE.documents
+    const bytes = m.bytesRead.remaining - documents * COMMENT_READS_RESERVE.bytes
+    if (ranges <= 0 || docs < documents || bytes <= 0) {
       if (out.length > 0) throw badRequest(PAGE_TOO_LARGE)
-      const filled = documents <= 0 || bytes <= 0 ? ACTIVE_TASKS_TOO_LARGE : ACTIVE_LIST_TOO_WIDE
+      const filled = docs < documents || bytes <= 0 ? ACTIVE_TASKS_TOO_LARGE : ACTIVE_LIST_TOO_WIDE
       throw badRequest(first ?? filled)
     }
-    const fits = Math.max(1, Math.floor(bytes / DOCUMENT_MAX_BYTES))
-    const batch = items.slice(out.length, out.length + Math.min(fits, ranges, documents))
+    const fits = Math.max(1, Math.floor(bytes / (documents * DOCUMENT_MAX_BYTES)))
+    const batch = items.slice(
+      out.length,
+      out.length + Math.min(fits, ranges, Math.floor(docs / documents)),
+    )
     out.push(...(await Promise.all(batch.map(read))))
   }
   return out

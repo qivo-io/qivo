@@ -111,11 +111,12 @@ const REPORTS = 4
 
 /** The bytes one page of the issues phase reads before it ends, besides one
  * last task (taskPage), and the documents of up to Convex's size limit one
- * task can read: its row, its description row, and its row again when the
- * fix patches its hours. A page so reads at most 15 MiB, and a step of the
- * page reads 4 tasks while little of it is spent. */
-const TASK_PAGE_BYTES = 12 * 1024 * 1024
-const TASK_DOCUMENTS = 3
+ * task can read: its row, its text's two description rows at most
+ * (model/descriptions.ts textCopiesOf), and its row again when the fix
+ * patches its hours. A page so reads at most 15 MiB, and a step of the
+ * page reads 2 tasks while little of it is spent. */
+const TASK_PAGE_BYTES = 11 * 1024 * 1024
+const TASK_DOCUMENTS = 4
 
 /** The tables whose `name` counts NAME_MAX UTF-16 units. */
 const NAMED = [

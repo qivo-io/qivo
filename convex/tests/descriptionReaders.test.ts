@@ -1032,6 +1032,58 @@ describe('real limits', () => {
     expect(got.parent_id).toBe(ids.parent)
   }, 300_000)
 
+  it('an active page and an export page count two description rows a task', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // 12 tasks with two rows of 900 KiB each, the first with a stale
+    // archived copy, as a rollback leaves them, so each text reads both
+    const shown = (i: number) => `${i} shown `.padEnd(900 * 1024, 's')
+    const ids: string[] = []
+    for (let from = 0; from < 12; from += 2)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 2; i++) {
+          const doc = taskDoc(f, 60_000 + i)
+          await ctx.db.insert('issues', doc)
+          for (const [text, archived] of [
+            [`${i} stale `.padEnd(900 * 1024, 'x'), NOW],
+            [shown(i), undefined],
+          ] as const)
+            await ctx.db.insert('issue_descriptions', {
+              issue_id: doc.id,
+              org_id: f.org.id,
+              project_id: f.sub.id,
+              ...(archived === undefined ? {} : { archived_at: archived }),
+              description: text,
+            })
+          ids.push(doc.id)
+        }
+      })
+    const agent = { callerId: f.agent.id, access: 'read' as const }
+    // twelve texts of two rows each do not fit beside the page; four do
+    await expectRefusal(
+      restTasks(t, { ...agent, limit: '12' }),
+      'bad_request',
+      /too large to read at once/,
+    )
+    expect((await restTasks(t, { ...agent, limit: '4' })).map((row) => row.description)).toEqual(
+      ids.slice(0, 4).map((_, i) => shown(i)),
+    )
+    // the export goes on a few tasks a page
+    const rows: OrgExportRow[] = []
+    for (let cursor: string | null = null, done = false; !done; ) {
+      const result: OrgExportPage = await as(t, f.admin).query(exportPage, {
+        org_id: f.org.id,
+        section: 'issues',
+        cursor,
+      })
+      rows.push(...result.rows)
+      done = result.isDone
+      cursor = result.continueCursor
+    }
+    for (const [i, id] of ids.entries())
+      expect(rows.find((row) => row.id === id)?.description).toBe(shown(i))
+  }, 300_000)
+
   it('a task with many rows reads two of them at most, within the limits', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)

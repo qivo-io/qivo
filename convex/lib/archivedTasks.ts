@@ -286,14 +286,15 @@ export const ARCHIVE_PAGE = {
 /** What an archived page keeps back from the request's limits, for the
  * reads of a row after its last check and of the page's end. The first task
  * a page looks at may use the rest. A task's filters can read whether it is
- * a group and its description row before its row's walk checks the room,
- * and past the walk's last check a REST or MCP row reads at most four more
- * documents (lib/core.ts listArchivedIssuesCore): the subtask its walk read
- * last, the first subtask of a group too large to walk, its parent and its
- * newest comment. Its text is the description row the filters read, or one
- * more read in its place. The bytes hold six documents at Convex's size
- * limit. Tests lower these. */
-export const ARCHIVE_RESERVE = { ranges: 16, documents: 64, bytes: 6 * DOCUMENT_MAX_BYTES }
+ * a group and its text, two description rows at most (model/descriptions.ts
+ * descriptionOf), before its row's walk checks the room, and past the walk's
+ * last check a REST or MCP row reads at most four more documents
+ * (lib/core.ts listArchivedIssuesCore): the subtask its walk read last, the
+ * first subtask of a group too large to walk, its parent and its newest
+ * comment. Its text is the one the filters read, or one more read in its
+ * place. The bytes hold seven documents at Convex's size limit. Tests lower
+ * these. */
+export const ARCHIVE_RESERVE = { ranges: 16, documents: 64, bytes: 7 * DOCUMENT_MAX_BYTES }
 
 /** Transaction totals (ctx.meta.getTransactionMetrics) that a read keeps
  * below, in index ranges, documents and bytes read. */
