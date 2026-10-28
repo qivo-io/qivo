@@ -782,17 +782,20 @@ describe('the project and archived copies', () => {
       archived: false,
     })
     expect(await archivedAt(root.id)).toBeUndefined()
-    // and the same toggle with an edit writes the row once, text and copies
+    // and the same toggle with an edit, on the active task, writes the row
+    // once, with the text and the new stamp
     await t.mutation(internal.machine.mcp.updateIssue, {
       callerId: f.agent.id,
       access: 'write',
-      ref: kids[0].id,
+      ref: root.id,
       archived: true,
       description: 'Archived with a note',
     })
-    expect(await rowOf(t, kids[0].id)).toMatchObject({
+    const stamp = (await liveTask(t, root.id))?.archived_at
+    expect(stamp).toBeDefined()
+    expect(await rowOf(t, root.id)).toMatchObject({
       description: 'Archived with a note',
-      archived_at: expect.any(String),
+      archived_at: stamp,
     })
     expect(await expectDescriptions(t, f.org.id)).toBe(3)
   })
