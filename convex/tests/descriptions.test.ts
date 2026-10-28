@@ -256,40 +256,61 @@ describe('the writers keep one equal row per task', () => {
     expect(await expectDescriptions(t, f.org.id)).toBe(1)
   })
 
-  it("the over-cap fix's pages read no description row, within Convex's limits", async () => {
+  it("the over-cap fix's pages read each task's description row, within Convex's limits", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // 80 untrimmed descriptions of 20,000 three-byte characters. A page
-    // reads 4 MiB of them, and their rows, read and patched there, would
-    // take it past 16 MiB
+    // 80 untrimmed descriptions of 20,000 three-byte characters in both
+    // copies, about 9 MiB a copy, and 12 rows near Convex's 1 MiB document
+    // limit beside task rows without text, as the third release leaves
+    // them. A page that read every row of its tasks at once would pass
+    // 16 MiB.
     const text = '中'.repeat(LIMITS.description.max)
+    const task = (i: number, description?: string) => ({
+      id: uuid(),
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      num: 5000 + i,
+      title: 'Untrimmed',
+      ...(description === undefined ? {} : { description }),
+      status: 'todo' as const,
+      priority: 'low' as const,
+      paused: false,
+      created_at: NOW,
+      updated_at: NOW,
+      window_key: newWindowKey(),
+    })
+    const trimmed: string[] = []
     for (let from = 0; from < 80; from += 10)
       await t.run(async (ctx) => {
-        for (let i = from; i < from + 10; i++)
-          await insertTask(
-            ctx.db,
-            {
-              id: uuid(),
-              org_id: f.org.id,
-              project_id: f.sub.id,
-              num: 5000 + i,
-              title: 'Untrimmed',
-              description: `${text}  `,
-              status: 'todo',
-              priority: 'low',
-              paused: false,
-              created_at: NOW,
-              updated_at: NOW,
-              window_key: newWindowKey(),
-            },
-            'restore',
-          )
+        for (let i = from; i < from + 10; i++) {
+          const doc = task(i, `${text}  `)
+          await insertTask(ctx.db, doc, 'restore')
+          trimmed.push(doc.id)
+        }
       })
-    await t.action(internal.internal.overCapRows.fix, { dry_run: false })
-    expect(await expectDescriptions(t, f.org.id)).toBe(80)
-    const rows = await t.run((ctx) => ctx.db.query('issue_descriptions').collect())
-    expect(rows.every((row) => row.description === text)).toBe(true)
-  }, 120_000)
+    const large = '0123456789'.repeat(100_000)
+    for (let from = 80; from < 92; from += 6)
+      await t.run(async (ctx) => {
+        for (let i = from; i < from + 6; i++) {
+          const doc = task(i)
+          await ctx.db.insert('issues', doc)
+          await ctx.db.insert('issue_descriptions', {
+            issue_id: doc.id,
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            description: large,
+          })
+        }
+      })
+    const { counts } = await t.action(internal.internal.overCapRows.fix, { dry_run: false })
+    expect(counts['issues.description fixed']).toBe(80)
+    // a trim leaves those over TEXT_MAX, for a person to shorten
+    expect(counts['issues.description reported']).toBe(12)
+    for (const id of trimmed) {
+      expect((await rowsOf(t, id)).map((row) => row.description)).toEqual([text])
+      expect((await liveTask(t, id))?.description).toBe(text)
+    }
+  }, 180_000)
 })
 
 /** Gives the description row of task `id` the text `description`, as an
