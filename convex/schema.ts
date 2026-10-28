@@ -156,7 +156,12 @@ const issuesTable = defineTable({
   org_id: v.string(), // denormalized, pinned from the project, immutable
   num: v.number(), // org-scoped, assigned by counter, immutable
   title: v.string(), // LIMITS.title (lib/limits.ts), trimmed
-  description: v.string(),
+  // Markdown, LIMITS.description (lib/limits.ts), trimmed; '' for none.
+  // Moving to issue_descriptions (below): every writer still sets it, and
+  // every reader reads it, until the third release of that move clears it.
+  // Optional for good, because deleted_rows checks its stored copies, which
+  // keep the text, against this validator.
+  description: v.optional(v.string()),
   status: vIssueStatus,
   priority: vIssuePriority,
   assignee_id: v.optional(v.string()), // same org, active, never a viewer
@@ -1073,6 +1078,37 @@ export default defineSchema({
   project_access: projectAccessTable,
   project_team_access: projectTeamAccessTable,
   issues: issuesTable,
+
+  /* A task's description in a row of its own, so that the reads of task
+   * lists read small task rows (an issues row with a description at
+   * LIMITS.description is about 60 KB, one stored before the caps up to
+   * 1 MiB). The server owns it, with exactly one row per live issues row
+   * and '' for a task without a description. Only model/descriptions.ts
+   * writes it, in the transaction that writes the task
+   * (scripts/check-task-writes.mjs fails on any other writer). A row names
+   * its task's organization, and a write that finds a row resets it, since
+   * a create may take the id of a task deleted for good, also in another
+   * organization. Deleted items stores a task with its text and deletes
+   * its row in its steps, so a task in Deleted items has no row once they
+   * have run, and a restore writes the row again (model/deletedItems.ts).
+   *
+   * The move takes three releases. In the first, this one, every writer
+   * keeps both copies and every reader still reads issues.description, the
+   * source of truth; internal/descriptionsBackfill gives older tasks their
+   * rows. The second reads this table, falling back to issues.description
+   * for a task without a row, and ships only once a dry run of that
+   * backfill on every deployment reports zero missing, differing,
+   * duplicate, orphaned and skipped rows (docs/deployment.md). The third
+   * stops writing issues.description and clears it, after which an earlier
+   * release no longer shows the descriptions, so it cannot be rolled back. */
+  issue_descriptions: defineTable({
+    issue_id: v.string(),
+    org_id: v.string(), // the task's, for the teardowns that delete an organization's rows
+    description: v.string(),
+  })
+    .index('by_issue', ['issue_id'])
+    .index('by_org', ['org_id']),
+
   issue_links: issueLinksTable,
 
   labels: defineTable({

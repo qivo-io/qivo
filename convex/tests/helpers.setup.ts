@@ -32,6 +32,7 @@ import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
 import { readWorkspace, type Workspace } from '../lib/workspaceJoin'
 import { type ActivityEntry, insertActivity } from '../model/activity'
+import { insertTask } from '../model/descriptions'
 import { ERASE_TIMERS, noteRestore } from '../model/fileHolds'
 import { countersOf, countersRow, type OrgCounters } from '../model/orgs'
 import schema from '../schema'
@@ -711,13 +712,15 @@ export async function plantProject(
   })
 }
 
-/* An issue row — unscheduled backlog-shaped unless overridden. */
+/* An issue row with its description row (model/descriptions.ts), as every
+ * task has once internal/descriptionsBackfill ran. It is unscheduled and
+ * backlog-shaped unless overridden. */
 export async function plantIssue(
   t: T,
   issue: { org_id: string; project_id: string } & Partial<WithoutSystemFields<Doc<'issues'>>>,
 ): Promise<Doc<'issues'>> {
   return await t.run(async (ctx) => {
-    const _id = await ctx.db.insert('issues', {
+    const _id = await insertTask(ctx.db, {
       id: uuid(),
       num: plantedNum++,
       title: 'Planted task',
@@ -863,6 +866,35 @@ export async function expectLiveCounts(t: T, orgId: string) {
   expect(row?.counted).toBeUndefined()
   expect({ active_tasks: row?.active_tasks, live_projects: row?.live_projects }).toEqual(rows)
   return rows
+}
+
+/** Expects every live task of organization `orgId`, or of every
+ * organization without one, to have exactly one description row with its
+ * issues.description ('' for none), and no description row without its
+ * live task (schema.ts issue_descriptions). Answers how many tasks it
+ * checked. */
+export async function expectDescriptions(t: T, orgId?: string): Promise<number> {
+  const { tasks, rows } = await t.run(async (ctx) => ({
+    tasks:
+      orgId === undefined
+        ? await ctx.db.query('issues').collect()
+        : await ctx.db
+            .query('issues')
+            .withIndex('by_org', (q) => q.eq('org_id', orgId))
+            .collect(),
+    rows:
+      orgId === undefined
+        ? await ctx.db.query('issue_descriptions').collect()
+        : await ctx.db
+            .query('issue_descriptions')
+            .withIndex('by_org', (q) => q.eq('org_id', orgId))
+            .collect(),
+  }))
+  const held = (row: Doc<'issue_descriptions'>) =>
+    `${row.org_id}:${row.issue_id}:${row.description}`
+  const kept = (task: Doc<'issues'>) => `${task.org_id}:${task.id}:${task.description ?? ''}`
+  expect(rows.map(held).sort()).toEqual(tasks.map(kept).sort())
+  return tasks.length
 }
 
 /** Overwrites the organization's stored counters, for fixtures that plant

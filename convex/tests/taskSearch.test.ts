@@ -134,7 +134,7 @@ async function oldMatch(ctx: MutationCtx, fx: Fx, c: SearchCase): Promise<string
         taskSearchText({
           key: issueKey(i.num),
           title: i.title,
-          description: i.description,
+          description: i.description ?? '',
           status: i.status,
           group: false,
           priority: i.priority,

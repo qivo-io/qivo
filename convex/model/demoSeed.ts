@@ -21,6 +21,7 @@ import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
 import { issueKey } from '../lib/taskRefs'
 import { insertActivity, issueChanges, machineDetail } from './activity'
 import { markArchivedTask } from './archiveMarks'
+import { insertTask } from './descriptions'
 import { browserVerbDetail, cleanDescription } from './issues'
 import {
   type NotifyPreload,
@@ -401,7 +402,7 @@ export async function writeNorthstarStep(
       // These are explicitly imported fixtures. Atlas is the import actor;
       // reporter is separate attribution, never a forged creator history.
       const windowKey = newWindowKey()
-      const issueDocId = await ctx.db.insert('issues', {
+      const issueDocId = await insertTask(ctx.db, {
         id: issueIds[i.key],
         window_key: windowKey,
         org_id: org.id,

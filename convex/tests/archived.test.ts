@@ -410,7 +410,7 @@ describe('issues.archivedPage', () => {
             taskSearchText({
               key: issueKey(row.num),
               title: row.title,
-              description: row.description,
+              description: row.description ?? '',
               status: row.status,
               group: parents.has(row.id),
               priority: row.priority,

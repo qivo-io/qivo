@@ -19,6 +19,7 @@ import { LIMITS } from '../lib/limits'
 import { hasPendingCheckout } from './billing'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
+import type { TaskPatch } from './descriptions'
 import { releaseFile } from './fileHolds'
 import { deleteSweepRow } from './messages'
 import { deleteOrgBookkeeping } from './orgs'
@@ -142,7 +143,7 @@ export async function clearHolder(
   holder: TaskHolder,
   now: string,
 ): Promise<void> {
-  const patch: Partial<Doc<'issues'>> = { updated_at: now }
+  const patch: TaskPatch = { updated_at: now }
   patch[holder] = undefined
   await ctx.db.patch(task._id, patch)
   await emitTaskEvent(ctx, {
@@ -520,6 +521,13 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
     }
     await ctx.db.delete(i._id)
   }
+  // the tasks' description rows (model/descriptions.ts), any left by a
+  // task gone without its row included
+  for (const d of await ctx.db
+    .query('issue_descriptions')
+    .withIndex('by_org', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(d._id)
 
   for (const p of await ctx.db
     .query('projects')

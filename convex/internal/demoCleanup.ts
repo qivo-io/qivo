@@ -75,13 +75,21 @@ async function trashRows(ctx: MutationCtx, orgId: string, budget: Budget): Promi
   return done
 }
 
+/** Every task with its rows, then the description rows the tasks leave
+ * (model/descriptions.ts), which a visitor's payload limit keeps small. */
 async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
   while (budget.left > 0) {
     const issue = await ctx.db
       .query('issues')
       .withIndex('by_org', (q) => q.eq('org_id', orgId))
       .first()
-    if (!issue) return true
+    if (!issue)
+      return await drain(ctx, budget, (n) =>
+        ctx.db
+          .query('issue_descriptions')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .take(n),
+      )
     const id = issue.id
     if (
       !(await drain(ctx, budget, (n) =>
@@ -576,7 +584,14 @@ export const purge = internalMutation({
           .withIndex('by_auth', (q) => q.eq('auth_user_id', receipt.auth_user_id))
           .first()) === null, rule('Demo login still owns a profile'))
         if (orgId) {
-          for (const table of ['issues', 'projects', 'teams', 'profiles', 'labels'] as const)
+          for (const table of [
+            'issues',
+            'issue_descriptions',
+            'projects',
+            'teams',
+            'profiles',
+            'labels',
+          ] as const)
             require((await ctx.db
               .query(table)
               .withIndex('by_org', (q) => q.eq('org_id', orgId))

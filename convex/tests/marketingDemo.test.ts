@@ -25,6 +25,7 @@ import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
 import schema from '../schema'
 import {
   countersFor,
+  expectDescriptions,
   expectLiveCounts,
   expectRefusal,
   fileState,
@@ -1183,6 +1184,9 @@ describe('marketing demo rebuild ownership', () => {
     const t = newAuthT()
     const result = await seeded(t)
     const counted = await expectLiveCounts(t, result.org_id)
+    // every seeded task has its description row, and the wipe takes them
+    const described = await expectDescriptions(t, result.org_id)
+    expect(described).toBeGreaterThanOrEqual(counted.active_tasks)
     const roster = await profiles(t, result.org_id)
     const issueIds = (await t.run(async (ctx) => ctx.db.query('issues').collect())).map((i) => i.id)
     expect(await wipe(t)).toMatchObject({
@@ -1227,8 +1231,10 @@ describe('marketing demo rebuild ownership', () => {
     // the live counts follow the rows it deleted and writes
     expect(await countersFor(t, result.org_id)).toEqual({ next_issue_num: 0, next_project_num: 0 })
     expect(await expectLiveCounts(t, result.org_id)).toEqual({ active_tasks: 0, live_projects: 0 })
+    expect(await expectDescriptions(t, result.org_id)).toBe(0)
     await seed(t, NEXT_ANCHOR)
     expect(await expectLiveCounts(t, result.org_id)).toEqual(counted)
+    expect(await expectDescriptions(t, result.org_id)).toBe(described)
     expect((await t.run(async (ctx) => ctx.db.query('issues').collect())).map((i) => i.id)).toEqual(
       issueIds,
     )
