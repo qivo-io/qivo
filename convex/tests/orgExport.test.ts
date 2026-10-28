@@ -117,6 +117,8 @@ const EXCLUDED_TABLES = [
   'billing_periods',
   'billing_usage',
   'billing_usage_totals',
+  'billing_usage_accounts',
+  'billing_month_totals',
   'billing_events',
   'billing_webhooks',
   'billing_notices',

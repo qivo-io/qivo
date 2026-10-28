@@ -33,6 +33,8 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'billing_periods', field: 'plan_id', target: 'billing_plans' },
   { table: 'billing_usage', field: 'org_id', target: 'organizations' },
   { table: 'billing_usage_totals', field: 'org_id', target: 'organizations' },
+  { table: 'billing_usage_accounts', field: 'org_id', target: 'organizations' },
+  { table: 'billing_month_totals', field: 'org_id', target: 'organizations' },
   { table: 'billing_events', field: 'org_id', target: 'organizations' },
   { table: 'billing_notices', field: 'org_id', target: 'organizations' },
   { table: 'usage_months', field: 'org_id', target: 'organizations' },
@@ -162,6 +164,7 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // billing_periods.profile_ids similarly records the renewal snapshot.
   'billing_usage.profile_id',
   'billing_usage.credential_id',
+  'billing_usage_accounts.profile_id',
   'billing_notices.profile_id',
   // A Better Auth session id, kept after the session row is deleted
   // (lib/sessionEnd.ts endSessionAccess).

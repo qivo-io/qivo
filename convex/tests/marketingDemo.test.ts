@@ -445,6 +445,35 @@ describe('marketing demo rebuild ownership', () => {
     await expectExact(t, org_id)
   })
 
+  it('seeds ranked usage whose account rows and month totals stay exact across a later reseed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.parse('2026-09-20T12:00:00.000Z'))
+    const t = newAuthT()
+    await seeded(t)
+    const clean = {
+      unranked: 0,
+      differing_accounts: 0,
+      differing_totals: 0,
+      unsettled: 0,
+      done: true,
+    }
+    // six months of three callers' calls
+    expect(await t.action(internal.internal.usageRanksBackfill.check, {})).toMatchObject({
+      ...clean,
+      buckets: 6,
+    })
+    const first = await t.run(async (ctx) => ctx.db.query('billing_usage').collect())
+    expect(first.every((row) => row.neg_calls === -row.calls)).toBe(true)
+    // a month later the reseed moves every month's calls and adds one month
+    vi.setSystemTime(Date.parse('2026-10-20T12:00:00.000Z'))
+    await reset(t, NEXT_ANCHOR)
+    expect(await t.action(internal.internal.usageRanksBackfill.check, {})).toMatchObject({
+      ...clean,
+      buckets: 7,
+    })
+    vi.useRealTimers()
+  })
+
   it('seeds two teams with separate leaders, partial membership overlap, default settings, and inherited project access', async () => {
     const t = newAuthT()
     await seeded(t)

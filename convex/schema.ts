@@ -740,6 +740,17 @@ export default defineSchema({
   // chosen by `usagePeriod` (model/billingUsage.ts): a paid period's ISO start,
   // a pending interval's ISO start, or `month:YYYY-MM` for a UTC calendar month
   // without a paid period. Older rows may be keyed by `complimentary_start`.
+  //
+  // `neg_calls` and `name_key` rank a row, server-owned and written with
+  // `calls` and `credential_name` (model/billingUsage.ts writeUsageRow): the
+  // negated calls, so one ascending range reads calls descending, and the
+  // credential name's key (lib/nameKey.ts). A ranked row's -neg_calls is in
+  // its account's billing_usage_accounts row and, for a calendar month, in
+  // the organization's billing_month_totals; a row without them, stored
+  // before ranks existed, is in neither until the next call of its
+  // credential or internal/usageRanksBackfill ranks it. Such a row sorts
+  // first in the rank indexes, so one read of a bucket's range says whether
+  // the bucket's aggregates are complete (usageRanked).
   billing_usage: defineTable({
     org_id: v.string(),
     profile_id: v.string(),
@@ -747,6 +758,8 @@ export default defineSchema({
     credential_name: v.string(),
     period_start: v.string(),
     calls: v.number(),
+    neg_calls: v.optional(v.number()),
+    name_key: v.optional(v.string()),
   })
     .index('by_org_period', ['org_id', 'period_start'])
     .index('by_credential_period', ['credential_id', 'period_start'])
@@ -755,14 +768,65 @@ export default defineSchema({
       'profile_id',
       'credential_id',
       'period_start',
+    ])
+    // a bucket's credentials, the organization's or one account's, by calls
+    // descending, then name, with the credential breaking ties
+    .index('by_org_period_rank', [
+      'org_id',
+      'period_start',
+      'neg_calls',
+      'name_key',
+      'credential_id',
+    ])
+    .index('by_org_period_profile_rank', [
+      'org_id',
+      'period_start',
+      'profile_id',
+      'neg_calls',
+      'name_key',
+      'credential_id',
     ]),
 
+  // The calls of a paid, pending or older ISO-keyed bucket, every call
+  // counted in its own transaction (model/billingUsage.ts recordApiCall). A
+  // calendar month keeps its total in billing_month_totals instead.
   billing_usage_totals: defineTable({
     org_id: v.string(),
     period_start: v.string(),
     calls: v.number(),
     reported_api_blocks: v.number(),
   }).index('by_org_period', ['org_id', 'period_start']),
+
+  // One account's calls in one usage bucket, every credential of the
+  // profile together: the sum of -neg_calls of the profile's ranked
+  // billing_usage rows in the bucket, kept in the transaction that ranks or
+  // counts each of them (model/billingUsage.ts addRankedCalls). Kept when the
+  // profile leaves, as its usage rows are, and deleted with the
+  // organization.
+  billing_usage_accounts: defineTable({
+    org_id: v.string(),
+    period_start: v.string(), // the bucket key, as on billing_usage
+    profile_id: v.string(),
+    calls: v.number(),
+  })
+    .index('by_org_period_profile', ['org_id', 'period_start', 'profile_id'])
+    // Billing's API calls by account: read in descending order
+    .index('by_org_period_calls', ['org_id', 'period_start', 'calls', 'profile_id']),
+
+  // A calendar-month bucket's calls, the organization's total in
+  // MONTH_TOTAL_SHARDS rows (model/billingUsage.ts), each holding the
+  // ranked calls of the profiles whose id hashes to it. Every call of one
+  // profile writes the same row, which its rate-limit row already
+  // serializes, so calls of different profiles rarely touch the same row.
+  // The total is the sum of the shards, which equals the bucket's calls
+  // once usageRanked says every row is in it. Deleted with the
+  // organization.
+  billing_month_totals: defineTable({
+    org_id: v.string(),
+    period_start: v.string(), // 'month:YYYY-MM'
+    shard: v.number(),
+    calls: v.number(),
+  }).index('by_org_period_shard', ['org_id', 'period_start', 'shard']),
 
   // Durable outbox. Provider event external_id is this id, so a timeout and
   // retry cannot bill twice. Metering is never reconstructed from logs.

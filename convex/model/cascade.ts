@@ -443,6 +443,16 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       .collect())
       await ctx.db.delete(row._id)
   for (const row of await ctx.db
+    .query('billing_usage_accounts')
+    .withIndex('by_org_period_profile', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(row._id)
+  for (const row of await ctx.db
+    .query('billing_month_totals')
+    .withIndex('by_org_period_shard', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(row._id)
+  for (const row of await ctx.db
     .query('billing_notices')
     .filter((q) => q.eq(q.field('org_id'), org.id))
     .collect())

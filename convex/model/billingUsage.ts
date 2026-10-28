@@ -5,6 +5,7 @@ import type { BillingUsage } from '../lib/billingTypes'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
 import { LIMITS } from '../lib/limits'
+import { nameKey } from '../lib/nameKey'
 
 export const MACHINE_WINDOW_MS = 60_000
 export const MACHINE_PROFILE_LIMIT = LIMITS.requestRate.max
@@ -201,6 +202,173 @@ export async function usageKeyRanges(
   })
 }
 
+/** How many billing_month_totals rows hold one calendar month's total
+ * (schema.ts). Readers sum at most this many rows. */
+export const MONTH_TOTAL_SHARDS = 16
+
+/** The billing_month_totals shard of profile `profileId`: a 32-bit FNV-1a
+ * hash of the id, so every call of one profile counts on the same row. */
+export function monthShard(profileId: string): number {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < profileId.length; i++)
+    hash = Math.imul(hash ^ profileId.charCodeAt(i), 0x01000193)
+  return (hash >>> 0) % MONTH_TOTAL_SHARDS
+}
+
+/** Whether `key` is a calendar month's bucket key, `month:YYYY-MM`. */
+export const isMonthKey = (key: string): boolean => MONTH_KEY.test(key)
+
+/** Adds `calls`, which may be negative, to the aggregates of profile
+ * `profileId` in bucket `period` of organization `orgId`: its account's
+ * billing_usage_accounts row, and for a calendar month the organization's
+ * total on the profile's shard (billing_month_totals). Either row is
+ * inserted when missing. A paid, pending or older ISO-keyed bucket keeps its
+ * total in billing_usage_totals, which recordApiCall counts itself. */
+async function addRankedCalls(
+  ctx: MutationCtx,
+  orgId: string,
+  period: string,
+  profileId: string,
+  calls: number,
+): Promise<void> {
+  if (calls === 0) return
+  const account = await ctx.db
+    .query('billing_usage_accounts')
+    .withIndex('by_org_period_profile', (q) =>
+      q.eq('org_id', orgId).eq('period_start', period).eq('profile_id', profileId),
+    )
+    .unique()
+  if (account) await ctx.db.patch(account._id, { calls: account.calls + calls })
+  else
+    await ctx.db.insert('billing_usage_accounts', {
+      org_id: orgId,
+      period_start: period,
+      profile_id: profileId,
+      calls,
+    })
+  if (!isMonthKey(period)) return
+  const shard = monthShard(profileId)
+  const total = await ctx.db
+    .query('billing_month_totals')
+    .withIndex('by_org_period_shard', (q) =>
+      q.eq('org_id', orgId).eq('period_start', period).eq('shard', shard),
+    )
+    .unique()
+  if (total) await ctx.db.patch(total._id, { calls: total.calls + calls })
+  else
+    await ctx.db.insert('billing_month_totals', {
+      org_id: orgId,
+      period_start: period,
+      shard,
+      calls,
+    })
+}
+
+/** What identifies a usage row: one credential of one profile in one bucket. */
+export type UsageRowKey = Pick<
+  Doc<'billing_usage'>,
+  'org_id' | 'profile_id' | 'credential_id' | 'period_start'
+>
+
+/** Writes `calls` and `name` on the usage row `row` of `key`, inserting it
+ * when `row` is null, ranks it and moves its aggregates by the difference
+ * (addRankedCalls). The aggregates hold -neg_calls of each ranked row, so a
+ * row stored before ranks existed adds all its calls the first time this
+ * writes it, and the aggregates stay exact whichever writer gets there
+ * first: a call, internal/usageRanksBackfill or the Northstar seed. */
+export async function writeUsageRow(
+  ctx: MutationCtx,
+  row: Doc<'billing_usage'> | null,
+  key: UsageRowKey,
+  calls: number,
+  name: string,
+): Promise<void> {
+  const counted = row?.neg_calls === undefined ? 0 : -row.neg_calls
+  const fields = { calls, credential_name: name, neg_calls: -calls, name_key: nameKey(name) }
+  if (row) await ctx.db.patch(row._id, fields)
+  else
+    await ctx.db.insert('billing_usage', {
+      org_id: key.org_id,
+      profile_id: key.profile_id,
+      credential_id: key.credential_id,
+      period_start: key.period_start,
+      ...fields,
+    })
+  await addRankedCalls(ctx, key.org_id, key.period_start, key.profile_id, calls - counted)
+}
+
+/** Whether API usage of organization `orgId` names profile `profileId`.
+ * Usage rows and their account rows outlive the profile, so a new seat of
+ * the organization must not take that id and with it the calls. One read. */
+export async function usageNamesProfile(
+  ctx: QueryCtx,
+  orgId: string,
+  profileId: string,
+): Promise<boolean> {
+  const row = await ctx.db
+    .query('billing_usage')
+    .withIndex('by_subject_credential_period', (q) =>
+      q.eq('org_id', orgId).eq('profile_id', profileId),
+    )
+    .first()
+  return row !== null
+}
+
+/** Whether every usage row of bucket `period` of organization `orgId`, or
+ * of only profile `profileId` in it, is ranked, so its account rows and
+ * month total hold all its calls. An unranked row sorts first in the rank
+ * indexes, so one read answers. */
+export async function usageRanked(
+  ctx: QueryCtx,
+  orgId: string,
+  period: string,
+  profileId?: string,
+): Promise<boolean> {
+  const first =
+    profileId === undefined
+      ? await ctx.db
+          .query('billing_usage')
+          .withIndex('by_org_period_rank', (q) => q.eq('org_id', orgId).eq('period_start', period))
+          .first()
+      : await ctx.db
+          .query('billing_usage')
+          .withIndex('by_org_period_profile_rank', (q) =>
+            q.eq('org_id', orgId).eq('period_start', period).eq('profile_id', profileId),
+          )
+          .first()
+  return first === null || first.neg_calls !== undefined
+}
+
+/** The calls of organization `orgId` in bucket `period`, read without its
+ * usage rows: the sum of a calendar month's shards, or another bucket's
+ * billing_usage_totals row. Null when that total is not complete: a month
+ * whose rows are not all ranked (usageRanked), or a bucket with usage rows
+ * and no totals row. */
+export async function periodCalls(
+  ctx: QueryCtx,
+  orgId: string,
+  period: string,
+): Promise<number | null> {
+  if (isMonthKey(period)) {
+    if (!(await usageRanked(ctx, orgId, period))) return null
+    const shards = await ctx.db
+      .query('billing_month_totals')
+      .withIndex('by_org_period_shard', (q) => q.eq('org_id', orgId).eq('period_start', period))
+      .take(MONTH_TOTAL_SHARDS)
+    return shards.reduce((sum, row) => sum + row.calls, 0)
+  }
+  const total = await ctx.db
+    .query('billing_usage_totals')
+    .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', period))
+    .unique()
+  if (total) return total.calls
+  const used = await ctx.db
+    .query('billing_usage')
+    .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', period))
+    .first()
+  return used === null ? 0 : null
+}
+
 /** Fixed minute windows use one stable row per subject. A denied call returns
  * false, so the enclosing mutation commits rather than rolling back its fence. */
 export async function consumeMachineRequest(
@@ -232,12 +400,14 @@ export async function consumeMachineRequest(
  * profile's call that passes the limit is counted, with or without a
  * subscription or plan.
  *
- * A calendar-month bucket is never charged, so its call writes only the
- * credential's own usage row, and readers sum those rows. Parallel calls
- * from different profiles of one organization then touch no shared row;
- * the credentials of one profile still share its rate-limit row.
- * A paid or pending bucket also counts the organization's total in
- * billing_usage_totals in the same transaction, which keeps the API block
+ * Every call also counts on its account's row (billing_usage_accounts),
+ * which the profile's credentials share as they share its rate-limit row.
+ * A calendar-month bucket is never charged, so it keeps no single
+ * organization total: its call counts on the profile's shard of the month's
+ * total (billing_month_totals), and parallel calls from different profiles
+ * of one organization rarely touch a shared row.
+ * A paid or pending bucket counts the organization's total in one
+ * billing_usage_totals row in the same transaction, which keeps the API block
  * accounting exact: every call sees the total before it, so each block is
  * billed once. Only a paid period can create billing events. Nothing here
  * is read by the planner snapshot, and no provider call runs in this
@@ -255,31 +425,26 @@ export async function recordApiCall(
   const sub = await subscriptionFor(ctx, profile.org_id)
   const { kind, key: period } = usagePeriod(sub, now)
 
+  const key: UsageRowKey = {
+    org_id: profile.org_id,
+    profile_id: profile.id,
+    credential_id: args.credential_id,
+    period_start: period,
+  }
   const usage = await ctx.db
     .query('billing_usage')
     .withIndex('by_subject_credential_period', (q) =>
       q
-        .eq('org_id', profile.org_id)
-        .eq('profile_id', profile.id)
-        .eq('credential_id', args.credential_id)
-        .eq('period_start', period),
+        .eq('org_id', key.org_id)
+        .eq('profile_id', key.profile_id)
+        .eq('credential_id', key.credential_id)
+        .eq('period_start', key.period_start),
     )
     .unique()
-  if (usage) {
-    await ctx.db.patch(usage._id, { calls: usage.calls + 1, credential_name: args.credential_name })
-  } else {
-    await ctx.db.insert('billing_usage', {
-      org_id: profile.org_id,
-      profile_id: profile.id,
-      credential_id: args.credential_id,
-      credential_name: args.credential_name,
-      period_start: period,
-      calls: 1,
-    })
-  }
-  // A calendar month has no allowance and is never charged, so it keeps no
-  // organization total (see apiAccess.ts and model/billing.ts, which sum the
-  // usage rows).
+  await writeUsageRow(ctx, usage, key, (usage?.calls ?? 0) + 1, args.credential_name)
+  // A calendar month has no allowance and is never charged, so its total is
+  // only the shards writeUsageRow counted on (apiAccess.ts and
+  // model/billing.ts still sum the usage rows).
   if (kind === 'month') return true
   const total = await ctx.db
     .query('billing_usage_totals')

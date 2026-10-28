@@ -502,8 +502,9 @@ const webhookRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     ),
   )
 
-/** Usage, billing events, periods, notices and the subscription row, then
- * the monthly usage rows and counts of Qivo Admin's Usage page. */
+/** Usage with its account rows and month totals, billing events, periods,
+ * notices and the subscription row, then the monthly usage rows and counts
+ * of Qivo Admin's Usage page. */
 const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
     ...(['billing_usage', 'billing_usage_totals', 'billing_events'] as const).map(
@@ -514,6 +515,22 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
           ctx.db.query(table).withIndex('by_org_period', (q) => q.eq('org_id', orgId)),
         ),
     ),
+    () =>
+      drain(
+        ctx,
+        budget,
+        ctx.db
+          .query('billing_usage_accounts')
+          .withIndex('by_org_period_profile', (q) => q.eq('org_id', orgId)),
+      ),
+    () =>
+      drain(
+        ctx,
+        budget,
+        ctx.db
+          .query('billing_month_totals')
+          .withIndex('by_org_period_shard', (q) => q.eq('org_id', orgId)),
+      ),
     ...(['billing_periods', 'billing_notices', 'billing_subscriptions'] as const).map(
       (table) => () =>
         drain(

@@ -16,6 +16,7 @@ import { badRequest, conflict, require, rule } from '../lib/functions'
 import { DEFAULT_MESSAGE_RETENTION_DAYS, LIMITS, MIB } from '../lib/limits'
 import { named } from '../lib/nameKey'
 import { monthOf } from '../lib/usage'
+import { writeUsageRow } from '../model/billingUsage'
 import { pendingRemoval } from '../model/cascade'
 import {
   layoutHash,
@@ -565,27 +566,20 @@ async function seedUsage(ctx: MutationCtx, org: Doc<'organizations'>, now: strin
     for (const [i, month] of months.entries()) {
       // The current month is under way, so it holds about a third of a month.
       const calls = Math.round((caller.calls * (i === 0 ? 0.35 : 1)) / (1 + 0.12 * i))
-      const period_start = `month:${month}`
+      const key = { org_id: org.id, profile_id, credential_id, period_start: `month:${month}` }
       const row = await ctx.db
         .query('billing_usage')
         .withIndex('by_subject_credential_period', (q) =>
           q
-            .eq('org_id', org.id)
-            .eq('profile_id', profile_id)
-            .eq('credential_id', credential_id)
-            .eq('period_start', period_start),
+            .eq('org_id', key.org_id)
+            .eq('profile_id', key.profile_id)
+            .eq('credential_id', key.credential_id)
+            .eq('period_start', key.period_start),
         )
         .unique()
-      if (row) await ctx.db.patch(row._id, { calls, credential_name: caller.credential })
-      else
-        await ctx.db.insert('billing_usage', {
-          org_id: org.id,
-          profile_id,
-          credential_id,
-          credential_name: caller.credential,
-          period_start,
-          calls,
-        })
+      // ranked, with the account and month totals moved to match, as a call
+      // would leave them
+      await writeUsageRow(ctx, row, key, calls, caller.credential)
     }
   }
   for (const [i, count] of USAGE_INVITES.entries()) {

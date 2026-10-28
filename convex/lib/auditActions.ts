@@ -42,6 +42,7 @@ export const AUDIT_ACTION_LABELS = {
   reap_orphans: 'Checked for files nothing refers to',
   usage_month: 'Stored monthly usage',
   credential_keys_backfill: 'Gave API credentials their organization and name keys',
+  usage_ranks_backfill: 'Ranked API usage and counted it per account and month',
   live_counts_backfill: 'Counted live tasks and projects',
   window_keys_backfill: 'Gave tasks and projects their window keys',
   descriptions_backfill: 'Gave tasks their description rows',
