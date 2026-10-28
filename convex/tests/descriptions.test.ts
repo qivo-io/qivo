@@ -12,7 +12,7 @@ import { PAGE, RUN } from '../internal/descriptionsBackfill'
 import { newWindowKey } from '../lib/db'
 import { LIMITS } from '../lib/limits'
 import { deleteOrgDeep } from '../model/cascade'
-import { TRASH_BUDGET } from '../model/deletedItems'
+import { clearOrgTrash, startPurge, TRASH_BUDGET } from '../model/deletedItems'
 import { insertTask, putDescription } from '../model/descriptions'
 import { wipeWorkStep } from '../model/orgDeletion'
 import {
@@ -30,13 +30,16 @@ import {
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import {
+  comment,
   DEFAULT_BUDGET,
   deleteProject,
   deleteTask,
   installTrashTimers,
+  itemById,
   itemFor,
   liveTask,
   runSteps,
+  step,
   storedIssue,
 } from './trash.setup'
 
@@ -399,7 +402,112 @@ describe('Deleted items', () => {
   })
 })
 
+/** A task item whose restore splits off a subtask whose project was
+ * purged, stopped after the split deleted the stored task row but before
+ * it deleted the task's deleted_tasks row, so the subtask's id is free.
+ * Answers the item and the subtask. */
+async function splitHalfway(t: T, f: OrgFixture) {
+  const org_id = f.org.id
+  const gone = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
+  const root = await plantIssue(t, { org_id, project_id: f.sub.id })
+  const sub = await plantIssue(t, { org_id, project_id: gone.id, parent_id: root.id })
+  for (let i = 0; i < 3; i++) await comment(t, sub)
+  await deleteTask(t, f, root.id, { subtask_ids: [sub.id] })
+  await deleteProject(t, f, gone.id)
+  await runSteps(t)
+  const goneItem = await itemFor(t, gone.id)
+  await t.run((ctx) => startPurge(ctx, goneItem, { inline: true }))
+  await runSteps(t)
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const item = await itemFor(t, root.id)
+  // each step deletes one row
+  Object.assign(TRASH_BUDGET, { rows: 1 })
+  await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
+  const marker = () =>
+    t.run((ctx) =>
+      ctx.db
+        .query('deleted_tasks')
+        .withIndex('by_task', (q) => q.eq('task_id', sub.id))
+        .first(),
+    )
+  for (let steps = 0; ; steps++) {
+    if ((await storedIssue(t, sub.id)) === undefined && (await marker()) !== null) break
+    expect(steps).toBeLessThan(40)
+    await step(t, item.id)
+  }
+  Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+  return { item, sub }
+}
+
+/** Creates a task with id `id` in `f`'s organization, or in the other
+ * organization, and answers that organization's id. */
+async function createWithId(t: T, f: OrgFixture, id: string, where: 'same' | 'other') {
+  if (where === 'same') {
+    await create(t, f, { id, description: 'Mine' })
+    return f.org.id
+  }
+  const sub = await plantProject(t, {
+    org_id: f.otherOrg.id,
+    type: 'project',
+    parent_id: f.otherProject.id,
+  })
+  await as(t, f.otherAdmin).mutation(api.issues.create, {
+    org_id: f.otherOrg.id,
+    id,
+    project_id: sub.id,
+    title: 'Mine',
+    description: 'Mine',
+  })
+  return f.otherOrg.id
+}
+
 describe('a task id that comes back', () => {
+  it("leaves another organization's row that waits for its own steps when a split stopped partway goes on", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const { item, sub } = await splitHalfway(t, f)
+    await createWithId(t, f, sub.id, 'other')
+    // the other organization deletes the task, and its row waits for that
+    // item's steps
+    Object.assign(TRASH_BUDGET, { ranges: 1 })
+    await as(t, f.otherAdmin).mutation(api.issues.deleteDeep, { org_id: f.otherOrg.id, id: sub.id })
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    expect(await rowsOf(t, sub.id)).toMatchObject([{ org_id: f.otherOrg.id }])
+    // only this organization's split goes on
+    for (let steps = 0; (await itemById(t, item.id)) !== null; steps++) {
+      expect(steps).toBeLessThan(40)
+      await step(t, item.id)
+    }
+    expect(await rowsOf(t, sub.id)).toMatchObject([{ org_id: f.otherOrg.id }])
+    // the other item's steps take it
+    await runSteps(t)
+    expect(await rowsOf(t, sub.id)).toEqual([])
+  })
+
+  for (const where of ['same', 'other'] as const) {
+    const org = where === 'same' ? 'the same organization' : 'another organization'
+    it(`keeps its row when a split stopped partway goes on, in ${org}`, async () => {
+      const t = newT()
+      const f = await withOrg(t)
+      const { sub } = await splitHalfway(t, f)
+      const orgId = await createWithId(t, f, sub.id, where)
+      await runSteps(t)
+      expect(await liveTask(t, sub.id)).toMatchObject({ org_id: orgId, description: 'Mine' })
+      expect(await rowsOf(t, sub.id)).toMatchObject([{ org_id: orgId, description: 'Mine' }])
+      await expectDescriptions(t, orgId)
+    })
+
+    it(`keeps its row when a teardown clears the Deleted items of a split stopped partway, in ${org}`, async () => {
+      const t = newT()
+      const f = await withOrg(t)
+      const { sub } = await splitHalfway(t, f)
+      const orgId = await createWithId(t, f, sub.id, where)
+      await t.run((ctx) => clearOrgTrash(ctx, f.org.id, { left: Number.POSITIVE_INFINITY }))
+      expect(await rowsOf(t, sub.id)).toMatchObject([{ org_id: orgId, description: 'Mine' }])
+      await expectDescriptions(t, orgId)
+    })
+  }
+
   it("takes over the row with its own organization, which the first one's teardown leaves alone", async () => {
     const t = newT()
     const f = await withOrg(t)

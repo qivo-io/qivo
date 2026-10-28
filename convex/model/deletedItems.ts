@@ -772,12 +772,38 @@ async function dropTaskDescription(
 /** Deletes the description rows a task item's stored task `taskId` still
  * has (model/descriptions.ts), in the step's budget, which counts each
  * row's read and its delete's. The person's delete leaves them to the
- * steps, so that it reads none (moveTasksToTrash). */
-const dropDescriptions = (run: Run, taskId: string): Promise<boolean> =>
-  drain(run.budget, descriptionRange(run.ctx, taskId), async (row) => {
+ * steps, so that it reads none (moveTasksToTrash). A split or a purge can
+ * stop after the stored task row is gone, which frees the id, so the rows
+ * of a live task that took it since, and those of another organization,
+ * stay (ownDescription). */
+async function dropDescriptions(run: Run, taskId: string): Promise<boolean> {
+  const live = await byId(run.ctx, 'issues', taskId)
+  if (live !== null) {
+    chargeRead(run.budget, live)
+    return true
+  }
+  return await drain(run.budget, descriptionRange(run.ctx, taskId), async (row) => {
+    if (!ownDescription(run.item.org_id, row)) return
     chargeRead(run.budget, row)
     await run.ctx.db.delete(row._id)
   })
+}
+
+/** Whether a stored task's description row `row` is its organization
+ * `orgId`'s, for Deleted items to delete. A create in another organization
+ * can take the id once the stored task row is gone, and its row then names
+ * that organization (model/descriptions.ts putDescription). */
+const ownDescription = (orgId: string, row: Doc<'issue_descriptions'>): boolean =>
+  row.org_id === orgId
+
+/** Whether stored task `taskId` still has a description row its item
+ * deletes (dropDescriptions). */
+async function holdsDescription(run: Run, taskId: string): Promise<boolean> {
+  if ((await byId(run.ctx, 'issues', taskId)) !== null) return false
+  for await (const row of descriptionRange(run.ctx, taskId))
+    if (ownDescription(run.item.org_id, row)) return true
+  return false
+}
 
 /** The description rows of task `taskId`, one unless a release before
  * this one wrote another. */
@@ -1126,7 +1152,7 @@ async function moveLeft(run: Run): Promise<TrashPhase | null> {
     const done = await eachStoredTask(run, async ({ task_id }) => {
       held =
         (await holdsMessages(run, task_id)) ||
-        (await descriptionRange(run.ctx, task_id).first()) !== null ||
+        (await holdsDescription(run, task_id)) ||
         (await holdsRows(run.ctx, TASK_ROWS, task_id))
       return !held
     })
@@ -3825,7 +3851,7 @@ async function clearPages<Row>(
 
 /** Deletes the rows task `taskId` still has in the live tables, letting go
  * of each attachment's file (model/fileHolds.ts releaseFile), then its
- * messages and its description row. */
+ * messages. */
 async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown): Promise<boolean> {
   for (const relation of TASK_ROWS) {
     const cleared = await clearPages(budget, relation(ctx, taskId), async (row) => {
@@ -3835,7 +3861,7 @@ async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown)
     })
     if (!cleared) return false
   }
-  const messages = await clearPages(
+  return await clearPages(
     budget,
     ctx.db.query('messages').withIndex('by_issue_read', (q) => q.eq('issue_id', taskId)),
     async (message) => {
@@ -3843,9 +3869,28 @@ async function clearLiveRows(ctx: MutationCtx, taskId: string, budget: Teardown)
       return true
     },
   )
-  if (!messages) return false
-  // clearPages charges each row's read, and this its delete's
+}
+
+/** Deletes the description rows of task `taskId` (model/descriptions.ts)
+ * for a teardown of organization `orgId`'s Deleted items. clearPages
+ * charges each row's read, and this its delete's. `own` is the live task
+ * the teardown deletes itself. Otherwise the stored task row may be gone,
+ * so the rows of a live task that took the id since, and those of another
+ * organization, stay (ownDescription). */
+async function clearDescriptions(
+  ctx: MutationCtx,
+  budget: Teardown,
+  orgId: string,
+  taskId: string,
+  own: boolean,
+): Promise<boolean> {
+  const live = own ? null : await byId(ctx, 'issues', taskId)
+  if (live !== null) {
+    if (budget.bytes !== undefined) budget.bytes -= estimateDocumentBytes(live)
+    return true
+  }
   return await clearPages(budget, descriptionRange(ctx, taskId), async (row) => {
+    if (!ownDescription(orgId, row)) return true
     if (budget.bytes !== undefined) budget.bytes -= estimateDocumentBytes(row)
     await ctx.db.delete(row._id)
     return true
@@ -3904,6 +3949,7 @@ export async function clearOrgTrash(
     ctx.db.query('deleted_tasks').withIndex('by_org_num', (q) => q.eq('org_id', orgId)),
     async (task) => {
       if (!(await clearLiveRows(ctx, task.task_id, budget))) return false
+      if (!(await clearDescriptions(ctx, budget, orgId, task.task_id, false))) return false
       await ctx.db.delete(task._id)
       return true
     },
@@ -3927,6 +3973,7 @@ export async function clearOrgTrash(
           ctx.db.query('issues').withIndex('by_project', (q) => q.eq('project_id', row.owner_id)),
           async (task) => {
             if (!(await clearLiveRows(ctx, task.id, budget))) return false
+            if (!(await clearDescriptions(ctx, budget, orgId, task.id, true))) return false
             await deleteLive(ctx, { table: 'issues', doc: task })
             return true
           },
