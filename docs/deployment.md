@@ -702,24 +702,32 @@ their threads again from the start.
 
 Each label has a `label_counts` row with the number of active tasks that
 carry it, and each team a `team_counts` row with its members, as the team
-lists show them. Every write that changes either keeps the rows, and labels
-and teams created since the release that added them start with one. A label
-or team stored before has no row, and readers show its count as unavailable,
-never as zero, until the one-time `internal/labelCountsBackfill` and
-`internal/teamCountsBackfill` count it. Run both on every hosted deployment
-once it serves that release, as each module's header says: read the dry
-run first, then run it, calling again with the answered `cursor` until it
-answers `done`. A dry run lists the labels and teams a run would count, any
-stored count that its rows do not give, and the rows left without their
-label, team or organization; `"recount": true` mends the differing counts.
-An earlier release moves none of these counts, so after the backend has run
-an earlier release, run both dry runs again once the later release serves:
-they list what it left wrong, and a run with `recount` mends it. A profile
-removal whose memberships outlive its own transaction marks its
-`profile_removals` row with `counted_org_id` until its background steps
-finish, which takes seconds. Releases before the one that added that field
-do not accept it, so a rollback past it fails to deploy while such a
-removal runs; wait for it to finish, or roll forward.
+lists show them. No reader uses them yet. Every write that changes either
+keeps the rows, and labels and teams created since the release that added
+them start with one. A label or team stored before has no row until the
+one-time `internal/labelCountsBackfill` and `internal/teamCountsBackfill`
+count it, and the readers to come show such a count as unavailable, never
+as zero. Run both on every hosted deployment once it serves that release,
+as each module's header says: read the dry run first, then run it, calling
+again with the answered `cursor` until it answers `done`. A dry run lists
+the labels and teams a run would count, any stored count that its rows do
+not give, any count left unfinished, and the rows left without their label,
+team or organization; `"recount": true` mends the differing counts.
+
+An earlier release moves none of these counts, deletes labels, teams and
+organizations without their rows, and leaves a count the backfill had not
+finished wrong below where it stopped. After the backend has run an earlier
+release, run both dry runs again once the later release serves, then run
+both with `"recount": true`, calling again with each answered `cursor` until
+it answers `done`: a recount counts every organization and team again, an
+unfinished count from its start, and deletes the rows left without their
+label, team or organization. An organization deletion or demo cleanup that
+had passed its labels and teams phases deletes the counts such a release
+left in its last phase. A profile removal whose memberships outlive its own
+transaction marks its `profile_removals` row with `counted_org_id` until its
+background steps finish, which takes seconds. Releases before the one that
+added that field do not accept it, so a rollback past it fails to deploy
+while such a removal runs; wait for it to finish, or roll forward.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to

@@ -1,9 +1,9 @@
 /* One-time migration that counts, for every label, the active tasks that
  * carry it (schema.ts label_counts), which Settings > Labels and its delete
- * confirmation show. Until a label is counted it has no row, and a reader
- * shows its count as unavailable (model/labelCounts.ts activeTaskCount).
- * Labels created since this release start with a row at zero, and every
- * write keeps the rows that exist.
+ * confirmation are to show. No reader uses the counts yet. Until a label is
+ * counted it has no row, and a reader is to show its count as unavailable
+ * (model/labelCounts.ts activeTaskCount). Labels created since this release
+ * start with a row at zero, and every write keeps the rows that exist.
  *
  * An organization's count runs in steps, each its own transaction. The
  * first step adds its label_count_runs row. The reset steps then set every
@@ -16,24 +16,28 @@
  * (model/labelCounts.ts), so the count is exact however the rows change
  * while it runs. A task created later, or written back from Deleted items,
  * is a new document past every one counted, which a later step reads as it
- * is then. The last step deletes the run row. A reader shows none of the
- * organization's counts while it exists.
+ * is then. The last step deletes the run row. A reader is to show none of
+ * the organization's counts while it exists.
  *
  * Read the dry run first. It writes nothing and reports each organization
  * a run would count, with its labels, those without a row yet and the
- * counts it would write (`to_count`), and the labels counted already whose
- * stored count their tasks do not give (`differ`).
- * It reads an organization's stored counts before and after it counts its
- * tasks, and lists an organization whose counts writes kept moving as
- * unsettled, to check again with a later dry run (dryCount). With the
- * private helper:
+ * counts it would write (`to_count`), the labels counted already whose
+ * stored count their tasks do not give (`differ`), and the organizations
+ * with a count left unfinished (`running_orgs`), which it cannot check. It
+ * reads an organization's stored counts and their revisions before and
+ * after it counts its tasks, and lists an organization whose counts writes
+ * kept moving as unsettled, to check again with a later dry run
+ * (dryCount). With the private helper:
  *   H="${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment"
  *   "$H" staging npx convex run internal/labelCountsBackfill:run '{"dry_run": true}'
  *   "$H" staging npx convex run internal/labelCountsBackfill:run '{"dry_run": false}'
- * A call stops after RUN.ms, well inside Convex's action time limit, and
- * then answers `done: false` with a `cursor`. Call it again with the same
- * arguments and `"cursor"` set to it until `done` is true. Each call
- * reports the organizations it went through.
+ * A call stops after RUN.ms, well inside Convex's action time limit, before
+ * its next organization, step or page, and then answers `done: false` with
+ * a `cursor`, which can point inside an organization. Call it again with
+ * the same arguments and `"cursor"` set to it until `done` is true. Each
+ * call reports the organizations it went through. A dry run checks the time
+ * between organizations, and reads each one whole in the call that starts
+ * it.
  *
  * Run it only after the deployment serves this release, and only with the
  * owner's approval. On production, take and verify a backup first
@@ -43,22 +47,25 @@
  * deployment:functions:runInternalActions.
  *
  * A run counts each organization that has a label without a row or a run
- * left unfinished, and leaves the others as they are. `"recount": true`
- * counts every organization again, to mend counts a dry run lists as
- * differing. After the organizations, a call goes through every row of
- * label_counts and label_count_runs and deletes the rows whose label or
- * organization is gone (`orphans`), which a dry run counts without
- * deleting. Only an earlier release leaves such rows: run back on a
- * deployment after this one, it deletes labels and organizations without
- * their rows and moves no count. After such a rollback, a dry run lists
- * the labels it created as to count, the counts it left wrong as differing
- * and the rows it left as orphans; a run, with `recount` for the differing
- * counts, mends them all. A call that wrote adds one platform_audit_log row
- * (action 'label_counts_backfill', actor 'system') with its totals.
- * Running it again is safe. It writes no activity, sends no task event and
- * changes nothing a person sees until a reader shows the counts. */
+ * left unfinished, going on with that run where it stopped, and leaves the
+ * others as they are. `"recount": true` counts every organization again,
+ * to mend counts a dry run lists as differing, and starts an unfinished run
+ * again from its start unless the call goes on inside that organization
+ * from its own cursor. After the organizations, a call goes through every
+ * row of label_counts and label_count_runs and deletes the rows whose label
+ * or organization is gone (`orphans`), which a dry run counts without
+ * deleting. Only an earlier release leaves such rows, or wrong counts: run
+ * back on a deployment after this one, it deletes labels and organizations
+ * without their rows, moves no count, and leaves a run it finds unfinished
+ * wrong below where it stopped. After such a rollback, read a dry run, then
+ * run with `"recount": true` until `done`, which mends them all. Every call
+ * that is no dry run adds one platform_audit_log row (action
+ * 'label_counts_backfill', actor 'system') with its totals and where it
+ * stopped, also when a step throws, with the error. Running it again is
+ * safe. It writes no activity, sends no task event and changes nothing a
+ * person sees. */
 import { makeFunctionReference } from 'convex/server'
-import { getDocumentSize, v } from 'convex/values'
+import { getDocumentSize, type Infer, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { internalAction, internalMutation, internalQuery } from '../_generated/server'
@@ -153,15 +160,23 @@ type Step = { done: boolean; cursor: string | null; labels: number; tasks: numbe
 /** One step of the organization's count, in its own transaction: it starts
  * the run, sets one page of labels to zero from `cursor`, or counts one
  * page of tasks, and ends the run once no active task is past where it
- * counted. A run left unfinished goes on where it stopped; the reset starts
- * from its first page again when `cursor` is null, which only sets rows to
- * zero once more. An organization deleted meanwhile is done. */
+ * counted. A run left unfinished goes on where it stopped, unless
+ * `restart`, which sets it back to its start, as a recount does: an earlier
+ * release run in between moves no count, so a count it left unfinished can
+ * be wrong below where it stopped. A run that starts, or starts again,
+ * resets from its first page whatever `cursor` says. Every row it writes
+ * gets a later revision. An organization deleted meanwhile is done. */
 export const step = internalMutation({
-  args: { org_id: v.string(), cursor: v.union(v.string(), v.null()) },
-  handler: async (ctx, { org_id, cursor }): Promise<Step> => {
+  args: {
+    org_id: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    restart: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { org_id, cursor: from, restart = false }): Promise<Step> => {
     const idle = { labels: 0, tasks: 0, uses: 0 }
     if ((await byId(ctx, 'organizations', org_id)) === null)
       return { done: true, cursor: null, ...idle }
+    let cursor = from
     let run = await labelCountRun(ctx, org_id)
     if (run === null) {
       const _id = await ctx.db.insert('label_count_runs', {
@@ -170,6 +185,11 @@ export const step = internalMutation({
         through: START,
       })
       run = (await ctx.db.get(_id)) as Doc<'label_count_runs'>
+      cursor = null
+    } else if (restart) {
+      await ctx.db.patch(run._id, { counting: false, through: START })
+      run = { ...run, counting: false, through: START }
+      cursor = null
     }
     if (!run.counting) {
       const page = await ctx.db
@@ -179,9 +199,9 @@ export const step = internalMutation({
       for (const label of page.page) {
         const row = await labelCountRow(ctx, label.id)
         const zero = { label_id: label.id, org_id, active_tasks: 0 }
-        if (row === null) await ctx.db.insert('label_counts', zero)
+        if (row === null) await ctx.db.insert('label_counts', { ...zero, revision: 0 })
         else if (row.org_id !== org_id || row.active_tasks !== 0)
-          await ctx.db.replace(row._id, zero)
+          await ctx.db.replace(row._id, { ...zero, revision: row.revision + 1 })
       }
       if (page.isDone) await ctx.db.patch(run._id, { counting: true })
       const next = page.isDone ? null : page.continueCursor
@@ -197,7 +217,10 @@ export const step = internalMutation({
       const row = await labelCountRow(ctx, labelId)
       // a deleted label's assignment that its removal still has to delete
       if (row === null || row.org_id !== org_id) continue
-      await ctx.db.patch(row._id, { active_tasks: row.active_tasks + tasks })
+      await ctx.db.patch(row._id, {
+        active_tasks: row.active_tasks + tasks,
+        revision: row.revision + 1,
+      })
       uses += tasks
     }
     await ctx.db.patch(run._id, { through: page.through })
@@ -205,10 +228,14 @@ export const step = internalMutation({
   },
 })
 
-/** One page of an organization's labels, each with its stored count, null
- * for none, and whether a run counts the organization now. */
+/** A label as a dry run reads it: its stored count and the revision of its
+ * row, both null without a row. */
+type StoredLabel = { stored: number | null; revision: number | null }
+
+/** One page of an organization's labels, each with its stored count, and
+ * whether a run counts the organization now. */
 type LabelPage = {
-  labels: { label_id: string; stored: number | null }[]
+  labels: ({ label_id: string } & StoredLabel)[]
   running: boolean
   cursor: string
   done: boolean
@@ -226,7 +253,12 @@ export const labelPage = internalQuery({
     const labels: LabelPage['labels'] = []
     for (const label of page.page) {
       const row = await labelCountRow(ctx, label.id)
-      labels.push({ label_id: label.id, stored: row?.org_id === org_id ? row.active_tasks : null })
+      const own = row?.org_id === org_id ? row : null
+      labels.push({
+        label_id: label.id,
+        stored: own?.active_tasks ?? null,
+        revision: own?.revision ?? null,
+      })
     }
     const running = (await labelCountRun(ctx, org_id)) !== null
     return { labels, running, cursor: page.continueCursor, done: page.isDone }
@@ -275,7 +307,32 @@ export const orphans = internalMutation({
   },
 })
 
-/** Records a run that wrote, with its totals. */
+/** Where a call stopped inside organization `id`: in the check of whether
+ * a run counts it, at the page of labels `due`, or among its steps, at the
+ * reset's next page of labels `reset`, null once it counts tasks. With
+ * neither, it stopped before the organization. */
+const vInside = v.object({
+  id: v.string(),
+  due: v.optional(v.string()),
+  reset: v.optional(v.union(v.string(), v.null())),
+})
+type Inside = Infer<typeof vInside>
+
+/** Where a call of run goes on: a page of organizations from `cursor`,
+ * inside organization `org` when it stopped there, then the orphan rows of
+ * each table. */
+const vPosition = v.union(
+  v.object({
+    table: v.literal('organizations'),
+    cursor: v.union(v.string(), v.null()),
+    org: v.optional(vInside),
+  }),
+  v.object({ table: vOrphanTable, cursor: v.union(v.string(), v.null()) }),
+)
+type Position = Infer<typeof vPosition>
+
+/** Records a call that may have written, with its totals, where it
+ * stopped (null once done) and the error that ended it, if any. */
 export const audit = internalMutation({
   args: {
     counted: v.number(),
@@ -283,20 +340,20 @@ export const audit = internalMutation({
     tasks: v.number(),
     uses: v.number(),
     orphans: v.number(),
+    cursor: v.union(vPosition, v.null()),
+    error: v.optional(v.string()),
   },
-  handler: async (ctx, totals) => {
-    await writeAudit(ctx, {
-      actor_email: 'system',
-      action: 'label_counts_backfill',
-      detail: totals,
-    })
+  handler: async (ctx, detail) => {
+    await writeAudit(ctx, { actor_email: 'system', action: 'label_counts_backfill', detail })
     return null
   },
 })
 
-const stepRef = makeFunctionReference<'mutation', { org_id: string; cursor: string | null }, Step>(
-  'internal/labelCountsBackfill:step',
-)
+const stepRef = makeFunctionReference<
+  'mutation',
+  { org_id: string; cursor: string | null; restart?: boolean },
+  Step
+>('internal/labelCountsBackfill:step')
 const labelPageRef = makeFunctionReference<
   'query',
   { org_id: string; cursor: string | null },
@@ -317,40 +374,46 @@ const orphansRef = makeFunctionReference<
 >('internal/labelCountsBackfill:orphans')
 const auditRef = makeFunctionReference<
   'mutation',
-  { counted: number; labels: number; tasks: number; uses: number; orphans: number },
+  {
+    counted: number
+    labels: number
+    tasks: number
+    uses: number
+    orphans: number
+    cursor: Position | null
+    error?: string
+  },
   null
 >('internal/labelCountsBackfill:audit')
 
 /** An organization's labels with their stored counts, and whether a run
  * counts it. */
-type Stored = { labels: Map<string, number | null>; running: boolean }
+type Stored = { labels: Map<string, StoredLabel>; running: boolean }
 
 /** Reads every label of the organization with its stored count. */
 async function storedOf(ctx: Pick<ActionCtx, 'runQuery'>, orgId: string): Promise<Stored> {
-  const labels = new Map<string, number | null>()
+  const labels = new Map<string, StoredLabel>()
   let running = false
   let cursor: string | null = null
   for (;;) {
     const page: LabelPage = await ctx.runQuery(labelPageRef, { org_id: orgId, cursor })
-    for (const label of page.labels) labels.set(label.label_id, label.stored)
+    for (const { label_id, ...stored } of page.labels) labels.set(label_id, stored)
     running ||= page.running
     if (page.done) return { labels, running }
     cursor = page.cursor
   }
 }
 
-/** Whether a run counts the organization without `recount`: it has a
- * label without a row, or a run left unfinished. Stops reading at the
- * first page that shows one. */
-async function due(ctx: Pick<ActionCtx, 'runQuery'>, orgId: string): Promise<boolean> {
-  let cursor: string | null = null
-  for (;;) {
-    const page: LabelPage = await ctx.runQuery(labelPageRef, { org_id: orgId, cursor })
-    if (page.running || page.labels.some((label) => label.stored === null)) return true
-    if (page.done) return false
-    cursor = page.cursor
-  }
-}
+/** Whether nothing moved between two reads of an organization's stored
+ * counts. A row's revision goes up with each write, so a write undone by
+ * another still shows. */
+const same = (a: Stored, b: Stored) =>
+  a.running === b.running &&
+  a.labels.size === b.labels.size &&
+  [...a.labels].every(([id, x]) => {
+    const y = b.labels.get(id)
+    return y !== undefined && x.stored === y.stored && x.revision === y.revision
+  })
 
 /** How many times a dry run counts an organization whose stored counts a
  * write moves while it counts. */
@@ -358,16 +421,15 @@ const DRY_TRIES = 3
 
 /** Counts the organization's labels without writing, a page of tasks per
  * query, between two reads of its stored counts. Writes can land between
- * those queries, so the counts match the stored ones only when these held
- * still across the count; it counts again while they moved, at most
- * DRY_TRIES times. Answers the counts by label, the tasks read, the stored
- * counts read after them and whether they held still (`settled`). A write
- * undone within one count, such as an archive and its restore, leaves them
- * as they were and can still show as a difference, which a later dry run
- * no longer shows. */
+ * those queries, so the counts match the stored ones only when no write
+ * moved these across the count (`same`); it counts again while one did, at
+ * most DRY_TRIES times, and no more once `late` answers true. Answers the
+ * counts by label, the tasks read, the stored counts read after them and
+ * whether nothing moved (`settled`). */
 export async function dryCount(
   ctx: Pick<ActionCtx, 'runQuery'>,
   orgId: string,
+  late: () => boolean = () => false,
 ): Promise<{ counts: Map<string, number>; tasks: number; stored: Stored; settled: boolean }> {
   let before = await storedOf(ctx, orgId)
   for (let tries = 1; ; tries++) {
@@ -382,41 +444,27 @@ export async function dryCount(
       after = got.through
     }
     const stored = await storedOf(ctx, orgId)
-    const settled =
-      stored.running === before.running &&
-      stored.labels.size === before.labels.size &&
-      [...stored.labels].every(([id, n]) => before.labels.get(id) === n)
-    if (settled || tries === DRY_TRIES) return { counts, tasks, stored, settled }
+    const settled = same(before, stored)
+    if (settled || tries === DRY_TRIES || late()) return { counts, tasks, stored, settled }
     before = stored
   }
 }
 
-/** Where a call of run goes on: a page of organizations from `cursor`,
- * from organization `org` on when it stopped inside one, then the orphan
- * rows of each table. */
-type Position =
-  | { table: 'organizations'; cursor: string | null; org?: string }
-  | { table: OrphanTable; cursor: string | null }
-
-const vPosition = v.union(
-  v.object({
-    table: v.literal('organizations'),
-    cursor: v.union(v.string(), v.null()),
-    org: v.optional(v.string()),
-  }),
-  v.object({ table: vOrphanTable, cursor: v.union(v.string(), v.null()) }),
-)
-
-/** Counts every organization due (due), or every one with `recount`, from
- * `cursor` on, then deletes the orphan rows, and answers how many it
- * counted with their totals. Past RUN.ms it stops between two steps and
- * answers the `cursor` to go on from, else `done`. A dry run writes
- * nothing. It counts each organization's labels (dryCount), answers the
- * same totals for those a run would count, lists up to COUNT_PAGE.listed of
- * them in `to_count`, lists the counted labels whose counts their tasks do
- * not give in `differ` (`differing` in all), the organizations whose counts
- * writes kept moving in `unsettled_orgs` (`unsettled` in all), and counts
- * the orphan rows. A call that wrote ends with its audit row. */
+/** Counts every organization due, one with a label without a row or a run
+ * left unfinished, or every one with `recount`, from `cursor` on, then
+ * deletes the orphan rows, and answers how many it counted with their
+ * totals. A recount starts again from its start a run it does not resume
+ * from its own cursor. Past RUN.ms it stops before the next organization,
+ * step or page, after doing at least one, and answers the `cursor` to go
+ * on from, else `done`. A dry run writes nothing. It counts each
+ * organization's labels (dryCount), answers the same totals for those a
+ * run would count, lists up to COUNT_PAGE.listed of them in `to_count`,
+ * lists the counted labels whose counts their tasks do not give in
+ * `differ` (`differing` in all), the organizations whose counts writes kept
+ * moving in `unsettled_orgs` (`unsettled` in all), and those a run counts
+ * now in `running_orgs` (`running` in all), whose counts it cannot check
+ * and which a recount starts again, and counts the orphan rows. A call that
+ * is no dry run ends with its audit row, also when a step throws. */
 export const run = internalAction({
   args: { dry_run: v.boolean(), recount: v.optional(v.boolean()), cursor: v.optional(vPosition) },
   handler: async (ctx, { dry_run, recount = false, cursor: from }) => {
@@ -431,43 +479,36 @@ export const run = internalAction({
     }[] = []
     const differ: { org_id: string; label_id: string; active_tasks: number; stored: number }[] = []
     const unsettledOrgs: string[] = []
+    const runningOrgs: string[] = []
     let differing = 0
     let unsettled = 0
+    let running = 0
     let at: Position = from ?? { table: 'organizations', cursor: null }
     let done = false
-    const late = () => Date.now() >= until
-    // Each organization. Answers false when time ran out inside it.
-    const count = async (org_id: string): Promise<boolean> => {
-      if (!dry_run) {
-        if (!recount && !(await due(ctx, org_id))) return true
-        let cursor: string | null = null
-        for (;;) {
-          const got: Step = await ctx.runMutation(stepRef, { org_id, cursor })
-          totals.labels += got.labels
-          totals.tasks += got.tasks
-          totals.uses += got.uses
-          if (got.done) break
-          // it stops only where the run row holds its place: a reset
-          // stopped between two pages would start from its first again
-          if (late() && got.cursor === null) return false
-          cursor = got.cursor
-        }
-        totals.counted++
-        return true
-      }
-      const { counts, tasks, stored, settled } = await dryCount(ctx, org_id)
-      if (!settled) {
+    const pastDeadline = () => Date.now() >= until
+    // whether this call did anything yet, so it always gets somewhere
+    let worked = false
+    const late = () => worked && pastDeadline()
+    // where the call is inside the organization it works on, for the audit
+    // row of a call a step ends with an error
+    let here: Inside | undefined
+    /** A dry run of one organization. */
+    const dryOrg = async (org_id: string): Promise<void> => {
+      const { counts, tasks, stored, settled } = await dryCount(ctx, org_id, pastDeadline)
+      if (stored.running) {
+        if (running++ < COUNT_PAGE.listed) runningOrgs.push(org_id)
+      } else if (!settled) {
         if (unsettled++ < COUNT_PAGE.listed) unsettledOrgs.push(org_id)
-      } else if (!stored.running)
-        for (const [label_id, n] of stored.labels) {
+      } else
+        for (const [label_id, { stored: n }] of stored.labels) {
           const active_tasks = counts.get(label_id) ?? 0
           if (n === null || n === active_tasks) continue
           if (differing++ < COUNT_PAGE.listed)
             differ.push({ org_id, label_id, active_tasks, stored: n })
         }
       // a run counts every label of an organization it counts again
-      const missing = [...stored.labels.values()].filter((n) => n === null).length
-      if (!recount && !stored.running && missing === 0) return true
+      const missing = [...stored.labels.values()].filter((l) => l.stored === null).length
+      if (!recount && !stored.running && missing === 0) return
       const labels = stored.labels.size
       const uses = [...stored.labels.keys()].reduce((n, id) => n + (counts.get(id) ?? 0), 0)
       totals.counted++
@@ -475,50 +516,105 @@ export const run = internalAction({
       totals.tasks += tasks
       totals.uses += uses
       if (toCount.length < COUNT_PAGE.listed) toCount.push({ org_id, labels, missing, tasks, uses })
-      return true
     }
-    for (;;) {
-      if (at.table === 'organizations') {
-        const page: { orgs: string[]; cursor: string; done: boolean } = await ctx.runQuery(
-          orgPageRef,
-          { cursor: at.cursor },
-        )
-        const resume = at.org === undefined ? -1 : page.orgs.indexOf(at.org)
-        let stopped: string | undefined
-        for (const org_id of page.orgs.slice(Math.max(0, resume))) {
-          if (!(await count(org_id))) {
-            stopped = org_id
-            break
-          }
-          totals.orgs++
-        }
-        if (stopped !== undefined) at = { ...at, org: stopped }
-        else if (page.done) at = { table: 'label_counts', cursor: null }
-        else at = { table: 'organizations', cursor: page.cursor }
-        if (stopped !== undefined) break
-      } else {
-        const got: { found: number; cursor: string; done: boolean } = await ctx.runMutation(
-          orphansRef,
-          { table: at.table, dry_run, cursor: at.cursor },
-        )
-        totals.orphans += got.found
-        if (!got.done) at = { table: at.table, cursor: got.cursor }
-        else if (at.table === 'label_counts') at = { table: 'label_count_runs', cursor: null }
-        else {
-          done = true
-          break
+    /** A run of one organization, from `inside` when this call goes on
+     * inside it. Answers where it stopped, or null once done with it. */
+    const countOrg = async (org_id: string, inside?: Inside): Promise<Inside | null> => {
+      if (inside?.reset === undefined && !recount) {
+        // whether it is due
+        let cursor = inside?.due ?? null
+        for (;;) {
+          const page: LabelPage = await ctx.runQuery(labelPageRef, { org_id, cursor })
+          worked = true
+          if (page.running || page.labels.some((label) => label.stored === null)) break
+          if (page.done) return null
+          cursor = page.cursor
+          here = { id: org_id, due: cursor }
+          if (late()) return here
         }
       }
-      if (late()) break
+      let cursor = inside?.reset ?? null
+      let restart = recount && inside?.reset === undefined
+      for (;;) {
+        const got: Step = await ctx.runMutation(stepRef, { org_id, cursor, restart })
+        worked = true
+        restart = false
+        totals.labels += got.labels
+        totals.tasks += got.tasks
+        totals.uses += got.uses
+        if (got.done) {
+          totals.counted++
+          return null
+        }
+        cursor = got.cursor
+        here = { id: org_id, reset: cursor }
+        if (late()) return here
+      }
     }
-    if (!dry_run)
-      await ctx.runMutation(auditRef, {
-        counted: totals.counted,
-        labels: totals.labels,
-        tasks: totals.tasks,
-        uses: totals.uses,
-        orphans: totals.orphans,
-      })
+    let error: string | undefined
+    try {
+      for (;;) {
+        if (at.table === 'organizations') {
+          const page: { orgs: string[]; cursor: string; done: boolean } = await ctx.runQuery(
+            orgPageRef,
+            { cursor: at.cursor },
+          )
+          const inside = at.org
+          const from = inside === undefined ? -1 : page.orgs.indexOf(inside.id)
+          let stopped: Inside | null = null
+          for (const org_id of page.orgs.slice(Math.max(0, from))) {
+            if (late()) {
+              stopped = { id: org_id }
+              break
+            }
+            const resume = inside?.id === org_id ? inside : undefined
+            here = resume ?? { id: org_id }
+            if (dry_run) await dryOrg(org_id)
+            else stopped = await countOrg(org_id, resume)
+            worked = true
+            here = undefined
+            if (stopped !== null) break
+            totals.orgs++
+          }
+          if (stopped !== null) {
+            at = { table: 'organizations', cursor: at.cursor, org: stopped }
+            break
+          }
+          at = page.done
+            ? { table: 'label_counts', cursor: null }
+            : { table: 'organizations', cursor: page.cursor }
+        } else {
+          const got: { found: number; cursor: string; done: boolean } = await ctx.runMutation(
+            orphansRef,
+            { table: at.table, dry_run, cursor: at.cursor },
+          )
+          worked = true
+          totals.orphans += got.found
+          if (!got.done) at = { table: at.table, cursor: got.cursor }
+          else if (at.table === 'label_counts') at = { table: 'label_count_runs', cursor: null }
+          else {
+            done = true
+            break
+          }
+        }
+        if (late()) break
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+      if (at.table === 'organizations' && here !== undefined) at = { ...at, org: here }
+      throw e
+    } finally {
+      if (!dry_run)
+        await ctx.runMutation(auditRef, {
+          counted: totals.counted,
+          labels: totals.labels,
+          tasks: totals.tasks,
+          uses: totals.uses,
+          orphans: totals.orphans,
+          cursor: done ? null : at,
+          ...(error === undefined ? {} : { error }),
+        })
+    }
     return {
       dry_run,
       ...totals,
@@ -527,6 +623,8 @@ export const run = internalAction({
       differ,
       unsettled,
       unsettled_orgs: unsettledOrgs,
+      running,
+      running_orgs: runningOrgs,
       done,
       cursor: done ? null : at,
     }

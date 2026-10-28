@@ -482,11 +482,13 @@ const projectRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     { before: (project) => tallyRow(ctx, 'projects', project, null) },
   )
 
-/** A parent's first child range, which deletes its count row (`remove`),
- * so the count reads as not counted while the parent's rows go over
- * several steps. */
-const countFirst = (remove: () => Promise<void>) => async () => {
-  await remove()
+/** A parent's first child range, which deletes its count row (`remove`,
+ * true when it found one) as one row of `budget`, so the count reads as not
+ * counted while the parent's rows go over several steps. It runs in each
+ * step that reaches the parent, the one that deletes the parent included,
+ * so a count a backfill wrote between two steps goes with the parent too. */
+const countFirst = (budget: RemovalBudget, remove: () => Promise<boolean>) => async () => {
+  if (await remove()) budget.rows -= 1
   return true
 }
 
@@ -498,7 +500,7 @@ const teamsWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =
     ctx.db.query('teams').withIndex('by_org', (q) => q.eq('org_id', orgId)),
     (team) =>
       inOrder([
-        countFirst(() => deleteTeamCount(ctx, team.id)),
+        countFirst(budget, () => deleteTeamCount(ctx, team.id)),
         () =>
           drain(
             ctx,
@@ -514,13 +516,11 @@ const teamsWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =
               .withIndex('by_team', (q) => q.eq('team_id', team.id)),
           ),
       ]),
-    { before: (team) => deleteTeamCount(ctx, team.id) },
   )
 
-/** Teams with their members and project grants. Each team's member count
- * goes first, and again with the team, in case a backfill counted it
- * meanwhile (model/teamCounts.ts). Then any count an earlier release left
- * after deleting its team. */
+/** Teams with their members and project grants, each team's member count
+ * first (countFirst, model/teamCounts.ts), then any count an earlier
+ * release left after deleting its team. */
 const teamRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
     () => teamsWithRows(ctx, orgId, budget),
@@ -540,7 +540,7 @@ const labelsWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) 
     ctx.db.query('labels').withIndex('by_org', (q) => q.eq('org_id', orgId)),
     (label) =>
       inOrder([
-        countFirst(() => deleteLabelCount(ctx, label.id)),
+        countFirst(budget, () => deleteLabelCount(ctx, label.id)),
         () =>
           drain(
             ctx,
@@ -548,12 +548,11 @@ const labelsWithRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) 
             ctx.db.query('issue_labels').withIndex('by_label', (q) => q.eq('label_id', label.id)),
           ),
       ]),
-    { before: (label) => deleteLabelCount(ctx, label.id) },
   )
 
-/** Labels with any task labels left on them. Each label's usage count goes
- * first, and again with the label, as a team's does (model/labelCounts.ts),
- * then any count an earlier release left after deleting its label. */
+/** Labels with any task labels left on them, each label's usage count
+ * first (countFirst, model/labelCounts.ts), then any count an earlier
+ * release left after deleting its label. */
 const labelRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
     () => labelsWithRows(ctx, orgId, budget),
@@ -771,6 +770,10 @@ export async function deleteOrgStep(
   let phase: OrgRemovalPhase = removal.phase
   while (!budgetSpent(budget)) {
     if (phase === 'finish') {
+      // Counts an earlier release left when it deleted their labels and
+      // teams past their phases, which finish() refuses to leave behind.
+      if (!(await countRows(ctx, removal.org_id, budget, 'label_counts'))) break
+      if (!(await countRows(ctx, removal.org_id, budget, 'team_counts'))) break
       // The organization goes first, so every call through access the
       // profiles phase deleted hears that it is being deleted until it is
       // gone. What that phase recorded (removed_access) goes after, over as

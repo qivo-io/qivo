@@ -32,8 +32,8 @@ export const teamCountRow = (ctx: QueryCtx, teamId: string) =>
     .withIndex('by_team', (q) => q.eq('team_id', teamId))
     .unique()
 
-/** The members of `team` as a reader may show them: null while the team is
- * not counted or is being counted. */
+/** The members of `team` as a reader may show them, which no reader does
+ * yet: null while the team is not counted or is being counted. */
 export async function memberCount(
   ctx: QueryCtx,
   team: Pick<Doc<'teams'>, 'id' | 'org_id'>,
@@ -73,19 +73,20 @@ export async function insertTeamCount(
   team: Pick<Doc<'teams'>, 'id' | 'org_id'>,
   members: number,
 ): Promise<void> {
-  const row = { team_id: team.id, org_id: team.org_id, members }
   const left = await teamCountRow(ctx, team.id)
+  const row = { team_id: team.id, org_id: team.org_id, members, revision: 0 }
   // the team spends a public demo's record limit, and its count row none
   // (lib/demo.ts uncountedWriter)
   if (left === null) await uncountedWriter(ctx.db).insert('team_counts', row)
-  else await ctx.db.replace(left._id, row)
+  else await ctx.db.replace(left._id, { ...row, revision: left.revision + 1 })
 }
 
 /** Deletes the team's row, if any, in the transaction that deletes the
- * team. */
-export async function deleteTeamCount(ctx: MutationCtx, teamId: string): Promise<void> {
+ * team, and answers whether it had one. */
+export async function deleteTeamCount(ctx: MutationCtx, teamId: string): Promise<boolean> {
   const row = await teamCountRow(ctx, teamId)
   if (row !== null) await ctx.db.delete(row._id)
+  return row !== null
 }
 
 /** Moves team `teamId`'s count by `by` when `countedIn` is its
@@ -102,7 +103,7 @@ async function moveMembers(
   const row = await teamCountRow(ctx, teamId)
   if (row === null || row.org_id !== countedIn) return
   if (row.through !== undefined && !read(row.through)) return
-  await ctx.db.patch(row._id, { members: row.members + by })
+  await ctx.db.patch(row._id, { members: row.members + by, revision: row.revision + 1 })
 }
 
 /** Counts a membership of team `teamId` this transaction inserted.

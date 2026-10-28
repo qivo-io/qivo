@@ -1150,14 +1150,16 @@ export default defineSchema({
   // internal/teamCountsBackfill counts it, and teams created since this
   // release start with one. While the backfill counts a team, `through`
   // holds the _creationTime of the last membership it counted, and a write
-  // moves the count only for a membership at or below it. A reader shows
-  // the count only for a row without `through` (memberCount), never a
-  // missing row as zero.
+  // moves the count only for a membership at or below it. `revision` goes
+  // up with every write of the row, so a dry run sees a change that ends
+  // where it began. No reader uses the count yet; one is to show it only
+  // for a row without `through` (memberCount), never a missing row as zero.
   team_counts: defineTable({
     team_id: v.string(),
     org_id: v.string(),
     members: v.number(),
     through: v.optional(v.number()),
+    revision: v.number(),
   })
     .index('by_team', ['team_id'])
     .index('by_org', ['org_id']),
@@ -1316,13 +1318,16 @@ export default defineSchema({
   // archives or restores a task (model/orgs.ts tallyRows), moves the counts
   // in its own transaction. A label has no row until
   // internal/labelCountsBackfill counts its organization, and labels created
-  // since this release start with one. A reader shows the count only while
-  // its organization has no label_count_runs row (activeTaskCount), never a
+  // since this release start with one. `revision` goes up with every write
+  // of the row, so a dry run sees a change that ends where it began. No
+  // reader uses the count yet; one is to show it only while its
+  // organization has no label_count_runs row (activeTaskCount), never a
   // missing row as zero.
   label_counts: defineTable({
     label_id: v.string(),
     org_id: v.string(),
     active_tasks: v.number(),
+    revision: v.number(),
   })
     .index('by_label', ['label_id'])
     .index('by_org', ['org_id']),
@@ -1331,8 +1336,9 @@ export default defineSchema({
   // counting. It first sets every label's row to zero (`counting` false),
   // then reads the active tasks in _creationTime order. `through` holds the
   // _creationTime of the last task it counted, below every task until the
-  // first; a write moves a count only for a task at or below it. The row
-  // is deleted once every task is counted, and with the organization.
+  // first; a write moves a count only for a task at or below it. A recount
+  // sets a row it finds back to that start. The row is deleted once every
+  // task is counted, and with the organization.
   label_count_runs: defineTable({
     org_id: v.string(),
     counting: v.boolean(),

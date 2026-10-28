@@ -5,7 +5,12 @@
  * (internal/teamCountsBackfill.ts) counts a team exactly while writes go on
  * between its steps. */
 
-import { getFunctionName, makeFunctionReference } from 'convex/server'
+import {
+  type FunctionArgs,
+  type FunctionReturnType,
+  getFunctionName,
+  makeFunctionReference,
+} from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -15,7 +20,17 @@ import { ACCESS_FIRST_PASS } from '../model/cascade'
 import { wipeWorkStep } from '../model/orgDeletion'
 import { memberCount, teamCountRow } from '../model/teamCounts'
 import { teamJson } from '../model/teams'
-import { as, NOW, newT, type OrgFixture, plantSeat, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectListCounts,
+  NOW,
+  newT,
+  type OrgFixture,
+  plantSeat,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import { installTrashTimers, runSteps } from './trash.setup'
@@ -113,8 +128,25 @@ const plantMembers = (t: T, team_id: string, profileIds: readonly string[]) =>
 const backfill = (t: T, args: { dry_run: boolean; recount?: boolean }) =>
   t.action(internal.internal.teamCountsBackfill.run, args)
 
-const step = (t: T, team_id: string, recount = false) =>
-  t.mutation(internal.internal.teamCountsBackfill.step, { team_id, recount })
+const step = (t: T, team_id: string, restart = false) =>
+  t.mutation(internal.internal.teamCountsBackfill.step, { team_id, restart })
+
+type RunArgs = FunctionArgs<typeof internal.internal.teamCountsBackfill.run>
+type RunAnswer = FunctionReturnType<typeof internal.internal.teamCountsBackfill.run>
+
+/** Every call of a run, each from the cursor the one before answered,
+ * until one answers done. */
+async function calls(t: T, args: Omit<RunArgs, 'cursor'>): Promise<RunAnswer[]> {
+  const got: RunAnswer[] = []
+  let cursor: RunArgs['cursor']
+  for (let n = 0; n < 40; n++) {
+    const last = await t.action(internal.internal.teamCountsBackfill.run, { ...args, cursor })
+    got.push(last)
+    if (last.cursor === null) return got
+    cursor = last.cursor
+  }
+  throw new Error('the run did not end')
+}
 
 describe('team counts', () => {
   it('every membership write keeps the count equal to the members a team lists', async () => {
@@ -204,7 +236,9 @@ describe('team counts', () => {
     await expectMembers(t, team, 0)
     // a row an earlier release left never passes to a new team with its id
     const reused = uuid()
-    await t.run((ctx) => ctx.db.insert('team_counts', { team_id: reused, org_id, members: 7 }))
+    await t.run((ctx) =>
+      ctx.db.insert('team_counts', { team_id: reused, org_id, members: 7, revision: 2 }),
+    )
     await newTeamWithId(t, f, reused)
     await expectMembers(t, reused, 0)
     await assertNoDanglingRefs(t, 'team counts')
@@ -249,7 +283,7 @@ describe('team counts', () => {
     ])
     // a recount meanwhile counts them the same way
     let got = await step(t, teams[3], true)
-    while (got === null) got = await step(t, teams[3], true)
+    while (got === null) got = await step(t, teams[3])
     expect(got).toBe(1)
 
     await runSteps(t)
@@ -304,7 +338,7 @@ describe('team counts', () => {
     const f = await withOrg(t)
     // a count an earlier release left after deleting its team
     await t.run((ctx) =>
-      ctx.db.insert('team_counts', { team_id: uuid(), org_id: f.org.id, members: 3 }),
+      ctx.db.insert('team_counts', { team_id: uuid(), org_id: f.org.id, members: 3, revision: 0 }),
     )
     const dry = await backfill(t, { dry_run: true })
     expect(dry).toMatchObject({ dry_run: true, counted: 1, members: 2, orphans: 1 })
@@ -330,9 +364,9 @@ describe('team counts', () => {
         .collect(),
     )
     expect(written.map((r) => r.detail)).toEqual([
-      { counted: 1, members: 2, orphans: 1 },
-      { counted: 0, members: 0, orphans: 0 },
-      { counted: 1, members: 2, orphans: 0 },
+      { counted: 1, members: 2, orphans: 1, cursor: null },
+      { counted: 0, members: 0, orphans: 0, cursor: null },
+      { counted: 1, members: 2, orphans: 0, cursor: null },
     ])
   })
 
@@ -342,52 +376,124 @@ describe('team counts', () => {
     const team = await newTeam(t, f, 'Busy')
     const state = () => t.query(internal.internal.teamCountsBackfill.state, { team_id: team })
     let member = false
+    // the reads of the state a dry count made, one a try
+    let reads = 0
     /** An action context whose queries `t` answers, with a member added or
-     * removed before each of its first `writes` reads of the state. */
-    const racing = (writes: number): Pick<ActionCtx, 'runQuery'> => ({
-      runQuery: async (query, ...args) => {
-        const name = getFunctionName(query)
-        if (name === 'internal/teamCountsBackfill:state' && writes-- > 0) {
-          member = !member
-          await (member ? add : remove)(t, f, team, f.user.id)
-        }
-        return await t.query(makeFunctionReference<'query'>(name), args[0])
-      },
-    })
-    const before = await state()
-    if (before === null) throw new Error('the team is gone')
-    const once = await dryCount(racing(1), before)
+     * removed, or added and removed again with `undone`, before each of its
+     * first `writes` reads of the state. */
+    const racing = (writes: number, undone = false): Pick<ActionCtx, 'runQuery'> => {
+      reads = 0
+      return {
+        runQuery: async (query, ...args) => {
+          const name = getFunctionName(query)
+          if (name === 'internal/teamCountsBackfill:state') reads++
+          if (name === 'internal/teamCountsBackfill:state' && writes-- > 0) {
+            member = !member
+            await (member ? add : remove)(t, f, team, f.user.id)
+            if (undone) {
+              member = !member
+              await (member ? add : remove)(t, f, team, f.user.id)
+            }
+          }
+          return await t.query(makeFunctionReference<'query'>(name), args[0])
+        },
+      }
+    }
+    const fresh = async () => {
+      const now = await state()
+      if (now === null) throw new Error('the team is gone')
+      return now
+    }
+    const once = await dryCount(racing(1), await fresh())
     expect(once.settled).toBe(true)
+    expect(reads).toBe(2)
     expect(once.members).toBe(once.state?.stored)
-    const busy = await dryCount(racing(Number.POSITIVE_INFINITY), (await state()) ?? before)
-    expect(busy.settled).toBe(false)
+    // a change undone before the read leaves the count where it was, and
+    // the row's revision still makes it count again
+    const undone = await dryCount(racing(1, true), await fresh())
+    expect(undone.settled).toBe(true)
+    expect(reads).toBe(2)
+    expect((await dryCount(racing(Number.POSITIVE_INFINITY), await fresh())).settled).toBe(false)
+    expect((await dryCount(racing(Number.POSITIVE_INFINITY, true), await fresh())).settled).toBe(
+      false,
+    )
+    // a call out of time does not count again
+    const late = await dryCount(racing(Number.POSITIVE_INFINITY), await fresh(), () => true)
+    expect(late.settled).toBe(false)
+    expect(reads).toBe(1)
   })
 
-  it('a call past its time answers a cursor, and the calls from it go through every team once', async () => {
+  it('a call past its time answers a cursor, inside a team too, and the calls from it go through every team once', async () => {
     const t = newT()
     const f = await withOrg(t)
     Object.assign(COUNT_PAGE, { members: 1 })
-    Object.assign(RUN, { teams: 1, rows: 1, ms: 0 })
+    Object.assign(RUN, { rows: 1, ms: 0 })
     const other = await plantTeam(t, f.otherOrg.id, 'Elsewhere')
     await plantMembers(t, other.id, [f.otherAdmin.id])
-    const calls = async (dry_run: boolean) => {
-      const got = [await backfill(t, { dry_run })]
-      for (let last = got[0]; last.cursor !== null && got.length < 20; got.push(last))
-        last = await t.action(internal.internal.teamCountsBackfill.run, {
-          dry_run,
-          cursor: last.cursor,
-        })
-      return got
-    }
     for (const dry_run of [true, false]) {
-      const got = await calls(dry_run)
-      expect(got[0]).toMatchObject({ done: false })
-      expect(got.at(-1)).toMatchObject({ done: true, cursor: null })
+      const got = await calls(t, { dry_run })
+      expect(got.length).toBeGreaterThan(2)
       expect(got.reduce((n, call) => n + call.counted, 0)).toBe(2)
       expect(got.reduce((n, call) => n + call.teams, 0)).toBe(2)
+      const stops = got.flatMap((call) =>
+        call.cursor?.table === 'teams' && call.cursor.team !== undefined ? [call.cursor.team] : [],
+      )
+      // a dry run stops between teams, a run inside a team's count too
+      if (dry_run) expect(stops).toEqual([{ id: other.id }])
+      else expect(stops).toContainEqual({ id: f.team.id, started: true })
     }
     await expectMembers(t, f.team.id, 2)
     await expectMembers(t, other.id, 1)
+  })
+
+  it('a recount after a rollback starts an unfinished count again and ends exact', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    Object.assign(COUNT_PAGE, { members: 1 })
+    const team = await plantTeam(t, f.org.id, 'Planted')
+    const [first] = await plantMembers(t, team.id, [f.user.id, f.viewer.id, f.admin.id])
+    expect(await step(t, team.id)).toBeNull()
+    expect(await step(t, team.id)).toBeNull()
+    // an earlier release removes a member the count has read, and moves no
+    // count
+    await t.run((ctx) => ctx.db.delete(first._id))
+    const dry = await backfill(t, { dry_run: true })
+    expect(dry).toMatchObject({ running: 1, running_teams: [team.id], differing: 0 })
+    // the documented procedure: a recount until done
+    await calls(t, { dry_run: false, recount: true })
+    await expectMembers(t, team.id, 2)
+    expect((await backfill(t, { dry_run: true })).differing).toBe(0)
+  })
+
+  it('a call a step ends with an error leaves its audit row, with where it stopped', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    Object.assign(RUN, { teams: 1 })
+    const broken = await plantTeam(t, f.otherOrg.id, 'Broken')
+    // two rows of one team, which no write makes: the read of its page
+    // refuses
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 2; n++)
+        await ctx.db.insert('team_counts', {
+          team_id: broken.id,
+          org_id: f.otherOrg.id,
+          members: 0,
+          revision: 0,
+        })
+    })
+    await expect(backfill(t, { dry_run: false })).rejects.toThrow()
+    const [row] = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('platform_audit_log')
+          .filter((q) => q.eq(q.field('action'), 'team_counts_backfill'))
+          .collect()
+      ).map((r) => r.detail),
+    )
+    expect(row).toMatchObject({ counted: 1, members: 2, orphans: 0, cursor: { table: 'teams' } })
+    expect(row?.cursor?.cursor).toEqual(expect.any(String))
+    expect(row?.error).toEqual(expect.any(String))
+    await expectMembers(t, f.team.id, 2)
   })
 
   it('the seeds count their teams, and the Northstar wipe takes the counts with the teams', async () => {
@@ -396,16 +502,24 @@ describe('team counts', () => {
     const counts = await truth(t, org.id)
     expect(await shown(t, org.id)).toEqual(counts)
     expect(Object.values(counts).every((n) => n > 0)).toBe(true)
-    for (let n = 0; n < 50; n++) {
-      const done = await t.run((ctx) =>
+    // small steps, with a count step for each team between two, as a
+    // backfill run meanwhile would take
+    let done = false
+    for (let n = 0; n < 200 && !done; n++) {
+      done = await t.run((ctx) =>
         wipeWorkStep(
           ctx,
           org.id,
           profiles.map((p) => p.id),
+          { rows: 16, bytes: 4 * 1024 * 1024 },
         ),
       )
-      if (done) break
+      await expectListCounts(t, org.id)
+      for (const id of Object.keys(await truth(t, org.id)))
+        await t.mutation(internal.internal.teamCountsBackfill.step, { team_id: id })
+      await expectListCounts(t, org.id)
     }
+    expect(done).toBe(true)
     expect(
       await t.run((ctx) =>
         ctx.db

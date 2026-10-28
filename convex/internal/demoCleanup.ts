@@ -293,7 +293,7 @@ async function teamRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
           .withIndex('by_org', (q) => q.eq('org_id', orgId))
           .take(n),
       )
-    await deleteTeamCount(ctx, team.id)
+    if (await deleteTeamCount(ctx, team.id)) budget.left--
     if (
       !(await drain(ctx, budget, (n) =>
         ctx.db
@@ -469,7 +469,7 @@ async function labelRows(ctx: MutationCtx, orgId: string, budget: Budget): Promi
           .withIndex('by_org', (q) => q.eq('org_id', orgId))
           .take(n),
       )
-    await deleteLabelCount(ctx, label.id)
+    if (await deleteLabelCount(ctx, label.id)) budget.left--
     if (
       !(await drain(ctx, budget, (n) =>
         ctx.db
@@ -483,6 +483,23 @@ async function labelRows(ctx: MutationCtx, orgId: string, budget: Budget): Promi
     budget.left--
   }
   return false
+}
+
+/* The label and team counts of the organization, which its labels and
+ * teams phases leave none of; only an earlier release, run in between,
+ * leaves some. */
+async function strayCounts(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
+  for (const table of ['label_counts', 'team_counts'] as const)
+    if (
+      !(await drain(ctx, budget, (n) =>
+        ctx.db
+          .query(table)
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .take(n),
+      ))
+    )
+      return false
+  return true
 }
 
 async function accountRows(ctx: MutationCtx, authId: string, budget: Budget): Promise<boolean> {
@@ -665,6 +682,9 @@ export const purge = internalMutation({
             uploadProgress.cleanup_file_after > Date.now() ||
             (uploadProgress.cleanup_file_wait_until ?? 0) > Date.now())
       } else if (phase === 'auth') done = await authRows(ctx, receipt.auth_user_id, budget)
+      // Counts an earlier release left when it deleted their labels and
+      // teams past their phases, which the checks below refuse to leave.
+      else if (phase === 'finish' && orgId && !(await strayCounts(ctx, orgId, budget))) done = false
       else if (phase === 'finish') {
         // No owner/work should reappear after the drained phases: all public
         // and background finalization paths fence against deleting receipts.

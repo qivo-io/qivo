@@ -39,8 +39,9 @@ export const labelCountRun = (ctx: QueryCtx, orgId: string) =>
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .unique()
 
-/** The active tasks carrying `label` as a reader may show them: null while
- * the label is not counted or its organization is being counted. */
+/** The active tasks carrying `label` as a reader may show them, which no
+ * reader does yet: null while the label is not counted or its organization
+ * is being counted. */
 export async function activeTaskCount(
   ctx: QueryCtx,
   label: Pick<Doc<'labels'>, 'id' | 'org_id'>,
@@ -59,19 +60,20 @@ export async function insertLabelCount(
   ctx: MutationCtx,
   label: Pick<Doc<'labels'>, 'id' | 'org_id'>,
 ): Promise<void> {
-  const row = { label_id: label.id, org_id: label.org_id, active_tasks: 0 }
   const left = await labelCountRow(ctx, label.id)
+  const row = { label_id: label.id, org_id: label.org_id, active_tasks: 0, revision: 0 }
   // the label spends a public demo's record limit, and its count row none
   // (lib/demo.ts uncountedWriter)
   if (left === null) await uncountedWriter(ctx.db).insert('label_counts', row)
-  else await ctx.db.replace(left._id, row)
+  else await ctx.db.replace(left._id, { ...row, revision: left.revision + 1 })
 }
 
 /** Deletes the label's row, if any, in the transaction that deletes the
- * label. */
-export async function deleteLabelCount(ctx: MutationCtx, labelId: string): Promise<void> {
+ * label, and answers whether it had one. */
+export async function deleteLabelCount(ctx: MutationCtx, labelId: string): Promise<boolean> {
   const row = await labelCountRow(ctx, labelId)
   if (row !== null) await ctx.db.delete(row._id)
+  return row !== null
 }
 
 /** Adds `by` to the count of label `labelId` of organization `orgId`. A
@@ -82,7 +84,7 @@ async function moveCount(ctx: MutationCtx, labelId: string, orgId: string, by: n
   if (by === 0) return
   const row = await labelCountRow(ctx, labelId)
   if (row === null || row.org_id !== orgId) return
-  await ctx.db.patch(row._id, { active_tasks: row.active_tasks + by })
+  await ctx.db.patch(row._id, { active_tasks: row.active_tasks + by, revision: row.revision + 1 })
 }
 
 /** Whether a write may move the counts for `task`: always, unless the

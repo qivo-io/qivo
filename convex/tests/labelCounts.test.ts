@@ -4,7 +4,12 @@
  * backfill (internal/labelCountsBackfill.ts) counts an organization exactly
  * while writes go on between its steps. */
 
-import { getFunctionName, makeFunctionReference } from 'convex/server'
+import {
+  type FunctionArgs,
+  type FunctionReturnType,
+  getFunctionName,
+  makeFunctionReference,
+} from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -16,7 +21,17 @@ import { activeTaskCount, labelCountRow, labelCountRun } from '../model/labelCou
 import { LABEL_REMOVAL } from '../model/labels'
 import { wipeWorkStep } from '../model/orgDeletion'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
-import { as, NOW, newT, type OrgFixture, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import {
+  as,
+  expectListCounts,
+  NOW,
+  newT,
+  type OrgFixture,
+  plantIssue,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import { deleteProject, deleteTask, installTrashTimers, itemFor, runSteps } from './trash.setup'
@@ -125,6 +140,34 @@ const plantLabelled = async (
 
 const backfill = (t: T, args: { dry_run: boolean; recount?: boolean }) =>
   t.action(internal.internal.labelCountsBackfill.run, args)
+
+type RunArgs = FunctionArgs<typeof internal.internal.labelCountsBackfill.run>
+type RunAnswer = FunctionReturnType<typeof internal.internal.labelCountsBackfill.run>
+
+/** Every call of a run, each from the cursor the one before answered,
+ * until one answers done. */
+async function calls(t: T, args: Omit<RunArgs, 'cursor'>): Promise<RunAnswer[]> {
+  const got: RunAnswer[] = []
+  let cursor: RunArgs['cursor']
+  for (let n = 0; n < 40; n++) {
+    const last = await t.action(internal.internal.labelCountsBackfill.run, { ...args, cursor })
+    got.push(last)
+    if (last.cursor === null) return got
+    cursor = last.cursor
+  }
+  throw new Error('the run did not end')
+}
+
+/** The audit rows of the label backfill, oldest first. */
+const audits = (t: T) =>
+  t.run(async (ctx) =>
+    (
+      await ctx.db
+        .query('platform_audit_log')
+        .filter((q) => q.eq(q.field('action'), 'label_counts_backfill'))
+        .collect()
+    ).map((row) => row.detail),
+  )
 
 /** Runs the organization's count steps until it is counted. */
 async function countAll(t: T, org_id: string): Promise<void> {
@@ -298,7 +341,7 @@ describe('label counts', () => {
     // new label with its id
     const reused = uuid()
     await t.run((ctx) =>
-      ctx.db.insert('label_counts', { label_id: reused, org_id, active_tasks: 7 }),
+      ctx.db.insert('label_counts', { label_id: reused, org_id, active_tasks: 7, revision: 3 }),
     )
     await as(t, f.admin).mutation(api.labels.create, {
       org_id,
@@ -309,6 +352,7 @@ describe('label counts', () => {
     expect(await t.run((ctx) => labelCountRow(ctx, reused))).toMatchObject({
       org_id,
       active_tasks: 0,
+      revision: 4,
     })
     await assertNoDanglingRefs(t, 'label removal')
   }, 60_000)
@@ -391,7 +435,12 @@ describe('label counts', () => {
     // rows an earlier release left: a count without its label, a run of a
     // deleted organization
     await t.run(async (ctx) => {
-      await ctx.db.insert('label_counts', { label_id: uuid(), org_id, active_tasks: 2 })
+      await ctx.db.insert('label_counts', {
+        label_id: uuid(),
+        org_id,
+        active_tasks: 2,
+        revision: 0,
+      })
       await ctx.db.insert('label_count_runs', { org_id: uuid(), counting: true, through: 0 })
     })
     const dry = await backfill(t, { dry_run: true })
@@ -412,8 +461,8 @@ describe('label counts', () => {
         .collect(),
     )
     expect(written.map((row) => row.detail)).toEqual([
-      { counted: 1, labels: 1, tasks: 1, uses: 1, orphans: 2 },
-      { counted: 0, labels: 0, tasks: 0, uses: 0, orphans: 0 },
+      { counted: 1, labels: 1, tasks: 1, uses: 1, orphans: 2, cursor: null },
+      { counted: 0, labels: 0, tasks: 0, uses: 0, orphans: 0, cursor: null },
     ])
 
     // a count an earlier release left wrong
@@ -434,17 +483,23 @@ describe('label counts', () => {
     const a = await newLabel(t, f, 'Alpha')
     const task = await newTask(t, f)
     let on = false
+    // label pages a dry count has read, its stored counts read twice a try
+    let pages = 0
     /** An action context whose queries `t` answers, with the label toggled
-     * on the task before each of its first `writes` reads of a label page
-     * after the first. */
-    const racing = (writes: number): Pick<ActionCtx, 'runQuery'> => {
-      let reads = 0
+     * on the task, or on and off again with `undone`, before each of its
+     * first `writes` reads of a label page after the first. */
+    const racing = (writes: number, undone = false): Pick<ActionCtx, 'runQuery'> => {
+      pages = 0
       return {
         runQuery: async (query, ...args) => {
           const name = getFunctionName(query)
-          if (name === 'internal/labelCountsBackfill:labelPage' && reads++ > 0 && writes-- > 0) {
+          if (name === 'internal/labelCountsBackfill:labelPage' && pages++ > 0 && writes-- > 0) {
             on = !on
             await toggle(t, f, task.id, a, on)
+            if (undone) {
+              on = !on
+              await toggle(t, f, task.id, a, on)
+            }
           }
           return await t.query(makeFunctionReference<'query'>(name), args[0])
         },
@@ -453,37 +508,116 @@ describe('label counts', () => {
     // a toggle while it counted counts again, and then matches
     const once = await dryCount(racing(1), org_id)
     expect(once.settled).toBe(true)
-    expect(once.counts.get(a) ?? 0).toBe(once.stored.labels.get(a))
+    expect(pages).toBe(3)
+    expect(once.counts.get(a) ?? 0).toBe(once.stored.labels.get(a)?.stored)
+    // a toggle undone before the next read leaves the count where it was,
+    // and the row's revision still makes it count again
+    const undone = await dryCount(racing(1, true), org_id)
+    expect(undone.settled).toBe(true)
+    expect(pages).toBe(3)
     // toggles through every count leave it unsettled, never differing
-    const busy = await dryCount(racing(Number.POSITIVE_INFINITY), org_id)
-    expect(busy.settled).toBe(false)
+    expect((await dryCount(racing(Number.POSITIVE_INFINITY), org_id)).settled).toBe(false)
+    expect((await dryCount(racing(Number.POSITIVE_INFINITY, true), org_id)).settled).toBe(false)
+    // a call out of time does not count again
+    const late = await dryCount(racing(Number.POSITIVE_INFINITY), org_id, () => true)
+    expect(late.settled).toBe(false)
+    expect(pages).toBe(2)
   })
 
-  it('a call past its time answers a cursor, and the calls from it go through every organization once', async () => {
+  it('a call past its time answers a cursor, inside an organization too, and the calls from it go through every organization once', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // counted already, then one without a row: the check of whether the
+    // organization is due reads two pages
+    await newLabel(t, f, 'Counted')
+    await plantLabelled(t, f, [await plantLabel(t, f.org.id, 'Alpha')])
+    await plantLabel(t, f.otherOrg.id, 'Elsewhere')
+    Object.assign(RUN, { rows: 1, ms: 0 })
+    Object.assign(COUNT_PAGE, { labels: 1 })
+    for (const dry_run of [true, false]) {
+      const got = await calls(t, { dry_run })
+      expect(got.length).toBeGreaterThan(2)
+      expect(got.reduce((n, call) => n + call.counted, 0)).toBe(2)
+      expect(got.reduce((n, call) => n + call.orgs, 0)).toBe(2)
+      const insides = got.flatMap((call) =>
+        call.cursor?.table === 'organizations' && call.cursor.org !== undefined
+          ? [call.cursor.org]
+          : [],
+      )
+      // a dry run stops between organizations, a run inside them, in its
+      // check whether one is due and in its reset
+      if (dry_run) expect(insides).toEqual([{ id: f.otherOrg.id }])
+      else {
+        expect(insides.some((org) => org.id === f.org.id && typeof org.due === 'string')).toBe(true)
+        expect(insides.some((org) => typeof org.reset === 'string')).toBe(true)
+      }
+    }
+    await expectCounted(t, f.org.id)
+    await expectCounted(t, f.otherOrg.id)
+  })
+
+  it('a recount after a rollback starts an unfinished count again and ends exact', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    Object.assign(COUNT_PAGE, { tasks: 1 })
+    const a = await plantLabel(t, org_id, 'Alpha')
+    const b = await plantLabel(t, org_id, 'Beta')
+    const tasks: Doc<'issues'>[] = []
+    for (let n = 0; n < 4; n++) tasks.push(await plantLabelled(t, f, [a]))
+    const step = (cursor: string | null) =>
+      t.mutation(internal.internal.labelCountsBackfill.step, { org_id, cursor })
+    // the reset and two tasks counted
+    expect(await step(null)).toMatchObject({ done: false, cursor: null })
+    await step(null)
+    await step(null)
+    expect((await t.run((ctx) => labelCountRun(ctx, org_id)))?.through).toBe(tasks[1]._creationTime)
+    // an earlier release runs: it changes the labels of counted tasks and
+    // moves no count
+    await t.run(async (ctx) => {
+      const held = await ctx.db
+        .query('issue_labels')
+        .withIndex('by_issue', (q) => q.eq('issue_id', tasks[1].id))
+        .unique()
+      if (held) await ctx.db.delete(held._id)
+      await ctx.db.insert('issue_labels', { org_id, issue_id: tasks[0].id, label_id: b.id })
+    })
+    // the dry run cannot check the unfinished count and lists it
+    const dry = await backfill(t, { dry_run: true })
+    expect(dry).toMatchObject({ running: 1, running_orgs: [org_id], differing: 0 })
+    // the documented procedure: a recount until done
+    await calls(t, { dry_run: false, recount: true })
+    expect(await expectCounted(t, org_id)).toEqual({ [a.id]: 3, [b.id]: 1 })
+    expect((await backfill(t, { dry_run: true })).differing).toBe(0)
+  })
+
+  it('a call a step ends with an error leaves its audit row, with where it stopped', async () => {
     const t = newT()
     const f = await withOrg(t)
     await plantLabelled(t, f, [await plantLabel(t, f.org.id, 'Alpha')])
     await plantLabel(t, f.otherOrg.id, 'Elsewhere')
-    Object.assign(RUN, { orgs: 1, rows: 1, ms: 0 })
-    Object.assign(COUNT_PAGE, { labels: 1 })
-    const calls = async (dry_run: boolean) => {
-      const got = [await backfill(t, { dry_run })]
-      for (let last = got[0]; last.cursor !== null && got.length < 20; got.push(last))
-        last = await t.action(internal.internal.labelCountsBackfill.run, {
-          dry_run,
-          cursor: last.cursor,
+    // two run rows of one organization, which no write makes: its first
+    // read refuses
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 2; n++)
+        await ctx.db.insert('label_count_runs', {
+          org_id: f.otherOrg.id,
+          counting: false,
+          through: 0,
         })
-      return got
-    }
-    for (const dry_run of [true, false]) {
-      const got = await calls(dry_run)
-      expect(got[0]).toMatchObject({ done: false })
-      expect(got.at(-1)).toMatchObject({ done: true, cursor: null })
-      expect(got.reduce((n, call) => n + call.counted, 0)).toBe(2)
-      expect(got.reduce((n, call) => n + call.orgs, 0)).toBe(2)
-    }
+    })
+    await expect(backfill(t, { dry_run: false })).rejects.toThrow()
+    const [row] = await audits(t)
+    expect(row).toMatchObject({
+      counted: 1,
+      labels: 1,
+      tasks: 1,
+      uses: 1,
+      orphans: 0,
+      cursor: { table: 'organizations', cursor: null, org: { id: f.otherOrg.id } },
+    })
+    expect(row?.error).toEqual(expect.any(String))
     await expectCounted(t, f.org.id)
-    await expectCounted(t, f.otherOrg.id)
   })
 
   it('the Northstar seed counts its labels, and its wipe takes the counts with the labels', async () => {
@@ -491,16 +625,28 @@ describe('label counts', () => {
     const { org, profiles } = await plantNorthstar(t)
     const counts = await expectCounted(t, org.id)
     expect(Object.values(counts).some((n) => n > 0)).toBe(true)
-    for (let n = 0; n < 50; n++) {
-      const done = await t.run((ctx) =>
+    // small steps, with a label count step between two, as a backfill run
+    // meanwhile would take
+    let done = false
+    let cursor: string | null = null
+    for (let n = 0; n < 200 && !done; n++) {
+      done = await t.run((ctx) =>
         wipeWorkStep(
           ctx,
           org.id,
           profiles.map((p) => p.id),
+          { rows: 16, bytes: 4 * 1024 * 1024 },
         ),
       )
-      if (done) break
+      await expectListCounts(t, org.id)
+      const got: { done: boolean; cursor: string | null } = await t.mutation(
+        internal.internal.labelCountsBackfill.step,
+        { org_id: org.id, cursor },
+      )
+      cursor = got.done ? null : got.cursor
+      await expectListCounts(t, org.id)
     }
+    expect(done).toBe(true)
     expect(
       await t.run((ctx) =>
         ctx.db
@@ -539,7 +685,12 @@ describe('label counts', () => {
       profile_id: f.user.id,
     })
     await t.run(async (ctx) => {
-      await ctx.db.insert('label_count_runs', { org_id, counting: true, through: 0 })
+      // a backfill run that has just started
+      await ctx.db.insert('label_count_runs', {
+        org_id,
+        counting: false,
+        through: Number.MIN_SAFE_INTEGER,
+      })
       await ctx.db.insert('org_removals', {
         org_id,
         reason: 'requested',
@@ -560,9 +711,31 @@ describe('label counts', () => {
             .withIndex('by_org', (q) => q.eq('org_id', org_id))
             .first()) === null,
       )
-    for (let n = 0; n < 300 && !(await gone()); n++)
+    // a label and team count step between two deletion steps, as a
+    // backfill run meanwhile would take, and every count right or gone
+    let cursor: string | null = null
+    let shown = 0
+    for (let n = 0; n < 300 && !(await gone()); n++) {
       await t.mutation(internal.orgRemovals.step, { org_id })
+      await expectListCounts(t, org_id)
+      const got: { done: boolean; cursor: string | null } = await t.mutation(
+        internal.internal.labelCountsBackfill.step,
+        { org_id, cursor },
+      )
+      cursor = got.done ? null : got.cursor
+      const teams = await t.run((ctx) =>
+        ctx.db
+          .query('teams')
+          .withIndex('by_org', (q) => q.eq('org_id', org_id))
+          .collect(),
+      )
+      for (const { id } of teams)
+        await t.mutation(internal.internal.teamCountsBackfill.step, { team_id: id })
+      shown += await expectListCounts(t, org_id)
+    }
     expect(await gone()).toBe(true)
+    // the backfill made counts the deletion then took
+    expect(shown).toBeGreaterThan(0)
     expect(await t.run((ctx) => byId(ctx, 'organizations', org_id))).toBeNull()
     for (const table of ['label_counts', 'team_counts', 'label_count_runs'] as const)
       expect(
@@ -570,5 +743,59 @@ describe('label counts', () => {
         table,
       ).toEqual([])
     await assertNoDanglingRefs(t, 'organization deletion')
+  }, 60_000)
+
+  it('an organization deletion past its labels and teams deletes the counts an earlier release left', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    await t.run((ctx) =>
+      ctx.db.insert('org_removals', {
+        org_id,
+        reason: 'requested',
+        ended_at: NOW,
+        delete_after: NOW,
+        phase: 'profiles',
+        created_at: NOW,
+      }),
+    )
+    REMOVAL_BUDGET.rows = 2
+    const phase = async () =>
+      (
+        await t.run((ctx) =>
+          ctx.db
+            .query('org_removals')
+            .withIndex('by_org', (q) => q.eq('org_id', org_id))
+            .first(),
+        )
+      )?.phase
+    for (
+      let n = 0;
+      n < 300 && !['activity', 'webhooks', 'billing', 'finish'].includes((await phase()) ?? '');
+      n++
+    )
+      await t.mutation(internal.orgRemovals.step, { org_id })
+    // an earlier release ran the labels and teams phases, deleting labels
+    // and teams without their counts
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 3; n++) {
+        await ctx.db.insert('label_counts', {
+          label_id: uuid(),
+          org_id,
+          active_tasks: n,
+          revision: 0,
+        })
+        await ctx.db.insert('team_counts', { team_id: uuid(), org_id, members: n, revision: 0 })
+      }
+    })
+    for (let n = 0; n < 300 && (await phase()) !== undefined; n++)
+      await t.mutation(internal.orgRemovals.step, { org_id })
+    expect(await phase()).toBeUndefined()
+    expect(await t.run((ctx) => byId(ctx, 'organizations', org_id))).toBeNull()
+    for (const table of ['label_counts', 'team_counts'] as const)
+      expect(
+        (await t.run((ctx) => ctx.db.query(table).collect())).filter((r) => r.org_id === org_id),
+        table,
+      ).toEqual([])
   }, 60_000)
 })
