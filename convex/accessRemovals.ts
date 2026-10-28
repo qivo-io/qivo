@@ -15,7 +15,10 @@ import { previewRemoval, vRemovalChange } from './model/removalPreview'
  * counting every such holding), how many tasks are in projects the caller
  * cannot see (`hidden`, a count without ids, numbers or titles), and
  * whether keeping those people as Viewers or reassigning their tasks would
- * pass the write's rules, with the write's sentence when not. The write itself reports how
+ * pass the write's rules, with the write's sentence when not. Reassigning
+ * is answered for a new holder who can take every task once the access is
+ * gone; the write checks the new holder first, so another one is refused
+ * with the sentence about them (model/removalPreview.ts RemovalEffect). The write itself reports how
  * many tasks it stranded (projects.removeAccess `stranded`), so `hidden`
  * tells the caller nothing new.
  *

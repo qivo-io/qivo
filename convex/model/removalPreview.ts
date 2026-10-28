@@ -99,9 +99,18 @@ export type ProjectRef = { id: string; name: string; key: string; parent_id: str
  * holdings of the first PREVIEW.items such tasks in projects the caller can
  * see, by task number, never only some of one task's holdings;
  * `items_total` counts every holding the caller can see, and `hidden` the
- * tasks in projects the caller cannot see. `keep` and `reassign` say whether the removal window's two choices
- * would pass the write's rules, and with which sentence the write would
- * refuse them. `keep.targets` are the projects Keep as Viewer would grant
+ * tasks in projects the caller cannot see. `keep` and `reassign` say
+ * whether the removal window's two choices would pass the write's rules,
+ * and with which sentence the write would refuse them. `reassign` covers
+ * the rules that do not depend on who takes the tasks, so it answers for a
+ * new holder who passes the write's own checks of them once the access is
+ * gone (model/projectAccess.ts assertCanTakeOver, then the task update's
+ * holder rules). The write checks the new holder first, so for one who
+ * fails them it refuses with that holder's sentence instead, marked
+ * HELD_TASKS_REFUSED; the window offers only new holders who pass. The
+ * preview leaves the new holder out because those checks read their access
+ * as it is before the removal, which may be one of its people.
+ * `keep.targets` are the projects Keep as Viewer would grant
  * Viewer on, and `keep.changers` name, for each person who can still change
  * a listed project or one of its sub-projects once the access is gone, the
  * first PREVIEW.changerProjects such projects and how many more there are
@@ -439,6 +448,7 @@ async function effectOf(
 
   // Reassign: the caller needs Edit on every lost task's project once the
   // access is gone (model/issues.ts assertCanEdit), checked after the count
+  // and, in the write, after the new holder's own checks (see RemovalEffect)
   const tasks = new Set(lost.map((h) => h.task.id)).size
   const edits = lost.every((h) => levelRank(later?.levelOf(h.project) ?? null) >= levelRank('user'))
   const reassignRefusal =

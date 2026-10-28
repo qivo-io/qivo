@@ -21,11 +21,12 @@ import { byId } from '../lib/db'
 import type { GrantLevel } from '../lib/enums'
 import type { Refusal } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
-import { NO_WRITE_ACCESS } from '../model/issues'
+import { ASSIGNEE_RULE, NO_WRITE_ACCESS } from '../model/issues'
 import { LAST_TEAM_RULE } from '../model/orgs'
 import {
   type AccessRemoval,
   type HeldTasks,
+  HELD_TASKS_REFUSED,
   type Holding,
   LEAD_ACCESS_RULE,
   NO_USER_MANAGEMENT,
@@ -545,6 +546,23 @@ describe('the removal preview and the write it previews', () => {
     expect(titles(p)).toEqual(["Lena's task"])
     expect(p.reassign).toEqual({ allowed: false, refusal: NO_WRITE_ACCESS })
     expect(p.keep).toMatchObject({ allowed: false, refusal: NO_USER_MANAGEMENT })
+  })
+
+  it('answers Reassign for a new holder who can take the tasks, whom the write checks first', async () => {
+    // the organization's viewer can hold no work, and the write says so
+    // before it finds that Lena cannot edit the task once she has left
+    const s = await leaderScenario('lena')
+    expect((await previewOk(s.t, s.caller, s.change)).reassign.refusal).toBe(NO_WRITE_ACCESS)
+    const e = await expectRefusal(
+      as(s.t, s.caller).mutation(api.teams.removeMember, {
+        org_id: s.orgId,
+        team_id: s.change.team_id,
+        profile_id: s.change.user_id,
+        on_held_tasks: { reassign_to: s.f.viewer.id },
+      }),
+      'rule',
+    )
+    expect(e.data).toMatchObject({ message: ASSIGNEE_RULE, reason: HELD_TASKS_REFUSED })
   })
 
   it('refuses to keep a person as Viewer whose removed grant was Viewer', async () => {
