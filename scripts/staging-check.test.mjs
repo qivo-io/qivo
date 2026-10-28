@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { HISTORY_PAGE_MAX } from '../convex/lib/activityVisibility'
+import { HISTORY_PAGE_MAX, WINDOW_HISTORY_PAGE } from '../convex/lib/activityVisibility'
 import {
   ACCESS_PUT_FIELDS,
   HELD_TASKS_FIELDS,
@@ -41,7 +41,11 @@ describe('staging check REST contract', () => {
     })
   })
   it('fills a task to the page sizes of its thread', () => {
-    expect(THREAD_PAGE).toEqual({ comments: COMMENT_PAGE_MAX, history: HISTORY_PAGE_MAX })
+    expect(THREAD_PAGE).toEqual({
+      comments: COMMENT_PAGE_MAX,
+      history: HISTORY_PAGE_MAX,
+      windowHistory: WINDOW_HISTORY_PAGE,
+    })
   })
 })
 

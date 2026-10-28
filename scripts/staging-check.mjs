@@ -88,11 +88,13 @@ export const STAGING_APP_ORIGIN = 'https://preview.qivo.io'
 const PRODUCTION_HOSTS = new Set(['qivo.io', 'www.qivo.io', 'demo.qivo.io', 'api.qivo.io'])
 /** The longest REST or MCP request body (convex/machine/shared.ts BODY_MAX_BYTES). */
 const BODY_MAX = LIMITS.requestBody.max * MIB
-/** The comments and history rows one page of a task's thread holds
- *  (convex/model/comments.ts COMMENT_PAGE_MAX and
- *  convex/lib/activityVisibility.ts HISTORY_PAGE_MAX). The task window opens
- *  with one page of each, and REST and MCP answer one a call. */
-export const THREAD_PAGE = { comments: LIMITS.listComments.max, history: 500 }
+/** The rows one page of a task's thread holds: comments
+ *  (convex/model/comments.ts COMMENT_PAGE_MAX), history over REST and MCP
+ *  (convex/lib/activityVisibility.ts HISTORY_PAGE_MAX), which answer one
+ *  page a call, and history in the task window (WINDOW_HISTORY_PAGE). The
+ *  window opens with one page of comments, and loads one page of history
+ *  once All is chosen. */
+export const THREAD_PAGE = { comments: LIMITS.listComments.max, history: 500, windowHistory: 50 }
 
 /** Checks that need a condition the run cannot create everywhere, which
  *  report SKIP without it, or FAIL when --require names them. */
@@ -2765,7 +2767,7 @@ async function threadPageChecks() {
     if (created) eq(r.created, created, 'the created row REST answered')
     return `${r.count} rows in 2 pages`
   })
-  await earlierThreadChecks(task, comments, created)
+  await earlierThreadChecks(task, comments, created, changes)
 }
 
 /** The rows of a task's history, oldest first, from `pages`, the pages
@@ -2784,13 +2786,14 @@ export function historyRows(pages, total) {
   return rows
 }
 
-/** The task window opens at the newest page of comments and of history.
- *  Under Comments, Show earlier comments loads the rest of the comments,
- *  and under All, Show earlier activity loads the rest of the thread, each
- *  until the control goes. Each check opens the task afresh, so one can
- *  fail without the other. `comments` are the task's comment ids, oldest
- *  first, and `created` the id of its created row. */
-async function earlierThreadChecks(task, comments, created) {
+/** The task window opens at the newest page of comments, and under All
+ *  at the newest page of history too. Under Comments, Show earlier comments
+ *  loads the rest of the comments, and under All, Show earlier activity
+ *  loads the rest of the thread, each until the control goes. Each check
+ *  opens the task afresh, so one can fail without the other. `comments`
+ *  are the task's comment ids, oldest first, `created` the id of its
+ *  created row and `changes` the number of rows in its history. */
+async function earlierThreadChecks(task, comments, created, changes) {
   const more = app.locator('[data-earlier-comments="more"] button')
   /** The ids the thread shows in the attribute `name`, top to bottom. */
   const shown = (name) =>
@@ -2847,8 +2850,12 @@ async function earlierThreadChecks(task, comments, created) {
       await more.waitFor({ timeout: 20_000 })
       eq((await more.textContent())?.trim(), 'Show earlier activity', 'the control under All')
       expect(!(await shown('data-event')).includes(created), 'the created row is already shown')
-      // a page of history, then the comments older than the oldest loaded one
-      const clicks = await pressUntilGone(3, 'Show earlier activity')
+      // pages of history, then the comments older than the oldest loaded
+      // one: a press loads at least one page of either
+      const most =
+        Math.ceil(changes / THREAD_PAGE.windowHistory) +
+        Math.ceil(comments.length / THREAD_PAGE.comments)
+      const clicks = await pressUntilGone(most, 'Show earlier activity')
       const first = await app
         .locator('[data-spine-feed]')
         .locator('[data-comment], [data-event]')
