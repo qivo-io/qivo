@@ -23,9 +23,12 @@
  * item's milestones among them, and one transaction at the end, the reveal,
  * writes the item's root rows (a task item's tasks; a project item's
  * projects), so the work appears complete in one delivery. A project item's
- * grants and team grants are written back before the reveal too
+ * grants and team grants, with the reach rows of its grants, shares and
+ * leads (model/projectNav.ts), are written back before the reveal too
  * (restoreAccess), and their stored rows go after it (restoreGrants), so
- * everyone who had access sees the projects at once. A project item's
+ * everyone who had access sees the projects at once. A move deletes the
+ * reach rows of its projects with their grants (clearProjectRows); nothing
+ * stores them. A project item's
  * tasks whose parent is outside it go back without that parent and get it
  * after the reveal, by the state then
  * (attachParents). That happens in the reveal's
@@ -144,6 +147,18 @@ import {
   scheduleArchivedReads,
 } from './messages'
 import { newUuid, tallyRow } from './orgs'
+import {
+  archiveStateOf,
+  type Grantee,
+  grantee,
+  insertGrant,
+  insertShare,
+  type ProjectRead,
+  type ReachProject,
+  reachFollows,
+  syncLeads,
+  syncReach,
+} from './projectNav'
 import { uncountFile, uncountStored } from './storageTotals'
 import { emitTaskEvent } from './taskEvents'
 
@@ -1052,7 +1067,9 @@ async function clearProjectTasks(run: Run, projectId: string, mode: Mode): Promi
   return true
 }
 
-/** Clears (keep or purge) project `projectId`'s milestones and grants. */
+/** Clears (keep or purge) project `projectId`'s milestones and grants,
+ * then deletes its reach rows (model/projectNav.ts), which nothing stores,
+ * because a restore writes them again from the grants (restoreAccess). */
 async function clearProjectRows(run: Run, projectId: string, mode: Mode): Promise<boolean> {
   for (const relation of PROJECT_ROWS) {
     const done = await drain(run.budget, relation(run.ctx, projectId), (row) =>
@@ -1060,7 +1077,25 @@ async function clearProjectRows(run: Run, projectId: string, mode: Mode): Promis
     )
     if (!done) return false
   }
-  return true
+  return await clearReach(run, projectId)
+}
+
+/** The reach rows on project `id`, every grantee's. */
+const reachOn = (ctx: QueryCtx, id: string) =>
+  ctx.db.query('project_reach').withIndex('by_project_grantee', (q) => q.eq('project_id', id))
+
+/** Deletes the reach rows on absent project `projectId` in one pass
+ * (drain), each with syncReach, which also takes its grantee's row off the
+ * live top-level project above a sub-project once nothing else of theirs is
+ * under it. Each sync's reads count against the step's budget, the bytes
+ * of the projects and teams it reads included. Until its row goes, a
+ * navigation-only parent can still list a grantee whose sub-project is
+ * already absent, which readers find gone when they check the live
+ * projects. */
+async function clearReach(run: Run, projectId: string): Promise<boolean> {
+  return await drain(run.budget, reachOn(run.ctx, projectId), (row) =>
+    syncReachOf(run, (ctx) => syncReach(ctx, row, projectId)),
+  )
 }
 
 /** Runs `clear` for each task the item stores, in deleted_tasks order from
@@ -1113,6 +1148,7 @@ async function moveEdges(run: Run): Promise<boolean> {
   for (; cursor.index < ids.length; cursor.index += 1, cursor.after = 0) {
     if (spent(run.budget)) return stop()
     const projectId = ids[cursor.index]
+    if (await takenAgain(run, projectId)) continue
     const tasks = run.ctx.db
       .query('issues')
       .withIndex('by_project_archived', (q) =>
@@ -1165,11 +1201,19 @@ async function isEdge(
   return false
 }
 
+/** Whether a live project holds the id of one of a moving item's projects.
+ * Only a project row the move dropped as too large to store frees its id
+ * (storeRow), and the project that took it since keeps its own rows, so
+ * the move leaves them alone, as a purge does (absentProjects). */
+const takenAgain = async (run: Run, id: string): Promise<boolean> =>
+  (await byId(run.ctx, 'projects', id)) !== null
+
 /* Each of the item's projects' milestones, grants and team grants, then
  * every task left in it. The user's transaction stored only the project
  * rows, which hide the rest. */
 async function moveProjectTasks(run: Run): Promise<boolean> {
   for (const id of itemProjectIds(run.item)) {
+    if (await takenAgain(run, id)) continue
     if (!(await clearProjectRows(run, id, 'keep'))) return false
     if (!(await clearProjectTasks(run, id, 'keep'))) return false
   }
@@ -1226,7 +1270,9 @@ async function moveLeft(run: Run): Promise<TrashPhase | null> {
     return done ? null : 'move_finish'
   }
   for (const id of itemProjectIds(run.item)) {
+    if (await takenAgain(run, id)) continue
     if (await holdsRows(run.ctx, PROJECT_ROWS, id)) return 'move_tasks'
+    if ((await reachOn(run.ctx, id).first()) !== null) return 'move_tasks'
     const task = await run.ctx.db
       .query('issues')
       .withIndex('by_project', (q) => q.eq('project_id', id))
@@ -1424,6 +1470,7 @@ async function purgeLeft(run: Run): Promise<boolean> {
   if (run.item.kind === 'task') return false
   for (const id of await absentProjects(run)) {
     if (await holdsRows(run.ctx, PROJECT_ROWS, id)) return true
+    if ((await reachOn(run.ctx, id).first()) !== null) return true
     const stranded = await run.ctx.db
       .query('issues')
       .withIndex('by_project', (q) => q.eq('project_id', id))
@@ -1447,11 +1494,21 @@ async function purgeLeft(run: Run): Promise<boolean> {
  * makes the reveal wait for a step of its own (revealTasks). */
 const REVEAL_RANGES_PER_TASK = 20
 
-/* The index ranges a reveal reads per project of a project item: the
- * conflict check's key and uuid reads, its lead and legacy team, the
- * used_ids row of its id (lib/db.ts insertUsed) and the stored row it
- * deletes. */
-const REVEAL_RANGES_PER_PROJECT = 6
+/** The index ranges a reveal reads per project of a project item, with a
+ * delete or patch counted as one for the row it reads: the conflict check's
+ * key and uuid reads, its lead and legacy team, the used_ids row of its id
+ * (lib/db.ts insertUsed), the counters and, in a counted organization, their
+ * patch (tallyRow), the stored row it deletes, and the reach rows of its
+ * stored lead it brings in line (revealProjects), which read the projects
+ * the reveal wrote. A lead who became a Viewer after restore_access wrote
+ * their rows comes back without the project (cleanProject), and taking their
+ * rows costs six reads and two deletes. Counted as a step's budget counts
+ * reads (meterDb), a reveal of 5 and of 10 sub-projects in a counted
+ * organization, each with a legacy team and such a lead, spent 16 a project,
+ * and 12 with each lead kept (tests/projectReach.test.ts). The largest item,
+ * 201 projects, so reads about 3,200 in a step of its own, inside Convex's
+ * 4,096. */
+export const REVEAL_RANGES_PER_PROJECT = 16
 
 /** Why an item cannot be restored now (design 5.3). The item's state while
  * it is not ready; read_only while billing or a pending deletion makes the
@@ -2695,20 +2752,23 @@ async function reveal(run: Run): Promise<JobState | null> {
 
 /* A project item's grants and team grants, written back before its reveal
  * (restore_access), so that the reveal shows the projects to everyone who
- * had access in one delivery. The stored rows stay until after the reveal
- * (restoreGrants): until then a level check keeps reading one person's
- * grants of the item by index (storedLevels), however many grants the item
- * holds, and the live copies name projects that are still absent, which
- * readers skip as they do while a move drains. The step walks each
- * project's stored rows of each table with the job's cursor, because the
- * rows stay in their range. Each step goes on from the creation time of the
- * last row it wrote, that row included, so a tie of _creationTime skips
- * nothing. A grant whose profile, or a share whose team, fails the
- * reference predicate stays out (cleanGrant, cleanShare), and so does one a
- * live row on the same project already holds: the row a step starts with,
- * or one a walk repeated after the reveal sent the item back to an earlier
- * phase finds. Every grant is back before the reveal, so nothing writes one
- * after it, when an admin may already have removed it. */
+ * had access in one delivery. Each one written back writes its reach rows
+ * too, and then each project's lead does (model/projectNav.ts), from the
+ * projects as their reveal writes them back (restoreRead), so the
+ * navigation lists have them at the reveal as well. The stored rows stay
+ * until after the reveal (restoreGrants): until then a level check keeps
+ * reading one person's grants of the item by index (storedLevels), however
+ * many grants the item holds, and the live copies name projects that are
+ * still absent, which readers skip as they do while a move drains. The step
+ * walks each project's stored rows of each table with the job's cursor,
+ * because the rows stay in their range. Each step goes on from the creation
+ * time of the last row it wrote, that row included, so a tie of
+ * _creationTime skips nothing. A grant whose profile, or a share whose
+ * team, fails the reference predicate stays out (cleanGrant, cleanShare),
+ * and so does one a live row on the same project already holds: the row a
+ * step starts with, or one a walk repeated after the reveal sent the item
+ * back to an earlier phase finds. Every grant is back before the reveal, so
+ * nothing writes one after it, when an admin may already have removed it. */
 async function restoreAccess(run: Run): Promise<boolean> {
   if (run.item.kind !== 'project') return true
   const ids = itemProjectIds(run.item)
@@ -2717,10 +2777,28 @@ async function restoreAccess(run: Run): Promise<boolean> {
     run.state.cursor = cursor
     return false
   }
-  for (; cursor.index < GRANT_TABLES.length * ids.length; cursor.index += 1, cursor.after = 0) {
+  // each project's grants, then its team grants, then its lead
+  for (
+    ;
+    cursor.index < (GRANT_TABLES.length + 1) * ids.length;
+    cursor.index += 1, cursor.after = 0
+  ) {
     if (spent(run.budget)) return stop()
-    const table = GRANT_TABLES[Math.floor(cursor.index / ids.length)]
+    const at = Math.floor(cursor.index / ids.length)
     const owner = ids[cursor.index % ids.length]
+    if (at === GRANT_TABLES.length) {
+      // the stored project's lead, read through the measured ctx, so the
+      // step counts the stored rows when this reads them first
+      await syncReachOf(run, async (ctx) => {
+        const project = (await hierarchyOf({ ...run, ctx })).projects.find((p) => p.id === owner)
+        const lead = project?.lead_id
+        if (lead === undefined) return
+        await syncLeads(ctx, owner, [lead], restoreRead(run, ctx))
+        run.budget.moved = true
+      })
+      continue
+    }
+    const table = GRANT_TABLES[at]
     const rows = run.ctx.db
       .query('deleted_rows')
       .withIndex('by_item_table_owner', (q) =>
@@ -2751,8 +2829,28 @@ async function restoreAccess(run: Run): Promise<boolean> {
  * restore_access wrote every one before the reveal (granted), and a grant
  * an admin removed since must stay removed. A job the release before left
  * past its reveal wrote its grants back here, so without `granted` this
- * writes back each one still missing on a live project first. */
+ * writes back each one still missing on a live project first. A stored row
+ * whose grantee holds no reach row on the project, live now, or one whose
+ * copies differ from it (model/projectNav.ts reachFollows), gets its rows
+ * written again (syncReach), as for a job an earlier release left past
+ * restore_access, which wrote grants back without them; a row that follows
+ * the project costs one read, and each project is read once a step. */
 async function restoreGrants(run: Run): Promise<boolean> {
+  // each project the step reads, once, its bytes charged to the budget
+  const projects = new Map<string, Promise<Doc<'projects'> | null>>()
+  const project = (id: string) => {
+    let read = projects.get(id)
+    if (read === undefined) {
+      read = (async () => {
+        const cost = { ranges: 0, bytes: 0 }
+        const doc = await byId(measured(run.ctx, cost), 'projects', id)
+        run.budget.bytes -= cost.bytes
+        return doc
+      })()
+      projects.set(id, read)
+    }
+    return read
+  }
   for (const table of GRANT_TABLES) {
     const done = await drain(
       run.budget,
@@ -2760,8 +2858,16 @@ async function restoreGrants(run: Run): Promise<boolean> {
         .query('deleted_rows')
         .withIndex('by_item_table_owner', (q) => q.eq('item_id', run.item.id).eq('table', table)),
       async (row) => {
-        if (!run.state.granted && (await byId(run.ctx, 'projects', row.owner_id)) !== null)
-          await writeGrantBack(run, row)
+        const live = await project(row.owner_id)
+        if (!run.state.granted && live !== null) await writeGrantBack(run, row)
+        // the grantee's reach rows on the project, live now, which
+        // restore_access wrote from the stored copy. They are written again
+        // where they are missing, as for a job an earlier release left past
+        // restore_access, or where a copy differs from the project the
+        // reveal wrote.
+        const g = granteeOfStored(row)
+        if (g !== null && live !== null && !(await reachFollows(run.ctx, g, live)))
+          await syncReachOf(run, (ctx) => syncReach(ctx, g, row.owner_id))
         await run.ctx.db.delete(row._id)
       },
     )
@@ -2770,9 +2876,18 @@ async function restoreGrants(run: Run): Promise<boolean> {
   return true
 }
 
-/** Writes stored grant or team grant `row` back to its live table, unless
- * it fails the reference predicate (cleanGrant, cleanShare) or a live row
- * on the same project already holds it. Leaves the stored row. True when it
+/** The grantee of stored grant or team grant `row`, null for another row. */
+function granteeOfStored(row: Doc<'deleted_rows'>): Grantee | null {
+  const r = row.row
+  if (r.table === 'project_access') return grantee.profile(r.doc.profile_id)
+  if (r.table === 'project_team_access') return grantee.team(r.doc.team_id)
+  return null
+}
+
+/** Writes stored grant or team grant `row` back to its live table, with
+ * its reach rows (model/projectNav.ts insertGrant, insertShare), unless it
+ * fails the reference predicate (cleanGrant, cleanShare) or a live row on
+ * the same project already holds it. Leaves the stored row. True when it
  * wrote one. */
 async function writeGrantBack(run: Run, row: Doc<'deleted_rows'>): Promise<boolean> {
   const db = uncountedWriter(run.ctx.db)
@@ -2786,7 +2901,9 @@ async function writeGrantBack(run: Run, row: Doc<'deleted_rows'>): Promise<boole
       )
       .first()
     if (grant === null || held !== null) return false
-    await db.insert('project_access', grant)
+    await syncReachOf(run, (ctx) =>
+      insertGrant(ctx, grant, { db, read: restoreRead(run, ctx), org: run.item.org_id }),
+    )
     return true
   } else if (r.table === 'project_team_access') {
     const share = await cleanShare(run, r.doc)
@@ -2797,10 +2914,36 @@ async function writeGrantBack(run: Run, row: Doc<'deleted_rows'>): Promise<boole
       )
       .first()
     if (share === null || held !== null) return false
-    await db.insert('project_team_access', share)
+    await syncReachOf(run, (ctx) =>
+      insertShare(ctx, share, { db, read: restoreRead(run, ctx), org: run.item.org_id }),
+    )
     return true
   }
   return false
+}
+
+/** Reads projects through `ctx` for the reach rows a project item's
+ * restore writes before its reveal: a live project, else one of the item's
+ * stored projects as its reveal writes it back (hierarchyOf). It reads the
+ * live table each time rather than through the Memo, which would keep an
+ * item's project absent after the reveal of the same transaction writes
+ * it. */
+const restoreRead =
+  (run: Run, ctx: QueryCtx): ProjectRead =>
+  async (id) =>
+    (await byId(ctx, 'projects', id)) ??
+    // through `ctx`, so the step counts the stored rows when this reads
+    // them first
+    (await hierarchyOf({ ...run, ctx })).projects.find((p) => p.id === id) ??
+    null
+
+/** Runs `write`, which brings reach rows in line, on the step's ctx with
+ * the bytes it reads, the projects and teams included, charged to the
+ * step's budget, which counts its index ranges already. */
+async function syncReachOf(run: Run, write: (ctx: MutationCtx) => Promise<void>): Promise<void> {
+  const cost = { ranges: 0, bytes: 0 }
+  await write(measured(run.ctx, cost))
+  run.budget.bytes -= cost.bytes
 }
 
 /** A failed reveal: the item goes back to moving, and its steps take what
@@ -2818,24 +2961,58 @@ async function sendBack(run: Run, reason: RestoreBlock): Promise<JobState> {
 }
 
 /* A project item's projects as the hierarchy cleans them, at most
- * LIMITS.projectDeleteSubProjects.max + 1. Their milestones, grants and team shares
- * went back before (restoreRows, restoreAccess), so the projects show with
- * them. Each
+ * LIMITS.projectDeleteSubProjects.max + 1, each with the archive state its
+ * archive time and its parent's give it now (model/projectNav.ts
+ * archiveStateOf), which a copy stored before archive states lacks. Their
+ * milestones, grants, team shares and reach rows went back before
+ * (restoreRows, restoreAccess), so the projects show with them. Each
  * counts against the rows and bytes of the budget, so a later item of the
  * same restore call waits for a step when they leave no room for its
  * reveal (revealFits). The attach after it still checks its first parent
  * whole when nothing moved before the reveal. */
 async function revealProjects(run: Run): Promise<void> {
-  for (const row of await storedOf(run, 'projects')) {
-    const project = await cleanProject(run, docOf(row, 'projects'))
+  const rows = await storedOf(run, 'projects')
+  const docs = rows.map((row) => docOf(row, 'projects'))
+  // the parent of the item's top-level row is live; the parent of each of
+  // its sub-projects is that row (model/projectNav.ts archiveStateOf)
+  const parent =
+    run.item.parent_project_id === undefined
+      ? null
+      : await byId(run.ctx, 'projects', run.item.parent_project_id)
+  if (parent !== null) run.budget.bytes -= estimateDocumentBytes(parent)
+  const top = docs.find((p) => p.id === run.item.target_id) ?? null
+  // the projects as the reveal writes them, which the leads' rows read
+  const written = new Map<string, ReachProject>()
+  for (const [index, row] of rows.entries()) {
+    const stored = docs[index]
+    const project = {
+      ...(await cleanProject(run, stored)),
+      archive_state: archiveStateOf(stored, stored.id === top?.id ? parent : top),
+    }
     // with the used_ids row of its id, which a project stored before
     // used_ids existed gets now
     await insertUsed(uncountedWriter(run.ctx.db), 'projects', project, 'restore')
     await tallyRow(run.ctx, 'projects', null, project)
     await run.ctx.db.delete(row._id)
+    written.set(project.id, project)
     run.budget.rows -= 1
     run.budget.bytes -= estimateDocumentBytes(row)
   }
+  // Once every project is in, the reach rows of each stored lead follow the
+  // lead the reveal wrote, which a role change since restore_access can
+  // have dropped or brought back (cleanProject). They read the projects
+  // from what the reveal wrote and the outside parent it read, so a
+  // sub-project costs no read of its top-level project, which a legacy icon
+  // can make near 1 MiB; the reveal runs whole in one transaction.
+  const read =
+    (ctx: QueryCtx): ProjectRead =>
+    async (id) =>
+      written.get(id) ?? (id === parent?.id ? parent : await byId(ctx, 'projects', id))
+  for (const stored of docs)
+    if (stored.lead_id !== undefined) {
+      const lead = stored.lead_id
+      await syncReachOf(run, (ctx) => syncLeads(ctx, stored.id, [lead], read(ctx)))
+    }
 }
 
 /** Writes a task item's stored tasks `tasks` back, parents before
@@ -4075,7 +4252,8 @@ async function clearDescriptions(
  * their restores wait to attach, so a step still scheduled finds nothing to
  * do. Then each stored task goes with the rows a move or restore left of it
  * in the live tables, and each stored row, a project after the milestones,
- * grants and tasks still live under it. An attachment leaves the
+ * grants, reach rows and tasks still live under it, so no live row is left
+ * to a project that takes its id later. An attachment leaves the
  * stored-byte totals with its row (model/storageTotals.ts), and its file is
  * let go unless another row, live or stored, still names it, and is held
  * for a restore before it is erased (model/fileHolds.ts releaseFile).
@@ -4138,6 +4316,13 @@ export async function clearOrgTrash(
           })
           if (!cleared) return false
         }
+        // and its reach rows, which go before the stored row frees its id
+        // (model/projectNav.ts)
+        const reached = await clearPages(budget, reachOn(ctx, row.owner_id), async (reach) => {
+          await ctx.db.delete(reach._id)
+          return true
+        })
+        if (!reached) return false
         const stranded = await clearPages(
           budget,
           ctx.db.query('issues').withIndex('by_project', (q) => q.eq('project_id', row.owner_id)),

@@ -24,6 +24,7 @@ import { releaseFile } from './fileHolds'
 import { recipientItems, stateRows } from './inboxItems'
 import { deleteSweepRow } from './messages'
 import { deleteOrgBookkeeping } from './orgs'
+import { grantee, reachOfGrantee, reachOfOrg } from './projectNav'
 import { deleteStamp } from './syncStamps'
 import { emitTaskEvent } from './taskEvents'
 import { countingOrg, countMemberRemoved, deleteTeamCount } from './teamCounts'
@@ -37,8 +38,9 @@ async function deleteProfileRateLimit(ctx: MutationCtx, profileId: string): Prom
 }
 
 /* delete_team's cascade (0081:458-471 authorizes). Projects are independent
- * of teams, so deleting a team removes its permission grants and clears the
- * legacy ownership column while preserving projects, tasks and milestones.
+ * of teams, so deleting a team removes its permission grants with their
+ * reach rows (model/projectNav.ts) and clears the legacy ownership column
+ * while preserving projects, tasks and milestones.
  * Memberships die (team_members.team_id CASCADE, 0001:51), labels are
  * org-level and SURVIVE (0010/0078). Activity rows survive and keep their
  * team_id, unlike 0001:156's SET NULL. Membership rows reach no client;
@@ -84,6 +86,11 @@ export async function deleteTeamDeep(
   for await (const grant of shared) {
     await next()
     await ctx.db.delete(grant._id)
+  }
+  // with its shares gone the team reaches nothing
+  for await (const row of reachOfGrantee(ctx, grantee.team(team.id))) {
+    await next()
+    await ctx.db.delete(row._id)
   }
   const members = ctx.db.query('team_members').withIndex('by_team', (q) => q.eq('team_id', team.id))
   for await (const tm of members) {
@@ -220,7 +227,13 @@ const removalStepRef = makeFunctionReference<'mutation', { profile_id: string },
  * can lower it. */
 export const ACCESS_FIRST_PASS = { rows: 512 }
 
-type AccessTable = 'agent_keys' | 'mcp_tokens' | 'team_members' | 'project_access' | 'user_prefs'
+type AccessTable =
+  | 'agent_keys'
+  | 'mcp_tokens'
+  | 'team_members'
+  | 'project_access'
+  | 'project_reach'
+  | 'user_prefs'
 
 /* The rows that give a profile access or hold its own settings, each read
  * through its by_profile index, in the order a removal deletes them. Rows
@@ -233,6 +246,8 @@ type AccessTable = 'agent_keys' | 'mcp_tokens' | 'team_members' | 'project_acces
  *   profile, and the snapshot sends only rows whose profile it sends. A
  *   membership left still counts in its team's member count until a
  *   background step deletes it (model/teamCounts.ts).
+ * - project_reach: navigation reads the rows of a live seat, and the rows
+ *   grant nothing (model/projectNav.ts).
  * - user_prefs: only the person's own seats read them (prefs.ts). */
 const ACCESS_RANGES: ((
   ctx: QueryCtx,
@@ -249,6 +264,7 @@ const ACCESS_RANGES: ((
     ctx.db.query('team_members').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
   (ctx, profileId) =>
     ctx.db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+  (ctx, profileId) => reachOfGrantee(ctx, grantee.profile(profileId)),
   (ctx, profileId) =>
     ctx.db.query('user_prefs').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
 ]
@@ -298,8 +314,8 @@ const ACTED_ROWS_FIRST_PASS = 500
  * the person's own list hides them at once. Every session, credential and
  * OAuth path requires the profile row, so access fails closed here. It
  * deletes the first ACCESS_FIRST_PASS.rows of its own agent keys, MCP
- * tokens, memberships, grants and preferences (ACCESS_RANGES, which says why
- * the rest grant nothing), and clears its newest ACTED_ROWS_FIRST_PASS
+ * tokens, memberships, grants, reach rows and preferences (ACCESS_RANGES,
+ * which says why the rest grant nothing), and clears its newest ACTED_ROWS_FIRST_PASS
  * activity rows and as many open tasks as REMOVAL_BUDGET allows, assignee
  * and reviewer fields first. That is every row unless the profile holds
  * hundreds. Then it inserts the profile_removals row and schedules the first
@@ -321,7 +337,8 @@ const ACTED_ROWS_FIRST_PASS = 500
  *   (0001:149, rows KEPT, history survives its actor), comments.author /
  *   comments.edited_by (0054:15/19), messages.actor_id (0074:24),
  *   agent_keys.created_by (0100:51), issue_attachments.uploaded_by (0018:23).
- * - DELETE: team_members (0001:52), project_access (0001:81),
+ * - DELETE: team_members (0001:52), project_access (0001:81), the
+ *   profile's project_reach rows (model/projectNav.ts),
  *   issue_subscriptions (0114:86), messages by recipient, the whole inbox
  *   (0074:23), user_prefs (0036:11), the Team sync stamp (sync_stamps),
  *   the read-message sweep row (message_sweeps), agent_keys by profile
@@ -345,6 +362,7 @@ export async function removeProfile(
     .withIndex('by_lead', (q) => q.eq('lead_id', profile.id))
     .take(LIMITS.removalLeads.max + 1)
   if (led.length > LIMITS.removalLeads.max) throw rule(LIMITS.removalLeads.refusal)
+  // Their reach rows go with the rest of their access rows below.
   for (const p of led) await ctx.db.patch(p._id, { lead_id: undefined })
   // DELETE, credentials first, within ACCESS_FIRST_PASS.rows rows. Every
   // reader of the rest ends with the profile row deleted below
@@ -582,6 +600,7 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       .collect())
       await ctx.db.delete(row._id)
 
+  for (const row of await reachOfOrg(ctx, org.id).collect()) await ctx.db.delete(row._id)
   for (const p of await ctx.db
     .query('projects')
     .withIndex('by_org', (q) => q.eq('org_id', org.id))

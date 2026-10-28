@@ -49,6 +49,7 @@ import { startCount } from '../model/commentLimits'
 import { insertTask } from '../model/descriptions'
 import { insertLabelCount } from '../model/labelCounts'
 import { insertOrgRows, newOrgDefaults, newTeamDefaults, tallyRow } from '../model/orgs'
+import { insertGrant } from '../model/projectNav'
 import { projectDescription } from '../model/projects'
 import { insertTeamCount } from '../model/teamCounts'
 import { releaseUsedIds } from '../model/usedIds'
@@ -173,6 +174,7 @@ export const zzGuestOrg = internalMutation({
         track_delay: true, // the 0064 column default the SQL rows took
         created_at: now,
         window_key: newWindowKey(),
+        archive_state: 'live',
       } as const
       await insertUsed(ctx.db, 'projects', row, conflict(ID_TAKEN, 'id_taken'))
       await tallyRow(ctx, 'projects', null, row)
@@ -271,12 +273,17 @@ export const zzGuestOrg = internalMutation({
      * only. claim_my_seats adopts it at his next boot, which is the first
      * thing the check asserts. */
     await profile(ZZ.guestSeat, GUEST.email, GUEST.name, GUEST.initials, 'guest')
-    await ctx.db.insert('project_access', {
-      project_id: ZZ.sharedMeta,
-      profile_id: ZZ.guestSeat,
-      level: 'user',
-      name_key: nameKey(GUEST.name),
-    })
+    // the grant writes its reach rows (model/projectNav.ts)
+    await insertGrant(
+      ctx,
+      {
+        project_id: ZZ.sharedMeta,
+        profile_id: ZZ.guestSeat,
+        level: 'user',
+        name_key: nameKey(GUEST.name),
+      },
+      { org: ZZ.org },
+    )
 
     /* The shared task must be QN-1, or the collision the browser half proves
      * is gone (the SQL do-block's assertion). */

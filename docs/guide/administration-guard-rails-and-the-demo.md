@@ -122,7 +122,9 @@ shares ([Creating projects and sub-projects](./who-sees-what-the-access-model.md
 Project settings includes the name, description, lead, access, delay tracking
 and review time. Names allow up to 80 characters and descriptions up to 500
 ([Limits](./limits.md)). A description saves when you click outside; clearing the field removes
-the description. Lead access is required to change **Review time**. An empty
+the description. Renaming a project or changing its key updates the access
+entry of every person and team who reaches it in one change, at most 2,000
+([Limits](./limits.md)). Lead access is required to change **Review time**. An empty
 sub-project value follows its parent project ([Review time](./will-it-be-ready-in-time-the-delay-status.md#review-time)).
 Its last section, **Archive or delete**, archives the project or moves it to
 Deleted items ([Deleting a project](./how-work-is-organized.md#deleting-a-project)).

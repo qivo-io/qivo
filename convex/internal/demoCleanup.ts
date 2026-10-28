@@ -27,6 +27,7 @@ import { eraseFile } from '../model/fileHolds'
 import { recipientItems, stateRows, taskItems } from '../model/inboxItems'
 import { deleteLabelCount } from '../model/labelCounts'
 import { deleteOrgBookkeeping, tallyRow } from '../model/orgs'
+import { reachOfOrg } from '../model/projectNav'
 import { uncountFile } from '../model/storageTotals'
 import { deleteTeamCount } from '../model/teamCounts'
 import { releaseUsedIds } from '../model/usedIds'
@@ -244,6 +245,9 @@ async function commentLimitRows(ctx: MutationCtx, orgId: string, budget: Budget)
 }
 
 async function projectRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
+  // the reach rows of every project, and of any a move left absent
+  // (model/projectNav.ts)
+  if (!(await drain(ctx, budget, (n) => reachOfOrg(ctx, orgId).take(n)))) return false
   while (budget.left > 0) {
     const project = await ctx.db
       .query('projects')
@@ -709,6 +713,7 @@ export const purge = internalMutation({
             'issues',
             'issue_descriptions',
             'projects',
+            'project_reach',
             'teams',
             'profiles',
             'labels',

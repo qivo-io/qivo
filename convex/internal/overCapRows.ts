@@ -44,7 +44,11 @@
  *
  * Each row found carries an `outcome`: 'fixed' by this run, 'would_fix' in a
  * dry run or check, 'skipped' when the fixed value would collide with
- * another row, or 'reported' when only a person can fix it. A dry run sees
+ * another row or, for a project name, when its reach rows do not fit what
+ * its page has left (run the fix again; behind more than REPORTS reported
+ * names on its page, after a person shortens those), or 'reported' when
+ * only a person can fix it, such as a project name whose reach rows are
+ * more than one change may update (LIMITS.projectTreeChange). A dry run sees
  * a collision with a stored row or a row of the same page; two rows on
  * different pages that fix to the same value both show 'would_fix', and the
  * real run fixes the first and skips the second. `fix` answers `counts` for
@@ -84,12 +88,19 @@ import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits
 import { nameKey } from '../lib/nameKey'
 import { patchTask } from '../model/descriptions'
 import { copyNameKey, inlineBudget } from '../model/nameKeys'
+import { patchRows } from '../model/projectNav'
 import { renameProjectTotals } from '../model/storageTotals'
 
 /** Rows per page and the bytes one page may read; a page can end early.
  * `page_size` lowers the rows per page, for tests of a walk over pages. */
 const PAGE = 500
 const PAGE_BYTES = 4 * 1024 * 1024
+
+/** The project names a page may read in full only to report them, each up
+ * to LIMITS.projectTreeChange.max reach rows, besides the allowance its
+ * fixes share. The bound keeps a page within Convex's read limits; past it
+ * the long names left on the page wait until a person shortens those. */
+const REPORTS = 4
 
 /** The tables whose `name` counts NAME_MAX UTF-16 units. */
 const NAMED = [
@@ -289,8 +300,11 @@ async function walk(
     const table = phase
     const page = await ctx.db.query(table).paginate(opts)
     // a cut profile or team name's copies follow it, within one budget a
-    // page (model/nameKeys.ts)
+    // page (model/nameKeys.ts), and so do a cut project name's reach rows
+    // (model/projectNav.ts), within LIMITS.projectTreeChange.max a page
     const copies = inlineBudget()
+    let reachLeft = LIMITS.projectTreeChange.max
+    let reportsLeft = REPORTS
     for (const doc of page.page) {
       const { _id, _creationTime, ...body } = doc
       const changes =
@@ -299,6 +313,46 @@ async function walk(
           : nameChange(doc.name, NAME_MAX)
       const found = sorted(table, _id, changes, write)
       rows.push(...found.rows)
+      // A project's reach rows, which its cut name's key must reach, read
+      // in the dry run too, so it reports what the fix does. A name that
+      // fits or waits spends the page's allowance with its query and each
+      // row it reads, as treeRows counts them. Past what the page has left
+      // the name waits for a later run ('skipped'), and once the allowance
+      // is spent the names left wait without a read. Past what one change
+      // may update, which only a read with the whole allowance finds, a
+      // person must shorten it after some access goes ('reported'), as a
+      // rename in the app is refused. That read spends one of REPORTS
+      // instead, so the names after it still fit, and with none left a
+      // name that would read the whole allowance waits.
+      let reach: Doc<'project_reach'>[] = []
+      if (table === 'projects' && typeof found.patch?.name === 'string') {
+        const named = found.rows.find((row) => row.field === 'name')
+        const wait = (outcome: Outcome) => {
+          if (named !== undefined) named.outcome = outcome
+        }
+        const fresh = reachLeft === LIMITS.projectTreeChange.max
+        if (reachLeft < 1 || (fresh && reportsLeft < 1)) {
+          wait('skipped')
+          continue
+        }
+        const read = await ctx.db
+          .query('project_reach')
+          .withIndex('by_project_grantee', (q) => q.eq('project_id', doc.id))
+          .take(reachLeft)
+        const cost = 1 + read.length
+        if (fresh && cost > reachLeft) {
+          reportsLeft -= 1
+          wait('reported')
+          continue
+        }
+        reachLeft -= cost
+        if (reachLeft < 0) {
+          wait('skipped')
+          continue
+        }
+        const org = 'org_id' in doc ? doc.org_id : undefined
+        reach = read.filter((row) => row.org_id === org)
+      }
       if (found.patch === null || write === null) continue
       const { name } = found.patch
       const keyed =
@@ -314,6 +368,8 @@ async function walk(
       // the Storage by project breakdown shows the project's current name
       if ('num' in doc && 'org_id' in doc && typeof name === 'string')
         await renameProjectTotals(write, { id: doc.id, org_id: doc.org_id, num: doc.num, name })
+      if (typeof name === 'string' && table === 'projects')
+        await patchRows(write, reach, { name_key: nameKey(name) })
     }
     return { rows, cursor: page.continueCursor, done: page.isDone }
   }

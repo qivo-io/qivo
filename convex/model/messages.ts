@@ -1284,6 +1284,15 @@ export const ARCHIVED_READ_BATCH = 330
  * a row to mark. */
 export const ARCHIVED_READ_TASKS = 500
 
+/* The rest of a chain as a step's arguments carry it, none when it ends. */
+const chain = (rest: string[]) => (rest.length > 0 ? { rest } : {})
+
+/** The most archived projects one chain of project steps walks, one after
+ * another (scheduleArchivedReads), so an archive of a project with
+ * thousands of sub-projects schedules a few chains, not one step a project,
+ * within Convex's 1,000 functions one mutation may schedule. */
+export const ARCHIVED_READ_PROJECTS = 100
+
 /* The steps in convex/messages.ts, referenced by name like wakeRef. `batch`
  * lowers the rows per step in tests, and `tasks` the tasks a project step
  * visits. */
@@ -1294,7 +1303,7 @@ const readArchivedTasksRef = makeFunctionReference<
 >('messages:readArchivedTasks')
 const readArchivedProjectRef = makeFunctionReference<
   'mutation',
-  { project_id: string; cursor?: string; batch?: number; tasks?: number },
+  { project_id: string; rest?: string[]; cursor?: string; batch?: number; tasks?: number },
   null
 >('messages:readArchivedProject')
 
@@ -1313,8 +1322,10 @@ export async function scheduleArchivedReads(
   const issues = a.issues ?? []
   await scheduleTaskReads(ctx, issues)
   await scheduleArchiveMarks(ctx, issues)
-  for (const project_id of a.projects ?? []) {
-    await ctx.scheduler.runAfter(0, readArchivedProjectRef, { project_id })
+  const projects = a.projects ?? []
+  for (let i = 0; i < projects.length; i += ARCHIVED_READ_PROJECTS) {
+    const [project_id, ...rest] = projects.slice(i, i + ARCHIVED_READ_PROJECTS)
+    await ctx.scheduler.runAfter(0, readArchivedProjectRef, { project_id, ...chain(rest) })
   }
 }
 
@@ -1467,14 +1478,34 @@ const ARCHIVED_READ_TASK_BYTES = 8 * 1024 * 1024
  * next step reads the same page again: the tasks already finished hold no
  * row to change and cost two index reads each, and every such step marks
  * at least one row, so the walk always ends. The cursor survives tasks
- * that share a creation time or are deleted between steps.
+ * that share a creation time or are deleted between steps. Once a
+ * project's walk ends, the step schedules the walk of the first project of
+ * `rest`, with the others after it, so one chain walks a list of projects.
  */
 export async function readArchivedProjectMessages(
   ctx: MutationCtx,
-  a: { project_id: string; cursor?: string; batch?: number; tasks?: number; now: string },
+  a: {
+    project_id: string
+    rest?: string[]
+    cursor?: string
+    batch?: number
+    tasks?: number
+    now: string
+  },
 ): Promise<void> {
+  const rest = a.rest ?? []
+  const next = async () => {
+    const [project_id, ...after] = rest
+    if (project_id !== undefined)
+      await ctx.scheduler.runAfter(0, readArchivedProjectRef, {
+        project_id,
+        ...chain(after),
+        batch: a.batch,
+        tasks: a.tasks,
+      })
+  }
   const project = await byId(ctx, 'projects', a.project_id)
-  if (project === null || project.archived_at === undefined) return
+  if (project === null || project.archived_at === undefined) return await next()
   let budget = stepLimit(a.batch, ARCHIVED_READ_BATCH)
   const page = await ctx.db
     .query('issues')
@@ -1503,9 +1534,10 @@ export async function readArchivedProjectMessages(
   }
   await edits.flush()
   await noteSweepables(ctx, earliest)
-  if (!unfinished && page.isDone) return
+  if (!unfinished && page.isDone) return await next()
   await ctx.scheduler.runAfter(0, readArchivedProjectRef, {
     project_id: project.id,
+    ...chain(rest),
     cursor: unfinished ? a.cursor : page.continueCursor,
     batch: a.batch,
     tasks: a.tasks,

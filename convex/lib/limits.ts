@@ -446,12 +446,12 @@ export const LIMITS = {
     on: ALL,
   },
   teamDeleteRows: {
-    label: 'Memberships and project shares one team deletion removes',
+    label: 'Memberships, project shares and access entries one team deletion removes',
     group: 'tasks',
     max: 3_000,
-    unit: 'memberships and project shares',
+    unit: 'memberships, project shares and access entries',
     refusal:
-      'deleting a team can remove at most 3,000 of its memberships and project shares at once. Remove some of its members or project shares first.',
+      'deleting a team can remove at most 3,000 of its memberships, project shares and access entries at once, and each project share has one or two access entries. Remove some of its members or project shares first.',
     on: ['app'],
   },
   // The delete hides the project and every sub-project in one transaction,
@@ -464,6 +464,21 @@ export const LIMITS = {
     refusal:
       'a project with more than 200 sub-projects, archived ones included, cannot be deleted at once. Delete some of its sub-projects first, then delete the project.',
     on: ['app'],
+  },
+  // An archive, restore, rename or key change updates the sub-projects it
+  // archives or restores and the navigation rows of the people and teams
+  // who reach the projects it changes, in one transaction, and the changes
+  // of one REST or MCP update share it (model/projectNav.ts TreeBudget,
+  // schema.ts project_reach).
+  projectTreeChange: {
+    label:
+      'Sub-projects and access entries one project archive, restore, rename or key change updates',
+    group: 'tasks',
+    max: 2_000,
+    unit: 'sub-projects and access entries',
+    refusal:
+      'archiving, restoring or renaming a project, or changing its key, can update at most 2,000 sub-projects and access entries at once. Each sub-project counts, and each person or team with access counts once for the project and once for each sub-project they have their own access to. Archive some of its sub-projects on their own first, or remove some access.',
+    on: ALL,
   },
   // A removal clears the person as the lead of each project in the
   // transaction that ends their access (model/cascade.ts removeProfile).

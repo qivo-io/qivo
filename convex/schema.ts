@@ -35,10 +35,12 @@ import { billingPlanFields, vBillingStatus } from './lib/billingTypes'
 import {
   vActivityTarget,
   vAppearanceMode,
+  vArchiveState,
   vCredentialAccess,
   vCredentialTable,
   vDeletedItemKind,
   vDeletedItemState,
+  vGranteeKind,
   vGrantLevel,
   vImageSource,
   vIssuePriority,
@@ -52,6 +54,7 @@ import {
   vProfileKind,
   vProjectCreators,
   vProjectType,
+  vReachKind,
   vRemovalPhase,
   vRemovedAccessKind,
   vStoredTable,
@@ -128,9 +131,28 @@ const projectsTable = defineTable({
   // items computes it again from the name (model/deletedItems.ts
   // cleanProject).
   name_key: v.optional(v.string()),
+  // Where the project stands in the archive (lib/enums.ts ARCHIVE_STATES),
+  // server-owned and derived from archived_at and the parent's archived_at
+  // by model/projectNav.ts archiveStateOf: 'live' without archived_at,
+  // 'listed' for an archived top-level project or an archived sub-project of
+  // a live parent, 'under' for a sub-project archived beneath an archived
+  // parent. Every writer of archived_at sets it (model/projects.ts archive
+  // and restore), and a restore from Deleted items computes it again
+  // (model/deletedItems.ts revealProjects). Never sent to clients, REST,
+  // MCP, webhooks or the export. A project stored before it had one has
+  // none until internal/navBackfill gives it one; readers wait for
+  // org_ready.nav_at.
+  archive_state: v.optional(vArchiveState),
 })
   .index('by_uuid', ['id'])
   .index('by_org', ['org_id'])
+  // A parent's sub-projects, or with parent_id absent the organization's
+  // top-level projects, of one archive state in name order, the id breaking
+  // ties: the admin Settings list, expanded sub-project lists and the chips
+  // of an archived parent.
+  .index('by_org_parent_state_name', ['org_id', 'parent_id', 'archive_state', 'name_key', 'id'])
+  // The organization's Archived projects entries ('listed') by archive time.
+  .index('by_org_state_archived', ['org_id', 'archive_state', 'archived_at'])
   // the app's project windows: a range of window keys (lib/workspaceParts.ts)
   .index('by_org_window', ['org_id', 'window_key'])
   .index('by_org_key', ['org_id', 'key'])
@@ -144,6 +166,9 @@ const projectsTable = defineTable({
   .index('by_lead', ['lead_id']) // projects_lead_idx — removeProfile's SET NULL
   // The nightly archive pages the live projects (archived_at absent).
   .index('by_archived_org', ['archived_at', 'org_id'])
+  // Name search of the directory, Settings and Archived projects, within
+  // one organization and archive state.
+  .searchIndex('search_name', { searchField: 'name', filterFields: ['org_id', 'archive_state'] })
 
 /* `name_key` on a membership, a grant or a team share is a server-owned copy
  * of its profile's or team's name_key, so a team's members and a project's
@@ -1089,10 +1114,14 @@ export default defineSchema({
   // reads. `name_keys_at` says from when every profile, team, project,
   // membership, grant and team share of the organization holds its name key
   // (internal/nameKeysBackfill.ts). An organization created since every
-  // writer keeps them gets it at its creation.
+  // writer keeps them gets it at its creation. `nav_at` says the same of
+  // every project's archive_state and every lead's, grant's and team share's
+  // project_reach rows (internal/navBackfill.ts); a reader in name order
+  // needs both (model/projectNav.ts navReady).
   org_ready: defineTable({
     org_id: v.string(),
     name_keys_at: v.optional(v.string()),
+    nav_at: v.optional(v.string()),
   }).index('by_org', ['org_id']),
 
   // Team sync stamps (model/syncStamps.ts, lib/teamSync.ts), one row per
@@ -1267,6 +1296,92 @@ export default defineSchema({
   projects: projectsTable,
   project_access: projectAccessTable,
   project_team_access: projectTeamAccessTable,
+
+  // Which projects each seat and each team reaches through ordinary access,
+  // so a person's projects page in name order across their seats and teams
+  // with reads bounded by the page, not by the grants (model/projectNav.ts).
+  // A row is a presence fact that finds candidates and grants nothing:
+  // every permission check keeps using lib/access.ts, and a reader checks
+  // the live project of each row it returns. Admin status alone writes no
+  // row. Rows exist only in a top-level meta's tree in the grantee's
+  // organization (lib/access.ts inMetaTree):
+  // - a child row for a sub-project on which the grantee holds a source of
+  //   its own: a team share for a team; for a seat a user grant or the
+  //   sub-project's own lead_id;
+  // - a root row for a top-level project on which the grantee holds a
+  //   source (on_root, which reaches the whole tree) or that holds one of
+  //   the grantee's child rows (navigation only).
+  // A membership change writes none, because a page reads one range for
+  // each team of the person. Whether the grantee's role turns a source into
+  // access (a guest gets no team share, a viewer leads nothing) is left to
+  // the reader, as lib/access.ts decides it.
+  //
+  // One recompute, syncReach, keeps the rows of a grantee on a project and
+  // its root exact, and every lead, grant and share writer calls it in its
+  // own transaction, the user grant and team share inserts and deletes
+  // through model/projectNav.ts (insertGrant, deleteGrant, insertShare,
+  // deleteShare, grantBatch). A rename, a key change, an archive or a
+  // restore updates the rows of the projects it changes in the same
+  // transaction, and refuses with LIMITS.projectTreeChange's sentence, before
+  // it writes, when the sub-projects it writes and the rows it reads are
+  // more than LIMITS.projectTreeChange.max, shared by every such change of
+  // one mutation (about half of Convex's 4,096 reads, as a label deletion
+  // measured; no background job takes the rest; model/projectNav.ts
+  // TreeBudget). A move to Deleted items deletes the rows of its projects
+  // in its steps, and a restore writes them again before its reveal and
+  // brings them in line again after it (model/deletedItems.ts
+  // clearProjectRows, restoreAccess, restoreGrants). Not a stored table: nothing goes to
+  // deleted_rows. Teardowns delete them by organization. Rows written before
+  // this table existed are none; internal/navBackfill writes them, and
+  // readers wait for org_ready.nav_at. Never sent to clients, REST, MCP,
+  // webhooks or the export.
+  project_reach: defineTable({
+    org_id: v.string(), // the project's
+    grantee_kind: vGranteeKind,
+    grantee_id: v.string(), // a profile id or a team id
+    kind: vReachKind,
+    project_id: v.string(), // the top-level project of a root row, the sub-project of a child row
+    root_id: v.string(), // the top-level project, project_id itself on a root row
+    // copies of the project's name key (lib/nameKey.ts of its name), key,
+    // and whether it is live (archived_at absent), which the project's
+    // rename, key change, archive and restore keep in line
+    name_key: v.string(),
+    key: v.string(),
+    live: v.boolean(),
+    // a root row: whether the grantee holds a source on the top-level
+    // project itself, which reaches every sub-project; false on a root row
+    // for navigation to a sub-project only, and on every child row
+    on_root: v.boolean(),
+  })
+    // a grantee's top-level projects (kind 'root') or sub-projects in name
+    // order, live or archived, the project id breaking ties
+    .index('by_grantee_list', [
+      'grantee_kind',
+      'grantee_id',
+      'kind',
+      'live',
+      'name_key',
+      'project_id',
+    ])
+    // a grantee's sub-projects under one top-level project in name order
+    .index('by_grantee_root', [
+      'grantee_kind',
+      'grantee_id',
+      'root_id',
+      'kind',
+      'live',
+      'name_key',
+      'project_id',
+    ])
+    // as by_grantee_list in key order, for REST and MCP
+    .index('by_grantee_key', ['grantee_kind', 'grantee_id', 'kind', 'live', 'key', 'project_id'])
+    // every grantee's row on one project, at most one each
+    .index('by_project_grantee', ['project_id', 'grantee_kind', 'grantee_id'])
+    // the child rows under one top-level project, live or archived, which
+    // an archive or a restore of the project reads in one range
+    .index('by_root_child', ['root_id', 'kind', 'live'])
+    .index('by_org', ['org_id']),
+
   issues: issuesTable,
 
   /* A task's description in a row of its own, so that the reads of task

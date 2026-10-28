@@ -60,6 +60,7 @@ import type * as internal_marketingDemoData from "../internal/marketingDemoData.
 import type * as internal_microsoftAccounts from "../internal/microsoftAccounts.js";
 import type * as internal_milestoneWeeks from "../internal/milestoneWeeks.js";
 import type * as internal_nameKeysBackfill from "../internal/nameKeysBackfill.js";
+import type * as internal_navBackfill from "../internal/navBackfill.js";
 import type * as internal_oauthSmoke from "../internal/oauthSmoke.js";
 import type * as internal_operator from "../internal/operator.js";
 import type * as internal_overCapRows from "../internal/overCapRows.js";
@@ -197,6 +198,7 @@ import type * as model_orgRetention from "../model/orgRetention.js";
 import type * as model_orgs from "../model/orgs.js";
 import type * as model_people from "../model/people.js";
 import type * as model_projectAccess from "../model/projectAccess.js";
+import type * as model_projectNav from "../model/projectNav.js";
 import type * as model_projects from "../model/projects.js";
 import type * as model_storageTotals from "../model/storageTotals.js";
 import type * as model_syncStamps from "../model/syncStamps.js";
@@ -295,6 +297,7 @@ declare const fullApi: ApiFromModules<{
   "internal/microsoftAccounts": typeof internal_microsoftAccounts;
   "internal/milestoneWeeks": typeof internal_milestoneWeeks;
   "internal/nameKeysBackfill": typeof internal_nameKeysBackfill;
+  "internal/navBackfill": typeof internal_navBackfill;
   "internal/oauthSmoke": typeof internal_oauthSmoke;
   "internal/operator": typeof internal_operator;
   "internal/overCapRows": typeof internal_overCapRows;
@@ -432,6 +435,7 @@ declare const fullApi: ApiFromModules<{
   "model/orgs": typeof model_orgs;
   "model/people": typeof model_people;
   "model/projectAccess": typeof model_projectAccess;
+  "model/projectNav": typeof model_projectNav;
   "model/projects": typeof model_projects;
   "model/storageTotals": typeof model_storageTotals;
   "model/syncStamps": typeof model_syncStamps;

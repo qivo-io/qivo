@@ -89,6 +89,7 @@ import {
   setProjectGrantCore,
   vHeldTasks,
 } from '../model/projectAccess'
+import { treeBudget } from '../model/projectNav'
 import {
   archiveProjectCore,
   createProjectCore,
@@ -326,9 +327,12 @@ async function applyUpdate(
 ): Promise<Doc<'projects'>> {
   const now = new Date().toISOString()
   const { archived, expected, ...patch } = input
+  // the archive or restore and the rename share one tree budget
+  // (model/projectNav.ts TreeBudget), as one transaction runs both
+  const budget = treeBudget()
   let current = project
   if (archived !== undefined) {
-    const step = { me, project: current, now, provenance }
+    const step = { me, project: current, now, provenance, budget }
     if (archived) await archiveProjectCore(ctx, step)
     else await unarchiveProjectCore(ctx, step)
     current = (await ctx.db.get(current._id)) ?? current
@@ -342,6 +346,7 @@ async function applyUpdate(
       provenance,
       expected,
       view: 'machine',
+      budget,
     })
   }
   return current
