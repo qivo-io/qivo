@@ -68,8 +68,10 @@
  *               webhooks.ts authorizeFilters refuses a top-level one), else
  *               'org'. `affected` says whether that task's or that
  *               project's project leaves, false also where it is gone or
- *               reaches nobody today. For 'org' it is null; read it with
- *               the admin's `leaves`.
+ *               reaches nobody today, or where the task has moved out of
+ *               the project its filters also name, as events must match
+ *               both. For 'org' it is null; read it with the admin's
+ *               `leaves`.
  *   credential  the active personal tokens and approved connected apps of
  *               an admin who has any. They act as the admin over REST and
  *               MCP and lose the same projects.
@@ -857,9 +859,12 @@ async function judgeWebhook(
     return
   }
   const levels = levelsOf(page, admin)
-  const projectId =
-    task_id === undefined ? project_id : (await byId(page.ctx, 'issues', task_id))?.project_id
-  const project = projectId === undefined ? null : await levels.project(projectId)
+  const task = task_id === undefined ? null : await byId(page.ctx, 'issues', task_id)
+  const projectId = task_id === undefined ? project_id : task?.project_id
+  // events match both filters (model/taskEvents.ts), so a task moved out of
+  // the project they name delivers nothing today
+  const moved = task !== null && project_id !== undefined && task.project_id !== project_id
+  const project = projectId === undefined || moved ? null : await levels.project(projectId)
   // a project gone, or outside the tree, delivers nothing today either
   const leaves =
     project !== null &&

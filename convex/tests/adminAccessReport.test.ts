@@ -612,6 +612,9 @@ describe('the machine phase', () => {
       leavingTask: await plantWebhook(t, f.admin, { task_id: leaving.id, project_id: f.sub.id }),
       stayingTask: await plantWebhook(t, f.admin, { task_id: staying.id }),
       goneTask: await plantWebhook(t, f.admin, { task_id: uuid() }),
+      // a task since moved out of the project the filters also name, from
+      // PCB, which stays, into FW, which leaves
+      movedTask: await plantWebhook(t, f.admin, { task_id: leaving.id, project_id: f.sub2.id }),
       leavingProject: await plantWebhook(t, f.admin, { project_id: f.sub.id }),
       stayingProject: await plantWebhook(t, f.admin, { project_id: f.sub2.id }),
       org: await plantWebhook(t, f.admin, {}, { expires_at: Date.now() + 3_600_000 }),
@@ -634,6 +637,7 @@ describe('the machine phase', () => {
         webhook(ids.leavingTask, 'task', true),
         webhook(ids.stayingTask, 'task', false),
         webhook(ids.goneTask, 'task', false),
+        webhook(ids.movedTask, 'task', false),
         webhook(ids.leavingProject, 'project', true),
         webhook(ids.stayingProject, 'project', false),
         webhook(ids.org, 'org', null),
