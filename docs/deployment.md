@@ -816,14 +816,18 @@ organization without both that stamp and the name keys stamp. Run the
 backfill on every hosted deployment once it serves that release, as the
 module's header says. Read its dry run first, then run it. A call that does
 not finish in about five minutes answers a `cursor`; call it again with the
-same arguments and that `cursor` until it answers `done`, and check that a
-second dry run reports nothing missing, extra or stale. Earlier releases do
-not accept the `archive_state` field, the `project_reach` table or the
-`nav_at` field, and every new organization writes `nav_at`, so the release
-that added them is a rollback floor for the backend as soon as it deploys
-(see Rollback and hotfixes). Roll forward instead. If a deployment runs an
-earlier release anyway, read the dry run again after rolling forward: it
-finds what that release wrote without rows, and a run mends it.
+same arguments and that `cursor` until it answers `done`. Then run a full dry
+run again. While Deleted items moves a project, its reach rows wait for the
+move's next steps, so a dry run can count them as extra for a moment, and
+one restore or move finishing during the walk can leave a row the walk
+already passed. If the second dry run reports anything missing, extra or
+stale, run the backfill again, and repeat until a full dry run reports zero.
+Earlier releases do not accept the `archive_state` and `nav_at` fields, and
+every new organization writes `nav_at`, so the release that added them is a
+rollback floor for the backend as soon as it deploys (see Rollback and
+hotfixes). Roll forward instead. If a deployment runs an earlier release
+anyway, read the dry run again after rolling forward: it finds what that
+release wrote without rows, and a run mends it.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to

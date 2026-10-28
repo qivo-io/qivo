@@ -12,7 +12,7 @@
  * (trash.setup.ts installTrashTimers). */
 /// <reference types="vite/client" />
 
-import type { FunctionArgs } from 'convex/server'
+import { type FunctionArgs, makeFunctionReference } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -21,6 +21,7 @@ import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
+import type { OrgExportPage, OrgExportSection } from '../lib/orgExport'
 import { ACCESS_FIRST_PASS, deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
 import { clearOrgTrash, meterDb, TRASH_BUDGET } from '../model/deletedItems'
 import { ARCHIVED_READ_PROJECTS } from '../model/messages'
@@ -47,6 +48,7 @@ import {
   type T,
   uuid,
   withOrg,
+  workspaceOf,
 } from './helpers.setup'
 import {
   expectedReach,
@@ -197,6 +199,43 @@ describe('reach rows follow ordinary access', () => {
     expect(await rowsOf(t, f.pia.id)).toEqual([])
     expect(await rowsOf(t, f.otherAdmin.id)).toEqual([])
     await expectAll(t, f)
+  })
+})
+
+describe('archive states', () => {
+  it('never leave the server: the workspace, the export, REST and MCP', async () => {
+    const t = newT()
+    const f = await ready(t)
+    await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: f.hidden.id })
+    expect(await states(t, [f.meta.id, f.hidden.id])).toEqual(['live', 'listed'])
+    const snap = (await workspaceOf(as(t, f.user)))!
+    expect(snap.projects.length).toBeGreaterThan(0)
+    for (const row of snap.projects) expect(row).not.toHaveProperty('archive_state')
+    const page = makeFunctionReference<
+      'query',
+      { org_id: string; section: OrgExportSection; cursor: string | null },
+      OrgExportPage
+    >('orgExport:page')
+    const exported = await as(t, f.admin).query(page, {
+      org_id: f.org.id,
+      section: 'projects',
+      cursor: null,
+    })
+    expect(exported.rows.length).toBeGreaterThan(0)
+    for (const row of exported.rows) expect(row).not.toHaveProperty('archive_state')
+    const caller = { callerId: f.user.id, access: 'read' as const }
+    const rest = await t.query(internal.machine.rest.getProject, { ...caller, ref: f.meta.key })
+    expect(rest).not.toHaveProperty('archive_state')
+    for (const archived of [false, true]) {
+      const listed = await t.query(internal.machine.rest.listProjects, {
+        ...caller,
+        archived: String(archived),
+      })
+      expect(listed.length).toBeGreaterThan(0)
+      for (const row of listed) expect(row).not.toHaveProperty('archive_state')
+      const mcp = await t.query(internal.machine.mcp.listProjects, { ...caller, archived })
+      expect(JSON.stringify(mcp)).not.toContain('archive_state')
+    }
   })
 })
 
@@ -358,14 +397,66 @@ const sources = import.meta.glob(['../**/*.ts', '!../_generated/**', '!../tests/
   import: 'default',
 }) as Record<string, string>
 
-describe('the one way to insert a grant or a share', () => {
+describe('the one way to write a grant, a share or a lead', () => {
   const INSERT = /\.insert\(\s*['"]project_(team_)?access['"]/
 
-  it('is model/projectNav.ts, which writes their reach rows', () => {
+  it('inserts grants and shares only in model/projectNav.ts, which writes their reach rows', () => {
     // the scan sees the file that inserts them, so its silence means something
     expect(sources['../model/projectNav.ts']).toMatch(INSERT)
     const others = Object.entries(sources)
       .filter(([path, source]) => path !== '../model/projectNav.ts' && INSERT.test(source))
+      .map(([path]) => path)
+    expect(others).toEqual([])
+  })
+
+  /* A grant or share read and deleted in one declaration, the shape a
+   * direct delete takes; the declaration ends at the next one that starts
+   * a line. Only the helpers and the teardowns, which delete the reach rows
+   * themselves, may. */
+  const READ =
+    /\.query\(\s*['"]project_(team_)?access['"]|tagged\(\s*['"]project_(team_)?access['"]/g
+  const NEXT = /^(\}|export |async function |function |const |type |\/\*)/m
+  const deletesGrants = (source: string) =>
+    [...source.matchAll(READ)].some((read) => {
+      const rest = source.slice((read.index ?? 0) + read[0].length)
+      const end = NEXT.exec(rest)
+      return rest.slice(0, end?.index ?? rest.length).includes('.delete(')
+    })
+  const TEARDOWNS = new Set([
+    '../model/projectNav.ts',
+    // team deletion and the deep organization delete, which delete the rows
+    '../model/cascade.ts',
+    '../model/orgDeletion.ts',
+    '../internal/demoCleanup.ts',
+    '../model/deletedItems.ts',
+  ])
+
+  it('deletes grants and shares only through the helpers or in a teardown', () => {
+    expect(deletesGrants(sources['../model/cascade.ts'])).toBe(true)
+    const others = Object.entries(sources)
+      .filter(([path, source]) => !TEARDOWNS.has(path) && deletesGrants(source))
+      .map(([path]) => path)
+    expect(others).toEqual([])
+  })
+
+  /* A project row inserted, or a lead written, outside a module that
+   * brings the lead's rows in line (syncLeads). */
+  const LEAD =
+    /insert\(\s*['"]projects['"]|insertUnique\(\s*ctx,\s*['"]projects['"]|\.patch\([^)]*\{\s*lead_id|\bdb\.lead_id\s*=|lead_id: undefined/
+  const LEADLESS = new Set([
+    // its projects have no lead
+    '../internal/guestOrg.ts',
+    // a removal clears the leads of a person whose rows it deletes
+    '../model/cascade.ts',
+  ])
+
+  it('writes a lead only where its reach rows follow', () => {
+    expect(sources['../model/projects.ts']).toMatch(LEAD)
+    const others = Object.entries(sources)
+      .filter(
+        ([path, source]) =>
+          !LEADLESS.has(path) && LEAD.test(source) && !source.includes('syncLeads('),
+      )
       .map(([path]) => path)
     expect(others).toEqual([])
   })
@@ -945,6 +1036,34 @@ describe('a restore and the work around it', () => {
     await expectAll(t, f)
   })
 
+  it('takes the rows back when the reveal sends the item back', async () => {
+    const t = newT()
+    const { f, item } = await halfRestored(t)
+    // the restorer's seat is switched off, so the reveal refuses
+    await t.run(async (ctx) => {
+      const row = await byId(ctx, 'profiles', f.user.id)
+      if (row !== null) await ctx.db.patch(row._id, { active: false })
+    })
+    await runSteps(t)
+    expect((await t.run((ctx) => byId(ctx, 'deleted_items', item.id)))?.state).toBe('ready')
+    expect(await rowsOf(t, f.pia.id)).toEqual([])
+    await expectReachExact(t)
+  })
+
+  it('deletes the rows of a stuck restoring item it purges', async () => {
+    const t = newT()
+    const { f, item } = await halfRestored(t)
+    await t.run(async (ctx) => {
+      const row = await byId(ctx, 'deleted_items', item.id)
+      if (row !== null) await ctx.db.patch(row._id, { state: 'stuck' })
+    })
+    await as(t, f.admin).mutation(api.deletedItems.purge, { org_id: f.org.id, ids: [item.id] })
+    await runSteps(t)
+    expect(await t.run((ctx) => byId(ctx, 'deleted_items', item.id))).toBeNull()
+    expect(await rowsOf(t, f.pia.id)).toEqual([])
+    await expectReachExact(t)
+  })
+
   /** Board rev led by Pia, moved to Deleted items, and a restore whose
    * call wrote her lead's rows and stops before its reveal. */
   async function ledAndRestoring(t: T, extra: Partial<Doc<'projects'>> = {}) {
@@ -1415,9 +1534,11 @@ describe('the backfill', () => {
         error: failed.error,
       },
     ])
-    // the projects committed, the grants' step did not
+    // the projects committed, the grants' step did not, and no organization
+    // is stamped while its rows are missing
     expect((await projectOf(t, f.meta.id))?.archive_state).toBe('live')
     expect(await rowsOf(t, people[0])).toEqual([])
+    expect(await t.run((ctx) => ctx.db.query('org_ready').collect())).toEqual([])
     // smaller steps fit
     NAV_STEP.rows = 5
     let last = await backfill(t, false, failed.cursor ?? undefined)

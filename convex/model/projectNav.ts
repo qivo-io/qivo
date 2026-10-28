@@ -268,8 +268,10 @@ export const grantee = {
  * reading it again. */
 type GrantWrite = { read?: ProjectRead; db?: MutationCtx['db']; org?: string }
 
-/** Inserts user grant `row` and brings its person's reach rows in line. The
- * one insert into project_access (tests/manifest.test.ts checks). */
+/** Inserts user grant `row` and brings its person's reach rows in line.
+ * Only this module inserts into project_access (here and in grantBatch),
+ * and only it and the teardowns delete from it, which
+ * tests/projectReach.test.ts checks. */
 export async function insertGrant(
   ctx: MutationCtx,
   row: WithoutSystemFields<Doc<'project_access'>>,
@@ -285,8 +287,10 @@ export async function deleteGrant(ctx: MutationCtx, row: Doc<'project_access'>):
   await syncReach(ctx, grantee.profile(row.profile_id), row.project_id)
 }
 
-/** Inserts team share `row` and brings its team's reach rows in line. The
- * one insert into project_team_access (tests/manifest.test.ts checks). */
+/** Inserts team share `row` and brings its team's reach rows in line.
+ * Only this module inserts into project_team_access (here and in
+ * grantBatch), and only it and the teardowns delete from it, which
+ * tests/projectReach.test.ts checks. */
 export async function insertShare(
   ctx: MutationCtx,
   row: WithoutSystemFields<Doc<'project_team_access'>>,
