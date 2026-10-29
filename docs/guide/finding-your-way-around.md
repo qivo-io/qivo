@@ -163,8 +163,10 @@ search shows nothing.
 Search finds a task by its ID (`QN-12` or `12`), the words of its title and
 the text its description shows, not link addresses or the hidden part of a
 mention. It finds a project by its own name. A project's name does not find
-its tasks, and a task is not found by its project's name. An ID matches the
-whole number, so `12` finds QN-12 but not QN-120.
+its tasks, and a task is not found by its project's name. A number on its
+own is read as a task ID and matches only whole, as a task's number or a
+whole word, so `12` finds QN-12 but not QN-120, and “roadmap 20” does not
+find “Roadmap 2026”.
 
 Search matches whole words in any order. Every word must match, and case
 does not matter. The last word also matches the start of a longer word, so
@@ -172,7 +174,10 @@ does not matter. The last word also matches the start of a longer word, so
 signed” does not, because only the last word may be the start of a longer
 one. Parts inside a word are not found, so “abl” does not find “cable”.
 Accents are not folded, so “cafe” does not find “café”, and å, ä and ö must
-be typed exactly. A search holds at most 200 characters ([Limits](./limits.md#text)).
+be typed exactly. Words of 32 bytes or more in UTF-8, about 30 letters,
+are not searched. In scripts written without spaces, such as Japanese, a
+run of text counts as one word, so a run of more than about 10 characters
+is not searched. A search holds at most 200 characters ([Limits](./limits.md#text)).
 
 Results come in one list, best matches first, and each row says whether it
 is a **Task** or a **Project**. A row from another organization names that
@@ -183,12 +188,14 @@ someone who can edit its project ([Archiving](./the-task-window.md#archiving)).
 Search never finds archived projects or the tasks in them.
 
 When Search could not cover everything, it says that some results might be
-missing and offers to choose a project to search in, which then searches
-that project completely. Someone who is not an organization admin and can
-open many projects sees this on every search of a whole organization.
+missing and offers to choose a project to search in. Choosing a project
+searches every task there that you can open, but a very common word can
+still leave some results out, and then the note asks for more words
+instead. Someone who is not an organization admin and can open many
+projects sees the note on every search of a whole organization.
 
-Use Up/Down and Enter to open a result, or select it directly. Enter waits
-until the results of what you typed have arrived. A task picked while the
+Use Up/Down and Enter to open a result, or select it directly. Enter does
+nothing until the results of what you typed have arrived. A task picked while the
 Board is open also shows its card behind the task window ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
 
 **Close**, **esc** or Escape closes search. On phones, browser Back also
