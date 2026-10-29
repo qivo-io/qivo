@@ -26,7 +26,7 @@ import { OrgUsersPage } from './settings/UsersSettings'
     large workspace still loads them (P.stillLoading). Removing access from
     a team or a project counts the tasks the change reaches before it asks,
     and Labels counts each label's tasks. Every other page, Sign out, tokens,
-    people and Archived tasks included, opens at once: Archived tasks reads
+    people and Archived tasks included, opens at once. Archived tasks reads
     its rows from the server, and its chooser only the projects and
     organizations, which a large workspace loads before its tasks. */
 function readsEveryTask(page: string) {
