@@ -48,12 +48,18 @@ import {
   projectLevelsForProfiles,
 } from './lib/access'
 import {
+  ARCHIVED_PAGE_MOST,
   ARCHIVED_PAGE_ROWS,
+  ARCHIVED_SCOPE,
+  type ArchivedListRow,
   type ArchivedPageRow,
+  type ArchivedPageScope,
   archiveCursorText,
   archivedPageCore,
   archivedTaskCore,
   parseArchiveCursor,
+  parseScopeCursor,
+  scopeCursorText,
 } from './lib/archivedTasks'
 import { byId } from './lib/db'
 import { vIssuePriority, vIssueStatus, vLinkType } from './lib/enums'
@@ -145,28 +151,47 @@ const assertWritable = (ctx: MeCtx, projectId: string): Promise<void> =>
  * Issue reads that live OUTSIDE the snapshot: the Archived tasks page's
  * paged list (P.fetchArchivedPage), the task window's look-up of its own
  * task (P.fetchArchivedTask) and, deprecated, the whole-archive read that
- * browser tabs and desktop clients from before it still call.
+ * browser tabs and desktop clients from before the paged list may still
+ * call.
  *
  * issues_select stayed can_see_project(project_id) (0003:165) for archived
  * rows too — fetchAll excluded them by filter, not by policy — so the fence
  * here is visibility alone, narrowed to archived_at set. An unknown or
  * invisible project id contributes nothing rather than erroring: RLS filtered
  * silently, and the id must not become an existence oracle. authedQuery
- * rather than orgQuery because the ids may span organizations (a foreign
- * meta's archived tasks); each project is fenced through the caller's seat in
- * ITS OWN org. */
+ * rather than orgQuery because the page's scope names its organization, which
+ * may be any of the caller's (a foreign meta's archived tasks), and each
+ * project is fenced through the caller's seat in ITS OWN org. */
 
-/** One page of a project family's archived tasks for the app's Archived
- * tasks page, most recently archived first, then newest created first. A
- * top-level project includes its visible sub-projects that share its
- * archived state, as the app's project tree does (lib/archivedTasks.ts
- * archiveFamily). With `search`, rows are only the matches, and a page may
- * stop early under the read budget; pass `next_cursor` back until it is
- * null. `scanned` counts the family's archived tasks the page looked at. An
- * unknown or invisible project answers an empty last page. */
+/* The page's answer when its scope covers nothing the caller sees. */
+const NO_ARCHIVED_PAGE = { rows: [], next_cursor: null, scanned: 0 }
+
+/** One page of archived tasks for the app's Archived tasks page, most
+ * recently archived first, then newest created first (lib/archivedTasks.ts
+ * archivedPageCore). `scope` names one organization and either up to
+ * ARCHIVED_SCOPE.ids of its projects, a top-level project standing for itself
+ * and its live sub-projects the caller sees, or `all: true`, every live
+ * project of the organization the caller sees. A repeated id counts once and
+ * an empty list is refused, never read as all. With `search`, rows are only
+ * the matches, and a page may stop early under the read budget, also with no
+ * rows; pass `next_cursor` back until it is null. `scanned` counts the
+ * scope's archived tasks the page looked at. An organization without the
+ * caller's seat, and ids that are unknown, archived, foreign or invisible,
+ * answer an empty last page alike. `limit` is 1 to ARCHIVED_PAGE_MOST,
+ * ARCHIVED_PAGE_ROWS when absent.
+ *
+ * Deprecated: `project_id` instead of `scope` names one project family as
+ * tabs from before scopes ask, with that release's answer and `2~` cursors
+ * (archiveFamily). Remove it once no served build calls it. */
 export const archivedPage = authedQuery({
   args: {
-    project_id: v.string(),
+    scope: v.optional(
+      v.union(
+        v.object({ org_id: v.string(), project_ids: v.array(v.string()) }),
+        v.object({ org_id: v.string(), all: v.literal(true) }),
+      ),
+    ),
+    project_id: v.optional(v.string()),
     cursor: v.optional(v.string()),
     search: v.optional(v.string()),
     limit: v.optional(v.number()),
@@ -174,29 +199,72 @@ export const archivedPage = authedQuery({
   handler: async (
     ctx,
     a,
-  ): Promise<{ rows: ArchivedPageRow[]; next_cursor: string | null; scanned: number }> => {
+  ): Promise<{ rows: ArchivedListRow[]; next_cursor: string | null; scanned: number }> => {
     const limit = a.limit ?? ARCHIVED_PAGE_ROWS
-    if (!Number.isInteger(limit) || limit < 1 || limit > ARCHIVED_PAGE_ROWS) {
-      throw badRequest(`limit must be a whole number from 1 to ${ARCHIVED_PAGE_ROWS}`)
+    if (!Number.isInteger(limit) || limit < 1 || limit > ARCHIVED_PAGE_MOST) {
+      throw badRequest(`limit must be a whole number from 1 to ${ARCHIVED_PAGE_MOST}`)
+    }
+    if ((a.scope === undefined) === (a.project_id === undefined)) {
+      throw badRequest('pass either scope or project_id')
+    }
+    let scope: ArchivedPageScope | null = null
+    if (a.scope !== undefined) {
+      if ('all' in a.scope) scope = { kind: 'all', orgId: a.scope.org_id }
+      else {
+        const projectIds = [...new Set(a.scope.project_ids)]
+        if (projectIds.length < 1 || projectIds.length > ARCHIVED_SCOPE.ids) {
+          throw badRequest(`scope.project_ids must name 1 to ${ARCHIVED_SCOPE.ids} projects`)
+        }
+        scope = { kind: 'projects', orgId: a.scope.org_id, projectIds }
+      }
     }
     const search = limitedText(LIMITS.search, a.search ?? '')
-    const cursor = a.cursor === undefined ? null : await parseArchiveCursor(a.cursor, a.project_id)
+    if (scope === null) return await familyPage(ctx, a.project_id ?? '', a.cursor, search, limit)
+    const cursor = a.cursor === undefined ? null : await parseScopeCursor(a.cursor, scope)
     if (a.cursor !== undefined && cursor === null) {
       throw badRequest('cursor must be the next_cursor of an earlier page')
     }
-    const empty = { rows: [], next_cursor: null, scanned: 0 }
-    const project = await byId(ctx, 'projects', a.project_id)
-    if (project === null) return empty
-    const me = ctx.myProfiles.get(project.org_id)
-    if (me === undefined || !(await canSeeProject(ctx, me, project))) return empty
-    const page = await archivedPageCore(ctx, me, project, { cursor, search, limit })
+    const me = ctx.myProfiles.get(scope.orgId)
+    if (me === undefined) return NO_ARCHIVED_PAGE
+    const page = await archivedPageCore(ctx, me, scope, { cursor, search, limit })
     return {
       rows: page.rows,
-      next_cursor: page.next === null ? null : await archiveCursorText(page.next, project.id),
+      next_cursor: page.next === null ? null : await scopeCursorText(page.next, scope),
       scanned: page.scanned,
     }
   },
 })
+
+/* archivedPage for the deprecated `project_id`: one project family, with
+ * `2~` cursors bound to that project. An unknown or invisible project
+ * answers an empty last page. */
+async function familyPage(
+  ctx: QueryCtx & { myProfiles: ReadonlyMap<string, Doc<'profiles'>> },
+  projectId: string,
+  cursorText: string | undefined,
+  search: string,
+  limit: number,
+): Promise<{ rows: ArchivedListRow[]; next_cursor: string | null; scanned: number }> {
+  const cursor = cursorText === undefined ? null : await parseArchiveCursor(cursorText, projectId)
+  if (cursorText !== undefined && cursor === null) {
+    throw badRequest('cursor must be the next_cursor of an earlier page')
+  }
+  const project = await byId(ctx, 'projects', projectId)
+  if (project === null) return NO_ARCHIVED_PAGE
+  const me = ctx.myProfiles.get(project.org_id)
+  if (me === undefined || !(await canSeeProject(ctx, me, project))) return NO_ARCHIVED_PAGE
+  const page = await archivedPageCore(
+    ctx,
+    me,
+    { kind: 'family', project },
+    { cursor, search, limit },
+  )
+  return {
+    rows: page.rows,
+    next_cursor: page.next === null ? null : await archiveCursorText(page.next, project.id),
+    scanned: page.scanned,
+  }
+}
 
 /** The archived task `id` as archivedPage shows it to the caller, or null
  * when archivedPage lists it for none of the caller's projects: the task is

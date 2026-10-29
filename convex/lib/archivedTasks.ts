@@ -8,24 +8,31 @@
  * so tasks that share both keys follow the indexes' last key, the document
  * id, which sorts like its text. A cursor names a position in that order, so
  * a page reads only what follows it, whatever the size of the archive.
- * Callers get the position sealed (archiveCursorText), since it can be a task
- * of a project they cannot see. The task window looks up its own task in the
- * archive by id instead (issues.archivedTask, archivedTaskCore below).
+ * Callers get the position sealed (archiveCursorText, scopeCursorText), since
+ * it can be a task of a project they cannot see. The task window looks up its
+ * own task in the archive by id instead (issues.archivedTask, archivedTaskCore
+ * below).
  *
- * Both surfaces page through archivedTasksPage, under one read budget, and
- * search with archivedTaskMatcher, the task search rule (lib/search.ts
- * taskSearchText) that reads a task's labels and subtasks only when they can
- * change the answer. The organization's matching labels and roster names
- * that a search reads live here too, and active task lists use them. */
+ * Both surfaces page through archivedTasksPage, under one read budget, over a
+ * scope (ArchiveScope) that either merges a list of projects or reads the
+ * organization's whole archive and keeps only the tasks the scope holds. The
+ * app's page asks for some projects of one organization or for all of them
+ * (ArchivedPageScope). Both search with archivedTaskMatcher, the task search
+ * rule (lib/search.ts taskSearchText) that reads a task's labels, assignee
+ * and subtasks only when they can change the answer, and never the
+ * organization's roster or more than ARCHIVE_LABELS.scan of its labels. The
+ * organization's matching labels and roster names that active task lists
+ * read live here too. */
 
 import type { TransactionMetric, TransactionMetrics } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { descriptionOf } from '../model/descriptions'
-import { canSeeProject } from './access'
-import { openCursorText, sealCursorText } from './archiveCursorSeal'
+import { canSeeProject, levelRank, projectLevelsOf } from './access'
+import { digestText, openCursorText, sealCursorText } from './archiveCursorSeal'
 import { byId } from './db'
+import { taskOwnerId } from './review'
 import { allWordsMatcher, searchPieces, type TaskSearchFields, taskSearchText } from './search'
 import { issueKey, STATUS_NAMES } from './taskRefs'
 
@@ -92,6 +99,61 @@ export async function parseArchiveCursor(
   const opened = await openCursorText(text.slice(2))
   const m = opened === null ? null : SEALED_TEXT.exec(opened)
   return m === null || m[1] !== projectId ? null : positionOf(m[2])
+}
+
+/** What the app's Archived tasks page asks for (issues.archivedPage): the
+ * archived tasks of some projects of one organization, a top-level project
+ * standing for its family (archivedPageCore), or of every project of the
+ * organization the caller sees. */
+export type ArchivedPageScope =
+  | { kind: 'projects'; orgId: string; projectIds: readonly string[] }
+  | { kind: 'all'; orgId: string }
+
+/* A scope as text of one length: the SHA-256 of its kind, its organization
+ * and its project ids, each once and sorted, as JSON. */
+const scopeKey = (scope: ArchivedPageScope): Promise<string> =>
+  digestText(
+    JSON.stringify(
+      scope.kind === 'all'
+        ? [scope.kind, scope.orgId]
+        : [scope.kind, scope.orgId, [...new Set(scope.projectIds)].sort()],
+    ),
+  )
+
+/* What a cursor of the app's page seals, `3:<kind>:<scope key>~<position>`.
+ * The colon after the version is in no project uuid, so a `2~` cursor's
+ * sealed text never opens as this one, nor this one as a `2~` cursor's. */
+const SCOPE_SEALED_TEXT = /^3:(projects|all):([0-9a-f]{64})~(.+)$/s
+
+/* The longest `3~` cursor scopeCursorText writes: `3:`, the longer kind and
+ * a colon, the scope key's 64 hex characters and a `~`, a position of at most
+ * 284 bytes as in SEALED_MAX, and the 16-byte tag, as hex. */
+const SCOPE_SEALED_MAX = 2 + 2 * (2 + 8 + 1 + 64 + 1 + 284 + 16)
+
+/** A cursor of the app's page as callers see it, `3~` and the position
+ * sealed together with the version, the scope's kind and its key. It seals
+ * the scope as asked for, not the projects it expanded to, since a family's
+ * sub-projects can change between pages. */
+export const scopeCursorText = async (
+  c: ArchiveCursor,
+  scope: ArchivedPageScope,
+): Promise<string> =>
+  `3~${await sealCursorText(`3:${scope.kind}:${await scopeKey(scope)}~${positionText(c)}`)}`
+
+/** The position `text` names for `scope`, or null when it is not a cursor
+ * scopeCursorText wrote for that scope. A cursor of another scope, kind or
+ * organization would start this list part way, as another project's would
+ * (parseArchiveCursor), and a `2~` cursor is not one of the app's scopes, so
+ * all of them are refused. */
+export async function parseScopeCursor(
+  text: string,
+  scope: ArchivedPageScope,
+): Promise<ArchiveCursor | null> {
+  if (!text.startsWith('3~') || text.length > SCOPE_SEALED_MAX) return null
+  const opened = await openCursorText(text.slice(2))
+  const m = opened === null ? null : SCOPE_SEALED_TEXT.exec(opened)
+  if (m === null || m[1] !== scope.kind || m[2] !== (await scopeKey(scope))) return null
+  return positionOf(m[3])
 }
 
 /* Whether `a` comes before `b` in archive order. */
@@ -200,6 +262,26 @@ function organizationArchive(
   return archivedIn([sameInstant, sameMoment, earlier])
 }
 
+/** The archived tasks one page covers, in the organization `orgId`: it
+ * reads those of `projectIds`, merged project by project
+ * (archivedTasksAfter), or the organization's whole archive when it is null,
+ * and keeps a task that read hands out only when `holds` says the task is in
+ * scope. A page never keeps a task of another organization, whatever `holds`
+ * answers. */
+export type ArchiveScope = {
+  orgId: string
+  projectIds: readonly string[] | null
+  holds(task: ArchivedTask): Promise<boolean>
+}
+
+/** The scope of the archived tasks of `projectIds` in the organization
+ * `orgId`, as REST and MCP archived lists and the app's page for a few
+ * projects name it. */
+export function projectsScope(orgId: string, projectIds: readonly string[]): ArchiveScope {
+  const projects = new Set(projectIds)
+  return { orgId, projectIds, holds: async (task) => projects.has(task.project_id) }
+}
+
 /** A merged read of archived tasks in archive order. */
 export type ArchivedTaskStream = {
   /** The next task, or null once every range is read to its end. */
@@ -211,7 +293,8 @@ export type ArchivedTaskStream = {
 }
 
 /**
- * The archived tasks of `scope.projectIds` after `cursor`, in archive order.
+ * The archived tasks of `scope.projectIds` after `cursor`, in archive order,
+ * or of the organization's whole archive when the scope names no projects.
  * It holds each project's next task, so it reads one task per project when
  * it opens, then one more task of a project each time it hands one out. A
  * page pays only for what it pulls, and more() needs no read. Before it opens
@@ -219,12 +302,12 @@ export type ArchivedTaskStream = {
  * leave room. When they do not, opening every project would read too much,
  * so it closes the ones it opened and reads the organization's archive
  * instead, one task at a time. That read hands out tasks of other projects
- * too, which the caller skips. Call close() when done, so no query stays
- * open.
+ * too, which the caller skips (ArchiveScope holds). Call close() when done,
+ * so no query stays open.
  */
 export async function archivedTasksAfter(
   ctx: QueryCtx,
-  scope: { orgId: string; projectIds: readonly string[] },
+  scope: Pick<ArchiveScope, 'orgId' | 'projectIds'>,
   cursor: ArchiveCursor | null,
   mayOpen: () => Promise<boolean>,
 ): Promise<ArchivedTaskStream> {
@@ -234,7 +317,11 @@ export async function archivedTasksAfter(
     const step = await streams[i].next()
     heads[i] = step.done === true ? null : step.value
   }
-  for (const projectId of scope.projectIds) {
+  if (scope.projectIds === null) {
+    streams = [organizationArchive(ctx, scope.orgId, cursor)]
+    await pull(0)
+  }
+  for (const projectId of scope.projectIds ?? []) {
     if (streams.length > 0 && !(await mayOpen())) {
       for (const stream of streams) await stream.return(undefined)
       streams = [organizationArchive(ctx, scope.orgId, cursor)]
@@ -459,6 +546,65 @@ export const searchFields = (
   assigneeName: task.assignee_id === undefined ? null : names.get(task.assignee_id),
 })
 
+/* `read` of each key, read once and kept. */
+function memoized<T>(read: (key: string) => Promise<T>): (key: string) => Promise<T> {
+  const known = new Map<string, Promise<T>>()
+  return (key) => {
+    let value = known.get(key)
+    if (value === undefined) {
+      value = read(key)
+      known.set(key, value)
+    }
+    return value
+  }
+}
+
+/** The name of the profile with an id in the organization `orgId`, or
+ * undefined for none there, each profile read once by id. The app's page
+ * names a search's assignees and its rows' owners this way, so it reads the
+ * profiles of the tasks it looks at and never the organization's roster. */
+export const profileNamesIn = (
+  ctx: QueryCtx,
+  orgId: string,
+): ((profileId: string) => Promise<string | undefined>) =>
+  memoized(async (id) => {
+    const profile = await byId(ctx, 'profiles', id)
+    return profile !== null && profile.org_id === orgId ? profile.name : undefined
+  })
+
+/** How many of the organization's labels a search reads at once. When the
+ * organization has at most `scan` labels, a search reads them all in one
+ * range and reads a task's labels only when one of them holds a piece of the
+ * search. Past it, items 5 and 12b of the limits plan set no cap on labels,
+ * so it reads instead the labels of each task whose own fields, text and
+ * assignee did not match, by id. A label stores a name of at most 40
+ * characters, its lowercase copy, a color and two ids, so labels at the
+ * longest names read 301 bytes each, measured, and 1,000 of them one range
+ * and about 300 KB (convex/tests/archived.test.ts). The scan reads one label
+ * more to tell whether that was all. Tests lower it. */
+export const ARCHIVE_LABELS = { scan: 1000 }
+
+/* The organization's labels whose lowercased name holds one of `pieces`,
+ * in the organization's label order, when it has at most
+ * ARCHIVE_LABELS.scan labels, else null. */
+async function scannedLabels(
+  ctx: QueryCtx,
+  orgId: string,
+  pieces: readonly string[],
+  holdsPiece: (label: Doc<'labels'>) => boolean,
+): Promise<Doc<'labels'>[] | null> {
+  if (pieces.length === 0) return []
+  const labels = await ctx.db
+    .query('labels')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .take(ARCHIVE_LABELS.scan + 1)
+  return labels.length > ARCHIVE_LABELS.scan ? null : labels.filter(holdsPiece)
+}
+
+/* Labels in the order of by_org: creation time, then document id. */
+const labelOrder = (a: Doc<'labels'>, b: Doc<'labels'>): number =>
+  a._creationTime - b._creationTime || (a._id < b._id ? -1 : a._id > b._id ? 1 : 0)
+
 /** A test of whether an archived task matches `search`. */
 export type ArchivedTaskMatcher = (task: ArchivedTask, facts: TaskFacts) => Promise<boolean>
 
@@ -468,50 +614,67 @@ export type ArchivedTaskMatcher = (task: ArchivedTask, facts: TaskFacts) => Prom
  * taskSearchText). Each fragment of `search` must occur in the task ID,
  * title, description, status name (not on a task with subtasks), priority
  * name, assignee name or label names, in any order. With `stars`, as REST
- * reads it, `*` stands for any run of text.
+ * reads it, `*` stands for any run of text, which may span fields, so the
+ * label names keep the organization's label order.
  *
  * More text never undoes a match, so it first tries the fields the task's
  * own row holds. Only when they fail does it read its description row, and
  * only when that fails too what else can still change the answer: the
- * roster's names (`names`, read once), whether the task is a group when
- * some fragment occurs in a status name, and the task's labels when some
- * label's name holds a fragment. Each of those costs one index range at
- * most, read through `facts` so the task's row can reuse it.
+ * assignee's name (`nameOf`), whether the task is a group when some fragment
+ * occurs in a status name, and the names of the task's labels that hold a
+ * piece of the search. It reads the organization's labels once, up to
+ * ARCHIVE_LABELS.scan, and then reads a task's labels only when one of those
+ * holds a piece; an organization with more labels has each task's labels
+ * read, and each label by id, once per matcher. Those reads go through
+ * `facts` so the task's row can reuse them.
  */
 export async function archivedTaskMatcher(
   ctx: QueryCtx,
   orgId: string,
   search: string,
-  o: { stars: boolean; names: () => Promise<ReadonlyMap<string, string>> },
+  o: { stars: boolean; nameOf: (profileId: string) => Promise<string | undefined> },
 ): Promise<ArchivedTaskMatcher> {
   const matches = allWordsMatcher(search, o.stars)
   const pieces = searchPieces(search, o.stars)
-  const labels = await matchingLabels(ctx, orgId, pieces)
+  // a label whose name holds none of the pieces never changes the answer
+  const holdsPiece = (label: Doc<'labels'>) => {
+    const name = label.name.toLowerCase()
+    return pieces.some((piece) => name.includes(piece))
+  }
+  const scanned = await scannedLabels(ctx, orgId, pieces, holdsPiece)
+  const labelOf = memoized((id) => byId(ctx, 'labels', id))
+  /* the names of the task's labels that hold a piece, in label order */
+  const labelNames = async (facts: TaskFacts): Promise<string[]> => {
+    if (scanned !== null) {
+      if (scanned.length === 0) return []
+      const held = new Set(await facts.labelIds())
+      return scanned.filter((l) => held.has(l.id)).map((l) => l.name)
+    }
+    const labels = await Promise.all([...new Set(await facts.labelIds())].map(labelOf))
+    return labels
+      .filter((l): l is Doc<'labels'> => l !== null && l.org_id === orgId && holdsPiece(l))
+      .sort(labelOrder)
+      .map((l) => l.name)
+  }
   // a status line holding none of the pieces never changes the answer
   const statusMatters = Object.values(STATUS_NAMES).some((name) => {
     const lower = name.toLowerCase()
     return pieces.some((piece) => lower.includes(piece))
   })
-  let names: Promise<ReadonlyMap<string, string>> | undefined
-  const nameOf = async (id: string) => {
-    names ??= o.names()
-    return (await names).get(id)
-  }
   return async (task, facts) => {
     const own = searchFields(task, new Map())
     const cheap = { ...own, group: true, labelNames: [] }
     if (matches(taskSearchText({ ...cheap, description: '' }))) return true
     const description = await facts.description()
     if (matches(taskSearchText({ ...cheap, description }))) return true
-    const assigneeName = task.assignee_id === undefined ? null : await nameOf(task.assignee_id)
-    const held = labels.length > 0 ? new Set(await facts.labelIds()) : null
+    const assigneeName = task.assignee_id === undefined ? null : await o.nameOf(task.assignee_id)
     return matches(
       taskSearchText({
         ...own,
         description,
         assigneeName,
         group: statusMatters ? await facts.isGroup() : true,
-        labelNames: held === null ? [] : labels.filter((l) => held.has(l.id)).map((l) => l.name),
+        labelNames: await labelNames(facts),
       }),
     )
   }
@@ -546,18 +709,21 @@ export type ArchivedTasksPage<Row> = {
 }
 
 /**
- * One page of the archived tasks of `scope.projectIds` in the organization
- * `scope.orgId` after `cursor`, in archive order. It stops at `limit` rows,
- * after looking at ARCHIVE_PAGE.tasks tasks, or once it has spent
- * ARCHIVE_PAGE's reads, so it can hold fewer rows than `limit`, even none,
- * while `next` is set. `next` is the last task the page looked at, not the
- * last row, so the next page never rereads tasks `rules.keeps` left out. A
- * task outside the scope's organization or projects is never kept, which
- * fails closed when the stream reads the organization's whole archive.
+ * One page of the archived tasks of `scope` after `cursor`, in archive
+ * order. It stops at `limit` rows, after looking at ARCHIVE_PAGE.tasks
+ * tasks, or once it has spent ARCHIVE_PAGE's reads, so it can hold fewer
+ * rows than `limit`, even none, while `next` is set. `next` is the last task
+ * the page looked at, not the last row, so the next page never rereads tasks
+ * `rules.keeps` left out. A task outside the scope's organization, or one
+ * the scope does not hold, is never kept or counted in `scanned`, which fails
+ * closed when the stream reads the organization's whole archive. Its budget
+ * counts from the request's reads when it starts, so what the caller read
+ * before, such as the scope's projects and a search's labels, leaves the
+ * page that much less room under the request's limits.
  */
 export async function archivedTasksPage<Row>(
   ctx: QueryCtx,
-  scope: { orgId: string; projectIds: readonly string[] },
+  scope: ArchiveScope,
   cursor: ArchiveCursor | null,
   limit: number,
   rules: ArchivedPageRules<Row>,
@@ -581,7 +747,6 @@ export async function archivedTasksPage<Row>(
     documents: used.documents + (budget.documents - used.documents) * ARCHIVE_PAGE.opening,
     bytes: used.bytes + (budget.bytes - used.bytes) * ARCHIVE_PAGE.opening,
   }
-  const projects = new Set(scope.projectIds)
   const rows: Row[] = []
   const stream = await archivedTasksAfter(ctx, scope, cursor, () => readsUnder(ctx, opening))
   let last: ArchiveCursor | null = null
@@ -590,8 +755,8 @@ export async function archivedTasksPage<Row>(
   try {
     for (let task = await stream.next(); task !== null; task = await stream.next()) {
       looked++
-      // a wide scope's stream hands out other projects' tasks too
-      if (task.org_id === scope.orgId && projects.has(task.project_id)) {
+      // a read of the organization's archive hands out other projects' tasks too
+      if (task.org_id === scope.orgId && (await scope.holds(task))) {
         scanned++
         const facts = taskFacts(ctx, task)
         if (await rules.keeps(task, facts)) {
@@ -624,13 +789,35 @@ export async function archivedTasksPage<Row>(
 /* ------------------------------------------------------ the Archived tasks
  * page of the app (issues.archivedPage) */
 
-/** The most rows one page of the app's Archived tasks answers, and how many
- * it answers unless asked for fewer. */
-export const ARCHIVED_PAGE_ROWS = 100
+/** How many rows one page of the app's Archived tasks answers when the call
+ * names no limit: the 25 a page shows (limits plan, "Archived task browsing
+ * and search"). */
+export const ARCHIVED_PAGE_ROWS = 25
+
+/** The most rows one page of the app's Archived tasks answers when asked.
+ * A tab loaded before pages of 25 asks for 100 and keeps working until it
+ * reloads. A later release lowers it to 25. */
+export const ARCHIVED_PAGE_MOST = 100
+
+/** How far the app's page expands the projects it is asked for, before its
+ * read budget starts: at most `ids` distinct project ids (issues.archivedPage
+ * refuses more), and at most `subProjects` sub-projects read for the
+ * top-level projects among them, each checked for the caller once. A family
+ * has no cap on sub-projects (limits plan, item 4), so past that bound the
+ * page reads the organization's archive instead and keeps the tasks of the
+ * named projects and of the live sub-projects of the named top-level ones
+ * that the caller sees. Opening that many projects side by side would mostly
+ * pass the page's opening share anyway (ARCHIVE_PAGE.opening). Tests lower
+ * `subProjects`. */
+export const ARCHIVED_SCOPE = { ids: 50, subProjects: 200 }
 
 /**
  * The projects whose archived tasks the app's Archived tasks page lists for
- * `project`, as `me` sees them. A sub-project is itself. A top-level project
+ * `project`, as `me` sees them, when a tab from before scopes names one
+ * project (issues.archivedPage `project_id`). It reads every sub-project
+ * and checks each one by itself, so only that deprecated argument uses it;
+ * scopes expand a family within ARCHIVED_SCOPE. A sub-project is itself. A
+ * top-level project
  * adds its sub-projects that share its archived state and that `me` can see,
  * as the app's project tree shows them (src/store/viewModels.ts shapeProject
  * `children`). Its own id stays in, though tasks live only in sub-projects,
@@ -662,32 +849,178 @@ export type ArchivedPageRow = Omit<
   '_id' | '_creationTime' | 'description' | 'parent_id' | 'relations_marked' | 'window_key'
 > & { archived_at: string; is_group: boolean }
 
+/** An archived task as the app's Archived tasks page lists it: its row
+ * (ArchivedPageRow) with where it lives, who owns it and whether the caller
+ * may restore it, so the page needs none of the planner's projects, people
+ * or levels. */
+export type ArchivedListRow = ArchivedPageRow & {
+  /** the names of the task's project and of the top-level project above
+   * it, null for a project without a parent */
+  place: { project_name: string; parent_name: string | null }
+  /** the name of the task's owner (lib/review.ts taskOwnerId), or null when
+   * it has none or the profile is gone */
+  owner_name: string | null
+  /** whether the caller has Edit or lead on the task's project, as
+   * issues.unarchive asks (model/issues.ts assertCanEdit) */
+  can_restore: boolean
+}
+
+/** What issues.archivedPage asks archivedPageCore for: a scope of the app's
+ * page, or the family of one project, as a tab from before scopes asks
+ * (archiveFamily). */
+export type ArchivedPageRequest = ArchivedPageScope | { kind: 'family'; project: Doc<'projects'> }
+
+/* What projectLevelsOf answers. */
+type ProjectLevels = ReturnType<typeof projectLevelsOf>
+
+/* Whether the project with an id is a live project of the organization
+ * `orgId` under a live parent, or without one, that the caller of `levels`
+ * sees, each project asked once. A top-level project is asked without
+ * navigation, as a parent shown only to reach one of its sub-projects grants
+ * nothing else, and that leaves out its sub-projects' walk. Tasks live only
+ * in sub-projects (model/issues.ts), so it changes nothing a page lists. */
+const shownIn = (levels: ProjectLevels, orgId: string) =>
+  memoized(async (id) => {
+    const project = await levels.project(id)
+    if (project === null || project.org_id !== orgId || project.archived_at !== undefined)
+      return false
+    if (project.parent_id !== undefined) {
+      const parent = await levels.project(project.parent_id)
+      if (parent === null || parent.archived_at !== undefined) return false
+    }
+    return (await levels.level(id, false)) !== null
+  })
+
+/* The archived tasks `asked` covers for `me`, with the levels instance that
+ * answered for its projects, or a null scope when it covers no project.
+ *
+ * - `all` reads the organization's archive and holds a task whose project
+ *   is live, under a live parent, and seen by `me` (shownIn), each project
+ *   asked once. So a sub-project archived on its own under an active parent
+ *   stays out, as do archived projects, until they are restored.
+ * - `projects` keeps the named live projects of the organization, and for
+ *   a top-level one its sub-projects, read within ARCHIVED_SCOPE. Each is
+ *   checked through one levels instance, and the page merges those `me`
+ *   sees. An archived, unknown, foreign or invisible id drops out alike, so
+ *   no answer tells them apart. Past the bound it reads the organization's
+ *   archive instead and holds a task of a named project or of a sub-project
+ *   of a named top-level one, which shownIn checks as for `all`.
+ * - `family` is archiveFamily's list, for the deprecated one-project
+ *   argument. */
+async function readScope(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  asked: ArchivedPageRequest,
+): Promise<{ scope: ArchiveScope | null; levels: ProjectLevels }> {
+  const orgId = me.org_id
+  if (asked.kind === 'family') {
+    const projectIds = await archiveFamily(ctx, me, asked.project)
+    return {
+      scope: projectsScope(orgId, projectIds),
+      levels: projectLevelsOf(ctx, me, [asked.project]),
+    }
+  }
+  if (asked.kind === 'all') {
+    const levels = projectLevelsOf(ctx, me)
+    const shown = shownIn(levels, orgId)
+    return { scope: { orgId, projectIds: null, holds: (task) => shown(task.project_id) }, levels }
+  }
+  const named: Doc<'projects'>[] = []
+  for (const id of new Set(asked.projectIds)) {
+    const project = await byId(ctx, 'projects', id)
+    if (project !== null && project.org_id === orgId && project.archived_at === undefined)
+      named.push(project)
+  }
+  const tops = named.filter((p) => p.type === 'meta' && p.parent_id === undefined)
+  const kids: Doc<'projects'>[] = []
+  let wide = false
+  for (const top of tops) {
+    const room = ARCHIVED_SCOPE.subProjects - kids.length
+    const rows = await ctx.db
+      .query('projects')
+      .withIndex('by_parent', (q) => q.eq('parent_id', top.id))
+      .take(room + 1)
+    if (rows.length > room) {
+      wide = true
+      break
+    }
+    kids.push(...rows)
+  }
+  const levels = projectLevelsOf(ctx, me, [...named, ...kids])
+  const shown = shownIn(levels, orgId)
+  if (wide) {
+    const namedIds = new Set(named.map((p) => p.id))
+    const topIds = new Set(tops.map((p) => p.id))
+    const holds = memoized(async (id) => {
+      const project = await levels.project(id)
+      if (project === null) return false
+      const inFamily = project.parent_id !== undefined && topIds.has(project.parent_id)
+      return (namedIds.has(project.id) || inFamily) && (await shown(project.id))
+    })
+    return { scope: { orgId, projectIds: null, holds: (task) => holds(task.project_id) }, levels }
+  }
+  const candidates = [...new Set([...named, ...kids].map((p) => p.id))]
+  const seen = await Promise.all(candidates.map(shown))
+  const projectIds = candidates.filter((_, i) => seen[i])
+  return { scope: projectIds.length === 0 ? null : projectsScope(orgId, projectIds), levels }
+}
+
 /**
- * One page of the archived tasks of `project`'s family (archiveFamily) for
- * `me`, most recently archived first, as the app's Archived tasks page asks
- * for it. With a `search`, the rows are the tasks that match it
+ * One page of the archived tasks `asked` covers for `me`, most recently
+ * archived first, as the app's Archived tasks page asks for it (readScope).
+ * With a `search`, the rows are the tasks that match it
  * (archivedTaskMatcher), and a page may stop early under the read budget;
  * the caller passes `next` back until it is null. `scanned` counts the
- * family's archived tasks the page looked at, so the page can say how far a
- * search reached. The caller has already checked that `me` sees `project`.
+ * scope's archived tasks the page looked at, so the page can say how far a
+ * search reached. A scope that covers no project answers an empty last page.
+ *
+ * An `all` page, and a page past ARCHIVED_SCOPE, read the organization's
+ * archive, so where `me` sees few of its projects a page looks at up to
+ * ARCHIVE_PAGE.tasks tasks and keeps few, and answers fewer rows than
+ * `limit`, even none, with `next` set. `scanned` counts only tasks in scope
+ * and the caller gets `next` sealed, so neither tells how many hidden
+ * archived tasks the organization has; a short page with a next cursor tells
+ * no more than a family's read of the organization's archive did before
+ * (archivedTasksAfter). For the deprecated `family` request the caller has
+ * already checked that `me` sees the project.
  */
 export async function archivedPageCore(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
-  project: Doc<'projects'>,
+  asked: ArchivedPageRequest,
   o: { cursor: ArchiveCursor | null; search: string; limit: number },
-): Promise<ArchivedTasksPage<ArchivedPageRow>> {
-  const projectIds = await archiveFamily(ctx, me, project)
+): Promise<ArchivedTasksPage<ArchivedListRow>> {
+  const { scope, levels } = await readScope(ctx, me, asked)
+  if (scope === null) return { rows: [], next: null, scanned: 0 }
+  const nameOf = profileNamesIn(ctx, me.org_id)
   const matches = o.search
-    ? await archivedTaskMatcher(ctx, me.org_id, o.search, {
-        stars: false,
-        names: () => rosterNames(ctx, me.org_id),
-      })
+    ? await archivedTaskMatcher(ctx, me.org_id, o.search, { stars: false, nameOf })
     : null
-  return await archivedTasksPage(ctx, { orgId: me.org_id, projectIds }, o.cursor, o.limit, {
+  return await archivedTasksPage(ctx, scope, o.cursor, o.limit, {
     keeps: async (task, facts) => matches === null || (await matches(task, facts)),
-    row: (task, facts) => pageRow(task, facts),
+    row: (task, facts) => listRow(task, facts, levels, nameOf),
   })
+}
+
+/* `task` as the app's Archived tasks page lists it (ArchivedListRow). Its
+ * project and parent are read once each through `levels`, and so is the
+ * caller's level, which the scope's check asked already. */
+async function listRow(
+  task: ArchivedTask,
+  facts: TaskFacts,
+  levels: ProjectLevels,
+  nameOf: (profileId: string) => Promise<string | undefined>,
+): Promise<ArchivedListRow> {
+  const row = await pageRow(task, facts)
+  const project = await levels.project(task.project_id)
+  const parent = project?.parent_id === undefined ? null : await levels.project(project.parent_id)
+  const owner = taskOwnerId(task, row.is_group)
+  return {
+    ...row,
+    place: { project_name: project?.name ?? '', parent_name: parent?.name ?? null },
+    owner_name: owner === undefined ? null : ((await nameOf(owner)) ?? null),
+    can_restore: levelRank(await levels.level(task.project_id, false)) >= levelRank('user'),
+  }
 }
 
 /* `task` as the Archived tasks page shows it (ArchivedPageRow). */
