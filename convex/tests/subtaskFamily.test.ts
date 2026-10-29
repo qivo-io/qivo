@@ -28,6 +28,7 @@ import {
   messagesFor,
   newT,
   type OrgFixture,
+  plantCopiedIssue,
   plantIssue,
   plantProject,
   plantSeat,
@@ -595,11 +596,13 @@ describe('a move, archive or parent change too large for one transaction', () =>
     const short = await plantIssue(t, base)
     await plantIssue(t, { ...base, parent_id: short.id, description: 'Notes.' })
     const long = await plantIssue(t, base)
-    await plantIssue(t, { ...base, parent_id: long.id, description: 'x'.repeat(2000) })
+    // its task row holds the text, as every deployment's do until the
+    // description backfill's clear
+    await plantCopiedIssue(t, { ...base, parent_id: long.id, description: 'x'.repeat(7000) })
     const other = await plantIssue(t, { ...base, project_id: f.sub2.id })
     const another = await plantIssue(t, base)
     // no check by count, only by size: 6 KiB is past the long subtask's
-    // estimate alone, and short of the short one's
+    // task row alone, and short of the short one's
     await crowdedRoom(
       1e9,
       async () => {
@@ -622,7 +625,8 @@ describe('a move, archive or parent change too large for one transaction', () =>
 describe('a parent whose subtasks are too large to count', () => {
   it('refuses with the plain sentence under a real read limit, and changes nothing', async () => {
     // ten subtasks of about 60 KB, each description TEXT_MAX characters of
-    // three UTF-8 bytes, read within a limit of 580 KB: the count asks once
+    // three UTF-8 bytes in the task row too, as until the description
+    // backfill's clear, read within a limit of 580 KB: the count asks once
     // the nine rows before it may hold SUBTREE_ROOM.bytes, and is past the
     // room by then
     const t = newT({ transactionLimits: { bytesRead: 580_000 } })
@@ -630,7 +634,11 @@ describe('a parent whose subtasks are too large to count', () => {
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const heavy = await plantIssue(t, base)
     for (let i = 0; i < 10; i++)
-      await plantIssue(t, { ...base, parent_id: heavy.id, description: '中'.repeat(TEXT_MAX) })
+      await plantCopiedIssue(t, {
+        ...base,
+        parent_id: heavy.id,
+        description: '中'.repeat(TEXT_MAX),
+      })
     const light = await plantIssue(t, base)
     await plantIssue(t, { ...base, parent_id: light.id })
     const other = await plantIssue(t, base)

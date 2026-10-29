@@ -31,6 +31,7 @@ import { issueKey } from '../lib/taskRefs'
 import { insertTask } from '../model/descriptions'
 import {
   as,
+  copyTaskTexts,
   expectRefusal,
   NOW,
   newT,
@@ -424,6 +425,12 @@ describe('issues.archivedPage', () => {
       const all = await ctx.db.query('issues').collect()
       const parents = new Set(all.map((row) => row.parent_id))
       const links = await ctx.db.query('issue_labels').collect()
+      // each task's text, from its description row
+      const texts = new Map(
+        (await ctx.db.query('issue_descriptions').collect()).map(
+          (row) => [row.issue_id, row.description] as const,
+        ),
+      )
       const found = all.filter(
         (row) =>
           row.archived_at !== undefined &&
@@ -433,7 +440,7 @@ describe('issues.archivedPage', () => {
             taskSearchText({
               key: issueKey(row.num),
               title: row.title,
-              description: row.description ?? '',
+              description: texts.get(row.id) ?? '',
               status: row.status,
               group: parents.has(row.id),
               priority: row.priority,
@@ -1476,7 +1483,9 @@ describe('issues.archivedPage', () => {
       }
     })
     // each holds one archived task at the description cap in a three-byte
-    // script, on the task row and on its description row, as release 2 stores it
+    // script, on its description row and in the copy on its task row that
+    // earlier releases wrote, as every deployment holds them until the
+    // description backfill's clear
     const text = '漢'.repeat(LIMITS.description.max)
     const tasks: string[] = []
     for (let batch = 0; batch < subs.length; batch += 25) {
@@ -1523,6 +1532,12 @@ describe('issues.archivedPage', () => {
           bytes: m.bytesRead.used,
         }
       })
+    // once the backfill's clear has taken the text off the task rows, the
+    // 200 newest tasks read side by side well inside the page
+    const cleared = await measured()
+    expect(cleared).toMatchObject({ rows: 25, tooWide: false })
+    expect(cleared.bytes).toBeLessThan(2 << 20)
+    await copyTaskTexts(t, f.org.id, tasks)
     const full = await measured()
     // 200 newest tasks of about 61 KB pass the page's 8 MiB, so the page is refused
     expect(full.tooWide).toBe(true)
@@ -1530,7 +1545,7 @@ describe('issues.archivedPage', () => {
     // with 120 of them archived it opens them side by side and lists
     await unarchive(t, tasks.slice(120))
     const fits = await measured()
-    console.info('archived projects side by side', { full, fits })
+    console.info('archived projects side by side', { cleared, full, fits })
     expect(fits).toMatchObject({ rows: 25, tooWide: false })
   }, 300_000)
 

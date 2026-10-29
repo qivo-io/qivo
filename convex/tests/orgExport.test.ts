@@ -493,7 +493,7 @@ describe('organization export', () => {
     expect(exported.projects.find((row) => row.id === f.sub.id)).toMatchObject({ archived_at: NOW })
     expect(exported.issues.find((row) => row.id === task.id)).toMatchObject({
       archived_at: NOW,
-      description: task.description,
+      description: '<p>Archived description</p>',
     })
     expect(exported.profiles.map((row) => row.id)).toEqual(
       expect.arrayContaining([inactive.id, unclaimed.id, f.agent.id]),

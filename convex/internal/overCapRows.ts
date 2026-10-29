@@ -70,7 +70,8 @@
  * in the app, because the app parses only up to TEXT_MAX. The fix writes no
  * activity. A task's description is the text readers show, its description
  * row's (model/descriptions.ts descriptionOf), and its trimmed form is
- * stored in both copies in a transaction of its own (describe). A task
+ * stored in the row in a transaction of its own, which unsets a copy the
+ * task row still holds, as every description write does (describe). A task
  * whose task row holds a different text, which only a rollback leaves, is
  * skipped for internal/descriptionsBackfill's repair, so no fresher edit is
  * lost. The issues phase reads each task's description row too, which can
@@ -540,11 +541,12 @@ export const page = internalMutation({
     await walk(ctx, phase, cursor, dry_run ? null : ctx, page_size),
 })
 
-/** Stores the description of task `id` trimmed in both copies
- * (model/descriptions.ts patchTask), once a page of the fix found its text
- * (textCopiesOf) untrimmed. A description that a trim leaves over
- * TEXT_MAX, or that changed since, stays as it is, and so does one whose
- * copies differ, as the page leaves it. */
+/** Stores the description of task `id` trimmed in its description row, and
+ * unsets a copy its task row still holds (model/descriptions.ts patchTask),
+ * once a page of the fix found its text (textCopiesOf) untrimmed. A
+ * description that a trim leaves over TEXT_MAX, or that changed since,
+ * stays as it is, and so does one whose copies differ, as the page leaves
+ * it. */
 export const describe = internalMutation({
   args: { id: v.id('issues') },
   handler: async (ctx, { id }): Promise<null> => {

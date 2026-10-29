@@ -31,17 +31,20 @@ import {
   TRASH_BUDGET,
   viewOf,
 } from '../model/deletedItems'
+import { descriptionOf } from '../model/descriptions'
 import { HOLDER_SIGHT_RULE, SUBTASK_PROJECT_RULE } from '../model/issues'
 import {
   activityFor,
   as,
   chargeFilteredReads,
+  copyTaskTexts,
   expectRefusal,
   fileState,
   messagesFor,
   NOW,
   newT,
   type OrgFixture,
+  plantCopiedIssue,
   plantHiddenSibling,
   plantIssue,
   plantProject,
@@ -662,9 +665,10 @@ describe('restoring a task item', () => {
     const parent = await plantIssue(t, { org_id, project_id: f.sub.id })
     const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
     await deleteTask(t, f, task.id)
-    // three subtasks of about 6 KB each, past a count bound of 10 KB
+    // three subtasks of about 6 KB each, the text in their task rows too,
+    // as until the description backfill's clear, past a count bound of 10 KB
     for (let i = 0; i < 3; i++)
-      await plantIssue(t, {
+      await plantCopiedIssue(t, {
         org_id,
         project_id: f.sub.id,
         parent_id: parent.id,
@@ -2540,12 +2544,13 @@ describe('parents outside a restored project', () => {
   /** 19,000 CJK characters, under TEXT_MAX: about 57 KB of UTF-8. */
   const HEAVY = '漢'.repeat(19_000)
 
-  /** A chain of `n` tasks in Firmware, each with `description`, top first.
-   * Answers its lowest task. */
+  /** A chain of `n` tasks in Firmware, each with `description` in its
+   * description row and its task row, as every deployment holds them until
+   * the description backfill's clear, top first. Answers its lowest task. */
   async function chainOf(t: T, f: OrgFixture, n: number, description = '') {
     let low: Doc<'issues'> | undefined
     for (let i = 0; i < n; i++)
-      low = await plantIssue(t, {
+      low = await plantCopiedIssue(t, {
         org_id: f.org.id,
         project_id: f.sub.id,
         parent_id: low?.id,
@@ -2616,7 +2621,10 @@ describe('parents outside a restored project', () => {
           .collect(),
       )
       expect(children.map((c) => c.id).sort()).toEqual([...ids[e]].sort())
-      expect(children.every((c) => c.description === description)).toBe(true)
+      // each text is back in its description row alone
+      const texts = await t.run((ctx) => Promise.all(children.map((c) => descriptionOf(ctx.db, c))))
+      expect(texts.every((text) => text === description)).toBe(true)
+      expect(children.every((c) => c.description === undefined)).toBe(true)
       expect((await liveTask(t, epic.id))?.remaining_hours).toBeUndefined()
       expect((await messagesFor(t, f.admin.id, epic.id)).map((m) => m.detail)).toEqual([
         'Remaining cleared (was 8 h)',
@@ -2997,8 +3005,12 @@ describe('parents outside a restored project', () => {
       id: '10000000-0000-4000-8000-000000000000',
     })
     const description = 'Spec line. '.repeat(1490)
+    const kids: string[] = []
     for (let i = 0; i < 3; i++)
-      await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: heavy.id, description })
+      kids.push(
+        (await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: heavy.id, description }))
+          .id,
+      )
     const light = await plantIssue(t, {
       org_id,
       project_id: f.sub2.id,
@@ -3007,11 +3019,23 @@ describe('parents outside a restored project', () => {
     })
     await deleteProject(t, f, f.sub2.id)
     const item = await itemFor(t, f.sub2.id)
+    TRASH_BUDGET.bytes = 12_000
+    expect((await restore(t, f.user, [item.id])).restored).toEqual([item.id])
+    for (let i = 0; (await jobFor(t, item.id))?.phase === 'restore_tasks'; i++) {
+      expect(i).toBeLessThan(50)
+      await step(t, item.id)
+    }
+    // the subtasks are written back; a release before the third, which
+    // wrote them, writes the copy of their text into their task rows too,
+    // and this release's steps go on from there after a deploy
+    await copyTaskTexts(t, org_id, kids)
+    for (let i = 0; (await jobFor(t, item.id))?.phase !== 'restore_attach'; i++) {
+      expect(i).toBeLessThan(50)
+      await step(t, item.id)
+    }
     // the check reads the first of the three subtasks of 16 KB under the
     // first task, which then comes back without its parent, and it spends
     // the step
-    TRASH_BUDGET.bytes = 12_000
-    await untilAttach(t, f, item.id)
     expect(await parentsOf(t, [heavy, light])).toEqual([undefined, undefined])
     expect((await waitingParents(t)).map((row) => row.task_id)).toEqual([light.id])
     await stepThrough(t, item.id)

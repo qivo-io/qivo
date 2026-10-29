@@ -14,6 +14,7 @@ import { printOf, trimmedForm } from '../lib/fieldPrints'
 import type { Refusal } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
+import { descriptionOf } from '../model/descriptions'
 import {
   as,
   expectRefusal,
@@ -657,7 +658,7 @@ describe('text values in expected', () => {
       (await byId(ctx, 'teams', fx.team.id))?.name,
       (await byId(ctx, 'projects', fx.meta.id))?.name,
       (await byId(ctx, 'milestones', milestone))?.name,
-      (await byId(ctx, 'issues', row.id))?.description,
+      await descriptionOf(ctx.db, (await byId(ctx, 'issues', row.id)) as Doc<'issues'>),
     ])
     expect(saved).toEqual(['Hardware', fx.meta.name, 'Prototype', 'Plan'])
     // at the cap once trimmed it is a value, so it compares

@@ -22,6 +22,7 @@ import {
 } from '../lib/core'
 import type { Refusal } from '../lib/functions'
 import { allWordsMatcher, searchPieces, taskSearchText } from '../lib/search'
+import { descriptionOf } from '../model/descriptions'
 import {
   expectRefusal,
   NOW,
@@ -134,23 +135,25 @@ async function oldMatches(ctx: MutationCtx, fx: Fx, c: SearchCase): Promise<Doc<
     .query('issues')
     .withIndex('by_org', (q) => q.eq('org_id', fx.org.id))
     .collect()
-  return tasks
-    .filter((i) => (i.archived_at !== undefined) === c.archived)
-    .filter((i) =>
+  const filtered: Doc<'issues'>[] = []
+  for (const i of tasks)
+    if (
+      (i.archived_at !== undefined) === c.archived &&
       matches(
         taskSearchText({
           key: issueKey(i.num),
           title: i.title,
-          description: i.description ?? '',
+          description: await descriptionOf(ctx.db, i),
           status: i.status,
           group: false,
           priority: i.priority,
           assigneeName: i.assignee_id === undefined ? null : names.get(i.assignee_id),
           labelNames: labels.get(i.id) ?? [],
         }),
-      ),
+      )
     )
-    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.num - b.num)
+      filtered.push(i)
+  return filtered.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.num - b.num)
 }
 
 /* Tasks in FW with labels created in the order Thermal, Power supply,

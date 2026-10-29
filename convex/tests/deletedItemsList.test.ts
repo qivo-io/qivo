@@ -22,6 +22,7 @@ import { REMOVAL_COUNT } from '../model/projects'
 import {
   as,
   chargeFilteredReads,
+  copyTaskTexts,
   expectRefusal,
   fileState,
   messagesFor,
@@ -1579,10 +1580,13 @@ describe('projects.removalSummary', () => {
   it('stops counting before long task descriptions pass the read limit', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // 1,000 tasks at the 20,000-character description cap pass 16 MiB
+    // 1,000 tasks at the 20,000-character description cap pass 16 MiB,
+    // their text in the task rows too, as until the description backfill's
+    // clear
     const description = 'Measured on site. '.repeat(1112).slice(0, 20_000)
     for (let i = 0; i < 1000; i++)
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description })
+    await copyTaskTexts(t, f.org.id)
 
     const summary = await as(t, f.user).query(api.projects.removalSummary, {
       org_id: f.org.id,

@@ -5,31 +5,30 @@
  * only this file writes issue_descriptions. scripts/check-task-writes.mjs
  * fails on any other such write.
  *
- * In this release, the second of the move, readers and writers follow
- * different rules. Every reader takes a task's text from its first
- * description row in creation order that holds the task's copies, else
- * from its first row (descriptionOf, withText, descriptionsOf), and only a
- * task without a row, which
- * internal/descriptionsBackfill has not reached, reads issues.description.
- * Only this file reads either copy for a reader, and
- * scripts/check-task-reads.mjs fails on any other read of
- * issues.description. Writers keep the first release's rule: every path
- * that writes a row takes the text from the task row while it holds one,
- * and only then from the row. Every release so far writes
- * issues.description, and the releases from before the table write only
- * it, so the task row holds the freshest text. So readers prove the rows on
- * every deployment while the task row still holds a copy, and a rollback to
- * the first release of the move, which reads only issues.description,
- * loses nothing. The third release stops writing
- * issues.description and clears it; a rollback from it to this release
- * still shows every description, because this one reads the rows.
+ * In this release, the third and last of the move, the description row is
+ * the only source of a task's text. Every reader takes it from the task's
+ * first description row in creation order that holds the task's copies,
+ * else from its first row (descriptionOf, withText, descriptionsOf), and
+ * only a task without a row, which internal/descriptionsBackfill has not
+ * reached, reads issues.description. Only this file reads either copy for
+ * a reader, and scripts/check-task-reads.mjs fails on any other read of
+ * issues.description. Writers write the text to the row alone. A create
+ * inserts the task row without it (insertTask), a description write unsets
+ * the copy the task row may still hold (patchTask), and a move or an
+ * archive gives the row the text readers showed before it. No other write
+ * unsets the copy. The backfill's clear unsets the copies the releases
+ * before wrote, only where the task's one row holds the same text
+ * (clearTaskCopy). The second release, v0.1.98, is the rollback floor. It
+ * reads the rows too, and its writers write copies equal to the rows
+ * again, which the next clear unsets. A release before it reads only issues.description, so it
+ * shows no text for a task this release wrote, edited or cleared.
  *
  * A write that changes or checks a task's description passes the task with
  * its text (withText) as its before and after documents, and every other
  * write passes the stored rows on both sides, so the activity diff, the
  * mention diff and a webhook's changed fields (textsOf) see a description
- * change only where a write made one, also once the third release has
- * cleared issues.description.
+ * change only where a write made one, whether or not the task row still
+ * holds a copy.
  *
  * A row names its task and copies its organization, project and archived
  * state, so main Search can filter descriptions by them (schema.ts
@@ -43,9 +42,10 @@
  * finds a row for its task resets its text and every copy (putDescription),
  * and an organization's teardown never takes another's row.
  *
- * Deleted items stores a task with this text (withDescription), and its
- * steps delete the task's description row with its messages
- * (model/deletedItems.ts), so the person's own delete reads no row.
+ * Deleted items stores a task with its text (withDescription), which reads
+ * the task's row only once the task row holds no copy, and its steps
+ * delete the description row with the task's messages
+ * (model/deletedItems.ts).
  *
  * In a public demo a description row spends none of the visitor's record
  * limit (lib/demo.ts uncountedWriter), because it is part of its task,
@@ -86,12 +86,18 @@ type TextOwner = Owner & Pick<Doc<'issues'>, 'description'>
  * as a duplicate, may read differently there when only a later row holds
  * the copies. */
 async function shownRow(db: Reader, task: Owner): Promise<Doc<'issue_descriptions'> | null> {
-  const rows = await db
-    .query('issue_descriptions')
-    .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
-    .take(2)
+  const rows = await firstRows(db, task.id)
   return rows.find((row) => holdsCopies(row, task)) ?? rows[0] ?? null
 }
+
+/** The first two description rows of task `issueId` in creation order, as
+ * shownRow and patchTask read them, in one by_issue range of two documents
+ * at most. */
+export const firstRows = (db: Reader, issueId: string): Promise<Doc<'issue_descriptions'>[]> =>
+  db
+    .query('issue_descriptions')
+    .withIndex('by_issue', (q) => q.eq('issue_id', issueId))
+    .take(2)
 
 /** The text of task `task` as readers show it: the text of its description
  * row (shownRow), else issues.description for a task the backfill has not
@@ -103,11 +109,10 @@ export async function descriptionOf(db: Reader, task: TextOwner): Promise<string
 
 /** The text readers show for `task` (descriptionOf), and whether its task
  * row holds a different one, which only a rollback leaves: a release from
- * before the table that changed issues.description without the row. A
- * writer then takes the task row's text (patchTask), so a tool that rewrites
- * the text it read from the row would lose that edit; it leaves such a task
- * to internal/descriptionsBackfill's repair. It reads as descriptionOf
- * does. */
+ * before the table that changed issues.description without the row. Only
+ * internal/descriptionsBackfill's repair then takes the task row's text, so
+ * a tool that rewrites the text it read from the row would lose that edit;
+ * it leaves such a task to the repair. It reads as descriptionOf does. */
 export async function textCopiesOf(
   db: Reader,
   task: TextOwner,
@@ -219,10 +224,11 @@ export type RangeStep = 'read' | 'missing' | 'done' | 'full'
  * the tasks it is read for, and skips the rows of the tasks before them,
  * which a caller read one by one. Only a row left by a task deleted for good
  * before used_ids recorded its id could be older, if a create took that id
- * (schema.ts issue_descriptions). A task whose project's range ends without
- * a row holding its copies, such as that one, one without a row or one
- * whose rows' copies are stale, which only a rollback leaves, is `missing`,
- * for the caller to read on its own.
+ * (schema.ts issue_descriptions), or a second row a Deleted items step left
+ * (withDescription), if a restore took it. A task whose project's range
+ * ends without a row holding its copies, such as those, one without a row
+ * or one whose rows' copies are stale, which only a rollback leaves, is
+ * `missing`, for the caller to read on its own.
  *
  * A step is one index range, read a row at a time, and it checks `room`
  * before the range and as its rows add up, so it passes `room` by one row
@@ -344,7 +350,8 @@ export const textsOf = (
   after: after.description ?? '',
 })
 
-/** The fields of a task row a write sets, its description among them. */
+/** The fields of a task a write sets, its description among them, which
+ * patchTask writes to the description row alone. */
 export type TaskFields = Partial<WithoutSystemFields<Doc<'issues'>>>
 
 /** The fields of a task row a write sets that never changes its
@@ -415,60 +422,87 @@ export async function putDescription(
  * task from Deleted items (lib/db.ts insertUsed). */
 export type TaskClaim = ConvexError<Refusal> | { server: ConvexError<Refusal> } | 'restore'
 
-/** Inserts task row `doc` with its description row and the used_ids row of
- * its id, taking the id as `claim` says, and answers the row's id. */
+/** Inserts task row `doc` without its description, which goes to its
+ * description row ('' for none), with the used_ids row of its id, taking
+ * the id as `claim` says, and answers the row's id. A `doc` that holds a
+ * description, such as a copy Deleted items stored, so leaves the task row
+ * without one. */
 export async function insertTask(
   db: Writer,
   doc: WithoutSystemFields<Doc<'issues'>>,
   claim: TaskClaim,
 ): Promise<Id<'issues'>> {
+  const { description, ...task } = doc
   const _id =
     claim === 'restore'
-      ? await insertUsed(db, 'issues', doc, 'restore')
+      ? await insertUsed(db, 'issues', task, 'restore')
       : 'server' in claim
-        ? await insertUsed(db, 'issues', doc, claim.server)
-        : await insertUnique({ db }, 'issues', 'by_uuid', { id: doc.id }, doc, claim)
-  await putDescription(db, doc, doc.description ?? '')
+        ? await insertUsed(db, 'issues', task, claim.server)
+        : await insertUnique({ db }, 'issues', 'by_uuid', { id: task.id }, task, claim)
+  await putDescription(db, task, description ?? '')
   return _id
 }
 
 /** Patches task row `issue` with `fields`, and its description row in the
- * same transaction. A description among them goes to the row, '' when it
- * is cleared, and a task without a row gets one. A new project or archived
- * state goes to the copies of the task's first row, in creation order,
- * with the text of issues.description while the task row holds one, and a
- * task without a row gets none (the backfill inserts it). Without
- * issues.description the row gets the text readers showed before the
- * change (shownText), which a second row holding the copies may hold, so
- * the change never shows another text. A second row, which no writer of
+ * same transaction. A description among them goes to the row alone, '' when
+ * it is cleared, and a task without a row gets one; the task row loses the
+ * copy an earlier release left in it. A new project or archived state goes
+ * to the copies of the task's first row, in creation order, with the text
+ * readers showed before the change (shownText), which a second row holding
+ * the copies may hold, so the change never shows another text. A copy the
+ * task row still holds stays for the backfill's clear, and a task without a
+ * row gets none (the backfill inserts it). A second row, which no writer of
  * this release leaves, keeps its copies until the backfill's repair deletes
  * it, so it never stops a move, an archive or the nightly archive. Either
- * reads the task's first two rows, which a write of the first reads
- * again. */
-export async function patchTask(db: Writer, issue: Doc<'issues'>, fields: TaskFields) {
-  await db.patch('issues', issue._id, fields)
+ * reads the task's first two rows (firstRows), which a write of the first
+ * reads again, unless the caller passes them as `rows`, as a subtree change
+ * does to price each patch first (model/issues.ts patchCost). */
+export async function patchTask(
+  db: Writer,
+  issue: Doc<'issues'>,
+  fields: TaskFields,
+  rows?: readonly Doc<'issue_descriptions'>[],
+) {
   const after = { ...issue, ...fields }
   if ('description' in fields) {
+    await db.patch('issues', issue._id, { ...fields, description: undefined })
     await putDescription(db, after, fields.description ?? '')
     return
   }
+  await db.patch('issues', issue._id, fields)
   if (!('project_id' in fields) && !('archived_at' in fields)) return
-  const rows = await db
-    .query('issue_descriptions')
-    .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-    .take(2)
-  const [row] = rows
-  if (row !== undefined)
-    await putDescription(db, after, after.description ?? shownText(rows, issue), row)
+  const read = rows ?? (await firstRows(db, issue.id))
+  const [row] = read
+  if (row !== undefined) await putDescription(db, after, shownText(read, issue), row)
 }
 
 /** The text readers show for task `task` (shownRow) from its first two
  * description rows, `rows`, which a caller read already: of them the first
- * that holds the task's copies, else the first. A writer that stamps new
- * copies on the first row without issues.description gives it this text,
- * so the change keeps the text readers showed. */
+ * that holds the task's copies, else the first. A move or an archive
+ * (patchTask), and the backfill's repair of a task row without a copy,
+ * give the first row new copies with this text, so the change keeps the
+ * text readers showed. */
 export const shownText = (rows: readonly Doc<'issue_descriptions'>[], task: Owner): string =>
   (rows.find((row) => holdsCopies(row, task)) ?? rows[0])?.description ?? ''
+
+/** Unsets the copy of its text that task row `task` holds, which a release
+ * before this one wrote, when `rows`, the task's first two description rows
+ * (firstRows), are one row that holds the task's copies and the same text,
+ * so no text is lost; internal/descriptionsBackfill's clear calls it.
+ * Answers whether it did. It changes no other field and writes no
+ * updated_at, event or activity, because readers show the same text
+ * before and after. */
+export async function clearTaskCopy(
+  db: Writer,
+  task: Doc<'issues'>,
+  rows: readonly Doc<'issue_descriptions'>[],
+): Promise<boolean> {
+  const [row, ...more] = rows
+  if (task.description === undefined || row === undefined || more.length > 0) return false
+  if (!holdsCopies(row, task) || row.description !== task.description) return false
+  await db.patch('issues', task._id, { description: undefined })
+  return true
+}
 
 /** Deletes the description row of task `issueId`, if it has one, and
  * answers it, for the caller's budget. `known` is the row a caller read
@@ -483,14 +517,21 @@ export async function dropDescription(
   return row
 }
 
-/** `task` as Deleted items stores it, with issues.description while the
- * task row holds one, else with the text of its description row, or ''.
- * Reads the row only then, and answers it, for the caller's budget. */
+/** `task` as Deleted items stores it, with the copy of its text the task
+ * row still holds, else with the text readers show from its description
+ * rows (shownRow), or ''. Once a dry run of internal/descriptionsBackfill
+ * reports no `differ` the copy equals the row, and taking it saves a
+ * person's delete one read a task until the backfill's clear unsets the
+ * copies. Reads the rows only without a copy, and answers the row it took,
+ * for the caller's budget. A caller that deletes it as `known`
+ * (model/deletedItems.ts clearTask) leaves a second row, which only a
+ * rollback leaves, to the backfill, which counts it `waiting` while the
+ * task's item is in its steps, then as an orphan its repair deletes. */
 export async function withDescription(
   db: Reader,
   task: Doc<'issues'>,
 ): Promise<{ task: Doc<'issues'>; row: Doc<'issue_descriptions'> | null }> {
   if (task.description !== undefined) return { task, row: null }
-  const row = await descriptionRow(db, task.id)
+  const row = await shownRow(db, task)
   return { task: { ...task, description: row?.description ?? '' }, row }
 }

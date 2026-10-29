@@ -28,6 +28,7 @@ import {
   plantSeat,
   plantSubscription,
   type T,
+  taskWithText,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -48,7 +49,8 @@ async function fieldChanged(p: Promise<unknown>): Promise<Refusal> {
   return data
 }
 
-const task = (t: T, id: string) => t.run((ctx) => byId(ctx, 'issues', id))
+// the task with the text readers show, from its description row
+const task = taskWithText
 
 type Fx = OrgFixture & { t: T }
 

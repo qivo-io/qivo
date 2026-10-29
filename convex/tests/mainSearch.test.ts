@@ -35,10 +35,12 @@ import { PROJECT_SIGHT } from '../model/projectNav'
 import { SHAPES, type Shape } from './accessShapes.setup'
 import {
   as,
+  copyTaskTexts,
   expectRefusal,
   NOW,
   newT,
   type OrgFixture,
+  plantCopiedIssue,
   plantHiddenSibling,
   plantIssue,
   plantLogin,
@@ -552,12 +554,14 @@ describe('seats', () => {
     }
     const without = await searchRun(t, seats, { text: 'gearbox' })
     // hidden matches in the first six organizations in seat order, with
-    // descriptions at LIMITS.description in a three-byte script
+    // descriptions at LIMITS.description in a three-byte script, in the task
+    // rows too, as until the description backfill's clear
     const long = `${'中'.repeat(LIMITS.description.max - 8)} gearbox`
     for (const org of [...orgs].sort().slice(0, 6)) {
       const root = await plantProject(t, { org_id: org })
       const hidden = await plantProject(t, { org_id: org, type: 'project', parent_id: root.id })
       await plantMany(t, 24, () => ({ org_id: org, project_id: hidden.id, description: long }), 8)
+      await copyTaskTexts(t, org)
     }
     const withHidden = await searchRun(t, seats, { text: 'gearbox' })
     expect(withHidden.page).toEqual(without.page)
@@ -723,13 +727,14 @@ describe('main Search across seats', () => {
     }
     // the first seat's numbers name legacy rows near 1 MiB in a project none
     // of them sees, which spend the real limit while each lookup counts as
-    // LOOKUP, so no later seat's first lookup fits
+    // LOOKUP, so no later seat's first lookup fits. The task rows hold the
+    // text, as every deployment's do until the description backfill's clear.
     const nums = Array.from({ length: 16 }, (_, i) => 901 + i)
     const [first, ...later] = [...orgs].sort()
     const root = await plantProject(t, { org_id: first })
     const hidden = await plantProject(t, { org_id: first, type: 'project', parent_id: root.id })
     for (const num of nums)
-      await plantIssue(t, {
+      await plantCopiedIssue(t, {
         org_id: first,
         project_id: hidden.id,
         num,
@@ -1371,6 +1376,9 @@ describe('main Search at Convex’s limits', () => {
       }),
       10,
     )
+    // with the text in the task rows too, as until the description
+    // backfill's clear, which reads the most
+    await copyTaskTexts(t, f.org.id)
     for (const who of [f.admin, f.guest]) {
       const run = await searchRun(t, [who], { text: 'gearbox' })
       console.log('600 large matches', who.name, run.read, run.searches, run.page.rows.length)
@@ -1398,6 +1406,9 @@ describe('main Search at Convex’s limits', () => {
         }),
         1,
       )
+    // the task rows hold the text too, as until the description backfill's
+    // clear
+    await copyTaskTexts(t, f.org.id)
     const run = await searchRun(t, [f.admin], { text: 'zebra' })
     console.log('24 rows near 1 MiB', run.read, run.searches, run.page.rows.length)
     expect(run.page.coverage).toEqual(stopped('reads'))

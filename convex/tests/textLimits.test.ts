@@ -21,6 +21,7 @@ import {
   type OrgFixture,
   plantIssue,
   type T,
+  taskWithText,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -36,14 +37,8 @@ const REASON_OVER = 'r'.repeat(LIMITS.archiveReason.max + 1)
 const TITLE_AT_CAP = 't'.repeat(LIMITS.title.max)
 const TITLE_OVER = 't'.repeat(LIMITS.title.max + 1)
 
-const issueRow = (t: T, id: string): Promise<Doc<'issues'> | null> =>
-  t.run(
-    async (ctx) =>
-      await ctx.db
-        .query('issues')
-        .withIndex('by_uuid', (q) => q.eq('id', id))
-        .unique(),
-  )
+/* The task with the text readers show, from its description row. */
+const issueRow = taskWithText
 
 const commentRow = (t: T, id: string): Promise<Doc<'comments'> | null> =>
   t.run(

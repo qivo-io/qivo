@@ -848,7 +848,8 @@ async function dropTaskDescription(
 /** Deletes the description rows a task item's stored task `taskId` still
  * has (model/descriptions.ts), in the step's budget, which counts each
  * row's read and its delete's. The person's delete leaves them to the
- * steps, so that it reads none (moveTasksToTrash). A split or a purge can
+ * steps, so that it reads at most one a task, the one whose text it stores
+ * once the task row holds no copy (moveTasksToTrash). A split or a purge can
  * stop after the stored task row is gone, which frees the id, so the rows
  * of a live task that took it since, and those of another organization,
  * stay (ownDescription). */
@@ -4592,8 +4593,8 @@ export async function moveTasksToTrash(
   // the caller read them, and the steps' reads come on top
   for (const task of [...a.subtasks, a.root]) chargeRead(budget, task)
   // each task as it is stored (model/descriptions.ts withDescription),
-  // which reads no description row while the task row holds the text; the
-  // steps delete the rows (moveDrain)
+  // which reads its description row only once the task row holds no copy
+  // of the text; the steps delete the rows (moveDrain)
   const described = async (task: Doc<'issues'>) => {
     const { task: doc, row } = await withDescription(counted.db, task)
     if (row !== null) chargeRead(budget, row)
