@@ -171,9 +171,10 @@ deployment takes a body that large. It also
 checks task progress, last comment times, delay and project completion, the
 rule that a subtask in an archived project makes no group, and in the browser
 the search on **Settings → Projects → Archived tasks** and main Search, where
-a task the run archived must show only with **Include archived tasks** on.
-That shows whether the deployment's search index takes the filter for an
-absent `archived_at`. Everything it creates
+an active task the run made must show with **Include archived tasks** off
+and a task the run archived only with it on. That shows whether the
+deployment's search index takes the filter for an absent `archived_at` and
+still returns active matches. Everything it creates
 carries a run tag such as `stgchk-1a2b3c`, and its tasks live in projects it
 creates. It deletes all of it at the end, also after a failure. Its deleted
 projects and tasks then wait in Deleted items for 30 days, where an admin can
