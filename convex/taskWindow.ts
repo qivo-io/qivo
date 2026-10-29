@@ -15,15 +15,23 @@
  * - attachments: the task's attachment rows, as metadata. One by_issue
  *   range.
  *
- * None reads a range of the organization or of a project, so an edit
- * elsewhere in the organization reruns none of them, and none reads the
- * links, subtasks or files of the tasks it names. A task outside the
- * caller's working set answers `{state: 'unavailable'}`, the same for every
- * reason, and `task` answers `{state: 'archived'}` for an archived task the
- * Archived tasks page lists for the caller. A list a budget stops answers
- * `complete: false`, never an error. orgQuery still refuses a caller
- * without a seat in the organization, or one whose organization is being
- * deleted, before the handler runs. */
+ * None reads the tasks of a project or of the organization, and none reads
+ * the links, subtasks or files of the tasks it names. Beside the caller's
+ * own grants, memberships and team shares, the access reads take the
+ * projects asked about with their grants and shares, and where a top-level
+ * project shows the caller only for navigation, that project's
+ * sub-projects and, for a caller in many teams, the organization's teams
+ * (lib/access.ts projectLevelsOf). An edit of those reruns a query, as it
+ * reruns the workspace parts, and no other edit elsewhere in the
+ * organization does.
+ *
+ * A task outside the caller's working set answers `{state: 'unavailable'}`,
+ * the same for every reason, and `task` answers `{state: 'archived'}` for an
+ * archived task the Archived tasks page lists for the caller. A list a
+ * budget stops answers `complete: false`, never an error. orgQuery still
+ * refuses a caller without a seat in the organization, or one whose
+ * organization is being deleted, before the handler runs, so the app must
+ * treat that refusal as it treats one of snapshot.threadComments. */
 
 import { v } from 'convex/values'
 import { orgQuery } from './lib/functions'

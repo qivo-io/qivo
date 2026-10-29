@@ -7,10 +7,15 @@
  * task's own index ranges with the tasks and projects their rows name:
  * its active subtasks (issues by_parent_archived), its links (issue_links
  * by_source and by_target), its labels, the caller's follow and its
- * attachments (by_issue, by_issue_profile). None reads a range of the
- * organization or of a project, so a task opens in a project of any size
- * and from a fresh app session, and an edit elsewhere in the organization
- * reruns none of them.
+ * attachments (by_issue, by_issue_profile). None reads the tasks of a
+ * project or of the organization, so a task opens in a project of any size
+ * and from a fresh app session. The caller's access reads the caller's own
+ * grants, memberships and team shares, and the projects, grants and shares
+ * of the projects asked about. Where a top-level project shows the caller
+ * only for navigation, it also reads that project's sub-projects and, for a
+ * caller in many teams, the organization's teams (lib/access.ts
+ * projectLevelsOf), so an edit of those reruns a read, as it reruns the
+ * workspace parts. No other edit elsewhere in the organization does.
  *
  * They say of a task what the tasks part says of it
  * (lib/workspaceParts.ts readTasks), under the same rules
