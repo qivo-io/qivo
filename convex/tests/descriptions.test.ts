@@ -1446,6 +1446,49 @@ describe("the copies at Convex's limits", () => {
     expect(await snapshot(t)).toEqual(before)
   }, 300_000)
 
+  it('a REST or MCP move folded with an archive archives the light subtasks after a heavy carry', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    const away = await awayProject(t, f)
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    // the move carries 110 archived subtasks at the three-byte cap, most of
+    // the room, and the archive then stamps two short active ones, whose
+    // rows are small
+    const family = async () => {
+      const root = await plantIssue(t, base)
+      await plantLong(t, 110, { ...base, parent_id: root.id, archived_at: NOW })
+      const kids = [
+        await plantIssue(t, { ...base, parent_id: root.id, description: 'Short' }),
+        await plantIssue(t, { ...base, parent_id: root.id, description: 'Short too' }),
+      ]
+      return { root, kids }
+    }
+    const rest = await family()
+    const answer = await t.mutation(internal.machine.rest.updateIssue, {
+      callerId: f.agent.id,
+      access: 'write',
+      keyName: 'descriptions',
+      ref: rest.root.id,
+      body: JSON.stringify({ project: away.id, archived: true }),
+    })
+    expect(answer).toMatchObject({ project_id: away.id, archived: true })
+    const mcp = await family()
+    await t.mutation(internal.machine.mcp.updateIssue, {
+      callerId: f.agent.id,
+      access: 'write',
+      ref: mcp.root.id,
+      project: f.hidden.id,
+      sub_project: away.id,
+      archived: true,
+    })
+    for (const { root, kids } of [rest, mcp])
+      for (const task of [root, ...kids])
+        expect(await rowOf(t, task.id)).toMatchObject({
+          project_id: away.id,
+          archived_at: expect.any(String),
+        })
+  }, 300_000)
+
   for (const copied of [true, false])
     it(`refuses a subtree of descriptions stored before the caps before one patch could pass the read limit, ${copied ? 'with both copies' : 'with cleared task rows'}`, async () => {
       const t = newT({ transactionLimits: true })

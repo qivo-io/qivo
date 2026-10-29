@@ -655,15 +655,27 @@ async function assertStepRoom(
  * (patchCost) and pass them on, so the patch reads none again. Either row
  * can come close to Convex's document size limit, so the change is refused
  * with `refusal` before the read unless two rows of that size, and
- * `reserve` bytes of reads after the change, still fit in SUBTREE_ROOM's
- * `room` (assertStepRoom). */
+ * `reserve` bytes of reads after the change, still fit inside Convex's own
+ * limits for one transaction. SUBTREE_ROOM's `room` is not asked here: the
+ * patch is priced against it at the rows' real size (assertStepRoom), so a
+ * change whose rows are small, such as the archive a REST or MCP update
+ * folds after a heavy move, is not refused for rows it does not have. */
 async function rowsForPatch(
   ctx: QueryCtx,
   task: Doc<'issues'>,
   refusal: string,
   reserve = 0,
 ): Promise<Doc<'issue_descriptions'>[]> {
-  await assertStepRoom(ctx, { reads: 2 * DOCUMENT_MAX_BYTES, writes: 0 }, refusal, reserve)
+  const metrics = await ctx.meta.getTransactionMetrics()
+  const more: Partial<Record<keyof TransactionMetrics, number>> = {
+    bytesRead: 2 * DOCUMENT_MAX_BYTES + reserve,
+    documentsRead: 2,
+    databaseQueries: 1,
+  }
+  const full = (Object.keys(metrics) as Array<keyof TransactionMetrics>).some(
+    (key) => (more[key] ?? 0) > metrics[key].remaining,
+  )
+  if (full) throw rule(refusal)
   return await firstRows(ctx.db, task.id)
 }
 
