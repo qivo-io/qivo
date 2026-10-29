@@ -415,7 +415,14 @@ and organization pages fail. The v0.1.15 console calls `adminPeople.listUsers`,
 so its Users page fails. The app before v0.1.16 calls `billing.usage`, so its
 Billing page cannot load usage. Later releases removed all four. The app
 before v0.1.26 calls `labels.toggle` without `on`, which later releases
-refuse, so after such a rollback it cannot add or remove labels. The app at
+refuse, so after such a rollback it cannot add or remove labels. The app
+before v0.1.98 subscribes to `snapshot.commentThread`, so its task window
+cannot load comments. The app before v0.1.99 reads Archived tasks through
+`issues.archivedPage` with `project_id`, API access through
+`apiAccess.list`, and each account's `keys` in Billing's usage report, so its
+Archived tasks and API access pages cannot load, and Billing shows "This view
+could not be loaded" while the period has API calls. Later releases removed
+them. The app at
 v0.1.38 or earlier tells a new Microsoft login that its confirmation email
 was sent, but later backends leave that first email to the app, so the person
 must press **Resend confirmation email**. An app from before demos were
@@ -549,7 +556,11 @@ a database to compensate for a failed build.
 Backend changes must remain compatible with open browser tabs, desktop clients
 and already scheduled jobs. Introduce optional schema fields first, migrate
 existing records deliberately, and remove old fields/functions only after old
-clients no longer need them. Two releases broke that rule on purpose, by the
+clients no longer need them. A public function, argument or answer field the
+app stops using stays through the release that ships the app's replacement,
+so tabs and desktop windows loaded before it keep working until they reload.
+A later release may remove it and adds it to the Instant Rollback list in
+Rollback and hotfixes. Two releases broke that rule on purpose, by the
 owner's decision while Qivo had no users: v0.1.52 and the release after it,
 which replaced `snapshot.forMe` with the workspace parts. A tab open across
 either deploy shows wrong load or cannot load until it reloads, and each is a
