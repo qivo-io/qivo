@@ -9,7 +9,7 @@
  * transaction limits and logs what each call read. */
 
 import { ConvexError, compareValues } from 'convex/values'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -24,6 +24,7 @@ import {
   projectLevel,
 } from '../lib/access'
 import { newWindowKey } from '../lib/db'
+import { DEMO_FEATURE_REFUSAL } from '../lib/demo'
 import { type GrantLevel, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
 import { NAMED_READ } from '../lib/namedPages'
@@ -33,6 +34,7 @@ import { insertTask } from '../model/descriptions'
 import { setProjectGrantCore } from '../model/projectAccess'
 import {
   candidatesOf,
+  inviteTargetOf,
   type ListBatch,
   leadCandidatesOf,
   type ProjectSettings,
@@ -71,6 +73,7 @@ const DEFAULT_UNKEYED = { ...UNKEYED_MOST }
 afterEach(() => {
   Object.assign(NAMED_READ, DEFAULT_READ)
   Object.assign(UNKEYED_MOST, DEFAULT_UNKEYED)
+  vi.unstubAllEnvs()
 })
 
 /* --------------------------------------------------------------- fixtures */
@@ -766,6 +769,28 @@ describe('rights', () => {
       }
     })
   }
+
+  it('answers can_invite false on a demo deployment, with the other rights unchanged, and refuses the invite lookup with the demo sentence', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a public call on the demo needs a demo session, so these call the readers
+    const settings = () =>
+      t.run((ctx) => projectSettingsOf(ctx, new Map([[f.org.id, f.user]]), f.meta.id))
+    const lookup = (me: Doc<'profiles'>) =>
+      t.run((ctx) =>
+        inviteTargetOf(ctx, me, { project_id: f.meta.id, email: 'guest@testbed.test' }),
+      )
+    const regular = await settings()
+    expect(regular).toMatchObject({ state: 'ok', can_invite: true })
+    expect((await lookup(f.user)).state).toBe('ready')
+    vi.stubEnv('APP_MODE', 'demo')
+    expect(await settings()).toEqual({ ...regular, can_invite: false })
+    // the demo refuses first, for a manager and anyone else, as inviteGuest does
+    for (const me of [f.user, f.guest])
+      expect(await lookup(me)).toEqual({ state: 'refused', message: DEMO_FEATURE_REFUSAL })
+    vi.stubEnv('APP_MODE', '')
+    expect(await lookup(f.guest)).toEqual({ state: 'refused', message: NO_USER_MANAGEMENT })
+  })
 
   it('leaves the rights that change access to people: an agent that leads a project may edit but not change access', async () => {
     const t = newT()
