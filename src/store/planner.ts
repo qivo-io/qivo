@@ -9795,20 +9795,28 @@ export function disposeDemoStore() {
    it holds that the previous delivery did not (base.stage), not the tasks
    the painted rows lacked. */
 function noteDelivery(newlyVisibleIssueIds: ReadonlySet<string>, snap: Snapshot) {
-  const restoreDelivery = [...pendingRestoreIssueIds].some((id) => newlyVisibleIssueIds.has(id))
-  if (restoreDelivery) {
-    /* A child restore can also surface archived ancestors. Suppress every
-       task that entered with that delivery so historical messages that are
-       still unread do not trigger desktop notifications. New messages on
-       already-visible tasks remain eligible for notification. */
+  const arrived = [...pendingRestoreIssueIds].filter((id) => newlyVisibleIssueIds.has(id))
+  if (arrived.length > 0) {
+    /* A child restore can also surface archived ancestors. Suppress the
+       restored tasks and the ancestors that entered with them, so their
+       historical messages that are still unread do not trigger desktop
+       notifications. Every other task that entered with the delivery, such
+       as the rest of a large workspace's tasks arriving in the same
+       delivery, keeps the rule below, so its new messages still notify. */
+    const parentOf = new Map(snap.issues.map((issue) => [issue.id, issue.parent_id]))
+    const restored = new Set<string>()
+    for (const id of arrived) {
+      for (let at: string | undefined = id; at !== undefined && !restored.has(at); ) {
+        if (!newlyVisibleIssueIds.has(at)) break
+        restored.add(at)
+        at = parentOf.get(at) ?? undefined
+      }
+      pendingRestoreIssueIds.delete(id)
+    }
     if (announcedMessages !== null) {
       for (const message of snap.messages) {
-        if (newlyVisibleIssueIds.has(message.issue_id))
-          announcedMessages.set(message.id, message.woke_at)
+        if (restored.has(message.issue_id)) announcedMessages.set(message.id, message.woke_at)
       }
-    }
-    for (const id of pendingRestoreIssueIds) {
-      if (newlyVisibleIssueIds.has(id)) pendingRestoreIssueIds.delete(id)
     }
   }
   /* A task also enters the working set when access returns or it moves back
