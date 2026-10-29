@@ -1747,35 +1747,38 @@ describe('the project results of main Search', () => {
     const t = newT()
     const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
     MAIN_SEARCH.projects = 1
+    // seven seats searched whole, each with an allowance of about 400 KB
+    MAIN_SEARCH.bytes = 2_800 << 10
+    SEAT_SHARE.bytes = 64 << 10
     const built = await broadSeats(t, login, 7)
     for (const { org, sub } of built) {
       await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox' })
       await t.run((ctx) => ctx.db.patch(sub._id, { name: 'Gearbox rig' }))
     }
     await withReach(t)
-    const without = await searchRun(
-      t,
-      built.map((b) => b.seat),
-      { text: 'gearbox' },
-    )
-    // hidden projects named the text in the first six organizations
-    for (const { org } of built.slice(0, 6)) {
-      const top = await plantProjects(t, org, 12, (i) => ({ type: 'meta', name: `Gearbox ${i}` }))
-      await plantProjects(t, org, 24, (i) => ({
-        parent_id: top[i % top.length],
-        name: `Gearbox spare ${i}`,
-        description: 'x'.repeat(20_000),
-      }))
-    }
+    const seats = built.map((b) => b.seat)
+    const without = await searchRun(t, seats, { text: 'gearbox' })
+    // hidden top-level projects named the text in the first six
+    // organizations, rows of 600 KB, older rows over the caps: each seat
+    // reads one past its names' part, more than its whole allowance, which
+    // its own allowance absorbs, but six of them, about 3.6 MB, would leave
+    // the last seat nothing under one budget the seats shared
+    for (const { org } of built.slice(0, 6))
+      await plantProjects(
+        t,
+        org,
+        4,
+        (i) => ({ type: 'meta', name: `Gearbox ${i}`, description: 'x'.repeat(600_000) }),
+        1,
+      )
     await withReach(t)
-    const withHidden = await searchRun(
-      t,
-      built.map((b) => b.seat),
-      { text: 'gearbox' },
-    )
-    expect(withHidden.page).toEqual(without.page)
-    expect(without.page.coverage).toMatchObject({ complete: false, stopped: 'projects', of: 7 })
-    expect(projectIds(without.page).length).toBeGreaterThan(0)
+    const withHidden = await searchRun(t, seats, { text: 'gearbox' })
+    const last = built[6].org
+    const lastRows = (page: MainSearchPage) => page.rows.filter((row) => row.org_id === last)
+    expect(lastRows(without.page).map((row) => row.kind)).toEqual(['task', 'project'])
+    expect(lastRows(withHidden.page)).toEqual(lastRows(without.page))
+    expect(withHidden.page.coverage).toEqual(without.page.coverage)
+    expect(without.page.coverage).toEqual(stopped('projects', 7, 7))
   })
 
   it('judges a top-level project without walking its sub-projects', async () => {
