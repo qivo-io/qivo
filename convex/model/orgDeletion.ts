@@ -32,7 +32,8 @@
  * before the tasks phase, as the public demo's cleanup runs it, leaves the
  * later phases only live rows that nothing in Deleted items still names.
  * A file is let go with its row unless another row still names it, and is
- * held for a restore before it is erased (model/fileHolds.ts).
+ * held for a restore before it is erased (model/fileHolds.ts). The parts of
+ * an export archive, temporary copies of data, are erased at once.
  *
  * Left alone, as deleteOrgDeep leaves them: Better Auth logins (a login may
  * hold seats elsewhere), per-login appearance and roadmap history, pending
@@ -53,9 +54,10 @@ import { require, rule } from '../lib/functions'
 import { budgetSpent, REMOVAL_BUDGET, type RemovalBudget, sweep } from './cascade'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
-import { releaseFile } from './fileHolds'
+import { eraseFile, releaseFile } from './fileHolds'
 import { recipientItems, stateRows, taskItems } from './inboxItems'
 import { deleteLabelCount } from './labelCounts'
+import { jobsOf, partsOf, requestsOf } from './orgExports'
 import { deleteOrgBookkeeping, tallyRow } from './orgs'
 import { grantee, reachOfGrantee, reachOfOrg } from './projectNav'
 import { uncountFile } from './storageTotals'
@@ -590,14 +592,34 @@ const labelRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
       ),
   ])
 
-/** The organization's activity history. */
-const activityRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
-  drain(
-    ctx,
-    budget,
-
-    ctx.db.query('activity_events').withIndex('by_org_ts', (q) => q.eq('org_id', orgId)),
+/** The organization's export jobs, each after its parts, whose files are
+ * erased at once because a part is a temporary copy (model/orgExports.ts),
+ * and its request rows. A job's step still running finds its job gone at
+ * its commit and deletes its own file. */
+const exportRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+  parents(ctx, budget, jobsOf(ctx, orgId), (job) =>
+    inOrder([
+      () =>
+        drain(ctx, budget, partsOf(ctx, job.id), {
+          after: (part) => eraseFile(ctx, part.storage_id),
+        }),
+      () => drain(ctx, budget, requestsOf(ctx, job.id)),
+    ]),
   )
+
+/** The organization's activity history, then its export jobs (exportRows).
+ * They go in the activity phase, so no phase is added, and the Northstar
+ * wipe, which runs the work phases, deletes the jobs too. */
+const activityRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
+  inOrder([
+    () =>
+      drain(
+        ctx,
+        budget,
+        ctx.db.query('activity_events').withIndex('by_org_ts', (q) => q.eq('org_id', orgId)),
+      ),
+    () => exportRows(ctx, orgId, budget),
+  ])
 
 /** Webhook events, health, deliveries and subscriptions. */
 const webhookRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
@@ -706,6 +728,10 @@ async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<v
       .query(table)
       .withIndex('by_org', (q) => q.eq('org_id', orgId))
       .first()) === null, rule('Organization deletion left organization data'))
+  // each job goes after its parts and request rows, so none of them is left
+  require((await jobsOf(ctx, orgId).first()) === null, rule(
+    'Organization deletion left organization data',
+  ))
   const trash = [
     await ctx.db
       .query('deleted_items')
@@ -806,6 +832,9 @@ export async function deleteOrgStep(
       // teams past their phases, which finish() refuses to leave behind.
       if (!(await countRows(ctx, removal.org_id, budget, 'label_counts'))) break
       if (!(await countRows(ctx, removal.org_id, budget, 'team_counts'))) break
+      // Export rows an earlier release left past the activity phase, which
+      // knew no export tables, as a deletion that spans a rollback does.
+      if (!(await exportRows(ctx, removal.org_id, budget))) break
       // The organization goes first, so every call through access the
       // profiles phase deleted hears that it is being deleted until it is
       // gone. What that phase recorded (removed_access) goes after, over as

@@ -113,6 +113,14 @@ crons.interval('organization removal recovery', { minutes: 10 }, internal.orgRem
 // Restarts Deleted items steps that stopped, at half the budget (deletedItems.ts).
 crons.interval('deleted item recovery', { minutes: 1 }, internal.deletedItems.recover)
 
+// Restarts organization export jobs whose step stopped, and fails those
+// that must stop or made no progress (orgExport.ts).
+crons.interval('organization export recovery', { minutes: 1 }, internal.orgExport.recover)
+
+// Expires ready export archives whose timer was lost, restarts erase legs
+// that stopped and deletes export history older than 30 days (orgExport.ts).
+crons.interval('organization export sweep', { minutes: 15 }, internal.orgExport.sweep)
+
 // Restarts the comment counts still under way, such as a restore's whose
 // step failed (commentLimits.ts).
 crons.interval('comment count recovery', { minutes: 10 }, internal.commentLimits.recover)

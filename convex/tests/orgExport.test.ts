@@ -92,6 +92,11 @@ const EXCLUDED_TABLES = [
   'archived_detaches',
   // An organization's deletion schedule and progress are operational state.
   'org_removals',
+  // The export job itself: its state, its archive's stored parts and who
+  // asked for it, internal job state (orgExport.ts).
+  'org_exports',
+  'org_export_parts',
+  'org_export_requests',
   // What a running deletion deleted of the organization's access, so its
   // calls still hear why they are refused; gone with the organization.
   'removed_access',

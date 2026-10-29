@@ -486,10 +486,10 @@ export const gatewayAvatar = internalQuery({
  * the signal. */
 
 /** The most rows one reapOrphans leg handles in each phase. A stored file
- * older than the floor costs storageIdInUse's index ranges, eight with the
- * Deleted items check and the hold, and one more to erase it, so a files
- * leg reads about 2,310 of Convex's 4,096 with the page and the restore
- * check, and has room for more references. A tickets leg reads two ranges
+ * older than the floor costs storageIdInUse's index ranges, nine with the
+ * Deleted items check, the export parts check and the hold, and one more to
+ * erase it, so a files leg reads about 2,570 of Convex's 4,096 with the page
+ * and the restore check, and has room for more references. A tickets leg reads two ranges
  * and deletes at most two pages. An accounts leg looks up its page's logins
  * in one Better Auth component call (betterAuth/accounts.ts liveLogins),
  * which reads each login, and clears each removed login's appearance and

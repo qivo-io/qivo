@@ -1,12 +1,13 @@
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { components } from '../_generated/api'
-import type { Doc, TableNames } from '../_generated/dataModel'
+import { api, components } from '../_generated/api'
+import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, marketingId } from '../internal/marketingDemoData'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { demoMonday, PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from '../model/demoSeed'
 import { lowerSweepDue } from '../model/messages'
+import { EXPORT_LIMITS } from '../model/orgExports'
 import { countersRow, tallyRow } from '../model/orgs'
 import { countFile } from '../model/storageTotals'
 import schema from '../schema'
@@ -176,6 +177,11 @@ const APP_OWNED: TableNames[] = [
   'issue_descriptions',
   'labels',
   'activity_events',
+  // export jobs with their parts and request rows, deleted in the activity
+  // phase
+  'org_exports',
+  'org_export_parts',
+  'org_export_requests',
   'webhook_events',
   'webhook_health',
   'webhook_subscriptions',
@@ -857,6 +863,191 @@ describe('public Northstar provisioning and bounded deletion', () => {
     expect(await t.run((ctx) => ctx.db.system.get(bytes))).toBeNull()
     expect((await rows(t, b.org_id!)).tasks).toHaveLength(MARKETING_DEMO.issues.length)
   }, 60_000)
+
+  it("prepares an export on the demo outside the visitor's record limit, and its cleanup deletes the job, parts and files", async () => {
+    const t = testBackend()
+    const b = await makeDemo(t)
+    const others = await ownedSnapshot(t)
+    const a = await makeDemo(t)
+    const orgId = a.org_id as string
+    const counts = () =>
+      t.run(async (ctx) =>
+        ctx.db
+          .query('demo_write_counts')
+          .withIndex('by_demo', (q) => q.eq('demo_id', a.id))
+          .unique(),
+      )
+    const before = await counts()
+    const visitor = t.withIdentity({ subject: a.auth_user_id })
+    const { export_id } = await visitor.mutation(api.orgExport.request, { org_id: orgId })
+    // the job and its request are a temporary copy, not the visitor's records
+    expect((await counts())?.insert_count ?? 0).toBe(before?.insert_count ?? 0)
+    // only the steps that are due, not the archive's expiry
+    await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0), 1000)
+    const parts = await t.run((ctx) =>
+      ctx.db
+        .query('org_export_parts')
+        .withIndex('by_export_seq', (q) => q.eq('export_id', export_id))
+        .collect(),
+    )
+    const ready = (await visitor.query(api.orgExport.status, { org_id: orgId })).latest
+    expect(ready).toMatchObject({ id: export_id, state: 'ready' })
+    expect(parts.length).toBeGreaterThan(2)
+    // a seeded demo's archive leaves a visitor many times its size under the
+    // demo's cap (model/orgExports.ts DEMO_ARCHIVE_BYTES)
+    expect(ready?.archive_bytes ?? Number.POSITIVE_INFINITY).toBeLessThan(
+      EXPORT_LIMITS.demoArchive / 16,
+    )
+
+    await deleteDemo(t, a)
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    expect(await ownedSnapshot(t)).toEqual(others)
+    for (const part of parts)
+      expect(await t.run((ctx) => ctx.db.system.get(part.storage_id))).toBeNull()
+    expect((await rows(t, b.org_id!)).tasks).toHaveLength(MARKETING_DEMO.issues.length)
+  }, 60_000)
+
+  it("stops a demo's collecting export when its cleanup begins, and erases its parts", async () => {
+    const t = testBackend()
+    const a = await makeDemo(t)
+    const orgId = a.org_id as string
+    const visitor = t.withIdentity({ subject: a.auth_user_id })
+    const { export_id } = await visitor.mutation(api.orgExport.request, { org_id: orgId })
+    const step = makeFunctionReference<'action', { export_id: string }, null>('orgExport:step')
+    await t.action(step, { export_id })
+    const partsOf = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('org_export_parts')
+          .withIndex('by_export_seq', (q) => q.eq('export_id', export_id))
+          .collect(),
+      )
+    const files = (await partsOf()).map((part) => part.storage_id)
+    expect(files).toHaveLength(1)
+    await t.run((ctx) => ctx.db.patch(a._id, { status: 'deleting' }))
+    await t.action(step, { export_id })
+    await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0), 1000)
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query('org_exports')
+          .withIndex('by_uuid', (q) => q.eq('id', export_id))
+          .unique(),
+      ),
+    ).toMatchObject({ state: 'failed', error: { code: 'org_deleting' } })
+    expect(await partsOf()).toEqual([])
+    for (const file of files) expect(await t.run((ctx) => ctx.db.system.get(file))).toBeNull()
+  })
+
+  it('deletes the export rows an earlier release left after the activity phase', async () => {
+    const t = testBackend()
+    const a = await makeDemo(t)
+    const orgId = a.org_id as string
+    await t.run((ctx) => ctx.db.patch(a._id, { status: 'deleting' }))
+    let files: string[] = []
+    for (let n = 0; n < 80 && (await t.run((ctx) => ctx.db.get(a._id))) !== null; n++) {
+      await t.mutation(purge, { demo_id: a.id })
+      const progress = await t.run((ctx) => ctx.db.get(a._id))
+      const phase = progress?.cleanup_phase ?? 'sessions'
+      if (files.length === 0 && ['webhooks', 'account', 'uploads', 'auth'].includes(phase))
+        // an earlier release ran the activity phase without knowing exports
+        files = await t.run(async (ctx) => {
+          const id = uuid()
+          await ctx.db.insert('org_exports', {
+            id,
+            org_id: orgId,
+            state: 'ready',
+            requested_by: uuid(),
+            started_at: new Date(NOW).toISOString(),
+            progress_at: new Date(NOW).toISOString(),
+            progress: { section: '', records: 0, sections_done: 16, sections_total: 16 },
+            step: { n: 1, section: 16, cursor: null, part: 1, seq: 2, bytes: 0, counts: {} },
+            attempts: 0,
+            format_version: 3,
+          })
+          const stored: string[] = []
+          for (let seq = 0; seq < 3; seq++) {
+            const storage_id = await ctx.storage.store(new Blob(['part']) as never)
+            stored.push(storage_id)
+            await ctx.db.insert('org_export_parts', {
+              export_id: id,
+              org_id: orgId,
+              seq,
+              entry: `data/tasks/000${seq + 1}.json`,
+              kind: 'data',
+              storage_id,
+              raw_bytes: 4,
+              stored_bytes: 4,
+              crc32: 0,
+              records: 0,
+            })
+          }
+          await ctx.db.insert('org_export_requests', {
+            export_id: id,
+            org_id: orgId,
+            profile_id: uuid(),
+            requested_at: new Date(NOW).toISOString(),
+          })
+          return stored
+        })
+      if (phase === 'uploads')
+        vi.setSystemTime(
+          Math.max(
+            Date.now() + 5000,
+            progress?.cleanup_file_after ?? 0,
+            progress?.cleanup_file_wait_until ?? 0,
+          ),
+        )
+    }
+    expect(files).toHaveLength(3)
+    expect(await t.run((ctx) => ctx.db.get(a._id))).toBeNull()
+    for (const table of ['org_exports', 'org_export_parts', 'org_export_requests'] as const)
+      expect(
+        (await t.run((ctx) => ctx.db.query(table).collect())).filter((r) => r.org_id === orgId),
+        table,
+      ).toEqual([])
+    for (const file of files)
+      expect(await t.run((ctx) => ctx.db.system.get(file as Id<'_storage'>))).toBeNull()
+  })
+
+  it("ends a demo export past the demo's archive cap, while the same data fits the cap elsewhere", async () => {
+    const t = testBackend()
+    const a = await makeDemo(t)
+    const orgId = a.org_id as string
+    const visitor = t.withIdentity({ subject: a.auth_user_id })
+    const run = async () => {
+      const { export_id } = await visitor.mutation(api.orgExport.request, { org_id: orgId })
+      await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0), 1000)
+      return t.run(async (ctx) =>
+        ctx.db
+          .query('org_exports')
+          .withIndex('by_uuid', (q) => q.eq('id', export_id))
+          .unique(),
+      )
+    }
+    const defaults = { ...EXPORT_LIMITS }
+    try {
+      // the cap of every other deployment stays as it is
+      EXPORT_LIMITS.archive = 4096
+      const first = await run()
+      expect(first).toMatchObject({ state: 'ready' })
+      // a demo archive larger than the demo's cap ends too_large
+      EXPORT_LIMITS.demoArchive = (first?.archive?.bytes ?? 0) - 1
+      const second = await run()
+      expect(second).toMatchObject({ state: 'failed', error: { code: 'too_large' } })
+      await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0), 1000)
+      expect(
+        await t.run((ctx) =>
+          ctx.db
+            .query('org_export_parts')
+            .withIndex('by_export_seq', (q) => q.eq('export_id', second?.id ?? ''))
+            .collect(),
+        ),
+      ).toEqual([])
+    } finally {
+      Object.assign(EXPORT_LIMITS, defaults)
+    }
+  })
 
   it("keeps a demo's stored-byte totals while its batches delete its files, then deletes them", async () => {
     const t = testBackend()

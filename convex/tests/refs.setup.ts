@@ -40,6 +40,12 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'usage_months', field: 'org_id', target: 'organizations' },
   { table: 'usage_counts', field: 'org_id', target: 'organizations' },
   { table: 'org_removals', field: 'org_id', target: 'organizations' },
+  { table: 'org_exports', field: 'org_id', target: 'organizations' },
+  { table: 'org_export_parts', field: 'export_id', target: 'org_exports' },
+  { table: 'org_export_parts', field: 'org_id', target: 'organizations' },
+  { table: 'org_export_requests', field: 'export_id', target: 'org_exports' },
+  { table: 'org_export_requests', field: 'org_id', target: 'organizations' },
+  { table: 'org_export_requests', field: 'profile_id', target: 'profiles' },
   { table: 'removed_access', field: 'org_id', target: 'organizations' },
   { table: 'marketing_demo', field: 'org_id', target: 'organizations' },
   { table: 'org_counters', field: 'org_id', target: 'organizations' },
@@ -231,6 +237,8 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'archived_detaches.scheduled_id',
   // The next step of an organization deletion (orgRemovals.ts).
   'org_removals.scheduled_id',
+  // An export job's next step, erase leg or expiry (orgExport.ts).
+  'org_exports.scheduled_id',
   // The eraser's restore witness, a scheduled function (model/fileHolds.ts).
   'restore_watch.witness',
   // Binds a private local credentials file; not the id of a database row.
@@ -265,6 +273,8 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'attachment_uploads.storage_id',
   // a deleted file no row names, kept for a restore until its hold ends
   'file_holds.storage_id',
+  // an export archive's part, erased with its row (model/orgExports.ts)
+  'org_export_parts.storage_id',
   // Provider identity retained for deduplication, not an app database uuid.
   'panorama_images.source_id',
   'panorama_submissions.source_id',

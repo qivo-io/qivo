@@ -20,9 +20,10 @@ import { hasPendingCheckout } from './billing'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
 import type { TaskPatch } from './descriptions'
-import { releaseFile } from './fileHolds'
+import { eraseFile, releaseFile } from './fileHolds'
 import { recipientItems, stateRows } from './inboxItems'
 import { deleteSweepRow } from './messages'
+import { jobsOf, partsOf, requestsOf } from './orgExports'
 import { deleteOrgBookkeeping } from './orgs'
 import { grantee, reachOfGrantee, reachOfOrg } from './projectNav'
 import { deleteStamp } from './syncStamps'
@@ -234,11 +235,13 @@ type AccessTable =
   | 'project_access'
   | 'project_reach'
   | 'user_prefs'
+  | 'org_export_requests'
 
-/* The rows that give a profile access or hold its own settings, each read
- * through its by_profile index, in the order a removal deletes them. Rows
- * left after the profile row is gone grant nothing, because every reader
- * asks with a live profile or drops ids without one:
+/* The rows that give a profile access, hold its own settings or ask for an
+ * export in its name, each read through its by_profile index, in the order
+ * a removal deletes them. Rows left after the profile row is gone grant
+ * nothing, because every reader asks with a live profile or drops ids
+ * without one:
  * - agent_keys, mcp_tokens: machine/auth.ts lookupCredential refuses a
  *   credential whose profile is gone, and the owner's own list reads
  *   through the live seat (tokens.ts). API access reads them by
@@ -251,7 +254,11 @@ type AccessTable =
  *   background step deletes it (model/teamCounts.ts).
  * - project_reach: navigation reads the rows of a live seat, and the rows
  *   grant nothing (model/projectNav.ts).
- * - user_prefs: only the person's own seats read them (prefs.ts). */
+ * - user_prefs: only the person's own seats read them (prefs.ts).
+ * - org_export_requests: an export job checks each requester through the
+ *   live profile, and one created after the request never counts
+ *   (model/orgExports.ts stopReason). They go so a later profile with a
+ *   reused id never inherits a request. */
 const ACCESS_RANGES: ((
   ctx: QueryCtx,
   profileId: string,
@@ -270,6 +277,10 @@ const ACCESS_RANGES: ((
   (ctx, profileId) => reachOfGrantee(ctx, grantee.profile(profileId)),
   (ctx, profileId) =>
     ctx.db.query('user_prefs').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
+  (ctx, profileId) =>
+    ctx.db
+      .query('org_export_requests')
+      .withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
 ]
 
 /** Deletes the access rows of `profileId` (ACCESS_RANGES) until none is
@@ -317,7 +328,8 @@ const ACTED_ROWS_FIRST_PASS = 500
  * the person's own list hides them at once. Every session, credential and
  * OAuth path requires the profile row, so access fails closed here. It
  * deletes the first ACCESS_FIRST_PASS.rows of its own agent keys, MCP
- * tokens, memberships, grants, reach rows and preferences (ACCESS_RANGES,
+ * tokens, memberships, grants, reach rows, preferences and export requests
+ * (ACCESS_RANGES,
  * which says why the rest grant nothing), and clears its newest ACTED_ROWS_FIRST_PASS
  * activity rows and as many open tasks as REMOVAL_BUDGET allows, assignee
  * and reviewer fields first. That is every row unless the profile holds
@@ -345,7 +357,8 @@ const ACTED_ROWS_FIRST_PASS = 500
  *   issue_subscriptions (0114:86), messages by recipient, the whole inbox
  *   (0074:23), user_prefs (0036:11), the Team sync stamp (sync_stamps),
  *   the read-message sweep row (message_sweeps), agent_keys by profile
- *   (0100:47), mcp_tokens (0030:11).
+ *   (0100:47), mcp_tokens (0030:11), the profile's export requests
+ *   (org_export_requests).
  *
  * Storage: the avatar is let go HERE (phase 5 on), and held for a restore
  * before it is erased (model/fileHolds.ts); phase 7 owns only avatar
@@ -528,6 +541,16 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
     .withIndex('by_org_ts', (q) => q.eq('org_id', org.id))
     .collect()) {
     await ctx.db.delete(a._id)
+  }
+  // its export jobs, each after its parts, whose files are erased at once
+  // (temporary copies, model/orgExports.ts), and its request rows
+  for (const job of await jobsOf(ctx, org.id).collect()) {
+    for (const part of await partsOf(ctx, job.id).collect()) {
+      await ctx.db.delete(part._id)
+      await eraseFile(ctx, part.storage_id)
+    }
+    for (const row of await requestsOf(ctx, job.id).collect()) await ctx.db.delete(row._id)
+    await ctx.db.delete(job._id)
   }
 
   await clearOrgTrash(ctx, org.id, { left: Number.POSITIVE_INFINITY })

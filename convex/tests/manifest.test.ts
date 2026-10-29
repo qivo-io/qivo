@@ -571,7 +571,20 @@ oauthConnections:revokeReplay mutation internal {"type":"object","value":{"kind"
 oauthRegistrations:admit mutation internal {"type":"object","value":{"address":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 oauthRegistrations:sweepClients mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true}}}
 oauthRegistrations:sweepCounters mutation internal {"type":"object","value":{"after":{"fieldType":{"type":"string"},"optional":true}}}
+orgExport:cancel mutation public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"export_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgExport:commitFinish mutation internal {"type":"object","value":{"export_id":{"fieldType":{"type":"string"},"optional":false},"n":{"fieldType":{"type":"number"},"optional":false},"readme":{"fieldType":{"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"raw_bytes":{"fieldType":{"type":"number"},"optional":false},"stored_bytes":{"fieldType":{"type":"number"},"optional":false},"crc32":{"fieldType":{"type":"number"},"optional":false}}},"optional":false},"manifest":{"fieldType":{"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"raw_bytes":{"fieldType":{"type":"number"},"optional":false},"stored_bytes":{"fieldType":{"type":"number"},"optional":false},"crc32":{"fieldType":{"type":"number"},"optional":false}}},"optional":false}}}
+orgExport:commitPart mutation internal {"type":"object","value":{"export_id":{"fieldType":{"type":"string"},"optional":false},"n":{"fieldType":{"type":"number"},"optional":false},"at":{"fieldType":{"type":"object","value":{"section":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"parents":{"fieldType":{"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"at":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"done":{"fieldType":{"type":"boolean"},"optional":false}}},"optional":true}}},"optional":false},"done":{"fieldType":{"type":"boolean"},"optional":false},"records":{"fieldType":{"type":"number"},"optional":false},"skipped":{"fieldType":{"type":"number"},"optional":false},"part":{"fieldType":{"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"raw_bytes":{"fieldType":{"type":"number"},"optional":false},"stored_bytes":{"fieldType":{"type":"number"},"optional":false},"crc32":{"fieldType":{"type":"number"},"optional":false}}},"optional":true}}}
+orgExport:erase mutation internal {"type":"object","value":{"export_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgExport:expire mutation internal {"type":"object","value":{"export_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgExport:finishInfo query internal {"type":"object","value":{"export_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgExport:page query public {"type":"object","value":{"section":{"fieldType":{"type":"union","value":[{"type":"literal","value":"organizations"},{"type":"literal","value":"teams"},{"type":"literal","value":"profiles"},{"type":"literal","value":"projects"},{"type":"literal","value":"issues"},{"type":"literal","value":"labels"},{"type":"literal","value":"activity_events"},{"type":"literal","value":"team_members"},{"type":"literal","value":"project_access"},{"type":"literal","value":"project_team_access"},{"type":"literal","value":"milestones"},{"type":"literal","value":"issue_links"},{"type":"literal","value":"issue_labels"},{"type":"literal","value":"issue_attachments"},{"type":"literal","value":"comments"},{"type":"literal","value":"agent_keys"}]},"optional":false},"parent_id":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgExport:readBatch query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"at":{"fieldType":{"type":"object","value":{"section":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"parents":{"fieldType":{"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"at":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"done":{"fieldType":{"type":"boolean"},"optional":false}}},"optional":true}}},"optional":false}}}
+orgExport:recover mutation internal {"type":"object","value":{}}
+orgExport:request mutation public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgExport:status query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgExport:step action internal {"type":"object","value":{"export_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgExport:stepState query internal {"type":"object","value":{"export_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgExport:sweep mutation internal {"type":"object","value":{}}
 orgRemovals:abort mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgRemovals:begin action internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgRemovals:beginDue query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1002,9 +1015,18 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // organization, and an unknown or invisible project or milestone reads as
   // absent, never refused.
   milestones: { between: 'authedQuery', get: 'authedQuery', section: 'authedQuery' },
-  // Paginated ZIP export for org admins. orgQuery authenticates the active
-  // seat; the handler positively requires admin on every page.
-  orgExport: { page: 'orgQuery' },
+  // Organization export for org admins. page is the browser export's
+  // paginated read; orgQuery authenticates the active seat and the handler
+  // positively requires admin on every page. status reads the export job;
+  // request and cancel check the admin seat themselves, because the
+  // read-only gate on orgMutation would refuse them while the organization
+  // is read-only before deletion, when exports matter most.
+  orgExport: {
+    page: 'orgQuery',
+    status: 'orgQuery',
+    request: 'authedMutation',
+    cancel: 'authedMutation',
+  },
   // Admins delete the organization after its read-only period, stop a
   // deletion they asked for and record finished exports. keep and
   // recordExport check the admin seat themselves, because the read-only
@@ -1134,7 +1156,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 201
+const PUBLIC_COUNT = 204
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

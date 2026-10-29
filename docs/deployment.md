@@ -110,10 +110,12 @@ value. A changed value takes effect only at the next push. Every other
 environment registers every job. A preview therefore has no retention or
 archive sweeps, no expiry of Deleted items or the audit log, no organization
 retention, no recovery of a stopped deletion or webhook step, no billing
-reconciliation or usage delivery to Polar, and none of the demo cleanup and
-metrics jobs. Work that a request starts still runs, including the delays it
-schedules, such as webhook delivery and its retries, the steps of a deletion,
-a snoozed item's wake and a demo's 24-hour expiry. The same holds for demo
+reconciliation or usage delivery to Polar, no recovery or sweep of
+organization export jobs, and none of the demo cleanup and metrics jobs.
+Work that a request starts still runs, including the delays it schedules,
+such as webhook delivery and its retries, the steps of a deletion, an
+export job's steps and erase legs and the expiry of its archive four hours
+after it is ready, a snoozed item's wake and a demo's 24-hour expiry. The same holds for demo
 branch previews. A preview exists to check that the functions and schema
 push, and to open its branch site by hand. Test cron jobs on a local backend,
 or on staging for jobs that need neither billing nor demo mode. Convex refuses
@@ -949,6 +951,45 @@ with a full pass that checks every profile and adds or lowers the rows that
 are missing or late, so such a message is removed at most 28 days after its
 retention period ends. Deleting the one `message_sweep_seeds` row makes the
 next night's run start with the full pass.
+
+Organization exports can run as a server job (`convex/orgExport.ts`), which
+nothing in the app starts yet; the browser export still reads
+`orgExport.page`. A job keeps its state in `org_exports`, one row per admin
+who asked for it in `org_export_requests`, and its archive as compressed
+parts in storage, one `org_export_parts` row per part. A ready archive stays
+four hours, then its expiry, scheduled when it became ready, erases the
+parts; a newer archive of the same organization ends it as soon as the
+newer one is ready, so an organization holds at most one collecting job and
+one ready archive. An archive holds at most 95 MiB, and 2 MiB on the public
+demo, where every visitor is an admin; a larger one fails as too large.
+Ended jobs and their request rows stay 30 days as history. Two crons
+serve it: `organization export recovery` (every minute) restarts a
+collecting job whose step stopped and fails it after three restarts without
+progress, and `organization export sweep` (every 15 minutes) expires ready
+archives whose timer was lost, restarts erase legs that stopped and deletes
+history older than 30 days. A branch preview registers neither, so there
+only the steps, the erase legs and the scheduled expiry run. The tables start
+empty, need no backfill, and `organizations.last_export_at` keeps its
+meaning.
+
+A rollback past the release that added the job deploys, because Convex
+leaves the rows of tables the schema does not list alone, but the earlier
+code knows none of it. Its orphan sweep does not know the parts, so it can
+erase a ready archive's files within its four hours; only that temporary
+copy is lost. The scheduled steps, expiries and erase legs of jobs fail,
+because their functions are missing, and its organization deletion, demo
+cleanup and profile removal leave the export rows of an organization or
+profile they remove. A deletion or demo cleanup that goes on after the roll
+forward deletes the export rows left behind in its last phase. After
+rolling forward, `organization export recovery`
+restarts a job that was collecting while its organization and an admin who
+asked for it are still there. It fails a job that must stop, because its
+organization's deletion has begun or no admin who asked for it is still
+one, also when they are gone, and a job that has used its three restarts.
+A resumed job whose parts the earlier orphan sweep erased fails as
+incomplete when it finishes. `organization export sweep` expires the ready
+archives and erases their parts, and it alone deletes ended jobs with their
+request rows, 30 days after they ended. Nothing needs a manual step.
 
 A frontend rollback changes the served application build. It does not roll
 back Convex code, schema changes, stored files or customer writes. A database
