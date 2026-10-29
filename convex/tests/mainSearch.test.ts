@@ -400,22 +400,31 @@ describe('who main Search shows a task to', () => {
 })
 
 describe('seats', () => {
-  it('searches eight seats that each search their organization whole', async () => {
+  it('shows the match of every seat it searches of eight that search their organization whole', async () => {
     const t = newT()
     const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
     // eight organizations, in each a guest who sees two sub-projects, more
     // than one by one allows here, with a small task in one of them
     MAIN_SEARCH.projects = 1
     const seats: Doc<'profiles'>[] = []
-    const found: string[] = []
+    const found = new Map<string, string>()
     for (let i = 0; i < 8; i++) {
       const { org, sub, seat } = await broadSeat(t, login, i)
       seats.push(seat)
-      found.push((await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox' })).id)
+      found.set(
+        org,
+        (await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox' })).id,
+      )
     }
     const run = await searchRun(t, seats, { text: 'gearbox' })
-    expect(ids(run.page).sort()).toEqual([...found].sort())
-    expect(run.page.coverage).toEqual(stopped('projects', 8, 8))
+    // as many seats as the budget gives a share and a step's headroom, in
+    // seat order, each judging its candidates
+    const { coverage } = run.page
+    if (coverage.complete) throw new Error('a search of a whole organization is never complete')
+    expect(coverage).toEqual(stopped('projects', coverage.searched, 8))
+    expect(coverage.searched).toBeGreaterThan(1)
+    const searched = [...found.keys()].sort().slice(0, coverage.searched)
+    expect(ids(run.page).sort()).toEqual(searched.map((org) => found.get(org)).sort())
   })
 
   it('keeps the page its room when seats searched whole read large project rows', async () => {
@@ -424,13 +433,16 @@ describe('seats', () => {
     MAIN_SEARCH.projects = 1
     const huge = 'x'.repeat(900_000)
     const seats: Doc<'profiles'>[] = []
-    const found = new Set<string>()
+    const found = new Map<string, string>()
     for (let i = 0; i < 4; i++) {
       const { org, sub, seat } = await broadSeat(t, login, i)
       seats.push(seat)
       // the guest's match first, as convex-test's search returns tasks in
       // the order they were made
-      found.add((await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox' })).id)
+      found.set(
+        org,
+        (await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox' })).id,
+      )
       // hidden matches, each in a project whose row and whose top-level
       // project's row are near Convex's 1 MiB, as older rows can be
       for (let k = 0; k < 4; k++) {
@@ -446,11 +458,40 @@ describe('seats', () => {
     }
     const run = await searchRun(t, seats, { text: 'gearbox' })
     console.log('4 broad seats, large project rows', run.read, run.page.rows.length)
-    // the seats that judged their match before the gathering's limit show it
-    expect(run.page.rows.length).toBeGreaterThanOrEqual(2)
-    for (const row of run.page.rows) expect(found.has(row.id)).toBe(true)
-    expect(run.page.coverage).toEqual(stopped('projects', 4, 4))
+    // every seat searched shows its match
+    const { coverage } = run.page
+    if (coverage.complete) throw new Error('a search of a whole organization is never complete')
+    expect(coverage).toEqual(stopped('projects', coverage.searched, 4))
+    expect(coverage.searched).toBeGreaterThanOrEqual(2)
+    const searched = [...found.keys()].sort().slice(0, coverage.searched)
+    expect(ids(run.page).sort()).toEqual(searched.map((org) => found.get(org)).sort())
     expect(run.read.bytes).toBeLessThan(16 << 20)
+  })
+
+  it("never lets hidden tasks in one seat's organization change what another seat reads", async () => {
+    const t = newT()
+    const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
+    MAIN_SEARCH.projects = 1
+    const seats: Doc<'profiles'>[] = []
+    const orgs: string[] = []
+    for (let i = 0; i < 7; i++) {
+      const { org, sub, seat } = await broadSeat(t, login, i)
+      seats.push(seat)
+      orgs.push(org)
+      await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox' })
+    }
+    const without = await searchRun(t, seats, { text: 'gearbox' })
+    // hidden matches in the first six organizations in seat order, with
+    // descriptions at LIMITS.description in a three-byte script
+    const long = `${'中'.repeat(LIMITS.description.max - 8)} gearbox`
+    for (const org of [...orgs].sort().slice(0, 6)) {
+      const root = await plantProject(t, { org_id: org })
+      const hidden = await plantProject(t, { org_id: org, type: 'project', parent_id: root.id })
+      await plantMany(t, 24, () => ({ org_id: org, project_id: hidden.id, description: long }), 8)
+    }
+    const withHidden = await searchRun(t, seats, { text: 'gearbox' })
+    expect(withHidden.page).toEqual(without.page)
+    expect(without.page.coverage).toMatchObject({ complete: false, stopped: 'projects', of: 7 })
   })
 
   it('counts only the seats whose reads began when task numbers spend the budget', async () => {

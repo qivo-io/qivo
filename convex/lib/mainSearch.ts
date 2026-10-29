@@ -90,6 +90,24 @@ export const MAIN_SEARCH = {
   pageParse: 500_000,
 }
 
+/** The least share of the gathering's reads that a seat searched whole is
+ * searched with (coverageOf). When the reads left cannot give every such
+ * seat this much and its step's headroom (STEP), the later ones in seat
+ * order are left unsearched. Tests lower it. */
+export const WIDE_SHARE: ReadCeiling = { ranges: 32, documents: 32, bytes: 256 << 10 }
+
+/* What one step of a seat searched whole can read past its share, which
+ * each step checks first (readBudget): the documents of its largest step at
+ * Convex's size limit, a task's two description rows or a project and the
+ * top-level project above it, and the access rows a project's first check
+ * reads after its share was checked (grants and team shares of the project
+ * and its top-level project, and the teams they name). */
+const STEP: ReadCeiling = {
+  ranges: 16,
+  documents: 64,
+  bytes: 2 * DOCUMENT_MAX_BYTES + (64 << 10),
+}
+
 /** What a call keeps back from Convex's limits for the reads its budget
  * does not count one by one: the caller's own access rows that one access
  * check may read at once (lib/access.ts OWN_READS, at most its teams and a
@@ -266,14 +284,20 @@ type Stops = {
  * `projects`, whatever it read: choosing a project searches that project
  * fully. A seat searched project by project reads only tasks of projects it
  * sees, and a seat that sees every project hides nothing from itself, so
- * their stops are reported exactly. They are searched first, and each seat
- * searched whole reads within an equal share of what they left, counted at
- * the reads' real size, so how far a seat gets does not depend on what a
- * whole-organization search read. A step of reads may pass its share by
- * the documents it reads, three at most, and the gathering's own limit
- * still holds every share, so only rows near Convex's 1 MiB document size,
- * of tasks or projects, could make one seat's reads felt in another's, and
- * never in the room the page reads in.
+ * their stops are reported exactly. They are searched first.
+ *
+ * Across seats, what one seat searched whole read never changes what
+ * another may read. Before any of them reads, the search decides from what
+ * the caller can see alone, the number of such seats and the reads before
+ * them, how many it searches, in seat order, and how much each may read:
+ * an equal share of the gathering's reads left, counted at the reads' real
+ * size from the seat's own start, and never less than WIDE_SHARE. Each step
+ * checks the share before it reads, so a seat reads at most its share and
+ * one step past it (STEP), and the shares and their steps together fit
+ * under the gathering's limit, which so never stops a seat first and keeps
+ * the page's room. The seats left out count as not searched. Inside one
+ * seat, its rows and stops can still depend on its organization's hidden
+ * tasks, which its coverage, `projects`, always admits.
  *
  * `stopped` names `projects` first, then the budget (`reads`), then a
  * source's cap (`candidates`), each of which means that matches in the
@@ -285,10 +309,13 @@ type Stops = {
  * What remains. The number source reads the task each reference names in
  * each seat's organization, whichever project holds it, and that task's
  * size counts toward the budget, which only a task near Convex's 1 MiB
- * document size could make felt. And the rows, not the coverage, of a
- * whole-organization search can differ with hidden tasks, which take
- * candidates a visible match would have had; its coverage always says that
- * results may be missing.
+ * document size could make felt. The rows, not the coverage, of a seat
+ * searched whole can differ with its organization's hidden tasks, which
+ * take candidates a visible match would have had; its coverage always says
+ * that results may be missing. And an access check that reads more rows
+ * than STEP holds, for a person in many teams or a project shared with
+ * many, passes its seat's step by them; only then could a later seat's
+ * reads be cut by the gathering's limit.
  */
 export function coverageOf(stops: Stops): Coverage {
   const left = stops.searched < stops.of
@@ -925,24 +952,32 @@ export async function mainSearchPage(
     stops.reads = true
   }
 
-  // the seats searched exactly, then each seat searched whole within an
-  // equal share of what they left, counted at the reads' real size, under
-  // the gathering's own limit, so the page keeps its room (coverageOf)
+  // the seats searched exactly, then the seats searched whole, as many as
+  // get WIDE_SHARE and STEP, each within an equal share of what was left
+  // before any of them read, counted at the reads' real size from its own
+  // start (coverageOf)
   for (const seat of planned) if (!seat.wide) await searchSeat(seat)
   const wide = planned.filter((seat) => seat.wide)
   if (wide.length > 0) {
     const m = await ctx.meta.getTransactionMetrics()
-    const share = {
-      ranges: Math.floor((ceiling.ranges - m.databaseQueries.used) / wide.length),
-      documents: Math.floor((ceiling.documents - m.documentsRead.used) / wide.length),
-      bytes: Math.floor((ceiling.bytes - m.bytesRead.used) / wide.length),
+    const left: ReadCeiling = {
+      ranges: ceiling.ranges - m.databaseQueries.used,
+      documents: ceiling.documents - m.documentsRead.used,
+      bytes: ceiling.bytes - m.bytesRead.used,
     }
-    for (const seat of wide) {
+    const fits = (n: number) =>
+      (['ranges', 'documents', 'bytes'] as const).every(
+        (count) => n * (WIDE_SHARE[count] + STEP[count]) <= left[count],
+      )
+    let searchable = wide.length
+    while (searchable > 0 && !fits(searchable)) searchable--
+    const share = (count: keyof ReadCeiling) => Math.floor(left[count] / searchable) - STEP[count]
+    for (const seat of wide.slice(0, searchable)) {
       const now = await ctx.meta.getTransactionMetrics()
       gather = readBudget(ctx, ceiling, {
-        ranges: now.databaseQueries.used + share.ranges,
-        documents: now.documentsRead.used + share.documents,
-        bytes: now.bytesRead.used + share.bytes,
+        ranges: now.databaseQueries.used + share('ranges'),
+        documents: now.documentsRead.used + share('documents'),
+        bytes: now.bytesRead.used + share('bytes'),
       })
       await searchSeat(seat)
     }
