@@ -542,7 +542,7 @@ function AttachmentsSection({
           {note}
         </div>
       ) : (
-        note && <div style={{ marginBottom: canEdit ? 8 : 0 }}>{note}</div>
+        note && <div className={canEdit ? '[margin-bottom:8px]' : undefined}>{note}</div>
       )}
       {canEdit && (
         <div
