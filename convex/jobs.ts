@@ -684,6 +684,17 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   })
 }
 
+/* The earliest threshold of a run that may hand `row`: its find phase's
+ * due_by, archiveCutoff of the `now` of the run whose leg wrote it, as only
+ * later runs hand it, or '' for a writer's row, which any run may hand. Of
+ * a project's rows a hand step keeps the one with the latest, so no older
+ * run's chain still holds it. Such a chain checks at its older threshold and
+ * deletes the row it holds when it is done with the project, so if the
+ * newer run kept that row and its own chain then failed, no row would be
+ * left for the tasks due only at the newer threshold. */
+const handFloor = (row: Doc<'archive_rechecks'>): string =>
+  row.due_by ?? (row.from_run === undefined ? '' : archiveCutoff(row.from_run))
+
 /* One step of the hand phase. It reads one page of archive_rechecks in
  * organization and project order, at most ARCHIVE_LIMITS.projects rows,
  * every row from before the run and those its find phase or a person wrote
@@ -692,11 +703,13 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
  * fell a day behind, also leaves the rows the newer run's find phase
  * (due_by after its own threshold) or legs (from_run after its own `now`)
  * wrote, because its chains check at its older threshold and would delete
- * them unchecked. It keeps one row a project, deletes the others it reads
- * with it, also across steps, and gathers an organization's projects with
- * their rows, also across steps, into one chain, which it starts once it
- * passes them or once they reach ARCHIVE_LIMITS.projects. So a step writes
- * at most one delete a row and schedules at most one chain a row. The
+ * them unchecked. It keeps one row a project, the one whose hand floor is
+ * latest (handFloor), deletes the others it reads with it, also across
+ * steps, and gathers an organization's projects with their rows, also
+ * across steps, into one chain, which it starts once it passes them or once
+ * they reach ARCHIVE_LIMITS.projects. So a step writes at most one delete a
+ * row, reads at most one kept row again, and schedules at most one chain a
+ * row. The
  * phase's last step writes the run's audit row and moves archive_runs to
  * the run's threshold, and to its start as the last full pass after a full
  * one. Only that step moves it, so a run whose dispatcher fails before it
@@ -729,12 +742,22 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     .query('archive_rechecks')
     .withIndex('by_org_project_run')
     .paginate({ cursor: a.cursor ?? null, numItems: ARCHIVE_LIMITS.projects })
+  // the row kept for the last project gathered, read again when the step
+  // before kept it, or null when it is gone
+  let kept: Doc<'archive_rechecks'> | null | undefined
   for (const row of page.page) {
     // this run's or a newer run's, which that run or a later one hands
     if (row.from_run !== undefined && row.from_run >= a.now) continue
     if (row.due_by !== undefined && row.due_by > cutoff) continue
     if (due?.org_id === row.org_id && due.projects.at(-1) === row.project_id) {
-      await ctx.db.delete(row._id)
+      const last = due.rows.length - 1
+      kept ??= await ctx.db.get(due.rows[last])
+      // the row with the latest hand floor stays, on a tie the later one
+      if (kept === null || handFloor(row) >= handFloor(kept)) {
+        if (kept !== null) await ctx.db.delete(kept._id)
+        due.rows[last] = row._id
+        kept = row
+      } else await ctx.db.delete(row._id)
       continue
     }
     if (due?.org_id !== row.org_id || due.projects.length >= ARCHIVE_LIMITS.projects) {
@@ -743,6 +766,7 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     }
     due.projects.push(row.project_id)
     due.rows.push(row._id)
+    kept = row
     projects += 1
   }
   const step = { now: a.now, repairs: a.repairs, tasks: a.tasks, full: a.full }

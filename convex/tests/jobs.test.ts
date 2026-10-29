@@ -2088,6 +2088,56 @@ describe('archiveDoneIssues and two runs that overlap', () => {
     expect(await runArchive(t, night(3))).toBe(1)
     expect((await issueRow(t, parent.id))?.archived_at).toBe(night(3))
   })
+
+  it("a newer run keeps its own row of a project an older run's chain still holds, so its failed chain leaves a row", async () => {
+    // a leg reads one task, so a chain can fail partway through a project
+    ARCHIVE_LIMITS.tasks = 1
+    const t = newT()
+    const f = await withOrg(t)
+    await runArchive(t, night(0))
+    const pastCutoff = (n: number) =>
+      new Date(Date.parse(cutoffAt(night(n))) + DAY / 2).toISOString()
+    const due = (done_at: string) =>
+      plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, status: 'done', done_at })
+    await due(pastCutoff(0))
+    const [a, b] = [night(1), night(2)]
+    const ran = new Set<string>()
+    const later: Doc<'issues'>[] = []
+    vi.useFakeTimers()
+    try {
+      // run A hands the project to its chain, which has not run yet
+      await start(t, a)
+      await runOf(t, a, ran, (name) => name === 'jobs:archiveProject')
+      // a day later run B finds two tasks due only at its threshold in the
+      // same project, and hands the project to its own chain
+      later.push(await due(pastCutoff(1)), await due(pastCutoff(1)))
+      await start(t, b)
+      await runOf(t, b, ran, (name) => name === 'jobs:archiveProject')
+      // B's chain archives one task, then A's chain finishes the project at
+      // its older threshold
+      let legs = 0
+      await runOf(t, b, ran, (name) => name === 'jobs:archiveProject' && legs++ === 1)
+      await runOf(t, a, ran)
+      // and B's chain fails at its next leg: a failed leg commits nothing
+      // and schedules nothing, as if this one never ran
+      await t.run(async (ctx) => {
+        for (const job of await ctx.db.system.query('_scheduled_functions').collect())
+          if (job.state.kind === 'pending' && (job.args[0] as { now?: string }).now === b)
+            await ctx.scheduler.cancel(job._id)
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(b) })
+    for (const task of later) expect((await issueRow(t, task.id))?.archived_at).toBeUndefined()
+    // B's row is left for the next night, whose window starts after both tasks
+    expect((await rechecks(t)).map((row) => [row.project_id, row.due_by])).toEqual([
+      [f.sub.id, cutoffAt(b)],
+    ])
+    expect(await runArchive(t, night(3))).toBe(2)
+    for (const task of later) expect((await issueRow(t, task.id))?.archived_at).toBe(night(3))
+    expect(await rechecks(t)).toEqual([])
+  })
 })
 
 describe('archiveDoneIssues runs what the release before queued', () => {
