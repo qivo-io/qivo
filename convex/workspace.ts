@@ -39,12 +39,23 @@
  * name with the caller's memberships of them; where it asks about many
  * projects, all of the caller's grants, memberships and team shares instead.
  * A part that asks whether a parent shows for navigation (a top-level
- * project the caller holds no level on, lib/access.ts levelUnder) reads all of the caller's grants, memberships and
- * team shares, the parent's sub-projects, and the teams of those
- * memberships or shares, or for many such teams all of the organization's
- * teams, so a team edit anywhere in the organization reruns it
- * (lib/access.ts projectLevelsOf, OWN_READS). An edit of one of those
- * reruns the parts that read it. Each windowed part stays inside Convex's limits at any size by
+ * project the caller holds no level on, lib/access.ts levelUnder) reads,
+ * once the organization's project_reach rows are complete (org_ready
+ * nav_at), the caller's memberships and the root rows of their seat and
+ * teams, and under the parent the child rows of those that hold one there
+ * with the sub-projects they name, so it reruns only when the caller's or
+ * their teams' reach rows change. Without nav_at, or past those reads'
+ * bounds, it reads the caller's grants, memberships and team shares, the
+ * parent's sub-projects, and the teams of those memberships or shares, or
+ * for many such teams all of the organization's teams, so a team edit
+ * anywhere in the organization reruns it (lib/access.ts projectLevelsOf,
+ * OWN_READS). An edit of one of those reruns the parts that read it. Every
+ * one of those reads is bounded. A check its bounds stop answers the
+ * projects and tasks parts `overflow` where what ran out is the room for
+ * the projects the window asks about (lib/access.ts roomSpent) and the
+ * window can still be cut, and else `{state: 'refused', message}` with
+ * lib/access.ts accessUnchecked's sentence, as a window too full to cut
+ * does; it cuts the inbox part. Each windowed part stays inside Convex's limits at any size by
  * answering `split` or `overflow` (lib/workspaceParts.ts), and the app
  * chooses the windows from the organization's counts of the rows they read,
  * without asking (lib/idWindows.ts startWindows).

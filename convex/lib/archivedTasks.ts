@@ -420,9 +420,14 @@ export const ARCHIVE_RESERVE = { ranges: 64, documents: 128, bytes: 7 * DOCUMENT
  * scope check asks its levels instance about the 32nd, 128th or 512th
  * project reads the caller's own grants and memberships, each up to one row
  * past the step, and the shares of their teams, up to OWN_READS.rows rows
- * and one range a team, at once (lib/access.ts OWN_READS). A grant, a
- * membership and a share hold ids and a level, a few hundred bytes at
- * most. */
+ * and one range a team, at once (lib/access.ts OWN_READS). That holds the
+ * largest step, which a project shared with more than OWN_READS.projectShares
+ * teams now starts at any project. The other reads such a project may start
+ * (the caller's reach rows and its teams asked one by one, OWN_READS's
+ * figures) come in readScope, which asks about every project of a scope
+ * before the page's budget starts, so they spend no page's room. A grant, a
+ * membership and a share hold ids, a level and a name key, a few hundred
+ * bytes at ordinary name lengths. */
 export const LEVEL_STEP_READS = {
   ranges: 2 + OWN_READS.teams,
   documents: 2 * (Math.max(...OWN_READS.steps) + 1) + OWN_READS.rows + 1,
@@ -1120,7 +1125,12 @@ async function mergedScope(
  *   too while the organization's reach rows cannot be read, which fails
  *   closed. Past the bounds it is too wide, and an admin's page reads the
  *   organization's archive and holds a task of a named project or of a
- *   sub-project of a family kept. */
+ *   sub-project of a family kept.
+ *
+ * A check of the caller's level that a bound of `levels` stopped
+ * (lib/access.ts accessUnchecked) rejects the read with that refusal, which
+ * the page passes on: too wide would ask for a sub-project, and an empty
+ * page would say nothing is archived. */
 async function readScope(
   ctx: QueryCtx,
   me: Doc<'profiles'>,

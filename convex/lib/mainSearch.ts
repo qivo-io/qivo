@@ -49,7 +49,14 @@ import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { descriptionOf } from '../model/descriptions'
 import { hasSubtasks } from '../model/issues'
 import { projectSight, reachReady } from '../model/projectNav'
-import { type Access, accessOf, OWN_READS, receivesTeamAccess } from './access'
+import {
+  type Access,
+  accessOf,
+  isAccessUnchecked,
+  OWN_READS,
+  type OwnReads,
+  receivesTeamAccess,
+} from './access'
 import { openCursorText, sealCursorText } from './archiveCursorSeal'
 import { type ReadCeiling, roomOf } from './archivedTasks'
 import { byId } from './db'
@@ -184,21 +191,45 @@ const SLACK: ReadCeiling = { ranges: 64, documents: 256, bytes: 512 << 10 }
 export const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 }
 
 /** What a call keeps back from Convex's limits for the reads its budget
- * does not count one by one: the caller's own access rows that one access
- * check may read at once (lib/access.ts OWN_READS, at most its teams and a
- * few ranges, its rows and the organization's teams). The listing reads
- * its rows one at a time under the budget, and the seats and the page read
- * within their own allowances (allowancesOf). What no budget bounds
- * is accessOf's own reads when it asks whether a top-level project shows
- * for navigation: all of the person's grants, memberships and team shares,
- * and the teams those name, which lib/access.ts reads whole. Each of those
- * team reads costs at most lib/limits.ts TEAM_ROW_MAX_BYTES, but their
- * number is the person's, which nothing bounds yet. Tests lower it. */
+ * does not count one by one, which are one access check past the budget's
+ * last look, with every read of the caller's own rows it may start, at
+ * searchReads' bounds (lib/access.ts OWN_READS states how they add up).
+ * That is one question, at most 6 ranges and 134 documents; the instance's
+ * memberships asked team by team (9) and its single-row reads past the
+ * bounds (teamReads, 32 ranges and 160 documents); and its shared reads,
+ * on the reach path for up to 128 teams at most 203 ranges and 5,020
+ * documents, and on the legacy path at most 138 ranges and 4,443 documents
+ * with a parent's sub-projects (513). So at most 250 ranges and about
+ * 5,300 documents. The listing reads its rows one at a time under the
+ * budget, and the seats and the page read within their own allowances
+ * (allowancesOf). Each team read costs at most lib/limits.ts
+ * TEAM_ROW_MAX_BYTES. Tests lower it. */
 export const SEARCH_RESERVE: ReadCeiling = {
   ranges: OWN_READS.teams + 64,
   documents: 2 * OWN_READS.rows + OWN_READS.orgTeamsMost,
   bytes: OWN_READS.bytes + (2 << 20),
 }
+
+/** The bounds of each seat's access reads (lib/access.ts OWN_READS), below
+ * the workspace parts' where theirs would not fit SEARCH_RESERVE: the
+ * shares of at most 64 teams read at once, memberships asked one by one
+ * for 8 teams and read whole up to 128, the organization's teams up to
+ * 1,024, and fewer root rows, sub-projects and single-row reads. A person
+ * in up to 128 teams is checked in full; past that, or past those bounds,
+ * a check refuses, which stops the search's reads (endsReads) and never
+ * shows less as complete. Computed from OWN_READS when a seat is read, so
+ * tests that lower it lower these too. */
+export const searchReads = (): OwnReads => ({
+  ...OWN_READS,
+  teams: Math.min(OWN_READS.teams, 64),
+  lookups: Math.min(OWN_READS.lookups, 8),
+  members: Math.min(OWN_READS.members, 128),
+  roots: Math.min(OWN_READS.roots, 512),
+  orgTeamsMost: Math.min(OWN_READS.orgTeamsMost, 1024),
+  subProjects: Math.min(OWN_READS.subProjects, 512),
+  subBytes: Math.min(OWN_READS.subBytes, 512 << 10),
+  teamReads: Math.min(OWN_READS.teamReads, 32),
+})
 
 /** How the search sources filter archived tasks while the toggle is off.
  * `byIndex` filters them in the search query (archived_at absent, which the
@@ -441,8 +472,12 @@ type Stops = {
  *   in the page's own allowance, and finds a project the seat already read
  *   for free.
  * Planning reads hidden projects, never tasks, in one case: whether a
- * top-level project of the scope shows only for navigation reads its
- * sub-projects. A seat searched project by project matches only the names
+ * top-level project of the scope shows only for navigation reads the reach
+ * rows of the seat and its teams under it and the sub-projects those name,
+ * and, only for an organization without nav_at or a seat past searchReads'
+ * reach bounds, its sub-projects. An access check a bound stops ends the
+ * search as a read that does not fit does (endsReads), so its coverage is
+ * never complete after one. A seat searched project by project matches only the names
  * of projects planning found it sees, so it reads no name of a project it
  * cannot see.
  */
@@ -469,6 +504,12 @@ export function coverageOf(stops: Stops): Coverage {
 
 /* Thrown when a read does not fit, which ends the gathering or the page. */
 class OutOfRoom extends Error {}
+
+/* Whether `e` ends the gathering or the page as a read that does not fit
+ * does: OutOfRoom, or an access check a bound stopped (lib/access.ts
+ * accessUnchecked), so a search that met one never reports complete
+ * coverage. */
+const endsReads = (e: unknown): boolean => e instanceof OutOfRoom || isAccessUnchecked(e)
 
 /* A read budget under `ceiling`, asked before each read whether it fits.
  * It counts each index range as one and each document at Convex's size
@@ -806,7 +847,7 @@ export async function searchPlaces(
     const own = await ownProjects(ctx, me, budget, read)
     if (own !== null) ({ ids: candidates, archived } = own)
   }
-  const access = accessOf(ctx, me, [...read.values()])
+  const access = accessOf(ctx, me, [...read.values()], searchReads())
   if (candidates === null || most <= 0) return { access, places: null, shown: [] }
   const places: string[] = []
   const shown = new Map<string, Doc<'projects'>>()
@@ -1020,7 +1061,7 @@ export async function mainSearchPage(
   let scoped: Doc<'projects'> | null = null
   if (args.scope?.project_id !== undefined) {
     const scopeId = args.scope.project_id
-    const access = accessOf(ctx, seats[0])
+    const access = accessOf(ctx, seats[0], [], searchReads())
     try {
       await step(gather)
       const p = await access.project(scopeId)
@@ -1033,7 +1074,7 @@ export async function mainSearchPage(
         scoped = p
       gather.recount()
     } catch (e) {
-      if (!(e instanceof OutOfRoom)) throw e
+      if (!endsReads(e)) throw e
       stops.reads = true
       return { rows: [], next_cursor: null, coverage: coverageOf(stops) }
     }
@@ -1255,7 +1296,7 @@ export async function mainSearchPage(
         { cap: MAIN_SEARCH.names, budget },
       )
     } catch (e) {
-      if (!(e instanceof OutOfRoom)) throw e
+      if (!endsReads(e)) throw e
       stops.reads = true
     } finally {
       // the seat's budget looks at what the names read before its next read
@@ -1327,7 +1368,7 @@ export async function mainSearchPage(
       // a seat with nothing to read at all searched all it had
       if (seat.places.length === 0 && numbers.length === 0) begin(seat)
     } catch (e) {
-      if (!(e instanceof OutOfRoom)) throw e
+      if (!endsReads(e)) throw e
       stops.reads = true
     }
   }
@@ -1342,7 +1383,14 @@ export async function mainSearchPage(
       if (free < 2) break
       let seat: Seat
       if (scoped !== null && scoped.parent_id !== undefined)
-        seat = seatOf(me, accessOf(ctx, me, [scoped]), scoped, [scoped.id], [scoped], false)
+        seat = seatOf(
+          me,
+          accessOf(ctx, me, [scoped], searchReads()),
+          scoped,
+          [scoped.id],
+          [scoped],
+          false,
+        )
       else {
         const most = Math.min(MAIN_SEARCH.projects, Math.floor(free / 2))
         const listing = await searchPlaces(ctx, me, scoped, gather, most, include)
@@ -1360,7 +1408,7 @@ export async function mainSearchPage(
       planned.push(seat)
     }
   } catch (e) {
-    if (!(e instanceof OutOfRoom)) throw e
+    if (!endsReads(e)) throw e
     stops.reads = true
   }
 
@@ -1414,8 +1462,11 @@ export async function mainSearchPage(
       if (row !== null) rows.push(row)
       last = m
     } catch (e) {
-      if (!(e instanceof OutOfRoom)) throw e
+      if (!endsReads(e)) throw e
       ranOut = true
+      // an access check a bound stopped leaves this row unjudged, which the
+      // next page would meet again, so the coverage says so
+      if (isAccessUnchecked(e)) stops.reads = true
       break
     }
   }

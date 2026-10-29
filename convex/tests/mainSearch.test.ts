@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { canAccessProject, canSeeProject } from '../lib/access'
+import { canAccessProject, canSeeProject, OWN_READS } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import { GRANT_LEVELS } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
@@ -67,7 +67,9 @@ const DEFAULT_RESERVE = { ...SEARCH_RESERVE }
 const DEFAULT_FILTER = { ...ARCHIVED_FILTER }
 const DEFAULT_SHARE = { ...SEAT_SHARE }
 const DEFAULT_SIGHT = { ...PROJECT_SIGHT }
+const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 afterEach(() => {
+  Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
   Object.assign(PROJECT_SIGHT, DEFAULT_SIGHT)
   Object.assign(SEAT_SHARE, DEFAULT_SHARE)
   Object.assign(MAIN_SEARCH, DEFAULT_SEARCH)
@@ -2424,5 +2426,130 @@ describe('the search_name index', () => {
     expect(await found()).toEqual([live, listed, unstated].sort())
     expect(await found('live')).toEqual([live])
     expect(await found('listed')).toEqual([listed])
+  })
+})
+
+describe('a check of the caller access that a bound stops', () => {
+  it('reports coverage reads where a project-by-project seat was exact, keeps a whole seat incomplete, and one bound up answers as with the default bounds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a member of a team sharing FW, with a task there
+    const member = await plantMember(t, f)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: member.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Zephyr fix',
+    })
+    await withReach(t)
+    for (const projects of [DEFAULT_SEARCH.projects, 0]) {
+      MAIN_SEARCH.projects = projects
+      const page = async () => (await searchRun(t, [member], { text: 'zephyr' })).page
+      const usual = await page()
+      expect(taskIds(usual), `projects ${projects}`).toEqual([task.id])
+      // the check of FW, shared with the member's team, stops at a bound
+      Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0 })
+      const stopped = await page()
+      expect(stopped.coverage.complete, `projects ${projects}`).toBe(false)
+      if (usual.coverage.complete)
+        expect(stopped.coverage, `projects ${projects}`).toMatchObject({ stopped: 'reads' })
+      expect(taskIds(stopped)).toEqual([])
+      Object.assign(OWN_READS, { lookups: 1, teamReads: 2 })
+      expect(await page(), `projects ${projects}`).toEqual(usual)
+      Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+    }
+  })
+
+  it('reports coverage reads where a later row of the page meets a check a bound stops', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const member = await plantMember(t, f)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: member.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    // a sub-project of TBED the member's team does not share, shared with
+    // 65 other teams, past OWN_READS.projectShares
+    const elsewhere = await subOf(t, f, f.meta)
+    const first = await task(t, f, f.sub, 'Zephyr first')
+    // its description row says FW, and its task row moved to `elsewhere`,
+    // as a release from before the table leaves them
+    const moved = await task(t, f, f.sub, 'Planted', { description: 'zephyr notes' })
+    await withReach(t)
+    await t.run(async (ctx) => {
+      await ctx.db.patch(moved._id, { project_id: elsewhere.id })
+      for (let i = 0; i <= OWN_READS.projectShares; i++)
+        await ctx.db.insert('project_team_access', {
+          project_id: elsewhere.id,
+          team_id: uuid(),
+          level: 'user',
+        })
+    })
+    const page = async () => (await searchRun(t, [member], { text: 'zephyr' })).page
+    const usual = await page()
+    expect(ids(usual)).toEqual([first.id])
+    expect(usual.coverage).toEqual({ complete: true })
+    // none of the team's shares read at once, so `elsewhere`'s team is asked
+    // by itself, and room for the team's own row, which FW's check reads,
+    // and not for its share on `elsewhere`, which the page's second row asks
+    Object.assign(OWN_READS, { rows: 0, teamReads: 1 })
+    const stopped = await page()
+    expect(ids(stopped)).toEqual([first.id])
+    expect(stopped.coverage).toMatchObject({ complete: false, stopped: 'reads' })
+  })
+
+  it("checks a person's results in up to 128 teams, searched whole as before these bounds, and leaves out what it cannot check past them", async () => {
+    for (const many of [100, 129]) {
+      const t = newT()
+      const f = await withOrg(t)
+      const member = await plantMember(t, f)
+      await t.run(async (ctx) => {
+        for (let i = 0; i < many; i++) {
+          const team_id = i === 0 ? f.team.id : uuid()
+          if (i > 0)
+            await ctx.db.insert('teams', {
+              id: team_id,
+              org_id: f.org.id,
+              name: `Team ${i}`,
+              track_delay_default: false,
+              created_at: NOW,
+            })
+          await ctx.db.insert('team_members', { team_id, profile_id: member.id, is_leader: false })
+          // ten of them share FW, more than searchReads asks one by one
+          if (i < 10)
+            await ctx.db.insert('project_team_access', {
+              project_id: f.sub.id,
+              team_id,
+              level: 'user',
+            })
+        }
+      })
+      const found = await task(t, f, f.sub, 'Zephyr fix')
+      await withReach(t)
+      const { page } = await searchRun(t, [member], { text: 'zephyr' })
+      // more teams than MAIN_SEARCH.listing reads make a seat searched
+      // whole, which never reports complete coverage
+      expect(page.coverage.complete, `${many} teams`).toBe(false)
+      expect(ids(page), `${many} teams`).toEqual(many <= 128 ? [found.id] : [])
+    }
   })
 })

@@ -18,7 +18,7 @@
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { accessOf } from '../lib/access'
+import { accessOf, isAccessUnchecked } from '../lib/access'
 import { byId, usedMoreThan } from '../lib/db'
 import { itemRow, seatReady } from './inboxItems'
 import { bulkRows } from './messages'
@@ -121,12 +121,31 @@ async function seatLine(ctx: QueryCtx, me: Doc<'profiles'>): Promise<SeatSummary
  * not, skips the rest of the project's items with one new range, without
  * reading their tasks. Items without a project (a task that was not live
  * when the item was last built) sort first and have their tasks read. `stopped` says the
- * budget ended the walk, so `counted` is a lower bound. */
+ * budget ended the walk, or a check of the seat's access that a bound
+ * stopped (lib/access.ts accessUnchecked), so `counted` is a lower bound. */
 async function countSeat(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   most: number,
   step: () => Promise<boolean>,
+): Promise<{ counted: number; stopped: boolean }> {
+  const walk = { counted: 0 }
+  try {
+    return await walkSeat(ctx, me, most, step, walk)
+  } catch (e) {
+    if (!isAccessUnchecked(e)) throw e
+    return { counted: walk.counted, stopped: true }
+  }
+}
+
+/* countSeat's walk, which keeps its count in `walk` as it goes, so a
+ * refused access check stops it with what it counted. */
+async function walkSeat(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  most: number,
+  step: () => Promise<boolean>,
+  walk: { counted: number },
 ): Promise<{ counted: number; stopped: boolean }> {
   const scope = inboxScope(ctx, me)
   const unread = (after: string | undefined) =>
@@ -134,7 +153,6 @@ async function countSeat(
       const seat = q.eq('recipient_id', me.id).eq('unread', true).eq('snoozed', false)
       return after === undefined ? seat : seat.gt('project_id', after)
     })
-  let counted = 0
   let after: string | undefined
   for (;;) {
     let project: string | undefined
@@ -142,19 +160,19 @@ async function countSeat(
     for await (const item of unread(after)) {
       if (item.project_id !== undefined && item.project_id !== project) {
         project = item.project_id
-        if (!(await step())) return { counted, stopped: true }
+        if (!(await step())) return { counted: walk.counted, stopped: true }
         if (!(await scope.holdsItems(project))) {
           skip = project
           break
         }
       }
-      if (!(await step())) return { counted, stopped: true }
+      if (!(await step())) return { counted: walk.counted, stopped: true }
       if ((await scope.shownTask(item.issue_id)) !== null) {
-        counted += 1
-        if (counted === most) return { counted, stopped: false }
+        walk.counted += 1
+        if (walk.counted === most) return { counted: walk.counted, stopped: false }
       }
     }
-    if (skip === undefined) return { counted, stopped: false }
+    if (skip === undefined) return { counted: walk.counted, stopped: false }
     after = skip
   }
 }
@@ -218,6 +236,19 @@ export async function readInboxSummary(ctx: QueryCtx, seats: readonly Doc<'profi
   }
 }
 
+/* The task with this id when `scope`'s seat is shown it, else null, also
+ * where a bound stopped the check of the seat's access (lib/access.ts
+ * accessUnchecked): the task window answers `unavailable` for that task
+ * then (lib/taskWindow.ts), so no item of it shows either. */
+async function shownOrUnchecked(scope: ReturnType<typeof inboxScope>, issueId: string) {
+  try {
+    return await scope.shownTask(issueId)
+  } catch (e) {
+    if (!isAccessUnchecked(e)) throw e
+    return null
+  }
+}
+
 /** How many read messages of one item the item read takes to count its
  * read changes. The prune keeps at most one per item (model/messages.ts
  * pruneReadMessages), so more means an item kept from before that rule. */
@@ -249,7 +280,9 @@ async function unreadChange(
 /**
  * Seat `me`'s item about task `issueId`, for the task window. `building`
  * while the seat is not ready (seatReady). Otherwise `item` is null when the
- * seat holds no item about the task or is not shown the task, and else
+ * seat holds no item about the task or is not shown the task, or when a
+ * bound stopped that check, where the task window answers `unavailable`
+ * for the same task (shownOrUnchecked), and else
  * holds the item's counts, the oldest unread message's created_at
  * (`first_unread_at`, null when all are read), whether an unread message is
  * a change (`unread_change`), the newest message by (created_at, id) for
@@ -271,7 +304,7 @@ export async function readInboxItem(ctx: QueryCtx, me: Doc<'profiles'>, issueId:
   if (!(await seatReady(ctx, me.id))) return { state: 'building' as const }
   const pair = { recipient_id: me.id, issue_id: issueId }
   const row = await itemRow(ctx, pair)
-  if (row === null || (await inboxScope(ctx, me).shownTask(issueId)) === null)
+  if (row === null || (await shownOrUnchecked(inboxScope(ctx, me), issueId)) === null)
     return { state: 'ok' as const, item: null }
   // the newest message by _creationTime, the cutoff the item actions take
   // (model/messages.ts itemMessages)

@@ -4,11 +4,12 @@
  * lookup of one address. The grant readers (userGrantBatch, teamShareBatch)
  * check no access, so REST and MCP project details can page grants with
  * them behind their own gate. Nothing here reads a task, a comment, a file
- * or a milestone. The gate reads a top-level project's sub-projects, in one
- * range, only to decide whether the project shows to a caller without a
- * level of their own for navigation, with the caller's own grants,
- * memberships and team shares (lib/access.ts accessOf); it reads nothing
- * else about them.
+ * or a milestone. To decide whether a top-level project shows to a caller
+ * without a level of their own for navigation, the gate reads the caller's
+ * reach rows under it, once the organization's are complete, or else its
+ * sub-projects, in one range, with the caller's own grants, memberships and
+ * team shares (lib/access.ts accessOf); it reads nothing else about them. A
+ * check a bound of those reads stopped answers `unavailable`.
  *
  * One gate (settingsGate) decides who reads a project: whoever sees it
  * (lib/access.ts projectLevel, navigation included, the rule behind
@@ -45,6 +46,7 @@ import {
   canLeadProjects,
   canManageOwnProjectAccess,
   inMetaTree,
+  isAccessUnchecked,
   NO_USER_MANAGEMENT,
 } from '../lib/access'
 import type { ReadCeiling } from '../lib/archivedTasks'
@@ -194,12 +196,17 @@ async function treeOf(
  * sees or manages; else `ok`. Each predicate runs once.
  *
  * The level comes from lib/access.ts accessOf, which answers projectLevel's
- * level within bounded reads: whether a top-level project shows to `me`
- * for navigation comes from its sub-projects (one range) and `me`'s own
- * grants, memberships and team shares, where projectLevel's walk reads each
- * sub-project's grant and team shares and, for each share, its team and
- * `me`'s membership, past Convex's 4,096 index ranges under a large shared
- * project. canManageOwnProjectAccess reads the root again, one range for a
+ * level within bounded reads (OWN_READS): whether a top-level project shows
+ * to `me` for navigation comes from the reach rows of `me`'s seat and teams
+ * under it, a few rows, once the organization's are complete, or else from
+ * its sub-projects (one range) and `me`'s own grants, memberships and team
+ * shares, where projectLevel's walk reads each sub-project's grant and team
+ * shares and, for each share, its team and `me`'s membership, past Convex's
+ * 4,096 index ranges under a large shared project. A check those bounds
+ * stopped (accessUnchecked) answers `unavailable`, as for a project `me`
+ * cannot reach; a caller who manages the project gets `lead` before any of
+ * those reads (levelUnder), so only one who does not can meet it.
+ * canManageOwnProjectAccess reads the root again, one range for a
  * sub-project.
  */
 export async function settingsGate(
@@ -211,7 +218,13 @@ export async function settingsGate(
   const tree = await treeOf(ctx, project)
   if (tree === null) return { state: 'unavailable' }
   const read = tree.parent === null ? [project] : [project, tree.parent]
-  const level = await accessOf(ctx, me, read).level(project.id)
+  let level: AccessLevel | null
+  try {
+    level = await accessOf(ctx, me, read).level(project.id)
+  } catch (e) {
+    if (!isAccessUnchecked(e)) throw e
+    return { state: 'unavailable' }
+  }
   const manages = await canManageOwnProjectAccess(ctx, me, project)
   if (level === null && !manages) return { state: 'unavailable' }
   if (project.archived_at !== undefined) return { state: 'archived', project, parent: tree.parent }
@@ -947,8 +960,9 @@ const NEW_PROJECT_LEAD_ROLES = ['admin', 'user'] as const
  *   person and manages the project (canManageProjectUsers for a top-level
  *   project, Lead access for a sub-project).
  * - `parent_id`, the lead of a new sub-project: createProjectCore's parent
- *   checks in its order (subProjectParent), where a parent `me` cannot see
- *   answers `unavailable` and the others are refused with the create's
+ *   checks in its order (subProjectParent), where a parent `me` cannot see,
+ *   or whose check the bounds of lib/access.ts accessOf stopped, answers
+ *   `unavailable` and the others are refused with the create's
  *   sentences, then refused unless `me` is a person, as the create refuses
  *   another lead.
  * - neither, a new top-level project: refused unless `me` may create
@@ -984,9 +998,16 @@ export async function leadCandidatesOf(
     // accessOf answers no level, so a missing parent, for a parent of
     // another organization or outside a meta tree, as the create's
     // projectLevel does, and also for one whose chain of parents is broken,
-    // where projectLevel throws
+    // where projectLevel throws; a check its bounds stopped answers the
+    // same
     const parent = await byId(ctx, 'projects', a.parent_id)
-    const check = await subProjectParent(ctx, me, parent, (p) => accessOf(ctx, me, [p]).level(p.id))
+    let check: Awaited<ReturnType<typeof subProjectParent>>
+    try {
+      check = await subProjectParent(ctx, me, parent, (p) => accessOf(ctx, me, [p]).level(p.id))
+    } catch (e) {
+      if (!isAccessUnchecked(e)) throw e
+      return { state: 'unavailable' }
+    }
     if (check.state === 'missing') return { state: 'unavailable' }
     if (check.state === 'refused') return refused(check.refusal.data.message)
     if (!canChangeAccess(me)) return refused(ACCESS_NEEDS_A_PERSON)

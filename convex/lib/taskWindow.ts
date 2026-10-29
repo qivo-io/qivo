@@ -12,10 +12,15 @@
  * and from a fresh app session. The caller's access reads the caller's own
  * grants, memberships and team shares, and the projects, grants and shares
  * of the projects asked about. Where a top-level project shows the caller
- * only for navigation, it also reads that project's sub-projects and, for a
- * caller in many teams, the organization's teams (lib/access.ts
- * projectLevelsOf), so an edit of those reruns a read, as it reruns the
- * workspace parts. No other edit elsewhere in the organization does.
+ * only for navigation, it also reads the caller's reach rows under it and
+ * the sub-projects they name, once the organization's are complete, or
+ * else that project's sub-projects and, for a caller in many teams, the
+ * organization's teams (lib/access.ts projectLevelsOf), so an edit of those
+ * reruns a read, as it reruns the workspace parts. No other edit elsewhere
+ * in the organization does. A check of the caller's access that a bound of
+ * those reads stopped (accessUnchecked) answers the opened task
+ * `unavailable` where it is the task's or its parent's, and ends a list as
+ * incomplete where it is a subtask's or a link end's.
  *
  * They say of a task what the tasks part says of it
  * (lib/workspaceParts.ts readTasks), under the same rules
@@ -41,7 +46,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { descriptionOf } from '../model/descriptions'
-import { type Access, accessOf } from './access'
+import { type Access, accessOf, isAccessUnchecked, OWN_READS } from './access'
 import { archivedRowOf } from './archivedTasks'
 import { byId } from './db'
 import type { AccessLevel } from './enums'
@@ -67,19 +72,21 @@ import { relationRow, type TaskRow, taskFields } from './workspaceParts'
  * at a time, each only while PROJECT fits (inOrder). Only a group check may
  * take one body more while some of every count is left. So a read passes
  * a cap by one task body at most, or by what the project it asked about
- * last reads past PROJECT: nothing bounds the team shares on one project,
- * and each share past PROJECT's costs about 9 KB at the name caps with the
- * caller's membership and the team. Besides that, its worst case is the
- * cap, 1 MiB past it and the shared reads: up to about 1.2 MiB of the
- * organization's teams at OWN_READS's 512 KiB, which counts JSON, and the
- * person's own rows. With few of those rows a task reads at most about 10
- * MiB and its links about 15 MiB, under Convex's 16 MiB. Nothing bounds
- * them yet: once 32 projects were asked they can be 33 grants, 33
- * memberships and 1,001 team shares, about 2.85 MiB at the name caps, and
- * more at OWN_READS's later steps and for navigation, so a person with many
- * of them near the name caps can make a read of links pass Convex's 16
- * MiB. The shared reads' ranges and documents count past `ranges` and
- * `documents` too, under 4,096 and 32,000 while those rows are few. At
+ * last reads past PROJECT: past the ten shares PROJECT's bytes hold at the
+ * name caps, up to lib/access.ts OWN_READS.projectShares and one more on
+ * the project and on its top-level project, about 1.3 MiB more at the
+ * caps, and past those the caller's own rows, which count as shared.
+ * Besides that, its worst case is the cap, 1 MiB past it and the shared
+ * reads (OWN_READS states them): at most 266 ranges and 7,098 documents,
+ * up to about 1.2 MiB of the organization's teams, which counts JSON, and
+ * the person's own rows, a few hundred bytes each at ordinary name
+ * lengths. A task's project is a sub-project, so the window navigates only
+ * for a task an earlier version stored on a top-level project. With few of
+ * those rows a task reads at most about 10 MiB and its links about 15.2 to
+ * 15.5 MiB, under Convex's 16 MiB; a person with thousands of those rows
+ * near the name caps can still make a read of links pass it. The shared
+ * reads and the instance's own (at most 193 ranges and 705 documents)
+ * count past `ranges` and `documents` too, under 4,096 and 32,000. At
  * the 20,000-character description cap in a three-byte script, 100
  * subtasks read about 6.1 MB, and fit in `bytes` with the task, its text
  * and its parent. A linked group also reads its first counting subtask
@@ -123,24 +130,31 @@ type Reads = { bytes: number; documents: number; ranges: number }
  * open. */
 const BODY: Reads = { bytes: DOCUMENT_MAX_BYTES, documents: 1, ranges: 1 }
 
-/** The team shares PROJECT holds on a project and on its top-level
- * project each, as lib/archivedTasks.ts ARCHIVE_RESERVE holds a project
- * shared with about ten teams. */
-const SHARES = 10
+/** The team shares one question of lib/access.ts projectLevelsOf reads of
+ * a project, and of its top-level project, before it turns to the caller's
+ * own rows: OWN_READS.projectShares and the one more that tells it to. */
+const SHARES = OWN_READS.projectShares + 1
 
-/** What the caller's access reads for a project it has not read yet
- * (lib/access.ts projectLevelsOf), on the project and on its top-level
- * project: the row, at most lib/limits.ts PROJECT_ROW_MAX_BYTES, the
- * caller's grant and the range of its team shares, and for each of SHARES
- * shares the share, the caller's membership and the team, each at most
- * TEAM_ROW_MAX_BYTES and read once a query. A project shared with more
- * teams reads up to three more such rows and two more ranges a share, as
- * nothing bounds the shares on one project. The next look at the budget
- * counts them, before the read asks about another project (inOrder), as it
- * counts the sub-projects navigation reads under a top-level project the
- * caller holds no level on. */
+/** The team shares PROJECT's bytes hold at the name caps, as
+ * lib/archivedTasks.ts ARCHIVE_RESERVE holds a project shared with about ten
+ * teams; at ordinary name lengths, about 300 bytes a row, they hold SHARES. */
+const SHARE_BYTES = 10
+
+/** What the caller's access reads for a project it has not read yet, one
+ * question at its worst (lib/access.ts projectLevelsOf), on the project and
+ * on its top-level project: the row, at most lib/limits.ts
+ * PROJECT_ROW_MAX_BYTES, the caller's grant and the range of its team
+ * shares, and for each of SHARES shares the share, the caller's membership
+ * and the team, each read once a query. Its bytes count SHARE_BYTES of those
+ * at TEAM_ROW_MAX_BYTES, so a project shared with more teams at the name
+ * caps passes them by up to about 1.3 MiB, past which the access reads the
+ * caller's own rows, counted as shared, or asks their teams one by one,
+ * within OWN_READS.teamReads for the query. The next look at the budget
+ * counts what it read, before the read asks about another project
+ * (inOrder), as it counts navigation under a top-level project the caller
+ * holds no level on. */
 const PROJECT: Reads = {
-  bytes: 2 * (PROJECT_ROW_MAX_BYTES + (1 + 3 * SHARES) * TEAM_ROW_MAX_BYTES),
+  bytes: 2 * (PROJECT_ROW_MAX_BYTES + (1 + 3 * SHARE_BYTES) * TEAM_ROW_MAX_BYTES),
   documents: 2 * (2 + 3 * SHARES),
   ranges: 2 * (3 + 2 * SHARES),
 }
@@ -194,11 +208,14 @@ function budgetIn(ctx: QueryCtx, cap: Reads, shared: Reads) {
      * undefined for none) the caller's access has not read yet, keeping
      * back CHECK for each of `checks` group checks to come. A round asks
      * about at most one such project, after a look at the budget, because
-     * nothing bounds the team shares the access reads on one project: a
-     * project shared with more teams than PROJECT holds passes the budget
-     * by its own reads, and no other project's join them. Answers the
+     * PROJECT's bytes hold fewer team shares than the access may read on one
+     * project (lib/access.ts OWN_READS): a project shared with more teams
+     * passes the budget by its own reads, and no other project's join them.
+     * Answers the
      * results of a prefix of `items`, all of them unless the budget ran
-     * out. */
+     * out or a check of the caller's access that a bound stopped
+     * (lib/access.ts accessUnchecked) ended it before that item, as a list
+     * the budget stops says it is incomplete. */
     async inOrder<T, R>(
       items: readonly T[],
       projectOf: (item: T) => string | undefined,
@@ -219,7 +236,21 @@ function budgetIn(ctx: QueryCtx, cap: Reads, shared: Reads) {
         }
         if (end === out.length) break
         if (fresh !== undefined) asked.add(fresh)
-        out.push(...(await Promise.all(items.slice(out.length, end).map(check))))
+        const got = await Promise.all(
+          items.slice(out.length, end).map((item) =>
+            check(item).then(
+              (result) => ({ result }),
+              (e) => {
+                if (!isAccessUnchecked(e)) throw e
+                return null
+              },
+            ),
+          ),
+        )
+        const stop = got.indexOf(null)
+        for (const one of stop === -1 ? got : got.slice(0, stop))
+          if (one !== null) out.push(one.result)
+        if (stop !== -1) break
       }
       return out
     },
@@ -273,12 +304,25 @@ async function taskByRef(ctx: QueryCtx, orgId: string, ref: string) {
 }
 
 /** The task with id `issueId` and the caller's access, when the task is in
- * the caller's working set (lib/workingSet.ts, Access.holds), else null. */
+ * the caller's working set (lib/workingSet.ts, Access.holds), else null,
+ * also where a bound stopped that check (lib/access.ts accessUnchecked),
+ * which the reads then answer `unavailable` as for every other reason. */
 async function openedTask(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
   const task = await byId(ctx, 'issues', issueId)
   if (task === null || task.org_id !== me.org_id) return null
   const access = accessOf(ctx, me)
-  return (await access.holds(task)) ? { task, access } : null
+  return (await unlessUnchecked(access.holds(task), false)) ? { task, access } : null
+}
+
+/* `check`, or `refused` where a check of the caller's access that a bound
+ * stopped (lib/access.ts accessUnchecked) ended it. */
+async function unlessUnchecked<T, R>(check: Promise<T>, refused: R): Promise<T | R> {
+  try {
+    return await check
+  } catch (e) {
+    if (!isAccessUnchecked(e)) throw e
+    return refused
+  }
 }
 
 /** Whether a subtask follows those a read took (subtasksOf): 'none' when
@@ -460,24 +504,32 @@ async function groupsOf(
 }
 
 /** `tasks`, each shown to the caller, as short rows in their order. A task
- * whose group fact `budget` left unread (groupsOf) is left out, and
- * `complete` says none was. The levels are those the caller's access read
- * when it found the tasks shown. */
+ * whose group fact `budget` left unread (groupsOf), or whose level a bound
+ * of the caller's access stopped (lib/access.ts accessUnchecked) after its
+ * level inherited from the top-level project showed it, is left out, and
+ * `complete` says none was. */
 async function shortRows(
   ctx: QueryCtx,
   access: Access,
   budget: Budget,
   tasks: readonly Doc<'issues'>[],
 ) {
-  const levels = await Promise.all(tasks.map((task) => access.level(task.project_id)))
+  const levels = await Promise.all(
+    tasks.map((task) => unlessUnchecked(access.level(task.project_id), undefined)),
+  )
   const groups = await groupsOf(ctx, access, budget, tasks)
   const rows: ShortRow[] = []
   for (const [i, task] of tasks.entries()) {
     const group = groups[i]
     const level = levels[i]
-    if (group !== undefined && level !== null) rows.push(shortRow(task, group, level))
+    if (group !== undefined && level !== null && level !== undefined)
+      rows.push(shortRow(task, group, level))
   }
-  return { rows, complete: groups.every((group) => group !== undefined) }
+  return {
+    rows,
+    complete:
+      groups.every((group) => group !== undefined) && levels.every((level) => level !== undefined),
+  }
 }
 
 /** The parent of `task` as a short row when the caller is shown it, else
@@ -519,12 +571,17 @@ async function shownParent(
  *   asks with the caller's seat in this organization only, never another
  *   seat of the login (lib/functions.ts loadMember), so another
  *   organization's archived task answers unavailable.
- * - `{ state: 'unavailable' }` for everything else, alike.
+ * - `{ state: 'unavailable' }` for everything else, alike, also where a
+ *   bound stopped the check of the caller's access on the task, its project
+ *   or its parent (lib/access.ts accessUnchecked), so the answer does not
+ *   tell a refused check from a hidden task, and never leaves out a parent
+ *   it could not check as hidden.
  *
  * The subtasks load with the task because the window needs the group facts
  * at once: the status control, the owner rule and the remaining total
- * depend on whether the task is a group. Past TASK_WINDOW the subtasks
- * answer `complete: false` with the rows read; has_subtasks then says
+ * depend on whether the task is a group. Past TASK_WINDOW, or at a subtask
+ * whose access check a bound stopped, the subtasks answer `complete: false`
+ * with the rows read before it; has_subtasks then says
  * whether one read counts, and has_hidden_subtasks is true, so the window
  * can say its completion is unknown. A subtask whose own has_subtasks is
  * true is a group stored before the rule of one level, and the answer holds
@@ -536,7 +593,13 @@ async function shownParent(
  * LIMITS.labels.max (model/labels.ts setTaskLabel), so only rows stored
  * against that rule could pass the stop, and those past it are left out.
  */
-export async function readWindowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
+export const readWindowTask = (ctx: QueryCtx, me: Doc<'profiles'>, ref: string) =>
+  unlessUnchecked(windowTask(ctx, me, ref), UNAVAILABLE)
+
+/* readWindowTask's answer while the checks of the caller's access on the
+ * task, its project and its parent finish; a subtask's that a bound stops
+ * ends the subtask list instead (budgetIn inOrder). */
+async function windowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
   const task = await taskByRef(ctx, me.org_id, ref)
   if (task === null) return UNAVAILABLE
   const access = accessOf(ctx, me)
@@ -602,8 +665,9 @@ export async function readWindowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: st
  *   the other end's is in the answer. A link grants no access.
  * - `{ state: 'unavailable' }` otherwise, alike for every reason.
  *
- * Past TASK_WINDOW.rows links or TASK_WINDOW.linkBytes it answers
- * `complete: false` with the links whose other end it read.
+ * Past TASK_WINDOW.rows links or TASK_WINDOW.linkBytes, or at an other end
+ * whose access check a bound stopped (lib/access.ts accessUnchecked), it
+ * answers `complete: false` with the links whose other end it read before.
  */
 export async function readWindowLinks(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
   const opened = await openedTask(ctx, me, issueId)

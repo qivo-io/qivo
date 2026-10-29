@@ -20,7 +20,8 @@
  * picker refuses, with the write's sentence, a caller the write would
  * refuse. An unknown id, a project of another organization, one in Deleted
  * items and one the caller neither sees nor manages answer `unavailable`
- * alike. get addresses a project by id alone and resolves the caller's seat
+ * alike, as does one whose access check the bounds of the caller's own
+ * reads stopped (lib/access.ts accessUnchecked). get addresses a project by id alone and resolves the caller's seat
  * in its organization; the others take the organization from the app, which
  * has it from get. They are live queries, like the page they serve, and
  * read no task, comment, file or milestone. The lists answer `not_ready`

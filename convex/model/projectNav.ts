@@ -697,8 +697,9 @@ type Held = { grantees: Grantee[]; onRoot: boolean }
 /**
  * Whether seat `me`, who sees through `access`, sees project `p`, a live
  * project a search of names read in this transaction, under the rule of
- * lib/access.ts canSeeProject, without the walk of a top-level project's
- * sub-projects that the rule's navigation reads whole (projectLevelsOf
+ * lib/access.ts canSeeProject, from reach rows read within the search's
+ * budget, where projectLevelsOf's navigation reads them within OWN_READS
+ * and, without nav_at, a top-level project's sub-projects (projectLevelsOf
  * navigates). Main Search's seats searched whole ask it (lib/mainSearch.ts),
  * and so can the directory's name search. Each project is judged once.
  *
@@ -739,10 +740,13 @@ type Held = { grantees: Grantee[]; onRoot: boolean }
  *
  * Every read goes through `budget`, which throws to stop the caller: each
  * project above a sub-project, each reach row and each sub-project a row
- * names, and after each access check its own reads (`recount`), which for a
- * project shared with many teams can be many rows (projectLevelsOf). A read
+ * names, and after each access check its own reads (`recount`), at most
+ * lib/access.ts OWN_READS's figures for one question and the person's own
+ * rows (lib/mainSearch.ts searchReads). A read
  * that throws fails every later answer that awaits it (the grantees, the
- * root rows, a project asked again), so a caller stops at the first throw.
+ * root rows, a project asked again), so a caller stops at the first throw,
+ * as it does at an access check a bound of OWN_READS stopped (lib/access.ts
+ * accessUnchecked).
  */
 export function projectSight(
   ctx: QueryCtx,

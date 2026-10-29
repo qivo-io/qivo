@@ -180,7 +180,10 @@ type ArchivedPageAnswer = {
  * answer an empty last page alike. A caller who is no organization admin
  * gets `too_wide` and no rows for a scope with more of their projects than
  * one page merges side by side, as a page never reads the organization's
- * archive for them; a narrower scope lists them. `limit` is a whole number
+ * archive for them; a narrower scope lists them. A check of the caller's
+ * access that a bound of their own reads stopped is refused with reason
+ * `access_unchecked` (lib/access.ts accessUnchecked), which the app's page
+ * shows as a failed load with Retry. `limit` is a whole number
  * from 1 to ARCHIVED_PAGE_ROWS, the 25 rows a page shows, and that many when
  * absent. */
 export const archivedPage = authedQuery({

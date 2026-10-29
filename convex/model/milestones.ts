@@ -36,6 +36,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
   canSeeProject,
   hasProjectLevel,
+  isAccessUnchecked,
   levelRank,
   projectLevelsOf,
   receivesTeamAccess,
@@ -715,8 +716,9 @@ const scopeCeiling = (m: TransactionMetrics): ReadCeiling => {
 /* How many projects the check of a read's projects asks the level of at
  * once, between two looks at its reads. A project's check reads its team
  * shares one by one while projectLevelsOf cannot read the caller's own at
- * once (lib/access.ts OWN_READS), so a batch passes the ceiling by at most
- * the shares of this many projects. */
+ * once, at most OWN_READS's figures for one question and the reads of the
+ * caller's own rows it starts (lib/access.ts OWN_READS), so a batch passes
+ * the ceiling by at most those of this many projects. */
 const SCOPE_BATCH = 8
 
 /** The reason of the refusal of a milestone read whose projects need more
@@ -879,11 +881,9 @@ export const MILESTONE_NAV = { children: 64 }
  * read is counted under `ceiling` or follows a look at it, and past the
  * ceiling the check throws `refusal()`. It passes the ceiling by at most
  * one sub-project's own access check. That check is the access layer's,
- * which reads every team share on the sub-project before the next look
- * (lib/access.ts projectLevelsOf), so a sub-project shared with tens of
- * thousands of teams passes Convex's document limit here, as it does in
- * every access check of that sub-project. Bounding it belongs in
- * lib/access.ts. */
+ * within lib/access.ts OWN_READS: at most projectShares team shares of the
+ * sub-project, then the caller's own rows, and past those bounds it refuses
+ * (accessUnchecked), which this check passes on beside its own refusal. */
 function navigationOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -971,11 +971,20 @@ function navigationOf(
           ? children
           : ((await ownByParent()).get(root.id) ?? [])
       const levels = projectLevelsOf(ctx, me, [root, ...asked])
+      // a child whose check a bound of the access layer stopped refuses the
+      // answer only if no later child shows the project
+      let unchecked: unknown
       try {
         for (const child of asked) {
           if (!(await readsUnder(ctx, ceiling))) throw refusal()
-          if ((await levels.level(child.id, false)) !== null) return true
+          try {
+            if ((await levels.level(child.id, false)) !== null) return true
+          } catch (e) {
+            if (!isAccessUnchecked(e)) throw e
+            unchecked ??= e
+          }
         }
+        if (unchecked !== undefined) throw unchecked
         return false
       } finally {
         // the access checks read past the guard's count
@@ -1007,7 +1016,10 @@ function navigationOf(
  * it refuses the whole read (MILESTONE_READ_TOO_LARGE) instead of answering
  * for part of the projects, so the caller can ask for fewer. It can pass
  * the ceiling by one batch's checks, whose team shares projectLevelsOf may
- * read project by project, or by one sub-project's access check.
+ * read project by project, or by one sub-project's access check, each
+ * within lib/access.ts OWN_READS. A check those bounds stop refuses the
+ * read with its own reason (accessUnchecked), beside
+ * MILESTONE_READ_TOO_LARGE.
  */
 export async function milestoneProjects(
   ctx: QueryCtx,

@@ -19,14 +19,17 @@
  * the links, subtasks or files of the tasks it names. Beside the caller's
  * own grants, memberships and team shares, the access reads take the
  * projects asked about with their grants and shares, and where a top-level
- * project shows the caller only for navigation, that project's
- * sub-projects and, for a caller in many teams, the organization's teams
- * (lib/access.ts projectLevelsOf). An edit of those reruns a query, as it
- * reruns the workspace parts, and no other edit elsewhere in the
- * organization does.
+ * project shows the caller only for navigation, the caller's reach rows
+ * under it and the sub-projects they name, once the organization's are
+ * complete, or else that project's sub-projects and, for a caller in many
+ * teams, the organization's teams (lib/access.ts projectLevelsOf). An edit
+ * of those reruns a query, as it reruns the workspace parts, and no other
+ * edit elsewhere in the organization does.
  *
  * A task outside the caller's working set answers `{state: 'unavailable'}`,
- * the same for every reason, and `task` answers `{state: 'archived'}` for an
+ * the same for every reason, a check of its access or its parent's that a
+ * bound of the caller's own reads stopped included (lib/access.ts
+ * accessUnchecked), and `task` answers `{state: 'archived'}` for an
  * archived task the Archived tasks page lists for the caller. A list a
  * budget stops answers `complete: false`, never an error. orgQuery still
  * refuses a caller without a seat in the organization, or one whose

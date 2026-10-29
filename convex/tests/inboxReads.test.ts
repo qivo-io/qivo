@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { BUILD } from '../internal/inboxItemsBackfill'
+import { OWN_READS } from '../lib/access'
 import { byId, newWindowKey } from '../lib/db'
 import { LIMITS } from '../lib/limits'
 import { TRASH_BUDGET } from '../model/deletedItems'
@@ -27,6 +28,7 @@ import {
   type OrgFixture,
   plantHiddenSibling,
   plantIssue,
+  plantLogin,
   plantMessage,
   plantProject,
   plantSeat,
@@ -41,9 +43,11 @@ import { DAY, deleteTask, installTrashTimers, runSteps, START } from './trash.se
 installTrashTimers()
 const DEFAULT_SUMMARY = { ...SUMMARY }
 const DEFAULT_REKEY = { ...REKEY }
+const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 afterEach(() => {
   Object.assign(SUMMARY, DEFAULT_SUMMARY)
   Object.assign(REKEY, DEFAULT_REKEY)
+  Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
 })
 
 /* The caller's unread summary. */
@@ -1095,5 +1099,50 @@ describe('the item actions', () => {
     expect(await pairRows(t, f.guest.id, b.id)).toHaveLength(1)
     expect(await storedItem(t, f.guest.id, b.id)).toMatchObject({ unread_count: 0 })
     expect(await drift(t)).toEqual([])
+  })
+})
+
+describe('a check of the seat access that a bound stops', () => {
+  it('leaves the summary incomplete with the count so far and the item out, and one bound up answers as with the default bounds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the guest's FW, and a team of a member that shares PCB
+    const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: me.id,
+        level: 'user',
+      })
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub2.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    await plantItems(t, f, me, 2, f.sub.id)
+    const [shared] = await plantItems(t, f, me, 1, f.sub2.id)
+    const read = async () => ({
+      summary: await summaryOf(t, me),
+      item: await itemFor(t, f, me, shared.id),
+    })
+    const usual = await read()
+    expect([usual.summary.unread_count, usual.summary.complete]).toEqual([3, true])
+    expect(usual.item.state === 'ok' && usual.item.item).not.toBeNull()
+    // the check of PCB, shared with the seat's team, stops: no share read
+    // project by project, none of their teams' at once, none team by team
+    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0 })
+    const stopped = await read()
+    expect(stopped.summary.complete).toBe(false)
+    expect(stopped.summary.unread_count).toBeLessThan(3)
+    expect(stopped.item).toEqual({ state: 'ok', item: null })
+    // room for the team asked by itself and its own row
+    Object.assign(OWN_READS, { lookups: 1, teamReads: 2 })
+    expect(await read()).toEqual(usual)
   })
 })
