@@ -428,8 +428,16 @@ describe('archiving seeded tasks', () => {
       await runBoardScaleSeed(
         [
           ...local,
-          ...['--tasks', '3', '--archived', '1', '--inbox', '1'],
-          ...['--credentials', '1', '--api-url', 'http://127.0.0.1:3215'],
+          '--tasks',
+          '3',
+          '--archived',
+          '1',
+          '--inbox',
+          '1',
+          '--credentials',
+          '1',
+          '--api-url',
+          'http://127.0.0.1:3215',
         ],
         { env, log: () => {} },
       )
