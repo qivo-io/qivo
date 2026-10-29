@@ -546,7 +546,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
               className="gap-2 p-2 data-[selected=true]:bg-primary-soft"
               onSelect={() => run(() => openTaskResult(row, ctx.openIssue))}
             >
-              <TaskResultRow row={row} />
+              <TaskResultRow row={row} mobile={mobile} />
             </CommandItem>
           ) : (
             <CommandItem
@@ -555,7 +555,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
               className="gap-2 p-2 data-[selected=true]:bg-primary-soft"
               onSelect={() => openProjectResult(row)}
             >
-              <ProjectResultRow row={row} />
+              <ProjectResultRow row={row} mobile={mobile} />
             </CommandItem>
           ),
         )}
@@ -583,60 +583,114 @@ function Kind({ children }: { children: string }) {
   )
 }
 
+/* Where a result lives, muted: its organization when it is not the home
+   one, then `place`. On a phone it takes a line of its own under the
+   title, so the title keeps the row's width. */
+function Place({
+  org,
+  mobile,
+  children,
+}: {
+  org: string | null
+  mobile: boolean
+  children: ReactNode
+}) {
+  return (
+    <span
+      data-result-place
+      className={`flex min-w-0 items-baseline gap-1 text-xs text-text-3 ${mobile ? '' : 'max-w-[40%] shrink'}`}
+    >
+      {org && (
+        <span data-result-org className="max-w-[50%] shrink-0 truncate">
+          {org}
+        </span>
+      )}
+      <span className="min-w-0 truncate">{children}</span>
+    </span>
+  )
+}
+
+/* A row's main line and its place: beside each other on a desktop, the
+   place under the main line on a phone. */
+function ResultLines({
+  main,
+  place,
+  mobile,
+}: {
+  main: ReactNode
+  place: ReactNode
+  mobile: boolean
+}) {
+  if (!mobile)
+    return (
+      <>
+        {main}
+        {place}
+      </>
+    )
+  return (
+    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span className="flex min-w-0 items-center gap-2">{main}</span>
+      {place}
+    </span>
+  )
+}
+
 /* A task result: its key, title, Archived mark, status and place, and its
    organization when it is not the home one. A group has no status. */
-function TaskResultRow({ row }: { row: SearchTaskRow }) {
-  const org = foreignOrg(row.org_id)
+function TaskResultRow({ row, mobile }: { row: SearchTaskRow; mobile: boolean }) {
   return (
     <>
       <Kind>Task</Kind>
-      <IssueKey id={row.key} />
-      <span className="min-w-0 flex-1 truncate text-base text-text-1">{row.title}</span>
-      {row.archived && (
-        <span
-          data-result-archived
-          className="shrink-0 rounded-sm border border-border px-1 text-xs text-text-2"
-        >
-          Archived
-        </span>
-      )}
-      {row.status !== null && <StatusDot status={row.status} />}
-      <span className="flex min-w-0 max-w-[40%] shrink items-baseline gap-1 text-xs text-text-3">
-        {org && (
-          <span data-result-org className="max-w-[50%] shrink-0 truncate">
-            {org}
-          </span>
-        )}
-        <span className="min-w-0 truncate">
-          <ProjectName project={row.project} owner={row.parent} />
-        </span>
-      </span>
+      <ResultLines
+        mobile={mobile}
+        main={
+          <>
+            <IssueKey id={row.key} />
+            <span className="min-w-0 flex-1 truncate text-base text-text-1">{row.title}</span>
+            {row.archived && (
+              <span
+                data-result-archived
+                className="shrink-0 rounded-sm border border-border px-1 text-xs text-text-2"
+              >
+                Archived
+              </span>
+            )}
+            {row.status !== null && <StatusDot status={row.status} />}
+          </>
+        }
+        place={
+          <Place org={foreignOrg(row.org_id)} mobile={mobile}>
+            <ProjectName project={row.project} owner={row.parent} />
+          </Place>
+        }
+      />
     </>
   )
 }
 
 /* A project result: its name, and for a sub-project its parent's, and its
    organization when it is not the home one. */
-function ProjectResultRow({ row }: { row: SearchProjectRow }) {
+function ProjectResultRow({ row, mobile }: { row: SearchProjectRow; mobile: boolean }) {
   const org = foreignOrg(row.org_id)
   return (
     <>
       <Kind>Project</Kind>
-      <span className="min-w-0 flex-1 truncate text-base text-text-1">
-        <ProjectName project={row} />
-      </span>
-      <span className="flex min-w-0 max-w-[40%] shrink items-baseline gap-1 text-xs text-text-3">
-        {org && (
-          <span data-result-org className="max-w-[50%] shrink-0 truncate">
-            {org}
+      <ResultLines
+        mobile={mobile}
+        main={
+          <span className="min-w-0 flex-1 truncate text-base text-text-1">
+            <ProjectName project={row} />
           </span>
-        )}
-        {row.parent && (
-          <span className="min-w-0 truncate">
-            <ProjectName project={row.parent} />
-          </span>
-        )}
-      </span>
+        }
+        place={
+          (org || row.parent) && (
+            <Place org={org} mobile={mobile}>
+              {row.parent && <ProjectName project={row.parent} />}
+            </Place>
+          )
+        }
+      />
     </>
   )
 }
