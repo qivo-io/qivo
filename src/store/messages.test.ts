@@ -1611,6 +1611,58 @@ describe('snooze through the client store', () => {
     expect(notes().map((n) => n.title)).toEqual([expect.stringContaining('New task')])
   })
 
+  it('silences only a restored task and the parent restored with it among the tasks a delivery brings', () => {
+    const notes = () => (window as { __qivoNotes?: { title: string }[] }).__qivoNotes ?? []
+    const org = snap.orgs[0]
+    const seat = snap.profiles[0]
+    const [parent, child, other] = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]
+    const task = (id: string, num: number, title: string, parent_id?: string) => ({
+      id,
+      org_id: org.id,
+      project_id: crypto.randomUUID(),
+      num,
+      title,
+      description: '',
+      status: 'todo' as const,
+      priority: 'medium' as const,
+      paused: false,
+      created_at: NOW,
+      updated_at: NOW,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+      ...(parent_id ? { parent_id } : {}),
+    })
+    // a restore of the subtask from Archived tasks, still on its way
+    void P.unarchiveIssue(child, 'Restored subtask', undefined, org.id)
+    // one delivery brings it with the parent the server restored with it,
+    // and another task, as the delivery that ends a large workspace's load does
+    snap.issues = [
+      ...snap.issues,
+      task(parent, 11, 'Restored parent'),
+      task(child, 12, 'Restored subtask', parent),
+      task(other, 13, 'Arriving task'),
+    ]
+    const fresh = (issue_id: string, title: string) => ({
+      id: crypto.randomUUID(),
+      org_id: org.id,
+      recipient_id: seat.id,
+      issue_id,
+      issue_title: title,
+      kind: 'change' as const,
+      detail: 'Status changed',
+      created_at: '2099-01-01T00:00:00.000Z',
+    })
+    snap.messages = [
+      ...snap.messages,
+      fresh(child, 'Restored subtask'),
+      fresh(parent, 'Restored parent'),
+      fresh(other, 'Arriving task'),
+    ]
+    snap.delivered_at = '2099-01-01T00:00:01.000Z'
+    publish(structuredClone(snap))
+    expect(notes().map((n) => n.title)).toEqual([expect.stringContaining('Arriving task')])
+  })
+
   it('judges new messages by the server delivery time, not the browser clock', () => {
     const notes = () => (window as { __qivoNotes?: { title: string }[] }).__qivoNotes ?? []
     const org = snap.orgs[0]

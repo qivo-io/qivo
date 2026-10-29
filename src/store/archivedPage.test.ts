@@ -27,21 +27,6 @@ describe('P.fetchArchivedPage', () => {
     vi.clearAllMocks()
     vi.spyOn(console, 'error').mockImplementation(() => {})
     snapshot = plannerFixture()
-    snapshot.issues.push({
-      id: 'live-task',
-      org_id: snapshot.orgs[0].id,
-      project_id: snapshot.projects[0].id,
-      num: 3,
-      title: 'Active',
-      description: '',
-      status: 'todo',
-      priority: 'medium',
-      created_at: '2026-09-01T08:00:00.000Z',
-      updated_at: '2026-09-01T08:00:00.000Z',
-      paused: false,
-      has_hidden_subtasks: false,
-      has_hidden_parent: false,
-    })
     network.onUpdate.mockImplementation((ref, _args, receive) => {
       if (getFunctionName(ref) === 'workspace:whole') receive(structuredClone(snapshot))
       return vi.fn()
@@ -76,55 +61,80 @@ describe('P.fetchArchivedPage', () => {
     updated_at: '2026-09-01T08:00:00.000Z',
     archived_at: '2026-10-01T08:00:00.000Z',
     is_group: false,
+    place: { project_name: 'Firmware', parent_name: 'Luma Sensor' },
+    owner_name: 'Rui Costa',
+    can_restore: true,
     ...patch,
   })
 
-  it('asks for one page and shapes its rows', async () => {
-    network.query.mockResolvedValue({ rows: [row()], next_cursor: '1~5~k1~x', scanned: 40 })
-    const page = await store.P.fetchArchivedPage(project(), {
-      cursor: '1~9~k2~y',
-      search: 'drift',
-      limit: 100,
-    })
+  it('asks for one page of a scope and shapes its rows', async () => {
+    network.query.mockResolvedValue({ rows: [row()], next_cursor: '3~ab', scanned: 40 })
+    const page = await store.P.fetchArchivedPage(
+      { org: org(), projectIds: [project()] },
+      { cursor: '3~cd', search: 'drift', limit: 25 },
+    )
     expect(asked()).toEqual([
       {
-        project_id: project(),
-        cursor: '1~9~k2~y',
+        scope: { org_id: org(), project_ids: [project()] },
+        cursor: '3~cd',
         search: 'drift',
-        limit: 100,
+        limit: 25,
       },
     ])
-    expect(page?.nextCursor).toBe('1~5~k1~x')
+    expect(page?.nextCursor).toBe('3~ab')
     expect(page?.scanned).toBe(40)
     expect(page?.rows[0]).toMatchObject({
       key: 'QN-12',
       uuid: 'archived-1',
+      org: org(),
       project: project(),
       isGroup: false,
       // In Review belongs to the reviewer (lib/review.ts)
       owner: 'reviewer',
       archivedAt: Date.parse('2026-10-01T08:00:00.000Z'),
+      // where it lives, who owns it and Restore come from the server
+      place: 'Luma Sensor › Firmware',
+      ownerName: 'Rui Costa',
+      canRestore: true,
     })
     expect(page?.rows[0]).not.toHaveProperty('description')
   })
 
+  it('names a project without a parent alone, and asks for All projects only when told', async () => {
+    network.query.mockResolvedValue({
+      rows: [row({ place: { project_name: 'Skunkworks', parent_name: null }, owner_name: null })],
+      next_cursor: null,
+      scanned: 1,
+    })
+    const page = await store.P.fetchArchivedPage({ org: org(), all: true })
+    expect(asked()).toEqual([{ scope: { org_id: org(), all: true } }])
+    expect(page?.rows[0]).toMatchObject({ place: 'Skunkworks', ownerName: null })
+  })
+
   it('sends no cursor or search for the first page of the whole list', async () => {
     network.query.mockResolvedValue({ rows: [], next_cursor: null, scanned: 0 })
-    await store.P.fetchArchivedPage(project(), { cursor: null, search: '' })
-    expect(asked()).toEqual([{ project_id: project() }])
+    await store.P.fetchArchivedPage(
+      { org: org(), projectIds: [project()] },
+      { cursor: null, search: '' },
+    )
+    expect(asked()).toEqual([{ scope: { org_id: org(), project_ids: [project()] } }])
   })
 
-  it('answers null when the read fails, and for either sentinel scope', async () => {
+  it('says when the scope is too wide to list side by side', async () => {
+    network.query.mockResolvedValue({ rows: [], next_cursor: null, scanned: 0, too_wide: true })
+    expect(await store.P.fetchArchivedPage({ org: org(), all: true })).toEqual({
+      rows: [],
+      nextCursor: null,
+      scanned: 0,
+      tooWide: true,
+    })
+    network.query.mockResolvedValue({ rows: [], next_cursor: null, scanned: 0 })
+    expect((await store.P.fetchArchivedPage({ org: org(), all: true }))?.tooWide).toBe(false)
+  })
+
+  it('answers null when the read fails', async () => {
     network.query.mockRejectedValue(new Error('Too many index ranges read'))
-    expect(await store.P.fetchArchivedPage(project())).toBeNull()
+    expect(await store.P.fetchArchivedPage({ org: org(), all: true })).toBeNull()
     expect(asked()).toHaveLength(1)
-    expect(await store.P.fetchArchivedPage(store.ALL_SCOPE)).toBeNull()
-    expect(await store.P.fetchArchivedPage(store.MINE_SCOPE)).toBeNull()
-    expect(asked()).toHaveLength(1)
-  })
-
-  it('tells an active task from an archived one', () => {
-    expect(store.P.isLiveTask('live-task')).toBe(true)
-    expect(store.P.isLiveTask('archived-1')).toBe(false)
   })
 })

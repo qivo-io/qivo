@@ -17,8 +17,8 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    moved meanwhile names itself, and earns an entry where it would with the
    task open. A task that arrives while a refused Back steps back is named
    once that step lands. A held address of another organization never
-   shows a home task with the same number. Settings opens meanwhile, but
-   its pages that read every task wait. Back to a task or project that is
+   shows a home task with the same number. Settings opens meanwhile, and
+   so does Archived tasks, but its pages that read every task wait. Back to a task or project that is
    gone, once every task has loaded, names the page it shows in place. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -549,6 +549,26 @@ describe('Settings while tasks load', { timeout: 30_000 }, () => {
         document.querySelector('[data-settings-page="org-labels"]'),
       'the Labels page',
     )
+  })
+
+  it('opens Archived tasks at once, with every project in its chooser', async () => {
+    const { org } = await bootLoading(true, undefined, secondProject)
+    network.query.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'issues:archivedPage'
+        ? { rows: [], next_cursor: null, scanned: 0 }
+        : null,
+    )
+    await back(`/app/${org}/settings/projects-archived-tasks`)
+    const page = '[data-settings-page="projects-archived-tasks"]'
+    await waitFor(() => document.querySelector(`${page} [data-archived-tasks]`), 'Archived tasks')
+    expect(document.querySelector(`${page} [data-tasks-loading-view]`)).toBeNull()
+    const options = [...document.querySelectorAll(`${page} [data-archive-project] option`)]
+    expect(options.map((o) => o.textContent).sort()).toEqual([
+      'All projects',
+      'Choose a project…',
+      'Second project, whole project',
+      'Task creation fixture, whole project',
+    ])
   })
 })
 

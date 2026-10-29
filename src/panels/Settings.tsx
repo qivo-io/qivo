@@ -23,19 +23,19 @@ import { OrgTeamsPage, TeamPage } from './settings/TeamSettings'
 import { OrgUsersPage } from './settings/UsersSettings'
 
 /** Whether the Settings page `page` reads every task, so it waits while a
-    large workspace still loads them (P.stillLoading): removing access from
+    large workspace still loads them (P.stillLoading). Removing access from
     a team or a project counts the tasks the change reaches before it asks,
-    Labels counts each label's tasks, and Archived tasks tells live tasks
-    from archived ones. Every other page, Sign out, tokens and people
-    included, opens at once. */
+    and Labels counts each label's tasks. Every other page, Sign out, tokens,
+    people and Archived tasks included, opens at once. Archived tasks reads
+    its rows from the server, and its chooser only the projects and
+    organizations, which a large workspace loads before its tasks. */
 function readsEveryTask(page: string) {
   return (
     page === 'org-teams' ||
     page.startsWith('team:') ||
     page === 'projects' ||
     page.startsWith('project:') ||
-    page === 'org-labels' ||
-    page === 'projects-archived-tasks'
+    page === 'org-labels'
   )
 }
 

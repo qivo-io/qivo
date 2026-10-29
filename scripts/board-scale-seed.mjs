@@ -4,7 +4,7 @@
  *   QIVO_FIXTURE_LOCAL=true QIVO_LOCAL_ADMIN_KEY=… \
  *     node scripts/board-scale-seed.mjs --local --deployment local-<name>-<port> \
  *       --url http://127.0.0.1:<port> [--site-url http://localhost:5199] [--tasks 10000] \
- *       [--inbox 600] [--credentials 45 --api-url http://127.0.0.1:<site port>]
+ *       [--archived 160] [--inbox 600] [--credentials 45 --api-url http://127.0.0.1:<site port>]
  *
  * It takes the same loopback-only target as `marketing-demo.mjs --local`, and
  * the same refusals: no deploy key, no staging, production or demo
@@ -21,6 +21,19 @@
  * due date every 7th (every other one past), a pause every 31st, a title of
  * the most characters a title holds (LIMITS.title) every 13th and no owner
  * every 11th. `--tasks 0` adds none.
+ *
+ * A run makes the credentials first, each as the login that makes it in the
+ * app, then the tasks as Nora, then archives as Nora, and posts the inbox
+ * comments last, each as its poster, so the comments land on tasks that
+ * stay active.
+ *
+ * `--archived <n>` archives the first n seeded tasks that are not parents,
+ * which spread over the seeded sub-projects as the tasks do, as Nora through
+ * issues:archive without a reason, so every archive writer runs. A run
+ * archives only those still active. The workspace leaves archived tasks out,
+ * so the seed finds them in the issues table, as the Convex CLI reads a
+ * table, with their text from issue_descriptions, and never seeds them
+ * again.
  *
  * `--inbox <n>` then gives Nora n inbox items, for checking the Inbox and
  * its bulk actions at scale: on each of the first n seeded tasks that are
@@ -150,7 +163,7 @@ const ref = (name) => makeFunctionReference(name)
 
 /** The options, or a DemoCliError naming what is wrong. */
 export function parseSeedArgs(args) {
-  const options = { target: null, tasks: 10_000, inbox: 0, credentials: 0 }
+  const options = { target: null, tasks: 10_000, archived: 0, inbox: 0, credentials: 0 }
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     const value = () => {
@@ -164,6 +177,7 @@ export function parseSeedArgs(args) {
     else if (arg === '--url') options.url = value()
     else if (arg === '--site-url') options.siteUrl = value()
     else if (arg === '--tasks') options.tasks = Number(value())
+    else if (arg === '--archived') options.archived = Number(value())
     else if (arg === '--inbox') options.inbox = Number(value())
     else if (arg === '--credentials') options.credentials = Number(value())
     else if (arg === '--api-url') options.apiUrl = value()
@@ -173,8 +187,11 @@ export function parseSeedArgs(args) {
     throw new DemoCliError('board-scale-seed writes to a disposable --local backend only.')
   if (!Number.isInteger(options.tasks) || options.tasks < 0 || options.tasks > MOST_TASKS)
     throw new DemoCliError(`--tasks takes a whole number from 0 to ${MOST_TASKS}.`)
-  if (!Number.isInteger(options.inbox) || options.inbox < 0 || options.inbox > options.tasks)
-    throw new DemoCliError('--inbox takes a whole number from 0 up to the --tasks count.')
+  for (const name of ['archived', 'inbox']) {
+    const count = options[name]
+    if (!Number.isInteger(count) || count < 0 || count > options.tasks)
+      throw new DemoCliError(`--${name} takes a whole number from 0 up to the --tasks count.`)
+  }
   const credentials = options.credentials
   if (!Number.isInteger(credentials) || credentials < 0 || credentials > MOST_CREDENTIALS)
     throw new DemoCliError(`--credentials takes a whole number from 0 to ${MOST_CREDENTIALS}.`)
@@ -388,6 +405,41 @@ export function seededTasks(issues) {
   return found
 }
 
+/** The ids of the seeded tasks to archive so that the first `count` seeded
+    tasks that are not parents are archived: `seeded` holds every seeded
+    task by number (seededTasks), and `parents` the ids of tasks with
+    subtasks. A task archived already needs nothing. */
+export function planArchive(count, seeded, parents) {
+  const ids = []
+  let taken = 0
+  for (const n of [...seeded.keys()].sort((a, b) => a - b)) {
+    if (taken === count) break
+    const { task } = seeded.get(n)
+    if (parents.has(task.id)) continue
+    taken++
+    if (!task.archived_at) ids.push(task.id)
+  }
+  return ids
+}
+
+/** The archived tasks of organization `org`, which the workspace leaves
+    out, read as the Convex CLI reads a table, each with its text: its
+    description row's, as the app reads it, or issues.description for a
+    task without one. Descriptions release 3 stops writing
+    issues.description, so the rows hold the seed's marks then. */
+export async function archivedTasksOf(client, org) {
+  const archived = (await tableRows(client, 'issues')).filter(
+    (row) => row.org_id === org && row.archived_at,
+  )
+  if (!archived.length) return archived
+  const texts = new Map()
+  for (const row of await tableRows(client, 'issue_descriptions'))
+    if (row.org_id === org && !texts.has(row.issue_id)) texts.set(row.issue_id, row.description)
+  return archived.map((row) =>
+    texts.has(row.id) ? { ...row, description: texts.get(row.id) } : row,
+  )
+}
+
 /** The work still to do for `tasks` seeded ones, given the `present` ones
     (seededTasks): one job per missing task, and one per family (every 25th
     task, its parent and the three tasks after it) that is not complete. A
@@ -448,6 +500,8 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   })
   const actor = people.page.find((profile) => profile.email === ACTOR && profile.auth_user_id)
   if (!actor) throw new DemoCliError('Seed Northstar first: marketing-demo.mjs seed --local.')
+  // the workspace leaves archived tasks out, so the admin reads them here
+  const archived = await archivedTasksOf(client, actor.org_id)
   client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
   const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
@@ -474,7 +528,9 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       apiUrl: new URL(options.apiUrl).origin,
       log,
     })
-  const jobs = planSeed(options.tasks, seededTasks(issues))
+  // a task an earlier run archived is seeded already
+  const seeded = seededTasks([...issues, ...archived])
+  const jobs = planSeed(options.tasks, seeded)
   log(`${jobs.added} seeded tasks to add in ${projects.length} sub-projects.`)
   let made = 0
   for (const job of jobs.list) {
@@ -507,6 +563,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
             'issues:create',
             {
               ...seededTask(job.first + k, org, familyProject, subtaskOwner),
+              number: job.first + k,
               parent_id: parent,
             },
           ]),
@@ -525,7 +582,9 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
           ]),
         ]
       : [['issues:create', head]]
-    for (const [name, fields] of calls) {
+    for (const [name, call] of calls) {
+      // a subtask's call names its number, which the server is not sent
+      const { number = job.first, ...fields } = call
       try {
         await client.mutation(ref(name), fields)
       } catch (error) {
@@ -533,12 +592,35 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
           `${name} refused task "${fields.title ?? fields.id}": ${error.data?.message ?? error.message}`,
         )
       }
-      if (name === 'issues:create' && ++made % 500 === 0) log(`${made} seeded tasks added`)
+      if (name !== 'issues:create') continue
+      seeded.set(number, { task: { id: fields.id }, parent: fields.parent_id ?? null })
+      if (++made % 500 === 0) log(`${made} seeded tasks added`)
     }
   }
   log(`Done: ${made} seeded tasks added in Northstar on ${target.url}.`)
+  if (options.archived > 0) {
+    const parents = new Set([...issues, ...archived].map((task) => task.parent_id).filter(Boolean))
+    await seedArchive(planArchive(options.archived, seeded, parents), { client, org, target, log })
+  }
   if (options.inbox > 0)
     await seedInbox(options.inbox, { client, target, people: people.page, actor, org, log })
+}
+
+/* Archives the tasks `ids` (planArchive) through `client`, which acts as
+   Nora. */
+async function seedArchive(ids, { client, org, target, log }) {
+  log(`${ids.length} seeded tasks to archive.`)
+  for (const [i, id] of ids.entries()) {
+    try {
+      await client.mutation(ref('issues:archive'), { id, org_id: org })
+    } catch (error) {
+      throw new DemoCliError(
+        `issues:archive refused task ${id}: ${error.data?.message ?? error.message}`,
+      )
+    }
+    if ((i + 1) % 100 === 0) log(`${i + 1} seeded tasks archived`)
+  }
+  log(`Done: ${ids.length} seeded tasks archived in Northstar on ${target.url}.`)
 }
 
 /* Posts the --inbox comments (planInbox) on the seeded tasks as they are

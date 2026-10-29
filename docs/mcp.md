@@ -1878,12 +1878,23 @@ each top-level project, the rows whose `parent_id` is `null`. Each covers all
 its sub-projects you can read, even when you can read only some of them. To
 read one sub-project's archive alone, name that sub-project.
 
+A page reads only the projects it lists, side by side, and never tasks of
+projects you cannot read. Unless you are an organization admin, a project
+with more than 200 projects to list, itself and its sub-projects you can
+read, is refused, and so is one whose sub-projects' newest archived tasks
+are too large to read side by side, such as about 130 or more with very long
+descriptions. Name its sub-projects one at a time instead. An organization
+admin's call can read the organization's whole archive for such a project.
+
 These calls are refused: `archived: true` without `project` (`archived:
 true needs project, because archived tasks are listed one project at a
 time`), `cursor` without `archived: true` (`cursor works only with archived:
 true`), an `offset` other than `0` with `archived: true` (`offset does not
-apply to archived tasks; pass next_cursor as cursor`) and a `cursor` that is
-not a `next_cursor` (`cursor must be the next_cursor of an earlier page`).
+apply to archived tasks; pass next_cursor as cursor`), a `cursor` that is
+not a `next_cursor` (`cursor must be the next_cursor of an earlier page`)
+and a project too wide to list together, as above (`this project has too
+many sub-projects to list their archived tasks together; name one of its
+sub-projects`).
 
 ### Moving, parents and labels
 

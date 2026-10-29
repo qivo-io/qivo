@@ -1,16 +1,23 @@
 /* Settings › Projects › Archived tasks. Archived tasks are not part of the
-   working snapshot. Nothing is read until this page opens, and then one
-   project family at a time, 100 tasks a page (P.fetchArchivedPage, server
-   issues.archivedPage). Search is the main way to find a task. It asks the
-   server, which looks through every archived task of the chosen project, a
-   read budget at a time, so a step can stop early and offer to search older
-   tasks. Without a search the list shows the newest archived tasks first,
-   and older ones a page at a time. Restoring goes through P.unarchiveIssue.
-   The server also restores the task's archived parents, so every row whose
-   task the snapshot shows as active again leaves the list, with no
-   reload. */
+   working snapshot. Nothing is read until this page opens and a scope is
+   chosen: a project, a top-level project with its sub-projects, or, only
+   when chosen, All projects of one organization. Then one page of 25 tasks
+   at a time (P.fetchArchivedPage, server issues.archivedPage), which
+   Previous and Next replace, so the page holds one page of rows however far
+   it goes. Search is the main way to find a task. It asks the server, which
+   looks through the scope's archived tasks a read budget at a time, so a
+   page can stop early, even with no matches, and Search older tasks goes on
+   from there. Without a search the list shows the newest archived tasks
+   first. Each row comes with its place, its owner's name and whether this
+   person may restore it, so the page reads no task, person or level from
+   the snapshot and opens while a large workspace still loads. Restoring goes
+   through P.unarchiveIssue. The row leaves at once and the page asks for
+   its tasks again, so tasks the server restored with it, such as archived
+   parents, leave too, and the page fills from the next ones. A row whose
+   task the snapshot holds as active, as when someone else restored it,
+   leaves as soon as the snapshot shows it. */
 
-import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { PageTitle } from '@/components/settingsPage'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -22,59 +29,106 @@ import { archivedAtLabel, deletedAtFull, monthLabel } from '../../lib/deletedTim
 import { limitSentence, overLimit } from '../../lib/fieldLimits'
 import { restoreFocus } from '../../lib/focusVisibility'
 import { useMobile } from '../../lib/useMobile'
-import { type ArchivedIssueVM, P } from '../../store/planner'
+import { type ArchivedListRowVM, type ArchivedScope, P } from '../../store/planner'
 import '../../styles/archived-tasks.css'
 
 /** How many tasks one page asks for. */
-export const PAGE_ROWS = 100
+export const PAGE_ROWS = 25
+
+/** How many page starts Previous keeps. Past it the oldest is dropped, so
+    Previous stops at the oldest page still held; another search or scope
+    starts again from the newest. */
+const MOST_STARTS = 1000
 
 /** How long typing rests before a search goes to the server. */
 const SEARCH_DELAY_MS = 250
 
-/** The list for one project and search text, and where its reading stands. */
+/** Where one page starts: the cursor it was asked from, null for the
+    first, and the archived tasks the pages before it looked at and the rows
+    they answered, for a search's reach and the position line. */
+type PageStart = { cursor: string | null; scanned: number; found: number }
+
+/** A move from the page on screen: to the next or the previous page, or
+    the same page asked for again after a restore. */
+type Move = 'next' | 'previous' | 'again'
+
+/** The page on screen for one scope and search, and where reading stands. */
 type Listing = {
-  rows: ArchivedIssueVM[]
-  /** where the next page starts, or null once the archive is read to its end */
+  /** which first page this listing grew from, so a restore that ends after
+      the scope or search changed asks for nothing */
+  gen: number
+  /** the scope and search the listing answers */
+  scope: ArchivedScope | null
+  query: string
+  rows: ArchivedListRowVM[]
+  /** where the next page starts, or null once the scope is read to its end */
   nextCursor: string | null
-  /** the archived tasks the server looked at so far, for a search's reach */
+  /** the scope's archived tasks this page looked at */
   scanned: number
-  /** the rows the server answered so far, restored ones included, so a
-      search that found matches still says so once they are all restored */
-  found: number
-  phase: 'first' | 'failedFirst' | 'ready' | 'more' | 'failedMore'
+  /** the rows the server answered for this page, restored ones included */
+  answered: number
+  /** the starts of the pages walked to, the page on screen last */
+  starts: PageStart[]
+  /** whether the scope holds more of this person's projects than one page
+      lists side by side, which a narrower scope lists */
+  tooWide: boolean
+  phase: 'first' | 'failedFirst' | 'ready'
+  /** a move that runs, or that failed while the page stays on screen */
+  moving: { to: Move; failed: boolean } | null
 }
 
-const START: Listing = { rows: [], nextCursor: null, scanned: 0, found: 0, phase: 'first' }
+const START: Omit<Listing, 'gen' | 'scope' | 'query'> = {
+  rows: [],
+  nextCursor: null,
+  scanned: 0,
+  answered: 0,
+  starts: [{ cursor: null, scanned: 0, found: 0 }],
+  tooWide: false,
+  phase: 'first',
+  moving: null,
+}
 
 /** `n` with thousands separators, "1,000". */
 const count = (n: number) => n.toLocaleString('en-US')
 /** "1 archived task", "1,000 archived tasks". */
 const tasks = (n: number) => `${count(n)} archived task${n === 1 ? '' : 's'}`
 
-/** "Luma Sensor › Firmware" for a sub-project, the name alone otherwise. */
-function placeOf(projectId: string): string {
-  const project = P.project(projectId)
-  if (!project) return ''
-  const parent = project.parent ? P.project(project.parent) : undefined
-  return parent ? `${parent.name} › ${project.name}` : project.name
+/** The chooser's value for All projects of organization `org`. */
+const allOf = (org: string) => `all:${org}`
+
+/** The scope the chooser's value `choice` names, or null for none. */
+function scopeOf(choice: string): ArchivedScope | null {
+  if (choice.startsWith('all:')) return { org: choice.slice(4), all: true }
+  const project = choice ? P.project(choice) : undefined
+  return project ? { org: project.org, projectIds: [project.id] } : null
 }
 
 /** The Archived tasks page, opened on `initialProject` when it is a project
-    the person can see, else on no project until they choose one. */
+    the person can see, else on no scope until they choose one. */
 export function ArchivedTasksPage({ initialProject }: { initialProject?: string | null }) {
   const mobile = useMobile()
   // every visible project (navigation is flat since 0078) with its visible
-  // sub-projects; seeing the archive needs only visibility, and restoring is
-  // checked per row
+  // sub-projects; seeing the archive needs only visibility, and the server
+  // says per row whether this person may restore it
   const groups = P.visibleProjects().map((meta) => ({
     meta,
     subs: (meta.children || [])
       .map((id: string) => P.project(id))
       .filter((sp) => !!sp && P.canSee(sp.id)),
   }))
+  // the organizations of those projects, each offered as All projects
+  const orgs = [...new Set(groups.map((g) => g.meta.org))]
   const known = (id: string | null | undefined) =>
     !!id && groups.some((g) => g.meta.id === id || g.subs.some((sp) => sp?.id === id))
-  const [project, setProject] = useState(known(initialProject) ? (initialProject as string) : '')
+  const [choice, setChoice] = useState(known(initialProject) ? (initialProject as string) : '')
+  // a project that left the chooser, as when it is archived or access to it
+  // ends, leaves no rows under another entry: the page starts again with no
+  // scope, and so does All projects of an organization no longer offered
+  const offered = choice.startsWith('all:') ? orgs.includes(choice.slice(4)) : known(choice)
+  const gone = choice !== '' && !offered
+  useEffect(() => {
+    if (gone) setChoice('')
+  }, [gone])
   const [search, setSearch] = useState('')
   // the search the list answers, which is the trimmed text once typing
   // rests, and empty at once when the box is cleared
@@ -92,20 +146,39 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
     return () => window.clearTimeout(timer)
   }, [text, tooLong])
 
-  const [list, setList] = useState<Listing>(START)
+  const [list, setList] = useState<Listing>({ ...START, gen: 0, scope: null, query: '' })
+  // the listing as last committed, for moves and restores that end later,
+  // and the generation of the newest first page, both set during the commit
+  // so no answer that lands after a change of scope or search acts on the
+  // listing before it
+  const listRef = useRef(list)
+  const genRef = useRef(0)
+  useLayoutEffect(() => {
+    listRef.current = list
+  })
   const [attempt, setAttempt] = useState(0)
   const [restoring, setRestoring] = useState<ReadonlySet<string>>(() => new Set())
-  // answers for an older project, search or attempt are dropped
+  // answers for an older scope, search, page or attempt are dropped
   const seqRef = useRef(0)
   const searchRef = useRef<HTMLInputElement>(null)
   const pageRef = useRef<HTMLDivElement>(null)
   // a focus move for after the next commit, once new rows are in or a
-  // restored one has left
+  // restored one has left, and a read of the page again that a restore
+  // owes once the Next or Previous it landed during settles
   const focusNext = useRef<(() => void) | null>(null)
+  const afterCommit = useRef<(() => void) | null>(null)
+  // the generation a restore owes a read of the page again, if any
+  const owedRef = useRef<number | null>(null)
+  // the rows that followed a restored row, then those before it nearest
+  // first, for focus once the page is read again without it
+  const followRef = useRef<string[]>([])
   useEffect(() => {
-    const run = focusNext.current
+    const focus = focusNext.current
+    const then = afterCommit.current
     focusNext.current = null
-    run?.()
+    afterCommit.current = null
+    focus?.()
+    then?.()
   })
 
   // Search is the main control, so it takes focus as the page opens. A
@@ -114,101 +187,167 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
     if (!mobile) restoreFocus(searchRef.current)
   }, [mobile])
 
-  /* The first page for the project and search, again on Retry. */
-  useEffect(() => {
+  /* The first page for the scope and search, again on Retry. Any change
+     starts again at the first page and forgets the pages walked and any
+     read a restore owed. It runs during the commit, so the generation
+     changes before any later answer can look at it. */
+  useLayoutEffect(() => {
     const seq = ++seqRef.current
-    setList(START)
-    if (!project) return
-    void P.fetchArchivedPage(project, { search: query, limit: PAGE_ROWS }).then((page) => {
+    const scope = scopeOf(choice)
+    genRef.current = seq
+    owedRef.current = null
+    setList({ ...START, gen: seq, scope, query })
+    if (!scope) return
+    void P.fetchArchivedPage(scope, { search: query, limit: PAGE_ROWS }).then((page) => {
       if (seqRef.current !== seq) return
-      setList(
-        page
-          ? {
+      setList((current) =>
+        current.gen !== seq
+          ? current
+          : page
+            ? {
+                ...current,
+                rows: page.rows,
+                nextCursor: page.nextCursor,
+                scanned: page.scanned,
+                answered: page.rows.length,
+                tooWide: page.tooWide,
+                phase: 'ready',
+              }
+            : { ...current, phase: 'failedFirst' },
+      )
+    })
+  }, [choice, query, attempt])
+
+  /* The element inside the page that `selector` names, or null. */
+  const pageElement = (selector: string) =>
+    pageRef.current?.querySelector<HTMLElement>(selector) ?? null
+  /* The button of move `to`, or null when it is not shown. */
+  const buttonOf = (to: Move) =>
+    pageElement(to === 'previous' ? '[data-archive-previous]' : '[data-archive-more]')
+
+  /* The first listed row, or null. */
+  const firstRow = () => pageElement('[data-archive-row]')
+  /* Where focus goes when nothing in the page holds it: `first` if given,
+     else Next or Previous, else the search, which a phone leaves alone. */
+  const focusInPage = (first: HTMLElement | null) => {
+    const button = buttonOf('next') ?? buttonOf('previous')
+    if (first) restoreFocus(first)
+    else if (button) restoreFocus(button)
+    else if (!mobile) restoreFocus(searchRef.current)
+  }
+
+  /* Moves from the page on screen, `to` the next page, the previous one, or
+     the same page again. The rows on screen stay until the answer replaces
+     them, and a failed move keeps them with a Retry. Focus moves to the
+     first row of a new page. A Next or Previous waits for no restore's read
+     of the page again, which it replaces, and a read a restore owed runs
+     once it lands. Nothing it does reaches a listing of another
+     generation. */
+  const go = (to: Move) => {
+    const current = listRef.current
+    const { scope, moving, gen } = current
+    if (gen !== genRef.current || !scope || current.phase !== 'ready') return
+    if (moving && !moving.failed && moving.to !== 'again') return
+    const here = current.starts[current.starts.length - 1]
+    let starts = current.starts
+    if (to === 'next') {
+      if (current.nextCursor === null) return
+      const after = {
+        cursor: current.nextCursor,
+        scanned: here.scanned + current.scanned,
+        found: here.found + current.answered,
+      }
+      starts = [...current.starts, after].slice(-MOST_STARTS)
+    } else if (to === 'previous') {
+      if (current.starts.length < 2) return
+      starts = current.starts.slice(0, -1)
+    }
+    const start = starts[starts.length - 1]
+    const seq = ++seqRef.current
+    // a Retry leaves with its failed line, so focus goes to the move's
+    // button, or for a read of the page again into the page
+    if (moving?.failed)
+      focusNext.current = () => {
+        if (pageRef.current?.contains(document.activeElement)) return
+        if (to === 'again') focusInPage(null)
+        else restoreFocus(buttonOf(to))
+      }
+    setList((c) => (c.gen !== gen ? c : { ...c, moving: { to, failed: false } }))
+    void P.fetchArchivedPage(scope, {
+      cursor: start.cursor,
+      search: current.query,
+      limit: PAGE_ROWS,
+    }).then((page) => {
+      if (seqRef.current !== seq || genRef.current !== gen) return
+      if (!page) {
+        // the move's button leaves with the failed move, so focus goes to Retry
+        focusNext.current = () => {
+          if (!pageRef.current?.contains(document.activeElement))
+            restoreFocus(pageElement('[data-archive-retry]'))
+        }
+        setList((c) => (c.gen !== gen ? c : { ...c, moving: { to, failed: true } }))
+        return
+      }
+      const follow = to === 'again' ? followRef.current : []
+      if (to === 'again') followRef.current = []
+      focusNext.current = () => {
+        const active = document.activeElement
+        // a new page: focus goes to its first row, which scrolls into view.
+        // The same page asked again leaves focus where it is, unless it was
+        // on a row that left; then it goes to the first row still listed of
+        // those that followed a restored row.
+        if (to !== 'again') {
+          const first = firstRow()
+          if (first) first.focus()
+          else if (!pageRef.current?.contains(active)) focusInPage(null)
+        } else if (!active || active === document.body) {
+          const kept = follow
+            .map((uuid) => pageElement(`[data-archive-row="${uuid}"]`))
+            .find((el) => el !== null)
+          focusInPage(kept ?? null)
+        }
+      }
+      setList((c) =>
+        c.gen !== gen
+          ? c
+          : {
+              ...c,
               rows: page.rows,
               nextCursor: page.nextCursor,
               scanned: page.scanned,
-              found: page.rows.length,
-              phase: 'ready',
-            }
-          : { ...START, phase: 'failedFirst' },
+              answered: page.rows.length,
+              tooWide: page.tooWide,
+              starts,
+              moving: null,
+            },
       )
-    })
-  }, [project, query, attempt])
-
-  /* The listed row of task `uuid`, or null when it is not shown. */
-  const rowElement = (uuid: string) =>
-    pageRef.current?.querySelector<HTMLElement>(`[data-archive-row="${uuid}"]`) ?? null
-
-  /* The next page, appended. Focus moves to its first new row. A step that
-     adds none leaves focus on its button, which stays in place while the
-     step runs, or on the search once the archive ends. */
-  const loadMore = () => {
-    if (!project || list.nextCursor === null || list.phase === 'more') return
-    const seq = seqRef.current
-    // a Retry leaves with its failed line, so focus goes to the step's button
-    if (list.phase === 'failedMore')
-      focusNext.current = () => {
-        const more = pageRef.current?.querySelector<HTMLElement>('[data-archive-more]')
-        if (!pageRef.current?.contains(document.activeElement)) restoreFocus(more)
-      }
-    setList((current) => ({ ...current, phase: 'more' }))
-    void P.fetchArchivedPage(project, {
-      cursor: list.nextCursor,
-      search: query,
-      limit: PAGE_ROWS,
-    }).then((page) => {
-      if (seqRef.current !== seq) return
-      if (!page) {
-        // the button leaves with the failed step, so focus goes to Retry
-        focusNext.current = () => {
-          const retry = pageRef.current?.querySelector<HTMLElement>('[data-archive-retry]')
-          if (!pageRef.current?.contains(document.activeElement)) restoreFocus(retry)
-        }
-        setList((current) => ({ ...current, phase: 'failedMore' }))
-        return
-      }
-      focusNext.current = () => {
-        const fresh = page.rows.find((row) => !P.isLiveTask(row.uuid))
-        const rowEl = fresh ? rowElement(fresh.uuid) : null
-        // focus goes to the first new row and scrolls it into view. Without
-        // one it stays where it is in the page, such as on the button. When
-        // it is outside the page, as after a tap that does not focus a
-        // button, it goes to the button, or to the search once the archive
-        // ends. A phone leaves the search alone, as its keyboard would cover
-        // the list.
-        if (rowEl) rowEl.focus()
-        else if (!pageRef.current?.contains(document.activeElement)) {
-          const more = pageRef.current?.querySelector<HTMLElement>('[data-archive-more]')
-          if (more) restoreFocus(more)
-          else if (!mobile) restoreFocus(searchRef.current)
-        }
-      }
-      setList((current) => ({
-        rows: [...current.rows, ...page.rows],
-        nextCursor: page.nextCursor,
-        scanned: current.scanned + page.scanned,
-        found: current.found + page.rows.length,
-        phase: 'ready',
-      }))
     })
   }
 
-  // a restored task, and any archived parent the server restored with it,
-  // is active in the snapshot again, and so is one someone else restored
-  const visible = list.rows.filter((row) => !P.isLiveTask(row.uuid))
+  /* A restore that landed while a move ran owes the page a read, which goes
+     once a listing of its generation commits ready with no move running,
+     whichever of the two landed first. It runs during the commit, after
+     listRef holds the listing. */
+  useLayoutEffect(() => {
+    if (owedRef.current === list.gen && list.phase === 'ready' && list.moving === null) {
+      owedRef.current = null
+      afterCommit.current = () => go('again')
+    }
+  })
 
-  /* Restores `row`'s task. Once it succeeds the row leaves, and focus moves
-     to the next row still listed when it was on this one. */
-  const restore = (row: ArchivedIssueVM) => {
+  /* Restores `row`'s task. Once it succeeds the row leaves, focus moves to
+     the next row still listed when it was on this one, and the page asks
+     for its tasks again, which fills it. A refused restore keeps the row,
+     and P.unarchiveIssue says why. */
+  const restore = (row: ArchivedListRowVM) => {
     if (restoring.has(row.uuid)) return
-    // the rows around this one, for focus once it leaves. They are taken
-    // now, because the snapshot that shows the task active again arrives
-    // before the restore's answer, and the row leaves with it.
+    // the rows around this one, for focus once it leaves
     const shown = [...(pageRef.current?.querySelectorAll<HTMLElement>('[data-archive-row]') ?? [])]
     const at = shown.findIndex((el) => el.dataset.archiveRow === row.uuid)
     const around = at < 0 ? [] : [...shown.slice(at + 1), ...shown.slice(0, at).reverse()]
+    const gen = listRef.current.gen
     setRestoring((current) => new Set(current).add(row.uuid))
-    void P.unarchiveIssue(row.uuid, row.title, row.project).then((ok) => {
+    void P.unarchiveIssue(row.uuid, row.title, row.project, row.org).then((ok) => {
       setRestoring((current) => {
         const next = new Set(current)
         next.delete(row.uuid)
@@ -216,33 +355,52 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
       })
       if (!ok) return // unarchiveIssue toasted why
       window.showToast?.(`Restored ${row.key}`)
+      if (genRef.current !== gen) return
       // focus goes to the next row still listed, else the nearest one
       // before it, unless it has moved on from the row and its button
       const active = document.activeElement
       if (!active || active === document.body || active.closest('[data-archive-row]') === shown[at])
         focusNext.current = () =>
           restoreFocus(around.find((el) => el.isConnected) ?? (mobile ? null : searchRef.current))
-      setList((current) => ({ ...current, rows: current.rows.filter((r) => r.uuid !== row.uuid) }))
+      followRef.current = around.flatMap((el) => el.dataset.archiveRow ?? [])
+      setList((current) =>
+        current.gen === gen
+          ? { ...current, rows: current.rows.filter((r) => r.uuid !== row.uuid) }
+          : current,
+      )
+      // a Next or Previous running now replaces the page, so the read waits
+      // for it
+      const moving = listRef.current.moving
+      if (moving && !moving.failed && moving.to !== 'again') owedRef.current = gen
+      else go('again')
     })
   }
 
-  const searching = query !== ''
+  const searching = list.query !== ''
   const ended = list.nextCursor === null
-  const projectName = project ? P.project(project)?.name : undefined
-  const reach = count(list.scanned)
+  const start = list.starts[list.starts.length - 1]
+  const later = list.starts.length > 1
+  const ready = list.phase === 'ready'
+  // a task the snapshot holds is active, whoever restored it, even while a
+  // large workspace still loads
+  const visible = list.rows.filter((row) => !P.isLiveTask(row.uuid))
+  const rowsShown = visible.length
+  // how far a search has read, this page included
+  const reach = start.scanned + list.scanned
 
-  // the count line under the filters, once the first page is in
+  // the position line under the filters, once a page with rows is in
   let countText = ''
-  if (!tooLong && list.phase !== 'first' && list.phase !== 'failedFirst' && visible.length > 0) {
-    if (searching)
-      countText = ended
-        ? `${count(visible.length)} found`
-        : `${count(visible.length)} found in the newest ${reach}`
-    else countText = ended ? tasks(visible.length) : `Newest ${tasks(visible.length)}`
+  if (!tooLong && ready && rowsShown > 0) {
+    const from = start.found + 1
+    const to = start.found + rowsShown
+    if (ended && !later) countText = searching ? `${count(rowsShown)} found` : tasks(rowsShown)
+    else if (from === to) countText = `${searching ? 'Match' : 'Archived task'} ${count(from)}`
+    else countText = `${searching ? 'Matches' : 'Archived tasks'} ${count(from)} to ${count(to)}`
   }
 
+  const projectName = list.scope && !('all' in list.scope) ? P.project(choice)?.name : undefined
   let body: ReactNode = null
-  if (!project) body = <ListNote>Choose a project to see its archived tasks.</ListNote>
+  if (!list.scope) body = <ListNote>Choose a project to see its archived tasks.</ListNote>
   else if (tooLong) body = <ListNote>{limitSentence(LIMITS.search)}</ListNote>
   else if (list.phase === 'first')
     body = (
@@ -250,53 +408,100 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
     )
   else if (list.phase === 'failedFirst')
     body = <Failed onRetry={() => setAttempt((n) => n + 1)}>Couldn't load the archive.</Failed>
-  else if (visible.length === 0 && ended)
+  else if (list.tooWide)
+    // a page reads only this person's own projects, and these are too many
+    // to read side by side, so a narrower scope lists them
     body = (
       <ListNote>
-        {searching
-          ? `No archived tasks match “${query}”.`
-          : `No archived tasks in ${projectName ? `“${projectName}”` : 'this project'}.`}
+        {'all' in list.scope
+          ? 'You see too many projects to list their archived tasks together. Choose a project.'
+          : 'This project has too many sub-projects to list their archived tasks together. Choose one of its sub-projects.'}
       </ListNote>
     )
+  else if (rowsShown === 0 && ended) {
+    let note: string
+    if (start.found > 0) note = searching ? 'No older matches.' : 'No older archived tasks.'
+    else if (searching) note = `No archived tasks match “${list.query}”.`
+    else if ('all' in list.scope) {
+      const org = list.scope.org
+      const name = orgs.length > 1 ? P.orgs.find((o) => o.id === org)?.name : undefined
+      note = `No archived tasks in any project you can see${name ? ` in ${name}` : ''}.`
+    } else note = `No archived tasks in ${projectName ? `“${projectName}”` : 'this project'}.`
+    body = <ListNote>{note}</ListNote>
+  }
 
-  // the line that ends the list: the next step, the step running, or why it
-  // failed. While a step runs its button stays, with the step's static text
-  // and no action, so keyboard focus stays on it.
+  // the line that ends the list: how far the scope is read, then Previous
+  // and Next, or why a move failed. While a move runs its button stays, with
+  // static text and no action, so keyboard focus stays on it.
   let fold: ReactNode = null
-  if (project && !ended && list.phase === 'failedMore')
+  const moving = list.moving
+  const running = moving && !moving.failed && moving.to !== 'again' ? moving.to : null
+  const previousButton = later && (
+    <Button
+      type="button"
+      variant="quiet"
+      size="sm"
+      className={running === 'previous' ? 'pointer-events-none italic' : 'text-text-1'}
+      aria-disabled={running !== null || undefined}
+      data-archive-previous
+      onClick={() => go('previous')}
+    >
+      {running === 'previous' ? 'Loading…' : 'Previous'}
+    </Button>
+  )
+  const nextButton = !ended && (
+    <Button
+      type="button"
+      variant="quiet"
+      size="sm"
+      className={running === 'next' ? 'pointer-events-none italic' : 'text-text-1'}
+      aria-disabled={running !== null || undefined}
+      data-archive-more
+      onClick={() => go('next')}
+    >
+      {running === 'next'
+        ? searching
+          ? 'Searching older tasks…'
+          : 'Loading…'
+        : searching
+          ? 'Search older tasks'
+          : 'Next'}
+    </Button>
+  )
+  if (list.scope && ready && moving?.failed)
+    // the other move stays beside the failure, so the person can go on
     fold = (
-      <Failed onRetry={loadMore}>
-        {searching ? "Couldn't search older tasks." : "Couldn't load older tasks."}
+      <Failed
+        onRetry={() => go(moving.to)}
+        after={
+          <>
+            {moving.to !== 'previous' && previousButton}
+            {moving.to !== 'next' && nextButton}
+          </>
+        }
+      >
+        {moving.to === 'again'
+          ? "Couldn't load this page again."
+          : searching && moving.to === 'next'
+            ? "Couldn't search older tasks."
+            : `Couldn't load the ${moving.to} page.`}
       </Failed>
     )
-  else if (project && !ended && (list.phase === 'ready' || list.phase === 'more')) {
-    const running = list.phase === 'more'
+  else if (list.scope && ready && !list.tooWide && (later || !ended)) {
+    let note = ''
+    if (searching && !ended) {
+      if (rowsShown > 0) note = `Searched the newest ${tasks(reach)}.`
+      else if (start.found > 0) note = `No more matches in the newest ${tasks(reach)}.`
+      else note = `No matches in the newest ${tasks(reach)}.`
+    } else if (!searching && !ended && rowsShown === 0)
+      note = 'No archived task you can see is among those read so far.'
+    else if (ended && rowsShown > 0)
+      note = searching ? 'These are the oldest matches.' : 'These are the oldest archived tasks.'
     fold = (
       <FoldLine>
-        {searching && (
-          <span>
-            {list.found > 0
-              ? `Searched the newest ${tasks(list.scanned)}.`
-              : `No matches in the newest ${tasks(list.scanned)}.`}
-          </span>
-        )}
-        <Button
-          type="button"
-          variant="quiet"
-          size="sm"
-          className={running ? 'pointer-events-none italic' : 'text-text-1'}
-          aria-disabled={running || undefined}
-          data-archive-more
-          onClick={loadMore}
-        >
-          {running
-            ? searching
-              ? 'Searching older tasks…'
-              : 'Loading older tasks…'
-            : searching
-              ? 'Search older tasks'
-              : `Show ${PAGE_ROWS} older tasks`}
-        </Button>
+        {note && <span>{note}</span>}
+        {previousButton}
+        {nextButton}
       </FoldLine>
     )
   }
@@ -307,9 +512,6 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
     const label = monthLabel(at)
     const before = visible[index - 1]
     const divider = !before || monthLabel(new Date(before.archivedAt)) !== label
-    const canRestore = ['lead', 'user'].includes(P.levelOn(row.project) || '')
-    const place = placeOf(row.project)
-    const owner = row.owner ? P.user(row.owner)?.name : undefined
     return (
       <Fragment key={row.uuid}>
         {divider && (
@@ -338,8 +540,8 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
             </HoverTooltip>
           </div>
           <div className="archived-row-meta mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-text-2">
-            {place && <span>{place}</span>}
-            {owner && <span>{owner}</span>}
+            {row.place && <span>{row.place}</span>}
+            {row.ownerName && <span>{row.ownerName}</span>}
           </div>
           <HoverTooltip content={deletedAtFull(at)}>
             <span
@@ -351,7 +553,7 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
             </span>
           </HoverTooltip>
           <div className="archived-row-actions flex shrink-0 items-center justify-end">
-            {canRestore && (
+            {row.canRestore && (
               <Button
                 type="button"
                 variant="ghost"
@@ -421,13 +623,22 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
           <NativeSelect
             data-archive-project
             aria-label="Project"
-            value={project}
-            onChange={(e) => setProject(e.target.value)}
+            value={choice}
+            onChange={(e) => setChoice(e.target.value)}
             className="archived-project h-control cursor-pointer bg-surface-1 font-sans text-sm"
           >
             <option value="" disabled hidden>
               Choose a project…
             </option>
+            {/* All projects of each organization, first and never chosen
+                by itself */}
+            {orgs.map((org) => (
+              <option key={allOf(org)} value={allOf(org)}>
+                {orgs.length === 1
+                  ? 'All projects'
+                  : `All projects in ${P.orgs.find((o) => o.id === org)?.name ?? 'another organization'}`}
+              </option>
+            ))}
             {groups.map((g) => (
               <optgroup key={g.meta.id} label={P.projectLabel(g.meta)}>
                 <option value={g.meta.id}>{P.projectLabel(g.meta)}, whole project</option>
@@ -466,7 +677,7 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
   )
 }
 
-/* A quiet line in place of the list: loading, empty or no project yet. */
+/* A quiet line in place of the list: loading, empty or no scope yet. */
 function ListNote({ children }: { children: ReactNode }) {
   return <div className="px-2 py-4 text-base italic text-text-2">{children}</div>
 }
@@ -483,10 +694,19 @@ function FoldLine({ children }: { children: ReactNode }) {
   )
 }
 
-/* A read that failed, with a way to try it again. */
-function Failed({ children, onRetry }: { children: ReactNode; onRetry: () => void }) {
+/* A read that failed, with a way to try it again, and `after` it what else
+   the person can do, such as the other move. */
+function Failed({
+  children,
+  onRetry,
+  after,
+}: {
+  children: ReactNode
+  onRetry: () => void
+  after?: ReactNode
+}) {
   return (
-    <div role="alert" className="flex items-center gap-2 px-2 py-4 text-base text-text-2">
+    <div role="alert" className="flex flex-wrap items-center gap-2 px-2 py-4 text-base text-text-2">
       {children}
       <Button
         type="button"
@@ -498,6 +718,7 @@ function Failed({ children, onRetry }: { children: ReactNode; onRetry: () => voi
         <Icon name="rotateCcw" size={16} />
         Retry
       </Button>
+      {after}
     </div>
   )
 }

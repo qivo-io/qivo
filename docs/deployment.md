@@ -294,6 +294,12 @@ names the task's number. Run it again to add only the tasks still missing;
 it also finishes a parent and subtasks it stopped in the middle of, under
 the parent it already made. It writes to that local backend alone.
 
+`--archived <n>`, up to the `--tasks` count, archives the first `n` seeded
+tasks that are not parents, spread over the sub-projects as the tasks are,
+as Nora and without a reason, which gives **Archived tasks** more than one
+page, for example `--tasks 400 --archived 160`. A second run archives only
+what is still active and never seeds an archived task again.
+
 `--inbox <n>`, up to the `--tasks` count, also gives Nora `n` inbox items,
 for checking the Inbox and its bulk actions at scale. On each of the first
 `n` seeded tasks that are not archived it posts one comment that mentions
@@ -314,6 +320,11 @@ A second run adds only the credentials still missing. A credential a
 stopped run saved without all its calls stays as it is, and its number gets
 a new credential named with the next try, such as `(scale 7, try 2)`, with
 all its calls. The seed deletes and changes no credential.
+
+One run makes the credentials first, each as the login that makes it in
+the app, then the tasks and the archiving as Nora, and posts the inbox
+comments last, each as its poster, so they land on tasks that stay active
+and arrive unread.
 
 ## Production release
 

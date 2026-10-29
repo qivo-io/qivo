@@ -15,7 +15,13 @@
  * way lib/fileTokens.ts derives its key, under its own label, so there is no
  * further env var to forget and neither key works for the other. Rotating
  * the secret only ends open page sequences, whose next cursor stops opening.
- * Deterministic given key and text, so legal inside a query. */
+ * Deterministic given key and text, so legal inside a query.
+ *
+ * Every kind of archive cursor shares this key, so each one's text names
+ * its kind inside what it seals, and one kind never opens as another. A
+ * cursor of the app's Archived tasks page seals a digest of its scope
+ * (digestText), which keeps it one length however many projects the scope
+ * names. */
 
 import { gcmsiv } from '@noble/ciphers/aes.js'
 import { bytesToHex, bytesToUtf8, hexToBytes, utf8ToBytes } from '@noble/ciphers/utils.js'
@@ -52,6 +58,11 @@ const keyFor = (value: string): Promise<Uint8Array> => {
     keys.set(value, key)
   }
   return key
+}
+
+/** The SHA-256 of `text`, as 64 lowercase hex characters. */
+export async function digestText(text: string): Promise<string> {
+  return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', utf8ToBytes(text))))
 }
 
 /** `text` sealed, as lowercase hex. */
