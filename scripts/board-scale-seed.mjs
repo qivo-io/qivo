@@ -32,7 +32,8 @@
  * issues:archive without a reason, so every archive writer runs. A run
  * archives only those still active. The workspace leaves archived tasks out,
  * so the seed finds them in the issues table, as the Convex CLI reads a
- * table, and never seeds them again.
+ * table, with their text from issue_descriptions, and never seeds them
+ * again.
  *
  * `--inbox <n>` then gives Nora n inbox items, for checking the Inbox and
  * its bulk actions at scale: on each of the first n seeded tasks that are
@@ -421,6 +422,24 @@ export function planArchive(count, seeded, parents) {
   return ids
 }
 
+/** The archived tasks of organization `org`, which the workspace leaves
+    out, read as the Convex CLI reads a table, each with its text: its
+    description row's, as the app reads it, or issues.description for a
+    task without one. Descriptions release 3 stops writing
+    issues.description, so the rows hold the seed's marks then. */
+export async function archivedTasksOf(client, org) {
+  const archived = (await tableRows(client, 'issues')).filter(
+    (row) => row.org_id === org && row.archived_at,
+  )
+  if (!archived.length) return archived
+  const texts = new Map()
+  for (const row of await tableRows(client, 'issue_descriptions'))
+    if (row.org_id === org && !texts.has(row.issue_id)) texts.set(row.issue_id, row.description)
+  return archived.map((row) =>
+    texts.has(row.id) ? { ...row, description: texts.get(row.id) } : row,
+  )
+}
+
 /** The work still to do for `tasks` seeded ones, given the `present` ones
     (seededTasks): one job per missing task, and one per family (every 25th
     task, its parent and the three tasks after it) that is not complete. A
@@ -482,9 +501,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   const actor = people.page.find((profile) => profile.email === ACTOR && profile.auth_user_id)
   if (!actor) throw new DemoCliError('Seed Northstar first: marketing-demo.mjs seed --local.')
   // the workspace leaves archived tasks out, so the admin reads them here
-  const archived = (await tableRows(client, 'issues')).filter(
-    (row) => row.org_id === actor.org_id && row.archived_at,
-  )
+  const archived = await archivedTasksOf(client, actor.org_id)
   client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
   const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id

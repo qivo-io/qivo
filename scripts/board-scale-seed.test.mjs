@@ -15,7 +15,9 @@ import {
 /* A local backend the seed talks to: Nora and the people in `fake.people`,
    Northstar with one sub-project, the tasks `fake.issues` holds, in the
    workspace parts, the archived ones `fake.archived` holds, in the issues
-   table two rows a page beside a task of another organization, the personal
+   table two rows a page beside a task of another organization that carries
+   a seed mark, the description rows `fake.texts` holds beside one of that
+   organization's, the personal
    tokens, agent keys and usage rows `fake.tokens`, `fake.keys` and
    `fake.usage` hold, and every mutation it receives, with the login it came
    as. A comment whose id `fake.comments` holds is refused as taken, and an
@@ -23,6 +25,7 @@ import {
 const fake = vi.hoisted(() => ({
   issues: [],
   archived: [],
+  texts: [],
   calls: [],
   people: [],
   comments: new Set(),
@@ -43,7 +46,12 @@ vi.mock('convex/browser', () => ({
       if (name === '_system/cli/tableData' && args.table === 'issues') {
         const rows = [
           ...fake.archived,
-          { id: 'elsewhere', org_id: 'other', archived_at: 'x' },
+          {
+            id: 'elsewhere',
+            org_id: 'other',
+            archived_at: 'x',
+            description: 'Seeded by board-scale-seed as task 3.',
+          },
           ...fake.issues,
         ]
         const at = Number(args.paginationOpts.cursor ?? 0)
@@ -71,6 +79,14 @@ vi.mock('convex/browser', () => ({
             mcp_tokens: fake.tokens,
             agent_keys: fake.keys,
             billing_usage: fake.usage,
+            issue_descriptions: [
+              ...fake.texts,
+              {
+                issue_id: 'elsewhere',
+                org_id: 'other',
+                description: 'Seeded by board-scale-seed as task 3.',
+              },
+            ],
           }[args.table],
           isDone: true,
         }
@@ -383,6 +399,54 @@ describe('archiving seeded tasks', () => {
     ])
     fake.issues = []
     fake.archived = []
+  })
+
+  it('archives the first seeded tasks of families as it seeds them, after every create', async () => {
+    fake.issues = []
+    fake.archived = []
+    fake.calls = []
+    await runBoardScaleSeed([...local, '--tasks', '30', '--archived', '6'], { env, log: () => {} })
+    const creates = fake.calls.filter(([name]) => name === 'issues:create')
+    expect(creates).toHaveLength(30)
+    const idOf = new Map(creates.map(([, fields]) => [fields.description, fields.id]))
+    const archives = fake.calls.filter(([name]) => name === 'issues:archive')
+    // tasks 1 to 4 are a family under a parent the seed made, which is no seeded task
+    expect(archives).toEqual(
+      [1, 2, 3, 4, 5, 6].map((n) => [
+        'issues:archive',
+        { id: idOf.get(`Seeded by board-scale-seed as task ${n}.`), org_id: 'org' },
+        'nora-login',
+      ]),
+    )
+    const parents = fake.calls.filter(([name]) => name === 'issues:createParent')
+    expect(parents.map(([, fields]) => fields.parent_id)).toHaveLength(2)
+    for (const [, fields] of parents)
+      expect(archives.map(([, a]) => a.id)).not.toContain(fields.parent_id)
+    // every archive comes after the last create
+    const lastCreate = fake.calls.findLastIndex(([name]) => name.startsWith('issues:create'))
+    expect(fake.calls.findIndex(([name]) => name === 'issues:archive')).toBeGreaterThan(lastCreate)
+  })
+
+  it('reads an archived seeded task by its description row once its task row holds no text', async () => {
+    const seeded = (n) => ({
+      ...seededTask(n, 'org', 'sub', 'owner'),
+      id: `task${n}`,
+      parent_id: null,
+    })
+    // task 1 archived, its text only in its description row, as release 3 stores it
+    const { description, ...bare } = seeded(1)
+    fake.issues = [seeded(0)]
+    fake.archived = [{ ...bare, archived_at: '2026-10-01T00:00:00.000Z' }]
+    fake.texts = [{ issue_id: 'task1', org_id: 'org', description }]
+    fake.calls = []
+    await runBoardScaleSeed([...local, '--tasks', '3'], { env, log: () => {} })
+    // only task 2 is new; another organization's seed marks count for nothing
+    expect(fake.calls.map(([name, fields]) => [name, fields.description])).toEqual([
+      ['issues:create', 'Seeded by board-scale-seed as task 3.'],
+    ])
+    fake.issues = []
+    fake.archived = []
+    fake.texts = []
   })
 
   it('leaves an archived subtask in its family on a rerun', async () => {
