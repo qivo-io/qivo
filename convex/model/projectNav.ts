@@ -465,10 +465,11 @@ export async function syncLeads(
  * than about 3.7 KB. A rename or a key change alone reads at most 2,001
  * reach rows, about 5.9 MB at the name cap, so only one that a REST or MCP
  * update makes after an archive or a restore, which share one budget, can
- * reach it. Such an update also reads every project of the organization
- * (lib/core.ts loadCatalogue), which nothing bounds yet, so near this bound
- * at the row bounds it can pass Convex's read limit there. A mutable
- * object, so tests can lower it. */
+ * reach it. A REST or MCP update that archives or restores then reads
+ * every project of the organization for its answer (machine/projects.ts
+ * projectOut, lib/core.ts loadCatalogue), which nothing bounds yet, so near
+ * this bound at the row bounds it can pass Convex's read limit after its
+ * tree change fitted. A mutable object, so tests can lower it. */
 export const TREE_READ = { bytes: 7 * MIB }
 
 /** The index ranges a mutation's tree changes may spend on their queries,
