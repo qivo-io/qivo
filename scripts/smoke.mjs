@@ -755,11 +755,25 @@ try {
 
   // cmdk handles Home/End on its parent. Search inputs must keep the native
   // caret/selection behavior while arrows and Enter still operate the results.
+  // Search matches whole words on the server, the last one also as the start
+  // of a longer word, so the query is the start of a word that at least
+  // three task titles or project names hold: "firm" finds the Firmware
+  // project and its firmware tasks.
   const paletteQuery = await pageA.evaluate(() => {
-    const issues = window.PLANNER.issues
-    if (issues.filter((issue) => issue.title.toLowerCase().includes('firm')).length >= 3)
-      return 'firm'
-    return issues.length >= 3 ? issues[0].key.replace(/\d+$/, '') : null
+    const words = (text) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+    const texts = [
+      ...window.PLANNER.issues.map((issue) => issue.title),
+      ...window.PLANNER.projects.map((project) => project.name),
+    ]
+    const holding = (start) => texts.filter((t) => words(t).some((w) => w.startsWith(start)))
+    if (holding('firm').length >= 3) return 'firm'
+    // else the word of four letters or more that most titles hold
+    const counts = new Map()
+    for (const text of texts)
+      for (const word of new Set(words(text)))
+        if (word.length >= 4) counts.set(word, (counts.get(word) ?? 0) + 1)
+    const [word, count] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? [null, 0]
+    return count >= 3 ? word : null
   })
   if (!paletteQuery) await fail('Northstar has too few tasks for the search keyboard check')
   const searchButton = pageA.locator('button[data-sidebar-search]')
@@ -771,13 +785,23 @@ try {
     await searchButton.click()
     await searchInput.waitFor({ state: 'visible', timeout: 10000 })
     await searchInput.fill(paletteQuery)
-    await pageA.waitForFunction(
-      () =>
-        document.querySelectorAll('[cmdk-item]').length >= 3 &&
-        document.querySelector('[cmdk-item][aria-selected="true"]'),
-      null,
-      { timeout: 5000 },
-    )
+    // the server answers once typing rests, which takes a round trip
+    const shown = await pageA
+      .waitForFunction(
+        () =>
+          document.querySelectorAll('[cmdk-item]').length >= 3 &&
+          document.querySelector('[cmdk-item][aria-selected="true"]'),
+        null,
+        { timeout: 10000 },
+      )
+      .then(
+        () => true,
+        () => false,
+      )
+    if (!shown)
+      await fail(
+        `Search for "${paletteQuery}" showed ${await palette.locator('[cmdk-item]').count()} results with one selected; the keyboard check needs at least three`,
+      )
   }
   await searchButton.click()
   await closeSearch.waitFor({ state: 'visible', timeout: 10000 })
