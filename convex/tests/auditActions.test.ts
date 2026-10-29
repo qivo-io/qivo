@@ -39,6 +39,7 @@ describe('platform audit actions', () => {
   it('show a label, a former action its old one, and an unknown one as written', () => {
     expect(auditActionLabel('org.deletion_requested')).toBe('Requested organization deletion')
     expect(auditActionLabel('panorama_refill_started')).toBe('Started image import')
+    expect(auditActionLabel('legacy_icons_backfill')).toBe('Cleared legacy project and team icons')
     expect(auditActionLabel('toString')).toBe('toString')
     expect(auditActionLabel('made_up')).toBe('made_up')
   })

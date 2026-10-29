@@ -55,7 +55,6 @@ export const AUDIT_ACTION_LABELS = {
   team_counts_backfill: 'Counted the members of each team',
   used_ids_backfill: 'Recorded the ids tasks and projects hold',
   nav_backfill: 'Gave projects their archive states and reach rows',
-  legacy_icons_backfill: 'Cleared legacy project and team icons',
   panorama_library_image_added: 'Added Unsplash image to the library',
   panorama_manual_image_added: 'Uploaded image to the library',
   panorama_image_approved: 'Approved background image',
@@ -82,6 +81,7 @@ export const FORMER_AUDIT_ACTION_LABELS: Readonly<Record<string, string>> = {
   panorama_refill_completed: 'Completed image import',
   panorama_refill_failed: 'Image import failed',
   panorama_library_settings_updated: 'Updated image library settings',
+  legacy_icons_backfill: 'Cleared legacy project and team icons',
 }
 
 const LABELS: Readonly<Record<string, string>> = {

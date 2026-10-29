@@ -27,8 +27,8 @@
  * counts the index ranges and bytes of everything it reads, the projects and
  * teams a recompute reads included, and of every row it patches or deletes,
  * which Convex reads again, and ends when it has spent NAV_STEP, after one
- * row at least, so a step over large legacy rows stays inside Convex's
- * limits and every step makes progress. Once every table is walked, a run
+ * row at least, so a step over rows stored before the caps, which can be
+ * large, stays inside Convex's limits and every step makes progress. Once every table is walked, a run
  * stamps every organization without `nav_at`, in id order. Deleted items
  * keep no reach rows and a restore writes them from the grants it writes
  * back (model/deletedItems.ts restoreAccess), so this walks no deleted_rows;
@@ -103,7 +103,9 @@ import {
  * count as a range and the document's bytes too. One row's work reads about
  * ten ranges and at most five documents of any size: the row itself, a
  * project, its top-level project, a team and the project its archive state
- * patches, each up to Convex's 1 MiB. A step checks these bounds before
+ * patches, each up to Convex's 1 MiB for a row stored before the caps (a
+ * project or team within them is at most lib/limits.ts
+ * PROJECT_ROW_MAX_BYTES). A step checks these bounds before
  * each row, so the one it starts past them leaves room for that work: at
  * most 8 MiB and 5 MiB more, inside Convex's 4,096 ranges and 16 MiB.
  * Tests lower them. */
@@ -214,7 +216,7 @@ async function walk(
       orgs.add(row.org_id)
       if (write !== null) {
         await write.db.patch(row._id, { archive_state: state })
-        // the patch reads the whole project again, a legacy icon included
+        // the patch reads the whole project again
         spent.ranges += 1
         spent.bytes += estimateDocumentBytes(row)
       }

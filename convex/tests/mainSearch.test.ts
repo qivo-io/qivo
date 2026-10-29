@@ -1018,8 +1018,8 @@ describe('searching project by project', () => {
   it('stops with reads, inside the limits, while it lists projects with large rows', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // projects the guest leads, each row near Convex's 1 MiB, as a legacy
-    // icon or text can make it
+    // projects the guest leads, each row near Convex's 1 MiB, as a
+    // description stored before the caps can make it
     for (let i = 0; i < 20; i++)
       await plantProject(t, {
         org_id: f.org.id,
@@ -2260,7 +2260,7 @@ describe('project results at Convex’s limits', () => {
       parent_id: tops[i % tops.length],
       name: `Zephyr part ${i}`,
     }))
-    // rows over the caps, as a legacy icon or an older description makes
+    // rows over the caps, as a description stored before the caps makes
     // them, one a transaction
     await plantProjects(
       t,

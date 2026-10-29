@@ -1426,14 +1426,10 @@ describe('navigation-only parents', () => {
       const meta = await ctx.db.get(f.meta._id)
       await ctx.db.patch(meta!._id, {
         lead_id: f.user.id,
-        icon: 'rocket',
-        icon_color: '#335577',
         review_hours: 3,
         team_id: f.team.id,
         description: 'Parent plans',
       })
-      // a legacy team icon of any length, as stored before icons were dropped
-      await ctx.db.patch(f.team._id, { icon: 'x'.repeat(5000), icon_color: '#335577' })
     })
 
     const snap = await snapFor(subOnly)
@@ -1441,7 +1437,6 @@ describe('navigation-only parents', () => {
     // A new project field reaches navigation-only parents unless it is
     // judged here first.
     const meta = snap.projects.find((p) => p.id === f.meta.id)!
-    // the legacy icon and its color stay on the server
     expect(Object.keys(meta).sort()).toEqual([
       'created_at',
       'description',
@@ -1457,8 +1452,6 @@ describe('navigation-only parents', () => {
       'track_delay',
       'type',
     ])
-    const team = snap.teams.find((row) => row.id === f.team.id)!
-    expect('icon' in team || 'icon_color' in team).toBe(false)
     expect(snap.issues.some((i) => i.id === sibling.id)).toBe(false)
     expect(new Set(snap.access.map((a) => a.project_id))).toEqual(new Set([f.meta.id, f.sub.id]))
     expect(snap.access.some((a) => a.profile_id === siblingOnly.id)).toBe(false)

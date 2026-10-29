@@ -1647,15 +1647,13 @@ function docOf<T extends StoredTable>(row: Doc<'deleted_rows'>, table: T): Store
 
 /** A stored project as its reveal writes it back: its lead only while that
  * profile passes the reference predicate and may lead (design 6.1), its
- * legacy team only while the team passes the predicate, the name key of
- * its name, which a copy stored before keys lacks, and without the legacy
- * icon and its color, which internal/legacyIconsBackfill clears. */
+ * legacy team only while the team passes the predicate, and the name key of
+ * its name, which a copy stored before keys lacks. */
 async function cleanProject(s: Scope, p: Stored<'projects'>): Promise<Stored<'projects'>> {
   const lead = p.lead_id === undefined ? null : await profileOf(s, p.lead_id)
   const team = p.team_id === undefined ? null : await teamOf(s, p.team_id)
-  const { icon: _icon, icon_color: _iconColor, ...project } = p
   return {
-    ...project,
+    ...p,
     window_key: p.window_key ?? newWindowKey(),
     name_key: nameKey(p.name),
     lead_id: sameReference(lead, s.item) && canLeadProjects(lead) ? p.lead_id : undefined,
@@ -3041,10 +3039,7 @@ async function revealProjects(run: Run): Promise<void> {
   // have dropped or brought back (cleanProject). They read the projects
   // from what the reveal wrote and the outside parent it read, so a
   // sub-project costs no read of its top-level project; the reveal runs
-  // whole in one transaction. The projects it wrote hold no legacy icon
-  // (cleanProject). Only the outside parent can still hold one, near 1 MiB,
-  // until internal/legacyIconsBackfill clears it, and the reveal reads it
-  // once.
+  // whole in one transaction.
   const read =
     (ctx: QueryCtx): ProjectRead =>
     async (id) =>

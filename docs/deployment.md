@@ -927,24 +927,21 @@ hotfixes). Roll forward instead. If a deployment runs an earlier release
 anyway, read the dry run again after rolling forward: it finds what that
 release wrote without rows, and a run mends it.
 
-Projects and teams keep the optional legacy fields `icon` and `icon_color`,
-which no release since v0.1.15 (`31ece0f`) takes or shows. A value stored
-before has no length limit. The one-time `internal/legacyIconsBackfill`
-reports and clears them on live projects and teams and on the project copies
-Deleted items keeps, and a restore from Deleted items leaves them out. Run
-it on every hosted deployment once it serves the release that adds it, as
-the module's header says. On production, first take a backup of the
-deployment with `npx convex export` and check it with `unzip -t`. Only that
-backup keeps the cleared values, because an organization export leaves both
-fields out. Read the dry run first, then run it. A call that does not finish
-in about five minutes answers a `cursor`; call it again with the same
-arguments and that `cursor` until it answers `done`. Then check that a
-second dry run reports zero rows in every phase. Earlier releases accept
-rows without the fields, so this is no rollback floor. A release before the
-one that adds the backfill can bring a field back only by restoring a copy
-the run has not cleared yet, so after a rollback to such a release, read the
-dry run again once the deployment serves a later release. The release after
-every deployment reports zero drops the fields from the schema.
+Projects and teams no longer have the fields `icon` and `icon_color`, which
+no release since v0.1.15 (`31ece0f`) took or showed. The one-time
+`internal/legacyIconsBackfill` reported and cleared them on live projects and
+teams and on the project copies Deleted items keeps. Its dry run reported
+zero on development, staging and the demo. On production it cleared 3
+projects and 2 teams, and a second dry run reported zero, before the fields
+were dropped. Convex refuses to deploy a later commit to a backend where any
+project, team or project copy still holds one of them, for example data
+restored from a backup taken before the backfill ran. Every main commit from
+v0.1.101 (`fe9888e`) up to the release that dropped the fields has the
+backfill. Deploy the newest of them, as an older one may refuse data from a
+later schema addition, run the backfill as its header says until a second
+full dry run reports zero, and then deploy the later commit. Earlier releases
+accept rows without the fields and write none, so the drop is no rollback
+floor.
 
 Releases before v0.1.40 require every team to have `stale_days` and
 `archive_days`, which no team has now, so a rollback to one of them fails to

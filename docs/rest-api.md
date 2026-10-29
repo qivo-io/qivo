@@ -385,7 +385,7 @@ into the range.
 | Milestones per project week | 1 milestone in each calendar week, for a project and its sub-projects together | this project already has a milestone in that week, and a project can have at most 1 milestone a week. Pick another week, or move that milestone first. |
 | Tasks one access removal reassigns | 120 tasks | a removal can reassign at most 120 tasks at once, fewer when the change is too large for one request. Keep the people as Viewers or reassign some of the tasks first. |
 | People with open tasks one access removal settles | 700 people | a removal that keeps people as Viewers or reassigns their tasks can take access from at most 700 people with open tasks at once. Leave the tasks with them, or remove some of the team's members first. |
-| Sub-projects and access entries one project archive, restore, rename or key change updates | 2,000 sub-projects and access entries | archiving, restoring or renaming a project, or changing its key, can update at most 2,000 sub-projects and access entries at once. Each sub-project counts, and each person or team with access counts once for the project and once for each sub-project they have their own access to. Archive some of its sub-projects on their own first, or remove some access. |
+| Sub-projects and access entries one project archive, restore, rename or key change updates | 2,000 sub-projects and access entries | archiving, restoring or renaming a project, or changing its key, can update at most 2,000 sub-projects and access entries at once. Each sub-project counts, and each person or team with access counts once for the project and once for each sub-project they have their own access to. Archive all of its sub-projects on their own first, or remove some access. |
 
 ### Numbers and settings
 
@@ -664,7 +664,12 @@ project`.
   needs Lead on the parent). Qivo archives or restores before it changes the
   other fields, so one request may restore and rename, or archive and hand
   over the lead. The archive or restore and a rename share one budget of
-  2,000 sub-projects and access entries (see [Limits](#limits)). A project takes no archive reason, as in the app, where only
+  2,000 sub-projects and access entries (see [Limits](#limits)) and of the
+  data one change can read. A project tree past that data is a `400`
+  (`this project, or the top-level project above it, has sub-projects that hold more data than one change can read, so it cannot be archived or restored at once. Shorten the longest project names or descriptions there, or delete some of those sub-projects first.`), and nothing changes. When a request that archives or
+  restores and renames is refused on that budget, send the archive or
+  restore and the rename as two requests, which each get the whole budget.
+  A project takes no archive reason, as in the app, where only
   archiving a task asks for one. A body with `archive_reason` is a `400`
   (`only tasks take an archive reason; archive a project with archived
   alone`), and nothing changes.

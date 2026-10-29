@@ -13,6 +13,7 @@
 /// <reference types="vite/client" />
 
 import { type FunctionArgs, makeFunctionReference } from 'convex/server'
+import { ConvexError, getDocumentSize } from 'convex/values'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -20,7 +21,7 @@ import type { MutationCtx } from '../_generated/server'
 import { NAV_STEP, RUN } from '../internal/navBackfill'
 import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
-import { LIMITS } from '../lib/limits'
+import { LIMITS, MIB, NAME_MAX } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import type { OrgExportPage, OrgExportSection } from '../lib/orgExport'
 import { ACCESS_FIRST_PASS, deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
@@ -42,7 +43,7 @@ import {
   TREE_READ,
   TREE_TOO_LARGE,
 } from '../model/projectNav'
-import { createProjectCore } from '../model/projects'
+import { archiveProjectCore, createProjectCore, unarchiveProjectCore } from '../model/projects'
 import {
   as,
   expectLiveCounts,
@@ -819,6 +820,78 @@ describe('archiving and restoring a tree', () => {
     expect((await reachRows(t)).length).toBe(before.length + 2)
   }, 120_000)
 
+  it('archives and restores a project whose sub-projects were all archived on their own, whatever their entries', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const earlier = new Date(Date.parse(NOW) - 3_600_000).toISOString()
+    const meta = await plantProject(t, { org_id, lead_id: f.user.id, archive_state: 'live' })
+    // 20 sub-projects archived on their own, each with the archived child
+    // rows of 100 people, 2,000 in all, and 101 people on the project
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 20; i++) {
+        const id = uuid()
+        await ctx.db.insert('projects', {
+          id,
+          org_id,
+          type: 'project',
+          parent_id: meta.id,
+          key: `E${i}`,
+          name: `Earlier ${i}`,
+          name_key: nameKey(`Earlier ${i}`),
+          description: '',
+          sort_order: i,
+          num: 20_000 + i,
+          track_delay: false,
+          created_at: NOW,
+          archived_at: earlier,
+          archive_state: 'listed',
+        })
+        for (let n = 0; n < 100; n++)
+          await ctx.db.insert('project_reach', {
+            org_id,
+            grantee_kind: 'profile',
+            grantee_id: uuid(),
+            kind: 'child',
+            project_id: id,
+            root_id: meta.id,
+            name_key: nameKey(`Earlier ${i}`),
+            key: `E${i}`,
+            live: false,
+            on_root: false,
+          })
+      }
+    })
+    await rootRows(t, f, meta, 101)
+    // The archive carries no sub-project, so its restore reads no child
+    // row and the archive counts none: 20 sub-projects and 101 rows.
+    const lead = as(t, f.user)
+    await lead.mutation(api.projects.archive, { org_id, id: meta.id })
+    const subs = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('projects')
+          .withIndex('by_parent', (q) => q.eq('parent_id', meta.id))
+          .collect(),
+      )
+    expect(await states(t, [meta.id])).toEqual(['listed'])
+    expect(
+      (await subs()).every((p) => p.archive_state === 'under' && p.archived_at === earlier),
+    ).toBe(true)
+    await lead.mutation(api.projects.unarchive, { org_id, id: meta.id })
+    expect(await states(t, [meta.id])).toEqual(['live'])
+    expect(
+      (await subs()).every((p) => p.archive_state === 'listed' && p.archived_at === earlier),
+    ).toBe(true)
+    const rows = await reachRows(t)
+    expect(
+      rows.filter((row) => row.root_id === meta.id && row.kind === 'root' && row.live),
+    ).toHaveLength(101)
+    expect(
+      rows.filter((row) => row.root_id === meta.id && row.kind === 'child' && row.live),
+    ).toHaveLength(0)
+  })
+
   it('refuses a tree whose sub-projects pass the bytes a change reads', async () => {
     const t = newT()
     const f = await ready(t)
@@ -830,6 +903,22 @@ describe('archiving and restoring a tree', () => {
     // its own sentence, which names the cause, not the 2,000 entries
     expect((e.data as Refusal).message).toBe(TREE_TOO_LARGE)
     expect((await projectOf(t, f.meta.id))?.archived_at).toBeUndefined()
+  })
+
+  it("refuses the restore of a sub-project whose archived top-level project's sub-projects pass the bytes", async () => {
+    const t = newT()
+    const f = await ready(t)
+    const lead = as(t, f.user)
+    await lead.mutation(api.projects.archive, { org_id: f.org.id, id: f.meta.id })
+    // the restore brings the top-level project back and reads its
+    // sub-projects, which the sentence names as the top-level project's
+    TREE_READ.bytes = 600
+    const e = await expectRefusal(
+      lead.mutation(api.projects.unarchive, { org_id: f.org.id, id: f.sub.id }),
+      'rule',
+    )
+    expect((e.data as Refusal).message).toBe(TREE_TOO_LARGE)
+    expect(await states(t, [f.meta.id, f.sub.id])).toEqual(['listed', 'under'])
   })
 
   it('archives a project with more than 1,000 live sub-projects within the scheduler limit', async () => {
@@ -899,6 +988,333 @@ describe('archiving and restoring a tree', () => {
     await update({ name: 'One at a time' })
     expect(await projectOf(t, f.meta.id)).toMatchObject({ archive_state: 'listed' })
   }, 60_000)
+})
+
+/* A name at the cap whose name key NFKD expands 18 times, and a project
+ * description at the cap in a three-byte script, the largest a project row
+ * and a reach row hold (lib/limits.ts PROJECT_ROW_MAX_BYTES). */
+const WIDE_NAME = '\uFDFA'.repeat(NAME_MAX)
+const WIDE_DESCRIPTION = '\u4E00'.repeat(LIMITS.projectDescription.max)
+
+/** A top-level project of the fixture's organization, led by its user, with
+ * `subs` sub-projects and the reach rows of `rows` other people on it, every
+ * project at the row bound and every row with its name key, archived
+ * together at NOW when `archived`. Planted raw, in transactions within
+ * Convex's limits. */
+async function wideTree(t: T, f: OrgFixture, subs: number, rows: number, archived = false) {
+  const meta = await plantProject(t, {
+    org_id: f.org.id,
+    lead_id: f.user.id,
+    name: WIDE_NAME,
+    name_key: nameKey(WIDE_NAME),
+    description: WIDE_DESCRIPTION,
+    ...(archived ? { archived_at: NOW, archive_state: 'listed' } : { archive_state: 'live' }),
+  })
+  await wideSubs(t, f, meta, subs)
+  await rootRows(t, f, meta, rows)
+  return meta
+}
+
+/** Plants the reach rows of `n` more people on top-level project `meta`,
+ * with its name key, live while it is. */
+async function rootRows(t: T, f: OrgFixture, meta: Doc<'projects'>, n: number) {
+  for (let from = 0; from < n; from += 250)
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(n, from + 250); i++)
+        await ctx.db.insert('project_reach', {
+          org_id: f.org.id,
+          grantee_kind: 'profile',
+          grantee_id: uuid(),
+          kind: 'root',
+          project_id: meta.id,
+          root_id: meta.id,
+          name_key: nameKey(meta.name),
+          key: meta.key,
+          live: meta.archived_at === undefined,
+          on_root: false,
+        })
+    })
+}
+
+/** Plants `n` more sub-projects of live top-level project `meta` at the row
+ * bound, every second one archived on its own an hour before NOW, each with
+ * the child reach row of a person of its own, live while it is. */
+async function mixedSubs(t: T, f: OrgFixture, meta: Doc<'projects'>, n: number) {
+  const earlier = new Date(Date.parse(NOW) - 3_600_000).toISOString()
+  for (let from = 0; from < n; from += 200)
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(n, from + 200); i++) {
+        const num = nextWide++
+        const id = uuid()
+        const archived = i % 2 === 1
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'project',
+          parent_id: meta.id,
+          key: `W${num}`,
+          name: WIDE_NAME,
+          name_key: nameKey(WIDE_NAME),
+          description: WIDE_DESCRIPTION,
+          sort_order: num,
+          num,
+          track_delay: false,
+          created_at: NOW,
+          ...(archived
+            ? { archived_at: earlier, archive_state: 'listed' as const }
+            : { archive_state: 'live' as const }),
+        })
+        await ctx.db.insert('project_reach', {
+          org_id: f.org.id,
+          grantee_kind: 'profile',
+          grantee_id: uuid(),
+          kind: 'child',
+          project_id: id,
+          root_id: meta.id,
+          name_key: nameKey(WIDE_NAME),
+          key: `W${num}`,
+          live: !archived,
+          on_root: false,
+        })
+      }
+    })
+}
+
+/** Plants `n` more sub-projects of `meta` at the row bound, archived with it
+ * when it is archived, as wideTree plants them. */
+async function wideSubs(t: T, f: OrgFixture, meta: Doc<'projects'>, n: number) {
+  const state =
+    meta.archived_at === undefined
+      ? { archive_state: 'live' as const }
+      : { archived_at: meta.archived_at, archive_state: 'under' as const }
+  for (let from = 0; from < n; from += 250)
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(n, from + 250); i++) {
+        const num = nextWide++
+        await ctx.db.insert('projects', {
+          id: uuid(),
+          org_id: f.org.id,
+          type: 'project',
+          parent_id: meta.id,
+          key: `W${num}`,
+          name: WIDE_NAME,
+          name_key: nameKey(WIDE_NAME),
+          description: WIDE_DESCRIPTION,
+          sort_order: num,
+          num,
+          track_delay: false,
+          created_at: NOW,
+          ...state,
+        })
+      }
+    })
+}
+
+/* The number of the next sub-project wideSubs plants. */
+let nextWide = 10_000
+
+/** wideTree with `rows` reach rows and as many sub-projects as its first
+ * reads hold under TREE_READ.bytes, so one more would pass it. */
+async function treeJustUnder(t: T, f: OrgFixture, rows: number, archived = false) {
+  const meta = await wideTree(t, f, 1, rows, archived)
+  const sub = await t.run(async (ctx) =>
+    archivedSize(
+      (await ctx.db
+        .query('projects')
+        .withIndex('by_parent', (q) => q.eq('parent_id', meta.id))
+        .first()) as Doc<'projects'>,
+    ),
+  )
+  await wideSubs(t, f, meta, Math.floor((TREE_READ.bytes - (await treeBytes(t, meta))) / sub))
+  const left = TREE_READ.bytes - (await treeBytes(t, meta))
+  expect(left).toBeGreaterThanOrEqual(0)
+  expect(left).toBeLessThan(sub)
+  return meta
+}
+
+/* The size of sub-project `p` as Convex counts a document once an archive
+ * stamped it. */
+const archivedSize = (p: Doc<'projects'>) =>
+  getDocumentSize({ ...p, archived_at: p.archived_at ?? NOW, archive_state: 'listed' })
+
+/** The bytes of the sub-projects and reach rows of `meta`'s tree, which a
+ * change of the tree reads first: each sub-project at its size once
+ * archived, which every change counts, and each row as Convex counts a
+ * document. */
+const treeBytes = (t: T, meta: Doc<'projects'>) =>
+  t.run(async (ctx) => {
+    const subs = await ctx.db
+      .query('projects')
+      .withIndex('by_parent', (q) => q.eq('parent_id', meta.id))
+      .collect()
+    const rows = await ctx.db
+      .query('project_reach')
+      .withIndex('by_root_child', (q) => q.eq('root_id', meta.id))
+      .collect()
+    return (
+      subs.reduce((sum, p) => sum + archivedSize(p), 0) +
+      rows.reduce((sum, row) => sum + getDocumentSize(row), 0)
+    )
+  })
+
+/** What an archive or a restore of `meta` by the fixture's user answers,
+ * run as the app's mutation would run it, with what it read: the
+ * refusal's message, or the transaction's bytes in MiB, documents and
+ * index ranges read. */
+const treeChange = (t: T, f: OrgFixture, meta: Doc<'projects'>, archive: boolean) =>
+  t.run(async (ctx) => {
+    const change = { me: f.user, project: meta, now: new Date().toISOString() }
+    try {
+      if (archive) await archiveProjectCore(ctx, change)
+      else await unarchiveProjectCore(ctx, change)
+    } catch (e) {
+      if (!(e instanceof ConvexError)) throw e
+      return { refused: (e.data as Refusal).message }
+    }
+    const m = await ctx.meta.getTransactionMetrics()
+    return {
+      read: Math.round((m.bytesRead.used / MIB) * 100) / 100,
+      documents: m.documentsRead.used,
+      ranges: m.databaseQueries.used,
+    }
+  })
+
+/** Every project of `meta`'s tree and every reach row on it, to compare
+ * before and after a refusal. */
+const treeRowsOf = (t: T, meta: Doc<'projects'>) =>
+  t.run(async (ctx) => [
+    await ctx.db.get(meta._id),
+    ...(await ctx.db
+      .query('projects')
+      .withIndex('by_parent', (q) => q.eq('parent_id', meta.id))
+      .collect()),
+    ...(await ctx.db
+      .query('project_reach')
+      .withIndex('by_root_child', (q) => q.eq('root_id', meta.id))
+      .collect()),
+  ])
+
+describe('a tree at the row bounds', () => {
+  const { max } = LIMITS.projectTreeChange
+
+  // 2,000 entries at the row bounds hold about 8.5 MiB, past
+  // TREE_READ.bytes, where without the byte count each change read past
+  // Convex's 16 MiB
+  it(`refuses an archive of ${max} entries at the row bounds whole`, async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const meta = await wideTree(t, f, 1_650, max - 1_650)
+    expect(await treeBytes(t, meta)).toBeGreaterThan(TREE_READ.bytes)
+    const before = await treeRowsOf(t, meta)
+    expect(await treeChange(t, f, meta, true)).toEqual({ refused: TREE_TOO_LARGE })
+    expect(await treeRowsOf(t, meta)).toEqual(before)
+  }, 300_000)
+
+  it(`refuses a restore of ${max} entries at the row bounds whole`, async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const meta = await wideTree(t, f, 1_650, max - 1_650, true)
+    const before = await treeRowsOf(t, meta)
+    expect(await treeChange(t, f, meta, false)).toEqual({ refused: TREE_TOO_LARGE })
+    expect(await treeRowsOf(t, meta)).toEqual(before)
+  }, 300_000)
+
+  it('archives and restores a tree just under TREE_READ.bytes at the row bounds within the limits', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const meta = await treeJustUnder(t, f, 300)
+    const subs = (await treeRowsOf(t, meta)).length - 301
+    const archived = await treeChange(t, f, meta, true)
+    console.log(`archive of ${subs} sub-projects and 300 reach rows:`, archived)
+    expect(archived).not.toHaveProperty('refused')
+    if ('read' in archived) expect(archived.read).toBeLessThan(14.5)
+    expect(await states(t, [meta.id])).toEqual(['listed'])
+    const restored = await treeChange(t, f, (await projectOf(t, meta.id)) as Doc<'projects'>, false)
+    console.log(`restore of ${subs} sub-projects and 300 reach rows:`, restored)
+    expect(restored).not.toHaveProperty('refused')
+    if ('read' in restored) expect(restored.read).toBeLessThan(14.5)
+    const after = await treeRowsOf(t, meta)
+    expect(after.every((row) => row !== null && !('archived_at' in row && row.archived_at))).toBe(
+      true,
+    )
+    expect(after.filter((row) => row !== null && 'live' in row && !row.live)).toEqual([])
+    // one more sub-project passes the bytes
+    await wideSubs(t, f, meta, 1)
+    expect(await treeChange(t, f, meta, true)).toEqual({ refused: TREE_TOO_LARGE })
+  }, 300_000)
+
+  it('restores what its archive took, with sub-projects archived on their own', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // 800 sub-projects at the row bound, every second one archived on its
+    // own with its child reach row, which the restore reads among the
+    // archived child rows under the project, and root reach rows up to two
+    // past TREE_READ.bytes with them
+    const meta = await wideTree(t, f, 0, 0)
+    await mixedSubs(t, f, meta, 800)
+    const subsAndChildren = await treeBytes(t, meta)
+    await rootRows(t, f, meta, 1)
+    const row = (await treeBytes(t, meta)) - subsAndChildren
+    await rootRows(t, f, meta, Math.floor((TREE_READ.bytes - subsAndChildren) / row) + 1)
+    expect(await treeBytes(t, meta)).toBeGreaterThan(TREE_READ.bytes + row)
+    // The archive changes only the live child rows, but it counts the
+    // archived ones its restore reads too, so it refuses whole a tree whose
+    // restore would not fit.
+    const before = await treeRowsOf(t, meta)
+    expect(await treeChange(t, f, meta, true)).toEqual({ refused: TREE_TOO_LARGE })
+    expect(await treeRowsOf(t, meta)).toEqual(before)
+    // three root rows fewer, the tree fits, and its restore takes it too
+    await t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query('project_reach')
+        .withIndex('by_project_grantee', (q) => q.eq('project_id', meta.id))
+        .take(3)
+      for (const r of rows) await ctx.db.delete(r._id)
+    })
+    expect(await treeBytes(t, meta)).toBeLessThanOrEqual(TREE_READ.bytes)
+    const archived = await treeChange(t, f, meta, true)
+    console.log('archive of 800 sub-projects, 400 archived on their own:', archived)
+    expect(archived).not.toHaveProperty('refused')
+    const restored = await treeChange(t, f, (await projectOf(t, meta.id)) as Doc<'projects'>, false)
+    console.log('restore of the same tree:', restored)
+    expect(restored).not.toHaveProperty('refused')
+    // the sub-projects archived on their own stay archived, listed under
+    // their live parent, and the others are live again with their rows
+    const { subs, children } = await t.run(async (ctx) => ({
+      subs: await ctx.db
+        .query('projects')
+        .withIndex('by_parent', (q) => q.eq('parent_id', meta.id))
+        .collect(),
+      children: await ctx.db
+        .query('project_reach')
+        .withIndex('by_root_child', (q) => q.eq('root_id', meta.id).eq('kind', 'child'))
+        .collect(),
+    }))
+    expect(await states(t, [meta.id])).toEqual(['live'])
+    expect(subs.filter((p) => p.archive_state === 'live')).toHaveLength(400)
+    expect(subs.filter((p) => p.archive_state === 'listed')).toHaveLength(400)
+    expect(children.filter((r) => r.live)).toHaveLength(400)
+  }, 300_000)
+
+  it('refuses whole a REST update that archives such a tree and renames it, and writes nothing', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const meta = await treeJustUnder(t, f, 300)
+    const before = await treeRowsOf(t, meta)
+    const update = (body: object) =>
+      t.mutation(internal.machine.projects.restUpdateProject, {
+        callerId: f.user.id,
+        access: 'write',
+        keyName: null,
+        ref: meta.key,
+        body: JSON.stringify(body),
+      })
+    // the rename reads the project's reach rows again, past the bytes the
+    // archive left in the budget they share
+    const e = await expectRefusal(update({ archived: true, name: 'Both' }), 'rule')
+    expect((e.data as Refusal).message).toBe(TREE_TOO_LARGE)
+    expect(await treeRowsOf(t, meta)).toEqual(before)
+  }, 300_000)
 })
 
 describe('Deleted items', () => {
@@ -1143,16 +1559,11 @@ describe('a restore and the work around it', () => {
     await expectAll(t, f)
   })
 
-  it('reveals many sub-projects with leads under a parent with a large legacy icon', async () => {
+  it('reveals many sub-projects with leads and reads their top-level project once', async () => {
     const t = newT({ transactionLimits: true })
     const f = await ready(t)
     const org_id = f.org.id
-    // a legacy icon on the top-level project, under the size a stored row
-    // may hold, and 24 sub-projects with a lead of their own each
-    await t.run(async (ctx) => {
-      const row = await byId(ctx, 'projects', f.meta.id)
-      if (row !== null) await ctx.db.patch(row._id, { icon: 'i'.repeat(950_000) })
-    })
+    // 24 sub-projects with a lead of their own each
     for (let i = 0; i < 22; i++)
       await plantProject(t, {
         org_id,
@@ -1173,9 +1584,9 @@ describe('a restore and the work around it', () => {
       await step(t, item.id)
     }
     TRASH_BUDGET.rows = DEFAULT_ROWS
-    // The reveal writes the top-level project back without its icon, and
-    // the leads' rows read it from what the reveal wrote, not once more for
-    // each sub-project (model/deletedItems.ts revealProjects)
+    // The leads' rows read the top-level project from what the reveal
+    // wrote, not once more for each sub-project (model/deletedItems.ts
+    // revealProjects)
     let topReads = 0
     await t.run((ctx) =>
       runStep(
@@ -1196,7 +1607,6 @@ describe('a restore and the work around it', () => {
     // the reveal and every step after it finished
     expect(await jobFor(t, item.id)).toBeNull()
     expect(await t.run((ctx) => byId(ctx, 'deleted_items', item.id))).toBeNull()
-    expect(await projectOf(t, f.meta.id)).not.toHaveProperty('icon')
     await expectAll(t, f)
   }, 120_000)
 
@@ -1363,13 +1773,13 @@ describe('a restore and the work around it', () => {
 
   it("counts the bytes of the stored projects its lead's rows read", async () => {
     const t = newT()
-    // a legacy icon, stored with the project
-    const { f, item } = await ledAndRestoring(t, { icon: 'i'.repeat(900_000) })
-    // a call's quarter of a step holds less than the icon
+    // a description stored before the caps, stored with the project
+    const { f, item } = await ledAndRestoring(t, { description: 'd'.repeat(900_000) })
+    // a call's quarter of a step holds less than the description
     TRASH_BUDGET.bytes = 2 * 1024 * 1024
     await as(t, f.admin).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [item.id] })
-    // the lead's rows read the icon, so the call stops before the reveal,
-    // where a call that missed the icon's bytes would have revealed
+    // the lead's rows read the description, so the call stops before the
+    // reveal, where a call that missed its bytes would have revealed
     expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_reveal' })
     await runSteps(t)
     await expectAll(t, f)
@@ -1379,10 +1789,11 @@ describe('a restore and the work around it', () => {
     const t = newT()
     const f = await ready(t)
     const org_id = f.org.id
-    // past what a stored row may hold, so the move drops it and frees its id
+    // a description stored before the caps, past what a stored row may
+    // hold, so the move drops it and frees its id
     await t.run(async (ctx) => {
       const row = await byId(ctx, 'projects', f.sub.id)
-      if (row !== null) await ctx.db.patch(row._id, { icon: 'i'.repeat(1_000_100) })
+      if (row !== null) await ctx.db.patch(row._id, { description: 'd'.repeat(1_000_100) })
     })
     TRASH_BUDGET.rows = 1
     await as(t, f.user).mutation(api.projects.deleteDeep, { org_id, id: f.meta.id })
@@ -1442,10 +1853,11 @@ describe('a restore and the work around it', () => {
           .withIndex('by_project_profile', (q) => q.eq('project_id', id))
           .collect(),
       )
-    // past what a stored row may hold, so the move drops it
+    // a description stored before the caps, past what a stored row may
+    // hold, so the move drops it
     await t.run(async (ctx) => {
       const row = await byId(ctx, 'projects', id)
-      if (row !== null) await ctx.db.patch(row._id, { icon: 'i'.repeat(1_000_100) })
+      if (row !== null) await ctx.db.patch(row._id, { description: 'd'.repeat(1_000_100) })
     })
     TRASH_BUDGET.rows = 1
     await as(t, f.user).mutation(api.projects.deleteDeep, { org_id, id })
@@ -1994,13 +2406,18 @@ describe('the backfill', () => {
     await expect(backfill(t, false, first.cursor ?? undefined)).rejects.toThrow('other dry_run')
   })
 
-  it('walks projects with icons near 1 MiB inside the limits of a transaction', async () => {
+  it('walks projects stored before the caps near 1 MiB inside the limits of a transaction', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // legacy icons, each project a document near Convex's 1 MiB, without
-    // an archive state, so every row walked is patched and read again
+    // descriptions stored before the caps, each project a document near
+    // Convex's 1 MiB, without an archive state, so every row walked is
+    // patched and read again
     for (let i = 0; i < 12; i++)
-      await plantProject(t, { org_id: f.org.id, lead_id: f.user.id, icon: 'i'.repeat(1_020_000) })
+      await plantProject(t, {
+        org_id: f.org.id,
+        lead_id: f.user.id,
+        description: 'd'.repeat(1_020_000),
+      })
     let got = await backfill(t, false)
     for (let calls = 0; !got.done; calls++) {
       expect(got.error).toBeUndefined()

@@ -106,6 +106,26 @@ export const TEXT_MAX = 20_000
  * or billing plan. */
 export const NAME_MAX = 80
 
+/** The most a project row takes as Convex counts a document, with every
+ * optional field set at the name and description caps (about 4.9 KB): a
+ * name of NAME_MAX characters whose name key NFKD expands, as U+FDFA's to
+ * 18 characters, and a 500-character description in a three-byte script.
+ * Writers keep rows within those caps (model/projects.ts cleanProjectName
+ * and projectDescription, model/teams.ts cleanTeamName, through LIMITS since
+ * v0.1.49, before every rollback floor). Only a row stored over the caps
+ * could pass it, and the 2026-10-29 dry runs found no project row over 614
+ * bytes, no team row over 273 and no Deleted items copy over 755 on any
+ * deployment. Every row a project or team read brings along is smaller: a
+ * grant, a team share or a membership with its name key copy is at most
+ * about 2.8 KB, a reach row about 3 KB. Not in LIMITS, as nobody meets it;
+ * tests/rowBounds.test.ts checks it against the schema. */
+export const PROJECT_ROW_MAX_BYTES = 6 * 1024
+
+/** The most a team row takes, as PROJECT_ROW_MAX_BYTES for a project
+ * (about 3.1 KB at the name cap). It also bounds a grant, a team share, a
+ * membership and a reach row. */
+export const TEAM_ROW_MAX_BYTES = 4 * 1024
+
 /** The rows of a list page REST and MCP answer when the call names no limit. */
 export const DEFAULT_PAGE_SIZE = 50
 
@@ -477,7 +497,7 @@ export const LIMITS = {
     max: 2_000,
     unit: 'sub-projects and access entries',
     refusal:
-      'archiving, restoring or renaming a project, or changing its key, can update at most 2,000 sub-projects and access entries at once. Each sub-project counts, and each person or team with access counts once for the project and once for each sub-project they have their own access to. Archive some of its sub-projects on their own first, or remove some access.',
+      'archiving, restoring or renaming a project, or changing its key, can update at most 2,000 sub-projects and access entries at once. Each sub-project counts, and each person or team with access counts once for the project and once for each sub-project they have their own access to. Archive all of its sub-projects on their own first, or remove some access.',
     on: ALL,
   },
   // A removal clears the person as the lead of each project in the

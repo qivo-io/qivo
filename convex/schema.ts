@@ -111,13 +111,6 @@ const projectsTable = defineTable({
   description: v.string(), // LIMITS.projectDescription (lib/limits.ts), trimmed, enforced by model/projects
   sort_order: v.number(),
   num: v.number(), // org-scoped, assigned by counter, immutable
-  // Legacy icon and its color, which nothing takes, shows or exports. A
-  // value stored before has no length limit. internal/legacyIconsBackfill
-  // clears them here and in the copies Deleted items keeps, a restore leaves
-  // them out (model/deletedItems.ts cleanProject), and the release after
-  // every deployment reports zero drops both from the schema.
-  icon: v.optional(v.string()),
-  icon_color: v.optional(v.string()),
   track_delay: v.boolean(),
   // remaining time a task gets on entering Review; absent = the parent
   // project's value, else DEFAULT_REVIEW_HOURS (2); LIMITS.reviewHours (lib/limits.ts)
@@ -1256,11 +1249,6 @@ export default defineSchema({
     id: v.string(),
     org_id: v.string(),
     name: v.string(),
-    // Legacy icon and its color, which internal/legacyIconsBackfill clears
-    // and a later release drops, as on projects. Teams have no copies in
-    // Deleted items.
-    icon: v.optional(v.string()),
-    icon_color: v.optional(v.string()),
     track_delay_default: v.boolean(),
     created_at: v.string(),
     // The name as name-ordered lists sort and search it, server-owned as on

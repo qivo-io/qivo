@@ -75,9 +75,9 @@ import { bringInLine, readyRow } from '../model/nameKeys'
 
 /** Rows of a table one page reads, the bytes that read takes before it ends
  * early, the copies one page brings in line or counts, the bytes it may
- * read of them, and the most organizations a run lists. A team or project
- * stored before legacy icons were dropped can be large, so pages end at the
- * bytes too. Every read counts. A page reads its rows once, up to `bytes`
+ * read of them, and the most organizations a run lists. Pages end at the
+ * bytes too, so a row stored before the caps, which can be large, cannot
+ * pass Convex's limits. Every read counts. A page reads its rows once, up to `bytes`
  * and one more document, under 4 MiB with a document near Convex's 1 MiB
  * limit, and again for each row it gives its key, so its rows cost at most
  * 8 MiB. Its copies cost `copy_bytes`, with both reads of each copy counted,

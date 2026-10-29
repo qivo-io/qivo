@@ -354,23 +354,12 @@ describe('accessFlags', () => {
     const f = await withOrg(t)
     const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
     // eight teams of the person, one of them shares the meta's sub-project,
-    // beside 24 teams with 64 KiB legacy icons, 1.5 MiB in all
-    await t.run(async (ctx) => {
-      const team = async (icon?: string) => {
-        const id = uuid()
-        await ctx.db.insert('teams', {
-          id,
-          org_id: f.org.id,
-          name: 'Team',
-          icon,
-          track_delay_default: false,
-          created_at: NOW,
-        })
-        return id
-      }
-      for (let i = 0; i < 24; i++) await team('x'.repeat(64 * 1024))
+    // after 24 other teams, as many rows as the organization's teams
+    // beside them
+    const row = await t.run(async (ctx) => {
+      for (let i = 0; i < 24; i++) await newTeam(ctx, f.org.id)
       for (let i = 0; i < OWN_READS.manyTeams; i++) {
-        const id = await team()
+        const id = await newTeam(ctx, f.org.id)
         await ctx.db.insert('team_members', { team_id: id, profile_id: me.id, is_leader: false })
         if (i === 0)
           await ctx.db.insert('project_team_access', {
@@ -379,21 +368,41 @@ describe('accessFlags', () => {
             level: 'user',
           })
       }
+      const teams = await ctx.db
+        .query('teams')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .collect()
+      return Math.max(...teams.map((team) => JSON.stringify(team).length))
     })
+    // twelve rows of the organization's teams, which pass it
+    OWN_READS.bytes = 12 * row
     await t.run(async (ctx) => {
-      const before = (await ctx.meta.getTransactionMetrics()).bytesRead.used
       const levels = projectLevelsOf(ctx, me)
       for (const p of [f.meta, f.sub, f.sub2]) {
         expect(await levels.level(p.id, true), p.key).toBe(await projectLevel(ctx, me, p, true))
       }
-      const read = (await ctx.meta.getTransactionMetrics()).bytesRead.used - before
       expect(await levels.level(f.sub.id)).toBe('user')
-      // the scan reached the bound and stopped at the first row past it,
-      // the reference walk's reads included
+      // the scan reached the bound and stopped at the first row past it:
+      // the person's memberships, the scan's twelve rows and one more, the
+      // person's teams by their own read and the one share, not the
+      // organization's 33 teams
       expect(levels.shared.bytes).toBeGreaterThan(OWN_READS.bytes)
-      expect(levels.shared.bytes).toBeLessThan(OWN_READS.bytes + 2 * 64 * 1024)
-      expect(read).toBeLessThan(OWN_READS.bytes + 3 * 64 * 1024)
+      expect(levels.shared.documents).toBe(OWN_READS.manyTeams + 13 + OWN_READS.manyTeams + 1)
     })
+    // What Convex read for the answers, against the same answers with a
+    // scan of all 33 teams: the scan stops 20 rows earlier, and the person's
+    // eight teams are then read by their own read.
+    const documentsRead = () =>
+      t.run(async (ctx) => {
+        const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        const levels = projectLevelsOf(ctx, me)
+        for (const p of [f.meta, f.sub, f.sub2]) await levels.level(p.id, true)
+        return (await ctx.meta.getTransactionMetrics()).documentsRead.used - before
+      })
+    const bounded = await documentsRead()
+    OWN_READS.bytes = DEFAULT_OWN_READS.bytes
+    const full = await documentsRead()
+    expect(bounded).toBe(full - 20 + OWN_READS.manyTeams)
   })
 
   it("stops reading the organization's teams past OWN_READS.orgTeams rows a team asked about and answers team by team", async () => {

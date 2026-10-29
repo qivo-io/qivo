@@ -411,8 +411,9 @@ export const ARCHIVE_PAGE = {
  * That is 30 ranges and 51 documents with a few shares and four more for
  * each further share, so the reserve covers a project shared with about ten
  * teams. The bytes hold seven documents at Convex's size limit: two
- * description rows and four REST documents, the rest small. The app's page
- * keeps LEVEL_STEP_READS back too. Tests lower these. */
+ * description rows and four REST documents, the rest small (the project and
+ * its parent at most lib/limits.ts PROJECT_ROW_MAX_BYTES each). The app's
+ * page keeps LEVEL_STEP_READS back too. Tests lower these. */
 export const ARCHIVE_RESERVE = { ranges: 64, documents: 128, bytes: 7 * DOCUMENT_MAX_BYTES }
 
 /** What the app's page keeps back beyond ARCHIVE_RESERVE: the task whose
@@ -868,7 +869,12 @@ export const ARCHIVED_PAGE_ROWS = 25
  * description cap in a three-byte script a task row is about 61 KB, so the
  * heads of about 130 such projects fill a page's bytes (ARCHIVE_PAGE.bytes,
  * convex/tests/archived.test.ts measures it); 200 keeps ordinary scopes
- * whole and leaves the rest to that budget. Tests lower them. */
+ * whole and leaves the rest to that budget. `rows` counts rows by number
+ * only, and a read takes one row past it before it stops (counted): each
+ * is at most lib/limits.ts PROJECT_ROW_MAX_BYTES, so 1,001 of them are at
+ * most about 6.2 MB, about 4.9 MB at the largest project row the caps
+ * allow, which the page's budget then sees in its metrics. Tests lower
+ * them. */
 export const ARCHIVED_SCOPE = { ids: 50, subProjects: 200, teams: 64, rows: 1000 }
 
 /* What readScope answers for a scope it may not merge side by side and may
