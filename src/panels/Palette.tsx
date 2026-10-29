@@ -90,6 +90,18 @@ type Failed = { ask: Ask; starts: (string | null)[]; move: Move }
 /* The key a text over LIMITS.search stands for, which is never sent. */
 const TOO_LONG = 'too-long'
 
+/* A letter or digit, as searchTerms reads words. A text that holds one but
+   no term holds only words too long for Convex to index
+   (CONVEX_WORD_BYTES). */
+const WORD_CHAR = /[\p{Alphabetic}\p{N}]/u
+
+/* Why a text that is not blank asks nothing: its words are all too long to
+   search, or it holds no word at all. */
+const noTerms = (text: string): string =>
+  WORD_CHAR.test(text)
+    ? 'Words longer than about 30 letters are not searched.'
+    : 'Type a word or a task ID to search.'
+
 /* The keys the command list's root acts on from any element inside it
    (cmdk 1.1.1): the arrows move the selection, Home and End jump, and Enter
    opens the selected row. */
@@ -370,7 +382,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
   let status: ReactNode = null
   let action: ReactNode = null
   if (tooLong) status = limitSentence(LIMITS.search)
-  else if (typed === null) status = null
+  else if (typed === null) status = text.trim() ? noTerms(text) : null
   else if (refusal && refusal.key === typed) status = refusal.message
   else if (failed && failed.ask.key === typed) {
     status = "Couldn't search. Try again."

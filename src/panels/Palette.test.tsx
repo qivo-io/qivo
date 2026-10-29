@@ -292,9 +292,22 @@ const toggle = () => click(find('[data-palette-archived]'))
 describe('the Search palette', { timeout: 20_000 }, () => {
   it('reads nothing for no text, blanks, punctuation or a text past 200 characters', async () => {
     await open()
-    for (const text of ['', '   ', '?! —', '…'.repeat(5)]) await type(text)
+    for (const [text, says] of [
+      ['', ''],
+      ['   ', ''],
+      ['?! —', 'Type a word or a task ID to search.'],
+      ['…'.repeat(5), 'Type a word or a task ID to search.'],
+      // Convex leaves out words of 32 bytes or more, so these are no search
+      [
+        `${'a'.repeat(32)} ${'ö'.repeat(16)}`,
+        'Words longer than about 30 letters are not searched.',
+      ],
+      ['  ', ''],
+    ]) {
+      await type(text)
+      expect(status(), JSON.stringify(text)).toBe(says)
+    }
     expect(calls).toHaveLength(0)
-    expect(status()).toBe('')
     // a scope or toggle change with no term asks nothing either
     await toggle()
     await choose(META)
