@@ -320,8 +320,9 @@ refuses the restore, and an organization admin can restore it instead.
 While the parent's project is being moved to Deleted items, Qivo refuses
 the restore for everyone until the move finishes.
 Parents restored this way send no **Restored** update. Restoring a Done task
-restarts its auto-archive clock. Archived tasks do not appear in other views,
-and shared task links work again only after restoration.
+restarts its auto-archive clock. Archived tasks appear only in **Archived
+tasks** and in Search with **Include archived tasks** on, and shared task
+links work again only after restoration.
 
 When someone else archives a task you have open, its window stays and says
 the task was archived. If you can edit its project, **Restore** in the
@@ -338,6 +339,11 @@ was already archived when you chose **Archive**, Qivo says that your reason
 was not used. While the board still shows the task, **Archive or delete…**
 stays open with your reason, and once the task leaves the board, the window
 keeps the reason the same way.
+
+Search finds archived tasks when **Include archived tasks** is on ([Search palette](./finding-your-way-around.md#search-palette)).
+Opening one shows its title, its project and when it was archived, with the
+same note, and **Restore** for someone who can edit its project. Its
+description and comments do not show there.
 
 ## Deleting
 

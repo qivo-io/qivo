@@ -740,12 +740,13 @@ inserts its row with the copies. Main Search's query, `search:page`
 (`convex/search.ts`), matches descriptions through `search_description`,
 titles through the `search_title` index of `issues` and project names
 through the `search_name` index of `projects`, which Convex builds at
-deploy without a backfill. The query ships before the app calls it. The
-release whose app calls it ships only once a dry run on development,
-staging, production and the demo reports the deployment clean, zero
-`missing`, `differ`, `duplicates` and `orphans`. `skipped` no longer counts
-against it, because from the third release of the description move it
-counts every task whose row in `issues` holds no copy of its text.
+deploy without a backfill. The query shipped before the app called it. The
+app's Search palette calls it, once typing rests and once for each page,
+and the release that first ships that palette goes out only once a dry run
+from the third release of the description move reports development,
+staging, production and the demo clean, zero `missing`, `differ`,
+`duplicates` and `orphans`. `skipped` is no gate there, because it counts
+every task whose text the clear took off its row in `issues`.
 Data restored from a backup taken before the copies leaves rows without
 them, and a dry run lists them as `differ` until a repair mends them.
 Code that lists `issue_descriptions` without the copy fields does not
