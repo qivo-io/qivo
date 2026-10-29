@@ -22,6 +22,7 @@ import { GRANT_LEVELS } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
 import {
   ARCHIVED_FILTER,
+  LOOKUP,
   MAIN_SEARCH,
   type MainSearchPage,
   mainSearchPage,
@@ -2142,6 +2143,26 @@ describe('the project results of main Search', () => {
     expect(run.page.coverage).toEqual(stopped('projects', 8, 8))
     expect(run.searches).toBe(24)
   }, 120_000)
+
+  it("reads names only within what the seat's number lookups left of its allowance", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantProjects(t, f.org.id, 40, (i) => ({ type: 'meta', name: `Zephyr 901 902 ${i}` }))
+    await withReach(t)
+    // an admin's seat, searched whole and planned with no read, gets the
+    // whole allowance, and its two number lookups, which find no task,
+    // count as LOOKUP each, leaving less than the names' quarter of it
+    MAIN_SEARCH.documents = 140
+    const left = MAIN_SEARCH.documents - 2 * LOOKUP.documents
+    expect(left).toBeLessThan(MAIN_SEARCH.documents / 4)
+    const run = await searchRun(t, [f.admin], { text: 'QN-901 QN-902 zephyr' })
+    // the lookups read nothing and the top-level projects' rows need no
+    // other read, so every document read is one the seat had left
+    expect(run.read.documents).toBeLessThanOrEqual(left)
+    expect(projectIds(run.page).length).toBeGreaterThan(0)
+    expect(projectIds(run.page).length).toBeLessThan(left)
+    expect(run.page.coverage).toEqual(stopped('reads'))
+  })
 
   it('keeps the task sources of a member past the root row bound', async () => {
     const t = newT()

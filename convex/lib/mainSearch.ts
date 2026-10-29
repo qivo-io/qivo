@@ -129,10 +129,11 @@ export const MAIN_SEARCH = {
 
 /* The part of a seat's allowance its project names may read, on every
  * count: a quarter. The name query, the readiness read and every read of
- * the names' check (model/projectNav.ts projectSight) count against it, as
- * reads of the seat's own allowance too, so the seat's task sources keep
- * the rest however the names' check reads, also when many seats share the
- * call and each allowance is small. */
+ * the names' check (model/projectNav.ts projectSight) count against it, and
+ * against what is left of the seat's allowance after its number lookups,
+ * so the names never read past the seat's allowance, and its task sources
+ * keep the rest however the names' check reads, also when many seats share
+ * the call and each allowance is small. */
 const NAME_SHARE = 4
 
 /** The least allowance a seat is searched with (allowancesOf). When what
@@ -164,14 +165,14 @@ const STEP: ReadCeiling = {
  * limit stop a seat before its own allowance does. */
 const SLACK: ReadCeiling = { ranges: 64, documents: 256, bytes: 512 << 10 }
 
-/* What a number lookup counts against its seat's allowance, from before its
+/** What a number lookup counts against its seat's allowance, from before its
  * read to the verdict of whether the seat may be shown the task it found:
  * whether a task the seat cannot see holds the number, one it can, or none,
  * it costs the same, so what it read changes no decision. It holds what
  * such a lookup reads at the sizes rows have under the caps: the task row,
  * the project and top-level project the verdict reads, and their access
- * rows. */
-const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 }
+ * rows. Tests read it. */
+export const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 }
 
 /** What a call keeps back from Convex's limits for the reads its budget
  * does not count one by one: the caller's own access rows that one access
@@ -545,6 +546,10 @@ function readBudget(ctx: QueryCtx, ceiling: ReadCeiling, share?: ReadCeiling) {
 }
 
 type ReadBudget = ReturnType<typeof readBudget>
+
+/* What a reader asks of a budget: room before each read, and a look at the
+ * request's metrics after reads it was not asked about. */
+type Reads = Pick<ReadBudget, 'need' | 'recount'>
 
 /* A transaction's reads so far, in the units of a ReadCeiling. */
 const countsOf = (m: TransactionMetrics): ReadCeiling => ({
@@ -1175,7 +1180,7 @@ export async function mainSearchPage(
     seat: Seat,
     query: AsyncIterable<D>,
     judge: (doc: D) => Promise<void>,
-    { cap = MAIN_SEARCH.candidates, budget = gather }: { cap?: number; budget?: ReadBudget } = {},
+    { cap = MAIN_SEARCH.candidates, budget = gather }: { cap?: number; budget?: Reads } = {},
   ) => {
     await budget.need(1, 1)
     begin(seat)
@@ -1201,13 +1206,26 @@ export async function mainSearchPage(
    * (`unready`), failing closed. Each candidate is matched first, so one
    * whose name lacks a term costs no check, then judged by
    * model/projectNav.ts projectSight. Everything it reads, the readiness
-   * included, goes through the names' own part of the seat's allowance
-   * (NAME_SHARE); once that is spent the names stop with `reads`, and the
-   * seat goes on to its places with the rest of its allowance. */
+   * included, must fit both the names' own part of the seat's allowance
+   * (NAME_SHARE) and what is left of the seat's allowance itself (`gather`,
+   * whose held number lookups count at LOOKUP), so the names never read past
+   * the seat's allowance; once either is spent the names stop with `reads`,
+   * and the seat goes on to its places with what is left. */
   const searchNames = async (seat: Seat) => {
     const { me, access } = seat
     const now = countsOf(await ctx.meta.getTransactionMetrics())
-    const budget = readBudget(ctx, seatLimit, plus(now, seatNames))
+    const share = readBudget(ctx, seatLimit, plus(now, seatNames))
+    const seatBudget = gather
+    const budget: Reads = {
+      async need(ranges, documents) {
+        await seatBudget.need(ranges, documents)
+        await share.need(ranges, documents)
+      },
+      recount() {
+        seatBudget.recount()
+        share.recount()
+      },
+    }
     try {
       await budget.need(1, 1)
       begin(seat)
