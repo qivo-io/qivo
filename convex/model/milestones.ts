@@ -36,6 +36,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
   canSeeProject,
   hasProjectLevel,
+  isAccessUnchecked,
   levelRank,
   projectLevelsOf,
   receivesTeamAccess,
@@ -970,11 +971,20 @@ function navigationOf(
           ? children
           : ((await ownByParent()).get(root.id) ?? [])
       const levels = projectLevelsOf(ctx, me, [root, ...asked])
+      // a child whose check a bound of the access layer stopped refuses the
+      // answer only if no later child shows the project
+      let unchecked: unknown
       try {
         for (const child of asked) {
           if (!(await readsUnder(ctx, ceiling))) throw refusal()
-          if ((await levels.level(child.id, false)) !== null) return true
+          try {
+            if ((await levels.level(child.id, false)) !== null) return true
+          } catch (e) {
+            if (!isAccessUnchecked(e)) throw e
+            unchecked ??= e
+          }
         }
+        if (unchecked !== undefined) throw unchecked
         return false
       } finally {
         // the access checks read past the guard's count

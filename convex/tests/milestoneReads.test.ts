@@ -1622,4 +1622,45 @@ describe('a check of the caller access that a bound stops', () => {
     Object.assign(OWN_READS, { lookups: 1, teamReads: 2 })
     expect(await read()).toEqual(usual)
   })
+
+  it("shows a parent for navigation through a later sub-project where an earlier one's check refuses, and refuses only where none shows", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      // FW, TBED's first sub-project, is shared with the member's team and
+      // 64 others, past OWN_READS.projectShares
+      for (let i = 0; i <= OWN_READS.projectShares; i++)
+        await ctx.db.insert('project_team_access', {
+          project_id: f.sub.id,
+          team_id: i === 0 ? f.team.id : uuid(),
+          level: 'user',
+        })
+    })
+    const m = await plant(t, f.meta.id, MONDAY, 'Launch')
+    const section = () =>
+      as(t, me).query(api.milestones.section, {
+        projects: [f.meta.id],
+        from: MONDAY,
+        limit: 25,
+        side: 'upcoming',
+      })
+    // FW's team may not be asked by itself, so FW's check refuses
+    Object.assign(OWN_READS, { rows: 0, teamReads: 0 })
+    expect((await expectRefusal(section(), 'rule')).data.reason).toBe(ACCESS_UNCHECKED)
+    // a grant on PCB, which comes after FW, shows TBED
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.sub2.id,
+        profile_id: me.id,
+        level: 'viewer',
+      }),
+    )
+    expect((await section()).rows.map((row) => row.id)).toEqual([m.id])
+  })
 })
