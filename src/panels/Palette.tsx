@@ -207,12 +207,17 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
   const seqRef = useRef(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const scopeRef = useRef<HTMLSelectElement>(null)
-  // a focus move for after the next commit, once a new page is in
-  const focusNext = useRef<(() => void) | null>(null)
-  useEffect(() => {
-    const focus = focusNext.current
-    focusNext.current = null
-    focus?.()
+  const listRef = useRef<HTMLDivElement>(null)
+  // what the commit that shows a new page does: the list starts at its
+  // top, where its first row is selected, and after a page move focus goes
+  // back to the search, so the arrows and Enter act on the new rows
+  const landed = useRef<{ focus: boolean } | null>(null)
+  useLayoutEffect(() => {
+    const page = landed.current
+    landed.current = null
+    if (!page) return
+    if (listRef.current) listRef.current.scrollTop = 0
+    if (page.focus) restoreFocus(inputRef.current)
   })
   // a late answer after the palette closed is dropped
   useEffect(
@@ -298,8 +303,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
           starts,
         })
         setSelected(answer.rows[0] ? resultValue(answer.rows[0]) : '')
-        // after a page move, the arrows and Enter act on the new rows
-        if (move !== 'first' || restarted) focusNext.current = () => restoreFocus(inputRef.current)
+        landed.current = { focus: move !== 'first' || restarted }
         return
       }
       if (move === 'first') setShown(null)
@@ -535,6 +539,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
         {action && <span onKeyDown={keepKeys}>{action}</span>}
       </div>
       <CommandList
+        ref={listRef}
         aria-busy={running !== null || stale || undefined}
         className="max-h-[388px] min-h-0 p-2"
       >

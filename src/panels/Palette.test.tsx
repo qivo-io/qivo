@@ -419,6 +419,44 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     }
   })
 
+  it('starts the list at its top for each page and search that lands', async () => {
+    await open()
+    await type('firm')
+    await last().answer(
+      Array.from({ length: 25 }, (_, i) => task(100 - i)),
+      'c1',
+    )
+    // jsdom keeps no scroll position, so the list gets one of its own
+    const list = find('[cmdk-list]')
+    let top = 0
+    Object.defineProperty(list, 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => {
+        top = value
+      },
+    })
+    const scrolled = () => {
+      list.scrollTop = 480
+      expect(list.scrollTop).toBe(480)
+    }
+    scrolled()
+    await click(pageButton('next'))
+    // the page on screen keeps its place until the next one lands
+    expect(list.scrollTop).toBe(480)
+    await last().answer([task(75), task(74)], 'c2')
+    expect(list.scrollTop).toBe(0)
+    expect(selected()?.dataset.value).toBe('issue-QN-75')
+    scrolled()
+    await toggle()
+    await last().answer([task(60), task(59)])
+    expect(list.scrollTop).toBe(0)
+    scrolled()
+    await type('firmware')
+    await last().answer([task(14)])
+    expect(list.scrollTop).toBe(0)
+  })
+
   it('labels each row and shows its key, status, place, Archived and organization', async () => {
     await open({ partner: true })
     await type('firm')
