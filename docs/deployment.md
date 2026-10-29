@@ -687,8 +687,13 @@ ones after it before the third (v0.1.98 to v0.1.100) read the rows, so
 every description shows, and their writers write copies equal to the rows
 again, which the next clear unsets after rolling forward. Their dry run
 counts every task without a copy as `skipped`, which is no fault there,
-and does not count a second row of a task without a copy, so only the
-third release's dry run finds such duplicates. Convex accepts a rollback to
+and does not count a second row of a task without a copy, so only the third
+release's dry run finds such duplicates. They also price each patch of a
+subtree move or archive at the size of the task row, which holds no text
+once the clear has run. Moving or archiving a family whose descriptions were
+stored before the caps, near Convex's document size limit, can then fail
+with Convex's read limit error instead of a refusal. Nothing of it is
+written, and rolling forward ends it. Convex accepts a rollback to
 v0.1.97 (`9243406`), or to a main commit between it and the second
 release, but that code reads only `issues.description`. Every task the
 third release created, edited, restored or cleared then shows no
