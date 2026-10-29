@@ -488,6 +488,50 @@ async function listBatch<Row extends GenericDocument, Out>(
  * are not all name keyed, else one batch. */
 export type GrantBatch<Row> = { state: 'not_ready' } | ({ state: 'ready' } & ListBatch<Row>)
 
+/** The most grants or shares without a name key on one project that a
+ * list checks before it reads in name order (unkeyedOrphans). Past it the
+ * list fails closed. Tests lower it. */
+export const UNKEYED_MOST = { rows: 64 }
+
+/* Whether every grant (or, for `shares`, team share) on `project` without
+ * a copy of its name key belongs to a profile (or team) that is gone or in
+ * another organization, which a list leaves out anyway. The walk in name
+ * order does not read such rows (model/nameKeys.ts projectGrantIndex), and
+ * they are only those a removed person or team left before the backfill
+ * keyed the organization, until their removal's background steps clear
+ * them. Reads at most UNKEYED_MOST.rows of them in one range, and one
+ * lookup each. Answers false for a row whose profile or team is in the
+ * organization, and past UNKEYED_MOST.rows, so the list fails closed
+ * rather than leave such a row out unseen. */
+async function unkeyedOrphans(
+  ctx: QueryCtx,
+  project: Doc<'projects'>,
+  kind: 'grants' | 'shares',
+): Promise<boolean> {
+  const most = UNKEYED_MOST.rows + 1
+  const holders =
+    kind === 'grants'
+      ? (
+          await ctx.db
+            .query('project_access')
+            .withIndex('by_project_name', (q) =>
+              q.eq('project_id', project.id).eq('name_key', undefined),
+            )
+            .take(most)
+        ).map((grant) => () => byId(ctx, 'profiles', grant.profile_id))
+      : (
+          await ctx.db
+            .query('project_team_access')
+            .withIndex('by_project_name', (q) =>
+              q.eq('project_id', project.id).eq('name_key', undefined),
+            )
+            .take(most)
+        ).map((share) => () => byId(ctx, 'teams', share.team_id))
+  if (holders.length === most) return false
+  for (const holder of holders) if ((await holder())?.org_id === project.org_id) return false
+  return true
+}
+
 /** A user grant as the Users list shows it: the person, their grant's
  * level and what else they may be given (GrantChoices). */
 export type UserGrantRow = PersonRow & { level: GrantLevel } & GrantChoices
@@ -508,8 +552,9 @@ export type TeamShareRow = { id: string; name: string; level: GrantLevel }
  * moment. Each kept row reads its profile. `limit` is the batch size.
  *
  * It checks no access: each caller applies its own gate first. It checks
- * the organization's name keys itself (nameKeysReady), so every caller
- * fails closed while they are missing.
+ * the organization's name keys itself (nameKeysReady), and that every grant
+ * without a key is one it would leave out (unkeyedOrphans), so every caller
+ * fails closed while keys are missing.
  */
 export async function userGrantBatch(
   ctx: QueryCtx,
@@ -517,7 +562,11 @@ export async function userGrantBatch(
   ask: ListAsk,
   o: { limit: number; ceiling: ReadCeiling; without?: string },
 ): Promise<GrantBatch<UserGrantRow>> {
-  if (!(await nameKeysReady(ctx, project.org_id))) return { state: 'not_ready' }
+  if (
+    !(await nameKeysReady(ctx, project.org_id)) ||
+    !(await unkeyedOrphans(ctx, project, 'grants'))
+  )
+    return { state: 'not_ready' }
   const matches = allWordsMatcher(nameKey(ask.search))
   const batch = await listBatch(ctx, ask, {
     stream: indexAfter(projectGrantIndex(ctx, project.id), ask.after),
@@ -547,7 +596,11 @@ export async function teamShareBatch(
   ask: ListAsk,
   o: { limit: number; ceiling: ReadCeiling },
 ): Promise<GrantBatch<TeamShareRow>> {
-  if (!(await nameKeysReady(ctx, project.org_id))) return { state: 'not_ready' }
+  if (
+    !(await nameKeysReady(ctx, project.org_id)) ||
+    !(await unkeyedOrphans(ctx, project, 'shares'))
+  )
+    return { state: 'not_ready' }
   const matches = allWordsMatcher(nameKey(ask.search))
   const batch = await listBatch(ctx, ask, {
     stream: indexAfter(projectShareIndex(ctx, project.id), ask.after),
@@ -753,7 +806,7 @@ const NEW_PROJECT_ROLES = ['admin', 'user', 'viewer'] as const
  * order (besideHeld), so the choices it holds cost one document each and no
  * index range. A choice the search matched that they do not hold is looked
  * up by id before it is offered, one index range, which catches a share or
- * grant whose copy of the name key trails a rename.
+ * grant whose copy of the name key trails a rename or is missing.
  */
 export async function candidatesOf(
   ctx: QueryCtx,

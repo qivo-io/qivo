@@ -39,6 +39,7 @@ import {
   projectSettingsOf,
   projectUsersOf,
   type SettingsRights,
+  UNKEYED_MOST,
 } from '../model/projectSettings'
 import {
   LEAD_ACCESS_NEEDED,
@@ -66,8 +67,10 @@ const g = globalThis as unknown as { process: { env: Record<string, string | und
 g.process.env.BETTER_AUTH_SECRET ??= 'project-settings-test-secret-not-a-deployment-key'
 
 const DEFAULT_READ = { ...NAMED_READ }
+const DEFAULT_UNKEYED = { ...UNKEYED_MOST }
 afterEach(() => {
   Object.assign(NAMED_READ, DEFAULT_READ)
+  Object.assign(UNKEYED_MOST, DEFAULT_UNKEYED)
 })
 
 /* --------------------------------------------------------------- fixtures */
@@ -942,6 +945,56 @@ describe('projectSettings.users', () => {
     await grant(t, f.meta, f.user.id, 'user')
     const batch = ready(await read.users(t, f.admin, f.meta.id))
     expect(batch.rows.map((r) => r.id)).toEqual([f.guest.id, f.viewer.id])
+  })
+
+  it('leaves out an unkeyed grant or share whose profile or team is gone, and fails closed on one whose is not', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await keyOrg(t, f.org.id)
+    // a removed person's grant and a deleted team's share, left without a
+    // key from before the backfill stamped the organization
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.meta.id,
+        profile_id: uuid(),
+        level: 'user',
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        team_id: uuid(),
+        level: 'user',
+      })
+    })
+    expect(await read.users(t, f.admin, f.meta.id)).toMatchObject({
+      state: 'ready',
+      rows: [{ id: f.guest.id }, { id: f.viewer.id }],
+    })
+    expect(await read.teams(t, f.admin, f.meta.id)).toMatchObject({ state: 'ready', rows: [] })
+    const offered = () =>
+      walk((after) => read.candidates(t, f.admin, { project_id: f.meta.id, after })).then(idsOf)
+    expect(await offered()).toEqual([f.team.id, f.admin.id, f.agent.id])
+    // past the most it checks, a list fails closed
+    Object.assign(UNKEYED_MOST, { rows: 0 })
+    expect(await read.users(t, f.admin, f.meta.id)).toEqual({ state: 'not_ready' })
+    expect(await read.teams(t, f.admin, f.meta.id)).toEqual({ state: 'not_ready' })
+    Object.assign(UNKEYED_MOST, DEFAULT_UNKEYED)
+    // an unkeyed grant or share of someone still in the organization: the
+    // lists fail closed, and the picker still leaves them out
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.meta.id,
+        profile_id: f.agent.id,
+        level: 'user',
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    expect(await read.users(t, f.admin, f.meta.id)).toEqual({ state: 'not_ready' })
+    expect(await read.teams(t, f.admin, f.meta.id)).toEqual({ state: 'not_ready' })
+    expect(await offered()).toEqual([f.admin.id])
   })
 
   it('lists a renamed person at the place their copy holds until the copy follows the rename', async () => {

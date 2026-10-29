@@ -295,14 +295,20 @@ export function teamIndex(ctx: QueryCtx, orgId: string): NamedIndex<Doc<'teams'>
 /** The user grants on project `projectId` in the order of their copies of
  * the person's name key (project_access.by_project_name): copied key, then
  * profile id. A copy can trail a rename for a moment, which places its row
- * by the earlier name. */
+ * by the earlier name. It holds only grants with a copy: one without sorts
+ * first, and is a grant a removed person left before the backfill keyed
+ * the organization, which a reader checks apart (model/projectSettings.ts
+ * unkeyedOrphans). */
 export function projectGrantIndex(
   ctx: QueryCtx,
   projectId: string,
 ): NamedIndex<Doc<'project_access'>, IdTie> {
   const grants = () => ctx.db.query('project_access')
   return {
-    all: () => grants().withIndex('by_project_name', (q) => q.eq('project_id', projectId)),
+    all: () =>
+      grants().withIndex('by_project_name', (q) =>
+        q.eq('project_id', projectId).gte('name_key', ''),
+      ),
     after: ({ key, tie: [id] }) => [
       () =>
         grants().withIndex('by_project_name', (q) =>
@@ -319,14 +325,18 @@ export function projectGrantIndex(
 
 /** The team shares on project `projectId` in the order of their copies of
  * the team's name key (project_team_access.by_project_name): copied key,
- * then team id, with the same lag as projectGrantIndex. */
+ * then team id, with the same lag as projectGrantIndex. Like it, it holds
+ * only shares with a copy. */
 export function projectShareIndex(
   ctx: QueryCtx,
   projectId: string,
 ): NamedIndex<Doc<'project_team_access'>, IdTie> {
   const shares = () => ctx.db.query('project_team_access')
   return {
-    all: () => shares().withIndex('by_project_name', (q) => q.eq('project_id', projectId)),
+    all: () =>
+      shares().withIndex('by_project_name', (q) =>
+        q.eq('project_id', projectId).gte('name_key', ''),
+      ),
     after: ({ key, tie: [id] }) => [
       () =>
         shares().withIndex('by_project_name', (q) =>
