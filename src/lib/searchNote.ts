@@ -23,6 +23,11 @@ export type SearchNote = { lines: string[]; offer: string | null }
     searched (owner decision, 2026-10-28). */
 export const MIGHT_BE_MISSING = 'Some results might be missing. Choose a project to search in.'
 
+/** The note for a search of a chosen project that may have missed
+    matches: a narrower scope has nothing left to offer but more words. */
+export const MIGHT_BE_MISSING_IN_PROJECT =
+  'Some results might be missing. Add more words to narrow the search.'
+
 /* A page that holds no rows while more follow: its matches no longer show,
    or its reads ran out before its first row. */
 const EMPTY_PAGE = 'Nothing on this page can still be shown. Next goes on with the search.'
@@ -32,13 +37,19 @@ const EMPTY_PAGE = 'Nothing on this page can still be shown. Next goes on with t
  * next_cursor `next` and its coverage. A complete search with no rows and
  * no next page has no results; one whose budget, candidate cap or access
  * rule stopped it (`projects`, `reads`, `candidates`) might miss results,
- * with or without rows; one that left organizations out says so; and a page
- * with no rows that a next page follows says Next goes on. Nothing for a
- * complete page with rows.
+ * with or without rows, and offers a project to search in, or, when the
+ * search is of a chosen project (`inProject`), asks for more words; one that
+ * left organizations out says so; and a page with no rows that a next page
+ * follows says Next goes on. Nothing for a complete page with rows.
  */
 export function searchNote(
   text: string,
-  { rows, next, coverage }: { rows: number; next: string | null; coverage: SearchCoverage },
+  {
+    rows,
+    next,
+    coverage,
+    inProject = false,
+  }: { rows: number; next: string | null; coverage: SearchCoverage; inProject?: boolean },
 ): SearchNote {
   if (!('stopped' in coverage)) {
     if (rows > 0) return { lines: [], offer: null }
@@ -47,6 +58,11 @@ export function searchNote(
   }
   const missing = coverage.stopped !== 'organizations'
   const left = coverage.searched < coverage.of
+  if (missing && inProject) {
+    const lines = [MIGHT_BE_MISSING_IN_PROJECT]
+    if (rows === 0 && next !== null) lines.push(EMPTY_PAGE)
+    return { lines, offer: null }
+  }
   const lines = [
     missing && left
       ? 'Some results might be missing, and some organizations were not searched. Choose a project or an organization to search in.'

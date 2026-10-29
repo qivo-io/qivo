@@ -415,6 +415,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
       rows: shown.rows.length,
       next: shown.nextCursor,
       coverage: shown.coverage,
+      inProject: shown.ask.scope?.project_id !== undefined,
     })
     status = note.lines.length ? note.lines.join(' ') : null
     if (note.offer)

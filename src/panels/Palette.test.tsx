@@ -617,6 +617,24 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     expect(pageButton('next')).not.toBeNull()
   })
 
+  it('asks for more words, not a project, when a chosen project could not be covered', async () => {
+    await open({ partner: true })
+    const stopped = { complete: false, stopped: 'reads', searched: 1, of: 1 } as const
+    await type('the')
+    await last().answer([task(3)], null, stopped)
+    expect(find('[data-palette-choose]').textContent).toBe('Choose a project')
+    await choose(FW)
+    expect(last().args.scope).toEqual({ org_id: ORG, project_id: FW })
+    await last().answer([task(3)], null, stopped)
+    expect(status()).toBe('Some results might be missing. Add more words to narrow the search.')
+    expect(document.querySelector('[data-palette-choose]')).toBeNull()
+    // an organization chosen whole still offers its projects
+    await choose(`org:${ORG}`)
+    await last().answer([task(3)], null, stopped)
+    expect(status()).toBe('Some results might be missing. Choose a project to search in.')
+    expect(find('[data-palette-choose]').textContent).toBe('Choose a project')
+  })
+
   it('offers Retry for a failed read, and restarts once at the first page on a refused cursor', async () => {
     await open()
     await type('firm')

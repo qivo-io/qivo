@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { MIGHT_BE_MISSING, type SearchCoverage, searchNote } from './searchNote'
+import {
+  MIGHT_BE_MISSING,
+  MIGHT_BE_MISSING_IN_PROJECT,
+  type SearchCoverage,
+  searchNote,
+} from './searchNote'
 
 /* What the Search palette says about a page (searchNote): one case for each
    line, and never "No results" for a search that did not cover everything
@@ -51,6 +56,22 @@ describe('searchNote', () => {
         offer: 'Choose a project',
       })
     }
+  })
+
+  it('asks for more words, and offers no project, when a chosen project was searched', () => {
+    for (const why of ['projects', 'reads', 'candidates'] as const) {
+      expect(
+        searchNote('the', { rows: 3, next: null, coverage: stopped(why), inProject: true }),
+        why,
+      ).toEqual({ lines: [MIGHT_BE_MISSING_IN_PROJECT], offer: null })
+      expect(
+        searchNote('the', { rows: 0, next: 's1~next', coverage: stopped(why), inProject: true }),
+      ).toEqual({ lines: [MIGHT_BE_MISSING_IN_PROJECT, EMPTY_PAGE], offer: null })
+    }
+    // a complete search of a project says what it says elsewhere
+    expect(searchNote('the', { rows: 0, next: null, coverage: COMPLETE, inProject: true })).toEqual(
+      { lines: ['No results for “the”'], offer: null },
+    )
   })
 
   it('says organizations were not searched, and offers one, when seats were left out', () => {
