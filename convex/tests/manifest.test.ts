@@ -944,8 +944,8 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     // them; ids the caller cannot see and an organization without their
     // seat answer an empty last page
     archivedPage: 'authedQuery',
-    // the task window's own task in the archive, by id; null unless
-    // archivedPage lists it for the caller
+    // the task window's own task in the archive, by id; null when the task
+    // is active, deleted, unknown or in a project the caller cannot see
     archivedTask: 'authedQuery',
     create: 'orgMutation',
     update: 'orgMutation',

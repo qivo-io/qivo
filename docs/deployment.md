@@ -421,8 +421,12 @@ cannot load comments. The app before v0.1.99 reads Archived tasks through
 `issues.archivedPage` with `project_id`, API access through
 `apiAccess.list`, and each account's `keys` in Billing's usage report, so its
 Archived tasks and API access pages cannot load, and Billing shows "This view
-could not be loaded" while the period has API calls. Later releases removed
-them. The app at
+could not be loaded" while the period has API calls. The app before v0.1.15
+reads Archived tasks through `issues.archivedFor`, the v0.1.15 app sends
+`access` and `team_access` maps to `projects.update`, and the app before
+v0.1.11 saves the Blue appearance through `appearance.save`, so their Archived
+tasks, project access edits and Blue choice fail; the rollback floors below
+already keep those apps out. Later releases removed them. The app at
 v0.1.38 or earlier tells a new Microsoft login that its confirmation email
 was sent, but later backends leave that first email to the app, so the person
 must press **Resend confirmation email**. An app from before demos were

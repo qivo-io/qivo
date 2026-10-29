@@ -481,26 +481,19 @@ describe('projects.update', () => {
     expect(await state()).toEqual(before)
   })
 
-  it("the access map speaks vGrantLevel (plus the dropped 'lead') only — anything else dies in the validator", async () => {
+  it("create's access map speaks vGrantLevel (plus the dropped 'lead') only — anything else dies in the validator", async () => {
     const t = newT()
     const f = await withOrg(t)
     // forged wire values a typed client could never send
     const admin = 'admin' as unknown as 'user'
     const member = 'member' as unknown as 'user' // the pre-0098 word is DEAD
-    // update takes no access map at all
-    await expect(
-      as(t, f.admin).mutation(api.projects.update, {
-        org_id: f.org.id,
-        id: f.meta.id,
-        patch: { access: { [f.guest.id]: admin } } as never,
-      }),
-    ).rejects.toThrowError(/Validator error/)
-    await expect(
-      as(t, f.admin).mutation(
-        api.projects.create,
-        createArgs(f, { key: 'BADLV', access: { [f.guest.id]: member } }),
-      ),
-    ).rejects.toThrowError(/Validator error/)
+    for (const level of [admin, member])
+      await expect(
+        as(t, f.admin).mutation(
+          api.projects.create,
+          createArgs(f, { key: 'BADLV', access: { [f.guest.id]: level } }),
+        ),
+      ).rejects.toThrowError(/Validator error/)
   })
 
   it('key change is allowed with shape + uniqueness revalidated; non-lead callers are refused', async () => {
@@ -814,7 +807,8 @@ describe('project description limits', () => {
             patch: {
               name: 'Renamed',
               key: 'EDIT',
-              // a handover that would move grants on TBED
+              // on TBED a handover that would move grants; FW has no lead
+              // or grants, so there it would move none
               lead_id: f.guest.id,
               track_delay: true,
               review_hours: 4,
