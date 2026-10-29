@@ -666,6 +666,7 @@ regroup:restoredStep mutation internal {"type":"object","value":{"projects":{"fi
 roadmap:change mutation public {"type":"object","value":{"session_id":{"fieldType":{"type":"string"},"optional":false},"operations":{"fieldType":{"type":"array","value":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"task"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"start_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"end_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"remaining_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true}}},"optional":false},"expected":{"fieldType":{"type":"object","value":{"start_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"end_week":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"remaining_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true}}},"optional":true}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"milestone_create"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"week":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"milestone_update"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"week":{"fieldType":{"type":"string"},"optional":true}}},"optional":false},"expected":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"week":{"fieldType":{"type":"string"},"optional":true}}},"optional":true}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"milestone_remove"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"week":{"fieldType":{"type":"string"},"optional":true}}},"optional":true}}}]}},"optional":false}}}
 roadmap:expire mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"session_id":{"fieldType":{"type":"string"},"optional":false},"expires_at":{"fieldType":{"type":"number"},"optional":false}}}
 roadmap:undo mutation public {"type":"object","value":{"session_id":{"fieldType":{"type":"string"},"optional":false},"all":{"fieldType":{"type":"boolean"},"optional":false}}}
+search:page query public {"type":"object","value":{"text":{"fieldType":{"type":"string"},"optional":false},"include_archived":{"fieldType":{"type":"boolean"},"optional":false},"scope":{"fieldType":{"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":true}}},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true}}}
 snapshot:commentThread query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:commentsBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:historyBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1105,6 +1106,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     updateMilestone: 'orgMutation',
     removeMilestone: 'orgMutation',
   },
+  // Main Search spans organizations like Deleted items: one page of task
+  // results across every active seat, or one organization the caller
+  // narrows it to, each candidate judged with the seat in its organization.
+  search: { page: 'authedQuery' },
   // The task window's live comment page, its live history page (only
   // while it shows All) and the earlier pages of each. commentThread is the
   // deprecated thread of both, kept one release for older clients.
@@ -1158,7 +1163,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 204
+const PUBLIC_COUNT = 205
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

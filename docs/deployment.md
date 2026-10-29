@@ -672,9 +672,13 @@ from before the copies holds none, and the same backfill counts it as
 the backfill with `"repair": true`, which writes the copies from each task,
 and call it again with the `cursor` it answers until it answers `done`. A
 task without a row gets none from a move or an archive, and the backfill
-inserts its row with the copies. Main Search's description matching ships
-only once a dry run on development, staging, production and the demo
-reports zero `missing`, `differ`, `duplicates`, `orphans` and `skipped`.
+inserts its row with the copies. Main Search's query, `search:page`
+(`convex/search.ts`), matches descriptions through `search_description`
+and titles through the `search_title` index of `issues`, which Convex builds
+at deploy without a backfill. The query ships before the app calls it. The
+release whose app calls it ships only once a dry run on development,
+staging, production and the demo reports zero `missing`, `differ`,
+`duplicates`, `orphans` and `skipped`.
 Data restored from a backup taken before the copies leaves rows without
 them, and a dry run lists them as `differ` until a repair mends them.
 Code that lists `issue_descriptions` without the copy fields does not
