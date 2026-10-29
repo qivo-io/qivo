@@ -38,6 +38,8 @@ const fake = vi.hoisted(() => ({
   usage: [],
   // the sub-projects the workspace holds, the one below when null
   projects: null,
+  // the issue_links table, which holds links the workspace leaves out
+  linkRows: [],
 }))
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
@@ -83,6 +85,7 @@ vi.mock('convex/browser', () => ({
               ...fake.people,
             ],
             mcp_tokens: fake.tokens,
+            issue_links: fake.linkRows,
             agent_keys: fake.keys,
             billing_usage: fake.usage,
             issue_descriptions: [
@@ -1008,6 +1011,82 @@ describe('board-scale-seed --relations', () => {
     expect(new Set(fake.calls.map(([, , as]) => as))).toEqual(new Set(['nora-login']))
     const subtask = fake.calls.find(([name, f]) => name === 'issues:create' && f.parent_id)
     expect(subtask[1]).toMatchObject({ assignee_id: 'person-aisha', project_id: 'project-FW' })
+  })
+
+  it('leaves archived subtasks and linked tasks archived on a rerun, and says so', async () => {
+    const all = plan()
+    const family = relationId('family')
+    const kids = all.tasks.filter((t) => t.parent_id === family).slice(0, 3)
+    const link = all.links[0]
+    const end = link.source_id === family ? link.target_id : link.source_id
+    fake.projects = KEYS.map((key) => ({
+      id: `project-${key}`,
+      key,
+      org_id: 'org',
+      type: 'project',
+    }))
+    // the archived tasks and the link to one, which the workspace leaves out
+    fake.archived = [...kids.map((t) => t.id), end].map((id) => ({
+      id,
+      org_id: 'org',
+      archived_at: '2026-10-29T00:00:00.000Z',
+    }))
+    fake.linkRows = [
+      { id: link.id, org_id: 'org' },
+      { id: 'elsewhere-link', org_id: 'other' },
+    ]
+    fake.calls = []
+    const lines = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--relations'], {
+        env,
+        log: (line) => lines.push(line),
+      })
+    } finally {
+      fake.projects = null
+      fake.archived = []
+      fake.linkRows = []
+    }
+    const created = new Set(fake.calls.filter(([n]) => n === 'issues:create').map(([, f]) => f.id))
+    expect(created.size).toBe(206 - 4)
+    for (const id of [...kids.map((t) => t.id), end]) expect(created.has(id)).toBe(false)
+    const linked = fake.calls.filter(([n]) => n === 'issues:addLink').map(([, f]) => f.id)
+    expect(linked).toHaveLength(99)
+    expect(linked).not.toContain(link.id)
+    expect(fake.calls.some(([n]) => n === 'issues:unarchive')).toBe(false)
+    expect(lines).toContain(
+      '3 of its subtasks and 1 of its linked tasks are archived, and the seed leaves them so.',
+    )
+    expect(lines.find((l) => l.startsWith('Done: the task'))).toContain(
+      'has 97 active subtasks and 99 links to active tasks',
+    )
+  })
+
+  it('leaves an archived --relations task and its rows alone', async () => {
+    fake.projects = KEYS.map((key) => ({
+      id: `project-${key}`,
+      key,
+      org_id: 'org',
+      type: 'project',
+    }))
+    fake.archived = [
+      { id: relationId('family'), org_id: 'org', archived_at: '2026-10-29T00:00:00.000Z' },
+    ]
+    fake.calls = []
+    const lines = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--relations'], {
+        env,
+        log: (line) => lines.push(line),
+      })
+    } finally {
+      fake.projects = null
+      fake.archived = []
+    }
+    expect(fake.calls).toEqual([])
+    expect(lines).toContain(
+      'The --relations task is archived; the seed leaves it and its rows as they are.',
+    )
   })
 
   it("says where the task's window key puts it, never that its id does", async () => {

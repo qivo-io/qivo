@@ -80,7 +80,9 @@
  * Partner pilot, a top-level project the seed makes for Nora alone, so
  * someone who is not an organization admin sees their links left out.
  * Five of the linked tasks are groups with one subtask each. Every id comes
- * from what it is for, so a rerun adds only what is missing. */
+ * from what it is for, so a rerun adds only what is missing. It leaves
+ * archived ones as they are, restoring and recreating none, and says how
+ * many of the task's subtasks and linked tasks that leaves out. */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -702,8 +704,10 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   })
   const actor = people.page.find((profile) => profile.email === ACTOR && profile.auth_user_id)
   if (!actor) throw new DemoCliError('Seed Northstar first: marketing-demo.mjs seed --local.')
-  // the workspace leaves archived tasks out, so the admin reads them here
+  // the workspace leaves archived tasks out, and the links to them, so the
+  // admin reads them here
   const archived = await archivedTasksOf(client, actor.org_id)
+  const storedLinks = options.relations ? await linkIdsOf(client, actor.org_id) : new Set()
   client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
   const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
@@ -801,7 +805,18 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   }
   log(`Done: ${made} seeded tasks added in Northstar on ${target.url}.`)
   if (options.relations)
-    await seedRelations({ client, org, snapshot, joined, people: people.page, actor, target, log })
+    await seedRelations({
+      client,
+      org,
+      snapshot,
+      joined,
+      archived,
+      storedLinks,
+      people: people.page,
+      actor,
+      target,
+      log,
+    })
   if (options.archived > 0) {
     const parents = new Set([...issues, ...archived].map((task) => task.parent_id).filter(Boolean))
     await seedArchive(planArchive(options.archived, seeded, parents), { client, org, target, log })
@@ -810,10 +825,38 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
     await seedInbox(options.inbox, { client, target, people: people.page, actor, org, log })
 }
 
+/** The ids of every link row of organization `org`, as the local admin
+    reads the table: the workspace leaves out a link to an archived task,
+    whose id stays taken. */
+async function linkIdsOf(client, org) {
+  return new Set(
+    (await tableRows(client, 'issue_links')).filter((l) => l.org_id === org).map((l) => l.id),
+  )
+}
+
 /* Adds the --relations rows still missing (planRelations) through
    `client`, which acts as Nora, reading what is there from the workspace
-   `snapshot` Nora sees and the Northstar people by their demo addresses. */
-async function seedRelations({ client, org, snapshot, joined, people, actor, target, log }) {
+   `snapshot` Nora sees, the `archived` tasks and `storedLinks` link ids the
+   admin read, and the Northstar people by their demo addresses. Archived
+   work stays as it is: the seed restores and recreates none of it, and
+   says what that leaves out of the task's lists. */
+async function seedRelations({
+  client,
+  org,
+  snapshot,
+  joined,
+  archived,
+  storedLinks,
+  people,
+  actor,
+  target,
+  log,
+}) {
+  const archivedIds = new Set(archived.map((task) => task.id))
+  if (archivedIds.has(relationId('family'))) {
+    log('The --relations task is archived; the seed leaves it and its rows as they are.')
+    return
+  }
   const projects = joined('projects')
   const byKey = new Map(
     projects
@@ -832,11 +875,33 @@ async function seedRelations({ client, org, snapshot, joined, people, actor, tar
     people: keys,
     present: {
       projects: new Set(projects.map((project) => project.id)),
-      tasks: new Set(joined('issues').map((task) => task.id)),
-      // a link row carries no organization; Nora sees only her own links
-      links: new Set([...snapshot.links, ...(snapshot.more?.links ?? []).flat()].map((l) => l.id)),
+      tasks: new Set([...joined('issues').map((task) => task.id), ...archivedIds]),
+      // a link row in the workspace carries no organization; Nora sees only
+      // her own links
+      links: new Set([
+        ...[...snapshot.links, ...(snapshot.more?.links ?? []).flat()].map((l) => l.id),
+        ...storedLinks,
+      ]),
     },
   })
+  // what archiving took out of the task's lists, which stays out
+  const whole = planRelations({
+    org,
+    projects: byKey,
+    people: keys,
+    present: { projects: new Set(), tasks: new Set(), links: new Set() },
+  })
+  const family = whole.expected.family
+  const gone = {
+    subtasks: whole.tasks.filter((t) => t.parent_id === family && archivedIds.has(t.id)).length,
+    links: whole.links.filter((l) =>
+      archivedIds.has(l.source_id === family ? l.target_id : l.source_id),
+    ).length,
+  }
+  if (gone.subtasks || gone.links)
+    log(
+      `${gone.subtasks} of its subtasks and ${gone.links} of its linked tasks are archived, and the seed leaves them so.`,
+    )
   log(
     `${plan.projects.length} projects, ${plan.tasks.length} tasks and ${plan.links.length} links to add for --relations.`,
   )
@@ -855,8 +920,14 @@ async function seedRelations({ client, org, snapshot, joined, people, actor, tar
     }
   }
   const { expected } = plan
+  const shown = {
+    subtasks: expected.subtasks - gone.subtasks,
+    links: expected.links - gone.links,
+  }
   log(
-    `Done: the task ${expected.family} has ${expected.subtasks} subtasks and ${expected.links} links on ${target.url}; its window shows ${expected.done} of ${expected.total} tasks done and Σ ${expected.remaining}h.`,
+    gone.subtasks || gone.links
+      ? `Done: the task ${expected.family} has ${shown.subtasks} active subtasks and ${shown.links} links to active tasks on ${target.url}.`
+      : `Done: the task ${expected.family} has ${expected.subtasks} subtasks and ${expected.links} links on ${target.url}; its window shows ${expected.done} of ${expected.total} tasks done and Σ ${expected.remaining}h.`,
   )
   // The app's task windows range over window keys, which the server sets
   // at random (convex/lib/db.ts newWindowKey), so the task's key, not its

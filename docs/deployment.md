@@ -337,7 +337,8 @@ links left out. Five of the linked tasks have one subtask each. The run
 ends by naming the task's window key, which the backend chose: a workspace
 that loads in stages (`--tasks 6000` or more) watches its task windows from
 the lowest keys up, so the key says which stage brings the task. A second
-run adds only what is missing.
+run adds only what is missing. It leaves archived subtasks and linked tasks
+archived and says how many of them the task's window no longer lists.
 
 One run makes the credentials first, each as the login that makes it in
 the app, then the tasks and the relations and the archiving as Nora, and
