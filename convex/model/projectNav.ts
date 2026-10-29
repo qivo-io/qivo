@@ -619,10 +619,10 @@ export async function reachReady(ctx: QueryCtx, orgId: string): Promise<boolean>
 }
 
 /** The bounds of projectSight's reads of the person's rows: at most `teams`
- * of their teams count as grantees (past them only their seat does), at
- * most `roots` live root rows of all their grantees are read to leave out
- * the projects none of them reaches (past them each project is checked by
- * itself), and at most `children` child rows of one grantee under one
+ * of their teams are read, and at most `roots` live root rows of their seat
+ * and those teams, to leave out the projects none of them reaches (past
+ * either, each project is checked by itself, with the seat's own child rows
+ * alone), and at most `children` child rows of one grantee under one
  * top-level project. A child row fails to show its parent only while a
  * Deleted items move or restore holds its project, after a reused id, or
  * for a lead the person's role turns into nothing, so a few suffice. Tests
@@ -662,13 +662,13 @@ type Held = { grantees: Grantee[]; onRoot: boolean }
  * archived, as navigation counts archived sub-projects) names a sub-project
  * of it in their organization that they see. The grantees are their seat
  * and, when their role receives team access, each of their teams
- * (team_members by_profile), up to PROJECT_SIGHT.teams. A reach row records
- * a source and grants nothing, so its project decides: a viewer's lead
- * counts for nothing there, and a row a Deleted items move or restore left
- * on a project it no longer describes, or one naming another top-level
- * project's sub-project, fails. When every row in the bound fails, the
- * project stays out though the person may see it, which misses a match and
- * never shows one.
+ * (team_members by_profile) that holds a root row on the project. A reach
+ * row records a source and grants nothing, so its project decides: a
+ * viewer's lead counts for nothing there, and a row a Deleted items move or
+ * restore left on a project it no longer describes, or one naming another
+ * top-level project's sub-project, fails. When every row in the bound
+ * fails, the project stays out though the person may see it, which misses
+ * a match and never shows one.
  *
  * For a person who is not an organization admin, it first reads once the
  * live root rows of all their grantees (project_reach by_grantee_list), up
@@ -679,15 +679,22 @@ type Held = { grantees: Grantee[]; onRoot: boolean }
  * one above every sub-project they see. A project without one is left out
  * with no read, so a hidden candidate costs no grant or share read, and a
  * top-level project with navigation rows only is not asked about its own
- * grants and shares. Past either bound, each project is checked by itself.
- * An organization admin sees every project of a meta's tree (lib/access.ts
- * levelUnder), which no reach row records, so their candidates skip the
- * root rows; the admin access split changes that rule in lib/access.ts.
+ * grants and shares. Past PROJECT_SIGHT.teams teams or PROJECT_SIGHT.roots
+ * root rows, each project is checked by itself, and only the seat's own
+ * child rows show a top-level project for navigation, one range a
+ * candidate: a top-level project the person sees only for navigation
+ * through a team's share on one of its sub-projects then stays out, a
+ * missed match. An organization admin sees every project of a meta's tree
+ * (lib/access.ts levelUnder), which no reach row records, so their
+ * candidates skip the root rows and are checked the same way; the admin
+ * access split changes that rule in lib/access.ts.
  *
  * Every read goes through `budget`, which throws to stop the caller: each
  * project above a sub-project, each reach row and each sub-project a row
  * names, and after each access check its own reads (`recount`), which for a
- * project shared with many teams can be many rows (projectLevelsOf).
+ * project shared with many teams can be many rows (projectLevelsOf). A read
+ * that throws fails every later answer that awaits it (the grantees, the
+ * root rows, a project asked again), so a caller stops at the first throw.
  */
 export function projectSight(
   ctx: QueryCtx,
@@ -800,7 +807,8 @@ export function projectSight(
       budget.recount()
       if (sees) return true
     }
-    return await navigates(p, reached?.grantees ?? (await granteesOf()).grantees)
+    // without root rows, the seat's own rows alone, one range
+    return await navigates(p, reached?.grantees ?? [grantee.profile(me.id)])
   }
   const asked = new Map<string, Promise<boolean>>()
   return (p) => {

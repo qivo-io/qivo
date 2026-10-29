@@ -2003,31 +2003,116 @@ describe('the project results of main Search', () => {
     expect(capped.coverage).toEqual(stopped('candidates'))
     expect(projectIds(capped)).toHaveLength(2)
     MAIN_SEARCH.names = DEFAULT_SEARCH.names
-    // and a quarter of the seat's ranges, so its task sources keep the rest
-    await plantProjects(t, f.org.id, 30, (i) => ({
-      parent_id: f.meta.id,
-      name: `Zephyr more ${i}`,
-    }))
-    await withReach(t)
-    MAIN_SEARCH.ranges = 80
-    const shared = await search(t, f.admin, { text: 'zephyr' })
-    expect(shared.coverage).toEqual(stopped('candidates'))
-    expect(projectIds(shared)).toHaveLength(20)
-    MAIN_SEARCH.ranges = DEFAULT_SEARCH.ranges
     // a seat searched whole that does not see every project
     MAIN_SEARCH.projects = 0
     expect((await search(t, f.user, { text: 'zephyr' })).coverage).toEqual(stopped('projects'))
     MAIN_SEARCH.projects = DEFAULT_SEARCH.projects
-    // project rows near Convex's 1 MiB spend the seat's allowance
+    // project rows near Convex's 1 MiB, more than the seat's whole
+    // allowance holds, spend the names' quarter of it, and the seat's task
+    // sources still read with the rest
     await plantProjects(t, f.org.id, 12, (i) => ({
       parent_id: f.meta.id,
       name: `Zephyr large ${i}`,
       description: 'x'.repeat(900_000),
     }))
     await withReach(t)
-    const large = await search(t, f.admin, { text: 'zephyr' })
-    expect(large.coverage).toEqual(stopped('reads'))
-    expect(projectIds(large).length).toBeGreaterThan(0)
+    const titled = await task(t, f, f.sub, 'Zephyr')
+    const large = await searchRun(t, [f.admin], { text: 'zephyr' })
+    expect(large.page.coverage).toEqual(stopped('reads'))
+    expect(projectIds(large.page).length).toBeGreaterThan(0)
+    expect(taskIds(large.page)).toEqual([titled.id])
+    // a quarter of the seat's 8 MiB, passed by the one row that crosses it
+    expect(large.read.bytes).toBeLessThan(4 << 20)
+  })
+
+  it("keeps the task sources of eight seats whose name checks would spend each seat's reads", async () => {
+    const t = newT()
+    const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
+    // in each of eight organizations a guest granted 65 sub-projects under
+    // distinct parents, more than one listing holds, so each seat is
+    // searched whole and its name candidates each cost a few access reads
+    const seats: Doc<'profiles'>[] = []
+    const titled: string[] = []
+    for (let i = 0; i < 8; i++) {
+      const org = await plantOrg(t, i)
+      const seat = await plantSeat(t, {
+        org_id: org,
+        auth_user_id: login,
+        org_role: 'guest',
+        accepted_at: NOW,
+      })
+      seats.push(seat)
+      const tops = await plantProjects(t, org, 65, (k) => ({ type: 'meta', name: `Zephyr ${k}` }))
+      const subs = await plantProjects(t, org, 65, (k) => ({
+        parent_id: tops[k],
+        name: `Zephyr part ${k}`,
+      }))
+      await t.run(async (ctx) => {
+        for (const project_id of subs)
+          await ctx.db.insert('project_access', { project_id, profile_id: seat.id, level: 'user' })
+      })
+      titled.push((await plantIssue(t, { org_id: org, project_id: subs[0], title: 'Zephyr' })).id)
+    }
+    await withReach(t)
+    const run = await searchRun(t, seats, { text: 'zephyr' })
+    // every seat's title match, ranked first as its title is the text
+    expect(taskIds(run.page).sort()).toEqual([...titled].sort())
+    expect(run.page.rows.slice(0, 8).map((row) => row.kind)).toEqual(Array(8).fill('task'))
+    // names stopped within their part, with some shown, and the seats
+    // searched whole say the search is incomplete
+    expect(projectIds(run.page).length).toBeGreaterThan(0)
+    expect(run.page.coverage).toEqual(stopped('projects', 8, 8))
+    expect(run.searches).toBe(24)
+  }, 120_000)
+
+  it('keeps the task sources of a member past the root row bound', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const member = await plantMember(t, f)
+    // twenty teams, the first sharing a top-level project with 40
+    // sub-projects, and a grant on TBED, so the member is searched whole
+    const teams = await t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i < 20; i++) {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: f.org.id,
+          name: `Team ${i}`,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', {
+          team_id: id,
+          profile_id: member.id,
+          is_leader: false,
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+    const shared = await plantProject(t, { org_id: f.org.id, name: 'Shared work' })
+    const subs = await plantProjects(t, f.org.id, 40, () => ({ parent_id: shared.id }))
+    await t.run((ctx) =>
+      ctx.db.insert('project_team_access', {
+        team_id: teams[0],
+        project_id: shared.id,
+        level: 'user',
+      }),
+    )
+    await grant(t, f.meta, member)
+    // 120 top-level projects named the text that the member cannot see
+    await plantProjects(t, f.org.id, 120, (i) => ({ type: 'meta', name: `Zephyr ${i}` }))
+    const titled = await plantIssue(t, { org_id: f.org.id, project_id: subs[0], title: 'Zephyr' })
+    await withReach(t)
+    // their two root rows pass the bound, so each candidate is checked by
+    // itself, with the seat's own child rows alone
+    PROJECT_SIGHT.roots = 1
+    const run = await searchRun(t, [member], { text: 'zephyr' })
+    expect(taskIds(run.page)).toEqual([titled.id])
+    expect(projectIds(run.page)).toEqual([])
+    expect(run.page.coverage).toEqual(stopped('projects'))
+    expect(run.searches).toBe(3)
   })
 
   it('runs one name query for each ready seat searched whole and none for one searched project by project', async () => {

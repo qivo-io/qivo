@@ -98,18 +98,20 @@ import {
  * far smaller than the tasks'. Reserving the name query inside `searches`
  * would lower `most` for later seats instead, so a later seat that sees a
  * few more projects than the lowered `most` would be searched whole. The
- * name source runs before the seat's task places and spends the same
- * allowance, so in a large organization whose project names match the
- * text, a seat searched whole has fewer reads left for its task sources
- * than before, and can stop with `reads` sooner. `names` bounds that, and so
- * does NAME_SHARE where several seats share the call. Measured in
- * convex-test (2026-10-29) in an organization of 300 projects whose names
- * all held the text, the 256 candidates cost an admin's seat and a member's
- * seat searched whole each about 255 documents and 95 KB more than one
- * candidate did, and on Convex, which counts each search result as a range,
- * as many ranges: about an eighth of a lone seat's ranges. The member's
- * check of hidden candidates read no more, as their reach rows left those
- * out (model/projectNav.ts projectSight). Tests lower these. */
+ * name source runs before the seat's task places, within its own part of
+ * the seat's allowance (NAME_SHARE), which bounds what reading and judging
+ * the names may read, and once that part is spent the seat stops its names
+ * with `reads` and goes on to its places with the rest. So in a large
+ * organization whose project names match the text, a seat searched whole
+ * has up to a quarter fewer reads left for its task sources than before,
+ * and can stop with `reads` sooner. Measured in convex-test (2026-10-29) in
+ * an organization of 300 projects whose names all held the text, the 256
+ * candidates cost an admin's seat and a member's seat searched whole each
+ * about 255 documents and 95 KB more than one candidate did, and on Convex,
+ * which counts each search result as a range, as many ranges: about an
+ * eighth of a lone seat's ranges. The member's check of hidden candidates
+ * read no more, as their reach rows left those out (model/projectNav.ts
+ * projectSight). Tests lower these. */
 export const MAIN_SEARCH = {
   rows: 25,
   candidates: 512,
@@ -125,10 +127,12 @@ export const MAIN_SEARCH = {
   pageParse: 500_000,
 }
 
-/* The part of a seat's allowance of ranges its project names may take at
- * most, as candidates (MAIN_SEARCH.names): a quarter, as each candidate
- * costs at least a range, so the seat's task sources keep the rest also when
- * many seats share the call. */
+/* The part of a seat's allowance its project names may read, on every
+ * count: a quarter. The name query, the readiness read and every read of
+ * the names' check (model/projectNav.ts projectSight) count against it, as
+ * reads of the seat's own allowance too, so the seat's task sources keep
+ * the rest however the names' check reads, also when many seats share the
+ * call and each allowance is small. */
 const NAME_SHARE = 4
 
 /** The least allowance a seat is searched with (allowancesOf). When what
@@ -398,10 +402,12 @@ type Stops = {
  *   names' check (model/projectNav.ts projectSight) reads the person's
  *   reach rows, and for a hidden top-level candidate the person's reach
  *   rows reach, its grants and team shares and their child rows under it,
- *   all within that seat's allowance. A top-level project the person sees
- *   only for navigation, whose first child rows of each grantee all fail
- *   (a viewer's lead, a project in a Deleted items move), stays out there,
- *   a missed match. An organization admin's whole seat also reads projects
+ *   all within the names' part of that seat's allowance (NAME_SHARE). A
+ *   top-level project the person sees only for navigation, whose first
+ *   child rows of each grantee all fail (a viewer's lead, a project in a
+ *   Deleted items move), or, past PROJECT_SIGHT's bounds, one seen only
+ *   through a team's source on a sub-project, stays out there, a missed
+ *   match. An organization admin's whole seat also reads projects
  *   outside any meta's tree, which no writer makes now and no one sees.
  *   Such a seat's coverage, and so the search's, is always `projects`,
  *   except an admin's, whose seat hides nothing.
@@ -1031,8 +1037,10 @@ export async function mainSearchPage(
   const sourcesTakeAll = convexTakesAll(terms)
   // the parse allowance of the seat searched now
   let seatParse = parseAllowance(0)
-  // how many project names the seat searched now may read (MAIN_SEARCH)
-  let seatNames = 0
+  // what the names of the seat searched now may read (NAME_SHARE), and the
+  // seats' real limit
+  let seatNames: ReadCeiling = { ranges: 0, documents: 0, bytes: 0 }
+  let seatLimit: ReadCeiling = seatNames
 
   /* The readable text of description `raw` when a task with `fields` and
    * that text matches every term, else null, its parse counted by `spend`.
@@ -1152,18 +1160,18 @@ export async function mainSearchPage(
   }
 
   /* Reads search source `query` of `seat` in Convex's order, a document at
-   * a time, judging each, up to `cap` candidates, and answers whether it
-   * read every candidate the source had. Convex reads a search query's
-   * documents as they are asked for, and counts each as an index range, as
-   * it fetches each by id (both checked on a local backend), so each
-   * document needs a range and a document. */
+   * a time under `budget`, the seat's own unless given, judging each, up to
+   * `cap` candidates, and answers whether it read every candidate the source
+   * had. Convex reads a search query's documents as they are asked for, and
+   * counts each as an index range, as it fetches each by id (both checked on
+   * a local backend), so each document needs a range and a document. */
   const readSource = async <D>(
     seat: Seat,
     query: AsyncIterable<D>,
     judge: (doc: D) => Promise<void>,
-    cap = MAIN_SEARCH.candidates,
+    { cap = MAIN_SEARCH.candidates, budget = gather }: { cap?: number; budget?: ReadBudget } = {},
   ) => {
-    await gather.need(1, 1)
+    await budget.need(1, 1)
     begin(seat)
     stats.searches++
     let read = 0
@@ -1173,7 +1181,7 @@ export async function mainSearchPage(
         stops.candidates = true
         return false
       }
-      await gather.need(1, 1)
+      await budget.need(1, 1)
     }
     return true
   }
@@ -1186,29 +1194,42 @@ export async function mainSearchPage(
    * runs, and the check reads reach rows. Without them it asks no names
    * (`unready`), failing closed. Each candidate is matched first, so one
    * whose name lacks a term costs no check, then judged by
-   * model/projectNav.ts projectSight within the seat's allowance. */
+   * model/projectNav.ts projectSight. Everything it reads, the readiness
+   * included, goes through the names' own part of the seat's allowance
+   * (NAME_SHARE); once that is spent the names stop with `reads`, and the
+   * seat goes on to its places with the rest of its allowance. */
   const searchNames = async (seat: Seat) => {
     const { me, access } = seat
-    await gather.need(1, 1)
-    begin(seat)
-    if (!(await reachReady(ctx, me.org_id))) {
-      stops.unready = true
-      return
-    }
-    const sees = projectSight(ctx, me, access, gather)
-    const names = ctx.db
-      .query('projects')
-      .withSearchIndex('search_name', (q) =>
-        q.search('name', text).eq('org_id', me.org_id).eq('archive_state', 'live'),
+    const now = countsOf(await ctx.meta.getTransactionMetrics())
+    const budget = readBudget(ctx, seatLimit, plus(now, seatNames))
+    try {
+      await budget.need(1, 1)
+      begin(seat)
+      if (!(await reachReady(ctx, me.org_id))) {
+        stops.unready = true
+        return
+      }
+      const sees = projectSight(ctx, me, access, budget)
+      const names = ctx.db
+        .query('projects')
+        .withSearchIndex('search_name', (q) =>
+          q.search('name', text).eq('org_id', me.org_id).eq('archive_state', 'live'),
+        )
+      await readSource(
+        seat,
+        names,
+        async (p) => {
+          if (nameFits(p) && (await sees(p))) addName(seat, p)
+        },
+        { cap: MAIN_SEARCH.names, budget },
       )
-    await readSource(
-      seat,
-      names,
-      async (p) => {
-        if (nameFits(p) && (await sees(p))) addName(seat, p)
-      },
-      seatNames,
-    )
+    } catch (e) {
+      if (!(e instanceof OutOfRoom)) throw e
+      stops.reads = true
+    } finally {
+      // the seat's budget looks at what the names read before its next read
+      gather.recount()
+    }
   }
 
   /* Searches `seat` and adds its matches: the names of the projects it
@@ -1324,7 +1345,12 @@ export async function mainSearchPage(
     const now = countsOf(await ctx.meta.getTransactionMetrics())
     gather = readBudget(ctx, allowances.limit, plus(now, allowances.seat))
     seatParse = parseAllowance(allowances.parse)
-    seatNames = Math.min(MAIN_SEARCH.names, Math.floor(allowances.seat.ranges / NAME_SHARE))
+    seatLimit = allowances.limit
+    seatNames = {
+      ranges: Math.floor(allowances.seat.ranges / NAME_SHARE),
+      documents: Math.floor(allowances.seat.documents / NAME_SHARE),
+      bytes: Math.floor(allowances.seat.bytes / NAME_SHARE),
+    }
     await searchSeat(seat)
   }
 
