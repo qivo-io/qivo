@@ -1602,6 +1602,17 @@ describe('archiveDoneIssues checks the projects that writers marked', () => {
     expect((await issueRow(t, parent.id))?.archived_at).toBe(night(1))
   })
 
+  it('outside a public demo, a writer adds its row without reading, a row a restore', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (let round = 0; round < 2; round++) {
+      await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: f.sub.id })
+      await as(t, f.user).mutation(api.projects.unarchive, { org_id: f.org.id, id: f.sub.id })
+    }
+    // the run's hand phase keeps one of them
+    expect((await rechecks(t)).map((row) => row.project_id)).toEqual([f.sub.id, f.sub.id])
+  })
+
   it('marks nothing for a change that leaves the parent waiting', async () => {
     const { t, f, child } = await waitingParent()
     await as(t, f.user).mutation(api.issues.update, {

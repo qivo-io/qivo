@@ -21,15 +21,20 @@
  *
  * Rows are written without a read first, through the writer that leaves a
  * public demo's record limit alone (lib/demo.ts uncountedWriter), because a
- * row only asks for a check and holds nothing of the visitor's. The run's
- * full pass every few weeks (jobs.ts ARCHIVE_FULL_AFTER_MS) covers a write
- * that marked nothing, such as data written outside the app or by an
- * earlier release. */
+ * row only asks for a check and holds nothing of the visitor's. On a demo
+ * deployment a writer reads first instead and adds no row while the project
+ * has one without from_run, so a visitor's rows stay bounded by projects,
+ * not by writes; a row a running chain deletes at that moment can then hide
+ * the visitor's change from the next run, which only lets a demo task
+ * archive late. Elsewhere the blind insert keeps writers free of read
+ * conflicts with the archive. The run's full pass every few weeks (jobs.ts
+ * ARCHIVE_FULL_AFTER_MS) covers a write that marked nothing, such as data
+ * written outside the app or by an earlier release. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
-import { uncountedWriter } from '../lib/demo'
+import { isDemoDeployment, uncountedWriter } from '../lib/demo'
 import { DEFAULT_ARCHIVE_DAYS } from './orgs'
 
 const DAY = 86_400_000
@@ -52,17 +57,27 @@ export const behindWindow = (doneAt: string, now: string): boolean =>
 /** The rechecks of organization `orgId`'s projects, which its teardowns
  * delete. */
 export const rechecksOfOrg = (ctx: QueryCtx, orgId: string) =>
-  ctx.db.query('archive_rechecks').withIndex('by_org_project', (q) => q.eq('org_id', orgId))
+  ctx.db.query('archive_rechecks').withIndex('by_org_project_run', (q) => q.eq('org_id', orgId))
 
 /** Asks the next nightly archive to check project `project_id` of
  * organization `org_id` in full. `from_run` is the `now` of the run whose
  * leg writes the row, which that run leaves for the next one, and `due_by`
  * the threshold of the run whose find phase writes it, which an older run
- * leaves for it. */
+ * leaves for it. A writer's row has neither, and on a demo deployment it is
+ * added only while the project has no row without from_run (header). */
 export async function recheckProject(
   db: MutationCtx['db'],
   row: { org_id: string; project_id: string; from_run?: string; due_by?: string },
 ): Promise<void> {
+  if (row.from_run === undefined && row.due_by === undefined && isDemoDeployment()) {
+    const held = await db
+      .query('archive_rechecks')
+      .withIndex('by_org_project_run', (q) =>
+        q.eq('org_id', row.org_id).eq('project_id', row.project_id).eq('from_run', undefined),
+      )
+      .first()
+    if (held !== null) return
+  }
   await uncountedWriter(db).insert('archive_rechecks', row)
 }
 

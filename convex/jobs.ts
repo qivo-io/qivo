@@ -727,7 +727,7 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   const cutoff = archiveCutoff(a.now)
   const page = await ctx.db
     .query('archive_rechecks')
-    .withIndex('by_org_project')
+    .withIndex('by_org_project_run')
     .paginate({ cursor: a.cursor ?? null, numItems: ARCHIVE_LIMITS.projects })
   for (const row of page.page) {
     // this run's or a newer run's, which that run or a later one hands

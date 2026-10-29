@@ -2351,14 +2351,15 @@ export default defineSchema({
   // tasks' done_at: a task there can be due without a new done_at, when its
   // project was restored from the archive or a subtask it waited for stopped
   // counting (model/archiveRechecks.ts). Writers insert without reading, so
-  // a project can have several rows; the run's hand phase keeps one per
-  // project, deletes the others it reads, and hands the project to its
-  // organization's chain, which deletes that row once it is done with the
-  // project. A chain that fails leaves its rows for the next run. A row is
-  // only a reason to check a project under the unchanged archive rules, so
-  // one that outlives its project, or names an id another project took
-  // since, costs one check and changes no outcome. Deleted with its
-  // organization.
+  // a project can have several rows, except on a public demo deployment,
+  // where a writer adds none while the project has one without from_run.
+  // The run's hand phase keeps one per project, deletes the others it reads,
+  // and hands the project to its organization's chain, which deletes that
+  // row once it is done with the project. A chain that fails leaves its rows
+  // for the next run. A row is only a reason to check a project under the
+  // unchanged archive rules, so one that outlives its project, or names an
+  // id another project took since, costs one check and changes no outcome.
+  // Deleted with its organization.
   archive_rechecks: defineTable({
     org_id: v.string(),
     project_id: v.string(),
@@ -2369,7 +2370,10 @@ export default defineSchema({
     // the threshold of the run whose find phase wrote the row, which the
     // hand phase of an older run, with an earlier threshold, leaves for it
     due_by: v.optional(v.string()),
-  }).index('by_org_project', ['org_id', 'project_id']),
+  })
+    // the hand phase's order, an organization's rows by prefix, and a
+    // project's rows without from_run (model/archiveRechecks.ts)
+    .index('by_org_project_run', ['org_id', 'project_id', 'from_run']),
 
   // When the nightly read-message sweep next visits a profile (jobs.ts
   // sweepReadMessages): no later than the oldest of its read, unsnoozed

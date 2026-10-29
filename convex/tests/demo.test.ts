@@ -924,6 +924,38 @@ describe('public demo archive rechecks', () => {
     expect(restore.counted).toBe(restore.rows)
     expect((await rechecksOf(org_id)).sort()).toEqual([parent.project_id, project.id].sort())
   })
+
+  it('keeps one row a project however often a visitor restores it', async () => {
+    const a = await readyDemo()
+    const org_id = a.profile.org_id
+    const project = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', org_id))
+          .collect()
+      ).find((p) => p.type === 'project' && p.archived_at === undefined),
+    )
+    if (project === undefined) throw new Error('the demo has no sub-project')
+    for (let round = 0; round < 3; round++) {
+      await a.as.mutation(api.projects.archive, { org_id, id: project.id })
+      await a.as.mutation(api.projects.unarchive, { org_id, id: project.id })
+    }
+    expect(await rechecksOf(org_id)).toEqual([project.id])
+    // a row a run's leg wrote is no reason to skip a visitor's
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('archive_rechecks').collect())
+        await ctx.db.delete(row._id)
+      await ctx.db.insert('archive_rechecks', {
+        org_id,
+        project_id: project.id,
+        from_run: '2026-09-14T02:30:00.000Z',
+      })
+    })
+    await a.as.mutation(api.projects.archive, { org_id, id: project.id })
+    await a.as.mutation(api.projects.unarchive, { org_id, id: project.id })
+    expect(await rechecksOf(org_id)).toEqual([project.id, project.id])
+  })
 })
 
 describe('public demo provisioning steps', () => {
