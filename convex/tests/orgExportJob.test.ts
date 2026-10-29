@@ -993,6 +993,104 @@ describe('organization export job', () => {
   })
 })
 
+describe("an export reads only the organization's own rows", () => {
+  /** The read state a step commits between two batches of child section
+   * `section`, whose page of parents holds `id` alone. */
+  const kept = (section: OrgExportSection, id: string) => ({
+    section: ORG_EXPORT_ORDER.indexOf(section),
+    cursor: null,
+    parents: { ids: [id], at: 0, cursor: null, done: true },
+  })
+
+  it("checks a parent an earlier batch kept again, so another organization's rows under a reused id stay out", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const key = {
+      name: 'Relay key',
+      key_prefix: 'qva_abc...cdef0',
+      key_hash: 'b'.repeat(64),
+      created_at: NOW,
+    }
+    await t.run(async (ctx) => {
+      await ctx.db.insert('agent_keys', { ...key, id: uuid(), profile_id: f.agent.id })
+      await ctx.db.insert('comments', {
+        id: uuid(),
+        issue_id: task.id,
+        body: 'Own',
+        created_at: NOW,
+      })
+    })
+    const read = (section: OrgExportSection, id: string) =>
+      t.run((ctx) => readBatch(ctx, f.org.id, kept(section, id)))
+    expect((await read('agent_keys', f.agent.id)).rows).toHaveLength(1)
+    expect((await read('comments', task.id)).rows).toHaveLength(1)
+
+    // Between two batches the agent and the task go for good, with their
+    // rows, and another organization's rows take their ids: a key from
+    // before keys named their organization, and a task with a comment.
+    await t.run(async (ctx) => {
+      for (const table of ['agent_keys', 'comments'] as const)
+        for (const row of await ctx.db.query(table).collect()) await ctx.db.delete(row._id)
+      await ctx.db.delete(f.agent._id)
+      await ctx.db.delete(task._id)
+      const { _id, _creationTime, ...agent } = f.agent
+      await ctx.db.insert('profiles', { ...agent, org_id: f.otherOrg.id })
+      await ctx.db.insert('agent_keys', { ...key, id: uuid(), profile_id: f.agent.id })
+    })
+    await plantIssue(t, { id: task.id, org_id: f.otherOrg.id, project_id: f.otherProject.id })
+    await t.run((ctx) =>
+      ctx.db.insert('comments', {
+        id: uuid(),
+        issue_id: task.id,
+        body: 'Foreign',
+        created_at: NOW,
+      }),
+    )
+    for (const [section, id] of [
+      ['agent_keys', f.agent.id],
+      ['comments', task.id],
+    ] as const)
+      expect(await read(section, id), section).toMatchObject({ rows: [], done: true })
+  })
+
+  it('leaves out a child row that names another organization, in the job and in page', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const attachment = (org_id: string, name: string) => ({
+      org_id,
+      id: uuid(),
+      issue_id: task.id,
+      name,
+      size_bytes: 1,
+      inline: false,
+      created_at: NOW,
+    })
+    await t.run(async (ctx) => {
+      const file = await ctx.storage.store(new Blob(['x']))
+      await ctx.db.insert('issue_attachments', {
+        ...attachment(f.org.id, 'own.txt'),
+        storage_id: file,
+      })
+      // damaged: under this organization's task, naming another
+      await ctx.db.insert('issue_attachments', {
+        ...attachment(f.otherOrg.id, 'foreign.txt'),
+        storage_id: file,
+      })
+    })
+    const batch = await t.run((ctx) => readBatch(ctx, f.org.id, kept('issue_attachments', task.id)))
+    expect(batch.rows.map((row) => row.name)).toEqual(['own.txt'])
+    const paged = await as(t, f.admin).query(page, {
+      org_id: f.org.id,
+      section: 'issue_attachments',
+      parent_id: task.id,
+      cursor: null,
+    })
+    expect(paged.rows.map((row) => row.name)).toEqual(['own.txt'])
+  })
+})
+
 describe('organization export teardowns', () => {
   it("organization deletion deletes every job, part, file and request row with the organization's work", async () => {
     const t = newT()

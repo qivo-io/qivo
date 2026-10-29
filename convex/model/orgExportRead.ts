@@ -323,6 +323,10 @@ export async function exportDocs(
   const rows: OrgExportRow[] = []
   let skipped = 0
   for (const doc of docs) {
+    // A child row that names its organization must name this one, also
+    // when a damaged row or a reused parent id reaches another
+    // organization's rows.
+    if ('org_id' in doc && doc.org_id !== undefined && doc.org_id !== orgId) continue
     // a task under a project in Deleted items stays out, like the project
     const projectId = checkParents && 'project_id' in doc ? doc.project_id : undefined
     if (projectId !== undefined && !(await live.project(projectId))) {
@@ -366,6 +370,42 @@ const roomLeft = async (ctx: QueryCtx): Promise<boolean> =>
   (await ctx.meta.getTransactionMetrics()).bytesRead.used < PAGE_BYTES &&
   !(await usedMoreThan(ctx, 0.5))
 
+type ParentTable = 'teams' | 'projects' | 'issues' | 'profiles'
+
+/* Whether parent `doc` of `section`, read in organization `orgId`, still
+ * has children the export reads. Only agents have agent keys. While a
+ * deleted item is in flight a task under a project that is not live stays
+ * out with its rows, as the tasks section leaves it out. */
+async function parentReads(
+  doc: Doc<PagedSection>,
+  orgId: string,
+  section: OrgExportSection,
+  inFlight: boolean,
+  live: LiveChecks,
+): Promise<boolean> {
+  if (!('org_id' in doc) || doc.org_id !== orgId) return false
+  if (section === 'agent_keys' && !('kind' in doc && doc.kind === 'agent')) return false
+  const projectId = 'project_id' in doc ? doc.project_id : undefined
+  return !(inFlight && projectId !== undefined && !(await live.project(projectId)))
+}
+
+/* Whether the parent `id` of a page an earlier call read still belongs to
+ * organization `orgId` and has children the export reads (parentReads). A
+ * profile or task removed since can have its id taken by another
+ * organization's row, whose children must not enter this archive. */
+async function stillParent(
+  ctx: QueryCtx,
+  orgId: string,
+  section: OrgExportSection,
+  parentTable: ParentTable,
+  id: string,
+  inFlight: boolean,
+  live: LiveChecks,
+): Promise<boolean> {
+  const doc = await byId(ctx, parentTable, id)
+  return doc !== null && (await parentReads(doc, orgId, section, inFlight, live))
+}
+
 /* The ids of the next page of a child section's parents, `parentTable` by
  * organization from `cursor`. Only agents have agent keys, so agent_keys
  * keeps the agents alone. While a deleted item is in flight a task under a
@@ -376,7 +416,7 @@ async function parentPage(
   ctx: QueryCtx,
   orgId: string,
   section: OrgExportSection,
-  parentTable: 'teams' | 'projects' | 'issues' | 'profiles',
+  parentTable: ParentTable,
   cursor: string | null,
   inFlight: boolean,
   live: LiveChecks,
@@ -387,10 +427,7 @@ async function parentPage(
   for (const doc of page.page) {
     // every parent table has an id; this tells TypeScript so
     if (!('id' in doc)) continue
-    if (section === 'agent_keys' && !('kind' in doc && doc.kind === 'agent')) continue
-    const projectId = 'project_id' in doc ? doc.project_id : undefined
-    if (inFlight && projectId !== undefined && !(await live.project(projectId))) continue
-    ids.push(doc.id)
+    if (await parentReads(doc, orgId, section, inFlight, live)) ids.push(doc.id)
   }
   return { ids, at: 0, cursor: page.continueCursor, done: page.isDone }
 }
@@ -404,7 +441,12 @@ async function parentPage(
  * whole while it has room, so a task with few comments costs no query of
  * its own. A parent whose children do not fit in one page is left for the
  * next call, which pages them. Convex runs one paginated read in a query,
- * so a call pages once: the parent page or the first parent.
+ * so a call pages once: the parent page or the first parent. Parent ids
+ * that an earlier call read wait in the step's state between calls, so a
+ * call reads each such parent again first and skips it unless it still
+ * belongs to the organization and still has children the export reads
+ * (stillParent). Every child row that names an organization must name
+ * this one (exportDocs).
  *
  * Each read it starts (a page, a parent page or one parent's whole range)
  * starts under PAGE_BYTES read and under half of Convex's other limits
@@ -461,6 +503,10 @@ export async function readBatch(
   }
   let cursor = from.cursor
   let parents = from.parents
+  // whether this call read the parent page itself, so its ids are as
+  // current as the children it reads; ids from an earlier call are checked
+  // again first
+  let fresh = false
   let paged = false
   for (;;) {
     if (parents !== undefined && parents.at >= parents.ids.length && parents.done)
@@ -478,10 +524,16 @@ export async function readBatch(
         inFlight,
         live,
       )
+      fresh = true
       cursor = null
       continue
     }
     const scope = parents.ids[parents.at]
+    if (!fresh && !(await stillParent(ctx, orgId, section, parentTable, scope, inFlight, live))) {
+      parents = { ...parents, at: parents.at + 1 }
+      cursor = null
+      continue
+    }
     if (!paged) {
       paged = true
       const page = await readPage(ctx, section, scope, cursor, pageSize)
