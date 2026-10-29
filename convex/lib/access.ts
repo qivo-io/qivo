@@ -595,6 +595,10 @@ export function accessOf(
     /** What the caller's own grants and team shares cost to read so far,
      * alike in every part (lib/workspaceParts.ts softSplit). */
     shared: levels.shared,
+    /** The project with this id, of any organization, or null, read once
+     * for every answer here (lib/mainSearch.ts names a result's projects
+     * with it). */
+    project: levels.project,
     /** Whether the caller can see the project with this id
      * (canSeeProject). */
     visible,

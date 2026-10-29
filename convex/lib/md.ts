@@ -458,6 +458,65 @@ export function parseMd(src: string): MdBlock[] {
   return blocks
 }
 
+/* The text inline nodes show, each piece apart: a link's text but not its
+   destination, an image's alt text but not its source, a mention's name but
+   not its id. */
+function inlineText(nodes: readonly MdInline[]): string {
+  return nodes
+    .map((node) => {
+      switch (node.t) {
+        case 'text':
+        case 'code':
+          return node.text
+        case 'br':
+          return '\n'
+        case 'image':
+          return node.alt
+        case 'mention':
+          return node.name
+        default:
+          return inlineText(node.children)
+      }
+    })
+    .join(' ')
+}
+
+/* What only a description with hidden words holds: the `](` of a link, an
+   image or a mention, a code fence, whose opening line can name a
+   language, and a numbered list item, whose number the list draws. Any
+   other markup is marks and punctuation, which hold no word. */
+const HIDES = /\]\(|^\s{0,3}```|^\d{1,3}[.)]\s/m
+
+/** Whether `markdown` can hold words it does not show (readableText). A
+    text without any is shown word for word, so it needs no parse. */
+export const hidesWords = (markdown: string): boolean => HIDES.test(markdown)
+
+/** The text a description shows, which main Search matches
+    (lib/mainSearch.ts): its text, code, link text, image alt text and
+    mention names, without link destinations, image sources (`att:`
+    references), mention ids (MENTION_DEST), the language a code fence
+    names or the numbers of a numbered list. A bare autolink is shown text
+    and stays. The pieces join with a space, as the markup between them
+    ends a word in the stored text too, so the words are those of the
+    stored text without its hidden parts. A text that hides no words
+    (hidesWords) is answered as it is, unparsed. */
+export function readableText(markdown: string): string {
+  if (!hidesWords(markdown)) return markdown
+  return parseMd(markdown)
+    .map((block) => {
+      switch (block.t) {
+        case 'codeblock':
+          return block.text
+        case 'ul':
+        case 'ol':
+          return block.items.map(inlineText).join('\n')
+        default:
+          return inlineText(block.children)
+      }
+    })
+    .join('\n')
+}
+
 /** Only plain web/mail links survive; anything else (javascript:, data:,
     relative paths…) renders as text. */
 export function sanitizeHref(href: string): string | null {

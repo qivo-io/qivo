@@ -304,6 +304,13 @@ const issuesTable = defineTable({
   .index('by_reviewer_archived_status', ['reviewer_id', 'archived_at', 'status'])
   .index('by_created_by_archived', ['created_by', 'archived_at'])
   .index('by_reporter_archived', ['reporter_id', 'archived_at'])
+  // main Search's title matches within an organization, narrowed to a
+  // project and to active tasks (archived_at absent) (search.ts,
+  // lib/mainSearch.ts). Convex builds it at deploy; it needs no backfill.
+  .searchIndex('search_title', {
+    searchField: 'title',
+    filterFields: ['org_id', 'project_id', 'archived_at'],
+  })
 
 // A task is an end of at most LIMITS.links.max links (lib/limits.ts).
 const issueLinksTable = defineTable({
@@ -1518,8 +1525,9 @@ export default defineSchema({
    * older backup, holds none, and a release from before the table, which
    * still deploys, leaves rows with stale ones when it moves or archives
    * tasks. The same backfill reports and mends both (`differ`). Main Search
-   * reads search_description only after a dry run on every deployment
-   * reports zero (docs/deployment.md). */
+   * (search.ts, lib/mainSearch.ts) reads search_description, and the app
+   * calls it only after a dry run on every deployment reports zero
+   * (docs/deployment.md). */
   issue_descriptions: defineTable({
     issue_id: v.string(),
     org_id: v.string(), // the task's, for the teardowns that delete an organization's rows
