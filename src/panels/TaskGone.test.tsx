@@ -771,12 +771,14 @@ async function openFound({
   archived = true,
   inArchive = true,
   loading = false,
+  archivedAt = '2026-09-14T09:00:00.000Z',
 }: {
   role?: 'admin' | 'user'
   level?: 'viewer' | 'user'
   archived?: boolean
   inArchive?: boolean
   loading?: boolean
+  archivedAt?: string
 } = {}) {
   vi.resetModules()
   snap = plannerFixture()
@@ -800,7 +802,7 @@ async function openFound({
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   }
-  archive = inArchive ? [{ ...row, archived_at: '2026-09-14T09:00:00.000Z' }] : []
+  archive = inArchive ? [{ ...row, archived_at: archivedAt }] : []
   let answer = () => {}
   lookup = (id) =>
     new Promise((resolve) => {
@@ -871,7 +873,9 @@ describe('the task window on a task Search found that the workspace does not hol
     expect(details()?.querySelector('[data-task-gone-place]')?.textContent).toBe(
       'Task creation fixture',
     )
-    expect(details()?.querySelector('[data-task-gone-archived]')?.textContent).toMatch(/^Archived /)
+    expect(details()?.querySelector('[data-task-gone-archived]')?.textContent).toMatch(
+      /^Archived on \d+ \w+/,
+    )
     expect(asked('issues:archivedTask')).toEqual([{ id: 'task-a' }])
     await click(button('Restore'))
     const restores = network.mutation.mock.calls.filter(
@@ -885,6 +889,28 @@ describe('the task window on a task Search found that the workspace does not hol
     expect(document.querySelector('[data-task-gone]')).toBeNull()
     expect(dialog()?.textContent).toContain('Run the soak test')
     expect(dialog()?.textContent).toContain('Measure the drift.')
+  })
+
+  it('says when it was archived as the app says a day inside a sentence', async () => {
+    // the clock reads 15:00 local time on 16 Oct 2026
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 9, 16, 15, 0))
+    try {
+      for (const [at, says] of [
+        [new Date(2026, 9, 16, 9, 30), 'Archived today'],
+        [new Date(2026, 9, 15, 18, 0), 'Archived yesterday'],
+        [new Date(2026, 9, 12, 9, 0), 'Archived on 12 Oct'],
+        [new Date(2025, 11, 20, 9, 0), 'Archived on 20 Dec 2025'],
+      ] as const) {
+        await act(async () => root.unmount())
+        root = createRoot(container)
+        const { answer } = await openFound({ archivedAt: at.toISOString() })
+        await answer()
+        expect(details()?.querySelector('[data-task-gone-archived]')?.textContent).toBe(says)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('offers no Restore to someone who can only read its project', async () => {

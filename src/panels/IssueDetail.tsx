@@ -49,7 +49,7 @@ import { ViewBoundary } from '../components/ViewBoundary'
 import { fmtSize, useWindowDropGuard } from '../lib/attachments'
 import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
-import { archivedAtLabel, deletedAtFull } from '../lib/deletedTime'
+import { dayInSentence, deletedAtFull } from '../lib/deletedTime'
 import { closeOrAsk, questionOpen } from '../lib/discardQuestion'
 import { limitSentence, overLimit } from '../lib/fieldLimits'
 import { roomBeside, useFloatInsets } from '../lib/floatStack'
@@ -1273,7 +1273,7 @@ function TaskGone({
               {place && <span data-task-gone-place>{P.placeLabel(place)}</span>}
               <HoverTooltip content={deletedAtFull(new Date(row.archivedAt))}>
                 <span data-task-gone-archived tabIndex={-1}>
-                  Archived {archivedAtLabel(new Date(row.archivedAt), new Date())}
+                  Archived {dayInSentence(new Date(row.archivedAt), new Date())}
                 </span>
               </HoverTooltip>
             </div>
