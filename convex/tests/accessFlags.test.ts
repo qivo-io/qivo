@@ -389,6 +389,20 @@ describe('accessFlags', () => {
       expect(levels.shared.bytes).toBeGreaterThan(OWN_READS.bytes)
       expect(levels.shared.documents).toBe(OWN_READS.manyTeams + 13 + OWN_READS.manyTeams + 1)
     })
+    // What Convex read for the answers, against the same answers with a
+    // scan of all 33 teams: the scan stops 20 rows earlier, and the person's
+    // eight teams are then read by their own read.
+    const documentsRead = () =>
+      t.run(async (ctx) => {
+        const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        const levels = projectLevelsOf(ctx, me)
+        for (const p of [f.meta, f.sub, f.sub2]) await levels.level(p.id, true)
+        return (await ctx.meta.getTransactionMetrics()).documentsRead.used - before
+      })
+    const bounded = await documentsRead()
+    OWN_READS.bytes = DEFAULT_OWN_READS.bytes
+    const full = await documentsRead()
+    expect(bounded).toBe(full - 20 + OWN_READS.manyTeams)
   })
 
   it("stops reading the organization's teams past OWN_READS.orgTeams rows a team asked about and answers team by team", async () => {
