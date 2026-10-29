@@ -15,7 +15,8 @@
  * the rows as they are, because a row records that access exists, not its
  * level. A rename, a key change, an archive or a restore updates the copies
  * on the rows of the projects it changes, read with treeRows, which refuses
- * a change past LIMITS.projectTreeChange.max before anything is written.
+ * a change past LIMITS.projectTreeChange.max or TREE_READ.bytes before
+ * anything is written.
  * Teardowns delete a grantee's or an organization's rows outright
  * (reachOfGrantee, reachOfOrg).
  *
@@ -25,7 +26,8 @@
  * search found from these rows, without walking a top-level project's
  * sub-projects (main Search, lib/mainSearch.ts). */
 
-import type { WithoutSystemFields } from 'convex/server'
+import type { GenericDocument, WithoutSystemFields } from 'convex/server'
+import { getDocumentSize } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { type Access, inMetaTree, receivesTeamAccess } from '../lib/access'
@@ -450,11 +452,24 @@ export async function syncLeads(
     if (lead !== undefined) await syncReach(ctx, grantee.profile(lead), projectId, read)
 }
 
-/** The bytes of sub-projects a tree change reads, half of Convex's 16 MiB
- * read limit as removalSummaryOf keeps (model/projects.ts REMOVAL_COUNT),
- * because a project stored before legacy icons were dropped can be large.
- * A mutable object, so tests can lower it. */
-export const TREE_READ = { bytes: 8 * MIB }
+/** The bytes of sub-projects and reach rows the tree changes of one
+ * mutation may read, as Convex counts a document's size (TreeBudget).
+ * Convex reads a document again to patch it, and an archive or a restore
+ * patches nearly every row it read, so the change reads up to twice this
+ * and one row more, beside the project, its parent and the rest of the
+ * mutation: about 14 MiB, under Convex's 16 MiB read limit (measured in
+ * tests/projectReach.test.ts, "a tree at the row bounds"). Rows near their
+ * bounds (lib/limits.ts PROJECT_ROW_MAX_BYTES, about 4.9 KB a sub-project
+ * at the name and description caps and about 3 KB a reach row) reach it
+ * before LIMITS.projectTreeChange.max, once 2,000 entries average more
+ * than about 3.7 KB. A rename or a key change alone reads at most 2,001
+ * reach rows, about 5.9 MB at the name cap, so only one that a REST or MCP
+ * update makes after an archive or a restore, which share one budget, can
+ * reach it. Such an update also reads every project of the organization
+ * (lib/core.ts loadCatalogue), which nothing bounds yet, so near this bound
+ * at the row bounds it can pass Convex's read limit there. A mutable
+ * object, so tests can lower it. */
+export const TREE_READ = { bytes: 7 * MIB }
 
 /** The index ranges a mutation's tree changes may spend on their queries,
  * besides LIMITS.projectTreeChange.max for what they write: at most four
@@ -463,11 +478,12 @@ export const TREE_READ = { bytes: 8 * MIB }
  * restore and a rename, in one REST or MCP update. */
 const TREE_QUERIES = 8
 
-/** The refusal of a tree whose sub-projects hold more than TREE_READ.bytes,
- * which only legacy icons make so large. Archiving or restoring other
- * projects first reads them all the same, so it names what helps. */
+/** The refusal of a tree change whose sub-projects and reach rows pass
+ * TREE_READ.bytes. Archiving or restoring some sub-projects on their own
+ * first does not help, as the change reads every sub-project all the same,
+ * so it names what does. */
 export const TREE_TOO_LARGE =
-  "this project's sub-projects hold more data than one change can read, most likely icons an earlier version of Qivo stored, so it cannot be archived or restored at once. Delete some of its sub-projects first, or contact support@qivo.io to remove the old icons."
+  "this project's sub-projects and access entries hold more data than one change can read, so it cannot be archived or restored at once. Delete some of its sub-projects or remove some access first."
 
 /**
  * What the tree changes of one mutation may still spend: `entries`, the
@@ -475,17 +491,19 @@ export const TREE_TOO_LARGE =
  * write may change and Convex reads by id first, within
  * LIMITS.projectTreeChange.max, which keeps them to about half of the
  * 4,096 index ranges one transaction may read, as model/labels.ts
- * LABEL_REMOVAL measured; and `queries`, the ranges their reads take.
+ * LABEL_REMOVAL measured; `bytes`, what those rows hold, within
+ * TREE_READ.bytes; and `queries`, the ranges their reads take.
  * A rename, a key change, an archive and a restore each take one unless the
  * caller passes the one it shares, as a REST or MCP update that archives or
  * restores a project and changes its fields does.
  */
-export type TreeBudget = { entries: number; queries: number }
+export type TreeBudget = { entries: number; queries: number; bytes: number }
 
 /** A fresh budget for a mutation's tree changes. */
 export const treeBudget = (): TreeBudget => ({
   entries: LIMITS.projectTreeChange.max,
   queries: TREE_QUERIES,
+  bytes: TREE_READ.bytes,
 })
 
 /* Spends one query of `budget`; a change that needs more is a bug, not the
@@ -495,22 +513,36 @@ function query(budget: TreeBudget): void {
   if (budget.queries < 0) throw new Error('a tree change read more ranges than TREE_QUERIES')
 }
 
-/* Spends `n` entries of `budget`, refused with LIMITS.projectTreeChange's
- * sentence past it. Every caller spends before it writes, so a refusal
- * leaves everything as it was. */
-function spend(budget: TreeBudget, n: number): void {
-  budget.entries -= n
-  if (budget.entries < 0) throw rule(LIMITS.projectTreeChange.refusal)
+/* The rows of `rows`, one query of `budget`, each spent from it as it is
+ * read: an entry, refused with LIMITS.projectTreeChange's sentence past
+ * them, and its bytes, refused with TREE_TOO_LARGE past them. So a read
+ * stops at the first row past either, and as every caller reads before it
+ * writes, a refusal leaves everything as it was. */
+async function spent<D extends GenericDocument>(
+  budget: TreeBudget,
+  rows: AsyncIterable<D>,
+  size: (row: D) => number = getDocumentSize,
+): Promise<D[]> {
+  query(budget)
+  const out: D[] = []
+  for await (const row of rows) {
+    budget.entries -= 1
+    if (budget.entries < 0) throw rule(LIMITS.projectTreeChange.refusal)
+    budget.bytes -= size(row)
+    if (budget.bytes < 0) throw rule(TREE_TOO_LARGE)
+    out.push(row)
+  }
+  return out
 }
 
 /**
  * The reach rows of `projectIds` in organization `orgId`, every grantee's,
  * for a change that updates their copies of the projects (a rename, a key
- * change, an archive or a restore), each read row spent from `budget`,
- * reading at most one row past it. Call it before the change writes
- * anything, so a refusal leaves everything as it was. A row another
- * organization left on a reused project id until its teardown deletes it
- * counts but is not returned, so the change never writes it.
+ * change, an archive or a restore), each read row spent from `budget`
+ * (spent). Call it before the change writes anything, so a refusal leaves
+ * everything as it was. A row another organization left on a reused
+ * project id until its teardown deletes it counts but is not returned, so
+ * the change never writes it.
  */
 export async function treeRows(
   ctx: QueryCtx,
@@ -520,12 +552,10 @@ export async function treeRows(
 ): Promise<Doc<'project_reach'>[]> {
   const rows: Doc<'project_reach'>[] = []
   for (const id of new Set(projectIds)) {
-    query(budget)
-    const got = await ctx.db
-      .query('project_reach')
-      .withIndex('by_project_grantee', (q) => q.eq('project_id', id))
-      .take(Math.max(0, budget.entries) + 1)
-    spend(budget, got.length)
+    const got = await spent(
+      budget,
+      ctx.db.query('project_reach').withIndex('by_project_grantee', (q) => q.eq('project_id', id)),
+    )
     rows.push(...got.filter((row) => row.org_id === orgId))
   }
   return rows
@@ -543,33 +573,40 @@ export async function childRows(
   live: boolean,
   budget: TreeBudget,
 ): Promise<Doc<'project_reach'>[]> {
-  query(budget)
-  const got = await ctx.db
-    .query('project_reach')
-    .withIndex('by_root_child', (q) => q.eq('root_id', rootId).eq('kind', 'child').eq('live', live))
-    .take(Math.max(0, budget.entries) + 1)
-  spend(budget, got.length)
+  const got = await spent(
+    budget,
+    ctx.db
+      .query('project_reach')
+      .withIndex('by_root_child', (q) =>
+        q.eq('root_id', rootId).eq('kind', 'child').eq('live', live),
+      ),
+  )
   return got.filter((row) => row.org_id === orgId)
 }
 
+/* An archive stamp, as long as every stamp new Date().toISOString() writes. */
+const STAMP = new Date(0).toISOString()
+
+/* The size of sub-project `p` once archived, with a stamp and the longest
+ * archive state, the most it holds in either state. An archive adds the
+ * stamp to every sub-project it carries, so counting it here lets the
+ * restore of a tree an archive took take it too, unless its rows grew in
+ * between. */
+const archivedSize = (p: Doc<'projects'>) =>
+  getDocumentSize({ ...p, archived_at: p.archived_at ?? STAMP, archive_state: 'listed' })
+
 /** The sub-projects of `parentId`, for a change that writes each of them,
- * each spent from `budget`, reading at most one more, and refused with
- * TREE_TOO_LARGE past TREE_READ's bytes. */
+ * each spent from `budget` as treeRows spends, at its size once archived. */
 export async function treeSubProjects(
   ctx: QueryCtx,
   parentId: string,
   budget: TreeBudget,
 ): Promise<Doc<'projects'>[]> {
-  query(budget)
-  const numItems = Math.max(0, budget.entries) + 1
-  const page = await ctx.db
-    .query('projects')
-    .withIndex('by_parent', (q) => q.eq('parent_id', parentId))
-    .paginate({ cursor: null, numItems, maximumBytesRead: TREE_READ.bytes })
-  spend(budget, page.page.length)
-  // a page that ended before its count ended on the bytes
-  if (!page.isDone) throw rule(TREE_TOO_LARGE)
-  return page.page
+  return await spent(
+    budget,
+    ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', parentId)),
+    archivedSize,
+  )
 }
 
 /** Gives each of `rows` the copy `fields` of its project, writing only the

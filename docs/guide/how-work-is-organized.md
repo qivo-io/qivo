@@ -148,10 +148,10 @@ Archiving or restoring a project updates its sub-projects and the access
 entries of the people and teams who reach them in one change. A project and
 its sub-projects with more than 2,000 of them together cannot be archived or
 restored at once ([Limits](./limits.md)). Archive some of its sub-projects
-on their own first, or remove some access. Sub-projects that hold old
-project icons from an earlier version of Qivo can also be too large to read
-in one change. Qivo then says so; delete some of those sub-projects first,
-or contact support@qivo.io to remove the old icons.
+on their own first, or remove some access. A project whose sub-projects
+have very long names and descriptions, or very many access entries, can
+also hold more data than one change can read. Qivo then says so; delete
+some of its sub-projects or remove some access first.
 
 A task in another sub-project whose subtasks were all in the archived one
 becomes an ordinary task again, with its own status, dates and estimate.
