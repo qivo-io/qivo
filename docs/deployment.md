@@ -1006,6 +1006,33 @@ incomplete when it finishes. `organization export sweep` expires the ready
 archives and erases their parts, and it alone deletes ended jobs with their
 request rows, 30 days after they ended. Nothing needs a manual step.
 
+The nightly archive of Done tasks reads only the tasks whose Done time passed
+the 30-day threshold since its last finished run, which the one
+`archive_runs` row records, and the projects in `archive_rechecks`, which
+every write that can let a task fall due without a new Done time marks, such
+as a project restored from the archive, or a subtask that stops counting for
+its Done parent because it is archived, leaves the parent or moves to Deleted
+items. About every 28th night it makes a full pass over every live project
+instead, which catches a task that data written outside the app or a missed
+mark left waiting, at most about four weeks late. Deleting the `archive_runs`
+row makes the next run a full pass. A backup restore rewinds both tables,
+which is safe, because the next run reads from the older threshold. After
+rolling forward from a release before the one that added them, delete the
+row so that the first run is full, because the earlier release's writers
+marked no project for a recheck. A run that the earlier release began and
+this one finishes, because a step of it was queued at the deploy, records no
+full pass and clears the last one, so the next night is a full pass too: the
+chains the earlier release ran before the deploy marked nothing either.
+Deleting the row on production is a production action and needs the owner's
+approval. Both tables, their
+indexes and the `issues.by_archived_status_done` index ship first in that
+release, so no step an earlier release queued reads them. A rollback past it
+deploys, because Convex leaves a table the schema does not list alone and
+drops the index. The archive steps and legs that release queued then fail
+the earlier release's argument checks, so that night's run does not finish,
+and the earlier release's next run walks every live project, as it does
+every night.
+
 A frontend rollback changes the served application build. It does not roll
 back Convex code, schema changes, stored files or customer writes. A database
 restore can discard newer customer changes and requires a separate reviewed

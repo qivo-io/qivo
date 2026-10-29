@@ -173,6 +173,8 @@ const APP_OWNED: TableNames[] = [
   'projects',
   // which projects each seat and team reaches, deleted with the projects
   'project_reach',
+  // the projects the nightly archive checks next, deleted with the projects
+  'archive_rechecks',
   'issues',
   'issue_descriptions',
   'labels',
@@ -250,6 +252,8 @@ const APP_SHARED = [
   // When the read-message sweep last checked every profile, one
   // deployment-wide row (jobs.ts).
   'message_sweep_seeds',
+  // How far the nightly archive got, one deployment-wide row (jobs.ts).
+  'archive_runs',
   // Keyed by an already deleted label; its own steps delete it, also after
   // the demo organization is gone (labelRemovals.ts).
   'label_removals',
@@ -570,6 +574,8 @@ describe('public Northstar provisioning and bounded deletion', () => {
         profile_id: uuid(),
         at: new Date(NOW).toISOString(),
       })
+      // the nightly archive's recheck of the visitor's task's project
+      await ctx.db.insert('archive_rechecks', { org_id: a.org_id!, project_id: issue.project_id })
       for (let i = 0; i < 150; i++)
         await ctx.db.insert('comments', {
           id: uuid(),

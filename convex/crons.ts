@@ -23,8 +23,10 @@ crons.interval(
 
 // was '30 2 * * *' (0070:265)
 // The empty arguments start a run, which schedules one chain per organization
-// with flagged tasks and one per organization with a due Done task in a live
-// project (jobs.ts).
+// with flagged tasks and one per organization with a live project to check:
+// one holding a Done task that fell due since the last run, or one a writer
+// marked for a recheck. Every 28th night the run checks every live project
+// (jobs.ts).
 crons.daily(
   'archive-done-issues',
   { hourUTC: 2, minuteUTC: 30 },

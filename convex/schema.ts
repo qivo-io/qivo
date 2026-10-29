@@ -278,6 +278,10 @@ const issuesTable = defineTable({
   // The nightly archive reads only a live project's Done tasks past the
   // threshold.
   .index('by_project_archived_status_done', ['project_id', 'archived_at', 'status', 'done_at'])
+  // The nightly archive finds the active Done tasks whose done_at passed the
+  // threshold since its last finished run, across every organization
+  // (jobs.ts windowStep).
+  .index('by_archived_status_done', ['archived_at', 'status', 'done_at'])
   // The nightly repair finds the organizations with active tasks still
   // flagged relations_marked, and each one's flagged tasks.
   .index('by_archived_marked_org', ['archived_at', 'relations_marked', 'org_id'])
@@ -2322,6 +2326,71 @@ export default defineSchema({
     // the nightly sweep's fallback wake finds the overdue snoozes of every
     // recipient in one range
     .index('by_snoozed', ['snoozed_until']),
+
+  // At most one row: how far the nightly archive got (jobs.ts
+  // archiveDoneIssues). Every active Done task whose done_at is at or before
+  // `through` was offered to a run whose dispatcher finished: that run
+  // checked the task's project, or the project was archived or gone, and the
+  // writes that bring such a task back into reach mark its project in
+  // archive_rechecks. Only a run's last step moves it, so a run that fails
+  // leaves it, and the next run reads the same window again; the run that
+  // finishes last sets it, and an older one only moves it back.
+  // The archive keeps this invariant: while a project has a task due at
+  // some run's threshold, at least one archive_rechecks row for the project
+  // exists that only a chain checking at that threshold or later can delete,
+  // or a later window still reaches the task. Two runs can overlap when the
+  // scheduler falls a day behind, and the rows keep it then too: a run hands
+  // only rows it may check (archive_rechecks), marks each it hands with its
+  // `now`, and its chain deletes a row only while the row still carries that
+  // mark. A newer run takes over rows an older run holds, and an older run
+  // leaves alone the rows a newer one wrote, holds or, for a writer's row,
+  // may need. A run is a full pass over every live project when this row is
+  // missing, has no `full_at`, or its `full_at` is jobs.ts
+  // ARCHIVE_FULL_AFTER_MS or more old. A backup restore rewinds it with the
+  // tasks, and the next run then reads from the older threshold.
+  archive_runs: defineTable({
+    // ISO instant, the threshold of the last finished run
+    through: v.optional(v.string()),
+    // ISO instant, the start of the last finished full pass
+    full_at: v.optional(v.string()),
+    // ISO instant, the `now` of the newest run that began its find phase,
+    // whose hand phase alone hands a writer's row from then on
+    started: v.optional(v.string()),
+  }),
+
+  // The projects the next nightly archive checks in full, whatever their
+  // tasks' done_at: a task there can be due without a new done_at, when its
+  // project was restored from the archive or a subtask it waited for stopped
+  // counting (model/archiveRechecks.ts). Writers insert without reading, so
+  // a project can have several rows, except on a public demo deployment,
+  // where a writer adds none while the project has a writer's row no chain
+  // holds yet. A run's hand phase takes the rows it may check (jobs.ts
+  // handStep), keeps one per project, marks it handed_at, deletes the others
+  // it reads, and hands the project to its organization's chain, which
+  // deletes the row once it is done with the project, if the row still
+  // carries its run's mark. A chain that fails leaves its rows, which the
+  // next run takes over. A row is only a reason to check a project under the
+  // unchanged archive rules, so one that outlives its project, or names an
+  // id another project took since, costs one check and changes no outcome.
+  // Deleted with its organization.
+  archive_rechecks: defineTable({
+    org_id: v.string(),
+    project_id: v.string(),
+    // the `now` of the run whose leg wrote the row, which the hand phase of
+    // that run and of any older one leaves for a later run (single
+    // snapshot, jobs.ts archiveLeg)
+    from_run: v.optional(v.string()),
+    // the threshold of the run whose find phase wrote the row, which the
+    // hand phase of an older run, with an earlier threshold, leaves for it
+    due_by: v.optional(v.string()),
+    // the `now` of the run whose hand phase handed the row to a chain; only
+    // that run's chain deletes it, and only a newer run takes it over
+    handed_at: v.optional(v.string()),
+  })
+    // the hand phase's order, an organization's rows by prefix, and a
+    // project's writer rows, which have neither from_run nor due_by
+    // (model/archiveRechecks.ts)
+    .index('by_org_project_run_due', ['org_id', 'project_id', 'from_run', 'due_by']),
 
   // When the nightly read-message sweep next visits a profile (jobs.ts
   // sweepReadMessages): no later than the oldest of its read, unsnoozed

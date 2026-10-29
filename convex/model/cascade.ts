@@ -16,6 +16,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { REMOVAL_PHASES } from '../lib/enums'
 import { require, rule } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
+import { rechecksOfOrg } from './archiveRechecks'
 import { hasPendingCheckout } from './billing'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
@@ -627,6 +628,8 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       await ctx.db.delete(row._id)
 
   for (const row of await reachOfOrg(ctx, org.id).collect()) await ctx.db.delete(row._id)
+  // the nightly archive's rechecks of its projects (model/archiveRechecks.ts)
+  for (const row of await rechecksOfOrg(ctx, org.id).collect()) await ctx.db.delete(row._id)
   for (const p of await ctx.db
     .query('projects')
     .withIndex('by_org', (q) => q.eq('org_id', org.id))

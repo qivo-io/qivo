@@ -51,6 +51,7 @@ import { orgRemovalFor } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import { ORG_REMOVAL_PHASES, type OrgRemovalPhase, type RemovedAccessKind } from '../lib/enums'
 import { require, rule } from '../lib/functions'
+import { rechecksOfOrg } from './archiveRechecks'
 import { budgetSpent, REMOVAL_BUDGET, type RemovalBudget, sweep } from './cascade'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
@@ -472,10 +473,13 @@ const liveTasks = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     { before: (issue) => tallyRow(ctx, 'issues', issue, null) },
   )
 
-/** The organization's reach rows (model/projectNav.ts), then its projects
- * with their milestones and access grants. */
+/** The organization's reach rows (model/projectNav.ts) and the nightly
+ * archive's rechecks of its projects (model/archiveRechecks.ts), then its
+ * projects with their milestones and access grants. The tasks phase before
+ * leaves no task a recheck could be written for. */
 const projectRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   (await drain(ctx, budget, reachOfOrg(ctx, orgId))) &&
+  (await drain(ctx, budget, rechecksOfOrg(ctx, orgId))) &&
   parents(
     ctx,
     budget,
@@ -732,6 +736,9 @@ async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<v
   require((await jobsOf(ctx, orgId).first()) === null, rule(
     'Organization deletion left organization data',
   ))
+  require((await rechecksOfOrg(ctx, orgId).first()) === null, rule(
+    'Organization deletion left organization data',
+  ))
   const trash = [
     await ctx.db
       .query('deleted_items')
@@ -835,6 +842,8 @@ export async function deleteOrgStep(
       // Export rows an earlier release left past the activity phase, which
       // knew no export tables, as a deletion that spans a rollback does.
       if (!(await exportRows(ctx, removal.org_id, budget))) break
+      // Likewise rechecks an earlier release left past the projects phase.
+      if (!(await drain(ctx, budget, rechecksOfOrg(ctx, removal.org_id)))) break
       // The organization goes first, so every call through access the
       // profiles phase deleted hears that it is being deleted until it is
       // gone. What that phase recorded (removed_access) goes after, over as

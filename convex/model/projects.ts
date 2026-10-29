@@ -38,6 +38,7 @@ import { creatorGrant, type Grants, grantsAfterHandover } from '../lib/projectGr
 import { PROJECT_KEY_SHAPE, projectKeyBase, projectKeyCandidate } from '../lib/projectKeys'
 import { resolveReviewHours, roundReviewHours } from '../lib/review'
 import { logActivity, signedDetail } from './activity'
+import { recheckProject } from './archiveRechecks'
 import { estimateDocumentBytes } from './demoMetrics'
 import {
   assertExpected,
@@ -860,7 +861,9 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
  * before anything is written. Not archived is a silent no-op. Returns
  * whether it restored anything. The restored projects' tasks make the
  * parents they have in other active projects groups again, which then lose
- * their own remaining hours in background steps (regroup.ts).
+ * their own remaining hours in background steps (regroup.ts). The next
+ * nightly archive checks each restored project in full, because their Done
+ * tasks keep their done_at (model/archiveRechecks.ts).
  */
 export async function unarchiveProjectCore(ctx: MutationCtx, a: TreeChange): Promise<boolean> {
   const { me, project, now } = a
@@ -909,8 +912,12 @@ export async function unarchiveProjectCore(ctx: MutationCtx, a: TreeChange): Pro
         if (ids.has(row.project_id)) reach.push(row)
   }
   const ids = restored.map((p) => p.id)
-  for (const p of restored)
+  // Their Done tasks keep their done_at, so the nightly archive checks
+  // these projects in full (model/archiveRechecks.ts).
+  for (const p of restored) {
     await ctx.db.patch(p._id, { archived_at: undefined, archive_state: 'live' })
+    await recheckProject(ctx.db, { org_id: p.org_id, project_id: p.id })
+  }
   for (const s of left)
     if (s.archive_state !== 'listed') await ctx.db.patch(s._id, { archive_state: 'listed' })
   await patchRows(ctx, reach, { live: true })

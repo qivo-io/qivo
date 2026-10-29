@@ -249,6 +249,7 @@ const orgRows = (t: T, orgId: string) =>
       'billing_month_totals',
       'task_comment_counts',
       'comment_rates',
+      'archive_rechecks',
     ] as const)
       counts[table] = (await ctx.db.query(table).collect()).filter(
         (row) => (row as { org_id?: string }).org_id === orgId,
@@ -658,6 +659,13 @@ describe('deleting the organization', () => {
       // read-message sweep rows, one of the other organization's
       for (const profile_id of [f.admin.id, f.user.id, f.otherAdmin.id])
         await ctx.db.insert('message_sweeps', { profile_id, due_at: NOW })
+      // the nightly archive's rechecks, one of the other organization's
+      for (const [org_id, project_id] of [
+        [f.org.id, f.sub.id],
+        [f.org.id, f.sub2.id],
+        [f.otherOrg.id, f.otherProject.id],
+      ])
+        await ctx.db.insert('archive_rechecks', { org_id, project_id })
       // inbox messages, with their items and the build states their first
       // message adds (model/inboxItems.ts)
       for (const recipient of [f.user, f.guest])
@@ -688,6 +696,7 @@ describe('deleting the organization', () => {
       mcp_tokens: 1,
       billing_usage: 2,
       billing_usage_accounts: 2,
+      archive_rechecks: 2,
     })
     expect(before.billing_month_totals).toBeGreaterThan(0)
     // the comment's count and post log, and the created tasks' counts

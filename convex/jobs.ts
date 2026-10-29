@@ -11,15 +11,23 @@
  *   next step.
  * - The archive's dispatcher first finds the organizations with an active
  *   task still flagged relations_marked, one index range each, and
- *   schedules one repair chain for each. It then pages the live projects
- *   and asks each one for a due Done task, one index range that reads at
- *   most one task, and stops a step once those tasks pass
- *   ARCHIVE_LIMITS.bytes. It schedules one archive chain for each
- *   organization with due projects, which archives them one after another,
- *   so its legs never write the organization's counters at the same time.
- *   Archived projects and the organizations' other rows cost nothing, and a
- *   live project without a due task costs its own document and one empty
- *   range.
+ *   schedules one repair chain for each. Its find phase then marks in
+ *   archive_rechecks each live project that may hold a due Done task: it
+ *   reads, in pages by index, only the active Done tasks whose done_at
+ *   passed the threshold since the last finished run (archive_runs), and
+ *   each one's project once a step. The writes that let a task fall due
+ *   without a new done_at mark its project themselves
+ *   (model/archiveRechecks.ts). Every 28th night (ARCHIVE_FULL_AFTER_MS),
+ *   and when no run has finished one, the find phase is the full pass
+ *   instead: it pages the live projects and asks each one for a due Done
+ *   task, one index range that reads at most one task, and stops a step
+ *   once those tasks pass ARCHIVE_LIMITS.bytes. The hand phase then pages
+ *   the marked projects in organization order and schedules one archive
+ *   chain for each organization, which archives its projects one after
+ *   another, so its legs never write the organization's counters at the
+ *   same time. An idle night is three calls that read one empty range a
+ *   phase and the archive_runs row, which its find phase also stamps,
+ *   however many organizations and live projects there are.
  * - An archive leg reads one page of one project's due Done tasks by index,
  *   at most ARCHIVE_LIMITS.tasks tasks and ARCHIVE_LIMITS.bytes bytes. The
  *   leaf guard reads at most one child per candidate, by index. A leg stops
@@ -45,26 +53,32 @@
  * calls a failed mutation scheduled. A leg that fails every time therefore
  * stops only its own chain, one organization or page of profiles.
  * Its earlier legs stay committed, every other chain runs on, and the next
- * night retries it, because what it left is still due. Failures show in the
- * Convex logs as failed scheduled functions with their arguments.
+ * night retries it, because what it left is still due: an archive chain
+ * deletes a project's archive_rechecks row only once it is done with the
+ * project, the next run takes over the rows a failed chain still holds, and
+ * a dispatcher that fails leaves archive_runs where it was.
+ * Failures show in the Convex logs as failed scheduled functions with their
+ * arguments.
  *
  * The dispatcher's last step inserts the run's platform_audit_log row
  * (actor 'system') with the number of chains it scheduled, or for the
- * archive the number of due projects and repair chains. The row records
- * that the run started every chain, not that every chain finished. Each
- * chain logs its own counts with console.info on its last leg when it
- * changed something, and an archive chain logs each project's count when it
- * is done with the project. Duration is deliberately NOT recorded, because
- * Convex freezes Date.now() at mutation start. */
+ * archive the number of projects it handed to chains and of repair chains,
+ * whether it made the full pass and how many tasks its find phase read. The
+ * row records that the run started every chain, not that every chain
+ * finished. Each chain logs its own counts with console.info on its last leg
+ * when it changed something, and an archive chain logs each project's count
+ * when it is done with the project. Duration is deliberately NOT recorded,
+ * because Convex freezes Date.now() at mutation start. */
 
 import { makeFunctionReference, type TransactionMetrics } from 'convex/server'
 import { getDocumentSize, type ObjectType, v } from 'convex/values'
-import type { Doc } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx, type QueryCtx } from './_generated/server'
 import { deletionBegun } from './lib/billingAccess'
 import { byId } from './lib/db'
 import { audit } from './model/admin'
 import { scheduleMarkClears } from './model/archiveMarks'
+import { archiveCutoff, recheckProject, waitsForChildren } from './model/archiveRechecks'
 import { patchTask } from './model/descriptions'
 import { itemEdits } from './model/inboxItems'
 import {
@@ -73,7 +87,7 @@ import {
   scheduleArchivedReads,
   wakeSnoozedItem,
 } from './model/messages'
-import { DEFAULT_ARCHIVE_DAYS, tallyRow } from './model/orgs'
+import { tallyRow } from './model/orgs'
 import { messageRetentionDays } from './model/people'
 import { emitTaskEvent } from './model/taskEvents'
 
@@ -81,24 +95,27 @@ const DAY = 86_400_000
 
 /** Sizes of one archive step. Tests lower them. */
 export const ARCHIVE_LIMITS = {
-  /** Live projects per dispatcher step. Each costs one index range for its
-   * due check and at most one scheduled chain, inside the 1,000 calls one
-   * mutation may schedule. Also the most due projects one archive chain
-   * takes, so an organization with more due projects in one night gets
-   * more than one chain. */
+  /** Live projects per step of the full pass, and archive_rechecks rows per
+   * hand step. A project costs one index range for its due check, and a row
+   * at most one scheduled chain, inside the 1,000 calls one mutation may
+   * schedule. Also the most projects one archive chain takes, so an
+   * organization with more projects to check in one night gets more than
+   * one chain. */
   projects: 500,
   /** Organizations with flagged active tasks per dispatcher step, one
    * repair chain each. */
   orgs: 64,
-  /** Done candidates per leg, so at most this many task patches. */
+  /** Done candidates per leg, so at most this many task patches, and due
+   * tasks per window step. */
   tasks: 500,
   /** Bytes of candidates one leg reads, and again of the children its leaf
    * guard reads, so its reads before archiving stay near half of the
    * 16 MiB a transaction may read. Archiving reads each task once more and
    * its description row twice (model/descriptions.ts patchTask), which
-   * `room` bounds. A dispatcher step reads at most this many bytes of
-   * projects, and this many and one task more of the tasks its checks
-   * read. */
+   * `room` bounds. A step of the full pass reads at most this many bytes of
+   * projects, and this many and one task more of the tasks its checks read.
+   * A window step reads at most this many bytes of tasks, and this many and
+   * one project more of their projects. */
   bytes: 4 * 1024 * 1024,
   /** Flagged active tasks per repair leg. */
   marked: 1000,
@@ -109,26 +126,60 @@ export const ARCHIVE_LIMITS = {
   room: 0.5,
 }
 
+/** How long after the start of the last finished full pass a run makes the
+ * full pass again. Half a day short of four weeks, so a nightly cron that
+ * starts a little early still makes every 28th run full, as the read-message
+ * sweep's SWEEP_FULL_AFTER_MS does. */
+export const ARCHIVE_FULL_AFTER_MS = 27.5 * DAY
+
+const vRechecks = v.array(v.id('archive_rechecks'))
+
 const archiveRunArgs = {
-  // 'flagged' walks the organizations with flagged active tasks, then
-  // 'projects' pages the live projects. Absent on the cron's call, which
-  // starts a run with the flagged phase, and on a step queued by the release
-  // before, whose cursor paged the organizations. Such a step starts the run
-  // again with its `now`.
-  phase: v.optional(v.union(v.literal('projects'), v.literal('flagged'))),
+  // 'flagged' walks the organizations with flagged active tasks. The find
+  // phase then marks the projects to check in archive_rechecks: 'window'
+  // reads the Done tasks that fell due since the last finished run, and
+  // 'projects', the full pass, pages the live projects. 'hand' hands the
+  // marked projects to chains. Absent on the cron's call, which starts a
+  // run with the flagged phase, and on a step queued two releases before,
+  // whose cursor paged the organizations. Such a step starts the run again
+  // with its `now`. A 'projects' step the release before queued goes on as
+  // the full pass.
+  phase: v.optional(
+    v.union(v.literal('projects'), v.literal('flagged'), v.literal('window'), v.literal('hand')),
+  ),
   cursor: v.optional(v.string()),
   // the projects of the page before that its step left unchecked, in index
   // order, which this step checks instead of reading a page
   left: v.optional(v.array(v.string())),
-  // the due projects found so far of the organization the step before ended
-  // in, not yet handed to a chain
-  due: v.optional(v.object({ org_id: v.string(), projects: v.array(v.string()) })),
+  // in the hand phase, the projects gathered so far of the organization the
+  // step before ended in, with their rows, not yet handed to a chain. On a
+  // projects step the release before queued, the due projects it found and
+  // had not handed, without rows.
+  due: v.optional(
+    v.object({
+      org_id: v.string(),
+      projects: v.array(v.string()),
+      rows: v.optional(vRechecks),
+    }),
+  ),
   // the flagged phase's last organization, which the next step starts after
   after: v.optional(v.string()),
+  // the window's lower end, the threshold of the last finished run
+  since: v.optional(v.string()),
   now: v.optional(v.string()),
+  // the projects the hand phase handed so far. A projects step the release
+  // before queued carries its own count of due projects, which is not used.
   projects: v.optional(v.number()),
   repairs: v.optional(v.number()),
-  // the running count of a step queued by the release before, unused
+  // the tasks the find phase read so far
+  tasks: v.optional(v.number()),
+  // whether the run's find phase was the full pass, set on its hand steps
+  full: v.optional(v.boolean()),
+  // set on the steps of a run whose projects phase a step of the release
+  // before began: that release's chains marked no project for a recheck, so
+  // the run's last step records no full pass, and the next run makes one
+  resumed: v.optional(v.boolean()),
+  // the running count of a step queued two releases before, unused
   organizations: v.optional(v.number()),
 }
 
@@ -141,9 +192,14 @@ const archiveProjectArgs = {
   size: v.optional(v.number()),
   // the tasks the chain archived in this project
   archived: v.number(),
-  // the organization's other due projects, which the chain archives after
-  // this one, in turn
+  // the organization's other projects to check, which the chain archives
+  // after this one, in turn
   next: v.optional(v.array(v.string())),
+  // the archive_rechecks rows the hand phase handed with `project_id` and
+  // then each of `next`, in that order, which the chain deletes once it is
+  // done with their project, if it still holds them (handed_at). Absent on
+  // a leg the release before queued.
+  rows: v.optional(vRechecks),
 }
 
 const repairOrgArgs = {
@@ -190,8 +246,10 @@ const repairOrgRef = makeFunctionReference<'mutation', RepairLeg, null>('jobs:re
  * run still counts as unarchived and its done parent goes the NEXT night. A
  * child counts as unarchived when it has no archived_at or carries this
  * run's stamp, in any project of the organization, archived ones included.
- * That holds inside one leg and across legs and chains. No activity rows,
- * because the SQL wrote none.
+ * That holds inside one leg and across legs and chains. A leg marks the
+ * project of each Done parent it may have freed for the next run
+ * (archive_rechecks with from_run, which this run's hand phase leaves). No
+ * activity rows, because the SQL wrote none.
  *
  * No inbox message either. The sweep never calls notifyIssueUpdate, so
  * followers are not told. Keep it that way, because an Archived notice for
@@ -208,10 +266,6 @@ const repairOrgRef = makeFunctionReference<'mutation', RepairLeg, null>('jobs:re
  * finds cleared or archived again, so the order of an organization's
  * archive and repair chains does not matter. */
 
-/* The run's threshold. A Done task with done_at at or before it is due. */
-const archiveCutoff = (now: string): string =>
-  new Date(Date.parse(now) - DEFAULT_ARCHIVE_DAYS * DAY).toISOString()
-
 /* The project's due Done tasks, oldest done first: not archived, status
  * 'done' and done_at at or before `cutoff`. A Done task without done_at is
  * never taken. */
@@ -224,6 +278,20 @@ const dueTasks = (ctx: QueryCtx, projectId: string, cutoff: string) =>
         .eq('archived_at', undefined)
         .eq('status', 'done')
         .gt('done_at', undefined)
+        .lte('done_at', cutoff),
+    )
+
+/* The active Done tasks of every organization whose done_at is after
+ * `since`, the last finished run's threshold, and at or before `cutoff`,
+ * this run's, oldest done first. Without `since` it reads every due task. */
+const windowTasks = (ctx: QueryCtx, since: string | undefined, cutoff: string) =>
+  ctx.db
+    .query('issues')
+    .withIndex('by_archived_status_done', (q) =>
+      q
+        .eq('archived_at', undefined)
+        .eq('status', 'done')
+        .gt('done_at', since)
         .lte('done_at', cutoff),
     )
 
@@ -277,13 +345,35 @@ function finishChain(a: {
   return null
 }
 
-/* Logs what the chain archived in its project, and returns the first leg of
- * the organization's next due project, or null when the chain is done. */
-function nextProject(a: ArchiveLeg): ArchiveLeg | null {
+/* Deletes the archive_rechecks rows `ids` that the chain of the run at
+ * `now` still holds (handed_at). A newer run's hand phase may have taken a
+ * row over since, and its own chain deletes it then. */
+async function dropRechecks(
+  ctx: MutationCtx,
+  ids: readonly Id<'archive_rechecks'>[],
+  now: string,
+): Promise<void> {
+  for (const id of ids) if ((await ctx.db.get(id))?.handed_at === now) await ctx.db.delete(id)
+}
+
+/* Logs what the chain archived in its project, deletes the row the chain
+ * was handed with it while the chain still holds it, and returns the first
+ * leg of the organization's next project, or null when the chain is done. A
+ * row written for the project since stays for the next run. */
+async function nextProject(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg | null> {
   finishChain({ ...a, flagged: 0 })
+  const [row, ...rows] = a.rows ?? []
+  if (row !== undefined) await dropRechecks(ctx, [row], a.now)
   const [project_id, ...next] = a.next ?? []
   if (project_id === undefined) return null
-  return { project_id, org_id: a.org_id, now: a.now, archived: 0, next }
+  return {
+    project_id,
+    org_id: a.org_id,
+    now: a.now,
+    archived: 0,
+    next,
+    ...(a.rows !== undefined ? { rows } : {}),
+  }
 }
 
 /* Whether the project still takes the run's archive: it exists in the
@@ -314,11 +404,16 @@ async function archivesInto(ctx: MutationCtx, a: ArchiveLeg): Promise<boolean> {
  * transaction limit, and the next leg reads the same page again, without
  * the tasks archived here, which have left its range, so a leg of tasks
  * with long descriptions archives fewer of them.
+ * A task it archives stops counting for its parent, so the leg reads each
+ * parent once, inside its measure, and marks the project of each one that
+ * waits for its children (model/archiveRechecks.ts) for the next run, once
+ * per project, with from_run, which this run's hand phase leaves (single
+ * snapshot).
  * Once the project is done, or no longer takes the run's archive, the next
- * leg starts the organization's next due project. Returns the next leg, or
+ * leg starts the organization's next project. Returns the next leg, or
  * null when the chain is done. */
 async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg | null> {
-  if (!(await archivesInto(ctx, a))) return nextProject(a)
+  if (!(await archivesInto(ctx, a))) return nextProject(ctx, a)
   const page = await dueTasks(ctx, a.project_id, archiveCutoff(a.now)).paginate({
     cursor: a.cursor ?? null,
     numItems: a.size ?? ARCHIVE_LIMITS.tasks,
@@ -342,6 +437,10 @@ async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg |
   // A leg always archives one task, so the chain moves on.
   const before = await ctx.meta.getTransactionMetrics()
   const patched: Doc<'issues'>[] = []
+  // the parents read, and the projects marked for those that wait for
+  // their children
+  const parents = new Set<string>()
+  const freed = new Set<string>()
   let full = false
   for (const task of batch) {
     if (patched.length > 0 && (await legIsFull(ctx, before))) {
@@ -359,13 +458,22 @@ async function archiveLeg(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg |
     // within the leg's measure, as each task's labels move their counts
     await tallyRow(ctx, 'issues', task, { ...task, archived_at: a.now })
     patched.push(task)
+    if (task.parent_id !== undefined && !parents.has(task.parent_id)) {
+      parents.add(task.parent_id)
+      const parent = await byId(ctx, 'issues', task.parent_id)
+      if (waitsForChildren(parent) && !freed.has(parent.project_id)) {
+        freed.add(parent.project_id)
+        const { org_id, project_id } = parent
+        await recheckProject(ctx.db, { org_id, project_id, from_run: a.now })
+      }
+    }
   }
   if (patched.length > 0)
     await scheduleArchivedReads(ctx, { issues: patched.map((task) => task.id) })
   const archived = a.archived + patched.length
   // The same page again. The tasks archived here have left its range.
   if (full) return { ...a, archived }
-  if (page.isDone) return nextProject({ ...a, archived })
+  if (page.isDone) return nextProject(ctx, { ...a, archived })
   return { ...a, cursor: page.continueCursor, size: undefined, archived }
 }
 
@@ -411,16 +519,25 @@ type RunStep = ArchiveRun & { now: string }
 
 /** The nightly archive, one dispatcher step per call. The cron starts a run
  * with no arguments. The flagged phase walks the organizations with an
- * active task still flagged relations_marked (flaggedStep), then the
- * projects phase pages the live projects (projectsStep). Each step
- * schedules the next with the running counts. The last step writes the
- * run's audit row with the number of due projects and repair chains. `now`
- * is the run's stamp and clock, shared by every chain. */
+ * active task still flagged relations_marked (flaggedStep). The find phase
+ * then marks in archive_rechecks the projects that may hold a due task: the
+ * window reads only the Done tasks whose done_at passed the threshold since
+ * the last finished run (windowStep), and about every 28th night the full
+ * pass pages every live project instead (projectsStep, ARCHIVE_FULL_AFTER_MS).
+ * The hand phase reads every row, those writers left since the last run
+ * included, and hands one chain per organization its projects (handStep).
+ * Each step schedules the next with the running counts. The last step
+ * writes the run's audit row with the number of projects handed, the repair
+ * chains, whether the run was full and how many tasks the find phase read,
+ * and moves archive_runs to the run's threshold. `now` is the run's stamp
+ * and clock, shared by every chain. */
 export const archiveDoneIssues = internalMutation({
   args: archiveRunArgs,
   handler: async (ctx, a): Promise<null> => {
     const run = { ...a, now: a.now ?? new Date().toISOString() }
     if (run.phase === 'projects') await projectsStep(ctx, run)
+    else if (run.phase === 'window') await windowStep(ctx, run)
+    else if (run.phase === 'hand') await handStep(ctx, run)
     else await flaggedStep(ctx, run)
     return null
   },
@@ -430,7 +547,7 @@ export const archiveDoneIssues = internalMutation({
  * organization with an active task still flagged relations_marked, in
  * org_id order, one index range each, at most ARCHIVE_LIMITS.orgs and until
  * the tasks it read pass ARCHIVE_LIMITS.bytes. The phase's last step
- * schedules the projects phase as a step of its own, so a projects step
+ * schedules the find phase as a step of its own (findStep), so a find step
  * that fails cannot drop these chains. */
 async function flaggedStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   let repairs = a.repairs ?? 0
@@ -447,7 +564,7 @@ async function flaggedStep(ctx: MutationCtx, a: RunStep): Promise<void> {
       })
       .first()
     if (task === null) {
-      await ctx.scheduler.runAfter(0, archiveRunRef, { phase: 'projects', now: a.now, repairs })
+      await ctx.scheduler.runAfter(0, archiveRunRef, await findStep(ctx, a.now, repairs))
       return
     }
     bytes += getDocumentSize(task)
@@ -458,34 +575,95 @@ async function flaggedStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   await ctx.scheduler.runAfter(0, archiveRunRef, { phase: 'flagged', after, now: a.now, repairs })
 }
 
-/* One step of the projects phase. It checks the projects the step before
- * left unchecked, or else reads a page of live projects, at most
+/* The first step of a run's find phase at `now`: the full pass when no run
+ * has finished one (archive_runs), so tasks may be due that no window
+ * reaches, or when the last one started ARCHIVE_FULL_AFTER_MS or more
+ * before. Otherwise the window from the last finished run's threshold. It
+ * records the run as the newest to begin its find phase (`started`), never
+ * moving that back, so the hand phase of an older run that overlaps it
+ * leaves writers' rows to it (handStep). */
+async function findStep(ctx: MutationCtx, now: string, repairs: number): Promise<ArchiveRun> {
+  const state = await ctx.db.query('archive_runs').first()
+  if (state === null) await ctx.db.insert('archive_runs', { started: now })
+  else if (state.started === undefined || state.started < now)
+    await ctx.db.patch(state._id, { started: now })
+  if (
+    state?.through === undefined ||
+    state.full_at === undefined ||
+    Date.parse(now) - Date.parse(state.full_at) >= ARCHIVE_FULL_AFTER_MS
+  )
+    return { phase: 'projects', now, repairs }
+  return { phase: 'window', since: state.through, now, repairs }
+}
+
+/* One step of the window. It reads one page of the active Done tasks whose
+ * done_at lies after `since` and at or before the run's threshold
+ * (windowTasks), at most ARCHIVE_LIMITS.tasks and ARCHIVE_LIMITS.bytes, and
+ * marks each live project that holds one of them in archive_rechecks, once
+ * a step. It reads each such project once and skips one that is archived or
+ * gone, whose writers mark it again if that changes. Once the projects it
+ * read pass ARCHIVE_LIMITS.bytes, it marks the rest of the page's projects
+ * without reading them, and their chains skip the ones that are not live.
+ * A window whose lower end is not before its upper end, which only a clock
+ * that went back gives, holds nothing and reads nothing. The window's last
+ * step schedules the hand phase. */
+async function windowStep(ctx: MutationCtx, a: RunStep): Promise<void> {
+  const cutoff = archiveCutoff(a.now)
+  const page =
+    a.since !== undefined && a.since >= cutoff
+      ? { page: [], isDone: true, continueCursor: '' }
+      : await windowTasks(ctx, a.since, cutoff).paginate({
+          cursor: a.cursor ?? null,
+          numItems: ARCHIVE_LIMITS.tasks,
+          maximumBytesRead: ARCHIVE_LIMITS.bytes,
+        })
+  const tasks = (a.tasks ?? 0) + page.page.length
+  // the page's projects, each with its tasks' organization, in index order
+  const found = new Map<string, string>()
+  for (const task of page.page)
+    if (!found.has(task.project_id)) found.set(task.project_id, task.org_id)
+  let bytes = 0
+  for (const [project_id, org_id] of found) {
+    if (bytes < ARCHIVE_LIMITS.bytes) {
+      const project = await byId(ctx, 'projects', project_id)
+      if (project === null) continue
+      bytes += getDocumentSize(project)
+      if (project.archived_at !== undefined) continue
+    }
+    await recheckProject(ctx.db, { org_id, project_id, due_by: cutoff })
+  }
+  const step = { now: a.now, repairs: a.repairs, tasks }
+  if (!page.isDone) {
+    await ctx.scheduler.runAfter(0, archiveRunRef, {
+      ...step,
+      phase: 'window',
+      since: a.since,
+      cursor: page.continueCursor,
+    })
+    return
+  }
+  await ctx.scheduler.runAfter(0, archiveRunRef, { ...step, phase: 'hand', full: false })
+}
+
+/* One step of the full pass. It checks the projects the step before left
+ * unchecked, or else reads a page of live projects, at most
  * ARCHIVE_LIMITS.projects and ARCHIVE_LIMITS.bytes. It asks each project for
- * a due Done task and stops once the tasks it read pass
- * ARCHIVE_LIMITS.bytes, which one project always fits. The next step then
- * checks the rest of the page. An organization's projects lie together in
- * the index, so the step gathers the organization's due projects, also
- * across steps, and hands them to one chain once it passes them, or once
- * they reach ARCHIVE_LIMITS.projects. The phase's last step writes the
- * run's audit row. */
+ * a due Done task, marks each project that has one in archive_rechecks, and
+ * stops once the tasks it read pass ARCHIVE_LIMITS.bytes, which one project
+ * always fits. The next step then checks the rest of the page. A step the
+ * release before queued carries its count of due projects (`projects`) and
+ * may carry the due projects it had not handed (`due` without rows), which
+ * are marked first. Such a run goes on as `resumed`: the chains that
+ * release started before the deploy marked nothing, such as a Done parent
+ * whose child they archived, and this run checks only the projects after
+ * its cursor. The pass's last step schedules the hand phase. */
 async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   const cutoff = archiveCutoff(a.now)
-  let projects = a.projects ?? 0
-  let due = a.due && { org_id: a.due.org_id, projects: [...a.due.projects] }
-  // starts one chain for the due projects gathered, never an empty list
-  const hand = async () => {
-    if (due !== undefined) {
-      const [project_id, ...next] = due.projects
-      await ctx.scheduler.runAfter(0, archiveProjectRef, {
-        project_id,
-        org_id: due.org_id,
-        now: a.now,
-        archived: 0,
-        next,
-      })
-    }
-    due = undefined
-  }
+  let tasks = a.tasks ?? 0
+  const resumed = a.resumed === true || a.projects !== undefined
+  if (a.due !== undefined && a.due.rows === undefined)
+    for (const project_id of a.due.projects)
+      await recheckProject(ctx.db, { org_id: a.due.org_id, project_id, due_by: cutoff })
 
   let ids: string[]
   let cursor: string
@@ -506,47 +684,191 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     cursor = page.continueCursor
     isDone = page.isDone
   }
-  const step = { phase: 'projects' as const, cursor, now: a.now, repairs: a.repairs }
+  const step = {
+    phase: 'projects' as const,
+    cursor,
+    now: a.now,
+    repairs: a.repairs,
+    ...(resumed ? { resumed } : {}),
+  }
   let bytes = 0
   for (const [i, id] of ids.entries()) {
     if (bytes >= ARCHIVE_LIMITS.bytes) {
-      await ctx.scheduler.runAfter(0, archiveRunRef, { ...step, left: ids.slice(i), due, projects })
+      await ctx.scheduler.runAfter(0, archiveRunRef, { ...step, left: ids.slice(i), tasks })
       return
     }
     const task = await dueTasks(ctx, id, cutoff).first()
     if (task === null) continue
     bytes += getDocumentSize(task)
-    projects += 1
-    if (due?.org_id !== task.org_id || due.projects.length >= ARCHIVE_LIMITS.projects) {
-      await hand()
-      due = { org_id: task.org_id, projects: [] }
-    }
-    due.projects.push(id)
+    tasks += 1
+    await recheckProject(ctx.db, { org_id: task.org_id, project_id: id, due_by: cutoff })
   }
   if (!isDone) {
-    await ctx.scheduler.runAfter(0, archiveRunRef, { ...step, due, projects })
+    await ctx.scheduler.runAfter(0, archiveRunRef, { ...step, tasks })
+    return
+  }
+  await ctx.scheduler.runAfter(0, archiveRunRef, {
+    phase: 'hand',
+    now: a.now,
+    repairs: a.repairs,
+    tasks,
+    full: true,
+    ...(resumed ? { resumed } : {}),
+  })
+}
+
+/* One step of the hand phase. It reads one page of archive_rechecks in
+ * organization and project order, at most ARCHIVE_LIMITS.projects rows,
+ * the rows it may check (model/archiveRechecks.ts says why each rule holds
+ * the archive's invariant): every row from before the run and those its
+ * find phase or a person wrote since, and rows an older run holds, which it
+ * takes over. It leaves a row its own or a newer run's leg wrote (from_run),
+ * a newer run's find row (due_by after its threshold), a writer's row once a
+ * newer run began its find phase (archive_runs.started) and a row a newer
+ * run holds (handed_at). It keeps one row a project, marks it handed to its
+ * chain, deletes the others it reads with it, also across steps, and gathers
+ * an organization's projects with their rows, also across steps, into one
+ * chain, which it starts once it passes them or once they reach
+ * ARCHIVE_LIMITS.projects. A step that meets a duplicate of the row the
+ * step before kept reads that row again first, and deletes the duplicate
+ * only while the run still holds it; otherwise the duplicate takes its
+ * place. So a step writes at most one mark or delete a row, reads
+ * archive_runs and at most one kept row, and schedules at most one chain a
+ * row. The phase's last step writes the run's audit row and moves
+ * archive_runs to the run's threshold, and to its start as the last full
+ * pass after a full one. Only that step moves it, so a run whose dispatcher
+ * fails before it leaves the window where it was, and the next run reads it
+ * again. A run the release before began (`resumed`) moves neither, and the
+ * next run is full. */
+async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
+  let projects = a.projects ?? 0
+  let due = a.due && {
+    org_id: a.due.org_id,
+    projects: [...a.due.projects],
+    rows: [...(a.due.rows ?? [])],
+  }
+  // starts one chain for the projects gathered, never an empty list
+  const hand = async () => {
+    if (due !== undefined) {
+      const [project_id, ...next] = due.projects
+      await ctx.scheduler.runAfter(0, archiveProjectRef, {
+        project_id,
+        org_id: due.org_id,
+        now: a.now,
+        archived: 0,
+        next,
+        rows: due.rows,
+      })
+    }
+    due = undefined
+  }
+
+  const cutoff = archiveCutoff(a.now)
+  // a newer run began its find phase, so it hands the writers' rows
+  const newer = (await ctx.db.query('archive_runs').first())?.started
+  const page = await ctx.db
+    .query('archive_rechecks')
+    .withIndex('by_org_project_run_due')
+    .paginate({ cursor: a.cursor ?? null, numItems: ARCHIVE_LIMITS.projects })
+  // the row this run keeps for the last project gathered, as this step
+  // knows it; a row the step before kept is read again, because a newer
+  // run may have taken it over, and its chain deleted it, since
+  let kept: Doc<'archive_rechecks'> | null | undefined
+  for (const row of page.page) {
+    if (row.from_run !== undefined && row.from_run >= a.now) continue
+    if (row.due_by !== undefined && row.due_by > cutoff) continue
+    if (
+      row.from_run === undefined &&
+      row.due_by === undefined &&
+      newer !== undefined &&
+      newer > a.now
+    )
+      continue
+    if (row.handed_at !== undefined && row.handed_at >= a.now) continue
+    const claimed = { ...row, handed_at: a.now }
+    if (due?.org_id === row.org_id && due.projects.at(-1) === row.project_id) {
+      const last = due.rows.length - 1
+      kept ??= await ctx.db.get(due.rows[last])
+      // a duplicate of a row this run still holds goes; else it takes the
+      // place of the one this run no longer holds
+      if (kept?.handed_at === a.now) await ctx.db.delete(row._id)
+      else {
+        await ctx.db.patch(row._id, { handed_at: a.now })
+        due.rows[last] = row._id
+        kept = claimed
+      }
+      continue
+    }
+    if (due?.org_id !== row.org_id || due.projects.length >= ARCHIVE_LIMITS.projects) {
+      await hand()
+      due = { org_id: row.org_id, projects: [], rows: [] }
+    }
+    // this run's chain holds it now; an older one's no longer deletes it
+    await ctx.db.patch(row._id, { handed_at: a.now })
+    due.projects.push(row.project_id)
+    due.rows.push(row._id)
+    kept = claimed
+    projects += 1
+  }
+  const step = { now: a.now, repairs: a.repairs, tasks: a.tasks, full: a.full, resumed: a.resumed }
+  if (!page.isDone) {
+    await ctx.scheduler.runAfter(0, archiveRunRef, {
+      ...step,
+      phase: 'hand',
+      cursor: page.continueCursor,
+      due,
+      projects,
+    })
     return
   }
   await hand()
+  const resumed = a.resumed === true
+  const full = a.full === true && !resumed
   await audit(ctx, {
     ts: a.now,
     actor_email: 'system',
     action: 'archive_done_issues',
-    detail: { projects, repairs: a.repairs ?? 0 },
+    detail: {
+      projects,
+      repairs: a.repairs ?? 0,
+      full,
+      tasks: a.tasks ?? 0,
+      ...(resumed ? { resumed } : {}),
+    },
   })
+  const through = cutoff
+  const state = await ctx.db.query('archive_runs').first()
+  // A run the release before began proves no window, so it moves neither
+  // value, and drops the last full pass a row kept from before a rollback,
+  // so the next run is full.
+  if (resumed) {
+    if (state?.full_at !== undefined) await ctx.db.patch(state._id, { full_at: undefined })
+    return
+  }
+  // A row deleted while an incremental run ran stays deleted, so the next
+  // run is full.
+  if (state === null) {
+    if (full) await ctx.db.insert('archive_runs', { through, full_at: a.now, started: a.now })
+  } else await ctx.db.patch(state._id, { through, ...(full ? { full_at: a.now } : {}) })
 }
 
 /** One leg of an organization's nightly archive chain. The chain pages
- * through the due Done tasks of each of the organization's due projects in
- * turn (`project_id`, then `next`), each leg scheduling the next with the
- * project's running count, and logs each project's count when it is done
- * with the project. A project archived, deleted or left without its root
- * since the dispatcher read it is skipped. The organization's deletion ends
- * the chain (chainEnds). */
+ * through the due Done tasks of each of the organization's projects to
+ * check in turn (`project_id`, then `next`), each leg scheduling the next
+ * with the project's running count, and logs each project's count when it
+ * is done with the project. Then it deletes the archive_rechecks row it was
+ * handed with the project, unless a newer run took the row over since, so a
+ * chain that fails leaves the rows of the projects it did not finish for the
+ * next run, and a chain that runs late deletes no row a newer run holds. A
+ * project archived, deleted or left without its root since the dispatcher
+ * read it is skipped. The organization's deletion ends the chain
+ * (chainEnds), which then deletes every row it still holds, because nothing
+ * of the organization is archived again. */
 export const archiveProject = internalMutation({
   args: archiveProjectArgs,
   handler: async (ctx, a): Promise<null> => {
     const ends = await chainEnds(ctx, a.org_id)
+    if (ends !== null) await dropRechecks(ctx, a.rows ?? [], a.now)
     if (ends === 'gone') return null
     if (ends === 'deleting') return finishChain({ ...a, flagged: 0 })
     const next = await archiveLeg(ctx, a)

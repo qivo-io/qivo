@@ -68,6 +68,7 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'project_team_access', field: 'project_id', target: 'projects' },
   { table: 'project_team_access', field: 'team_id', target: 'teams' },
   { table: 'project_reach', field: 'org_id', target: 'organizations' },
+  { table: 'archive_rechecks', field: 'org_id', target: 'organizations' },
   { table: 'project_reach', field: 'project_id', target: 'projects' },
   { table: 'project_reach', field: 'root_id', target: 'projects' },
   { table: 'issues', field: 'project_id', target: 'projects' },
@@ -229,6 +230,11 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // project_reach); tests/projectReach.setup.ts checks that every row's
   // grantee and sources are there.
   'project_reach.grantee_id',
+  // A nightly archive recheck names a project to check, which may be gone,
+  // in Deleted items, or reused by another project since; its chain checks
+  // that project under the archive's rules, or nothing, and deletes the row
+  // (model/archiveRechecks.ts).
+  'archive_rechecks.project_id',
   // A pending detach names the deleted task, which is in Deleted items or
   // back, and who deleted it, until its last step deletes the row
   // (model/deletedItems.ts detachArchivedChildren).

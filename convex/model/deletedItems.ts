@@ -131,6 +131,7 @@ import { cutText, LIMITS, TEXT_MAX } from '../lib/limits'
 import { countsAsSubtask } from '../lib/liveTasks'
 import { nameKey } from '../lib/nameKey'
 import { insertActivity, logActivity } from './activity'
+import { recheckParent, recheckProject, waitsForChildren } from './archiveRechecks'
 import { beginCount, type CommentWrite, deleteCommentRows, tallyComments } from './commentLimits'
 import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleImageReap } from './descriptionImages'
@@ -981,7 +982,8 @@ async function idTaken(run: Run, taskId: string): Promise<boolean> {
  * the next step picks it up. A task too large to store goes in cut to the
  * caps (fitToStore). A task that a restore wrote back without its parent, and that still waits
  * for it, is stored with that parent again (takeParent). Tasks of a deleted
- * project emit no task.deleted. */
+ * project emit no task.deleted. A purge marks the project of an open task's
+ * parent outside the item for the nightly archive (markPurgedParent). */
 async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boolean> {
   for (const relation of TASK_ROWS) {
     // the task stays live until its own row goes, below
@@ -1016,11 +1018,38 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
     }
     const stored = fitToStore(run.item, { ...described.task, parent_id })
     await storeTask(run.ctx, run.item, tallyOf(run), stored)
-  } else await discard(run.ctx, { table: 'issues', doc: task })
+  } else {
+    await discard(run.ctx, { table: 'issues', doc: task })
+    await markPurgedParent(run, task)
+  }
   await dropTaskDescription(run.ctx, run.budget, task.id, row)
   run.budget.tasks -= 1
   charge(run.budget, task)
   return true
+}
+
+/* The parents a purge step read for its open tasks, so the siblings of a
+ * task read theirs no more that step (markPurgedParent). */
+const purgedParents = new WeakMap<Run, Set<string>>()
+
+/** Marks the project of `task`'s parent for the nightly archive
+ * (model/archiveRechecks.ts) as a purge deletes `task`, an open task, for
+ * good, when the parent lies outside the item and waits for its children.
+ * Only a project item whose move got stuck before moveEdges reached the
+ * task leaves it live; moveEdges would have marked the parent. The parent's
+ * project is known only from the parent, so the step reads each parent
+ * once, charged to its budget, and a parent inside the item, which goes
+ * too, marks nothing. */
+async function markPurgedParent(run: Run, task: Doc<'issues'>): Promise<void> {
+  if (task.archived_at !== undefined || task.parent_id === undefined) return
+  const read = purgedParents.get(run) ?? new Set<string>()
+  purgedParents.set(run, read)
+  if (read.has(task.parent_id)) return
+  read.add(task.parent_id)
+  const parent = await byId(run.ctx, 'issues', task.parent_id)
+  if (parent !== null) chargeRead(run.budget, parent)
+  if (waitsForChildren(parent) && !itemProjectIds(run.item).includes(parent.project_id))
+    await recheckProject(run.ctx.db, { org_id: parent.org_id, project_id: parent.project_id })
 }
 
 /** Whether `task`, which a restore of project item `item` wrote back
@@ -1136,7 +1165,9 @@ async function eachStoredTask(
  * passes over stays within its budget (the first step runs in the user's
  * own delete). It reads no child inside the item to find one outside
  * (childrenOutside), so the children of one task cannot pass the
- * transaction's read limit either. */
+ * transaction's read limit either. A Done parent outside the item may have
+ * waited for a task that moves, so the next nightly archive checks the
+ * parent's project (model/archiveRechecks.ts). */
 async function moveEdges(run: Run): Promise<boolean> {
   const ids = itemProjectIds(run.item)
   const parents = new Map<string, Doc<'issues'> | null>()
@@ -1159,8 +1190,14 @@ async function moveEdges(run: Run): Promise<boolean> {
       )
     for await (const task of tasks) {
       chargeRead(run.budget, task)
-      if ((await isEdge(run, task, ids, parents)) && !(await clearTask(run, task, 'keep')))
-        return stop()
+      if (await isEdge(run, task, ids, parents)) {
+        if (!(await clearTask(run, task, 'keep'))) return stop()
+        // a parent outside the item stays live and may have waited for this
+        // task alone (model/archiveRechecks.ts); isEdge read it
+        const parent = task.parent_id === undefined ? null : (parents.get(task.parent_id) ?? null)
+        if (waitsForChildren(parent) && !ids.includes(parent.project_id))
+          await recheckProject(run.ctx.db, { org_id: parent.org_id, project_id: parent.project_id })
+      }
       cursor.after = task._creationTime
       run.budget.moved = true
       if (spent(run.budget)) return stop()
@@ -4526,8 +4563,11 @@ export async function recoverArchivedDetaches(ctx: MutationCtx): Promise<void> {
  * and the 'deleted' activity row written as before, its detail the machine
  * `provenance`. A child inside the item keeps its parent, and a task that
  * still waits for its parent after a project item's restore is stored with
- * it (takeParent). `children` are the root's active children when the
- * caller read them in this transaction, so they are not read twice. The
+ * it (takeParent). A Done parent of the root may have waited for it alone,
+ * so the next nightly archive checks the parent's project
+ * (model/archiveRechecks.ts recheckParent). `children` are the root's
+ * active children when the caller read them in this transaction, so they
+ * are not read twice. The
  * tasks are then hidden; their messages and other rows follow within the
  * same budget, and steps take the rest (moveDrain). A task too large to
  * store goes in cut to the caps (fitToStore). Returns the item.
@@ -4558,6 +4598,10 @@ export async function moveTasksToTrash(
   const subtasks: Doc<'issues'>[] = []
   for (const task of a.subtasks) subtasks.push(await described(task))
   const tasks = [...subtasks, root]
+  // Only the root can have a parent outside the item, which stays live and
+  // may have waited for the root alone (model/archiveRechecks.ts).
+  const above = await recheckParent(counted, a.root)
+  if (above !== null) chargeRead(budget, above)
   const doomed = new Set(tasks.map((task) => task.id))
   const id = newUuid()
   const project = await liveProject(counted, root.project_id)

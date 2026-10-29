@@ -91,6 +91,7 @@ import { issueKey, PRIORITY_NAMES, STATUS_NAMES } from '../lib/taskRefs'
 import { inWorkingSet } from '../lib/workingSet'
 import { excerpt, issueChanges, logActivity, machineDetail, narratedChange } from './activity'
 import { scheduleMarkClears } from './archiveMarks'
+import { recheckParent } from './archiveRechecks'
 import { startCount } from './commentLimits'
 import { IMAGE_NOT_ATTACHED, settleDescriptionImages } from './descriptionImages'
 import {
@@ -1850,6 +1851,9 @@ export async function updateIssueCore(
     w.start_week = start
     w.end_week = end
   }
+  // -- a task that leaves its parent or is archived stops counting for the
+  //    parent, which may have waited for it alone (model/archiveRechecks.ts)
+  if ('parent_id' in patch || toggle === 'archived') await recheckParent(ctx, issue)
   // -- the row write: ONE patch, the folded archive toggle included, and
   //    the description row with it (model/descriptions.ts)
   await patchTask(ctx.db, issue, w)
@@ -2239,6 +2243,9 @@ export async function moveIssueCore(
           .filter((c) => c.archived_at === undefined)
           .reduce((sum, c) => sum + getDocumentSize(c), 0)
       : 0
+  // a task that leaves its parent stops counting for it, which may have
+  // waited for it alone (model/archiveRechecks.ts)
+  if (detach) await recheckParent(ctx, issue)
   const before = { ...issue }
   // the task and its description row (model/descriptions.ts); a move that
   // read the subtree to carry it asks the room first, and any other patches
@@ -2410,7 +2417,9 @@ async function archiveSubtree(
  * keepSubtasks (the app's archive window only; REST and MCP archive the
  * subtree): every active direct child is detached first, as a delete
  * detaches it (detachChild), so the cascade finds only archived children,
- * which stay attached, and the task is archived alone. */
+ * which stay attached, and the task is archived alone. A Done parent of the
+ * task may have waited for it alone, so the next nightly archive checks the
+ * parent's project (model/archiveRechecks.ts recheckParent). */
 export async function archiveIssueCore(
   ctx: MutationCtx,
   a: { me: Doc<'profiles'>; issue: Doc<'issues'>; now: string; keepSubtasks?: boolean },
@@ -2418,6 +2427,8 @@ export async function archiveIssueCore(
   const { me, issue, now } = a
   await assertCanEdit(ctx, me, issue.project_id)
   if (issue.archived_at !== undefined) return issue
+  // its parent may wait for it alone (model/archiveRechecks.ts)
+  await recheckParent(ctx, issue)
   if (a.keepSubtasks === true) {
     // read in full before the first detach, which moves a row out of the range
     const kids = await activeSubtasks(ctx, issue.id).take(LIMITS.subtasks.max)

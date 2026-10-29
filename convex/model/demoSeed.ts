@@ -22,6 +22,7 @@ import { named, nameKey } from '../lib/nameKey'
 import { issueKey } from '../lib/taskRefs'
 import { insertActivity, issueChanges, machineDetail } from './activity'
 import { markArchivedTask } from './archiveMarks'
+import { behindWindow, recheckProject } from './archiveRechecks'
 import { type CommentWrite, startCount, tallyComments } from './commentLimits'
 import { insertTask } from './descriptions'
 import { itemEdits } from './inboxItems'
@@ -461,6 +462,9 @@ async function writeStep(
     )
     const labels = shared.labels
     const inserted: Doc<'issues'>[] = []
+    // the projects of active Done tasks that the nightly archive's window
+    // may not reach, which an anchor weeks back gives (model/archiveRechecks.ts)
+    const behind = new Set<string>()
     for (let index = step.from; index < step.to; index++) {
       const i = data.issues[index]
       // a project, label or parent task the app removed since it was
@@ -550,6 +554,8 @@ async function writeStep(
       const issue = await ctx.db.get(issueDocId)
       require(issue !== null, rule(SEED_ROW_MISSING.task))
       inserted.push(issue)
+      if (!i.archived && times.done !== undefined && behindWindow(times.done, now))
+        behind.add(issue.project_id)
       shared.tasks.set(i.key, issue)
       await notifyIssueInsert(ctx, {
         issue,
@@ -567,6 +573,7 @@ async function writeStep(
       'issues',
       inserted.map((issue) => [null, issue] as const),
     )
+    for (const project_id of behind) await recheckProject(ctx.db, { org_id: org.id, project_id })
     return
   }
   if (step.kind === 'history') {

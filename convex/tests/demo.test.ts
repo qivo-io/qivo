@@ -838,6 +838,126 @@ describe('public demo records and used ids', () => {
   })
 })
 
+describe('public demo archive rechecks', () => {
+  /** The number of rows in every table. */
+  const rowsByTable = () =>
+    t.run(async (ctx) => {
+      const rows: Record<string, number> = {}
+      for (const table of Object.keys(schema.tables) as TableNames[])
+        rows[table] = (await ctx.db.query(table).collect()).length
+      return rows
+    })
+
+  /* The demo's archive_rechecks rows, as project ids. */
+  const rechecksOf = (orgId: string) =>
+    t.run(async (ctx) =>
+      (await ctx.db.query('archive_rechecks').collect())
+        .filter((row) => row.org_id === orgId)
+        .map((row) => row.project_id),
+    )
+
+  /* Runs `change` and answers how many records the demo counted for it,
+   * and how many rows it added in every table but archive_rechecks, the
+   * read-message sweep rows that an archive's notices, stored read, give
+   * their recipients, which the record limit does not count either
+   * (model/messages.ts lowerSweepDue), and the counters' own row (lib/demo.ts
+   * demoCounts). */
+  async function spent(receipt: Doc<'demo_sessions'>, change: () => Promise<unknown>) {
+    const before = { counts: await countsOf(receipt), rows: await rowsByTable() }
+    await change()
+    const after = { counts: await countsOf(receipt), rows: await rowsByTable() }
+    const added = (table: string) => after.rows[table] - before.rows[table]
+    return {
+      counted: (after.counts?.insert_count ?? 0) - (before.counts?.insert_count ?? 0),
+      rows:
+        Object.keys(after.rows).reduce((sum, table) => sum + added(table), 0) -
+        added('archive_rechecks') -
+        added('message_sweeps') -
+        added('demo_write_counts'),
+      rechecks: added('archive_rechecks'),
+    }
+  }
+
+  it("spends none of the record limit on a visitor's rechecks", async () => {
+    const a = await readyDemo()
+    const org_id = a.profile.org_id
+    // a seeded group, made a Done parent that waits for its open subtask
+    const { parent, child } = await t.run(async (ctx) => {
+      const tasks = await ctx.db
+        .query('issues')
+        .withIndex('by_org', (q) => q.eq('org_id', org_id))
+        .collect()
+      const child = tasks.find(
+        (row) =>
+          row.archived_at === undefined &&
+          row.parent_id !== undefined &&
+          !tasks.some((kid) => kid.parent_id === row.id),
+      )
+      if (child === undefined) throw new Error('the demo has no open subtask')
+      const parent = tasks.find((row) => row.id === child.parent_id)!
+      await ctx.db.patch(parent._id, { status: 'done', done_at: '2026-07-01T00:00:00.000Z' })
+      return { parent, child }
+    })
+    const archive = await spent(a.receipt, () =>
+      a.as.mutation(api.issues.archive, { org_id, id: child.id }),
+    )
+    expect(archive.rechecks).toBe(1)
+    expect(await rechecksOf(org_id)).toEqual([parent.project_id])
+    expect(archive.counted).toBe(archive.rows)
+
+    const project = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', org_id))
+          .collect()
+      ).find(
+        (p) => p.type === 'project' && p.archived_at === undefined && p.id !== parent.project_id,
+      ),
+    )
+    if (project === undefined) throw new Error('the demo has no other sub-project')
+    await a.as.mutation(api.projects.archive, { org_id, id: project.id })
+    const restore = await spent(a.receipt, () =>
+      a.as.mutation(api.projects.unarchive, { org_id, id: project.id }),
+    )
+    expect(restore.rechecks).toBe(1)
+    expect(restore.counted).toBe(restore.rows)
+    expect((await rechecksOf(org_id)).sort()).toEqual([parent.project_id, project.id].sort())
+  })
+
+  it('keeps one row a project however often a visitor restores it', async () => {
+    const a = await readyDemo()
+    const org_id = a.profile.org_id
+    const project = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', org_id))
+          .collect()
+      ).find((p) => p.type === 'project' && p.archived_at === undefined),
+    )
+    if (project === undefined) throw new Error('the demo has no sub-project')
+    for (let round = 0; round < 3; round++) {
+      await a.as.mutation(api.projects.archive, { org_id, id: project.id })
+      await a.as.mutation(api.projects.unarchive, { org_id, id: project.id })
+    }
+    expect(await rechecksOf(org_id)).toEqual([project.id])
+    // a row a run's leg or find phase wrote, or one a run's chain holds and
+    // deletes once it is done, is no reason to skip a visitor's
+    const stamp = '2026-09-14T02:30:00.000Z'
+    for (const other of [{ from_run: stamp }, { due_by: stamp }, { handed_at: stamp }]) {
+      await t.run(async (ctx) => {
+        for (const row of await ctx.db.query('archive_rechecks').collect())
+          await ctx.db.delete(row._id)
+        await ctx.db.insert('archive_rechecks', { org_id, project_id: project.id, ...other })
+      })
+      await a.as.mutation(api.projects.archive, { org_id, id: project.id })
+      await a.as.mutation(api.projects.unarchive, { org_id, id: project.id })
+      expect(await rechecksOf(org_id), Object.keys(other)[0]).toEqual([project.id, project.id])
+    }
+  })
+})
+
 describe('public demo provisioning steps', () => {
   it('runs every step once, and a step past the call sizes in a call of its own', () => {
     expect(stepCalls([1, 2, 3, 4, 5], [2, 2])).toEqual([[1, 2], [3, 4], [5]])
