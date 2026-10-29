@@ -19,7 +19,7 @@ async function fixture() {
 }
 
 describe('named lead permission management', () => {
-  it('a direct User grant and team leadership cannot administer access', async () => {
+  it('a direct User grant and team leadership cannot administer access or settings', async () => {
     const { t, f, person } = await fixture()
     await t.run((ctx) =>
       ctx.db.insert('project_access', {
@@ -28,11 +28,9 @@ describe('named lead permission management', () => {
         level: 'user',
       }),
     )
-    for (const patch of [
-      { access: {} },
-      { team_access: { [f.team.id]: 'user' as const } },
-      { lead_id: person.id },
-    ]) {
+    // an empty patch and a setting need Lead, and the lead needs an
+    // organization admin or the project's lead
+    for (const patch of [{}, { name: 'x' }, { lead_id: person.id }]) {
       await expectRefusal(
         as(t, person).mutation(api.projects.update, { org_id: f.org.id, id: f.meta.id, patch }),
         'forbidden',
@@ -71,10 +69,11 @@ describe('named lead permission management', () => {
 
   it('child-only permissions expose parent context without spilling into siblings, tasks or parent writes', async () => {
     const { t, f, person } = await fixture()
-    await as(t, f.user).mutation(api.projects.update, {
+    await as(t, f.user).mutation(api.projects.setAccess, {
       org_id: f.org.id,
       id: f.sub.id,
-      patch: { access: { [person.id]: 'user' } },
+      user_id: person.id,
+      level: 'user',
     })
     await t.run(async (ctx) => {
       expect(await canSeeProject(ctx, person, f.meta)).toBe(true)
@@ -91,10 +90,11 @@ describe('named lead permission management', () => {
       expect(view.accessible(f.sub2.id)).toBe(false)
     })
     await expectRefusal(
-      as(t, person).mutation(api.projects.update, {
+      as(t, person).mutation(api.projects.setAccess, {
         org_id: f.org.id,
         id: f.sub.id,
-        patch: { team_access: { [f.team.id]: 'user' } },
+        team_id: f.team.id,
+        level: 'user',
       }),
       'forbidden',
     )
@@ -102,10 +102,11 @@ describe('named lead permission management', () => {
 
   it('child team shares track membership without upgrading team leaders to project leads', async () => {
     const { t, f, person } = await fixture()
-    await as(t, f.user).mutation(api.projects.update, {
+    await as(t, f.user).mutation(api.projects.setAccess, {
       org_id: f.org.id,
       id: f.sub.id,
-      patch: { team_access: { [f.team.id]: 'user' } },
+      team_id: f.team.id,
+      level: 'user',
     })
     await t.run(async (ctx) => {
       expect(await hasProjectLevel(ctx, person, f.sub.id, 'user')).toBe(true)
@@ -146,29 +147,45 @@ describe('named lead permission management', () => {
     })
   })
 
-  it('fences foreign users and teams and rolls back earlier grant writes atomically', async () => {
+  it('fences foreign users and teams on create and rolls back the project and its earlier grants', async () => {
     const { t, f, person } = await fixture()
-    for (const id of [f.meta.id, f.sub.id]) {
-      const before = await t.run((ctx) => ctx.db.query('project_access').collect())
-      await expectRefusal(
-        as(t, f.user).mutation(api.projects.update, {
+    const state = () =>
+      t.run(async (ctx) => ({
+        projects: await ctx.db.query('projects').collect(),
+        grants: await ctx.db.query('project_access').collect(),
+        shares: await ctx.db.query('project_team_access').collect(),
+        counters: await ctx.db.query('org_counters').collect(),
+      }))
+    const before = await state()
+    // a top-level project by an admin, a sub-project by its parent's lead
+    for (const [who, place] of [
+      [f.admin, { type: 'meta' }],
+      [f.user, { type: 'project', parent_id: f.meta.id }],
+    ] as const) {
+      const create = (maps: {
+        access?: Record<string, 'user'>
+        team_access?: Record<string, 'user'>
+      }) =>
+        as(t, who).mutation(api.projects.create, {
           org_id: f.org.id,
-          id,
-          patch: { access: { [person.id]: 'user', [f.otherAdmin.id]: 'user' } },
-        }),
+          id: uuid(),
+          key: 'NEW',
+          name: 'New project',
+          sort_order: 9,
+          ...place,
+          ...maps,
+        })
+      await expectRefusal(
+        create({ access: { [person.id]: 'user', [f.otherAdmin.id]: 'user' } }),
         'forbidden',
         /grantee must hold/,
       )
       await expectRefusal(
-        as(t, f.user).mutation(api.projects.update, {
-          org_id: f.org.id,
-          id,
-          patch: { access: { [person.id]: 'user' }, team_access: { [uuid()]: 'user' } },
-        }),
+        create({ access: { [person.id]: 'user' }, team_access: { [uuid()]: 'user' } }),
         'forbidden',
         /team must belong/,
       )
-      expect(await t.run((ctx) => ctx.db.query('project_access').collect())).toEqual(before)
     }
+    expect(await state()).toEqual(before)
   })
 })

@@ -48,16 +48,13 @@ import {
   projectLevelsForProfiles,
 } from './lib/access'
 import {
-  ARCHIVED_PAGE_MOST,
   ARCHIVED_PAGE_ROWS,
   ARCHIVED_SCOPE,
   type ArchivedListRow,
   type ArchivedPageRow,
   type ArchivedPageScope,
-  archiveCursorText,
   archivedPageCore,
   archivedTaskCore,
-  parseArchiveCursor,
   parseScopeCursor,
   scopeCursorText,
 } from './lib/archivedTasks'
@@ -82,7 +79,6 @@ import {
   assertCanEdit,
   assertTaskExpected,
   createIssueCore,
-  hasSubtasks,
   moveIssueCore,
   subtasksWouldMove,
   unarchiveIssueCore,
@@ -99,7 +95,7 @@ type MeCtx = QueryCtx & { me: Doc<'profiles'> }
  * window_key (where the app's windows place the task) stay internal too.
  * The text stays out: the app reads only the number, the parent's number
  * and the archive answer from a write, and the text is the task's
- * description row (model/descriptions.ts), which archivedFor reads. */
+ * description row (model/descriptions.ts). */
 const pub = ({
   _id,
   _creationTime,
@@ -110,27 +106,20 @@ const pub = ({
 }: Doc<'issues'>) => row
 
 /* A returned row names its parent only when the caller can see the parent's
- * project, so no hidden task id leaves a read or a write's result (the
- * snapshot's has_hidden_parent rule). `seen` caches project visibility for
- * list reads. */
+ * project, so no hidden task id leaves a write's result (the snapshot's
+ * has_hidden_parent rule). */
 async function pubFor(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   issue: Doc<'issues'>,
-  seen = new Map<string, Promise<boolean>>(),
 ): Promise<ReturnType<typeof pub>> {
   const { parent_id, ...row } = pub(issue)
   if (parent_id === undefined) return row
   const parent = await byId(ctx, 'issues', parent_id)
   if (parent === null || parent.org_id !== me.org_id) return row
-  let visible = seen.get(parent.project_id)
-  if (visible === undefined) {
-    visible = byId(ctx, 'projects', parent.project_id).then(
-      async (project) => project !== null && (await canSeeProject(ctx, me, project)),
-    )
-    seen.set(parent.project_id, visible)
-  }
-  return (await visible) ? { ...row, parent_id } : row
+  const project = await byId(ctx, 'projects', parent.project_id)
+  const visible = project !== null && (await canSeeProject(ctx, me, project))
+  return visible ? { ...row, parent_id } : row
 }
 
 /* Resolve an issue uuid inside the caller's org — missing and foreign rows
@@ -149,10 +138,8 @@ const assertWritable = (ctx: MeCtx, projectId: string): Promise<void> =>
 
 /* --------------------------------------------------------------- archived
  * Issue reads that live OUTSIDE the snapshot: the Archived tasks page's
- * paged list (P.fetchArchivedPage), the task window's look-up of its own
- * task (P.fetchArchivedTask) and, deprecated, the whole-archive read that
- * browser tabs and desktop clients from before the paged list may still
- * call.
+ * paged list (P.fetchArchivedPage) and the task window's look-up of its own
+ * task (P.fetchArchivedTask).
  *
  * issues_select stayed can_see_project(project_id) (0003:165) for archived
  * rows too — fetchAll excluded them by filter, not by policy — so the fence
@@ -170,11 +157,6 @@ const NO_ARCHIVED_PAGE = { rows: [], next_cursor: null, scanned: 0 }
  * side by side for a caller who is no organization admin
  * (lib/archivedTasks.ts archivedPageCore). */
 const TOO_WIDE_PAGE = { rows: [], next_cursor: null, scanned: 0, too_wide: true as const }
-
-/* The deprecated `project_id`'s refusal of a family too wide to merge, which
- * a tab from before scopes shows as a failed read. */
-const FAMILY_TOO_WIDE =
-  'this project has too many sub-projects to list their archived tasks together; choose one of its sub-projects'
 
 /* What archivedPage answers. */
 type ArchivedPageAnswer = {
@@ -198,47 +180,34 @@ type ArchivedPageAnswer = {
  * answer an empty last page alike. A caller who is no organization admin
  * gets `too_wide` and no rows for a scope with more of their projects than
  * one page merges side by side, as a page never reads the organization's
- * archive for them; a narrower scope lists them. `limit` is 1 to
- * ARCHIVED_PAGE_MOST, ARCHIVED_PAGE_ROWS when absent.
- *
- * Deprecated: `project_id` instead of `scope` names one project family as
- * tabs from before scopes ask (archiveFamily), with that release's rows,
- * which now carry the list fields too, and its `2~` cursors. Remove it once
- * no served build calls it. */
+ * archive for them; a narrower scope lists them. `limit` is a whole number
+ * from 1 to ARCHIVED_PAGE_ROWS, the 25 rows a page shows, and that many when
+ * absent. */
 export const archivedPage = authedQuery({
   args: {
-    scope: v.optional(
-      v.union(
-        v.object({ org_id: v.string(), project_ids: v.array(v.string()) }),
-        v.object({ org_id: v.string(), all: v.literal(true) }),
-      ),
+    scope: v.union(
+      v.object({ org_id: v.string(), project_ids: v.array(v.string()) }),
+      v.object({ org_id: v.string(), all: v.literal(true) }),
     ),
-    project_id: v.optional(v.string()),
     cursor: v.optional(v.string()),
     search: v.optional(v.string()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, a): Promise<ArchivedPageAnswer> => {
     const limit = a.limit ?? ARCHIVED_PAGE_ROWS
-    if (!Number.isInteger(limit) || limit < 1 || limit > ARCHIVED_PAGE_MOST) {
-      throw badRequest(`limit must be a whole number from 1 to ${ARCHIVED_PAGE_MOST}`)
+    if (!Number.isInteger(limit) || limit < 1 || limit > ARCHIVED_PAGE_ROWS) {
+      throw badRequest(`limit must be a whole number from 1 to ${ARCHIVED_PAGE_ROWS}`)
     }
-    if ((a.scope === undefined) === (a.project_id === undefined)) {
-      throw badRequest('pass either scope or project_id')
-    }
-    let scope: ArchivedPageScope | null = null
-    if (a.scope !== undefined) {
-      if ('all' in a.scope) scope = { kind: 'all', orgId: a.scope.org_id }
-      else {
-        const projectIds = [...new Set(a.scope.project_ids)]
-        if (projectIds.length < 1 || projectIds.length > ARCHIVED_SCOPE.ids) {
-          throw badRequest(`scope.project_ids must name 1 to ${ARCHIVED_SCOPE.ids} projects`)
-        }
-        scope = { kind: 'projects', orgId: a.scope.org_id, projectIds }
+    let scope: ArchivedPageScope
+    if ('all' in a.scope) scope = { kind: 'all', orgId: a.scope.org_id }
+    else {
+      const projectIds = [...new Set(a.scope.project_ids)]
+      if (projectIds.length < 1 || projectIds.length > ARCHIVED_SCOPE.ids) {
+        throw badRequest(`scope.project_ids must name 1 to ${ARCHIVED_SCOPE.ids} projects`)
       }
+      scope = { kind: 'projects', orgId: a.scope.org_id, projectIds }
     }
     const search = limitedText(LIMITS.search, a.search ?? '')
-    if (scope === null) return await familyPage(ctx, a.project_id ?? '', a.cursor, search, limit)
     const cursor = a.cursor === undefined ? null : await parseScopeCursor(a.cursor, scope)
     if (a.cursor !== undefined && cursor === null) {
       throw badRequest('cursor must be the next_cursor of an earlier page')
@@ -255,110 +224,15 @@ export const archivedPage = authedQuery({
   },
 })
 
-/* archivedPage for the deprecated `project_id`: one project family, with
- * `2~` cursors bound to that project. An unknown or invisible project
- * answers an empty last page, and a family too wide to merge for a caller
- * who is no organization admin is refused, which a tab from before shows as
- * a failed read. */
-async function familyPage(
-  ctx: QueryCtx & { myProfiles: ReadonlyMap<string, Doc<'profiles'>> },
-  projectId: string,
-  cursorText: string | undefined,
-  search: string,
-  limit: number,
-): Promise<ArchivedPageAnswer> {
-  const cursor = cursorText === undefined ? null : await parseArchiveCursor(cursorText, projectId)
-  if (cursorText !== undefined && cursor === null) {
-    throw badRequest('cursor must be the next_cursor of an earlier page')
-  }
-  const project = await byId(ctx, 'projects', projectId)
-  if (project === null) return NO_ARCHIVED_PAGE
-  const me = ctx.myProfiles.get(project.org_id)
-  if (me === undefined || !(await canSeeProject(ctx, me, project))) return NO_ARCHIVED_PAGE
-  const page = await archivedPageCore(
-    ctx,
-    me,
-    { kind: 'family', project },
-    { cursor, search, limit },
-  )
-  if (page.tooWide) throw rule(FAMILY_TOO_WIDE)
-  return {
-    rows: page.rows,
-    next_cursor: page.next === null ? null : await archiveCursorText(page.next, project.id),
-    scanned: page.scanned,
-  }
-}
-
 /** The archived task `id` as archivedPage shows it to the caller, or null
- * when archivedPage lists it for none of the caller's projects: the task is
- * active, deleted, unknown or in a project the caller cannot see, which all
- * answer alike (lib/archivedTasks.ts archivedTaskCore). The task window asks
- * it once its task has left the board, to say whether it was archived. */
+ * when the task is active, deleted, unknown or in a project the caller
+ * cannot see, which all answer alike (lib/archivedTasks.ts
+ * archivedTaskCore). The task window asks it once its task has left the
+ * board, to say whether it was archived. */
 export const archivedTask = authedQuery({
   args: { id: v.string() },
   handler: async (ctx, { id }): Promise<ArchivedPageRow | null> =>
     await archivedTaskCore(ctx, ctx.myProfiles, id),
-})
-
-/** Deprecated: the Archived tasks page reads archivedPage. Kept for one
- * release, with the same answer, for browser tabs and desktop clients from
- * before it; remove it with its manifest line once no served build calls
- * it. It reads every archived task of the named projects at once, which
- * passes a transaction's limits for a large archive. */
-export const archivedFor = authedQuery({
-  args: { project_ids: v.array(v.string()) },
-  handler: async (ctx, { project_ids }) => {
-    const out: Doc<'issues'>[] = []
-    const seen = new Set<string>()
-    for (const pid of project_ids) {
-      if (seen.has(pid)) continue
-      seen.add(pid)
-      const project = await byId(ctx, 'projects', pid)
-      if (project === null) continue
-      const me = ctx.myProfiles.get(project.org_id)
-      if (me === undefined) continue
-      if (!(await canSeeProject(ctx, me, project))) continue
-      // only archived rows, never the project's active tasks
-      const projectIssues = await ctx.db
-        .query('issues')
-        .withIndex('by_project_archived', (q) =>
-          q.eq('project_id', pid).gt('archived_at', undefined),
-        )
-        .collect()
-      out.push(...projectIssues)
-    }
-    // the old client's order: archived_at desc, num desc
-    out.sort((a, b) =>
-      a.archived_at === b.archived_at
-        ? b.num - a.num
-        : (a.archived_at as string) < (b.archived_at as string)
-          ? 1
-          : -1,
-    )
-    // per organization: each row is fenced through the caller's seat there
-    const seenByOrg = new Map<string, Map<string, Promise<boolean>>>()
-    return await Promise.all(
-      out.map(async (issue) => {
-        const me = ctx.myProfiles.get(issue.org_id) as Doc<'profiles'>
-        let seen = seenByOrg.get(issue.org_id)
-        if (seen === undefined) {
-          seen = new Map()
-          seenByOrg.set(issue.org_id, seen)
-        }
-        const issueLabels = await ctx.db
-          .query('issue_labels')
-          .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-          .collect()
-        return {
-          ...(await pubFor(ctx, me, issue, seen)),
-          // the old page searched it
-          description: await descriptionOf(ctx.db, issue),
-          is_group: await hasSubtasks(ctx, issue),
-          label_ids: issueLabels.map((label) => label.label_id),
-        }
-      }),
-    )
-  },
 })
 
 /* ----------------------------------------------------------------- create

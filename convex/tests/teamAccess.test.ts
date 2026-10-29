@@ -37,12 +37,16 @@ async function fixture() {
       team_id: teamId,
       profile_id: profileId,
     })
-  const share = (team_access: Record<string, 'user' | 'viewer'>) =>
-    as(t, f.admin).mutation(api.projects.update, {
-      org_id: f.org.id,
-      id: f.meta.id,
-      patch: { team_access },
-    })
+  /* Shares the top-level project with each team, one setAccess a team. */
+  const share = async (team_access: Record<string, 'user' | 'viewer'>) => {
+    for (const [team_id, level] of Object.entries(team_access))
+      await as(t, f.admin).mutation(api.projects.setAccess, {
+        org_id: f.org.id,
+        id: f.meta.id,
+        team_id,
+        level,
+      })
+  }
   const snapshot = async () => {
     const snap = await workspaceOf(as(t, person))
     if (snap === null) throw new Error('expected signed-in snapshot')
@@ -194,10 +198,11 @@ describe('project team sharing', () => {
       expect(await hasProjectLevel(ctx, person, f.sub.id, 'lead')).toBe(false)
     })
     await expectRefusal(
-      as(t, person).mutation(api.projects.update, {
+      as(t, person).mutation(api.projects.setAccess, {
         org_id: f.org.id,
         id: f.meta.id,
-        patch: { team_access: {} },
+        team_id: sharedTeamId,
+        level: 'viewer',
       }),
       'forbidden',
     )
@@ -221,11 +226,7 @@ describe('project team sharing', () => {
       name: 'Foreign',
     })
     for (const teamId of [foreignTeamId, uuid()]) {
-      await expectRefusal(
-        share({ [sharedTeamId]: 'user', [teamId]: 'user' }),
-        'forbidden',
-        /team must belong/,
-      )
+      await expectRefusal(share({ [teamId]: 'user' }), 'not_found', /^team not found$/)
       await expectRefusal(
         as(t, f.admin).mutation(api.projects.create, {
           org_id: f.org.id,
@@ -242,10 +243,11 @@ describe('project team sharing', () => {
       )
     }
     expect(await t.run((ctx) => ctx.db.query('project_team_access').collect())).toEqual([])
-    await as(t, f.admin).mutation(api.projects.update, {
+    await as(t, f.admin).mutation(api.projects.setAccess, {
       org_id: f.org.id,
       id: f.sub.id,
-      patch: { team_access: { [sharedTeamId]: 'user' } },
+      team_id: sharedTeamId,
+      level: 'user',
     })
   })
 

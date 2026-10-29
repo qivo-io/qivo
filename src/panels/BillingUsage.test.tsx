@@ -8,8 +8,7 @@ import type { ApiAccessEntry } from '../lib/apiAccess'
 import { BillingUsage } from './BillingUsage'
 
 /* Billing's API calls by account: each account's total with a View
-   credentials link, no nested credential rows. The report still lists each
-   account's credentials (`keys`) for apps of the release before. */
+   credentials link, no nested credential rows. */
 
 const USAGE: BillingUsageData = {
   period_kind: 'month',
@@ -25,21 +24,8 @@ const USAGE: BillingUsageData = {
   waived: true,
   delivery_unconfirmed: false,
   users: [
-    {
-      profile_id: 'nora',
-      name: 'Nora Lind',
-      calls: 30,
-      keys: [
-        { id: 'mcp_tokens:a', name: 'Cursor', calls: 20 },
-        { id: 'oauth_connections:b', name: 'Claude', calls: 10 },
-      ],
-    },
-    {
-      profile_id: 'gone',
-      name: 'Removed user',
-      calls: 12,
-      keys: [{ id: 'agent_keys:c', name: 'Night job', calls: 12 }],
-    },
+    { profile_id: 'nora', name: 'Nora Lind', calls: 30 },
+    { profile_id: 'gone', name: 'Removed user', calls: 12 },
   ],
   projects: [],
 }
@@ -84,8 +70,6 @@ describe('API calls by account', () => {
     expect(container.textContent).toContain('Each account’s total covers all of its credentials.')
     // the credentials are API access's to show, a page at a time
     expect(container.querySelector('[data-billing-usage] li')).toBeNull()
-    for (const name of ['Cursor', 'Claude', 'Night job'])
-      expect(container.textContent).not.toContain(name)
 
     const link = container.querySelector<HTMLButtonElement>(
       '[data-billing-view-credentials="gone"]',

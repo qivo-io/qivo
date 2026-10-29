@@ -408,9 +408,7 @@ export async function usageAllowance(
  * calendar month, and names its key, which View credentials hands to API
  * access. Allowances come from the subscription's plan, or the default plan
  * before enrollment, and are null when there is no plan. A calendar month
- * and a pending interval are always waived. Each account still lists its
- * credentials (`keys`) for apps of the release before (lib/billingTypes.ts
- * BillingUsage). */
+ * and a pending interval are always waived. */
 export async function billingUsageHead(
   ctx: QueryCtx,
   orgId: string,
@@ -432,12 +430,10 @@ export async function billingUsageHead(
         profile_id: row.profile_id,
         name: profile?.org_id === orgId ? profile.name : 'Removed user',
         calls: 0,
-        keys: [],
       }
       users.set(row.profile_id, user)
     }
     user.calls += row.calls
-    user.keys.push({ id: row.credential_id, name: row.credential_name, calls: row.calls })
   }
   const calls = rows.reduce((total, row) => total + row.calls, 0)
   const includedBytes = plan

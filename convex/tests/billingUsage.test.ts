@@ -204,7 +204,8 @@ describe('pooled API usage', () => {
       ['oauth-connection', 1],
       ['personal-token', 2],
     ])
-    expect(await report(t, f)).toMatchObject({
+    const shown = await report(t, f)
+    expect(shown).toMatchObject({
       period_kind: 'paid',
       period_start: PERIOD,
       period_end: END,
@@ -212,6 +213,15 @@ describe('pooled API usage', () => {
       api_overage_cents: 200,
       waived: false,
     })
+    // each account's total over its credentials, and no credential list
+    const byProfile = (a: { profile_id: string }, b: { profile_id: string }) =>
+      a.profile_id.localeCompare(b.profile_id)
+    expect([...shown.users].sort(byProfile)).toEqual(
+      [
+        { profile_id: f.agent.id, name: f.agent.name, calls: 4 },
+        { profile_id: f.user.id, name: f.user.name, calls: 3 },
+      ].sort(byProfile),
+    )
   })
 
   it('a paid period consumes blocks waived by complimentary access and charges only later blocks', async () => {

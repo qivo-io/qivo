@@ -6794,8 +6794,8 @@ export const PLANNER = {
   },
   /** Task `uuid` in the archive, for the task window once the task has left
       the board: `row` is the task as the Archived tasks page shows it, or
-      null when that page lists it for none of this person's projects, as
-      for a task that was deleted. Null on a transport or server error.
+      null when it is active, deleted, unknown or in a project this person
+      cannot see. Null on a transport or server error.
       Never part of the snapshot (issues.archivedTask). */
   fetchArchivedTask: async (uuid: string): Promise<{ row: ArchivedIssueVM | null } | null> => {
     let data: FunctionReturnType<typeof api.issues.archivedTask>

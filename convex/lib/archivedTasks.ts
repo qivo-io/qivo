@@ -848,15 +848,10 @@ export async function archivedTasksPage<Row>(
 /* ------------------------------------------------------ the Archived tasks
  * page of the app (issues.archivedPage) */
 
-/** How many rows one page of the app's Archived tasks answers when the call
- * names no limit: the 25 a page shows (limits plan, "Archived task browsing
- * and search"). */
+/** The most rows one page of the app's Archived tasks answers, and how
+ * many when the call names no limit: the 25 a page shows (limits plan,
+ * "Archived task browsing and search"). */
 export const ARCHIVED_PAGE_ROWS = 25
-
-/** The most rows one page of the app's Archived tasks answers when asked.
- * A tab loaded before pages of 25 asks for 100 and keeps working until it
- * reloads. A later release lowers it to 25. */
-export const ARCHIVED_PAGE_MOST = 100
 
 /** How far a page expands its scope before its read budget starts: at
  * most `ids` distinct project ids (issues.archivedPage refuses more), and at
@@ -888,36 +883,6 @@ type RowRoom = { rows: number }
  * it. */
 const counted = (room: RowRoom): boolean => --room.rows >= 0
 
-/**
- * The projects whose archived tasks the app's Archived tasks page lists for
- * `project`, as `me` sees them, when a tab from before scopes names one
- * project (issues.archivedPage `project_id`). It reads every sub-project
- * and checks each one by itself, so only that deprecated argument uses it;
- * scopes expand a family within ARCHIVED_SCOPE. A sub-project is itself. A
- * top-level project
- * adds its sub-projects that share its archived state and that `me` can see,
- * as the app's project tree shows them (src/store/viewModels.ts shapeProject
- * `children`). Its own id stays in, though tasks live only in sub-projects,
- * which costs one empty range. So an active project leaves out a sub-project
- * archived on its own, where a restored task would stay hidden everywhere.
- * REST and MCP archived lists include such sub-projects (lib/core.ts
- * taskListScope). The caller has already checked that `me` sees `project`.
- */
-export async function archiveFamily(
-  ctx: QueryCtx,
-  me: Doc<'profiles'>,
-  project: Doc<'projects'>,
-): Promise<string[]> {
-  if (project.type !== 'meta') return [project.id]
-  const out = [project.id]
-  const kids = ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', project.id))
-  for await (const kid of kids) {
-    if ((kid.archived_at === undefined) !== (project.archived_at === undefined)) continue
-    if (await canSeeProject(ctx, me, kid)) out.push(kid.id)
-  }
-  return out
-}
-
 /** An archived task as the Archived tasks page shows it: its stored fields
  * without the description, the parent or server-owned marks, and whether it
  * is a group. */
@@ -941,11 +906,6 @@ export type ArchivedListRow = ArchivedPageRow & {
    * issues.unarchive asks (model/issues.ts assertCanEdit) */
   can_restore: boolean
 }
-
-/** What issues.archivedPage asks archivedPageCore for: a scope of the app's
- * page, or the family of one project, as a tab from before scopes asks
- * (archiveFamily). */
-export type ArchivedPageRequest = ArchivedPageScope | { kind: 'family'; project: Doc<'projects'> }
 
 /* What projectLevelsOf answers. */
 type ProjectLevels = ReturnType<typeof projectLevelsOf>
@@ -1154,24 +1114,15 @@ async function mergedScope(
  *   too while the organization's reach rows cannot be read, which fails
  *   closed. Past the bounds it is too wide, and an admin's page reads the
  *   organization's archive and holds a task of a named project or of a
- *   sub-project of a family kept.
- * - `family` is archiveFamily's list, for the deprecated one-project
- *   argument, too wide past ARCHIVED_SCOPE.subProjects projects for anyone
- *   but an admin. */
+ *   sub-project of a family kept. */
 async function readScope(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
-  asked: ArchivedPageRequest,
+  asked: ArchivedPageScope,
 ): Promise<{ scope: ArchiveScope | null | typeof TOO_WIDE; levels: ProjectLevels }> {
   const orgId = me.org_id
   const admin = me.org_role === 'admin'
   const room: RowRoom = { rows: ARCHIVED_SCOPE.rows }
-  if (asked.kind === 'family') {
-    const projectIds = await archiveFamily(ctx, me, asked.project)
-    const levels = projectLevelsOf(ctx, me, [asked.project])
-    if (!admin && projectIds.length > ARCHIVED_SCOPE.subProjects) return { scope: TOO_WIDE, levels }
-    return { scope: projectsScope(orgId, projectIds, admin), levels }
-  }
   if (asked.kind === 'all') {
     if (admin) {
       const levels = projectLevelsOf(ctx, me)
@@ -1264,14 +1215,12 @@ async function readScope(
  * no rows, when the scope has more projects than ARCHIVED_SCOPE allows or
  * than one page can open (archivedTasksPage). What decides that is the
  * caller's own projects and their newest archived tasks. An admin's page
- * may read the organization's archive, which hides nothing from them. For
- * the deprecated `family` request the caller has already checked that `me`
- * sees the project.
+ * may read the organization's archive, which hides nothing from them.
  */
 export async function archivedPageCore(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
-  asked: ArchivedPageRequest,
+  asked: ArchivedPageScope,
   o: { cursor: ArchiveCursor | null; search: string; limit: number },
 ): Promise<ArchivedTasksPage<ArchivedListRow>> {
   const { scope, levels } = await readScope(ctx, me, asked)
@@ -1330,12 +1279,14 @@ async function pageRow(task: ArchivedTask, facts: TaskFacts): Promise<ArchivedPa
 /**
  * The archived task `id` as the app's Archived tasks page shows it to the
  * caller, whose active profiles are `myProfiles` keyed by organization, or
- * null when that page lists it for none of the caller's projects. It applies
- * the page's rule for a row: the task is archived, and the caller's seat in
- * the organization of the task's project sees that project (canSeeProject).
- * The page of that project lists such a task (archivedPageCore), so the
- * answer tells nothing the page does not. An active, deleted or unknown task
- * and one in a project the caller cannot see all answer null.
+ * null when the caller cannot see it. It applies the page's rule for a row:
+ * the task is archived, and the caller's seat in the organization of the
+ * task's project sees that project (canSeeProject). A scope of that project
+ * lists such a task (archivedPageCore) while the project and its parent are
+ * live, and REST and MCP archived lists of that project list it either way
+ * (lib/core.ts taskListScope), so the answer tells nothing the caller
+ * cannot read. An active, deleted or unknown task and one in a project the
+ * caller cannot see all answer null.
  */
 export async function archivedTaskCore(
   ctx: QueryCtx,

@@ -3,13 +3,11 @@
  * issues.archivedPage (P.fetchArchivedPage) pages the archived tasks of a
  * scope, some projects of one organization or all of them, with a cursor
  * sealed to that scope, and searches them on the server
- * (lib/archivedTasks.ts). Its deprecated `project_id` names one project
- * family, as tabs from before scopes ask. issues.archivedFor is the
- * deprecated whole-archive read that clients from before the paged list may
- * still call. issues.archivedTask (P.fetchArchivedTask) finds one archived
- * task by id for the task window. Fence: can_see_project through the
- * caller's seat in the project's OWN org; an unknown or invisible project
- * answers nothing (no existence oracle). Only archived rows come back. */
+ * (lib/archivedTasks.ts). issues.archivedTask (P.fetchArchivedTask) finds
+ * one archived task by id for the task window. Fence: can_see_project
+ * through the caller's seat in the project's OWN org; an unknown or
+ * invisible project answers nothing (no existence oracle). Only archived
+ * rows come back. */
 
 import type { FunctionArgs, FunctionReturnType } from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -19,8 +17,10 @@ import {
   ARCHIVE_LABELS,
   ARCHIVE_PAGE,
   ARCHIVED_SCOPE,
+  archiveCursorText,
   archivedPageCore,
   archivedTaskMatcher,
+  parseArchiveCursor,
 } from '../lib/archivedTasks'
 import { ARCHIVED_TOO_WIDE } from '../lib/core'
 import type { OrgRole } from '../lib/enums'
@@ -51,102 +51,6 @@ import {
  * (lib/archiveCursorSeal.ts), so every page with a next cursor needs one. */
 const g = globalThis as unknown as { process: { env: Record<string, string | undefined> } }
 g.process.env.BETTER_AUTH_SECRET ??= 'archived-test-secret-not-a-deployment-key'
-
-describe('issues.archivedFor', () => {
-  it('returns only archived issues of the named projects, newest-archived first, num desc tiebreak', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'live' })
-    const early = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      title: 'early',
-      archived_at: '2026-01-02T00:00:00.000Z',
-    })
-    const labelId = uuid()
-    await t.run(async (ctx) => {
-      await ctx.db.insert('labels', {
-        id: labelId,
-        org_id: f.org.id,
-        name: 'Old',
-        name_lower: 'old',
-        color: '#F0555D',
-        created_at: '2026-01-01T00:00:00.000Z',
-      })
-      await ctx.db.insert('issue_labels', {
-        org_id: early.org_id,
-        issue_id: early.id,
-        label_id: labelId,
-      })
-    })
-    const lateA = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      title: 'lateA',
-      archived_at: '2026-01-03T00:00:00.000Z',
-    })
-    const lateB = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub2.id,
-      title: 'lateB',
-      archived_at: '2026-01-03T00:00:00.000Z',
-    })
-    const rows = await as(t, f.admin).query(api.issues.archivedFor, {
-      project_ids: [f.meta.id, f.sub.id, f.sub2.id],
-    })
-    const higherNum = lateB.num > lateA.num ? lateB : lateA
-    const lowerNum = lateB.num > lateA.num ? lateA : lateB
-    expect(rows.map((r) => r.id)).toEqual([higherNum.id, lowerNum.id, early.id])
-    // raw app rows: uuid key kept, system fields stripped
-    expect(rows[0]).not.toHaveProperty('_id')
-    expect(rows[0].title).toBe(higherNum.title)
-    expect(rows.find((row) => row.id === early.id)?.label_ids).toEqual([labelId])
-  })
-
-  it('an invisible or unknown project id contributes nothing, without erroring', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const hiddenRow = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.hidden.id,
-      title: 'hidden archived',
-      archived_at: '2026-01-02T00:00:00.000Z',
-    })
-    const visible = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      title: 'mine archived',
-      archived_at: '2026-01-02T00:00:00.000Z',
-    })
-    // guest holds a grant on meta only — hidden and a bogus id fall away silently
-    const rows = await as(t, f.guest).query(api.issues.archivedFor, {
-      project_ids: [f.sub.id, f.hidden.id, 'no-such-project'],
-    })
-    expect(rows.map((r) => r.id)).toEqual([visible.id])
-    expect(rows.some((r) => r.id === hiddenRow.id)).toBe(false)
-  })
-
-  it('spans organizations: each id is fenced through the caller seat in ITS org', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const foreign = await plantIssue(t, {
-      org_id: f.otherOrg.id,
-      project_id: f.otherProject.id,
-      title: 'foreign archived',
-      archived_at: '2026-01-02T00:00:00.000Z',
-    })
-    // admin of Testbed Labs holds no seat in Other — the foreign id yields nothing
-    const refused = await as(t, f.admin).query(api.issues.archivedFor, {
-      project_ids: [f.otherProject.id],
-    })
-    expect(refused).toEqual([])
-    // the Other org's own admin sees it
-    const rows = await as(t, f.otherAdmin).query(api.issues.archivedFor, {
-      project_ids: [f.otherProject.id],
-    })
-    expect(rows.map((r) => r.id)).toEqual([foreign.id])
-  })
-})
 
 /* ------------------------------------------------------------ archivedPage */
 
@@ -373,11 +277,11 @@ describe('issues.archivedPage', () => {
     expect(all.sizes).toEqual([...Array(9).fill(25), 5])
     // a family whose size is a multiple of the limit ends on its last full
     // page, with no empty page after it
-    const exact = await everyPage(t, f.admin, { ...scopeOf(f.org.id, f.meta.id), limit: 46 })
-    expect(exact.sizes).toEqual([46, 46, 46, 46, 46])
-    // 1 and 100 are the smallest and the largest pages
+    const exact = await everyPage(t, f.admin, { ...scopeOf(f.org.id, f.meta.id), limit: 23 })
+    expect(exact.sizes).toEqual(Array(10).fill(23))
+    // 1 and 25 are the smallest and the largest pages
     expect((await pageOf(t, f.admin, { ...allOf(f.org.id), limit: 1 })).rows).toHaveLength(1)
-    expect((await pageOf(t, f.admin, { ...allOf(f.org.id), limit: 100 })).rows).toHaveLength(100)
+    expect((await pageOf(t, f.admin, { ...allOf(f.org.id), limit: 25 })).rows).toHaveLength(25)
   })
 
   it('answers rows with their place, owner and Restore, without descriptions or parents', async () => {
@@ -815,8 +719,8 @@ describe('issues.archivedPage', () => {
       })
     }
     const scope = scopeOf(f.org.id, f.meta.id)
-    const first = await pageOf(t, f.admin, { ...scope, limit: 100 })
-    expect(first.rows).toHaveLength(100)
+    const first = await pageOf(t, f.admin, { ...scope, limit: 25 })
+    expect(first.rows).toHaveLength(25)
     expect(first.next_cursor).not.toBeNull()
     // the label matches every task, so the search reads each one's labels
     const found = await pageOf(t, f.admin, { ...scope, search: 'hardware' })
@@ -824,12 +728,6 @@ describe('issues.archivedPage', () => {
     const missing = await pageOf(t, f.admin, { ...allOf(f.org.id), search: 'hardwarez' })
     expect(missing.rows).toHaveLength(0)
     expect(missing.next_cursor).not.toBeNull()
-    // the deprecated whole-archive read passes the transaction's limits here
-    await expect(
-      as(t, f.admin).query(api.issues.archivedFor, {
-        project_ids: [f.meta.id, f.sub.id, f.sub2.id],
-      }),
-    ).rejects.toThrow(/Too many index ranges/)
   }, 120_000)
 
   it('keeps paging in order while tasks are archived and restored', async () => {
@@ -873,7 +771,7 @@ describe('issues.archivedPage', () => {
     }
     const empty = { rows: [], next_cursor: null, scanned: 0 }
     // invisible, unknown, of another organization, and an organization where
-    // the caller has no seat, by scope and by the deprecated argument
+    // the caller has no seat
     for (const [profile, args] of [
       [f.guest, scopeOf(f.org.id, f.hidden.id)],
       [f.guest, scopeOf(f.org.id, 'no-such-project')],
@@ -882,9 +780,6 @@ describe('issues.archivedPage', () => {
       [f.admin, scopeOf(f.otherOrg.id, f.otherProject.id)],
       [f.admin, allOf(f.otherOrg.id)],
       [f.admin, allOf('no-such-organization')],
-      [f.guest, { project_id: f.hidden.id }],
-      [f.guest, { project_id: 'no-such-project' }],
-      [f.admin, { project_id: f.otherProject.id }],
     ] as const) {
       expect(await pageOf(t, profile, args), JSON.stringify(args)).toEqual(empty)
     }
@@ -967,7 +862,6 @@ describe('issues.archivedPage', () => {
       scopeOf(f.org.id, f.sub.id, f.sub2.id),
       allOf(f.org.id),
       scopeOf(f.otherOrg.id, f.sub.id),
-      { project_id: f.sub.id },
     ]) {
       await badRequest(pageOf(t, f.admin, { ...args, cursor }), sentence)
     }
@@ -986,17 +880,14 @@ describe('issues.archivedPage', () => {
       pageOf(t, f.admin, { ...allOf(f.otherOrg.id), cursor: all.next_cursor ?? '' }),
       sentence,
     )
-    // a `2~` cursor of the deprecated argument opens for no scope
-    const old = await pageOf(t, f.admin, { project_id: f.sub.id, limit: 1 })
-    expect(old.next_cursor).toMatch(/^2~/)
-    await badRequest(pageOf(t, f.admin, { ...fwOnly, cursor: old.next_cursor ?? '' }), sentence)
+    // a `2~` cursor of REST and MCP archived lists opens for no scope
+    const position = { created: 1, id: 'k1', archived_at: day(1) }
+    const old = await archiveCursorText(position, f.sub.id)
+    expect(await parseArchiveCursor(old, f.sub.id)).toEqual(position)
+    await badRequest(pageOf(t, f.admin, { ...fwOnly, cursor: old }), sentence)
     // a `3~` cursor sealed around a `2~` cursor's text opens for neither
-    const relabeled = `2~${cursor.slice(2)}`
-    await badRequest(pageOf(t, f.admin, { project_id: f.sub.id, cursor: relabeled }), sentence)
-    await badRequest(
-      pageOf(t, f.admin, { ...fwOnly, cursor: `3~${old.next_cursor?.slice(2)}` }),
-      sentence,
-    )
+    expect(await parseArchiveCursor(`2~${cursor.slice(2)}`, f.sub.id)).toBeNull()
+    await badRequest(pageOf(t, f.admin, { ...fwOnly, cursor: `3~${old.slice(2)}` }), sentence)
   })
 
   it('merges named projects of different families in archive order, each id once', async () => {
@@ -1715,7 +1606,7 @@ describe('issues.archivedPage', () => {
     expect(await pageOf(t, f.user, scopeOf(f.org.id, away.id))).toEqual(EMPTY)
   })
 
-  it('leaves out a sub-project archived on its own, which only the deprecated argument names', async () => {
+  it('leaves out a sub-project archived on its own', async () => {
     const t = newT()
     const f = await withOrg(t)
     const shelved = await plantProject(t, {
@@ -1729,48 +1620,16 @@ describe('issues.archivedPage', () => {
       project_id: f.sub.id,
       archived_at: day(2),
     })
-    const left = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: shelved.id,
-      archived_at: day(3),
-    })
+    await plantIssue(t, { org_id: f.org.id, project_id: shelved.id, archived_at: day(3) })
     const ids = async (args: PageArgs) => (await pageOf(t, f.admin, args)).rows.map((row) => row.id)
     expect(await ids(scopeOf(f.org.id, f.meta.id))).toEqual([kept.id])
     expect(await ids(allOf(f.org.id))).toEqual([kept.id])
     // named itself, an archived project drops out like an invisible one
     expect(await ids(scopeOf(f.org.id, shelved.id))).toEqual([])
-    // the deprecated argument lists its own, as it did
-    expect(await ids({ project_id: shelved.id })).toEqual([left.id])
     // a task stored under another organization never shows
     await plantIssue(t, { org_id: uuid(), project_id: f.sub.id, archived_at: day(9) })
     expect(await ids(scopeOf(f.org.id, f.sub.id))).toEqual([kept.id])
     expect(await ids(allOf(f.org.id))).toEqual([kept.id])
-  })
-
-  it('answers the deprecated project_id with its family’s rows and `2~` cursors', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    await plantMany(t, f, 30, (i) => ({
-      project_id: i % 2 ? f.sub.id : f.sub2.id,
-      archived_at: day(1 + (i % 9)),
-    }))
-    const all = await everyPage(t, f.admin, { project_id: f.meta.id, limit: 100 })
-    expect(all.ids).toEqual(
-      (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id])).map((row) => row.id),
-    )
-    expect(all.sizes).toEqual([30])
-    const first = await pageOf(t, f.admin, { project_id: f.meta.id, limit: 7 })
-    expect(first.next_cursor).toMatch(/^2~[0-9a-f]+$/)
-    // without a limit it answers 25, as a scope does
-    expect((await pageOf(t, f.admin, { project_id: f.meta.id })).rows).toHaveLength(25)
-    const next = await pageOf(t, f.admin, {
-      project_id: f.meta.id,
-      cursor: first.next_cursor ?? '',
-      limit: 100,
-    })
-    expect([...first.rows, ...next.rows].map((row) => row.id)).toEqual(all.ids)
-    // that release's fields are all there
-    expect(first.rows[0]).toMatchObject({ org_id: f.org.id, status: 'done', is_group: false })
   })
 
   it('refuses a malformed cursor or limit, and a search past its limit', async () => {
@@ -1792,10 +1651,10 @@ describe('issues.archivedPage', () => {
         'cursor must be the next_cursor of an earlier page',
       )
     }
-    for (const limit of [0, 101, 2.5, -1]) {
+    for (const limit of [0, 26, 2.5, -1]) {
       await badRequest(
         pageOf(t, f.admin, { ...scope, limit }),
-        'limit must be a whole number from 1 to 100',
+        'limit must be a whole number from 1 to 25',
       )
     }
     // a search counts after trimming and is refused past LIMITS.search as a rule
@@ -1807,24 +1666,26 @@ describe('issues.archivedPage', () => {
     // the refusals come before the fence, the same for any scope
     await badRequest(
       pageOf(t, f.guest, { ...scopeOf(f.org.id, f.hidden.id), limit: 0 }),
-      'limit must be a whole number from 1 to 100',
+      'limit must be a whole number from 1 to 25',
     )
     await badRequest(
-      pageOf(t, f.admin, { ...allOf(f.otherOrg.id), limit: 101 }),
-      'limit must be a whole number from 1 to 100',
+      pageOf(t, f.admin, { ...allOf(f.otherOrg.id), limit: 26 }),
+      'limit must be a whole number from 1 to 25',
     )
     const atCap = ` ${'x'.repeat(LIMITS.search.max)} `
     expect((await pageOf(t, f.admin, { ...scope, search: atCap })).rows).toEqual([])
   })
 
-  it('refuses neither or both of scope and project_id, and project ids past the bound', async () => {
+  it('refuses a call without a scope or with project_id, and project ids past the bound', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await badRequest(pageOf(t, f.admin, {}), 'pass either scope or project_id')
-    await badRequest(
-      pageOf(t, f.admin, { ...scopeOf(f.org.id, f.sub.id), project_id: f.sub.id }),
-      'pass either scope or project_id',
-    )
+    // a call needs a scope, and project_id is no argument
+    for (const args of [
+      {},
+      { project_id: f.sub.id },
+      { ...scopeOf(f.org.id, f.sub.id), project_id: f.sub.id },
+    ])
+      await expect(pageOf(t, f.admin, args as never)).rejects.toThrowError(/Validator error/)
     const ids = 'scope.project_ids must name 1 to 50 projects'
     // an empty list is never All projects
     await badRequest(pageOf(t, f.admin, scopeOf(f.org.id)), ids)

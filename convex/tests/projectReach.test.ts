@@ -562,7 +562,7 @@ describe('every writer keeps the rows exact', () => {
     await expectAll(t, f)
   })
 
-  it('follows a rename, a key change, a lead handover and the access maps', async () => {
+  it('follows a rename, a key change and a lead handover', async () => {
     const t = newT()
     const f = await ready(t)
     const org_id = f.org.id
@@ -609,12 +609,6 @@ describe('every writer keeps the rows exact', () => {
     expect(await rowsOf(t, ole.id)).toContainEqual(
       expect.objectContaining({ kind: 'child', project_id: f.sub2.id }),
     )
-    await expectAll(t, f)
-    await as(t, f.admin).mutation(api.projects.update, {
-      org_id,
-      id: f.hidden.id,
-      patch: { access: { [ole.id]: 'viewer' }, team_access: { [f.team.id]: 'viewer' } },
-    })
     await expectAll(t, f)
   }, 60_000)
 

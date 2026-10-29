@@ -1182,7 +1182,7 @@ export async function childProjectsCore(
  * ones, asking for the project as it stands, and an archived meta all of
  * them, as it was put away (0106). For archived tasks it adds all of them,
  * archived ones included. The app's Archived tasks page leaves out a
- * sub-project archived on its own (lib/archivedTasks.ts archiveFamily). */
+ * sub-project archived on its own (lib/archivedTasks.ts readScope). */
 export function taskListScope(
   cat: Catalogue,
   project: Doc<'projects'>,

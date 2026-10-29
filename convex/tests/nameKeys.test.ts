@@ -459,8 +459,8 @@ describe('writers', () => {
       patch: { name: 'Renamed Project' },
     })
     expect((await projectOf(t, id))?.name_key).toBe('renamed project')
-    // one grant and one share through setAccess, a level change of each
-    // and the access maps of an update
+    // one grant and one share through setAccess, a level change, and the
+    // grant a lead handover gives the outgoing lead
     const setAccess = (
       target: { user_id: string } | { team_id: string },
       level: 'user' | 'viewer',
@@ -472,11 +472,7 @@ describe('writers', () => {
     await as(t, f.user).mutation(api.projects.update, {
       org_id: f.org.id,
       id,
-      // a map names every grant it keeps
-      patch: {
-        access: { [f.viewer.id]: 'viewer', [f.guest.id]: 'user', [f.admin.id]: 'user' },
-        team_access: { [f.team.id]: 'viewer', [team.id]: 'viewer' },
-      },
+      patch: { lead_id: f.admin.id },
     })
     const rows = await t.run(async (ctx) => ({
       grants: (
@@ -496,7 +492,7 @@ describe('writers', () => {
       new Map([
         [f.viewer.id, 'viewer'],
         [f.guest.id, 'guest'],
-        [f.admin.id, 'admin'],
+        [f.user.id, 'user'],
       ]),
     )
     expect(new Map(rows.shares)).toEqual(

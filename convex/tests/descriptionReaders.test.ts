@@ -172,7 +172,7 @@ async function readers(t: T, f: OrgFixture, pair: Pair, words: [string, string])
       await t.query(internal.machine.mcp.getIssue, { ...agent, today: TODAY, ref: task.id }),
     ) as Row
   const archivedPage = await as(t, f.admin).query(api.issues.archivedPage, {
-    project_id: f.sub.id,
+    scope: { org_id: f.org.id, project_ids: [f.sub.id] },
     search: words[1],
   })
   const exported: OrgExportRow[] = []
