@@ -21,11 +21,14 @@
  * out with its id and the other end's.
  *
  * A task body is one document of up to Convex's 1 MiB while descriptions
- * stay on task rows, so the subtask read and the read of link ends take
- * bodies only as far as TASK_WINDOW allows. A read takes no more bodies at
- * a time than its unspent bytes hold at that size (Room), as
- * model/comments.ts newestComments steps, and a list it stops early answers
- * `complete: false` with the rows it read, never an error. Every row a list
+ * stay on task rows, and a project row can be as large with a legacy icon,
+ * so the subtask read and the read of link ends take bodies, and ask the
+ * caller's access about projects, only as far as TASK_WINDOW allows. A
+ * read takes no more of them at a time than what it has left holds at that
+ * size, in bytes, documents and index ranges (budgetIn), as
+ * model/comments.ts newestComments steps by bytes, and a list it stops
+ * early answers `complete: false` with the rows it read, never an
+ * error. Every row a list
  * answers has its group fact (groupsOf); a row whose fact the budget left
  * unread is left out of a list that says it is incomplete. */
 
@@ -49,20 +52,25 @@ import { relationRow, type TaskRow, taskFields } from './workspaceParts'
  * before those limits. Label rows stop there too, ten times
  * LIMITS.labels.max.
  *
- * `bytes` and `linkBytes` cap what readWindowTask and readWindowLinks read,
- * not counting the caller's own grants, memberships and team shares
+ * `bytes` and `linkBytes` cap the bytes readWindowTask and readWindowLinks
+ * read, and `documents` and `ranges` the documents and index ranges each
+ * reads, not counting the caller's own grants, memberships and team shares
  * (lib/access.ts projectLevelsOf shared), which every read of theirs
- * repeats. A read checks the cap before each step of task bodies, and the
- * caller's access to a step's tasks counts in the next check, so it passes
- * the cap by one task body or one step's access reads at most (Room).
- * Its worst case is the cap, about 1 MiB past it and those shared reads
- * (up to about 1 MiB with OWN_READS's 512 KiB of the organization's
- * teams): about 10 MiB for a task and 15 MiB for its links, under
- * Convex's 16 MiB. At the 20,000-character description cap in
- * a three-byte script, 100 subtasks read about 6.1 MB, and fit in `bytes`
- * with the task, its text and its parent. A linked group also reads its
- * first counting subtask (groupsOf), so 100 linked groups at the cap read
- * about 12.2 MB, which `linkBytes` holds.
+ * repeats. A read looks at its budget before each step (budgetIn): a step
+ * takes only the task bodies that fit whole, each up to Convex's 1 MiB,
+ * and asks the caller's access about a project it has not read yet only
+ * while PROJECT fits. Only a group check may take one body more while some
+ * of every count is left. So a read passes a cap by one task body at most,
+ * besides the reads PROJECT leaves out. Its worst case is the cap, 1 MiB
+ * past it and the shared reads (up to about 1 MiB with OWN_READS's 512 KiB
+ * of the organization's teams): about 10 MiB for a task and 15 MiB for its
+ * links, under Convex's 16 MiB, and the shared reads' few hundred ranges
+ * and documents past `ranges` and `documents`, under 4,096 and 32,000. At
+ * the 20,000-character description cap in a three-byte script, 100
+ * subtasks read about 6.1 MB, and fit in `bytes` with the task, its text
+ * and its parent. A linked group also reads its first counting subtask
+ * (groupsOf), so 100 linked groups at the cap read about 12.2 MB, which
+ * `linkBytes` holds.
  *
  * `attachments` stops the attachment read: three times
  * LIMITS.attachments.max, for the counted rows, the description images a
@@ -72,6 +80,8 @@ export const TASK_WINDOW = {
   rows: 200,
   bytes: 8 * MIB,
   linkBytes: 13 * MIB,
+  documents: 16_000,
+  ranges: 2000,
   attachments: 300,
 }
 
@@ -91,25 +101,103 @@ export type ShortRow = Omit<
  * reason. */
 const UNAVAILABLE = { state: 'unavailable' as const }
 
-/** How many task bodies a read may take before it asks again: as many as
- * the unspent bytes hold at Convex's document size limit. With `last`, one
- * more while any bytes are unspent, so those reads pass the budget by one
- * body at most. A list's own rows take bodies without `last`, so they
- * never pass the budget and leave room for the group checks after them
- * (groupsOf), most of which read no body, and which take `last`. */
-type Room = (last?: 'last') => Promise<number>
+/** Reads by Convex's counts of a transaction's reads. */
+type Reads = { bytes: number; documents: number; ranges: number }
 
-/** A Room for `bytes` of the transaction's reads, less `shared`, the
- * caller's own rows that lib/access.ts projectLevelsOf counts as it reads
- * them (as lib/workspaceParts.ts readPast leaves them out). */
-function roomIn(ctx: QueryCtx, bytes: number, shared: { bytes: number }): Room {
-  return async (last) => {
+/** A task body, read by id or as the next row of a stream: one document of
+ * up to Convex's size limit, and an index range for the stream it may
+ * open. */
+const BODY: Reads = { bytes: DOCUMENT_MAX_BYTES, documents: 1, ranges: 1 }
+
+/** What the caller's access reads for a project it has not read yet
+ * (lib/access.ts projectLevelsOf): the project's row and its top-level
+ * project's, each up to Convex's size limit with a legacy icon, and the
+ * caller's grant and the team shares on each, small rows. Two reads PROJECT
+ * leaves out count at the next look at the budget: the teams those shares
+ * name, read once each a query, and the sub-projects navigation reads
+ * under a top-level project the caller holds no level on. */
+const PROJECT: Reads = { bytes: 2 * DOCUMENT_MAX_BYTES, documents: 8, ranges: 6 }
+
+/** What a list keeps back for the group check (groupsOf) of each row it
+ * read, so the checks can run once the list's own reads have taken what
+ * fits: the index range of the row's subtasks and the document of its first
+ * one. A check's body bytes are not kept back, since a check takes one
+ * while any bytes are left ('last'), and most rows have no subtasks. */
+const CHECK = { documents: 1, ranges: 1 }
+
+/** A read's budget `cap` (TASK_WINDOW) on its own reads: the transaction's
+ * reads less `shared`, the caller's own rows that lib/access.ts
+ * projectLevelsOf counts as it reads them (as lib/workspaceParts.ts
+ * readPast leaves them out). It knows the projects whose access the read
+ * has asked about, which cost nothing more to ask again. */
+function budgetIn(ctx: QueryCtx, cap: Reads, shared: Reads) {
+  const asked = new Set<string>()
+  /** How many reads of `cost` the reads left under `cap` hold, on every
+   * count, 0 once one is spent, keeping back CHECK for each of `checks`
+   * group checks to come. A list's own rows and the projects read for them
+   * take only what fits, so they never pass `cap` and leave room for the
+   * group checks after them (groupsOf), most of which read no body. With
+   * 'last', as a group check's body, one more while some of every count is
+   * left, so those reads pass `cap` by one at most. */
+  const fits = async (cost: Reads, last?: 'last', checks = 0): Promise<number> => {
     const m = await ctx.meta.getTransactionMetrics()
-    const left = bytes - (m.bytesRead.used - shared.bytes)
-    const whole = Math.floor(left / DOCUMENT_MAX_BYTES)
-    return left <= 0 ? 0 : last === 'last' ? Math.max(1, whole) : whole
+    const left = {
+      bytes: cap.bytes - (m.bytesRead.used - shared.bytes),
+      documents:
+        cap.documents - (m.documentsRead.used - shared.documents) - checks * CHECK.documents,
+      ranges: cap.ranges - (m.databaseQueries.used - shared.ranges) - checks * CHECK.ranges,
+    }
+    if (left.bytes <= 0 || left.documents <= 0 || left.ranges <= 0) return 0
+    const whole = Math.min(
+      Math.floor(left.bytes / cost.bytes),
+      Math.floor(left.documents / cost.documents),
+      Math.floor(left.ranges / cost.ranges),
+    )
+    return last === 'last' ? Math.max(1, whole) : whole
+  }
+  return {
+    fits,
+    /** Records that the caller's access has read the project with this
+     * id. */
+    asked(projectId: string) {
+      asked.add(projectId)
+    },
+    /** `check` of each of `items` in order, a few at a time, while the
+     * budget holds PROJECT for each project of theirs (`projectOf`,
+     * undefined for none) the caller's access has not read yet, keeping
+     * back CHECK for each of `checks` group checks to come. Answers the
+     * results of a prefix of `items`, all of them unless the budget ran
+     * out. */
+    async inOrder<T, R>(
+      items: readonly T[],
+      projectOf: (item: T) => string | undefined,
+      check: (item: T) => Promise<R>,
+      checks = 0,
+    ): Promise<R[]> {
+      const out: R[] = []
+      while (out.length < items.length) {
+        // the projects this step asks about first, as many as PROJECT fits
+        const fresh = new Set<string>()
+        let room: number | undefined
+        let end = out.length
+        for (; end < items.length; end++) {
+          const id = projectOf(items[end])
+          if (id === undefined || asked.has(id) || fresh.has(id)) continue
+          room ??= await fits(PROJECT, undefined, checks)
+          if (fresh.size === room) break
+          fresh.add(id)
+        }
+        if (end === out.length) break
+        for (const id of fresh) asked.add(id)
+        out.push(...(await Promise.all(items.slice(out.length, end).map(check))))
+      }
+      return out
+    },
   }
 }
+
+/** What budgetIn answers. */
+type Budget = ReturnType<typeof budgetIn>
 
 /* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order, as
  * src/store/taskIndex.ts byThenId compares. */
@@ -166,46 +254,71 @@ async function openedTask(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
 /** The first `most` active subtasks of the task with this id, oldest
  * first, each with whether it counts toward the task (its project is live,
  * lib/liveTasks.ts countsAsSubtask) and whether the caller is shown it. It
- * reads them one at a time while `room` allows, and checks each as it is
- * read, so the reads of the caller's access count before the next look at
- * `room`. `complete` says they are all of them: the read reached the
- * range's end, not the row past `most` or the end of the room. */
-async function subtasksOf(ctx: QueryCtx, access: Access, id: string, room: Room, most: number) {
+ * reads them one at a time while a body fits in `budget`, and checks each
+ * as it is read while the budget holds its project (inOrder). `complete`
+ * says they are all of them: the read reached the range's end, not the row
+ * past `most` or the end of the budget. */
+async function subtasksOf(ctx: QueryCtx, access: Access, budget: Budget, id: string, most: number) {
   const rows: { kid: Doc<'issues'>; counts: boolean; shown: boolean }[] = []
-  let left = await room()
-  if (left === 0) return { rows, complete: false }
-  for await (const kid of activeKids(ctx, id)) {
-    if (rows.length === most) return { rows, complete: false }
-    const counts = await access.live(kid.project_id)
-    rows.push({ kid, counts, shown: counts && (await access.visible(kid.project_id)) })
-    left -= 1
-    if (left === 0) left = await room()
-    if (left === 0) return { rows, complete: false }
+  // the rows the caller is shown, each of which a group check follows
+  let checks = 0
+  const kids = activeKids(ctx, id)[Symbol.asyncIterator]()
+  try {
+    for (;;) {
+      if ((await budget.fits(BODY, undefined, checks)) === 0) return { rows, complete: false }
+      const next = await kids.next()
+      if (next.done === true) return { rows, complete: true }
+      if (rows.length === most) return { rows, complete: false }
+      const [row] = await budget.inOrder(
+        [next.value],
+        (kid) => kid.project_id,
+        async (kid) => {
+          const counts = await access.live(kid.project_id)
+          return { kid, counts, shown: counts && (await access.visible(kid.project_id)) }
+        },
+        checks,
+      )
+      if (row === undefined) return { rows, complete: false }
+      rows.push(row)
+      if (row.shown) checks += 1
+    }
+  } finally {
+    await kids.return?.()
   }
-  return { rows, complete: true }
 }
 
 /** The tasks with these ids that the caller is shown (Access.holds), in
- * order, read by id in steps `room` allows. Each step checks its tasks
- * before the next look at `room`, so the reads of the caller's access
- * count in it. `complete` says it read them all. */
+ * order, read by id in steps of the bodies that fit in `budget`, each
+ * step's tasks checked while the budget holds their projects (inOrder).
+ * `complete` says it read and checked them all. */
 async function shownByIds(
   ctx: QueryCtx,
   access: Access,
+  budget: Budget,
   orgId: string,
   ids: readonly string[],
-  room: Room,
 ) {
   const shown: Doc<'issues'>[] = []
+  // a task gone or of another organization needs no access read
+  const ours = (task: Doc<'issues'> | null) =>
+    task !== null && task.org_id === orgId ? task : undefined
   for (let at = 0; at < ids.length; ) {
-    const n = await room()
+    // each end the caller is shown is a row a group check follows
+    const n = await budget.fits(BODY, undefined, shown.length)
     if (n === 0) return { shown, complete: false }
     const step = ids.slice(at, at + n)
     const tasks = await Promise.all(step.map((id) => byId(ctx, 'issues', id)))
-    const held = await Promise.all(
-      tasks.map(async (task) => task !== null && task.org_id === orgId && access.holds(task)),
+    const held = await budget.inOrder(
+      tasks,
+      (task) => ours(task)?.project_id,
+      async (task) => {
+        const mine = ours(task)
+        return mine !== undefined && (await access.holds(mine)) ? mine : null
+      },
+      shown.length,
     )
-    shown.push(...tasks.filter((task, i): task is Doc<'issues'> => task !== null && held[i]))
+    shown.push(...held.filter((task) => task !== null))
+    if (held.length < tasks.length) return { shown, complete: false }
     at += step.length
   }
   return { shown, complete: true }
@@ -213,24 +326,26 @@ async function shownByIds(
 
 /** Whether each of `tasks`, which the caller is shown, so active tasks in
  * live projects, is a group: whether an active subtask of it is in a live
- * project (lib/liveTasks.ts countsAsSubtask). Undefined where `room` ran
+ * project (lib/liveTasks.ts countsAsSubtask). Undefined where `budget` ran
  * out first. It reads each task's active subtasks, oldest first, only until
  * one counts: one index range and no body for a task without any, as most
  * subtasks are, and usually one body for a group. Each step reads the next
- * subtask of as many undecided tasks as `room` allows, one while any bytes
- * are unspent ('last'). */
+ * subtask of as many undecided tasks as `budget` holds bodies for, one
+ * while some of every count is left ('last'), and checks their projects
+ * while the budget holds them (inOrder); past that every task still open
+ * stays undecided. */
 async function groupsOf(
   ctx: QueryCtx,
   access: Access,
+  budget: Budget,
   tasks: readonly Doc<'issues'>[],
-  room: Room,
 ): Promise<(boolean | undefined)[]> {
   const groups: (boolean | undefined)[] = tasks.map(() => undefined)
   const streams = new Map<number, AsyncIterator<Doc<'issues'>>>()
   let open = tasks.map((_, at) => at)
   try {
     while (open.length > 0) {
-      const n = await room('last')
+      const n = await budget.fits(BODY, 'last')
       if (n === 0) break
       const step = open.slice(0, n)
       open = open.slice(n)
@@ -244,12 +359,15 @@ async function groupsOf(
           return kids.next()
         }),
       )
-      const counts = await Promise.all(
-        next.map((kid) => (kid.done === true ? false : access.live(kid.value.project_id))),
+      const counts = await budget.inOrder(
+        next,
+        (kid) => (kid.done === true ? undefined : kid.value.project_id),
+        async (kid) => kid.done !== true && (await access.live(kid.value.project_id)),
       )
-      for (const [i, at] of step.entries()) {
+      for (const [i, counted] of counts.entries()) {
+        const at = step[i]
         const kid = next[i]
-        if (kid.done !== true && !counts[i]) {
+        if (kid.done !== true && !counted) {
           open.push(at)
           continue
         }
@@ -258,6 +376,9 @@ async function groupsOf(
         await streams.get(at)?.return?.()
         streams.delete(at)
       }
+      // a subtask read whose project the budget could not hold leaves its
+      // task, and every task still open, undecided
+      if (counts.length < step.length) break
     }
   } finally {
     await Promise.all([...streams.values()].map((kids) => kids.return?.()))
@@ -266,17 +387,17 @@ async function groupsOf(
 }
 
 /** `tasks`, each shown to the caller, as short rows in their order. A task
- * whose group fact `room` left unread (groupsOf) is left out, and
+ * whose group fact `budget` left unread (groupsOf) is left out, and
  * `complete` says none was. The levels are those the caller's access read
  * when it found the tasks shown. */
 async function shortRows(
   ctx: QueryCtx,
   access: Access,
+  budget: Budget,
   tasks: readonly Doc<'issues'>[],
-  room: Room,
 ) {
   const levels = await Promise.all(tasks.map((task) => access.level(task.project_id)))
-  const groups = await groupsOf(ctx, access, tasks, room)
+  const groups = await groupsOf(ctx, access, budget, tasks)
   const rows: ShortRow[] = []
   for (const [i, task] of tasks.entries()) {
     const group = groups[i]
@@ -372,14 +493,16 @@ export async function readWindowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: st
     descriptionOf(ctx.db, task),
   ])
   if (level === null) return UNAVAILABLE
-  const room = roomIn(ctx, TASK_WINDOW.bytes, access.shared)
-  const kids = await subtasksOf(ctx, access, task.id, room, TASK_WINDOW.rows)
+  const { documents, ranges } = TASK_WINDOW
+  const budget = budgetIn(ctx, { bytes: TASK_WINDOW.bytes, documents, ranges }, access.shared)
+  budget.asked(task.project_id)
+  const kids = await subtasksOf(ctx, access, budget, task.id, TASK_WINDOW.rows)
   const counting = kids.rows.filter((row) => row.counts)
   const shown = await shortRows(
     ctx,
     access,
+    budget,
     counting.filter((row) => row.shown).map((row) => row.kid),
-    room,
   )
   const complete = kids.complete && shown.complete
   const row: TaskRow = {
@@ -435,9 +558,11 @@ export async function readWindowLinks(ctx: QueryCtx, me: Doc<'profiles'>, issueI
   const read = all.slice(0, TASK_WINDOW.rows)
   const otherEnd = (link: Doc<'issue_links'>) =>
     link.source_id === task.id ? link.target_id : link.source_id
-  const room = roomIn(ctx, TASK_WINDOW.linkBytes, access.shared)
-  const ends = await shownByIds(ctx, access, me.org_id, [...new Set(read.map(otherEnd))], room)
-  const shown = await shortRows(ctx, access, ends.shown, room)
+  const { documents, ranges } = TASK_WINDOW
+  const budget = budgetIn(ctx, { bytes: TASK_WINDOW.linkBytes, documents, ranges }, access.shared)
+  budget.asked(task.project_id)
+  const ends = await shownByIds(ctx, access, budget, me.org_id, [...new Set(read.map(otherEnd))])
+  const shown = await shortRows(ctx, access, budget, ends.shown)
   const ids = new Set([task.id, ...shown.rows.map((row) => row.id)])
   return {
     state: 'ok' as const,
