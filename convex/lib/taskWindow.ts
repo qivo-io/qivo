@@ -251,39 +251,82 @@ async function openedTask(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
   return (await access.holds(task)) ? { task, access } : null
 }
 
-/** The first `most` active subtasks of the task with this id, oldest
- * first, each with whether it counts toward the task (its project is live,
- * lib/liveTasks.ts countsAsSubtask) and whether the caller is shown it. It
- * reads them one at a time while a body fits in `budget`, and checks each
- * as it is read while the budget holds its project (inOrder). `complete`
- * says they are all of them: the read reached the range's end, not the row
- * past `most` or the end of the budget. */
-async function subtasksOf(ctx: QueryCtx, access: Access, budget: Budget, id: string, most: number) {
+/** Whether a subtask follows those a read took (subtasksOf): 'none' when
+ * the read reached the range's end, 'some' when it read one more it left
+ * out, 'unknown' when it stopped before the next for want of room or at
+ * its row stop. */
+type Rest = 'none' | 'some' | 'unknown'
+
+/** The first `most` active subtasks from `kids`, a stream of a task's active
+ * subtasks oldest first, each with whether it counts toward the task (its
+ * project is live, lib/liveTasks.ts countsAsSubtask) and whether the caller
+ * is shown it. It reads them one at a time while a body fits in `budget`,
+ * keeping back what the group check of each shown row needs, and checks
+ * each as it is read while the budget holds its project (inOrder). `rest`
+ * says whether more follow; the caller asks restOf when it is unknown,
+ * after the group checks. */
+async function subtasksOf(
+  kids: AsyncIterator<Doc<'issues'>>,
+  access: Access,
+  budget: Budget,
+  most: number,
+): Promise<{ rows: { kid: Doc<'issues'>; counts: boolean; shown: boolean }[]; rest: Rest }> {
   const rows: { kid: Doc<'issues'>; counts: boolean; shown: boolean }[] = []
   // the rows the caller is shown, each of which a group check follows
   let checks = 0
-  const kids = activeKids(ctx, id)[Symbol.asyncIterator]()
+  for (;;) {
+    if (rows.length === most) return { rows, rest: 'unknown' }
+    if ((await budget.fits(BODY, undefined, checks)) === 0) return { rows, rest: 'unknown' }
+    const next = await kids.next()
+    if (next.done === true) return { rows, rest: 'none' }
+    const [row] = await budget.inOrder(
+      [next.value],
+      (kid) => kid.project_id,
+      async (kid) => {
+        const counts = await access.live(kid.project_id)
+        return { kid, counts, shown: counts && (await access.visible(kid.project_id)) }
+      },
+      checks,
+    )
+    if (row === undefined) return { rows, rest: 'some' }
+    rows.push(row)
+    if (row.shown) checks += 1
+  }
+}
+
+/** Whether another subtask follows in `kids` after subtasksOf stopped:
+ * it reads the next one while some of every count of `budget` is left
+ * ('last'), so a list that took the last row the budget held is still
+ * complete, and a list is incomplete only when a row follows or the budget
+ * cannot tell. */
+async function restOf(kids: AsyncIterator<Doc<'issues'>>, budget: Budget): Promise<Rest> {
+  if ((await budget.fits(BODY, 'last')) === 0) return 'unknown'
+  return (await kids.next()).done === true ? 'none' : 'some'
+}
+
+/** The subtask list of the task with this id: its first TASK_WINDOW.rows
+ * active subtasks and whether each counts and is shown (subtasksOf), the
+ * shown ones as short rows (shortRows), and whether the list is complete:
+ * the read reached the range's end, or the look for one more after the
+ * group checks found none (restOf), and every shown row has its group
+ * fact. */
+async function subtaskList(ctx: QueryCtx, access: Access, budget: Budget, id: string) {
+  const stream = activeKids(ctx, id)[Symbol.asyncIterator]()
   try {
-    for (;;) {
-      if ((await budget.fits(BODY, undefined, checks)) === 0) return { rows, complete: false }
-      const next = await kids.next()
-      if (next.done === true) return { rows, complete: true }
-      if (rows.length === most) return { rows, complete: false }
-      const [row] = await budget.inOrder(
-        [next.value],
-        (kid) => kid.project_id,
-        async (kid) => {
-          const counts = await access.live(kid.project_id)
-          return { kid, counts, shown: counts && (await access.visible(kid.project_id)) }
-        },
-        checks,
-      )
-      if (row === undefined) return { rows, complete: false }
-      rows.push(row)
-      if (row.shown) checks += 1
-    }
+    const kids = await subtasksOf(stream, access, budget, TASK_WINDOW.rows)
+    const counting = kids.rows.filter((kid) => kid.counts)
+    const shown = await shortRows(
+      ctx,
+      access,
+      budget,
+      counting.filter((kid) => kid.shown).map((kid) => kid.kid),
+    )
+    // the group checks come before the look for one more subtask, so the
+    // budget they need is not spent on it
+    const rest = kids.rest === 'unknown' ? await restOf(stream, budget) : kids.rest
+    return { counting, rows: shown.rows, complete: rest === 'none' && shown.complete }
   } finally {
-    await kids.return?.()
+    await stream.return?.()
   }
 }
 
@@ -496,21 +539,13 @@ export async function readWindowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: st
   const { documents, ranges } = TASK_WINDOW
   const budget = budgetIn(ctx, { bytes: TASK_WINDOW.bytes, documents, ranges }, access.shared)
   budget.asked(task.project_id)
-  const kids = await subtasksOf(ctx, access, budget, task.id, TASK_WINDOW.rows)
-  const counting = kids.rows.filter((row) => row.counts)
-  const shown = await shortRows(
-    ctx,
-    access,
-    budget,
-    counting.filter((row) => row.shown).map((row) => row.kid),
-  )
-  const complete = kids.complete && shown.complete
+  const kids = await subtaskList(ctx, access, budget, task.id)
   const row: TaskRow = {
     ...taskFields(task),
     description,
     ...parentLink(task, () => parent !== null),
-    has_subtasks: counting.length > 0,
-    has_hidden_subtasks: !complete || counting.some((row) => !row.shown),
+    has_subtasks: kids.counting.length > 0,
+    has_hidden_subtasks: !kids.complete || kids.counting.some((kid) => !kid.shown),
   }
   return {
     state: 'ok' as const,
@@ -519,7 +554,7 @@ export async function readWindowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: st
     labels: labels.map(relationRow),
     follow: follow === null ? null : relationRow(follow),
     parent,
-    subtasks: { rows: shown.rows.sort(byNumber), complete },
+    subtasks: { rows: kids.rows.sort(byNumber), complete: kids.complete },
   }
 }
 

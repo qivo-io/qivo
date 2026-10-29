@@ -1036,6 +1036,34 @@ describe('real limits', () => {
     expect(ranges).toBeLessThanOrEqual(TASK_WINDOW.ranges + 50)
   }, 300_000)
 
+  it('answers complete for exactly the subtasks the budget holds, and incomplete for one more', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
+    const legacy = 'o'.repeat(900 * 1024)
+    await plantMany(t, f, 3, () => ({ description: legacy, parent_id: task.id }), {
+      each: 1,
+      rows: false,
+    })
+    // room for three bodies near 900 KB whole and about half a MiB left,
+    // so the room for whole bodies runs out on the third subtask
+    TASK_WINDOW.bytes = 3.2 * MIB
+    const three = await taskRead(t, f, task.id)
+    if (three.answer.state !== 'ok') throw new Error(three.answer.state)
+    expect(three.answer.subtasks).toMatchObject({ complete: true, rows: { length: 3 } })
+    expect(three.answer.task.has_hidden_subtasks).toBe(false)
+    await plantMany(t, f, 1, () => ({ description: legacy, parent_id: task.id }), {
+      each: 1,
+      rows: false,
+    })
+    const four = await taskRead(t, f, task.id)
+    if (four.answer.state !== 'ok') throw new Error(four.answer.state)
+    expect(four.answer.subtasks).toMatchObject({ complete: false, rows: { length: 3 } })
+    expect(four.answer.task.has_hidden_subtasks).toBe(true)
+    // the look for a fourth reads it whole, one body past the budget at most
+    expect(four.read).toBeLessThanOrEqual(TASK_WINDOW.bytes / MIB + 1)
+  })
+
   it('stops the subtask read at TASK_WINDOW.documents', async () => {
     const t = newT()
     const f = await withOrg(t)
