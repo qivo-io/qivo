@@ -46,6 +46,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { withReach } from './projectReach.setup'
 
 /* Archive cursors are sealed with a key derived from BETTER_AUTH_SECRET
  * (lib/archiveCursorSeal.ts), so every page with a next cursor needs one. */
@@ -168,25 +169,6 @@ const grantAgent = (t: T, f: OrgFixture) =>
       level: 'user',
     }),
   )
-
-/** Writes every organization's archive states and project_reach rows, as
- * internal/navBackfill does on a deployment, and stamps its name keys, so
- * the reads that wait for navigation data take them (model/projectNav.ts
- * navReady). A grant planted after it gets no row. */
-async function withReach(t: T): Promise<void> {
-  let cursor: FunctionArgs<typeof internal.internal.navBackfill.run>['cursor']
-  do {
-    const done = await t.action(internal.internal.navBackfill.run, {
-      dry_run: false,
-      ...(cursor ? { cursor } : {}),
-    })
-    cursor = done.cursor ?? undefined
-  } while (cursor !== undefined)
-  await t.run(async (ctx) => {
-    for (const row of await ctx.db.query('org_ready').collect())
-      await ctx.db.patch(row._id, { name_keys_at: NOW })
-  })
-}
 
 /** Makes the archived tasks `ids` active again. */
 const unarchive = (t: T, ids: readonly string[]) =>

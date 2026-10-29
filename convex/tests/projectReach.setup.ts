@@ -1,5 +1,7 @@
 /* Reach row checks shared by the suites that write project_reach rows
- * (projectReach.test.ts, marketingDemo.test.ts and others). Two dots in the
+ * (projectReach.test.ts, marketingDemo.test.ts and others), and withReach,
+ * which writes them as a deployment's backfill does for the suites that
+ * read them (archived.test.ts, mainSearch.test.ts). Two dots in the
  * basename keep the Convex CLI from deploying this module, as
  * helpers.setup.ts.
  *
@@ -9,11 +11,34 @@
  * second check holds the rows against lib/access.ts projectLevel for every
  * person who is not an organization admin. */
 
+import type { FunctionArgs } from 'convex/server'
 import { expect } from 'vitest'
+import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { projectLevel } from '../lib/access'
 import { nameKey } from '../lib/nameKey'
-import type { T } from './helpers.setup'
+import { NOW, type T } from './helpers.setup'
+
+/** Writes every organization's archive states and project_reach rows, as
+ * internal/navBackfill does on a deployment, stamps nav_at, and stamps its
+ * name keys, so the reads that wait for navigation data take them
+ * (model/projectNav.ts navReady, reachReady). A project, grant or share
+ * planted after it gets no archive state or row, so call it after the last
+ * one a case plants. */
+export async function withReach(t: T): Promise<void> {
+  let cursor: FunctionArgs<typeof internal.internal.navBackfill.run>['cursor']
+  do {
+    const done = await t.action(internal.internal.navBackfill.run, {
+      dry_run: false,
+      ...(cursor ? { cursor } : {}),
+    })
+    cursor = done.cursor ?? undefined
+  } while (cursor !== undefined)
+  await t.run(async (ctx) => {
+    for (const row of await ctx.db.query('org_ready').collect())
+      await ctx.db.patch(row._id, { name_keys_at: NOW })
+  })
+}
 
 /** A reach row as the checks compare it. */
 export type ReachFields = Omit<Doc<'project_reach'>, '_id' | '_creationTime'>

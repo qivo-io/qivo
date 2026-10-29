@@ -21,12 +21,14 @@
  *
  * org_ready.nav_at says an organization's rows are complete, and navReady
  * asks it with the name keys stamp, which name-ordered project lists need
- * too. */
+ * too; reachReady asks it alone. projectSight judges a project a name
+ * search found from these rows, without walking a top-level project's
+ * sub-projects (main Search, lib/mainSearch.ts). */
 
 import type { WithoutSystemFields } from 'convex/server'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { inMetaTree } from '../lib/access'
+import { type Access, inMetaTree, receivesTeamAccess } from '../lib/access'
 import { byId } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { ArchiveState, GranteeKind } from '../lib/enums'
@@ -606,4 +608,215 @@ export const reachOfOrg = (ctx: QueryCtx, orgId: string) =>
 export async function navReady(ctx: QueryCtx, orgId: string): Promise<boolean> {
   const row = await readyRow(ctx, orgId)
   return row?.nav_at !== undefined && row.name_keys_at !== undefined
+}
+
+/** Whether every project of the organization holds its archive state and
+ * every source its reach rows (nav_at), without the name keys navReady also
+ * asks for. A search of project names (projects search_name, which filters
+ * by archive_state) and projectSight need only these. */
+export async function reachReady(ctx: QueryCtx, orgId: string): Promise<boolean> {
+  return (await readyRow(ctx, orgId))?.nav_at !== undefined
+}
+
+/** The bounds of projectSight's reads of the person's rows: at most `teams`
+ * of their teams are read, and at most `roots` live root rows of their seat
+ * and those teams, to leave out the projects none of them reaches (past
+ * either, each project is checked by itself, with the seat's own child rows
+ * alone), and at most `children` child rows of one grantee under one
+ * top-level project. A child row fails to show its parent only while a
+ * Deleted items move or restore holds its project, after a reused id, or
+ * for a lead the person's role turns into nothing, so a few suffice. Tests
+ * lower them. */
+export const PROJECT_SIGHT = { teams: 64, roots: 512, children: 4 }
+
+/** What projectSight reads through: `need` throws unless `ranges` more
+ * index ranges and `documents` more documents of any size fit, and
+ * `recount` follows reads it was not asked about, those of an access check.
+ * lib/mainSearch.ts readBudget is one. */
+export type SightBudget = {
+  need(ranges: number, documents: number): Promise<void>
+  recount(): void
+}
+
+/* What projectSight learns of the person's rows: their grantees, and
+ * whether those are all of them (`all`). */
+type Grantees = { grantees: Grantee[]; all: boolean }
+
+/* The grantees that hold a live root row on one top-level project, and
+ * whether one of those rows records a source on the project itself. */
+type Held = { grantees: Grantee[]; onRoot: boolean }
+
+/**
+ * Whether seat `me`, who sees through `access`, sees project `p`, a live
+ * project a search of names read in this transaction, under the rule of
+ * lib/access.ts canSeeProject, without the walk of a top-level project's
+ * sub-projects that the rule's navigation reads whole (projectLevelsOf
+ * navigates). Main Search's seats searched whole ask it (lib/mainSearch.ts),
+ * and so can the directory's name search. Each project is judged once.
+ *
+ * A sub-project shows when the person sees it (access.visible), which never
+ * walks navigation. A top-level project must be a meta, and shows when the
+ * person sees it for a reason of its own (access.accessible), or, for
+ * navigation, when one of the first PROJECT_SIGHT.children child rows of
+ * one of their grantees under it (project_reach by_grantee_root, live or
+ * archived, as navigation counts archived sub-projects) names a sub-project
+ * of it in their organization that they see. The grantees are their seat
+ * and, when their role receives team access, each of their teams
+ * (team_members by_profile) that holds a root row on the project. A reach
+ * row records a source and grants nothing, so its project decides: a
+ * viewer's lead counts for nothing there, and a row a Deleted items move or
+ * restore left on a project it no longer describes, or one naming another
+ * top-level project's sub-project, fails. When every row in the bound
+ * fails, the project stays out though the person may see it, which misses
+ * a match and never shows one.
+ *
+ * For a person who is not an organization admin, it first reads once the
+ * live root rows of all their grantees (project_reach by_grantee_list), up
+ * to PROJECT_SIGHT.roots. Once the organization's reach rows are complete
+ * (org_ready nav_at, reachReady, which the caller asks first), every
+ * top-level project such a person sees holds a root row of one of their
+ * grantees, for a source on it (on_root) or for navigation, and so does the
+ * one above every sub-project they see. A project without one is left out
+ * with no read, so a hidden candidate costs no grant or share read, and a
+ * top-level project with navigation rows only is not asked about its own
+ * grants and shares. Past PROJECT_SIGHT.teams teams or PROJECT_SIGHT.roots
+ * root rows, each project is checked by itself, and only the seat's own
+ * child rows show a top-level project for navigation, one range a
+ * candidate: a top-level project the person sees only for navigation
+ * through a team's share on one of its sub-projects then stays out, a
+ * missed match. An organization admin sees every project of a meta's tree
+ * (lib/access.ts levelUnder), which no reach row records, so their
+ * candidates skip the root rows and are checked the same way; the admin
+ * access split changes that rule in lib/access.ts.
+ *
+ * Every read goes through `budget`, which throws to stop the caller: each
+ * project above a sub-project, each reach row and each sub-project a row
+ * names, and after each access check its own reads (`recount`), which for a
+ * project shared with many teams can be many rows (projectLevelsOf). A read
+ * that throws fails every later answer that awaits it (the grantees, the
+ * root rows, a project asked again), so a caller stops at the first throw.
+ */
+export function projectSight(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  access: Access,
+  budget: SightBudget,
+): (p: Doc<'projects'>) => Promise<boolean> {
+  let grantees: Promise<Grantees> | undefined
+  const granteesOf = () => {
+    grantees ??= (async (): Promise<Grantees> => {
+      const seat = grantee.profile(me.id)
+      if (!receivesTeamAccess(me)) return { grantees: [seat], all: true }
+      await budget.need(1, 1)
+      const teams: Grantee[] = []
+      const rows = ctx.db
+        .query('team_members')
+        .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+      for await (const row of rows) {
+        if (teams.length === PROJECT_SIGHT.teams) return { grantees: [seat], all: false }
+        teams.push(grantee.team(row.team_id))
+        await budget.need(0, 1)
+      }
+      return { grantees: [seat, ...teams], all: true }
+    })()
+    return grantees
+  }
+  let roots: Promise<Map<string, Held> | null> | undefined
+  const rootsOf = () => {
+    roots ??= (async () => {
+      const who = await granteesOf()
+      if (!who.all) return null
+      const held = new Map<string, Held>()
+      let read = 0
+      for (const g of who.grantees) {
+        await budget.need(1, 1)
+        const rows = ctx.db
+          .query('project_reach')
+          .withIndex('by_grantee_list', (q) =>
+            q
+              .eq('grantee_kind', g.grantee_kind)
+              .eq('grantee_id', g.grantee_id)
+              .eq('kind', 'root')
+              .eq('live', true),
+          )
+        for await (const row of rows) {
+          if (++read > PROJECT_SIGHT.roots) return null
+          if (row.org_id === me.org_id) {
+            const known = held.get(row.project_id) ?? { grantees: [], onRoot: false }
+            known.grantees.push(g)
+            known.onRoot ||= row.on_root
+            held.set(row.project_id, known)
+          }
+          await budget.need(0, 1)
+        }
+      }
+      return held
+    })()
+    return roots
+  }
+  /* Whether one of `who` holds a child row under top-level project `p`,
+   * among its first few, whose sub-project the person sees. */
+  const navigates = async (p: Doc<'projects'>, who: readonly Grantee[]) => {
+    for (const g of who) {
+      await budget.need(1, 1)
+      const rows = ctx.db
+        .query('project_reach')
+        .withIndex('by_grantee_root', (q) =>
+          q
+            .eq('grantee_kind', g.grantee_kind)
+            .eq('grantee_id', g.grantee_id)
+            .eq('root_id', p.id)
+            .eq('kind', 'child'),
+        )
+      let read = 0
+      for await (const row of rows) {
+        // the row's sub-project, and the access rows its check reads
+        await budget.need(1, 1)
+        const sub = await access.project(row.project_id)
+        // parent_id never changes, so a row whose project is not a
+        // sub-project of p says nothing of p
+        if (sub !== null && sub.org_id === me.org_id && sub.parent_id === p.id) {
+          const sees = await access.visible(sub.id)
+          budget.recount()
+          if (sees) return true
+        }
+        if (++read === PROJECT_SIGHT.children) break
+        await budget.need(0, 1)
+      }
+    }
+    return false
+  }
+  const judge = async (p: Doc<'projects'>): Promise<boolean> => {
+    if (p.org_id !== me.org_id || p.archived_at !== undefined) return false
+    access.seen(p)
+    const held = me.org_role === 'admin' ? null : await rootsOf()
+    const reached = held?.get(p.parent_id ?? p.id)
+    if (held !== null && reached === undefined) return false
+    if (p.parent_id !== undefined) {
+      // the top-level project above it, and the access rows its check reads
+      await budget.need(1, 1)
+      const sees = await access.visible(p.id)
+      budget.recount()
+      return sees
+    }
+    if (!inMetaTree(p, p)) return false
+    if (reached === undefined || reached.onRoot) {
+      // the access rows its check reads
+      await budget.need(1, 1)
+      const sees = await access.accessible(p.id)
+      budget.recount()
+      if (sees) return true
+    }
+    // without root rows, the seat's own rows alone, one range
+    return await navigates(p, reached?.grantees ?? [grantee.profile(me.id)])
+  }
+  const asked = new Map<string, Promise<boolean>>()
+  return (p) => {
+    let known = asked.get(p.id)
+    if (known === undefined) {
+      known = judge(p)
+      asked.set(p.id, known)
+    }
+    return known
+  }
 }
