@@ -12,9 +12,10 @@
  * - a seeded Done task whose done_at may already lie before the last run's
  *   threshold (model/demoSeed.ts).
  * A write that sets done_at to its own time needs no row, because the
- * window reaches the task when its age passes the threshold. Every restore
- * and move to another project restamps done_at (model/issues.ts
- * doneStampUpdate, movedStamps, model/deletedItems.ts writeTask).
+ * window reaches the task when its age passes the threshold. Every task
+ * restore, from the archive or from Deleted items, and every move of a task
+ * to another sub-project restamps done_at (model/issues.ts doneStampUpdate,
+ * movedStamps, model/deletedItems.ts writeTask).
  *
  * Rows are written without a read first, through the writer that leaves a
  * public demo's record limit alone (lib/demo.ts uncountedWriter), because a
