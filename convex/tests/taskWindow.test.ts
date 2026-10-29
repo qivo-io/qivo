@@ -875,4 +875,45 @@ describe('real limits', () => {
     ])
     expect(answer.links.map((link) => link.target_id)).toEqual(answer.tasks.map((row) => row.id))
   })
+
+  it('answers an archived task under a parent of thousands of sub-projects within the index ranges', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // the viewer sees this top-level project only for navigation, through a
+    // grant on its last sub-project; canSeeProject's walk would ask the
+    // viewer's grant and team shares on each sub-project first, two ranges
+    // a sub-project, past 4,096
+    const top = await plantProject(t, { org_id: f.org.id })
+    let last = ''
+    for (let from = 0; from < 2100; from += 700)
+      last = await t.run(async (ctx) => {
+        let id = ''
+        for (let i = from; i < from + 700; i++) {
+          id = uuid()
+          await ctx.db.insert('projects', {
+            id,
+            org_id: f.org.id,
+            type: 'project',
+            parent_id: top.id,
+            key: `S${i}`,
+            name: `Sub-project ${i}`,
+            description: '',
+            sort_order: 1000 + i,
+            num: 1000 + i,
+            track_delay: false,
+            created_at: NOW,
+            window_key: newWindowKey(),
+          })
+        }
+        return id
+      })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', { project_id: last, profile_id: f.viewer.id, level: 'user' }),
+    )
+    // stored under the top-level project, as older code did
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: top.id, archived_at: NOW })
+    expect(
+      await as(t, f.viewer).query(api.taskWindow.task, { org_id: f.org.id, ref: task.id }),
+    ).toMatchObject({ state: 'archived', task: { id: task.id, is_group: false } })
+  }, 120_000)
 })

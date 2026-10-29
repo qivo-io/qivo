@@ -34,7 +34,7 @@ import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { descriptionOf } from '../model/descriptions'
 import { type Access, accessOf } from './access'
-import { archivedTaskCore } from './archivedTasks'
+import { archivedRowOf } from './archivedTasks'
 import { byId } from './db'
 import type { AccessLevel } from './enums'
 import { MIB } from './limits'
@@ -321,10 +321,10 @@ async function shownParent(
  *   not shown sets has_hidden_subtasks and sends no row.
  * - `{ state: 'archived', task }` for an archived task of the organization
  *   that the Archived tasks page lists for the caller (lib/archivedTasks.ts
- *   archivedTaskCore), with that page's row, which holds no text. It asks
- *   with the caller's seat in this organization only, never another seat
- *   of the login (lib/functions.ts loadMember), so another organization's
- *   archived task answers unavailable.
+ *   archivedTaskCore's rule), with that page's row, which holds no text. It
+ *   asks with the caller's seat in this organization only, never another
+ *   seat of the login (lib/functions.ts loadMember), so another
+ *   organization's archived task answers unavailable.
  * - `{ state: 'unavailable' }` for everything else, alike.
  *
  * The subtasks load with the task because the window needs the group facts
@@ -346,13 +346,15 @@ export async function readWindowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: st
   const task = await taskByRef(ctx, me.org_id, ref)
   if (task === null) return UNAVAILABLE
   const access = accessOf(ctx, me)
-  if (task.archived_at !== undefined) {
-    // archivedTaskCore asks canSeeProject, which throws for a project whose
-    // tree is broken (a missing parent, a cycle), where Access.visible
-    // answers false, so such a task is unavailable like any other
+  const archived_at = task.archived_at
+  if (archived_at !== undefined) {
+    // archivedTaskCore's rule, the caller's seat in this organization sees
+    // the task's project, through Access.visible: canSeeProject's walk of a
+    // large parent's sub-projects can pass Convex's 4,096 index ranges, and
+    // a broken tree (a missing parent, a cycle) makes it throw, where
+    // Access.visible reads within bounds and answers false
     if (!(await access.visible(task.project_id))) return UNAVAILABLE
-    const row = await archivedTaskCore(ctx, new Map([[me.org_id, me]]), task.id)
-    return row === null ? UNAVAILABLE : { state: 'archived' as const, task: row }
+    return { state: 'archived' as const, task: await archivedRowOf(ctx, { ...task, archived_at }) }
   }
   if (!(await access.holds(task))) return UNAVAILABLE
   // the reads every answer needs, before the subtasks spend the rest
