@@ -8,7 +8,7 @@ import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import { docArb, hostileString, RUNS } from '../../src/lib/md.arb'
 import { astToMd } from '../../src/lib/mdSerialize'
-import { readableText } from '../lib/md'
+import { hidesWords, readableText } from '../lib/md'
 import {
   CONVEX_TERMS,
   convexTakesAll,
@@ -240,8 +240,19 @@ describe('readableText', () => {
   })
 
   it('answers a text with nothing hidden as it is, unparsed', () => {
-    const text = '**Bold** and `code` but no link'
+    const text = '**Bold** and `code` but no link, 1. not a list'
+    expect(hidesWords(text)).toBe(false)
     expect(readableText(text)).toBe(text)
+  })
+
+  it("leaves out a code fence's language and a numbered list's numbers", () => {
+    const words = (md: string) => wordsOf(readableText(md))
+    for (const md of ['```kotlin\nfun main()\n```', '  ```kotlin\nfun main()\n```'])
+      expect(words(md)).toEqual(['fun', 'main'])
+    expect(words('1. first\n2) second\n10. tenth')).toEqual(['first', 'second', 'tenth'])
+    // they hide words without a link, so the text is parsed
+    expect(hidesWords('```kotlin\nx\n```')).toBe(true)
+    expect(hidesWords('1. first')).toBe(true)
   })
 
   it('holds only words of the stored text, which main Search reads first', () => {

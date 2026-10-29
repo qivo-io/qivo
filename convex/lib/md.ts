@@ -481,17 +481,27 @@ function inlineText(nodes: readonly MdInline[]): string {
     .join(' ')
 }
 
+/* What only a description with hidden words holds: the `](` of a link, an
+   image or a mention, a code fence, whose opening line can name a
+   language, and a numbered list item, whose number the list draws. Any
+   other markup is marks and punctuation, which hold no word. */
+const HIDES = /\]\(|^\s{0,3}```|^\d{1,3}[.)]\s/m
+
+/** Whether `markdown` can hold words it does not show (readableText). A
+    text without any is shown word for word, so it needs no parse. */
+export const hidesWords = (markdown: string): boolean => HIDES.test(markdown)
+
 /** The text a description shows, which main Search matches
     (lib/mainSearch.ts): its text, code, link text, image alt text and
     mention names, without link destinations, image sources (`att:`
-    references) or mention ids (MENTION_DEST). A bare autolink is shown text
+    references), mention ids (MENTION_DEST), the language a code fence
+    names or the numbers of a numbered list. A bare autolink is shown text
     and stays. The pieces join with a space, as the markup between them
     ends a word in the stored text too, so the words are those of the
-    stored text without its hidden parts. Only a link, an image or a
-    mention hides text, and each needs `](`, so a text without it is
-    answered as it is, unparsed. */
+    stored text without its hidden parts. A text that hides no words
+    (hidesWords) is answered as it is, unparsed. */
 export function readableText(markdown: string): string {
-  if (!markdown.includes('](')) return markdown
+  if (!hidesWords(markdown)) return markdown
   return parseMd(markdown)
     .map((block) => {
       switch (block.t) {
