@@ -22,13 +22,19 @@
  * time stops only its own organization or page of profiles. */
 /// <reference types="vite/client" />
 
-import type { FunctionArgs, WithoutSystemFields } from 'convex/server'
+import {
+  type FunctionArgs,
+  makeFunctionReference,
+  type TransactionMetrics,
+  type WithoutSystemFields,
+} from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, components, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { REAP_PAGES } from '../files'
 import { ARCHIVE_LIMITS, SWEEP_LIMITS } from '../jobs'
 import { DEFAULT_MESSAGE_RETENTION_DAYS } from '../lib/limits'
+import { insertTask } from '../model/descriptions'
 import { ITEM_UNREAD_CAP, postMessage, wakeSnoozedItem } from '../model/messages'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import { messageRetentionDays } from '../model/people'
@@ -49,6 +55,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { plantNorthstar } from './northstar.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
  * declare it (same situation as helpers.setup's crypto) */
@@ -401,10 +408,11 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     expect(first).toEqual([
       { org_id: f.org.id, project_id: f.sub.id, archived: 1, flagged: 0, now: rows[0].ts },
     ])
-    // one project had a due task, and none the next night
+    // one project had a due task, which the full pass of a run without
+    // archive_runs found, and the next night's window found none
     expect(rows.map((r) => r.detail)).toEqual([
-      { projects: 1, repairs: 0 },
-      { projects: 0, repairs: 0 },
+      { projects: 1, repairs: 0, full: true, tasks: 1 },
+      { projects: 0, repairs: 0, full: false, tasks: 0 },
     ])
     for (const r of rows) {
       expect(r.actor_email).toBe('system')
@@ -434,11 +442,12 @@ describe('archiveDoneIssues — the 0106 predicate', () => {
     expect(chains.map((c) => c.org_id).sort()).toEqual([...due.keys()].sort())
     for (const id of due.values()) expect((await issueRow(t, id))?.archived_at).toBeDefined()
     // the flagged step the cron's call ran, then three pages of projects
-    expect(await scheduled(t, 'archiveDoneIssues')).toHaveLength(3)
+    // and three pages of the rows they marked
+    expect(await scheduled(t, 'archiveDoneIssues')).toHaveLength(6)
     expect(await scheduled(t, 'archiveProject')).toHaveLength(5)
     expect(await scheduled(t, 'repairOrg')).toEqual([])
     expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
-      { projects: 5, repairs: 0 },
+      { projects: 5, repairs: 0, full: true, tasks: 5 },
     ])
   })
 })
@@ -616,10 +625,16 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
     const repairs = await scheduled(t, 'repairOrg')
     expect(repairs.map((job) => job.args[0].org_id).sort()).toEqual([...orgs].sort())
     // the cron's call and two more flagged steps, then one page of projects
+    // and one of rows
     const steps = await scheduled(t, 'archiveDoneIssues')
-    expect(steps.map((job) => job.args[0].phase)).toEqual(['flagged', 'flagged', 'projects'])
+    expect(steps.map((job) => job.args[0].phase)).toEqual([
+      'flagged',
+      'flagged',
+      'projects',
+      'hand',
+    ])
     expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
-      { projects: 0, repairs: 5 },
+      { projects: 0, repairs: 5, full: true, tasks: 0 },
     ])
   })
 
@@ -793,14 +808,16 @@ describe('archiveDoneIssues budgets the events of a leg', () => {
     const legs = await archiveByHand(t, f.org.id)
     expect(legs).toHaveLength(6)
     // each leg after a stop reads the same page again, without the task it
-    // archived, and the chain takes Board rev once Firmware is done
+    // archived, and the chain takes the second project, in id order, once
+    // the first is done
+    const [first, second] = [f.sub.id, f.sub2.id].sort()
     expect(legs.map((leg) => [leg.project_id, leg.cursor, leg.archived])).toEqual([
-      [f.sub.id, undefined, 0],
-      [f.sub.id, undefined, 1],
-      [f.sub.id, undefined, 2],
-      [f.sub2.id, undefined, 0],
-      [f.sub2.id, undefined, 1],
-      [f.sub2.id, undefined, 2],
+      [first, undefined, 0],
+      [first, undefined, 1],
+      [first, undefined, 2],
+      [second, undefined, 0],
+      [second, undefined, 1],
+      [second, undefined, 2],
     ])
     expect(await archived(t, tasks)).toEqual(tasks.map(() => true))
     expect(await updatedTasks(t)).toEqual(tasks)
@@ -887,11 +904,13 @@ describe('archiveDoneIssues runs one chain per organization', () => {
 
     const legs = await archiveByHand(t, f.org.id)
 
-    // each project's leg is scheduled by the leg before, never two at once
+    // each project's leg is scheduled by the leg before, never two at once,
+    // in the order of their ids
+    const [a, b, c] = [f.sub.id, f.sub2.id, third.id].sort()
     expect(legs.map((leg) => [leg.project_id, leg.next])).toEqual([
-      [f.sub.id, [f.sub2.id, third.id]],
-      [f.sub2.id, [third.id]],
-      [third.id, []],
+      [a, [b, c]],
+      [b, [c]],
+      [c, []],
     ])
     for (const id of tasks) expect((await issueRow(t, id))?.archived_at).toBeDefined()
   })
@@ -909,11 +928,12 @@ describe('archiveDoneIssues runs one chain per organization', () => {
 
     expect(await runArchive(t)).toBe(3)
     const legs = (await scheduled(t, 'archiveProject')).map((job) => job.args[0])
+    const [a, b, c] = [f.sub.id, f.sub2.id, third.id].sort()
     expect(legs.map((leg) => [leg.project_id, leg.next]).sort()).toEqual(
       [
-        [f.sub.id, [f.sub2.id]],
-        [f.sub2.id, []],
-        [third.id, []],
+        [a, [b]],
+        [b, []],
+        [c, []],
       ].sort(),
     )
     for (const id of tasks) expect((await issueRow(t, id))?.archived_at).toBeDefined()
@@ -936,7 +956,8 @@ describe('archiveDoneIssues runs one chain per organization', () => {
         }),
       )
 
-      expect(legs.map((leg) => leg.project_id)).toEqual([f.sub.id, f.sub2.id])
+      // the chain takes both, in the order of their ids
+      expect(legs.map((leg) => leg.project_id)).toEqual([f.sub.id, f.sub2.id].sort())
       expect((await issueRow(t, skipped.id))?.archived_at).toBeUndefined()
       expect((await issueRow(t, kept.id))?.archived_at).toBeDefined()
     },
@@ -973,7 +994,7 @@ describe('archiveDoneIssues runs one chain per organization', () => {
     expect((await issueRow(t, due.get(last) ?? ''))?.archived_at).toBeDefined()
     expect(chains.map((c) => c.org_id).sort()).toEqual([first, last])
     expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
-      { projects: 3, repairs: 0 },
+      { projects: 3, repairs: 0, full: true, tasks: 3 },
     ])
   })
 })
@@ -1002,7 +1023,7 @@ describe('archiveDoneIssues bounds each dispatcher step', () => {
     const legs = await scheduled(t, 'archiveProject')
     expect(legs.filter((job) => job.args[0].next?.length === 3)).toHaveLength(3)
     expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
-      { projects: 12, repairs: 0 },
+      { projects: 12, repairs: 0, full: true, tasks: 12 },
     ])
   })
 
@@ -1041,7 +1062,7 @@ describe('archiveDoneIssues bounds each dispatcher step', () => {
     const steps = await scheduled(t, 'archiveDoneIssues')
     expect(steps.filter((job) => job.args[0].phase === 'flagged').length).toBeGreaterThan(1)
     expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
-      { projects: 0, repairs: 10 },
+      { projects: 0, repairs: 10, full: true, tasks: 0 },
     ])
   })
 })
@@ -1094,9 +1115,11 @@ describe('archiveDoneIssues reads only what is due', () => {
       { org_id: markedOrg, archived: 0, flagged: 1, now },
       { org_id: dueOrg, project_id: second.id, archived: 1, flagged: 0, now },
     ])
-    // the flagged step, the 33 live projects in four steps, one chain for the
-    // due project and one for the flagged organization
+    // the flagged step, the full pass over the 33 live projects in four
+    // steps, the hand step, one chain for the due project and one for the
+    // flagged organization
     expect((await jobCalls(t)).sort()).toEqual([
+      'jobs:archiveDoneIssues',
       'jobs:archiveDoneIssues',
       'jobs:archiveDoneIssues',
       'jobs:archiveDoneIssues',
@@ -1143,9 +1166,805 @@ describe('archiveDoneIssues reads only what is due', () => {
       { org_id: f.org.id, project_id: f.sub.id, archived: 1, flagged: 0, now },
     ])
     expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
-      { projects: 1, repairs: 0 },
+      { projects: 1, repairs: 0, full: true, tasks: 1 },
     ])
   })
+})
+
+/* -------------------------------------------- the window and the rechecks */
+
+/* The instant `days` after NOW, the clock of one night in these tests. */
+const night = (days: number) => new Date(Date.parse(NOW) + days * DAY).toISOString()
+
+/* A run's threshold at `now`, as jobs.ts reads it. */
+const cutoffAt = (now: string) =>
+  new Date(Date.parse(now) - DEFAULT_ARCHIVE_DAYS * DAY).toISOString()
+
+/* One call a night ran by hand, with what Convex counted for it. */
+type Call = { name: string; args: Record<string, unknown>; metrics: TransactionMetrics }
+
+/* The functions of a nightly archive run. */
+const ARCHIVE_CALLS = /^jobs:(archiveDoneIssues|archiveProject|repairOrg)$/
+
+/* Runs one nightly archive by hand at `now`: the cron's call, then every
+ * archive call it schedules, one at a time in schedule order, each in a
+ * transaction of its own whose use Convex reports, on fake timers that
+ * never fire. `before` runs ahead of each scheduled call with its name and
+ * arguments, so a test can write between two of them. Other scheduled work,
+ * such as the message steps a leg schedules, does not run. Returns every
+ * call it ran, the cron's first. */
+async function nightByHand(
+  t: T,
+  now: string,
+  before?: (name: string, args: Record<string, unknown>) => Promise<unknown>,
+): Promise<Call[]> {
+  const run = async (name: string, args: Record<string, unknown>): Promise<Call> => ({
+    name,
+    args,
+    metrics: await t.run(async (ctx) => {
+      await ctx.runMutation(makeFunctionReference<'mutation'>(name), args)
+      return await ctx.meta.getTransactionMetrics()
+    }),
+  })
+  const pending = () => t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+  vi.useFakeTimers()
+  try {
+    const ran = new Set((await pending()).map((job) => job._id))
+    const calls = [await run('jobs:archiveDoneIssues', { now })]
+    for (let guard = 0; guard < 10_000; guard++) {
+      const job = (await pending()).find(
+        (j) => j.state.kind === 'pending' && !ran.has(j._id) && ARCHIVE_CALLS.test(j.name),
+      )
+      if (job === undefined) return calls
+      ran.add(job._id)
+      const args = job.args[0] as Record<string, unknown>
+      await before?.(job.name, args)
+      calls.push(await run(job.name, args))
+    }
+    throw new Error('the archive did not finish')
+  } finally {
+    vi.useRealTimers()
+  }
+}
+
+/* What the calls of a night read in total: calls, index ranges, documents
+ * and bytes. */
+const readsOf = (calls: readonly Call[]) => ({
+  calls: calls.length,
+  ranges: calls.reduce((n, c) => n + c.metrics.databaseQueries.used, 0),
+  documents: calls.reduce((n, c) => n + c.metrics.documentsRead.used, 0),
+  bytes: calls.reduce((n, c) => n + c.metrics.bytesRead.used, 0),
+})
+
+/* The calls of a night to the dispatcher, by phase. */
+const phasesOf = (calls: readonly Call[]) =>
+  calls
+    .filter((c) => c.name === 'jobs:archiveDoneIssues')
+    .map((c) => (c.args.phase as string | undefined) ?? 'cron')
+
+/* The archive_rechecks rows, oldest first. */
+const rechecks = (t: T) => t.run((ctx) => ctx.db.query('archive_rechecks').collect())
+
+/* The one archive_runs row, or null. */
+const runState = (t: T) => t.run((ctx) => ctx.db.query('archive_runs').unique())
+
+/* The full flag of the last run's audit row. */
+const lastRunFull = async (t: T) =>
+  ((await auditRows(t, 'archive_done_issues')).at(-1)?.detail as { full?: boolean } | undefined)
+    ?.full
+
+/* `orgs` organizations with `projects` live sub-projects each, under one
+ * top-level project, every sub-project with an open task and a Done task
+ * done 10 days before night 0, in one transaction. Returns the
+ * sub-projects. */
+async function plantLiveProjects(t: T, orgs: number, projects: number): Promise<Doc<'projects'>[]> {
+  return await t.run(async (ctx) => {
+    const subs: Doc<'projects'>[] = []
+    for (let o = 0; o < orgs; o++) {
+      const org_id = uuid()
+      await ctx.db.insert('organizations', {
+        id: org_id,
+        name: `Org ${o}`,
+        slug: `org-${org_id}`,
+        created_at: NOW,
+        date_format: 'iso',
+        week_start: 1,
+        week_one_rule: 'first4day',
+        default_plannable_hours: 40,
+      })
+      const project = (n: number, parent_id?: string) =>
+        ctx.db.insert('projects', {
+          id: uuid(),
+          org_id,
+          type: parent_id === undefined ? 'meta' : 'project',
+          ...(parent_id === undefined ? {} : { parent_id }),
+          key: `P${n}`,
+          name: `Project ${n}`,
+          description: '',
+          sort_order: n,
+          num: n,
+          track_delay: false,
+          created_at: NOW,
+        })
+      const top = (await ctx.db.get(await project(0))) as Doc<'projects'>
+      for (let p = 1; p <= projects; p++) {
+        const sub = (await ctx.db.get(await project(p, top.id))) as Doc<'projects'>
+        subs.push(sub)
+        for (const status of ['todo', 'done'] as const)
+          await ctx.db.insert('issues', {
+            id: uuid(),
+            org_id,
+            project_id: sub.id,
+            num: bulkNum++,
+            title: 'Live task',
+            description: '',
+            status,
+            priority: 'medium',
+            paused: false,
+            ...(status === 'done' ? { done_at: night(-10) } : {}),
+            created_at: NOW,
+            updated_at: NOW,
+          })
+      }
+    }
+    return subs
+  })
+}
+
+describe('archiveDoneIssues reads only the window since its last run', () => {
+  it('an idle night reads the same few ranges and documents however many live projects there are, and a later night archives a task that entered the window', async () => {
+    const nights: Record<string, ReturnType<typeof readsOf>> = {}
+    const archived: Record<string, number> = {}
+    const phases: Record<string, string[]> = {}
+    for (const [label, orgs, projects] of [
+      ['1 live project', 1, 1],
+      ['1,000 live projects in 10 organizations', 10, 100],
+    ] as const) {
+      const t = newT()
+      const subs = await plantLiveProjects(t, orgs, projects)
+      const full = await nightByHand(t, night(0))
+      // done half a day after night 0's threshold, so night 1's window holds it
+      const due = await plantIssue(t, {
+        org_id: subs[0].org_id,
+        project_id: subs[0].id,
+        status: 'done',
+        done_at: new Date(Date.parse(cutoffAt(night(0))) + DAY / 2).toISOString(),
+      })
+      const window = await nightByHand(t, night(1))
+      archived[label] = (await issueRow(t, due.id))?.archived_at === night(1) ? 1 : 0
+      const idle = await nightByHand(t, night(2))
+      nights[`${label}, full night 0`] = readsOf(full)
+      nights[`${label}, window night 1`] = readsOf(window)
+      nights[`${label}, idle night 2`] = readsOf(idle)
+      phases[label] = phasesOf(idle)
+    }
+    console.log('Nightly archive reads', nights)
+    for (const label of Object.keys(phases))
+      expect(phases[label], label).toEqual(['cron', 'window', 'hand'])
+    expect(archived).toEqual({
+      '1 live project': 1,
+      '1,000 live projects in 10 organizations': 1,
+    })
+    // the window and idle nights read the same whatever the size
+    const { bytes: _small, ...small } = nights['1 live project, idle night 2']
+    const { bytes: _large, ...large } =
+      nights['1,000 live projects in 10 organizations, idle night 2']
+    expect(large).toEqual(small)
+    expect(large.ranges).toBeLessThanOrEqual(6)
+    expect(large.documents).toBeLessThanOrEqual(3)
+    const { bytes: _w1, ...windowSmall } = nights['1 live project, window night 1']
+    const { bytes: _w2, ...windowLarge } =
+      nights['1,000 live projects in 10 organizations, window night 1']
+    expect(windowLarge).toEqual(windowSmall)
+  })
+
+  it('a Done task in an archived project inside the window stays, and the night after its restore archives it', async () => {
+    for (const via of ['app', 'REST', 'MCP'] as const) {
+      const t = newT()
+      const f = await withOrg(t)
+      const shelf = await plantProject(t, {
+        org_id: f.org.id,
+        type: 'project',
+        parent_id: f.meta.id,
+      })
+      await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: shelf.id })
+      expect(await runArchive(t, night(0))).toBe(0)
+      const done = await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: shelf.id,
+        status: 'done',
+        done_at: new Date(Date.parse(cutoffAt(night(0))) + DAY / 2).toISOString(),
+      })
+      // night 1's window reads it and leaves it, as its project is archived
+      expect(await runArchive(t, night(1))).toBe(0)
+      expect(await rechecks(t)).toEqual([])
+
+      if (via === 'app')
+        await as(t, f.user).mutation(api.projects.unarchive, { org_id: f.org.id, id: shelf.id })
+      else if (via === 'REST')
+        await t.mutation(internal.machine.projects.restUpdateProject, {
+          callerId: f.user.id,
+          access: 'write',
+          keyName: 'drive',
+          ref: shelf.key,
+          body: JSON.stringify({ archived: false }),
+        })
+      else
+        await t.mutation(internal.machine.projects.mcpUpdateProject, {
+          callerId: f.user.id,
+          access: 'write',
+          project: shelf.key,
+          archived: false,
+        })
+
+      // night 2's window starts after it, and the restore's mark brings it in
+      expect(await runArchive(t, night(2)), via).toBe(1)
+      expect((await issueRow(t, done.id))?.archived_at, via).toBe(night(2))
+      expect(await rechecks(t)).toEqual([])
+    }
+  })
+})
+
+describe('archiveDoneIssues checks the projects that writers marked', () => {
+  /* withOrg with a Done parent in f.sub, done long before night 0, and its
+   * open child in f.sub2. Night 0, a full pass, leaves the parent waiting
+   * for the child, and no later window reaches it. */
+  async function waitingParent() {
+    const t = newT()
+    const f = await withOrg(t)
+    const parent = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: night(-40),
+    })
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub2.id,
+      parent_id: parent.id,
+      status: 'todo',
+    })
+    expect(await runArchive(t, night(0))).toBe(0)
+    expect(await rechecks(t)).toEqual([])
+    return { t, f, parent, child }
+  }
+
+  /* Runs every scheduled function, such as the steps of a move to Deleted
+   * items, on fake timers. */
+  async function settle(t: T): Promise<void> {
+    vi.useFakeTimers()
+    try {
+      await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it.each([
+    'an archive in the app',
+    'an archive over REST',
+    'an archive over MCP',
+    'a parent change',
+    'a move that detaches',
+    'a move to Deleted items',
+    "its project's move to Deleted items",
+  ] as const)('a Done parent that waited for a child goes the night after %s', async (change) => {
+    const { t, f, parent, child } = await waitingParent()
+    const org_id = f.org.id
+    const ref = String(child.num)
+    if (change === 'an archive in the app')
+      await as(t, f.user).mutation(api.issues.archive, { org_id, id: child.id })
+    else if (change === 'an archive over REST')
+      await t.mutation(internal.machine.rest.updateIssue, {
+        callerId: f.user.id,
+        access: 'write',
+        keyName: 'drive',
+        ref,
+        body: JSON.stringify({ archived: true }),
+      })
+    else if (change === 'an archive over MCP')
+      await t.mutation(internal.machine.mcp.updateIssue, {
+        callerId: f.user.id,
+        access: 'write',
+        ref,
+        archived: true,
+      })
+    else if (change === 'a parent change')
+      await as(t, f.user).mutation(api.issues.update, {
+        org_id,
+        id: child.id,
+        patch: { parent_id: null },
+      })
+    else if (change === 'a move that detaches')
+      await as(t, f.user).mutation(api.issues.move, {
+        org_id,
+        id: child.id,
+        project_id: f.sub.id,
+        detach_parent: true,
+      })
+    else if (change === 'a move to Deleted items')
+      await as(t, f.user).mutation(api.issues.deleteDeep, { org_id, id: child.id })
+    else await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id, id: f.sub2.id })
+    await settle(t)
+    expect((await rechecks(t)).map((row) => row.project_id)).toEqual([f.sub.id])
+
+    expect(await runArchive(t, night(1))).toBe(1)
+    expect((await issueRow(t, parent.id))?.archived_at).toBe(night(1))
+    expect(await rechecks(t)).toEqual([])
+  })
+
+  it('marks nothing for a change that leaves the parent waiting', async () => {
+    const { t, f, child } = await waitingParent()
+    await as(t, f.user).mutation(api.issues.update, {
+      org_id: f.org.id,
+      id: child.id,
+      patch: { title: 'Still open' },
+    })
+    expect(await rechecks(t)).toEqual([])
+  })
+
+  it('single snapshot over two nights: the full pass archives the child, and the leg marks the parent for the next window', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const due = { org_id: f.org.id, status: 'done' as const, done_at: night(-40) }
+    const parent = await plantIssue(t, { ...due, project_id: f.sub.id })
+    const child = await plantIssue(t, { ...due, project_id: f.sub2.id, parent_id: parent.id })
+
+    expect(await runArchive(t, night(0))).toBe(1)
+    expect((await issueRow(t, child.id))?.archived_at).toBe(night(0))
+    expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
+    // the leg's mark, which night 0's hand phase left
+    expect(await rechecks(t)).toEqual([
+      expect.objectContaining({ org_id: f.org.id, project_id: f.sub.id, from_run: night(0) }),
+    ])
+
+    expect(await runArchive(t, night(1))).toBe(1)
+    expect(await lastRunFull(t)).toBe(false)
+    expect((await issueRow(t, parent.id))?.archived_at).toBe(night(1))
+    expect(await rechecks(t)).toEqual([])
+  })
+})
+
+describe('archiveDoneIssues and the Northstar seed', () => {
+  /* The ids of the archived tasks of organization `orgId`. */
+  const archivedOf = (t: T, orgId: string) =>
+    t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('issues')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .collect()
+      )
+        .filter((task) => task.archived_at !== undefined)
+        .map((task) => task.id)
+        .sort(),
+    )
+
+  /* A deployment whose archive ran the night before `seededAt`, with
+   * Northstar seeded at `seededAt` around Monday `anchor`, the seed's clock
+   * at that instant too. */
+  async function seeded(anchor: string, seededAt: string) {
+    const t = newT()
+    await runArchive(t, new Date(Date.parse(seededAt) - DAY).toISOString())
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.parse(seededAt))
+    try {
+      const { org } = await plantNorthstar(t, anchor, seededAt)
+      return { t, org }
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  // 2026-03-02 is a Monday, and the seed runs that Wednesday
+  const seededAt = '2026-03-04T12:00:00.000Z'
+  it.each([
+    // Done three days before the anchor, which the window reaches 30 days on
+    ['the current Monday', '2026-03-02', false],
+    // Done 38 days before the seed, behind the night before's threshold
+    ['a Monday five weeks back', '2026-01-26', true],
+  ] as const)(
+    'a seed around %s archives as a full pass every night does',
+    async (_, anchor, marked) => {
+      const window = await seeded(anchor, seededAt)
+      const full = await seeded(anchor, seededAt)
+      expect((await rechecks(window.t)).length > 0).toBe(marked)
+      const before = (await archivedOf(window.t, window.org.id)).length
+
+      const nights = [1, 2, 31, 32].map((n) =>
+        new Date(Date.parse(seededAt) + n * DAY).toISOString(),
+      )
+      const archived: number[] = []
+      for (const now of nights) {
+        await runArchive(window.t, now)
+        // every night a full pass, as before archive_runs
+        await full.t.run(async (ctx) => {
+          const state = await ctx.db.query('archive_runs').unique()
+          if (state !== null) await ctx.db.delete(state._id)
+        })
+        await runArchive(full.t, now)
+        const done = await archivedOf(window.t, window.org.id)
+        expect(done, now).toEqual(await archivedOf(full.t, full.org.id))
+        archived.push(done.length)
+      }
+      // the seeded Done tasks go the night after the seed through its marks,
+      // or 31 days on through the window
+      const goes = marked ? 0 : 2
+      expect(archived.map((n) => n > before)).toEqual(nights.map((_, i) => i >= goes))
+    },
+  )
+})
+
+describe('archiveDoneIssues makes a full pass every few weeks', () => {
+  it('without archive_runs, once the last full pass is 27.5 days old, and after the row is deleted', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const parent = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'done',
+      done_at: night(-40),
+    })
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub2.id,
+      parent_id: parent.id,
+    })
+
+    await runArchive(t, night(0))
+    expect(await lastRunFull(t)).toBe(true)
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(night(0)), full_at: night(0) })
+    // a delete outside the app marks nothing, so only a full pass sees the
+    // parent go free
+    await t.run(async (ctx) => ctx.db.delete(child._id))
+    for (const n of [1, 27]) {
+      expect(await runArchive(t, night(n))).toBe(0)
+      expect(await lastRunFull(t)).toBe(false)
+    }
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(night(27)), full_at: night(0) })
+
+    expect(await runArchive(t, night(27.5))).toBe(1)
+    expect(await lastRunFull(t)).toBe(true)
+    expect((await issueRow(t, parent.id))?.archived_at).toBe(night(27.5))
+    expect(await runState(t)).toMatchObject({ full_at: night(27.5) })
+    await runArchive(t, night(28.5))
+    expect(await lastRunFull(t)).toBe(false)
+
+    await t.run(async (ctx) => {
+      const state = await ctx.db.query('archive_runs').unique()
+      if (state !== null) await ctx.db.delete(state._id)
+    })
+    await runArchive(t, night(29.5))
+    expect(await lastRunFull(t)).toBe(true)
+    expect(await runState(t)).toMatchObject({
+      through: cutoffAt(night(29.5)),
+      full_at: night(29.5),
+    })
+  })
+
+  it('an incremental run whose row was deleted while it ran leaves it deleted, so the next run is full', async () => {
+    const t = newT()
+    await withOrg(t)
+    await runArchive(t, night(0))
+    await nightByHand(t, night(1), async (name, args) => {
+      if (name === 'jobs:archiveDoneIssues' && args.phase === 'hand')
+        await t.run(async (ctx) => {
+          const state = await ctx.db.query('archive_runs').unique()
+          if (state !== null) await ctx.db.delete(state._id)
+        })
+    })
+    expect(await runState(t)).toBeNull()
+    await runArchive(t, night(2))
+    expect(await lastRunFull(t)).toBe(true)
+  })
+})
+
+describe('archiveDoneIssues keeps a row for every project it did not finish', () => {
+  /* Deletes `count` of project `projectId`'s tasks titled 'Bulk done',
+   * outside the app, 20 a transaction to stay inside a test's read limit,
+   * which counts each delete as a read too. */
+  async function deleteTasks(t: T, projectId: string, count: number): Promise<void> {
+    for (let left = count; left > 0; left -= 20)
+      await t.run(async (ctx) => {
+        const rows = await ctx.db
+          .query('issues')
+          .withIndex('by_project', (q) => q.eq('project_id', projectId))
+          .filter((q) => q.eq(q.field('title'), 'Bulk done'))
+          .take(Math.min(left, 20))
+        for (const row of rows) await ctx.db.delete(row._id)
+      })
+  }
+
+  it("a row one of the run's legs writes waits for the next run, also when the hand phase reads it later", async () => {
+    // one row a hand step and one project a chain, so the hand phase is
+    // still paging when the child's leg marks the parent's project
+    ARCHIVE_LIMITS.projects = 1
+    const t = newT()
+    const f = await withOrg(t)
+    // the child's project sorts before the parent's, and a third after both
+    const [first, second, third] = [uuid(), uuid(), uuid()].sort()
+    const sub = (id: string) =>
+      plantProject(t, { id, org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    const childHome = await sub(first)
+    const parentHome = await sub(second)
+    const after = await sub(third)
+    const due = { org_id: f.org.id, status: 'done' as const, done_at: night(-40) }
+    const parent = await plantIssue(t, { ...due, project_id: parentHome.id })
+    const child = await plantIssue(t, { ...due, project_id: childHome.id, parent_id: parent.id })
+    await plantIssue(t, { ...due, project_id: after.id })
+
+    const calls = await nightByHand(t, night(0))
+    expect((await issueRow(t, child.id))?.archived_at).toBe(night(0))
+    expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
+    // the child's leg ran before the hand phase's last step, which read the
+    // mark it wrote and left it
+    const leg = calls.findIndex(
+      (c) => c.name === 'jobs:archiveProject' && c.args.project_id === childHome.id,
+    )
+    const lastHand = calls.findLastIndex(
+      (c) => c.name === 'jobs:archiveDoneIssues' && c.args.phase === 'hand',
+    )
+    expect(leg).toBeGreaterThan(0)
+    expect(leg).toBeLessThan(lastHand)
+    expect(await rechecks(t)).toEqual([
+      expect.objectContaining({ project_id: parentHome.id, from_run: night(0) }),
+    ])
+
+    expect(await runArchive(t, night(1))).toBe(1)
+    expect((await issueRow(t, parent.id))?.archived_at).toBe(night(1))
+    expect(await rechecks(t)).toEqual([])
+  })
+
+  it('a row a person writes before the hand phase reads its range is handed, and its project is checked after the write', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const shelf = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    await as(t, f.user).mutation(api.projects.archive, { org_id: f.org.id, id: shelf.id })
+    const done = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: shelf.id,
+      status: 'done',
+      done_at: night(-40),
+    })
+    await runArchive(t, night(0))
+
+    const calls = await nightByHand(t, night(1), async (name, args) => {
+      if (name === 'jobs:archiveDoneIssues' && args.phase === 'hand' && args.cursor === undefined)
+        await as(t, f.user).mutation(api.projects.unarchive, { org_id: f.org.id, id: shelf.id })
+    })
+    expect(phasesOf(calls)).toEqual(['cron', 'window', 'hand'])
+    expect((await issueRow(t, done.id))?.archived_at).toBe(night(1))
+    expect(await rechecks(t)).toEqual([])
+  })
+
+  it('a chain that fails leaves the rows of the projects it did not finish, and the next night archives their tasks', async () => {
+    // The second project's due page passes this read budget on every
+    // attempt; the first fits.
+    const t = limitedT({ documentsRead: 200 })
+    const f = await withOrg(t)
+    const [first, second] = [uuid(), uuid()].sort()
+    const sub = (id: string) =>
+      plantProject(t, { id, org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    const fine = await sub(first)
+    const failing = await sub(second)
+    const due = { org_id: f.org.id, status: 'done' as const, done_at: night(-40) }
+    const done = await plantIssue(t, { ...due, project_id: fine.id })
+    const task = await plantIssue(t, { ...due, project_id: failing.id })
+    await plantTasks(t, 300, { ...due, project_id: failing.id, title: 'Bulk done' })
+
+    expect(await failsOnReads(() => runArchive(t, night(0)))).toBe(true)
+    // the chain finished the first project and deleted its row only
+    expect((await issueRow(t, done.id))?.archived_at).toBe(night(0))
+    expect((await issueRow(t, task.id))?.archived_at).toBeUndefined()
+    expect((await rechecks(t)).map((row) => row.project_id)).toEqual([failing.id])
+
+    // outside the app, so nothing marks the project again
+    await deleteTasks(t, failing.id, 300)
+    expect(await runArchive(t, night(1))).toBe(1)
+    expect((await issueRow(t, task.id))?.archived_at).toBe(night(1))
+    expect(await rechecks(t)).toEqual([])
+  })
+
+  it('a dispatcher step that fails leaves the window where it was, and the next night reads it again', async () => {
+    // The window's page passes this read budget on every attempt.
+    const t = limitedT({ documentsRead: 60 })
+    const project = await plantOrg(t, uuid())
+    await runArchive(t, night(0))
+    const due = {
+      org_id: project.org_id,
+      project_id: project.id,
+      status: 'done' as const,
+      done_at: new Date(Date.parse(cutoffAt(night(0))) + DAY / 2).toISOString(),
+    }
+    await plantTasks(t, 80, { ...due, title: 'Bulk done' })
+
+    expect(await failsOnReads(() => runLegs(t, night(1)))).toBe(true)
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(night(0)) })
+    expect((await auditRows(t, 'archive_done_issues')).length).toBe(1)
+
+    await deleteTasks(t, project.id, 70)
+    expect(await runArchive(t, night(2))).toBe(10)
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(night(2)) })
+  })
+
+  it('hands one chain a project however many rows name it, across hand steps too', async () => {
+    ARCHIVE_LIMITS.projects = 2
+    const t = newT()
+    const f = await withOrg(t)
+    await runArchive(t, night(0))
+    const [a, b] = [f.sub, f.sub2].sort((x, y) => (x.id < y.id ? -1 : 1))
+    const tasks: string[] = []
+    for (const project of [a, b])
+      tasks.push(
+        (
+          await plantIssue(t, {
+            org_id: f.org.id,
+            project_id: project.id,
+            status: 'done',
+            done_at: night(-40),
+          })
+        ).id,
+      )
+    await t.run(async (ctx) => {
+      for (const project of [a, a, a, b, b])
+        await ctx.db.insert('archive_rechecks', { org_id: f.org.id, project_id: project.id })
+    })
+
+    const calls = await nightByHand(t, night(1))
+    const legs = calls.filter((c) => c.name === 'jobs:archiveProject').map((c) => c.args)
+    expect(legs.map((leg) => [leg.project_id, leg.next])).toEqual([
+      [a.id, [b.id]],
+      [b.id, []],
+    ])
+    for (const id of tasks) expect((await issueRow(t, id))?.archived_at).toBe(night(1))
+    expect(await rechecks(t)).toEqual([])
+  })
+
+  it('a chain drops the row of a project that is gone or in Deleted items without an error', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await runArchive(t, night(0))
+    await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.sub2.id })
+    await t.run(async (ctx) => {
+      for (const project_id of [uuid(), f.sub2.id])
+        await ctx.db.insert('archive_rechecks', { org_id: f.org.id, project_id })
+      // and one of an organization that is gone
+      await ctx.db.insert('archive_rechecks', { org_id: uuid(), project_id: uuid() })
+    })
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(await runArchive(t, night(1))).toBe(0)
+      expect(logged).not.toHaveBeenCalled()
+    } finally {
+      logged.mockRestore()
+    }
+    expect(await rechecks(t)).toEqual([])
+  })
+})
+
+describe('archiveDoneIssues runs what the release before queued', () => {
+  it('a projects step with due projects it had not handed, and a leg without rows', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const due = { org_id: f.org.id, status: 'done' as const, done_at: night(-40) }
+    const first = await plantIssue(t, { ...due, project_id: f.sub.id })
+    const second = await plantIssue(t, { ...due, project_id: f.sub2.id })
+    const now = night(0)
+
+    // a leg of the release before, which archives both projects in turn
+    await runLogged(
+      t,
+      () =>
+        t.mutation(internal.jobs.archiveProject, {
+          project_id: f.sub.id,
+          org_id: f.org.id,
+          now,
+          archived: 0,
+          next: [f.sub2.id],
+        }),
+      'Auto-archive finished',
+    )
+    for (const task of [first, second]) expect((await issueRow(t, task.id))?.archived_at).toBe(now)
+
+    // a projects step that found f.sub due, goes on as the full pass
+    const third = await plantIssue(t, { ...due, project_id: f.sub.id })
+    const fourth = await plantIssue(t, { ...due, project_id: f.sub2.id })
+    const later = night(1)
+    await runLogged(
+      t,
+      () =>
+        t.mutation(internal.jobs.archiveDoneIssues, {
+          phase: 'projects',
+          now: later,
+          due: { org_id: f.org.id, projects: [f.sub.id] },
+          projects: 1,
+          repairs: 0,
+        }),
+      'Auto-archive finished',
+    )
+    for (const task of [third, fourth])
+      expect((await issueRow(t, task.id))?.archived_at).toBe(later)
+    expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
+      { projects: 2, repairs: 0, full: true, tasks: 2 },
+    ])
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(later), full_at: later })
+    expect(await rechecks(t)).toEqual([])
+  })
+})
+
+describe('archiveDoneIssues within Convex limits', () => {
+  it('a window of 2,000 Done tasks with 20,000-character three-byte descriptions across 200 projects in 20 organizations keeps every call inside them', async () => {
+    const t = newT({ transactionLimits: true })
+    await runArchive(t, night(0))
+    const description = '漢'.repeat(20_000)
+    const done_at = new Date(Date.parse(cutoffAt(night(0))) + DAY / 2).toISOString()
+    const projects = await plantLiveProjects(t, 20, 10)
+    // a task row and its description row each hold the text, so 100 tasks
+    // a transaction stay inside its 16 MiB of writes
+    for (let from = 0; from < 2000; from += 100)
+      await t.run(async (ctx) => {
+        for (let n = from; n < from + 100; n++) {
+          const project = projects[n % projects.length]
+          await insertTask(
+            ctx.db,
+            {
+              id: uuid(),
+              org_id: project.org_id,
+              project_id: project.id,
+              num: bulkNum++,
+              title: `Window task ${n}`,
+              description,
+              status: 'done',
+              priority: 'medium',
+              paused: false,
+              done_at,
+              created_at: NOW,
+              updated_at: NOW,
+            },
+            'restore',
+          )
+        }
+      })
+
+    const calls = await nightByHand(t, night(1))
+    // every task of the window went, and none is left in it
+    const left = await t.run(
+      async (ctx) =>
+        await ctx.db
+          .query('issues')
+          .withIndex('by_archived_status_done', (q) =>
+            q.eq('archived_at', undefined).eq('status', 'done').eq('done_at', done_at),
+          )
+          .first(),
+    )
+    expect(left).toBeNull()
+
+    const kinds = {
+      window: calls.filter((c) => c.args.phase === 'window'),
+      hand: calls.filter((c) => c.args.phase === 'hand'),
+      leg: calls.filter((c) => c.name === 'jobs:archiveProject'),
+    }
+    const most = (of: readonly Call[]) =>
+      Object.fromEntries(
+        (Object.keys(of[0].metrics) as Array<keyof TransactionMetrics>).map((key) => [
+          key,
+          Math.max(...of.map((c) => c.metrics[key].used)),
+        ]),
+      ) as Record<keyof TransactionMetrics, number>
+    const report = Object.fromEntries(
+      Object.entries(kinds).map(([kind, of]) => [kind, { calls: of.length, ...most(of) }]),
+    )
+    console.log('Nightly archive window of 2,000 large tasks, the most one call used', report)
+    for (const of of Object.values(kinds)) {
+      const m = most(of)
+      expect(m.bytesRead).toBeLessThan(16 * 1024 * 1024)
+      expect(m.documentsRead).toBeLessThan(32_000)
+      expect(m.databaseQueries).toBeLessThan(4096)
+      expect(m.bytesWritten).toBeLessThan(16 * 1024 * 1024)
+      expect(m.documentsWritten).toBeLessThan(16_000)
+      expect(m.functionsScheduled).toBeLessThan(1000)
+    }
+  }, 600_000)
 })
 
 type SweepCounts = { to: string; deleted: number; woken: number }
