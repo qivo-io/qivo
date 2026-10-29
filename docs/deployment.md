@@ -924,7 +924,14 @@ the one-time `internal/navBackfill` writes them. The backfill walks the
 projects, grants, team shares and reach rows of every organization, then
 stamps each organization in `org_ready` (`nav_at`); an organization created
 since that release is stamped at its creation. A navigation list refuses an
-organization without both that stamp and the name keys stamp. Main Search
+organization without both that stamp and the name keys stamp. Once `nav_at`
+holds, the access checks behind the workspace, the task window, the inbox,
+main Search, Archived tasks, milestones and project settings
+(`convex/lib/access.ts` `projectLevelsOf`) answer whether a top-level project
+shows a person only for navigation to one of its sub-projects from these
+rows, not from the project's sub-projects and every team share of the
+person. A row an earlier release left missing hides such a project until a
+backfill run writes it, which narrows the answer and never widens it. Main Search
 (`search:page`) needs `nav_at` alone, and only where it searches a whole
 organization: there it leaves the organization's project names out and
 reports its search incomplete while the stamp is missing. A seat it searches
