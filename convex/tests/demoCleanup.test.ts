@@ -1,6 +1,6 @@
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { components } from '../_generated/api'
+import { api, components } from '../_generated/api'
 import type { Doc, TableNames } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, marketingId } from '../internal/marketingDemoData'
@@ -176,6 +176,11 @@ const APP_OWNED: TableNames[] = [
   'issue_descriptions',
   'labels',
   'activity_events',
+  // export jobs with their parts and request rows, deleted in the activity
+  // phase
+  'org_exports',
+  'org_export_parts',
+  'org_export_requests',
   'webhook_events',
   'webhook_health',
   'webhook_subscriptions',
@@ -855,6 +860,46 @@ describe('public Northstar provisioning and bounded deletion', () => {
     await t.finishAllScheduledFunctions(() => vi.runAllTimers())
     expect(await ownedSnapshot(t)).toEqual(others)
     expect(await t.run((ctx) => ctx.db.system.get(bytes))).toBeNull()
+    expect((await rows(t, b.org_id!)).tasks).toHaveLength(MARKETING_DEMO.issues.length)
+  }, 60_000)
+
+  it("prepares an export on the demo outside the visitor's record limit, and its cleanup deletes the job, parts and files", async () => {
+    const t = testBackend()
+    const b = await makeDemo(t)
+    const others = await ownedSnapshot(t)
+    const a = await makeDemo(t)
+    const orgId = a.org_id as string
+    const counts = () =>
+      t.run(async (ctx) =>
+        ctx.db
+          .query('demo_write_counts')
+          .withIndex('by_demo', (q) => q.eq('demo_id', a.id))
+          .unique(),
+      )
+    const before = await counts()
+    const visitor = t.withIdentity({ subject: a.auth_user_id })
+    const { export_id } = await visitor.mutation(api.orgExport.request, { org_id: orgId })
+    // the job and its request are a temporary copy, not the visitor's records
+    expect((await counts())?.insert_count ?? 0).toBe(before?.insert_count ?? 0)
+    // only the steps that are due, not the archive's expiry
+    await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0), 1000)
+    const parts = await t.run((ctx) =>
+      ctx.db
+        .query('org_export_parts')
+        .withIndex('by_export_seq', (q) => q.eq('export_id', export_id))
+        .collect(),
+    )
+    expect((await visitor.query(api.orgExport.status, { org_id: orgId })).latest).toMatchObject({
+      id: export_id,
+      state: 'ready',
+    })
+    expect(parts.length).toBeGreaterThan(2)
+
+    await deleteDemo(t, a)
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    expect(await ownedSnapshot(t)).toEqual(others)
+    for (const part of parts)
+      expect(await t.run((ctx) => ctx.db.system.get(part.storage_id))).toBeNull()
     expect((await rows(t, b.org_id!)).tasks).toHaveLength(MARKETING_DEMO.issues.length)
   }, 60_000)
 

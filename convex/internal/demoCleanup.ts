@@ -26,6 +26,7 @@ import { drainDemoUploads } from '../model/demoUploads'
 import { eraseFile } from '../model/fileHolds'
 import { recipientItems, stateRows, taskItems } from '../model/inboxItems'
 import { deleteLabelCount } from '../model/labelCounts'
+import { jobsOf, partsOf, requestsOf } from '../model/orgExports'
 import { deleteOrgBookkeeping, tallyRow } from '../model/orgs'
 import { reachOfOrg } from '../model/projectNav'
 import { uncountFile } from '../model/storageTotals'
@@ -83,6 +84,27 @@ async function trashRows(ctx: MutationCtx, orgId: string, budget: Budget): Promi
   const done = await clearOrgTrash(ctx, orgId, teardown)
   budget.left = teardown.left
   return done
+}
+
+/** The organization's export jobs, each after its parts, whose files are
+ * erased at once, and its request rows (model/orgExports.ts). A step still
+ * running finds its job gone at its commit and deletes its own file. */
+async function exportRows(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
+  while (budget.left > 0) {
+    const job = await jobsOf(ctx, orgId).first()
+    if (job === null) return true
+    const parts = await drain(
+      ctx,
+      budget,
+      (n) => partsOf(ctx, job.id).take(n),
+      (part) => removeFile(ctx, part.storage_id),
+    )
+    if (!parts || !(await drain(ctx, budget, (n) => requestsOf(ctx, job.id).take(n)))) return false
+    if (budget.left <= 0) return false
+    await ctx.db.delete(job._id)
+    budget.left--
+  }
+  return false
 }
 
 /** Any task or project storage totals left once the tasks are gone. The
@@ -659,12 +681,13 @@ export const purge = internalMutation({
       else if (phase === 'activity')
         done =
           !orgId ||
-          (await drain(ctx, budget, (n) =>
+          ((await drain(ctx, budget, (n) =>
             ctx.db
               .query('activity_events')
               .withIndex('by_org_ts', (q) => q.eq('org_id', orgId))
               .take(n),
-          ))
+          )) &&
+            (await exportRows(ctx, orgId, budget)))
       else if (phase === 'webhooks') {
         done = true
         if (orgId)
@@ -741,6 +764,10 @@ export const purge = internalMutation({
               .first(),
           ]
           require(trash.every((row) => row === null), rule('Demo cleanup left Deleted items'))
+          // each export job goes after its parts and request rows
+          require((await jobsOf(ctx, orgId).first()) === null, rule(
+            'Demo cleanup left organization data',
+          ))
           await deleteOrgBookkeeping(ctx, orgId)
           const org = await byId(ctx, 'organizations', orgId)
           if (org) await ctx.db.delete(org._id)

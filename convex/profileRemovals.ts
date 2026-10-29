@@ -131,8 +131,8 @@ const oauthEdge: Edge = {
  * (model/inboxItems.ts), so no write to a message still waiting can build
  * an item again. */
 const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
-  // the keys, tokens, memberships, grants and preferences the removal
-  // transaction left
+  // the keys, tokens, memberships, grants, preferences and export requests
+  // the removal transaction left
   access: [
     {
       // memberships the removal row still counts leave their teams' counts
