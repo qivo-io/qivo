@@ -191,16 +191,22 @@ const SLACK: ReadCeiling = { ranges: 64, documents: 256, bytes: 512 << 10 }
 export const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 }
 
 /** What a call keeps back from Convex's limits for the reads its budget
- * does not count one by one: the caller's own access rows that one access
- * check may read at once (lib/access.ts OWN_READS, at most its teams and a
- * few ranges, its rows and the organization's teams). The listing reads
- * its rows one at a time under the budget, and the seats and the page read
- * within their own allowances (allowancesOf). What no budget bounds
- * is accessOf's own reads when it asks whether a top-level project shows
- * for navigation: all of the person's grants, memberships and team shares,
- * and the teams those name, which lib/access.ts reads whole. Each of those
- * team reads costs at most lib/limits.ts TEAM_ROW_MAX_BYTES, but their
- * number is the person's, which nothing bounds yet. Tests lower it. */
+ * does not count one by one: one access check past the budget's last look,
+ * with every read of the caller's own rows it may start, at searchReads'
+ * bounds (lib/access.ts OWN_READS states the figures). That is one
+ * question's project, parent, grants and team shares and its navigation
+ * from reach rows, at most 23 ranges and 411 documents; the instance's
+ * memberships asked team by team (17 ranges), its teams asked one by one
+ * past projectShares (32) and each team of the caller's a share names (at
+ * most 64); and its shared reads, at most 139 ranges and 4,956 documents on
+ * either path, or 64 ranges more where the organization's teams are past
+ * their bounds. So at most 275 ranges and about 5,500 documents, or 339
+ * ranges in that one case, which passes 320 by at most 19, while convex-test
+ * counts a range the transaction read before again and a deployment does
+ * not. The listing reads its rows one at a time under the budget, and the
+ * seats and the page read within their own allowances (allowancesOf). Each
+ * team read costs at most lib/limits.ts TEAM_ROW_MAX_BYTES. Tests lower
+ * it. */
 export const SEARCH_RESERVE: ReadCeiling = {
   ranges: OWN_READS.teams + 64,
   documents: 2 * OWN_READS.rows + OWN_READS.orgTeamsMost,
@@ -466,8 +472,12 @@ type Stops = {
  *   in the page's own allowance, and finds a project the seat already read
  *   for free.
  * Planning reads hidden projects, never tasks, in one case: whether a
- * top-level project of the scope shows only for navigation reads its
- * sub-projects. A seat searched project by project matches only the names
+ * top-level project of the scope shows only for navigation reads the reach
+ * rows of the seat and its teams under it and the sub-projects those name,
+ * and, only for an organization without nav_at or a seat past searchReads'
+ * reach bounds, its sub-projects. An access check a bound stops ends the
+ * search as a read that does not fit does (endsReads), so its coverage is
+ * never complete after one. A seat searched project by project matches only the names
  * of projects planning found it sees, so it reads no name of a project it
  * cannot see.
  */
