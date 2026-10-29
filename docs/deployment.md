@@ -1019,8 +1019,12 @@ row makes the next run a full pass. A backup restore rewinds both tables,
 which is safe, because the next run reads from the older threshold. After
 rolling forward from a release before the one that added them, delete the
 row so that the first run is full, because the earlier release's writers
-marked no project for a recheck. Deleting the row on production is a
-production action and needs the owner's approval. Both tables, their
+marked no project for a recheck. A run that the earlier release began and
+this one finishes, because a step of it was queued at the deploy, records no
+full pass and clears the last one, so the next night is a full pass too: the
+chains the earlier release ran before the deploy marked nothing either.
+Deleting the row on production is a production action and needs the owner's
+approval. Both tables, their
 indexes and the `issues.by_archived_status_done` index ship first in that
 release, so no step an earlier release queued reads them. A rollback past it
 deploys, because Convex leaves a table the schema does not list alone and

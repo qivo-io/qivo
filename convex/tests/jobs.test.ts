@@ -2400,7 +2400,8 @@ describe('archiveDoneIssues runs what the release before queued', () => {
     )
     for (const task of [first, second]) expect((await issueRow(t, task.id))?.archived_at).toBe(now)
 
-    // a projects step that found f.sub due, goes on as the full pass
+    // a projects step that found f.sub due goes on as a resumed walk of the
+    // live projects, which records no full pass
     const third = await plantIssue(t, { ...due, project_id: f.sub.id })
     const fourth = await plantIssue(t, { ...due, project_id: f.sub2.id })
     const later = night(1)
@@ -2419,10 +2420,95 @@ describe('archiveDoneIssues runs what the release before queued', () => {
     for (const task of [third, fourth])
       expect((await issueRow(t, task.id))?.archived_at).toBe(later)
     expect((await auditRows(t, 'archive_done_issues')).map((r) => r.detail)).toEqual([
-      { projects: 2, repairs: 0, full: true, tasks: 2 },
+      { projects: 2, repairs: 0, full: false, tasks: 2, resumed: true },
     ])
-    expect(await runState(t)).toMatchObject({ through: cutoffAt(later), full_at: later })
+    expect(await runState(t)).toBeNull()
     expect(await rechecks(t)).toEqual([])
+  })
+
+  it('a projects step the release before queued past a parent its chain left waiting records no full pass, so the next night archives the parent', async () => {
+    const t = newT()
+    // the parent's organization sorts first among the live projects
+    const [first, second] = [uuid(), uuid()].sort()
+    const home = await plantOrg(t, first)
+    const rest = await plantOrg(t, second)
+    const now = night(0)
+    const parent = await plantIssue(t, {
+      org_id: first,
+      project_id: home.id,
+      status: 'done',
+      done_at: night(-40),
+    })
+    // before the deploy, that run's chain archived the child, left the
+    // parent for the next night and, as the release before did, marked
+    // nothing
+    await plantIssue(t, {
+      org_id: first,
+      project_id: home.id,
+      parent_id: parent.id,
+      status: 'done',
+      done_at: night(-40),
+      archived_at: now,
+    })
+    const later = await plantIssue(t, {
+      org_id: second,
+      project_id: rest.id,
+      status: 'done',
+      done_at: night(-40),
+    })
+    // the run's projects step had passed the parent's project
+    const cursor = await t.run(async (ctx) => {
+      const page = await ctx.db
+        .query('projects')
+        .withIndex('by_archived_org', (q) => q.eq('archived_at', undefined))
+        .paginate({ cursor: null, numItems: 1 })
+      expect(page.page.map((p) => p.id)).toEqual([home.id])
+      return page.continueCursor
+    })
+    await runLogged(
+      t,
+      () =>
+        t.mutation(internal.jobs.archiveDoneIssues, {
+          phase: 'projects',
+          cursor,
+          now,
+          projects: 1,
+          repairs: 0,
+        }),
+      'Auto-archive finished',
+    )
+    expect((await issueRow(t, later.id))?.archived_at).toBe(now)
+    expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
+    const state = await runState(t)
+
+    await runArchive(t, night(1))
+    expect((await issueRow(t, parent.id))?.archived_at).toBe(night(1))
+    // the resumed run recorded no full pass, so night 1 made one
+    expect(state).toBeNull()
+    expect(await lastRunFull(t)).toBe(true)
+  })
+
+  it('a resumed run clears the last full pass a row kept from before a rollback', async () => {
+    const t = newT()
+    await plantOrg(t, uuid())
+    await t.run((ctx) =>
+      ctx.db.insert('archive_runs', { through: cutoffAt(night(-1)), full_at: night(-1) }),
+    )
+    await runLogged(
+      t,
+      () =>
+        t.mutation(internal.jobs.archiveDoneIssues, {
+          phase: 'projects',
+          now: night(0),
+          projects: 0,
+          repairs: 0,
+        }),
+      'Auto-archive finished',
+    )
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(night(-1)) })
+    expect((await runState(t))?.full_at).toBeUndefined()
+    await runArchive(t, night(1))
+    expect(await lastRunFull(t)).toBe(true)
   })
 })
 

@@ -175,6 +175,10 @@ const archiveRunArgs = {
   tasks: v.optional(v.number()),
   // whether the run's find phase was the full pass, set on its hand steps
   full: v.optional(v.boolean()),
+  // set on the steps of a run whose projects phase a step of the release
+  // before began: that release's chains marked no project for a recheck, so
+  // the run's last step records no full pass, and the next run makes one
+  resumed: v.optional(v.boolean()),
   // the running count of a step queued two releases before, unused
   organizations: v.optional(v.number()),
 }
@@ -647,12 +651,16 @@ async function windowStep(ctx: MutationCtx, a: RunStep): Promise<void> {
  * a due Done task, marks each project that has one in archive_rechecks, and
  * stops once the tasks it read pass ARCHIVE_LIMITS.bytes, which one project
  * always fits. The next step then checks the rest of the page. A step the
- * release before queued may carry the due projects it had not handed
- * (`due` without rows), which are marked first. The pass's last step
- * schedules the hand phase. */
+ * release before queued carries its count of due projects (`projects`) and
+ * may carry the due projects it had not handed (`due` without rows), which
+ * are marked first. Such a run goes on as `resumed`: the chains that
+ * release started before the deploy marked nothing, such as a Done parent
+ * whose child they archived, and this run checks only the projects after
+ * its cursor. The pass's last step schedules the hand phase. */
 async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   const cutoff = archiveCutoff(a.now)
   let tasks = a.tasks ?? 0
+  const resumed = a.resumed === true || a.projects !== undefined
   if (a.due !== undefined && a.due.rows === undefined)
     for (const project_id of a.due.projects)
       await recheckProject(ctx.db, { org_id: a.due.org_id, project_id, due_by: cutoff })
@@ -676,7 +684,13 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     cursor = page.continueCursor
     isDone = page.isDone
   }
-  const step = { phase: 'projects' as const, cursor, now: a.now, repairs: a.repairs }
+  const step = {
+    phase: 'projects' as const,
+    cursor,
+    now: a.now,
+    repairs: a.repairs,
+    ...(resumed ? { resumed } : {}),
+  }
   let bytes = 0
   for (const [i, id] of ids.entries()) {
     if (bytes >= ARCHIVE_LIMITS.bytes) {
@@ -699,6 +713,7 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     repairs: a.repairs,
     tasks,
     full: true,
+    ...(resumed ? { resumed } : {}),
   })
 }
 
@@ -723,7 +738,8 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
  * archive_runs to the run's threshold, and to its start as the last full
  * pass after a full one. Only that step moves it, so a run whose dispatcher
  * fails before it leaves the window where it was, and the next run reads it
- * again. */
+ * again. A run the release before began (`resumed`) moves neither, and the
+ * next run is full. */
 async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   let projects = a.projects ?? 0
   let due = a.due && {
@@ -794,7 +810,7 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     kept = claimed
     projects += 1
   }
-  const step = { now: a.now, repairs: a.repairs, tasks: a.tasks, full: a.full }
+  const step = { now: a.now, repairs: a.repairs, tasks: a.tasks, full: a.full, resumed: a.resumed }
   if (!page.isDone) {
     await ctx.scheduler.runAfter(0, archiveRunRef, {
       ...step,
@@ -806,15 +822,29 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     return
   }
   await hand()
-  const full = a.full === true
+  const resumed = a.resumed === true
+  const full = a.full === true && !resumed
   await audit(ctx, {
     ts: a.now,
     actor_email: 'system',
     action: 'archive_done_issues',
-    detail: { projects, repairs: a.repairs ?? 0, full, tasks: a.tasks ?? 0 },
+    detail: {
+      projects,
+      repairs: a.repairs ?? 0,
+      full,
+      tasks: a.tasks ?? 0,
+      ...(resumed ? { resumed } : {}),
+    },
   })
   const through = cutoff
   const state = await ctx.db.query('archive_runs').first()
+  // A run the release before began proves no window, so it moves neither
+  // value, and drops the last full pass a row kept from before a rollback,
+  // so the next run is full.
+  if (resumed) {
+    if (state?.full_at !== undefined) await ctx.db.patch(state._id, { full_at: undefined })
+    return
+  }
   // A row deleted while an incremental run ran stays deleted, so the next
   // run is full.
   if (state === null) {
