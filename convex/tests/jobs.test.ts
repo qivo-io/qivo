@@ -1951,6 +1951,134 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
   })
 })
 
+describe('archiveDoneIssues and two runs that overlap', () => {
+  /* Runs the pending archive calls of the run at `now`, one at a time in
+   * schedule order, each in a transaction of its own, until none is left or
+   * `stop` holds for the next one. `ran` holds the calls run already. Call
+   * on fake timers, so nothing runs by itself. */
+  async function runOf(
+    t: T,
+    now: string,
+    ran: Set<string>,
+    stop?: (name: string, args: Record<string, unknown>) => boolean | Promise<boolean>,
+  ): Promise<void> {
+    for (let guard = 0; guard < 1000; guard++) {
+      const job = (
+        await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+      ).find(
+        (j) =>
+          j.state.kind === 'pending' &&
+          !ran.has(j._id) &&
+          ARCHIVE_CALLS.test(j.name) &&
+          (j.args[0] as { now?: string }).now === now,
+      )
+      if (job === undefined) return
+      const args = job.args[0] as Record<string, unknown>
+      if (await stop?.(job.name, args)) return
+      ran.add(job._id)
+      await t.run((ctx) => ctx.runMutation(makeFunctionReference<'mutation'>(job.name), args))
+    }
+    throw new Error('the run did not finish')
+  }
+
+  /* Starts the run at `now` with the cron's call. */
+  const start = (t: T, now: string) =>
+    t.run((ctx) =>
+      ctx.runMutation(makeFunctionReference<'mutation'>('jobs:archiveDoneIssues'), { now }),
+    )
+
+  /* withOrg with three sub-projects whose ids sort in the order given, and
+   * one row a hand step, after night 0's full pass. */
+  async function overlapScene() {
+    ARCHIVE_LIMITS.projects = 1
+    const t = newT()
+    const f = await withOrg(t)
+    const ids = [uuid(), uuid(), uuid(), uuid()].sort()
+    const subs: Doc<'projects'>[] = []
+    for (const id of ids)
+      subs.push(
+        await plantProject(t, { id, org_id: f.org.id, type: 'project', parent_id: f.meta.id }),
+      )
+    await runArchive(t, night(0))
+    // done half a day after night 1's threshold or night 0's
+    const pastCutoff = (n: number) =>
+      new Date(Date.parse(cutoffAt(night(n))) + DAY / 2).toISOString()
+    const done = (project: Doc<'projects'>, done_at: string, parent_id?: string) =>
+      plantIssue(t, {
+        org_id: f.org.id,
+        project_id: project.id,
+        status: 'done',
+        done_at,
+        ...(parent_id === undefined ? {} : { parent_id }),
+      })
+    return { t, f, subs, pastCutoff, done }
+  }
+
+  it("an older run's hand phase leaves the rows a newer run's find phase wrote", async () => {
+    const { t, subs, pastCutoff, done } = await overlapScene()
+    const [first, middle, , last] = subs
+    // run A's window holds a task in the first and last projects, and run
+    // B's a task in the middle one too, which A's threshold leaves out
+    await done(first, pastCutoff(0))
+    await done(last, pastCutoff(0))
+    const late = await done(middle, pastCutoff(1))
+    const [a, b] = [night(1), night(2)]
+    const ran = new Set<string>()
+    vi.useFakeTimers()
+    try {
+      await start(t, a)
+      // A's hand phase reads its first row and goes on with the next step
+      await runOf(t, a, ran, (_, args) => args.phase === 'hand' && args.cursor !== undefined)
+      // a day of scheduler backlog later, B's find phase marks its window
+      await start(t, b)
+      await runOf(t, b, ran, (_, args) => args.phase === 'hand')
+      expect((await rechecks(t)).filter((row) => row.due_by === cutoffAt(b))).toHaveLength(3)
+      // A finishes first, then B
+      await runOf(t, a, ran)
+      await runOf(t, b, ran)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect((await issueRow(t, late.id))?.archived_at).toBe(b)
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(b) })
+    expect(await rechecks(t)).toEqual([])
+  })
+
+  it("an older run's hand phase leaves the row a newer run's leg wrote", async () => {
+    const { t, subs, pastCutoff, done } = await overlapScene()
+    const [first, childHome, parentHome, last] = subs
+    await done(first, pastCutoff(0))
+    await done(last, pastCutoff(0))
+    // in run B's window only: a Done parent and its Done child, which B's
+    // leg archives and so marks the parent's project for the next run
+    const parent = await done(parentHome, pastCutoff(1))
+    const child = await done(childHome, pastCutoff(1), parent.id)
+    const [a, b] = [night(1), night(2)]
+    const ran = new Set<string>()
+    vi.useFakeTimers()
+    try {
+      await start(t, a)
+      await runOf(t, a, ran, (_, args) => args.phase === 'hand' && args.cursor !== undefined)
+      await start(t, b)
+      // B runs until its child's leg has marked the parent's project
+      await runOf(t, b, ran, async () => (await rechecks(t)).some((row) => row.from_run === b))
+      expect((await issueRow(t, child.id))?.archived_at).toBe(b)
+      // A finishes first, then B, which leaves its leg's row for night 3
+      await runOf(t, a, ran)
+      await runOf(t, b, ran)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(b) })
+    expect(await rechecks(t)).toEqual([
+      expect.objectContaining({ project_id: parentHome.id, from_run: b }),
+    ])
+    expect(await runArchive(t, night(3))).toBe(1)
+    expect((await issueRow(t, parent.id))?.archived_at).toBe(night(3))
+  })
+})
+
 describe('archiveDoneIssues runs what the release before queued', () => {
   it('a projects step with due projects it had not handed, and a leg without rows', async () => {
     const t = newT()

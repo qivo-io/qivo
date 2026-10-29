@@ -56,10 +56,12 @@ export const rechecksOfOrg = (ctx: QueryCtx, orgId: string) =>
 
 /** Asks the next nightly archive to check project `project_id` of
  * organization `org_id` in full. `from_run` is the `now` of the run whose
- * leg writes the row, which that run leaves for the next one. */
+ * leg writes the row, which that run leaves for the next one, and `due_by`
+ * the threshold of the run whose find phase writes it, which an older run
+ * leaves for it. */
 export async function recheckProject(
   db: MutationCtx['db'],
-  row: { org_id: string; project_id: string; from_run?: string },
+  row: { org_id: string; project_id: string; from_run?: string; due_by?: string },
 ): Promise<void> {
   await uncountedWriter(db).insert('archive_rechecks', row)
 }

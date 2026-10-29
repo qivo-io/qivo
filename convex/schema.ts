@@ -2333,10 +2333,15 @@ export default defineSchema({
   // checked the task's project, or the project was archived or gone, and the
   // writes that bring such a task back into reach mark its project in
   // archive_rechecks. Only a run's last step moves it, so a run that fails
-  // leaves it, and the next run reads the same window again. A run is a full
-  // pass over every live project when this row is missing or `full_at` is
-  // jobs.ts ARCHIVE_FULL_AFTER_MS or more old. A backup restore rewinds it
-  // with the tasks, and the next run then reads from the older threshold.
+  // leaves it, and the next run reads the same window again. Two runs can
+  // overlap when the scheduler falls a day behind. The rows a run's find
+  // phase or legs write carry that run's threshold or stamp, and an older
+  // run's hand phase leaves them, so the newer run checks its own window
+  // whichever finishes first; the run that finishes last sets `through`, and
+  // an older one only moves it back. A run is a full pass over every live
+  // project when this row is missing or `full_at` is jobs.ts
+  // ARCHIVE_FULL_AFTER_MS or more old. A backup restore rewinds it with the
+  // tasks, and the next run then reads from the older threshold.
   archive_runs: defineTable({
     through: v.string(), // ISO instant, the threshold of the last finished run
     full_at: v.string(), // ISO instant, the start of the last finished full pass
@@ -2357,9 +2362,13 @@ export default defineSchema({
   archive_rechecks: defineTable({
     org_id: v.string(),
     project_id: v.string(),
-    // the `now` of the run whose leg wrote the row, which that run's hand
-    // phase leaves for the next run (single snapshot, jobs.ts archiveLeg)
+    // the `now` of the run whose leg wrote the row, which the hand phase of
+    // that run and of any older one leaves for a later run (single
+    // snapshot, jobs.ts archiveLeg)
     from_run: v.optional(v.string()),
+    // the threshold of the run whose find phase wrote the row, which the
+    // hand phase of an older run, with an earlier threshold, leaves for it
+    due_by: v.optional(v.string()),
   }).index('by_org_project', ['org_id', 'project_id']),
 
   // When the nightly read-message sweep next visits a profile (jobs.ts

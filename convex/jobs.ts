@@ -608,7 +608,7 @@ async function windowStep(ctx: MutationCtx, a: RunStep): Promise<void> {
       bytes += getDocumentSize(project)
       if (project.archived_at !== undefined) continue
     }
-    await recheckProject(ctx.db, { org_id, project_id })
+    await recheckProject(ctx.db, { org_id, project_id, due_by: cutoff })
   }
   const step = { now: a.now, repairs: a.repairs, tasks }
   if (!page.isDone) {
@@ -637,7 +637,7 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   let tasks = a.tasks ?? 0
   if (a.due !== undefined && a.due.rows === undefined)
     for (const project_id of a.due.projects)
-      await recheckProject(ctx.db, { org_id: a.due.org_id, project_id })
+      await recheckProject(ctx.db, { org_id: a.due.org_id, project_id, due_by: cutoff })
 
   let ids: string[]
   let cursor: string
@@ -669,7 +669,7 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     if (task === null) continue
     bytes += getDocumentSize(task)
     tasks += 1
-    await recheckProject(ctx.db, { org_id: task.org_id, project_id: id })
+    await recheckProject(ctx.db, { org_id: task.org_id, project_id: id, due_by: cutoff })
   }
   if (!isDone) {
     await ctx.scheduler.runAfter(0, archiveRunRef, { ...step, tasks })
@@ -688,7 +688,11 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
  * organization and project order, at most ARCHIVE_LIMITS.projects rows,
  * every row from before the run and those its find phase or a person wrote
  * since, except a row one of this run's legs wrote (from_run), which waits
- * for the next run. It keeps one row a project, deletes the others it reads
+ * for the next run. A run that overlaps a newer one, after the scheduler
+ * fell a day behind, also leaves the rows the newer run's find phase
+ * (due_by after its own threshold) or legs (from_run after its own `now`)
+ * wrote, because its chains check at its older threshold and would delete
+ * them unchecked. It keeps one row a project, deletes the others it reads
  * with it, also across steps, and gathers an organization's projects with
  * their rows, also across steps, into one chain, which it starts once it
  * passes them or once they reach ARCHIVE_LIMITS.projects. So a step writes
@@ -720,12 +724,15 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     due = undefined
   }
 
+  const cutoff = archiveCutoff(a.now)
   const page = await ctx.db
     .query('archive_rechecks')
     .withIndex('by_org_project')
     .paginate({ cursor: a.cursor ?? null, numItems: ARCHIVE_LIMITS.projects })
   for (const row of page.page) {
-    if (row.from_run === a.now) continue
+    // this run's or a newer run's, which that run or a later one hands
+    if (row.from_run !== undefined && row.from_run >= a.now) continue
+    if (row.due_by !== undefined && row.due_by > cutoff) continue
     if (due?.org_id === row.org_id && due.projects.at(-1) === row.project_id) {
       await ctx.db.delete(row._id)
       continue
@@ -757,7 +764,7 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     action: 'archive_done_issues',
     detail: { projects, repairs: a.repairs ?? 0, full, tasks: a.tasks ?? 0 },
   })
-  const through = archiveCutoff(a.now)
+  const through = cutoff
   const state = await ctx.db.query('archive_runs').first()
   // A row deleted while an incremental run ran stays deleted, so the next
   // run is full.
