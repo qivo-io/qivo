@@ -235,8 +235,9 @@ function once<T>(cache: Map<string, Promise<T>>, key: string, read: () => Promis
  * such teams not asked yet reads the organization's teams in one range
  * instead, while they are at most `orgTeams` for each of those teams and at
  * most `orgTeamsMost` and at most `bytes` as JSON, as the part's hard budget
- * counts this read too, and `orgTeamsMost` teams at lib/limits.ts
- * TEAM_ROW_MAX_BYTES are about 12 MB. 512 KiB holds about 1,700 teams of
+ * counts this read too, and `orgTeamsMost` teams are about 12.4 MB at the
+ * largest team row the name cap allows (about 3.1 KB) and about 16.4 MB at
+ * lib/limits.ts TEAM_ROW_MAX_BYTES. 512 KiB holds about 1,700 teams of
  * the largest row a deployment held on 2026-10-29 (273 bytes, about 307
  * JSON characters). JSON counts characters where Convex counts UTF-8 bytes,
  * so at the name caps the read can take up to about 2.3 times `bytes`
