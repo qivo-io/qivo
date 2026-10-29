@@ -870,9 +870,11 @@ export const ARCHIVED_PAGE_ROWS = 25
  * heads of about 130 such projects fill a page's bytes (ARCHIVE_PAGE.bytes,
  * convex/tests/archived.test.ts measures it); 200 keeps ordinary scopes
  * whole and leaves the rest to that budget. `rows` counts rows by number
- * only: each is at most lib/limits.ts PROJECT_ROW_MAX_BYTES, so 1,000 of
- * them are at most about 5 MB, which the page's budget then sees in its
- * metrics. Tests lower them. */
+ * only, and a read takes one row past it before it stops (counted): each
+ * is at most lib/limits.ts PROJECT_ROW_MAX_BYTES, so 1,001 of them are at
+ * most about 6.2 MB, about 4.9 MB at the largest project row the caps
+ * allow, which the page's budget then sees in its metrics. Tests lower
+ * them. */
 export const ARCHIVED_SCOPE = { ids: 50, subProjects: 200, teams: 64, rows: 1000 }
 
 /* What readScope answers for a scope it may not merge side by side and may
