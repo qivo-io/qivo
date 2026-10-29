@@ -122,10 +122,9 @@ const seatsOf = (t: T, profile: Doc<'profiles'>) =>
     ).filter((seat) => seat.id !== profile.id && seat.active),
   )
 
-/** An organization of its own for login `login`, in which a guest seat
- * sees one top-level project with two sub-projects, `sub` among them. */
-async function broadSeat(t: T, login: string, i: number) {
-  const org = await t.run(async (ctx) => {
+/** Organization number `i` of its own, with its counters, and its id. */
+const plantOrg = (t: T, i: number) =>
+  t.run(async (ctx) => {
     const id = uuid()
     await ctx.db.insert('organizations', {
       id,
@@ -140,6 +139,11 @@ async function broadSeat(t: T, login: string, i: number) {
     await ctx.db.insert('org_counters', { org_id: id, next_issue_num: 1, next_project_num: 4 })
     return id
   })
+
+/** An organization of its own for login `login`, in which a guest seat
+ * sees one top-level project with two sub-projects, `sub` among them. */
+async function broadSeat(t: T, login: string, i: number) {
+  const org = await plantOrg(t, i)
   const meta = await plantProject(t, { org_id: org })
   const sub = await plantProject(t, { org_id: org, type: 'project', parent_id: meta.id })
   await plantProject(t, { org_id: org, type: 'project', parent_id: meta.id })
@@ -625,6 +629,46 @@ describe('main Search across seats', () => {
     }
     for (const page of pages) expect(page).toEqual(pages[0])
     expect(pages[0].rows).toHaveLength(3)
+  })
+
+  it('answers alike whether a number names no task or a hidden task at the description limit', async () => {
+    const t = newT()
+    const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
+    // eight guest seats that see no project, so only number lookups read
+    const orgs: string[] = []
+    const seats: Doc<'profiles'>[] = []
+    for (let i = 0; i < 8; i++) {
+      const org = await plantOrg(t, i)
+      orgs.push(org)
+      seats.push(
+        await plantSeat(t, {
+          org_id: org,
+          auth_user_id: login,
+          org_role: 'guest',
+          accepted_at: NOW,
+        }),
+      )
+    }
+    const nums = Array.from({ length: 12 }, (_, i) => 901 + i)
+    const text = nums.map((num) => `QN-${num}`).join(' ')
+    const answer = async () => {
+      const { page } = await searchRun(t, seats, { text })
+      return { rows: page.rows, coverage: page.coverage, more: page.next_cursor !== null }
+    }
+    const absent = await answer()
+    // the last number now names a task in a project none of them sees,
+    // with a description at LIMITS.description in a three-byte script
+    const [first] = [...orgs].sort()
+    const root = await plantProject(t, { org_id: first })
+    const hidden = await plantProject(t, { org_id: first, type: 'project', parent_id: root.id })
+    await plantIssue(t, {
+      org_id: first,
+      project_id: hidden.id,
+      num: nums[11],
+      description: '中'.repeat(LIMITS.description.max),
+    })
+    expect(await answer()).toEqual(absent)
+    expect(absent).toEqual({ rows: [], coverage: COMPLETE, more: false })
   })
 
   it('keeps later seats and coverage alike whatever hidden tasks earlier organizations hold', async () => {
