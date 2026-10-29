@@ -223,6 +223,7 @@ export const SEARCH_RESERVE: ReadCeiling = {
 export const searchReads = (): OwnReads => ({
   ...OWN_READS,
   teams: Math.min(OWN_READS.teams, 64),
+  navTeams: Math.min(OWN_READS.navTeams, 64),
   lookups: Math.min(OWN_READS.lookups, 16),
   members: Math.min(OWN_READS.members, 64),
   roots: Math.min(OWN_READS.roots, 512),

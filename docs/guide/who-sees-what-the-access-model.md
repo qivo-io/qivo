@@ -81,7 +81,7 @@ opening sibling projects or the change history of the parent's own tasks.
 
 Qivo checks what you can see within fixed limits on every request. Very
 large access of your own can pass them, for example when you belong to more
-than 256 teams, or to more than 64 teams that together share over 1,000
+than 256 teams, or to more than 128 teams that together share over 1,000
 projects, or when your teams have to be checked one by one on many projects
 that are each shared with more than 64 teams. Qivo then says it could not
 finish checking which projects you can see and asks you to contact support,

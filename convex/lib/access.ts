@@ -319,23 +319,23 @@ export const isAccessUnchecked = (e: unknown): e is ConvexError<Refusal> =>
  *   ranges, 1,350 documents), their teams' shares (one range a team, 1,001
  *   documents, read once for the steps, sharesOn and the legacy path), the
  *   readiness row (1, 1) and the legacy path's grants (1, 1,001). The reach
- *   path adds all their memberships, at most 65 (1 range) and the root
- *   rows (65 ranges, 1,001): at most 139 ranges and 5,443 documents, the
+ *   path adds all their memberships, at most 129 (1 range) and the root
+ *   rows (129 ranges, 1,001): at most 267 ranges and 6,532 documents, the
  *   organization's teams for a parent it hands to the legacy path
- *   included. Past navTeams the legacy path adds the memberships, at most
+ *   included (2,049 rows). Past navTeams the legacy path adds the memberships, at most
  *   257, and the organization's teams (1 range, 4,001 rows, 512 KiB): at
  *   most 266 ranges and 7,611 documents, or 522 ranges where the
  *   organization's teams are past their bounds and each team is read by
  *   itself. Past `teams` teams it refuses after the memberships (4,001), at
- *   most 9 ranges and 6,353 documents. So one instance reads at most 266
+ *   most 9 ranges and 6,353 documents. So one instance reads at most 267
  *   ranges and 7,611 documents in `shared`, 522 ranges in that one case.
  *
  * A caller keeps room for those past its last look at its reads. A
  * workspace part's batch of 64 questions (lib/workspaceParts.ts PAGE.batch)
  * takes at most 384 ranges and 8,576 documents of questions, and with every
- * shared and instance read in the same batch 843 ranges and 16,508
+ * shared and instance read in the same batch 844 ranges and 16,508
  * documents, past the 896 and 16,000 Convex leaves past PAGE.hard by 508
- * documents. That needs a person in 65 to 256 teams with hundreds of
+ * documents. That needs a person in 129 to 256 teams with hundreds of
  * grants, whose first navigation question comes after PAGE.hard's last
  * look in a window of projects each shared with 64 teams; the person of the
  * review's finding (20 teams of 1,600 shares) reads 25 ranges and 1,342
@@ -353,7 +353,7 @@ export const OWN_READS = {
   orgTeams: 16,
   orgTeamsMost: 4000,
   bytes: 512 * 1024,
-  navTeams: 64,
+  navTeams: 128,
   roots: 1000,
   children: 4,
   navRows: 1000,
