@@ -25,8 +25,8 @@
  * read live here too. */
 
 import type { TransactionMetric, TransactionMetrics } from 'convex/server'
-import type { QueryCtx } from '../_generated/server'
 import type { Doc } from '../_generated/dataModel'
+import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { descriptionOf } from '../model/descriptions'
 import { type Grantee, navReady } from '../model/projectNav'
