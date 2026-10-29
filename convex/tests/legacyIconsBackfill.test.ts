@@ -26,7 +26,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
-import { deleteProject, installTrashTimers, itemFor, runSteps } from './trash.setup'
+import { deleteProject, installTrashTimers, itemFor, runSteps, storedRows } from './trash.setup'
 
 installTrashTimers()
 
@@ -67,6 +67,17 @@ async function drain(t: T, dry_run: boolean, first?: RunResult): Promise<RunResu
     cursor = got.cursor ?? undefined
   }
   throw new Error('the backfill did not finish in 200 calls')
+}
+
+/** A full dry run at the default page size and time, which must find
+ * nothing left in any phase. Answers it. */
+async function expectNoneLeft(t: T): Promise<RunResult> {
+  Object.assign(PAGE, DEFAULT_PAGE)
+  Object.assign(RUN, DEFAULT_RUN)
+  const again = await run(t, true)
+  expect(again).toMatchObject({ done: true, cursor: null, orgs: [] })
+  for (const phase of PHASES) expect(again.tables[phase]).toMatchObject(zero)
+  return again
 }
 
 /** The tables of `calls` together: the counts summed, the largest sizes
@@ -123,6 +134,20 @@ const cleared = (all: Everything) => ({
       : stored,
   ),
 })
+
+/** The project copies Deleted items keeps in item `itemId`. */
+const storedProjects = async (t: T, itemId: string) =>
+  (await storedRows(t, itemId)).flatMap((row) =>
+    row.row.table === 'projects' ? [row.row.doc] : [],
+  )
+
+/** That no document of `docs` holds either field. */
+function expectIconless(docs: object[]): void {
+  for (const doc of docs) {
+    expect(doc).not.toHaveProperty('icon')
+    expect(doc).not.toHaveProperty('icon_color')
+  }
+}
 
 /** The details of the backfill's audit rows, oldest first. */
 const audits = (t: T) =>
@@ -244,9 +269,7 @@ describe('the legacy icons backfill', () => {
       { projects: 3, teams: 1, deleted_projects: 1, done: true, cursor: null },
     ])
 
-    const again = await run(t, true)
-    for (const phase of PHASES) expect(again.tables[phase]).toMatchObject(zero)
-    expect(again.orgs).toEqual([])
+    const again = await expectNoneLeft(t)
     // a second run is safe and finds nothing to clear
     expect((await run(t, false)).tables).toEqual(again.tables)
   })
@@ -259,13 +282,16 @@ describe('the legacy icons backfill', () => {
     await trash(t, f, f.meta.id)
     expect((await run(t, false)).tables.deleted_projects.rows).toBe(3)
     const item = await itemFor(t, f.meta.id)
+    // the run cleared the copies, so the restore has nothing to leave out
+    const copies = await storedProjects(t, item.id)
+    expect(copies).toHaveLength(3)
+    expectIconless(copies)
     await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [item.id] })
     await runSteps(t)
     for (const p of [f.meta, f.sub, f.sub2]) {
       const back = await t.run((ctx) => byId(ctx, 'projects', p.id))
       expect(back).toMatchObject({ id: p.id, name: p.name })
-      expect(back).not.toHaveProperty('icon')
-      expect(back).not.toHaveProperty('icon_color')
+      expectIconless([back ?? {}])
     }
   })
 
@@ -301,9 +327,7 @@ describe('the legacy icons backfill', () => {
     const rows = await audits(t)
     expect(rows).toHaveLength(clearing.length)
     expect(rows.at(-1)).toMatchObject({ done: true, cursor: null })
-    Object.assign(PAGE, DEFAULT_PAGE)
-    const again = await run(t, true)
-    for (const phase of PHASES) expect(again.tables[phase]).toMatchObject(zero)
+    await expectNoneLeft(t)
   })
 
   it('records what committed when a page throws, and goes on from that page', async () => {
@@ -341,8 +365,7 @@ describe('the legacy icons backfill', () => {
     PAGE.rows = 10
     const calls = await drain(t, false, await run(t, false, failed.cursor ?? undefined))
     expect(summed(calls).projects.rows).toBe(21)
-    const again = await run(t, true)
-    for (const phase of PHASES) expect(again.tables[phase]).toMatchObject(zero)
+    await expectNoneLeft(t)
   })
 
   it('clears the copy of a project moved to Deleted items while it runs', async () => {
@@ -366,9 +389,10 @@ describe('the legacy icons backfill', () => {
       teams: { rows: 0 },
       deleted_projects: { rows: 1, icon: 1, icon_color: 1 },
     })
-    Object.assign(PAGE, DEFAULT_PAGE)
-    const again = await run(t, true)
-    for (const phase of PHASES) expect(again.tables[phase]).toMatchObject(zero)
+    const copies = await storedProjects(t, (await itemFor(t, moved.id)).id)
+    expect(copies.map((doc) => doc.id)).toEqual([moved.id])
+    expectIconless(copies)
+    await expectNoneLeft(t)
   })
 
   /** One page of `phase` from `cursor` as `page` clears it, and what it read
@@ -459,7 +483,6 @@ describe('the legacy icons backfill', () => {
     expect(got).toMatchObject({ done: true, cursor: null })
     expect(got.error).toBeUndefined()
     expect(got.tables).toEqual(dry.tables)
-    const again = await run(t, true)
-    for (const phase of PHASES) expect(again.tables[phase]).toMatchObject(zero)
+    await expectNoneLeft(t)
   }, 300_000)
 })
