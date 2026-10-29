@@ -667,6 +667,58 @@ describe('Deleted items', () => {
     await assertNoDanglingRefs(t, 'after a purge')
   })
 
+  it('stores the shown text of a task without a copy whose first row is stale, as a task item and in a project item, and restores it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const alone = await twoRows(t, f, f.sub.id, 'Old text', 'Current text')
+    const inProject = await twoRows(t, f, f.sub2.id, 'Old project text', 'Current project text')
+    // the task item's steps have not run, so both of its rows wait for them
+    Object.assign(TRASH_BUDGET, { ranges: 1 })
+    await deleteTask(t, f, alone.id)
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    expect(await backfill(t, { dry_run: true })).toMatchObject({
+      waiting: 2,
+      orphans: 0,
+      ids: { waiting: [alone.id, alone.id] },
+    })
+    // its steps delete every row of the task
+    await runSteps(t)
+    expect(await rowsOf(t, alone.id)).toEqual([])
+    // a project item's step deletes the row it stored the text from, and
+    // leaves the stale one to the backfill, an orphan once the item is ready
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+    expect(await rowsOf(t, inProject.id)).toMatchObject([{ description: 'Old project text' }])
+    expect(await backfill(t, { dry_run: true })).toMatchObject({
+      waiting: 0,
+      orphans: 1,
+      ids: { orphans: [inProject.id] },
+    })
+    expect((await storedIssue(t, alone.id))?.description).toBe('Current text')
+    expect((await storedIssue(t, inProject.id))?.description).toBe('Current project text')
+
+    const items = [(await itemFor(t, alone.id)).id, (await itemFor(t, f.sub2.id)).id]
+    await as(t, f.user).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: items })
+    await runSteps(t)
+    // the restore writes the stored text to one row of each task, the
+    // project task's left row included, and no copy
+    expect(await rowOf(t, alone.id)).toMatchObject({ description: 'Current text' })
+    expect(await rowOf(t, inProject.id)).toMatchObject({
+      description: 'Current project text',
+      project_id: f.sub2.id,
+    })
+    expect(await rowOf(t, inProject.id)).not.toHaveProperty('archived_at')
+    await expectNoCopy(t, [alone.id, inProject.id])
+    expect(await expectDescriptions(t, f.org.id)).toBe(2)
+    expect(await backfill(t, { dry_run: true })).toMatchObject({
+      skipped: 2,
+      differ: 0,
+      duplicates: 0,
+      orphans: 0,
+      waiting: 0,
+    })
+  })
+
   it('charges a move for both rows it reads of a task without a copy whose first row is stale', async () => {
     const t = newT()
     const f = await withOrg(t)
