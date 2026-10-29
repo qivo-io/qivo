@@ -923,9 +923,25 @@ describe('the task window on a task Search found that the workspace does not hol
     expect(details()?.textContent).toContain('Run the soak test')
   })
 
-  it('says a found task the archive does not hold is no longer here', async () => {
-    const { answer } = await openFound({ archived: false, inArchive: false })
+  it('says an active result the archive does not hold may still arrive, and shows it when it does', async () => {
+    const { answer, row } = await openFound({ archived: false, inArchive: false })
     expect(note()?.textContent).toBe('Loading QN-27…')
+    await answer()
+    // Search found it active, so the window does not say it was deleted
+    expect(note()?.textContent).toBe(
+      'QN-27 is not here yet. It may still be on its way, or you can no longer open it.',
+    )
+    expect(note()?.textContent).not.toContain('deleted')
+    expect(button('Restore')).toBeUndefined()
+    // the workspace brings it in, as once a held part arrives
+    snap.issues.push(row)
+    await act(async () => deliver(snap))
+    expect(document.querySelector('[data-task-gone]')).toBeNull()
+    expect(dialog()?.textContent).toContain('Run the soak test')
+  })
+
+  it('says an archived result the archive no longer holds is no longer here', async () => {
+    const { answer } = await openFound({ archived: true, inArchive: false })
     await answer()
     expect(note()?.textContent).toBe(
       'QN-27 is no longer here. It was deleted, or you can no longer open it.',

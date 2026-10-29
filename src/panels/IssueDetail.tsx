@@ -1252,7 +1252,12 @@ function TaskGone({
           ? canRestore
             ? `${task.key} was archived. Restore it to bring it back to the board.`
             : `${task.key} was archived. Someone who can edit its project can restore it from Archived tasks.`
-          : `${task.key} is no longer here. It was deleted, or you can no longer open it.`
+          : task.opened?.archived === false
+            ? // Search found it active, and the workspace may not be current
+              // yet, as while a part of it is held back or failed: it can
+              // still arrive, and then fills the window
+              `${task.key} is not here yet. It may still be on its way, or you can no longer open it.`
+            : `${task.key} is no longer here. It was deleted, or you can no longer open it.`
   // the note says the reason went unused, and points a screen reader at it
   const reasonId = useIdID()
   // the place of an archived task Search opened, read-only
