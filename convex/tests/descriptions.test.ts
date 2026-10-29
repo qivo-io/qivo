@@ -666,7 +666,51 @@ describe('Deleted items', () => {
     expect(await expectDescriptions(t, f.org.id)).toBe(1)
     await assertNoDanglingRefs(t, 'after a purge')
   })
+
+  it('charges a move for both rows it reads of a task without a copy whose first row is stale', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const filler = 'x'.repeat(300_000)
+    // the person's delete moves the first task of the project itself, then
+    // two tasks each with two rows of about 300 KB as its bytes allow
+    const lead = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    const first = await twoRows(t, f, f.sub2.id, `Old ${filler}`, `Current ${filler}`)
+    const second = await twoRows(t, f, f.sub2.id, `Old ${filler}`, `Current ${filler}`)
+    // the call spends a quarter of this, about 2.8 MB, which holds both
+    // tasks with one row read each, not the first with both of its rows read
+    TRASH_BUDGET.bytes = 11_200_000
+    await deleteProject(t, f, f.sub2.id)
+    expect(await liveTask(t, lead.id)).toBeNull()
+    expect(await liveTask(t, first.id)).toBeNull()
+    expect(await liveTask(t, second.id)).not.toBeNull()
+    Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
+    await runSteps(t)
+    for (const task of [first, second])
+      expect((await storedIssue(t, task.id))?.description).toBe(`Current ${filler}`)
+  })
 })
+
+/** A task in project `projectId` with no copy of its text, whose first
+ * description row has a stale archived copy and the text `old`, and whose
+ * second holds its copies and `current`, which readers show, as repeated
+ * rollbacks can leave it. */
+async function twoRows(t: T, f: OrgFixture, projectId: string, old: string, current: string) {
+  const task = await plantIssue(t, { org_id: f.org.id, project_id: projectId, description: old })
+  await t.run(async (ctx) => {
+    const [row] = await ctx.db
+      .query('issue_descriptions')
+      .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+      .collect()
+    await ctx.db.patch(row._id, { archived_at: NOW })
+    await ctx.db.insert('issue_descriptions', {
+      issue_id: task.id,
+      org_id: f.org.id,
+      project_id: projectId,
+      description: current,
+    })
+  })
+  return task
+}
 
 /** A task item whose restore splits off a subtask whose project was
  * purged, stopped after the split deleted the stored task row but before

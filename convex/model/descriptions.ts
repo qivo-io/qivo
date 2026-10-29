@@ -86,9 +86,16 @@ type TextOwner = Owner & Pick<Doc<'issues'>, 'description'>
  * as a duplicate, may read differently there when only a later row holds
  * the copies. */
 async function shownRow(db: Reader, task: Owner): Promise<Doc<'issue_descriptions'> | null> {
-  const rows = await firstRows(db, task.id)
-  return rows.find((row) => holdsCopies(row, task)) ?? rows[0] ?? null
+  return shownOf(await firstRows(db, task.id), task)
 }
+
+/* Of task `task`'s first two description rows, `rows`, the one readers
+ * take its text from (shownRow), or null for none. */
+const shownOf = (
+  rows: readonly Doc<'issue_descriptions'>[],
+  task: Owner,
+): Doc<'issue_descriptions'> | null =>
+  rows.find((row) => holdsCopies(row, task)) ?? rows[0] ?? null
 
 /** The first two description rows of task `issueId` in creation order, as
  * shownRow and patchTask read them, in one by_issue range of two documents
@@ -483,7 +490,7 @@ export async function patchTask(
  * give the first row new copies with this text, so the change keeps the
  * text readers showed. */
 export const shownText = (rows: readonly Doc<'issue_descriptions'>[], task: Owner): string =>
-  (rows.find((row) => holdsCopies(row, task)) ?? rows[0])?.description ?? ''
+  shownOf(rows, task)?.description ?? ''
 
 /** Unsets the copy of its text that task row `task` holds, which a release
  * before this one wrote, when `rows`, the task's first two description rows
@@ -521,17 +528,23 @@ export async function dropDescription(
  * row still holds, else with the text readers show from its description
  * rows (shownRow), or ''. Once a dry run of internal/descriptionsBackfill
  * reports no `differ` the copy equals the row, and taking it saves a
- * person's delete one read a task until the backfill's clear unsets the
- * copies. Reads the rows only without a copy, and answers the row it took,
- * for the caller's budget. A caller that deletes it as `known`
- * (model/deletedItems.ts clearTask) leaves a second row, which only a
- * rollback leaves, to the backfill, which counts it `waiting` while the
- * task's item is in its steps, then as an orphan its repair deletes. */
+ * person's delete its row reads until the backfill's clear unsets the
+ * copies. Reads the rows only without a copy, and answers `read`, every row
+ * it read, for the caller's budget: two when a rollback left a second row.
+ * `row` is the one it took the text from. A caller that deletes it as
+ * `known` (model/deletedItems.ts clearTask) leaves the other to the
+ * backfill, which counts it `waiting` while the task's item is in its
+ * steps, then as an orphan its repair deletes. */
 export async function withDescription(
   db: Reader,
   task: Doc<'issues'>,
-): Promise<{ task: Doc<'issues'>; row: Doc<'issue_descriptions'> | null }> {
-  if (task.description !== undefined) return { task, row: null }
-  const row = await shownRow(db, task)
-  return { task: { ...task, description: row?.description ?? '' }, row }
+): Promise<{
+  task: Doc<'issues'>
+  row: Doc<'issue_descriptions'> | null
+  read: Doc<'issue_descriptions'>[]
+}> {
+  if (task.description !== undefined) return { task, row: null, read: [] }
+  const read = await firstRows(db, task.id)
+  const row = shownOf(read, task)
+  return { task: { ...task, description: row?.description ?? '' }, row, read }
 }
