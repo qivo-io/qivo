@@ -21,13 +21,14 @@ import {
   canChangeAccess,
   canManageOwnProjectAccess,
   canManageProjectUsers,
-  canSeeProject,
   hasProjectLevel,
+  levelRank,
   NO_USER_MANAGEMENT,
+  projectLevel,
   rootMetaOf,
 } from '../lib/access'
 import { assertNewRowId, byId, insertUnique, newWindowKey } from '../lib/db'
-import type { GrantLevel, ProjectType } from '../lib/enums'
+import type { AccessLevel, GrantLevel, ProjectType } from '../lib/enums'
 import { descriptionForm, trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, type Refusal, require, rule } from '../lib/functions'
 import { limitedNumber, limitedText } from '../lib/limitRules'
@@ -297,18 +298,27 @@ export type ParentCheck =
  * Lead access to are refused with the create's own sentences
  * (projects_hierarchy_guard 0078:341-349, archive-parent guard 0106:68). The
  * lead picker of a new sub-project (model/projectSettings.ts
- * leadCandidatesOf) asks the same, so both say the same. Like canSeeProject,
- * it throws not_found for a parent whose own chain of parents is broken.
+ * leadCandidatesOf) asks the same, so both say the same.
+ *
+ * `levelOf` answers `me`'s level on the parent, navigation included, which
+ * decides both whether they see it (canSeeProject) and whether they have
+ * Lead access to it (hasProjectLevel). The create reads it with
+ * lib/access.ts projectLevel, which throws not_found for a parent whose own
+ * chain of parents is broken; a read passes accessOf's level, which answers
+ * the same within bounded reads.
  */
 export async function subProjectParent(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   parent: Doc<'projects'> | null,
+  levelOf: (parent: Doc<'projects'>) => Promise<AccessLevel | null> = (p) =>
+    projectLevel(ctx, me, p),
 ): Promise<ParentCheck> {
-  if (parent === null || !(await canSeeProject(ctx, me, parent))) return { state: 'missing' }
+  const level = parent === null ? null : await levelOf(parent)
+  if (parent === null || level === null) return { state: 'missing' }
   if (parent.type !== 'meta') return { state: 'refused', refusal: rule(PARENT_NOT_TOP_LEVEL) }
   if (parent.archived_at !== undefined) return { state: 'refused', refusal: rule(PARENT_ARCHIVED) }
-  if (!(await hasProjectLevel(ctx, me, parent.id, 'lead')))
+  if (levelRank(level) < levelRank('lead'))
     return { state: 'refused', refusal: forbidden(LEAD_ACCESS_NEEDED) }
   return { state: 'ok', parent }
 }

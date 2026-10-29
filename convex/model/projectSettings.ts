@@ -36,12 +36,12 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
   ACCESS_NEEDS_A_PERSON,
+  accessOf,
   canChangeAccess,
   canLeadProjects,
   canManageOwnProjectAccess,
   inMetaTree,
   NO_USER_MANAGEMENT,
-  projectLevel,
 } from '../lib/access'
 import type { ReadCeiling } from '../lib/archivedTasks'
 import { byId } from '../lib/db'
@@ -187,8 +187,16 @@ async function treeOf(
  * manages it (canManageOwnProjectAccess) reads it. Answers `unavailable`
  * for no project, one of another organization or outside a meta tree, and
  * one `me` neither sees nor manages; `archived` for an archived project `me`
- * sees or manages; else `ok`. Each predicate runs once. Both read the root
- * again, one range for a sub-project.
+ * sees or manages; else `ok`. Each predicate runs once.
+ *
+ * The level comes from lib/access.ts accessOf, which answers projectLevel's
+ * level within bounded reads: whether a top-level project shows to `me`
+ * for navigation comes from its sub-projects (one range) and `me`'s own
+ * grants, memberships and team shares, where projectLevel's walk reads each
+ * sub-project's grant and team shares and, for each share, its team and
+ * `me`'s membership, past Convex's 4,096 index ranges under a large shared
+ * project. canManageOwnProjectAccess reads the root again, one range for a
+ * sub-project.
  */
 export async function settingsGate(
   ctx: QueryCtx,
@@ -198,7 +206,8 @@ export async function settingsGate(
   if (project === null || project.org_id !== me.org_id) return { state: 'unavailable' }
   const tree = await treeOf(ctx, project)
   if (tree === null) return { state: 'unavailable' }
-  const level = await projectLevel(ctx, me, project)
+  const read = tree.parent === null ? [project] : [project, tree.parent]
+  const level = await accessOf(ctx, me, read).level(project.id)
   const manages = await canManageOwnProjectAccess(ctx, me, project)
   if (level === null && !manages) return { state: 'unavailable' }
   if (project.archived_at !== undefined) return { state: 'archived', project, parent: tree.parent }
@@ -912,13 +921,12 @@ export async function leadCandidatesOf(
       return refused(gate.project.type === 'meta' ? NO_USER_MANAGEMENT : LEAD_ACCESS_NEEDED)
     }
   } else if (a.parent_id !== undefined) {
+    // accessOf answers no level, so a missing parent, for a parent of
+    // another organization or outside a meta tree, as the create's
+    // projectLevel does, and also for one whose chain of parents is broken,
+    // where projectLevel throws
     const parent = await byId(ctx, 'projects', a.parent_id)
-    // a parent outside a meta tree reads as missing to the create too, and
-    // is told apart here before its broken chain of parents could throw
-    if (parent === null || parent.org_id !== me.org_id || (await treeOf(ctx, parent)) === null) {
-      return { state: 'unavailable' }
-    }
-    const check = await subProjectParent(ctx, me, parent)
+    const check = await subProjectParent(ctx, me, parent, (p) => accessOf(ctx, me, [p]).level(p.id))
     if (check.state === 'missing') return { state: 'unavailable' }
     if (check.state === 'refused') return refused(check.refusal.data.message)
     if (!canChangeAccess(me)) return refused(ACCESS_NEEDS_A_PERSON)

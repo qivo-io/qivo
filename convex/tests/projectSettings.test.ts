@@ -1524,11 +1524,15 @@ describe('real limits', () => {
     }
   }, 120_000)
 
-  it('reads the settings of a project with 300 sub-projects for someone who reaches only the last', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
+  /** A top-level project led by the fixture's user with 300 sub-projects,
+   * each shared with six teams the caller is not in, and a caller whose only
+   * grant is on the last, so the project shows to them for navigation only. */
+  async function farParent(t: T, f: OrgFixture) {
+    await keyOrg(t, f.org.id)
     const top = await meta(t, f, f.user)
     const me = await seat(t, f, 'Far member')
+    const crews: Doc<'teams'>[] = []
+    for (const name of names('Crew ', 6)) crews.push(await team(t, f.org.id, name))
     await t.run(async (ctx) => {
       for (let i = 0; i < 300; i++) {
         const id = uuid()
@@ -1539,6 +1543,7 @@ describe('real limits', () => {
           parent_id: top.id,
           key: `S${i}`,
           name: `Sub ${i}`,
+          name_key: `sub ${i}`,
           description: '',
           sort_order: i,
           num: 1000 + i,
@@ -1546,20 +1551,67 @@ describe('real limits', () => {
           created_at: NOW,
           window_key: newWindowKey(),
         })
+        for (const crew of crews)
+          await ctx.db.insert('project_team_access', {
+            project_id: id,
+            team_id: crew.id,
+            level: 'user',
+            name_key: crew.name_key,
+          })
         if (i === 299)
           await ctx.db.insert('project_access', {
             project_id: id,
             profile_id: me.id,
             level: 'user',
+            name_key: me.name_key,
           })
       }
     })
+    return { top, me }
+  }
+
+  it('reads the settings of a parent shown only for navigation, whose 300 sub-projects carry six team shares each, within the limits', async () => {
+    // the reference: canSeeProject's walk, without limits
+    const free = newT()
+    const plain = await withOrg(free)
+    const reference = await farParent(free, plain)
+    expect(
+      await free.run(async (ctx) => [
+        await canSeeProject(ctx, reference.me, reference.top),
+        await projectLevel(ctx, reference.me, reference.top),
+      ]),
+    ).toEqual([true, 'viewer'])
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const { top, me } = await farParent(t, f)
+    // the walk reads each sub-project's shares, their teams and memberships,
+    // past Convex's 4,096 index ranges
+    await expect(t.run((ctx) => canSeeProject(ctx, me, top))).rejects.toThrow(
+      /Too many index ranges/,
+    )
     const got = await measured(t, (ctx) =>
       projectSettingsOf(ctx, new Map([[f.org.id, me]]), top.id),
     )
-    console.log('get, a top-level project with 300 sub-projects, the grant on the last', got.read)
+    console.log(
+      'get, a parent shown for navigation, 300 sub-projects with six shares each',
+      got.read,
+    )
     expect(got.out).toMatchObject({ state: 'ok', level: 'viewer', can_edit: false })
-    expect(got.read.ranges).toBeLessThan(1000)
-    expect((await read.get(t, me, top.id)).state).toBe('ok')
+    expect(got.read.ranges).toBeLessThan(100)
+    // every read behind the gate answers within the limits
+    expect(await read.get(t, me, top.id)).toMatchObject({ state: 'ok', level: 'viewer' })
+    expect((await read.users(t, me, top.id)).state).toBe('ready')
+    expect((await read.teams(t, me, top.id)).state).toBe('ready')
+    for (const answer of [
+      await read.candidates(t, me, { project_id: top.id }),
+      await read.leadCandidates(t, me, { project_id: top.id }),
+      await read.inviteTarget(t, me, top.id, 'guest@testbed.test'),
+    ])
+      expect(answer).toEqual({ state: 'refused', message: NO_USER_MANAGEMENT })
+    // and a new sub-project under it is refused as the create refuses it
+    expect(await read.leadCandidates(t, me, { parent_id: top.id })).toEqual({
+      state: 'refused',
+      message: LEAD_ACCESS_NEEDED,
+    })
   }, 120_000)
 })
