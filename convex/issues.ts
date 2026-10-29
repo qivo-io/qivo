@@ -181,8 +181,9 @@ const NO_ARCHIVED_PAGE = { rows: [], next_cursor: null, scanned: 0 }
  * ARCHIVED_PAGE_ROWS when absent.
  *
  * Deprecated: `project_id` instead of `scope` names one project family as
- * tabs from before scopes ask, with that release's answer and `2~` cursors
- * (archiveFamily). Remove it once no served build calls it. */
+ * tabs from before scopes ask (archiveFamily), with that release's rows,
+ * which now carry the list fields too, and its `2~` cursors. Remove it once
+ * no served build calls it. */
 export const archivedPage = authedQuery({
   args: {
     scope: v.optional(

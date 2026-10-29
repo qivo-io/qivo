@@ -19,8 +19,8 @@
  * app's page asks for some projects of one organization or for all of them
  * (ArchivedPageScope). Both search with archivedTaskMatcher, the task search
  * rule (lib/search.ts taskSearchText) that reads a task's labels, assignee
- * and subtasks only when they can change the answer, and never the
- * organization's roster or more than ARCHIVE_LABELS.scan of its labels. The
+ * and subtasks only when they can change the answer, never the
+ * organization's roster, and its labels only up to ARCHIVE_LABELS.scan. The
  * organization's matching labels and roster names that active task lists
  * read live here too. */
 
