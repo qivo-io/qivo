@@ -149,9 +149,10 @@ export const PAGE_READS: ReadCeiling = { ranges: 300, documents: 1_000, bytes: 3
 
 /* The most one step of a seat or of the page reserves, which it reserves
  * against the real limit before it reads (readBudget): two documents at
- * Convex's size limit, a task's two description rows or a project and the
- * top-level project above it, and the access rows a project's first check
- * reads after the reservation. */
+ * Convex's size limit, a task's two description rows, which text stored
+ * before the caps can make that large, or a project and the top-level
+ * project above it, at most twice lib/limits.ts PROJECT_ROW_MAX_BYTES, and
+ * the access rows a project's first check reads after the reservation. */
 const STEP: ReadCeiling = {
   ranges: 16,
   documents: 64,
@@ -171,7 +172,15 @@ const SLACK: ReadCeiling = { ranges: 64, documents: 256, bytes: 512 << 10 }
  * it costs the same, so what it read changes no decision. It holds what
  * such a lookup reads at the sizes rows have under the caps: the task row,
  * the project and top-level project the verdict reads, and their access
- * rows. Tests read it. */
+ * rows. With both projects at lib/limits.ts PROJECT_ROW_MAX_BYTES and a
+ * task row as the third release of the description move writes it,
+ * without its text, a lookup by a seat without team access reads about 13
+ * KB (measured). A task row that still holds its text's copy until the
+ * description backfill's clear, about 61 KB at the cap in a three-byte
+ * script, makes it about 73 KB, and a seat in teams that share the projects
+ * reads about 9 KB more a share at the name caps; that difference falls to
+ * the real limit, as coverageOf says of a lookup that reads more than
+ * LOOKUP holds. Tests read it. */
 export const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 }
 
 /** What a call keeps back from Convex's limits for the reads its budget
@@ -182,10 +191,9 @@ export const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 
  * within their own allowances (allowancesOf). What no budget bounds
  * is accessOf's own reads when it asks whether a top-level project shows
  * for navigation: all of the person's grants, memberships and team shares,
- * and the teams those name, which lib/access.ts reads whole, and a team row
- * can hold a legacy icon of any size. internal/legacyIconsBackfill clears
- * those icons, and once a later release drops the fields, each of these
- * team reads costs at most one small team row. Tests lower it. */
+ * and the teams those name, which lib/access.ts reads whole. Each of those
+ * team reads costs at most lib/limits.ts TEAM_ROW_MAX_BYTES, but their
+ * number is the person's, which nothing bounds yet. Tests lower it. */
 export const SEARCH_RESERVE: ReadCeiling = {
   ranges: OWN_READS.teams + 64,
   documents: 2 * OWN_READS.rows + OWN_READS.orgTeamsMost,
@@ -419,8 +427,7 @@ type Stops = {
  *   SLACK under it, so it stops a read before the read's own allowance
  *   does only once earlier reads passed what they were counted at by more
  *   than SLACK holds: rows near Convex's 1 MiB document size (a task, or a
- *   project whose older description, or legacy icon until
- *   internal/legacyIconsBackfill clears it, is that large), a number
+ *   project with a description stored before the caps), a number
  *   lookup that reads more than LOOKUP holds (a hidden task or project row
  *   over the caps), or an access check that reads many rows, for a person
  *   in many teams or a project shared with many.
