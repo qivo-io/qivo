@@ -6,10 +6,13 @@ import {
   parseSeedArgs,
   planArchive,
   planInbox,
+  planRelations,
   planSeed,
+  relationId,
   runBoardScaleSeed,
   seededTask,
   seededTasks,
+  threeByteText,
 } from './board-scale-seed.mjs'
 
 /* A local backend the seed talks to: Nora and the people in `fake.people`,
@@ -32,6 +35,8 @@ const fake = vi.hoisted(() => ({
   tokens: [],
   keys: [],
   usage: [],
+  // the sub-projects the workspace holds, the one below when null
+  projects: null,
 }))
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
@@ -101,7 +106,7 @@ vi.mock('convex/browser', () => ({
         'workspace:people': { state: 'ok', profiles: [], teamMembers: [] },
         'workspace:projects': {
           state: 'ok',
-          projects: [{ id: 'sub', org_id: 'org', type: 'project' }],
+          projects: fake.projects ?? [{ id: 'sub', org_id: 'org', type: 'project' }],
           access: [],
           teamAccess: [],
           milestones: [],
@@ -808,5 +813,197 @@ describe('board-scale-seed credentials', () => {
     ])
     fake.tokens = []
     fake.keys = []
+  })
+})
+
+describe('board-scale-seed --relations', () => {
+  const KEYS = [
+    'ELEC',
+    'FW',
+    'MECH',
+    'TEST',
+    'MFG',
+    'UX',
+    'WEB',
+    'API',
+    'REL',
+    'CUST',
+    'BRAND',
+    'CS',
+  ]
+  const projects = new Map(KEYS.map((key) => [key, `project-${key}`]))
+  const people = new Map(
+    ['nora', 'leo', 'aisha', 'emil', 'daniel', 'sofia', 'ben'].map((key) => [key, `person-${key}`]),
+  )
+  const nothing = () => ({ projects: new Set(), tasks: new Set(), links: new Set() })
+  const plan = (present = nothing()) => planRelations({ org: 'org', projects, people, present })
+  const count = (list, key) => {
+    const out = {}
+    for (const item of list) out[item[key]] = (out[item[key]] ?? 0) + 1
+    return out
+  }
+
+  it('takes --relations without a value', () => {
+    expect(parseSeedArgs(local).relations).toBe(false)
+    expect(parseSeedArgs([...local, '--tasks', '0', '--relations'])).toMatchObject({
+      tasks: 0,
+      relations: true,
+    })
+    expect(() => parseSeedArgs([...local, '--relation'])).toThrow('Unknown option --relation.')
+  })
+
+  it('plans a Firmware task at both caps, with every status, owner and relation kind', () => {
+    const all = plan()
+    const family = relationId('family')
+    expect(all.projects.map((p) => [p.key, p.type, p.lead_id])).toEqual([
+      ['PART', 'meta', 'person-nora'],
+      ['PFLD', 'project', 'person-nora'],
+    ])
+    expect(all.tasks[0]).toMatchObject({
+      id: family,
+      project_id: 'project-FW',
+      title: 'Coordinate the pilot firmware release',
+      status: 'progress',
+      assignee_id: 'person-aisha',
+    })
+    const kids = all.tasks.filter((t) => t.parent_id === family)
+    expect(kids).toHaveLength(LIMITS.subtasks.max)
+    expect(new Set(kids.map((t) => t.project_id))).toEqual(new Set(['project-FW']))
+    expect(count(kids, 'status')).toEqual({
+      backlog: 20,
+      todo: 20,
+      progress: 20,
+      review: 20,
+      done: 20,
+    })
+    expect(Object.values(count(kids, 'assignee_id'))).toEqual([20, 20, 20, 20, 20])
+    // a reviewer, never the assignee, owns each subtask In Review
+    for (const kid of kids)
+      if (kid.status === 'review') expect(kid.reviewer_id).not.toBe(kid.assignee_id)
+      else expect(kid.reviewer_id).toBeNull()
+    expect(kids.filter((t) => t.remaining_hours !== null)).toHaveLength(34)
+    // each subtask's text is at the cap, three bytes a letter
+    for (const t of [all.tasks[0], ...kids]) {
+      expect(t.description).toHaveLength(LIMITS.description.max)
+      expect(Buffer.byteLength(t.description)).toBe(3 * LIMITS.description.max)
+    }
+    // one link to each task made for it, in turn Blocks, Blocked by and Relates to
+    expect(all.links).toHaveLength(LIMITS.links.max)
+    const ends = all.links.map((l) => (l.source_id === family ? l.target_id : l.source_id))
+    expect(new Set(ends).size).toBe(LIMITS.links.max)
+    expect(all.links.every((l) => l.source_id === family || l.target_id === family)).toBe(true)
+    const kinds = all.links.map((l) =>
+      l.type === 'relates' ? 'relates' : l.source_id === family ? 'blocks' : 'blocked_by',
+    )
+    expect(
+      count(
+        kinds.map((kind) => ({ kind })),
+        'kind',
+      ),
+    ).toEqual({
+      blocks: 34,
+      blocked_by: 33,
+      relates: 33,
+    })
+    for (const l of all.links.filter((x) => x.type === 'relates'))
+      expect(l.source_id < l.target_id).toBe(true)
+    const byId = new Map(all.tasks.map((t) => [t.id, t]))
+    const places = ends.map((id) => byId.get(id).project_id)
+    const sensor = ['ELEC', 'FW', 'MECH', 'TEST', 'MFG'].map((k) => `project-${k}`)
+    expect(places.filter((p) => sensor.includes(p))).toHaveLength(70)
+    expect(places.filter((p) => p === relationId('sub-project'))).toHaveLength(15)
+    expect(
+      places.filter((p) => !sensor.includes(p) && p !== relationId('sub-project')),
+    ).toHaveLength(15)
+    expect(new Set(ends.map((id) => byId.get(id).status)).size).toBe(5)
+    // five linked tasks are groups with one subtask each
+    const groups = all.tasks.filter((t) => t.parent_id && t.parent_id !== family)
+    expect(groups).toHaveLength(5)
+    expect(new Set(groups.map((t) => t.parent_id)).size).toBe(5)
+    for (const sub of groups) expect(sub.project_id).toBe(byId.get(sub.parent_id).project_id)
+    // the partner tasks are named apart, for a search of what reaches others
+    const partner = all.tasks.filter((t) => t.project_id === relationId('sub-project'))
+    expect(partner.every((t) => t.title.includes('Fjordline'))).toBe(true)
+    expect(all.tasks.filter((t) => t.title.includes('Fjordline'))).toEqual(partner)
+    // 20 Done subtasks; the open hours count review time for In Review ones
+    expect(all.expected).toEqual({
+      family,
+      subtasks: 100,
+      links: 100,
+      done: 20,
+      total: 100,
+      remaining: 133,
+    })
+    expect(all.tasks).toHaveLength(206)
+    expect(new Set(all.tasks.map((t) => t.id)).size).toBe(206)
+  })
+
+  it('adds only what a rerun finds missing, with the same ids', () => {
+    const first = plan()
+    expect(plan().tasks.map((t) => t.id)).toEqual(first.tasks.map((t) => t.id))
+    const half = {
+      projects: new Set(first.projects.map((p) => p.id)),
+      tasks: new Set(first.tasks.slice(0, 103).map((t) => t.id)),
+      links: new Set(first.links.slice(0, 40).map((l) => l.id)),
+    }
+    const rest = plan(half)
+    expect(rest.projects).toEqual([])
+    expect(rest.tasks.map((t) => t.id)).toEqual(first.tasks.slice(103).map((t) => t.id))
+    expect(rest.links.map((l) => l.id)).toEqual(first.links.slice(40).map((l) => l.id))
+    // the totals describe the whole family, whatever is missing
+    expect(rest.expected).toEqual(first.expected)
+    const full = {
+      projects: half.projects,
+      tasks: new Set(first.tasks.map((t) => t.id)),
+      links: new Set(first.links.map((l) => l.id)),
+    }
+    expect(plan(full)).toMatchObject({ projects: [], tasks: [], links: [] })
+  })
+
+  it('writes three-byte text of the length asked', () => {
+    expect(threeByteText(0)).toBe('')
+    expect(threeByteText(5)).toHaveLength(5)
+    expect(Buffer.byteLength(threeByteText(1000))).toBe(3000)
+  })
+
+  it('makes the projects, then the tasks, then the links, as Nora', async () => {
+    fake.projects = KEYS.map((key) => ({
+      id: `project-${key}`,
+      key,
+      org_id: 'org',
+      type: 'project',
+    }))
+    fake.people = ['leo', 'aisha', 'emil', 'daniel', 'sofia', 'ben'].map((key) => ({
+      id: `person-${key}`,
+      email: `${key}@demo.qivo.io`,
+      auth_user_id: `${key}-login`,
+      org_id: 'org',
+      kind: 'person',
+      active: true,
+    }))
+    fake.issues = []
+    fake.calls = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--relations'], { env, log: () => {} })
+    } finally {
+      fake.projects = null
+      fake.people = []
+    }
+    const names = fake.calls.map(([name]) => name)
+    expect(
+      count(
+        names.map((name) => ({ name })),
+        'name',
+      ),
+    ).toEqual({
+      'projects:create': 2,
+      'issues:create': 206,
+      'issues:addLink': 100,
+    })
+    expect(names.slice(0, 3)).toEqual(['projects:create', 'projects:create', 'issues:create'])
+    expect(names.at(-1)).toBe('issues:addLink')
+    expect(new Set(fake.calls.map(([, , as]) => as))).toEqual(new Set(['nora-login']))
+    const subtask = fake.calls.find(([name, f]) => name === 'issues:create' && f.parent_id)
+    expect(subtask[1]).toMatchObject({ assignee_id: 'person-aisha', project_id: 'project-FW' })
   })
 })
