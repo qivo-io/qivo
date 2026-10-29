@@ -44,14 +44,15 @@ export const JOINED_PAGE_SIZE = 10
  * beside the page's own rows. */
 export const ISSUES_PAGE_SIZE = 6
 /* An issue_links page read while a project item is in flight. Each row can
- * also read its target task and the target's project, each up to Convex's
- * 1 MiB document limit, so 4 rows plus the page's own rows stay under the
- * 16 MiB read limit. */
+ * also read its target task, up to Convex's 1 MiB document limit, and the
+ * target's project, at most lib/limits.ts PROJECT_ROW_MAX_BYTES, so 4 rows
+ * plus the page's own rows stay under the 16 MiB read limit. */
 export const IN_FLIGHT_LINKS_PAGE_SIZE = 4
 /* An issues page read while a project item is in flight. Each row can also
  * read the task's project, its parent and the parent's project, and its
- * text, two description rows at most, five documents of up to 1 MiB, so 2
- * rows plus the page's own rows stay under the 16 MiB read limit. */
+ * text, two description rows at most: three documents of up to 1 MiB and
+ * two projects of at most lib/limits.ts PROJECT_ROW_MAX_BYTES, so 2 rows
+ * plus the page's own rows stay under the 16 MiB read limit. */
 export const IN_FLIGHT_ISSUES_PAGE_SIZE = 2
 export const PAGE_BYTES = 1024 * 1024
 const JOINED_SECTIONS: ReadonlySet<OrgExportSection> = new Set([
@@ -406,8 +407,9 @@ async function stillParent(
  * organization from `cursor`. Only agents have agent keys, so agent_keys
  * keeps the agents alone. While a deleted item is in flight a task under a
  * project that is not live stays out with its rows, so the page then reads
- * each task's project, on a page of JOINED_PAGE_SIZE tasks because a
- * project can carry a large description. */
+ * each task's project, on a page of JOINED_PAGE_SIZE tasks, set while a
+ * project row had no size bound. A project is at most lib/limits.ts
+ * PROJECT_ROW_MAX_BYTES now. */
 async function parentPage(
   ctx: QueryCtx,
   orgId: string,

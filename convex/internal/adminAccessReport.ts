@@ -163,8 +163,9 @@ const PAGE = { projects: 4_000, work: 2_000, machine: 2_000 }
  * check, which is one task of at most Convex's 1 MiB document limit, or one
  * admin's first navigation answer of the page. That answer reads the
  * admin's own rows twice (OWN), the organization's teams once
- * (lib/access.ts OWN_READS, at most 4,000 rows and 512 KiB) and the
- * parent's sub-projects twice (SUBS). Tests lower it. */
+ * (lib/access.ts OWN_READS, at most 4,000 rows and 512 KiB as JSON, about
+ * 1.2 MiB at the name caps) and the parent's sub-projects twice (SUBS).
+ * Tests lower it. */
 export const ROOM = { share: 0.5 }
 
 /** The most sub-projects of one parent, and their bytes as Convex counts a
@@ -176,8 +177,10 @@ export const ROOM = { share: 0.5 }
  * page leaves past its room (ROOM). Twice 2 MiB is half of that half's 8
  * MiB, and twice 1,000 documents an eighth of its 16,000. A sub-project
  * holds a name of at most 80 characters and a description of at most 500,
- * at most about 2.5 KiB, and may hold a legacy icon of any length, which the
- * byte bound covers. A parent with more is `unchecked`. Tests lower them. */
+ * at most lib/limits.ts PROJECT_ROW_MAX_BYTES (about 4.9 KB with a name
+ * whose key NFKD expands), so near that size `bytes` ends the read before
+ * `most`, at about 425 sub-projects. A parent with more is `unchecked`.
+ * Tests lower them. */
 export const SUBS = { most: 1_000, bytes: 2 * MIB }
 
 /** The most of an admin's own rows, their grants, team memberships and the
@@ -213,7 +216,8 @@ export const SHARES = { most: 250 }
  * makes the admins' levels again, which then read their own rows again. A
  * part's bytes count the parents it reads as well as its projects, and it
  * ends once they pass PART.bytes, so it reads at most PART.bytes and one
- * project and one parent more, each at most Convex's 1 MiB document limit.
+ * project and one parent more, each at most lib/limits.ts
+ * PROJECT_ROW_MAX_BYTES.
  * It is read past the room check before it, and the page asks its room
  * again before it judges the part's first project, so the part and one
  * navigation answer (ROOM, OWN, SUBS) never follow one check together past
