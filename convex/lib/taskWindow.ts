@@ -26,11 +26,11 @@
  * out with its id and the other end's.
  *
  * A task body is one document of up to Convex's 1 MiB while descriptions
- * stay on task rows, and a project row can be as large with a legacy icon,
- * so the subtask read and the read of link ends take bodies, and ask the
- * caller's access about projects, only as far as TASK_WINDOW allows. A
- * read takes no more of them at a time than what it has left holds at that
- * size, in bytes, documents and index ranges (budgetIn), as
+ * stay on task rows, so the subtask read and the read of link ends take
+ * bodies, and ask the caller's access about projects (PROJECT), only as far
+ * as TASK_WINDOW allows. A read takes no more of them at a time than what
+ * it has left holds at that size, in bytes, documents and index ranges
+ * (budgetIn), as
  * model/comments.ts newestComments steps by bytes, and a list it stops
  * early answers `complete: false` with the rows it read, never an
  * error. Every row a list
@@ -45,7 +45,7 @@ import { type Access, accessOf } from './access'
 import { archivedRowOf } from './archivedTasks'
 import { byId } from './db'
 import type { AccessLevel } from './enums'
-import { MIB } from './limits'
+import { MIB, PROJECT_ROW_MAX_BYTES, TEAM_ROW_MAX_BYTES } from './limits'
 import { parseIssueRef } from './taskRefs'
 import { linkShown, parentLink } from './workingSet'
 import { relationRow, type TaskRow, taskFields } from './workspaceParts'
@@ -67,10 +67,16 @@ import { relationRow, type TaskRow, taskFields } from './workspaceParts'
  * while PROJECT fits. Only a group check may take one body more while some
  * of every count is left. So a read passes a cap by one task body at most,
  * besides the reads PROJECT leaves out. Its worst case is the cap, 1 MiB
- * past it and the shared reads (up to about 1 MiB with OWN_READS's 512 KiB
- * of the organization's teams): about 10 MiB for a task and 15 MiB for its
- * links, under Convex's 16 MiB, and the shared reads' few hundred ranges
- * and documents past `ranges` and `documents`, under 4,096 and 32,000. At
+ * past it and the shared reads (the person's own rows, and up to about 1.2
+ * MiB of the organization's teams at OWN_READS's 512 KiB, which counts
+ * JSON): about 10 MiB for a task and 15 MiB for its links, under Convex's
+ * 16 MiB, and the shared reads' few hundred ranges and documents past
+ * `ranges` and `documents`, under 4,096 and 32,000. A step asks about at
+ * most one new project for each body it counts at 1 MiB, so a project
+ * shared with more teams than PROJECT holds passes a cap only once its
+ * reads and its task's body pass 1 MiB: past about 110 shares on it and
+ * its top-level project at the name caps, about 9 KB a share with the
+ * caller's membership and the team. At
  * the 20,000-character description cap in a three-byte script, 100
  * subtasks read about 6.1 MB, and fit in `bytes` with the task, its text
  * and its parent. A linked group also reads its first counting subtask
@@ -114,14 +120,26 @@ type Reads = { bytes: number; documents: number; ranges: number }
  * open. */
 const BODY: Reads = { bytes: DOCUMENT_MAX_BYTES, documents: 1, ranges: 1 }
 
+/** The team shares PROJECT holds on a project and on its top-level
+ * project each, as lib/archivedTasks.ts ARCHIVE_RESERVE holds a project
+ * shared with about ten teams. */
+const SHARES = 10
+
 /** What the caller's access reads for a project it has not read yet
- * (lib/access.ts projectLevelsOf): the project's row and its top-level
- * project's, each up to Convex's size limit with a legacy icon, and the
- * caller's grant and the team shares on each, small rows. Two reads PROJECT
- * leaves out count at the next look at the budget: the teams those shares
- * name, read once each a query, and the sub-projects navigation reads
- * under a top-level project the caller holds no level on. */
-const PROJECT: Reads = { bytes: 2 * DOCUMENT_MAX_BYTES, documents: 8, ranges: 6 }
+ * (lib/access.ts projectLevelsOf), on the project and on its top-level
+ * project: the row, at most lib/limits.ts PROJECT_ROW_MAX_BYTES, the
+ * caller's grant and the range of its team shares, and for each of SHARES
+ * shares the share, the caller's membership and the team, each at most
+ * TEAM_ROW_MAX_BYTES and read once a query. A project shared with more
+ * teams reads up to three more such rows and two more ranges a share, as
+ * nothing bounds the shares on one project, which counts at the next look
+ * at the budget, as do the sub-projects navigation reads under a top-level
+ * project the caller holds no level on. */
+const PROJECT: Reads = {
+  bytes: 2 * (PROJECT_ROW_MAX_BYTES + (1 + 3 * SHARES) * TEAM_ROW_MAX_BYTES),
+  documents: 2 * (2 + 3 * SHARES),
+  ranges: 2 * (3 + 2 * SHARES),
+}
 
 /** What a list keeps back for the group check (groupsOf) of each row it
  * read, so the checks can run once the list's own reads have taken what
