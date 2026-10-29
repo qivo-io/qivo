@@ -392,7 +392,11 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
         variant="ghost"
         size="sm"
         data-palette-retry
-        onClick={() => ask(failed.ask, failed.starts, failed.move)}
+        onClick={() => {
+          // the button goes with the failure, so focus goes to the search
+          restoreFocus(inputRef.current)
+          ask(failed.ask, failed.starts, failed.move)
+        }}
       >
         <Icon name="rotateCcw" size={16} />
         Retry

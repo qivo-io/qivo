@@ -592,7 +592,10 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     await last().fail()
     expect(status()).toBe("Couldn't search. Try again.")
     expect(values()).toEqual([])
+    // Retry takes focus, as a person presses it, and leaves with the failure
+    find('[data-palette-retry]').focus()
     await click(find('[data-palette-retry]'))
+    expect(document.activeElement).toBe(input())
     expect(calls.map((c) => c.args)).toEqual([
       { text: 'firm', include_archived: false },
       { text: 'firm', include_archived: false },
@@ -603,7 +606,9 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     await last().fail()
     expect(values()).toEqual(['issue-QN-14'])
     expect(status()).toBe("Couldn't search. Try again.")
+    find('[data-palette-retry]').focus()
     await click(find('[data-palette-retry]'))
+    expect(document.activeElement).toBe(input())
     expect(last().args.cursor).toBe('c1')
     // a cursor the server no longer takes restarts at the first page, once
     await last().refuse('bad_request', 'cursor must be the next_cursor of an earlier page')
