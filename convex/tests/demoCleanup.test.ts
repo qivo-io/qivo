@@ -907,6 +907,38 @@ describe('public Northstar provisioning and bounded deletion', () => {
     expect((await rows(t, b.org_id!)).tasks).toHaveLength(MARKETING_DEMO.issues.length)
   }, 60_000)
 
+  it("stops a demo's collecting export when its cleanup begins, and erases its parts", async () => {
+    const t = testBackend()
+    const a = await makeDemo(t)
+    const orgId = a.org_id as string
+    const visitor = t.withIdentity({ subject: a.auth_user_id })
+    const { export_id } = await visitor.mutation(api.orgExport.request, { org_id: orgId })
+    const step = makeFunctionReference<'action', { export_id: string }, null>('orgExport:step')
+    await t.action(step, { export_id })
+    const partsOf = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('org_export_parts')
+          .withIndex('by_export_seq', (q) => q.eq('export_id', export_id))
+          .collect(),
+      )
+    const files = (await partsOf()).map((part) => part.storage_id)
+    expect(files).toHaveLength(1)
+    await t.run((ctx) => ctx.db.patch(a._id, { status: 'deleting' }))
+    await t.action(step, { export_id })
+    await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0), 1000)
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query('org_exports')
+          .withIndex('by_uuid', (q) => q.eq('id', export_id))
+          .unique(),
+      ),
+    ).toMatchObject({ state: 'failed', error: { code: 'org_deleting' } })
+    expect(await partsOf()).toEqual([])
+    for (const file of files) expect(await t.run((ctx) => ctx.db.system.get(file))).toBeNull()
+  })
+
   it('deletes the export rows an earlier release left after the activity phase', async () => {
     const t = testBackend()
     const a = await makeDemo(t)

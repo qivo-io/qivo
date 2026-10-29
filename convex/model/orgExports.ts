@@ -86,9 +86,9 @@ export const STALLED_MS = 60_000
 /** The restarts without a committed step before a job fails as stalled. */
 export const RESTARTS = 3
 
-/* The request rows a check reads before it fails closed (requesterIsAdmin):
+/** The request rows a check reads before it fails closed (requesterIsAdmin):
  * the first in order whose admin is still one lets the job go on. */
-const AUTHORITY_READS = 32
+export const AUTHORITY_READS = 32
 
 /** Why a job fails, each with the sentence its status shows. */
 export const STOP_MESSAGES = {

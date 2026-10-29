@@ -34,6 +34,7 @@ import { deleteOrgStep, wipeWorkStep } from '../model/orgDeletion'
 import { PAGE_BYTES, readBatch } from '../model/orgExportRead'
 import {
   ARCHIVE_TTL_MS,
+  AUTHORITY_READS,
   EXPORT_LIMITS,
   HISTORY_MS,
   RESTARTS,
@@ -987,6 +988,75 @@ describe('organization export job', () => {
       error: { code: 'no_admin' },
     })
     expect(await partsOf(t, export_id)).toEqual([])
+  })
+
+  it('stops a job whose sole requester is deactivated, and erases its parts', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, {
+      org_id: f.org.id,
+    })
+    await t.action(internal.orgExport.step, { export_id })
+    const files = (await partsOf(t, export_id)).map((part) => part.storage_id)
+    expect(files).toHaveLength(1)
+    await t.run((ctx) => ctx.db.patch(f.admin._id, { active: false }))
+    await settle(t)
+    expect(await jobOf(t, export_id)).toMatchObject({
+      state: 'failed',
+      error: { code: 'no_admin' },
+    })
+    expect(await partsOf(t, export_id)).toEqual([])
+    for (const file of files) expect(await exists(t, file)).toBe(false)
+  })
+
+  it("does not count a profile created after the request under the requester's id", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, {
+      org_id: f.org.id,
+    })
+    // the requester is removed and a new admin profile takes their id
+    vi.advanceTimersByTime(1000)
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...seat } = f.admin
+      await ctx.db.delete(_id)
+      await ctx.db.insert('profiles', { ...seat, name: 'Not the requester' })
+    })
+    await settle(t)
+    expect(await jobOf(t, export_id)).toMatchObject({
+      state: 'failed',
+      error: { code: 'no_admin' },
+    })
+  })
+
+  it("fails closed once AUTHORITY_READS request rows before an admin's are not admins", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    /** A job asked for by the admin and by `others` profiles that are no
+     * admins here, whose request rows come first. */
+    const withOthers = async (others: number) => {
+      const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, {
+        org_id: f.org.id,
+      })
+      await t.run(async (ctx) => {
+        for (let i = 0; i < others; i++)
+          await ctx.db.insert('org_export_requests', {
+            export_id,
+            org_id: f.org.id,
+            // ids before every uuid of the fixture, of no profile
+            profile_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+            requested_at: NOW,
+          })
+      })
+      await t.action(internal.orgExport.step, { export_id })
+      return export_id
+    }
+    const within = await withOthers(AUTHORITY_READS - 1)
+    expect(await jobOf(t, within)).toMatchObject({ state: 'collecting', step: { n: 1 } })
+    // a new request needs the collecting job to end first
+    await as(t, f.admin).mutation(api.orgExport.cancel, { org_id: f.org.id, export_id: within })
+    const past = await withOthers(AUTHORITY_READS)
+    expect(await jobOf(t, past)).toMatchObject({ state: 'failed', error: { code: 'no_admin' } })
   })
 
   it('fails a job that would pass the archive size cap and erases its parts', async () => {
