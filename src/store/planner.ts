@@ -6805,6 +6805,11 @@ export const PLANNER = {
     const key = `${ISSUE_PREFIX}-${data.num}`
     return { row: shapeArchivedIssue(data, handleFor(data.id, data.org_id, key), key) }
   },
+  /** Whether the snapshot holds task `uuid` as an active task, such as an
+      archived one that someone restored. A task it holds is active even
+      while a large workspace still loads; one it lacks then may still be
+      on its way. */
+  isLiveTask: (uuid: string): boolean => rows.issues.has(uuid),
   addLink: (srcId: string, type: string, dstId: string) => {
     if (srcId === dstId) return
     const a = keyToUuid.get(srcId)

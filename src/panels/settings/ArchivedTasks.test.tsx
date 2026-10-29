@@ -12,8 +12,10 @@ import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
    Luma Sensor with its sub-projects Firmware and Electronics, and, with
    `partner`, holds a guest seat in Partner Co with its project Partner
    portal. Each issues.archivedPage call waits until the test answers it,
-   so a test can answer calls out of order, and so does each restore. The
-   clock reads 15:00 local time on 16 Oct 2026. */
+   so a test can answer calls out of order, and so does each restore.
+   `whenAsked` runs inside each archivedPage call, as the page makes it.
+   `publish` delivers a changed snapshot. The clock reads 15:00 local time
+   on 16 Oct 2026. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', async () => ({
@@ -43,6 +45,8 @@ type Call = {
 type Restore = {
   args: { org_id: string; id: string }
   answer: () => Promise<void>
+  /** resolves the restore at once, outside act, from wherever the test is */
+  answerNow: () => void
   refuse: () => Promise<void>
 }
 
@@ -59,6 +63,8 @@ let container: HTMLDivElement
 let root: Root
 let calls: Call[]
 let restores: Restore[]
+let whenAsked: ((args: Args) => void) | null
+let publish: (snapshot: Snapshot) => void
 
 /** Lets pending promises, effects and renders run. */
 const settle = async () => {
@@ -147,12 +153,16 @@ async function open({ phone = false, initial = 'meta' as 'meta' | 'none', partne
   snap = fixture(partner)
   calls = []
   restores = []
+  whenAsked = null
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({ matches: phone, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   )
   network.onUpdate.mockImplementation((ref, _args, next) => {
-    if (getFunctionName(ref) === 'workspace:whole') next(structuredClone(snap))
+    if (getFunctionName(ref) === 'workspace:whole') {
+      publish = next
+      next(structuredClone(snap))
+    }
     return () => {}
   })
   network.query.mockImplementation((ref, args) => {
@@ -169,6 +179,7 @@ async function open({ phone = false, initial = 'meta' as 'meta' | 'none', partne
           await settle()
         },
       })
+      whenAsked?.(args)
     })
   })
   network.mutation.mockImplementation((ref, args) => {
@@ -180,6 +191,7 @@ async function open({ phone = false, initial = 'meta' as 'meta' | 'none', partne
           await act(async () => resolve({ issue: { id: args.id }, left_parent: false }))
           await settle()
         },
+        answerNow: () => resolve({ issue: { id: args.id }, left_parent: false }),
         refuse: async () => {
           await act(async () =>
             reject(
@@ -565,13 +577,18 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     await choose(`all:${PARTNER}`)
     expect(calls.map((c) => c.args)).toEqual([{ scope: { org_id: PARTNER, all: true }, limit: 25 }])
     await last().answer([], null, 0)
-    expect(text('[data-archived-tasks]')).toContain('No archived tasks in any project you can see.')
+    // with two organizations the note names the one it read
+    expect(text('[data-archived-tasks]')).toContain(
+      'No archived tasks in any project you can see in Partner Co.',
+    )
     // one organization names it All projects, and a project opens on itself
     await open()
     expect(text('[data-archive-project] option:nth-child(2)')).toBe('All projects')
     expect(find<HTMLSelectElement>('[data-archive-project]').value).toBe(META)
     await choose(`all:${ORG}`)
     expect(last().args).toEqual({ scope: { org_id: ORG, all: true }, limit: 25 })
+    await last().answer([], null, 0)
+    expect(text('[data-archived-tasks]')).toContain('No archived tasks in any project you can see.')
   })
 
   it('takes place, owner and Restore from the answer, and restores with the row’s organization', async () => {
@@ -631,6 +648,137 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     expect(text('[data-archive-row="archived-2"] [data-restore]')).toBe('Restore')
     expect(calls.length).toBe(asked)
     expect(window.showToast).not.toHaveBeenCalledWith('Restored QN-2')
+  })
+
+  /** The snapshot row of an active task, as it reads once restored. */
+  const active = (num: number) => ({
+    id: `archived-${num}`,
+    org_id: ORG,
+    project_id: FW,
+    num,
+    title: `Task ${num}`,
+    description: '',
+    status: 'done' as const,
+    priority: 'medium' as const,
+    paused: false,
+    created_at: '2026-01-01T08:00:00.000Z',
+    updated_at: '2026-01-01T08:00:00.000Z',
+    has_hidden_subtasks: false,
+    has_hidden_parent: false,
+  })
+  /** Delivers the snapshot with `nums` active again. */
+  async function restoredElsewhere(...nums: number[]) {
+    snap.issues.push(...nums.map(active))
+    snap.delivered_at = new Date(Date.parse(snap.delivered_at) + 1000).toISOString()
+    await act(async () => publish(structuredClone(snap)))
+    await settle()
+  }
+
+  it('lets a task someone else restores leave as soon as the snapshot shows it', async () => {
+    await open()
+    await last().answer([task(1), task(2), task(3)])
+    const asked = calls.length
+    await restoredElsewhere(2)
+    expect(rowIds()).toEqual(['archived-1', 'archived-3'])
+    expect(text('[data-archive-count]')).toBe('2 archived tasks')
+    expect(calls.length).toBe(asked)
+  })
+
+  it('lets a restore that lands just after a change of scope touch nothing', async () => {
+    await open()
+    await last().answer([task(1), task(2)])
+    await click(find('[data-archive-row="archived-2"] [data-restore]'))
+    const asked = calls.length
+    // the restore lands while the page makes its first call for Firmware,
+    // before React has run anything after that commit
+    whenAsked = (args) => {
+      if (args.scope.project_ids?.[0] === FW) restores[0].answerNow()
+    }
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', false)
+    const select = find<HTMLSelectElement>('[data-archive-project]')
+    select.value = FW
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    await new Promise((done) => setTimeout(done, 50))
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    whenAsked = null
+    await settle()
+    // only Firmware's first page was asked for, and its answer shows
+    expect(calls.slice(asked).map((c) => c.args)).toEqual([{ scope: project(FW), limit: 25 }])
+    await last().answer([task(7)])
+    expect(rowIds()).toEqual(['archived-7'])
+    expect(text('[data-archived-tasks]')).not.toContain('Loading archived tasks…')
+  })
+
+  it('reads the new page again once a restore that landed during Next settles', async () => {
+    await open()
+    await last().answer(many(1, 25), '3~p2')
+    await click(button('Next'))
+    // Restore on the page still on screen, which lands while Next runs
+    await click(find('[data-archive-row="archived-3"] [data-restore]'))
+    await restores[0].answer()
+    const asked = calls.length
+    await last().answer(many(26, 25, 30), '3~p3')
+    // the page Next brought is asked for again from where it starts
+    expect(calls.length).toBe(asked + 1)
+    expect(last().args).toEqual({ scope: project(META), cursor: '3~p2', limit: 25 })
+    await last().answer(many(26, 25, 30), '3~p3')
+    expect(text('[data-archive-count]')).toBe('Archived tasks 26 to 50')
+  })
+
+  it('moves focus to the next row still listed when the page read again drops the focused one', async () => {
+    await open()
+    await last().answer([task(1), task(2), task(3), task(4)])
+    const restore = find('[data-archive-row="archived-2"] [data-restore]')
+    restore.focus()
+    await click(restore)
+    await restores[0].answer()
+    expect(document.activeElement).toBe(find('[data-archive-row="archived-3"]'))
+    // the server restored 3 with 2, as its parent, so the page read again leaves it out
+    await last().answer([task(1), task(4), task(5)])
+    expect(rowIds()).toEqual(['archived-1', 'archived-4', 'archived-5'])
+    expect(document.activeElement).toBe(find('[data-archive-row="archived-4"]'))
+  })
+
+  it('starts again with no scope when the chosen project leaves the chooser', async () => {
+    await open()
+    await last().answer([task(1)])
+    // Luma Sensor is archived, so the snapshot no longer holds it or its sub-projects
+    snap.projects = snap.projects.filter((p) => p.id !== META && p.parent_id !== META)
+    snap.delivered_at = new Date(Date.parse(snap.delivered_at) + 1000).toISOString()
+    await act(async () => publish(structuredClone(snap)))
+    await settle()
+    expect(find<HTMLSelectElement>('[data-archive-project]').value).toBe('')
+    expect(rowIds()).toEqual([])
+    expect(text('[data-archived-tasks]')).toContain('Choose a project to see its archived tasks.')
+  })
+
+  it('keeps the other move beside a failed one, and gives Retry of a failed read a place for focus', async () => {
+    await open()
+    await last().answer(many(1, 25), '3~p2')
+    await click(button('Next'))
+    await last().answer(many(26, 25, 30), '3~p3')
+    await click(button('Next'))
+    await last().fail()
+    // Previous stays beside the failure, and works
+    expect(text('[data-archived-tasks]')).toContain("Couldn't load the next page.")
+    await click(button('Previous'))
+    expect(last().args).toEqual({ scope: project(META), limit: 25 })
+    await last().answer(many(1, 25), '3~p2')
+    expect(text('[data-archive-count]')).toBe('Archived tasks 1 to 25')
+    // a read of the page again after a restore fails, and its Retry hands
+    // focus to Next, which stays
+    await click(find('[data-archive-row="archived-1"] [data-restore]'))
+    await restores[0].answer()
+    await last().fail()
+    expect(text('[data-archived-tasks]')).toContain("Couldn't load this page again.")
+    expect(has('[data-archive-more]')).toBe(true)
+    const retry = button('Retry')
+    retry.focus()
+    await click(retry)
+    expect(last().args).toEqual({ scope: project(META), limit: 25 })
+    expect(document.activeElement).toBe(find('[data-archive-more]'))
+    await last().answer(many(2, 25), '3~p2')
+    expect(rowIds()).toHaveLength(25)
   })
 
   it('searches on a phone too, without taking focus', async () => {
