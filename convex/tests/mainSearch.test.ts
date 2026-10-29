@@ -671,6 +671,41 @@ describe('main Search across seats', () => {
     expect(absent).toEqual({ rows: [], coverage: COMPLETE, more: false })
   })
 
+  it('counts no seat whose first number lookup the real limit refuses', async () => {
+    const t = newT()
+    const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
+    const orgs: string[] = []
+    const seats: Doc<'profiles'>[] = []
+    for (let i = 0; i < 8; i++) {
+      const org = await plantOrg(t, i)
+      orgs.push(org)
+      seats.push(
+        await plantSeat(t, {
+          org_id: org,
+          auth_user_id: login,
+          org_role: 'guest',
+          accepted_at: NOW,
+        }),
+      )
+    }
+    // the first seat's numbers name legacy rows near 1 MiB in a project none
+    // of them sees, which spend the real limit while each lookup counts as
+    // LOOKUP, so no later seat's first lookup fits
+    const nums = Array.from({ length: 16 }, (_, i) => 901 + i)
+    const [first] = [...orgs].sort()
+    const root = await plantProject(t, { org_id: first })
+    const hidden = await plantProject(t, { org_id: first, type: 'project', parent_id: root.id })
+    for (const num of nums)
+      await plantIssue(t, {
+        org_id: first,
+        project_id: hidden.id,
+        num,
+        description: 'x'.repeat(900_000),
+      })
+    const { page } = await searchRun(t, seats, { text: nums.map((num) => `QN-${num}`).join(' ') })
+    expect(page.coverage).toEqual(stopped('reads', 1, 8))
+  })
+
   it('keeps later seats and coverage alike whatever hidden tasks earlier organizations hold', async () => {
     const t = newT()
     const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])

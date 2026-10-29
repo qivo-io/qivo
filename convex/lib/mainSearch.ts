@@ -1014,10 +1014,11 @@ export async function mainSearchPage(
     try {
       for (const num of numbers) {
         await gather.hold(LOOKUP)
-        begin(seat)
         let shown: Doc<'issues'> | null = null
         try {
           await gather.need(1, 1)
+          // the seat counts as searched once a read fits, not before
+          begin(seat)
           const task = await ctx.db
             .query('issues')
             .withIndex('by_org_num', (q) => q.eq('org_id', me.org_id).eq('num', num))
