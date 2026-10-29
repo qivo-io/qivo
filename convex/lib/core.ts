@@ -70,6 +70,7 @@ import {
   readOnlyRefusal,
 } from './access'
 import {
+  ARCHIVED_SCOPE,
   type ArchiveCursor,
   archivedTaskMatcher,
   archivedTasksPage,
@@ -1017,6 +1018,12 @@ const firstSubtask = (ctx: QueryCtx, task: Doc<'issues'>): Promise<Doc<'issues'>
     .withIndex('by_parent', (q) => q.eq('parent_id', task.id))
     .first()
 
+/** The refusal of an archived list whose scope has more projects than one
+ * page merges side by side for a caller who is no organization admin
+ * (listArchivedIssuesCore). A sub-project alone always fits. */
+export const ARCHIVED_TOO_WIDE =
+  'this project has too many sub-projects to list their archived tasks together; name one of its sub-projects'
+
 /** One page of archived tasks, with its rows and where the next page
  * starts, or null when no archived task follows. */
 export type ArchivedPage<Row> = { rows: Row[]; next: ArchiveCursor | null }
@@ -1039,6 +1046,13 @@ export type ArchivedPage<Row> = { rows: Row[]; next: ArchiveCursor | null }
  * progress that counts nothing, so every page moves on. Each row's newest
  * comment and its text, from its description row unless a search read it
  * already, are one more read each, which ARCHIVE_RESERVE leaves room for.
+ *
+ * A caller who is no organization admin reads only the scope's projects,
+ * merged side by side, never the organization's archive, whose read would
+ * pass tasks of projects they cannot see (lib/archivedTasks.ts
+ * ArchiveScope). A scope of more than ARCHIVED_SCOPE.subProjects projects,
+ * or one whose projects one page cannot open, is refused with
+ * ARCHIVED_TOO_WIDE, before anything else is read in the first case.
  */
 export async function listArchivedIssuesCore(
   ctx: QueryCtx,
@@ -1059,6 +1073,8 @@ export async function listArchivedIssuesCore(
   view: ListView,
 ): Promise<ArchivedPage<RestIssueJson | McpIssueOut>> {
   if (o.search !== undefined) limitedText(LIMITS.search, o.search)
+  const admin = me.org_role === 'admin'
+  if (!admin && o.scope.length > ARCHIVED_SCOPE.subProjects) throw badRequest(ARCHIVED_TOO_WIDE)
   const { cat, readable } = view
   const names = await rosterNames(ctx, me.org_id)
   const orgSlug = (await byId(ctx, 'organizations', me.org_id))?.slug
@@ -1072,7 +1088,8 @@ export async function listArchivedIssuesCore(
         nameOf: async (id) => names.get(id),
       })
     : null
-  const page = await archivedTasksPage(ctx, projectsScope(me.org_id, o.scope), o.cursor, o.limit, {
+  const scope = projectsScope(me.org_id, o.scope, admin)
+  const page = await archivedTasksPage(ctx, scope, o.cursor, o.limit, {
     /* Whether the filters keep `task`. An archived task is a group while it
      * has any subtask, which is read only when a filter still needs it after
      * the stored fields, such as a status that matches. The project's
@@ -1122,6 +1139,7 @@ export async function listArchivedIssuesCore(
       })
     },
   })
+  if (page.tooWide) throw badRequest(ARCHIVED_TOO_WIDE)
   return { rows: page.rows, next: page.next }
 }
 

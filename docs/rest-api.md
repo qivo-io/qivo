@@ -1194,6 +1194,15 @@ project, the rows whose `parent_id` is `null`. Each covers all its
 sub-projects you can read, even when you can read only some of them. To read
 one sub-project's archive alone, name that sub-project.
 
+A page reads only the projects it lists, side by side, and never tasks of
+projects you cannot read. Unless you are an organization admin, a project
+with more than 200 projects to list, itself and its sub-projects you can
+read, is refused, and so is one whose sub-projects' newest archived tasks
+are too large to read side by side, such as about 130 or more with very long
+descriptions. Name its sub-projects one at a time instead. An organization
+admin's request can read the organization's whole archive for such a
+project.
+
 These requests are a `400`:
 
 - `archived=true` without `project`: `archived=true needs project, because
@@ -1203,6 +1212,9 @@ These requests are a `400`:
   archived tasks; pass next_cursor as cursor`
 - a `cursor` that is not a `next_cursor`: `cursor must be the next_cursor of
   an earlier page`
+- a project too wide to list together, as above: `this project has too many
+  sub-projects to list their archived tasks together; name one of its
+  sub-projects`
 
 Until October 2026, `archived=true` listed the archived tasks of every
 readable project as an array paged with `offset`, and read the

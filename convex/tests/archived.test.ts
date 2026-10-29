@@ -22,6 +22,7 @@ import {
   archivedPageCore,
   archivedTaskMatcher,
 } from '../lib/archivedTasks'
+import { ARCHIVED_TOO_WIDE } from '../lib/core'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
@@ -41,6 +42,7 @@ import {
   plantSeat,
   restArchivedPage,
   type T,
+  TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -296,6 +298,10 @@ const unarchive = (t: T, ids: readonly string[]) =>
 
 /** The empty last page, as for an unknown id or an empty archive. */
 const EMPTY = { rows: [], next_cursor: null, scanned: 0 }
+
+/** The answer to a scope with more projects than one page merges side by
+ * side, for anyone but an organization admin. */
+const TOO_WIDE = { rows: [], next_cursor: null, scanned: 0, too_wide: true }
 
 /** A person of `f`'s organization who can sign in, with role `org_role` and
  * no grant on any project. */
@@ -887,19 +893,25 @@ describe('issues.archivedPage', () => {
       expect((await pageOf(t, f.otherAdmin, args)).rows).toHaveLength(1)
   })
 
-  it('never shows a hidden task in the cursor of a page that reads the whole archive', async () => {
+  it('never shows an out-of-scope task in the cursor of an admin page that reads the whole archive', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // a top-level project the guest cannot see, archived most recently
-    const secret = await plantProject(t, { org_id: f.org.id, type: 'meta', key: 'SEC' })
+    // an archived top-level project, whose tasks the page leaves out, archived most recently
+    const secret = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'meta',
+      key: 'SEC',
+      archived_at: day(19),
+    })
     const secretSub = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
       parent_id: secret.id,
+      archived_at: day(19),
     })
-    const hidden: Doc<'issues'>[] = []
+    const shelved: Doc<'issues'>[] = []
     for (let d = 20; d <= 23; d++) {
-      hidden.push(
+      shelved.push(
         await plantIssue(t, { org_id: f.org.id, project_id: secretSub.id, archived_at: day(d) }),
       )
     }
@@ -907,19 +919,19 @@ describe('issues.archivedPage', () => {
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: day(d) })
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, archived_at: day(d) })
     }
-    const visible = (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id])).map((row) => row.id)
-    // no share for opening projects one by one, so the family's pages read
-    // the organization's archive, as All projects does without reach rows,
+    const listed = (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id])).map((row) => row.id)
+    // no share for opening projects one by one, so an admin's family pages
+    // read the organization's archive, as All projects does for an admin,
     // and a budget of one document ends each page after its first task
     ARCHIVE_PAGE.opening = 0
     ARCHIVE_PAGE.documents = 1
     for (const scope of [scopeOf(f.org.id, f.meta.id), allOf(f.org.id)]) {
-      const first = await pageOf(t, f.guest, scope)
-      // the budget ran out on a hidden task: no rows, none counted, more to read
+      const first = await pageOf(t, f.admin, scope)
+      // the budget ran out on a task outside the scope: no rows, none counted, more to read
       expect(first.rows).toEqual([])
       expect(first.scanned).toBe(0)
       expect(first.next_cursor).toMatch(/^3~[0-9a-f]+$/)
-      for (const task of hidden) {
+      for (const task of shelved) {
         for (const part of [
           task._id,
           String(Math.trunc(task._creationTime)),
@@ -928,11 +940,14 @@ describe('issues.archivedPage', () => {
           expect(first.next_cursor).not.toContain(part)
         }
       }
-      // the pages still move past the hidden tasks and list the visible once each
-      const all = await everyPage(t, f.guest, scope)
-      expect(all.ids).toEqual(visible)
-      expect(all.scanned).toBe(visible.length)
+      // the pages still move past them and list the family's once each
+      const all = await everyPage(t, f.admin, scope)
+      expect(all.ids).toEqual(listed)
+      expect(all.scanned).toBe(listed.length)
     }
+    // a guest's page reads only their own projects, which do not fit that
+    // budget side by side, so it is refused
+    expect(await pageOf(t, f.guest, scopeOf(f.org.id, f.meta.id))).toEqual(TOO_WIDE)
   })
 
   it('refuses a cursor from another scope, organization, kind or version', async () => {
@@ -1027,7 +1042,7 @@ describe('issues.archivedPage', () => {
     )
   })
 
-  it('pages a family past its sub-project bound through the organization’s archive, each task once', async () => {
+  it('refuses a family past its sub-project bound for anyone but an admin, who reads it whole', async () => {
     const t = newT()
     const f = await withOrg(t)
     // the guest sees FW and PCB, not this third sub-project of TBED
@@ -1066,24 +1081,26 @@ describe('issues.archivedPage', () => {
       project_id: projects[i % projects.length],
       archived_at: day(1 + (i % 25)),
     }))
-    const wanted = (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id, doc.id])).map(
-      (row) => row.id,
-    )
+    const order = async (ids: string[]) =>
+      (await archiveOrder(t, f.org.id, ids)).map((row) => row.id)
     const scope = scopeOf(f.org.id, f.meta.id)
     // within the bound the guest's visible sub-projects merge one by one
-    expect((await everyPage(t, f.guest, scope)).ids).toEqual(wanted)
-    // past it the pages read the organization's archive and keep the same
-    ARCHIVED_SCOPE.subProjects = 2
-    const wide = await everyPage(t, f.guest, { ...scope, limit: 5 })
-    expect(wide.ids).toEqual(wanted)
-    expect(wide.scanned).toBe(wanted.length)
-    // a named sub-project of another family stays in, past the bound too
-    const mixed = await everyPage(t, f.guest, scopeOf(f.org.id, f.meta.id, otherSub.id))
-    expect(mixed.ids).toEqual(
-      (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id, doc.id, otherSub.id])).map(
-        (row) => row.id,
-      ),
+    expect((await everyPage(t, f.guest, scope)).ids).toEqual(
+      await order([f.sub.id, f.sub2.id, doc.id]),
     )
+    // past it a guest's page would have to read projects they cannot see
+    ARCHIVED_SCOPE.subProjects = 2
+    expect(await pageOf(t, f.guest, scope)).toEqual(TOO_WIDE)
+    expect(await pageOf(t, f.guest, scopeOf(f.org.id, f.meta.id, otherSub.id))).toEqual(TOO_WIDE)
+    // a narrower scope still lists
+    expect((await everyPage(t, f.guest, scopeOf(f.org.id, otherSub.id))).ids).toEqual(
+      await order([otherSub.id]),
+    )
+    // an admin, who sees every project, reads the organization's archive past it
+    const admin = await everyPage(t, f.admin, { ...scope, limit: 5 })
+    const live = await order([f.sub.id, f.sub2.id, sibling.id, doc.id])
+    expect(admin.ids).toEqual(live)
+    expect(admin.scanned).toBe(live.length)
   })
 
   it('lists for All projects every archived task of the live projects the caller sees, only', async () => {
@@ -1125,20 +1142,22 @@ describe('issues.archivedPage', () => {
     const order = async (ids: string[]) =>
       (await archiveOrder(t, f.org.id, ids)).map((row) => row.id)
     const scope = allOf(f.org.id)
-    // through the organization's archive, then merging the projects each
-    // person's reach rows find
     for (const ready of [false, true]) {
       if (ready) await withReach(t)
-      // an admin sees every live project, Skunkworks too
+      // an admin sees every live project, Skunkworks too, through the organization's archive
       expect((await everyPage(t, f.admin, scope)).ids).toEqual(
         await order([f.sub.id, f.sub2.id, skunkSub.id]),
       )
+      if (!ready) {
+        // without complete reach rows no one else's projects can be found
+        expect(await pageOf(t, f.guest, scope)).toEqual(TOO_WIDE)
+        expect(await pageOf(t, ungranted, scope)).toEqual(TOO_WIDE)
+        continue
+      }
       // a guest sees TBED's sub-projects through their grant
       expect((await everyPage(t, f.guest, scope)).ids).toEqual(await order([f.sub.id, f.sub2.id]))
       // a member without a grant sees none
-      const none = await everyPage(t, ungranted, scope)
-      expect(none.ids).toEqual([])
-      expect(none.scanned).toBe(0)
+      expect(await pageOf(t, ungranted, scope)).toEqual(EMPTY)
     }
   })
 
@@ -1169,65 +1188,159 @@ describe('issues.archivedPage', () => {
     expect((await pageOf(t, reader, allOf(f.org.id))).rows.map((row) => row.id)).toEqual([fw.id])
   })
 
-  it('lets neither a guest nor a member without access count hidden archived tasks', async () => {
+  it('answers a member, a Viewer and a guest alike with or without archived tasks they cannot see', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const ungranted = await plantPerson(t, f)
+    // a member with a grant on TBED, in the Hardware team; the Viewer and
+    // the guest hold grants on TBED too
+    const member = await plantPerson(t, f)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.meta.id,
+        profile_id: member.id,
+        level: 'user',
+      })
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: member.id,
+        is_leader: false,
+      })
+    })
+    // Skunkworks, led by the user, holds what none of them sees
     const skunkSub = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
       parent_id: f.hidden.id,
     })
     await withReach(t)
-    // 12 tasks the guest sees among 60 they cannot, interleaved in archive order
-    await plantMany(t, f, 12, (i) => ({
+    await plantMany(t, f, 9, (i) => ({
       project_id: i % 2 ? f.sub.id : f.sub2.id,
-      archived_at: day(1 + 2 * i),
-    }))
-    const hidden = await plantMany(t, f, 60, (i) => ({
-      project_id: skunkSub.id,
-      archived_at: day(1 + (i % 25)),
+      archived_at: day(3 + 2 * i),
     }))
     const visible = (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id])).map((row) => row.id)
-    ARCHIVE_PAGE.tasks = 5
-    /** Every page as the guest, merged side by side and then, past a bound
-     * of one project, through the organization's archive: each page's
-     * rows, scanned and whether more follow, which is all a caller sees. */
-    const walks = async () => {
-      const out = []
-      for (const bound of [200, 1]) {
-        ARCHIVED_SCOPE.subProjects = bound
-        for (const scope of [allOf(f.org.id), scopeOf(f.org.id, f.meta.id)]) {
-          const pages = []
-          let cursor: string | undefined
-          do {
-            const page = await pageOf(t, f.guest, { ...scope, cursor, limit: 4 })
-            pages.push({
-              ids: page.rows.map((row) => row.id),
-              scanned: page.scanned,
-              more: page.next_cursor !== null,
-            })
-            cursor = page.next_cursor ?? undefined
-          } while (cursor !== undefined)
-          out.push(pages)
-        }
+    // a budget that a few dozen hidden tasks read would exhaust
+    ARCHIVE_PAGE.documents = 40
+    const callers = { member, viewer: f.viewer, guest: f.guest }
+    type Pages = (string[] | boolean | number)[][] | string
+    /** Every page of the app's list as `profile` sees it: rows, whether
+     * more follow and scanned, or the refusal. */
+    const appPages = async (profile: Doc<'profiles'>, args: PageArgs): Promise<Pages> => {
+      const pages = []
+      let cursor: string | undefined
+      do {
+        const page = await pageOf(t, profile, { ...args, cursor, limit: 4 })
+        if (page.too_wide) return 'too wide'
+        pages.push([page.rows.map((row) => row.id), page.next_cursor !== null, page.scanned])
+        cursor = page.next_cursor ?? undefined
+      } while (cursor !== undefined)
+      return pages
+    }
+    /** Every page of TBED's archived tasks over REST or MCP: rows and
+     * whether more follow, or the refusal. */
+    const machinePages = async (callerId: string, surface: 'rest' | 'mcp'): Promise<Pages> => {
+      const pages = []
+      let cursor: string | undefined
+      try {
+        do {
+          const page: { tasks: { id: string }[]; next_cursor: string | null } =
+            surface === 'rest'
+              ? await restArchivedPage(t, {
+                  callerId,
+                  access: 'read',
+                  project: 'TBED',
+                  limit: '4',
+                  cursor,
+                })
+              : JSON.parse(
+                  await t.query(internal.machine.mcp.listIssues, {
+                    callerId,
+                    access: 'read',
+                    today: TODAY,
+                    project: 'TBED',
+                    archived: true,
+                    limit: 4,
+                    ...(cursor ? { cursor } : {}),
+                  }),
+                )
+          pages.push([page.tasks.map((task) => task.id), page.next_cursor !== null])
+          cursor = page.next_cursor ?? undefined
+        } while (cursor !== undefined)
+      } catch (e) {
+        return `refused: ${(e as { data?: Refusal }).data?.message}`
       }
+      return pages
+    }
+    /** What each of them sees on each surface, as the bounds and the reach rows stand. */
+    const lists = async () => {
+      const out: Record<string, Record<string, Pages>> = {}
+      for (const [who, caller] of Object.entries(callers))
+        out[who] = {
+          all: await appPages(caller, allOf(f.org.id)),
+          family: await appPages(caller, scopeOf(f.org.id, f.meta.id)),
+          rest: await machinePages(caller.id, 'rest'),
+          mcp: await machinePages(caller.id, 'mcp'),
+        }
       return out
     }
-    const withHidden = await walks()
-    for (const pages of withHidden) expect(pages.flatMap((page) => page.ids)).toEqual(visible)
-    // a member who sees nothing gets an empty archive's answer, without
-    // reading the archive, so even a budget of one document changes nothing
-    for (const bound of [200, 1]) {
-      ARCHIVED_SCOPE.subProjects = bound
-      expect(await pageOf(t, ungranted, allOf(f.org.id))).toEqual(EMPTY)
+    const stamp = (name_keys_at: string | undefined) =>
+      t.run(async (ctx) => {
+        for (const row of await ctx.db.query('org_ready').collect())
+          await ctx.db.patch(row._id, { name_keys_at })
+      })
+    /** The lists merged, past the sub-project bound, past the team bound
+     * and while the reach rows are not complete. */
+    const settings = async () => {
+      const merged = await lists()
+      ARCHIVED_SCOPE.subProjects = 1
+      const wide = await lists()
+      ARCHIVED_SCOPE.subProjects = expansion.subProjects
+      ARCHIVED_SCOPE.teams = 0
+      const teams = await lists()
+      ARCHIVED_SCOPE.teams = expansion.teams
+      await stamp(undefined)
+      const unready = await lists()
+      await stamp(NOW)
+      return { merged, wide, teams, unready }
     }
-    ARCHIVE_PAGE.documents = 1
-    expect(await pageOf(t, ungranted, allOf(f.org.id))).toEqual(EMPTY)
+    const without = await settings()
+    const ids = (pages: Pages) =>
+      typeof pages === 'string' ? pages : pages.flatMap((page) => page[0] as string[])
+    for (const who of Object.keys(callers))
+      for (const list of ['all', 'family', 'rest', 'mcp'])
+        expect(ids(without.merged[who][list]), `${who} ${list}`).toEqual(visible)
+    // past the bound every list is refused, past the team bound only the
+    // member's All projects, and before the reach rows every All projects
+    const machineRefusal = `refused: ${ARCHIVED_TOO_WIDE}`
+    for (const who of Object.keys(callers))
+      expect(without.wide[who], who).toEqual({
+        all: 'too wide',
+        family: 'too wide',
+        rest: machineRefusal,
+        mcp: machineRefusal,
+      })
+    expect(without.teams.member.all).toBe('too wide')
+    expect(ids(without.teams.guest.all)).toEqual(visible)
+    for (const who of Object.keys(callers)) {
+      expect(without.unready[who].all, who).toBe('too wide')
+      expect(ids(without.unready[who].family), who).toEqual(visible)
+    }
+    // (i) one hidden archived task older than every task they see
+    const older = await plantMany(t, f, 1, () => ({ project_id: skunkSub.id, archived_at: day(1) }))
+    expect(await settings()).toEqual(without)
+    // (ii) 60 hidden archived tasks newer than every task they see, more
+    // than the budget would read
+    await unarchive(t, older)
+    const newer = await plantMany(t, f, 60, () => ({
+      project_id: skunkSub.id,
+      archived_at: day(25),
+    }))
+    expect(await settings()).toEqual(without)
+    // an admin reaches every archived task, the hidden ones too, through
+    // the organization's archive
     ARCHIVE_PAGE.documents = page.documents
-    // the same pages, page for page, once the hidden tasks are active again
-    await unarchive(t, hidden)
-    expect(await walks()).toEqual(withHidden)
+    expect(new Set((await everyPage(t, f.admin, allOf(f.org.id))).ids)).toEqual(
+      new Set([...visible, ...newer]),
+    )
   })
 
   it('answers a family the caller cannot see past the bound as it answers an unknown id', async () => {
@@ -1246,8 +1359,10 @@ describe('issues.archivedPage', () => {
     ARCHIVE_PAGE.documents = 1
     expect(await pageOf(t, f.guest, scopeOf(f.org.id, f.hidden.id))).toEqual(EMPTY)
     expect(await pageOf(t, f.guest, scopeOf(f.org.id, uuid()))).toEqual(EMPTY)
-    // its lead sees it, past the bound through the organization's archive
-    expect((await everyPage(t, f.user, scopeOf(f.org.id, f.hidden.id))).ids).toHaveLength(9)
+    // its lead sees it, so past the bound they are told to choose a sub-project
+    expect(await pageOf(t, f.user, scopeOf(f.org.id, f.hidden.id))).toEqual(TOO_WIDE)
+    // an admin reads it through the organization's archive
+    expect((await everyPage(t, f.admin, scopeOf(f.org.id, f.hidden.id))).ids).toHaveLength(9)
   })
 
   it('counts only live sub-projects toward the bound, with or without their archive state', async () => {
@@ -1298,7 +1413,7 @@ describe('issues.archivedPage', () => {
     }
   })
 
-  it('answers Restore and owners on All projects and past the bound, for a Viewer and a guest', async () => {
+  it('answers Restore and owners on All projects for a Viewer and a guest, and past the bound for an admin', async () => {
     const t = newT()
     const f = await withOrg(t)
     await withReach(t)
@@ -1317,19 +1432,25 @@ describe('issues.archivedPage', () => {
       reviewer_id: f.guest.id,
     })
     const shown = (page: Page) => page.rows.map((row) => [row.id, row.owner_name, row.can_restore])
-    for (const bound of [200, 1]) {
-      ARCHIVED_SCOPE.subProjects = bound
-      for (const scope of [allOf(f.org.id), scopeOf(f.org.id, f.meta.id)]) {
-        // a Viewer may not restore, a guest with Edit may
-        expect(shown(await pageOf(t, f.viewer, scope)), String(bound)).toEqual([
-          [owned.id, 'user', false],
-          [reviewed.id, 'guest', false],
-        ])
-        expect(shown(await pageOf(t, f.guest, scope)), String(bound)).toEqual([
-          [owned.id, 'user', true],
-          [reviewed.id, 'guest', true],
-        ])
-      }
+    for (const scope of [allOf(f.org.id), scopeOf(f.org.id, f.meta.id)]) {
+      // a Viewer may not restore, a guest with Edit may
+      expect(shown(await pageOf(t, f.viewer, scope))).toEqual([
+        [owned.id, 'user', false],
+        [reviewed.id, 'guest', false],
+      ])
+      expect(shown(await pageOf(t, f.guest, scope))).toEqual([
+        [owned.id, 'user', true],
+        [reviewed.id, 'guest', true],
+      ])
+    }
+    // past the bound only an admin's page lists, through the organization's archive
+    ARCHIVED_SCOPE.subProjects = 1
+    for (const scope of [allOf(f.org.id), scopeOf(f.org.id, f.meta.id)]) {
+      expect(await pageOf(t, f.viewer, scope)).toEqual(TOO_WIDE)
+      expect(shown(await pageOf(t, f.admin, scope))).toEqual([
+        [owned.id, 'user', true],
+        [reviewed.id, 'guest', true],
+      ])
     }
   })
 
@@ -1359,20 +1480,152 @@ describe('issues.archivedPage', () => {
       archived_at: day(5),
     })
     const fw = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: day(3) })
-    const ids = async (profile: Doc<'profiles'>, args: PageArgs) =>
-      (await everyPage(t, profile, args)).ids
+    const scopes = [
+      allOf(f.org.id),
+      scopeOf(f.org.id, f.meta.id),
+      scopeOf(f.org.id, f.meta.id, f.sub.id),
+    ]
+    for (const scope of scopes)
+      expect((await everyPage(t, f.guest, scope)).ids, JSON.stringify(scope)).toEqual([fw.id])
+    // past the bound the guest is refused, and the admin sees both
+    ARCHIVED_SCOPE.subProjects = 0
+    for (const scope of scopes) expect(await pageOf(t, f.guest, scope)).toEqual(TOO_WIDE)
     for (const bound of [200, 0]) {
       ARCHIVED_SCOPE.subProjects = bound
-      for (const scope of [
-        allOf(f.org.id),
-        scopeOf(f.org.id, f.meta.id),
-        scopeOf(f.org.id, f.meta.id, f.sub.id),
-      ])
-        expect(await ids(f.guest, scope), `${bound} ${JSON.stringify(scope)}`).toEqual([fw.id])
-      // the admin sees both
-      expect(await ids(f.admin, allOf(f.org.id))).toEqual([inTop.id, fw.id])
+      expect((await everyPage(t, f.admin, allOf(f.org.id))).ids).toEqual([inTop.id, fw.id])
     }
   })
+
+  it('counts every reach row it reads toward its bound, navigation-only and repeated ones too', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the guest's grant moves from TBED onto FW, and they get one on a sub-project
+    // of another top-level project: two root rows for navigation only and two child rows
+    const other = await plantProject(t, { org_id: f.org.id, type: 'meta' })
+    const otherSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: other.id,
+    })
+    await t.run(async (ctx) => {
+      const grant = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.meta.id).eq('profile_id', f.guest.id),
+        )
+        .unique()
+      if (grant !== null) await ctx.db.delete(grant._id)
+      for (const project_id of [f.sub.id, otherSub.id])
+        await ctx.db.insert('project_access', { project_id, profile_id: f.guest.id, level: 'user' })
+    })
+    await withReach(t)
+    const fw = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: day(3) })
+    const away = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: otherSub.id,
+      archived_at: day(4),
+    })
+    // four rows find two projects
+    ARCHIVED_SCOPE.rows = 4
+    expect((await everyPage(t, f.guest, allOf(f.org.id))).ids).toEqual([away.id, fw.id])
+    ARCHIVED_SCOPE.rows = 3
+    expect(await pageOf(t, f.guest, allOf(f.org.id))).toEqual(TOO_WIDE)
+    // under TBED, which the guest sees only to reach FW, one child row
+    ARCHIVED_SCOPE.rows = 1
+    expect((await everyPage(t, f.guest, scopeOf(f.org.id, f.meta.id))).ids).toEqual([fw.id])
+    ARCHIVED_SCOPE.rows = 0
+    expect(await pageOf(t, f.guest, scopeOf(f.org.id, f.meta.id))).toEqual(TOO_WIDE)
+    // and the two live sub-projects of a top-level project the caller holds access on
+    ARCHIVED_SCOPE.rows = 1
+    expect(await pageOf(t, f.viewer, scopeOf(f.org.id, f.meta.id))).toEqual(TOO_WIDE)
+    ARCHIVED_SCOPE.rows = 2
+    expect(await pageOf(t, f.viewer, scopeOf(f.org.id, f.meta.id))).toMatchObject({
+      next_cursor: null,
+    })
+  })
+
+  it('refuses a scope whose projects’ newest tasks at the longest text do not fit one page side by side', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // 199 more sub-projects of TBED, 200 projects with TBED itself, the most a page merges
+    const subs = [f.sub.id, f.sub2.id]
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 197; i++) {
+        const id = uuid()
+        subs.push(id)
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'project',
+          parent_id: f.meta.id,
+          key: `S${i}`,
+          name: `Sub ${i}`,
+          description: '',
+          sort_order: i,
+          num: 1000 + i,
+          track_delay: false,
+          created_at: NOW,
+        })
+      }
+    })
+    // each holds one archived task at the description cap in a three-byte
+    // script, on the task row and on its description row, as release 2 stores it
+    const text = '漢'.repeat(LIMITS.description.max)
+    const tasks: string[] = []
+    for (let batch = 0; batch < subs.length; batch += 25) {
+      await t.run(async (ctx) => {
+        for (const [i, project_id] of subs.slice(batch, batch + 25).entries()) {
+          const id = uuid()
+          tasks.push(id)
+          await insertTask(
+            ctx.db,
+            {
+              id,
+              org_id: f.org.id,
+              project_id,
+              num: bulkNum++,
+              title: `Long ${batch + i}`,
+              description: text,
+              status: 'done',
+              priority: 'medium',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+              archived_at: day(1 + ((batch + i) % 28)),
+            },
+            'restore',
+          )
+        }
+      })
+    }
+    /** The guest's first page of TBED, and what the request read. */
+    const measured = () =>
+      t.run(async (ctx) => {
+        const found = await archivedPageCore(
+          ctx,
+          f.guest,
+          { kind: 'projects', orgId: f.org.id, projectIds: [f.meta.id] },
+          { cursor: null, search: '', limit: 25 },
+        )
+        const m = await ctx.meta.getTransactionMetrics()
+        return {
+          rows: found.rows.length,
+          tooWide: found.tooWide === true,
+          ranges: m.databaseQueries.used,
+          documents: m.documentsRead.used,
+          bytes: m.bytesRead.used,
+        }
+      })
+    const full = await measured()
+    // 200 newest tasks of about 61 KB pass the page's 8 MiB, so the page is refused
+    expect(full.tooWide).toBe(true)
+    expect(full.bytes).toBeLessThan(16 << 20)
+    // with 120 of them archived it opens them side by side and lists
+    await unarchive(t, tasks.slice(120))
+    const fits = await measured()
+    console.info('archived projects side by side', { full, fits })
+    expect(fits).toMatchObject({ rows: 25, tooWide: false })
+  }, 300_000)
 
   it('answers each organization of a login with two seats through its seat there', async () => {
     const t = newT()

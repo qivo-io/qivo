@@ -166,6 +166,24 @@ const assertWritable = (ctx: MeCtx, projectId: string): Promise<void> =>
 /* The page's answer when its scope covers nothing the caller sees. */
 const NO_ARCHIVED_PAGE = { rows: [], next_cursor: null, scanned: 0 }
 
+/* The page's answer when its scope has more projects than one page merges
+ * side by side for a caller who is no organization admin
+ * (lib/archivedTasks.ts archivedPageCore). */
+const TOO_WIDE_PAGE = { rows: [], next_cursor: null, scanned: 0, too_wide: true as const }
+
+/* The deprecated `project_id`'s refusal of a family too wide to merge, which
+ * a tab from before scopes shows as a failed read. */
+const FAMILY_TOO_WIDE =
+  'this project has too many sub-projects to list their archived tasks together; choose one of its sub-projects'
+
+/* What archivedPage answers. */
+type ArchivedPageAnswer = {
+  rows: ArchivedListRow[]
+  next_cursor: string | null
+  scanned: number
+  too_wide?: true
+}
+
 /** One page of archived tasks for the app's Archived tasks page, most
  * recently archived first, then newest created first (lib/archivedTasks.ts
  * archivedPageCore). `scope` names one organization and either up to
@@ -177,8 +195,11 @@ const NO_ARCHIVED_PAGE = { rows: [], next_cursor: null, scanned: 0 }
  * rows; pass `next_cursor` back until it is null. `scanned` counts the
  * scope's archived tasks the page looked at. An organization without the
  * caller's seat, and ids that are unknown, archived, foreign or invisible,
- * answer an empty last page alike. `limit` is 1 to ARCHIVED_PAGE_MOST,
- * ARCHIVED_PAGE_ROWS when absent.
+ * answer an empty last page alike. A caller who is no organization admin
+ * gets `too_wide` and no rows for a scope with more of their projects than
+ * one page merges side by side, as a page never reads the organization's
+ * archive for them; a narrower scope lists them. `limit` is 1 to
+ * ARCHIVED_PAGE_MOST, ARCHIVED_PAGE_ROWS when absent.
  *
  * Deprecated: `project_id` instead of `scope` names one project family as
  * tabs from before scopes ask (archiveFamily), with that release's rows,
@@ -197,10 +218,7 @@ export const archivedPage = authedQuery({
     search: v.optional(v.string()),
     limit: v.optional(v.number()),
   },
-  handler: async (
-    ctx,
-    a,
-  ): Promise<{ rows: ArchivedListRow[]; next_cursor: string | null; scanned: number }> => {
+  handler: async (ctx, a): Promise<ArchivedPageAnswer> => {
     const limit = a.limit ?? ARCHIVED_PAGE_ROWS
     if (!Number.isInteger(limit) || limit < 1 || limit > ARCHIVED_PAGE_MOST) {
       throw badRequest(`limit must be a whole number from 1 to ${ARCHIVED_PAGE_MOST}`)
@@ -228,6 +246,7 @@ export const archivedPage = authedQuery({
     const me = ctx.myProfiles.get(scope.orgId)
     if (me === undefined) return NO_ARCHIVED_PAGE
     const page = await archivedPageCore(ctx, me, scope, { cursor, search, limit })
+    if (page.tooWide) return TOO_WIDE_PAGE
     return {
       rows: page.rows,
       next_cursor: page.next === null ? null : await scopeCursorText(page.next, scope),
@@ -238,14 +257,16 @@ export const archivedPage = authedQuery({
 
 /* archivedPage for the deprecated `project_id`: one project family, with
  * `2~` cursors bound to that project. An unknown or invisible project
- * answers an empty last page. */
+ * answers an empty last page, and a family too wide to merge for a caller
+ * who is no organization admin is refused, which a tab from before shows as
+ * a failed read. */
 async function familyPage(
   ctx: QueryCtx & { myProfiles: ReadonlyMap<string, Doc<'profiles'>> },
   projectId: string,
   cursorText: string | undefined,
   search: string,
   limit: number,
-): Promise<{ rows: ArchivedListRow[]; next_cursor: string | null; scanned: number }> {
+): Promise<ArchivedPageAnswer> {
   const cursor = cursorText === undefined ? null : await parseArchiveCursor(cursorText, projectId)
   if (cursorText !== undefined && cursor === null) {
     throw badRequest('cursor must be the next_cursor of an earlier page')
@@ -260,6 +281,7 @@ async function familyPage(
     { kind: 'family', project },
     { cursor, search, limit },
   )
+  if (page.tooWide) throw rule(FAMILY_TOO_WIDE)
   return {
     rows: page.rows,
     next_cursor: page.next === null ? null : await archiveCursorText(page.next, project.id),

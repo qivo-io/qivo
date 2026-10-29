@@ -15,6 +15,7 @@ import type { QueryCtx } from '../_generated/server'
 import {
   ARCHIVE_PAGE,
   ARCHIVE_RESERVE,
+  ARCHIVED_SCOPE,
   type ArchiveCursor,
   archiveCursorText,
   archivedTasksAfter,
@@ -22,6 +23,7 @@ import {
   parseArchiveCursor,
 } from '../lib/archivedTasks'
 import {
+  ARCHIVED_TOO_WIDE,
   DESCRIPTION_READS_RESERVE,
   LABEL_READS_RESERVE,
   LABEL_TASK_READS,
@@ -420,9 +422,11 @@ describe('a single-task read of a large active group', () => {
 describe('archived task lists page one project with a cursor', () => {
   const page = { ...ARCHIVE_PAGE }
   const reserve = { ...ARCHIVE_RESERVE }
+  const expansion = { ...ARCHIVED_SCOPE }
   afterEach(() => {
     Object.assign(ARCHIVE_PAGE, page)
     Object.assign(ARCHIVE_RESERVE, reserve)
+    Object.assign(ARCHIVED_SCOPE, expansion)
   })
 
   it('writes sealed cursors that read back, and refuses anything else', async () => {
@@ -571,12 +575,14 @@ describe('archived task lists page one project with a cursor', () => {
       const seen: string[] = []
       let cursor: ArchiveCursor | null = null
       for (let page = 0; page < 20; page++) {
+        // a wide scope, an admin's, may read the organization's archive
         const stream = await archivedTasksAfter(
           ctx,
-          { orgId: 'org', projectIds: ['P', 'Q'] },
+          { orgId: 'org', projectIds: ['P', 'Q'], wide: true },
           cursor,
           async () => projects,
         )
+        if (stream === null) throw new Error('a wide scope always opens')
         const task = await stream.next()
         await stream.close()
         if (task === null) break
@@ -770,9 +776,9 @@ describe('archived task lists page one project with a cursor', () => {
     expect(all.restPages).toBe(5)
   })
 
-  it('never shows a hidden task in the cursor of a page that reads the whole archive', async () => {
+  it('never shows an out-of-scope task in an admin’s cursor over the whole archive, and refuses others', async () => {
     const fx = await setup()
-    // a top-level project the agent cannot see, archived most recently
+    // a top-level project outside TBED, archived most recently
     const secret = await plantProject(fx.t, { org_id: fx.org.id, type: 'meta', key: 'SEC' })
     const hidden: Doc<'issues'>[] = []
     for (let d = 20; d <= 23; d++) {
@@ -784,9 +790,9 @@ describe('archived task lists page one project with a cursor', () => {
       await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, archived_at: day(d) })
       await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub2.id, archived_at: day(d) })
     }
-    // no share for opening projects one by one, so TBED's pages read the
-    // organization's archive, and a budget of one document ends each page
-    // after its first task, here a hidden one
+    // no share for opening projects one by one, so an admin's TBED pages read
+    // the organization's archive, and a budget of one document ends each page
+    // after its first task, here one outside TBED
     ARCHIVE_PAGE.opening = 0
     ARCHIVE_PAGE.documents = 1
     const leaks = (cursor: string | null) =>
@@ -796,21 +802,37 @@ describe('archived task lists page one project with a cursor', () => {
         ),
       )
     const rest = await restArchivedPage(fx.t, {
-      callerId: fx.agent.id,
+      callerId: fx.admin.id,
       access: 'read',
       project: 'TBED',
     })
     expect(rest.tasks).toEqual([])
     expect(rest.next_cursor).toMatch(/^2~[0-9a-f]+$/)
     expect(leaks(rest.next_cursor)).toEqual([])
-    const mcp = await mcpList<McpPage>(fx, fx.agent.id, { project: 'TBED', archived: true })
+    const mcp = await mcpList<McpPage>(fx, fx.admin.id, { project: 'TBED', archived: true })
     expect(mcp.tasks).toEqual([])
     expect(leaks(mcp.next_cursor)).toEqual([])
-    // the pages still move past the hidden tasks and list TBED's once each
-    const all = await everyPage(fx, fx.agent.id, { project: 'TBED' })
+    // the pages still move past those tasks and list TBED's once each
+    const all = await everyPage(fx, fx.admin.id, { project: 'TBED' })
     const expected = await archiveOrder(fx, [fx.sub.id, fx.sub2.id])
     expect(all.rest).toEqual(expected)
     expect(all.mcp).toEqual(expected)
+    // the agent's page reads only TBED's projects, which do not fit that
+    // budget side by side, so it is refused
+    await refused(
+      restArchivedPage(fx.t, { callerId: fx.agent.id, access: 'read', project: 'TBED' }),
+      'bad_request',
+      ARCHIVED_TOO_WIDE,
+    )
+    await refused(
+      mcpList(fx, fx.agent.id, { project: 'TBED', archived: true }),
+      'bad_request',
+      ARCHIVED_TOO_WIDE,
+    )
+    // a sub-project alone always fits
+    expect((await everyPage(fx, fx.agent.id, { project: 'FW' })).rest).toEqual(
+      await archiveOrder(fx, [fx.sub.id]),
+    )
   })
 
   it('refuses a cursor from another project’s list', async () => {
@@ -1002,7 +1024,7 @@ describe('archived task lists page one project with a cursor', () => {
     expect(all.mcp).toEqual(all.rest)
   })
 
-  it('reads the organization’s archive for a scope too wide to open project by project', async () => {
+  it('refuses a scope too wide to open project by project, which only an admin reads whole', async () => {
     const fx = await setup(newT({ transactionLimits: { bytesRead: 400 << 10 } }))
     ARCHIVE_RESERVE.bytes = 64 << 10
     const subs = [fx.sub.id, fx.sub2.id]
@@ -1031,14 +1053,43 @@ describe('archived task lists page one project with a cursor', () => {
     for (let i = 0; i < 3; i++) {
       await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.hidden.id, archived_at: day(11) })
     }
-    // opening a quarter of the page fits two of the 40 KB tasks, not twelve
+    // the whole page fits seven of the 40 KB tasks side by side, not twelve,
+    // so the agent, who may not read the organization's archive, is refused
+    for (const surface of ['rest', 'mcp'] as const)
+      await refused(
+        surface === 'rest'
+          ? restArchivedPage(fx.t, { callerId: fx.agent.id, access: 'read', project: 'TBED' })
+          : mcpList(fx, fx.agent.id, { project: 'TBED', archived: true }),
+        'bad_request',
+        ARCHIVED_TOO_WIDE,
+      )
+    // an admin reads it through the organization's archive
     const expected = tasks.map((t) => t.id).reverse()
-    for (const callerId of [fx.agent.id, fx.admin.id]) {
-      const pages = await everyPage(fx, callerId, { project: 'TBED' })
-      expect(pages.rest).toEqual(expected)
-      expect(pages.mcp).toEqual(expected)
-      expect(pages.restPages).toBeGreaterThan(1)
-    }
+    const pages = await everyPage(fx, fx.admin.id, { project: 'TBED' })
+    expect(pages.rest).toEqual(expected)
+    expect(pages.mcp).toEqual(expected)
+    expect(pages.restPages).toBeGreaterThan(1)
+  })
+
+  it('refuses a scope of more projects than one page merges for anyone but an admin', async () => {
+    const fx = await setup()
+    const fw = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      archived_at: day(2),
+    })
+    // TBED with FW and PCB is three projects
+    ARCHIVED_SCOPE.subProjects = 2
+    for (const surface of ['rest', 'mcp'] as const)
+      await refused(
+        surface === 'rest'
+          ? restArchivedPage(fx.t, { callerId: fx.agent.id, access: 'read', project: 'TBED' })
+          : mcpList(fx, fx.agent.id, { project: 'TBED', archived: true }),
+        'bad_request',
+        ARCHIVED_TOO_WIDE,
+      )
+    expect((await everyPage(fx, fx.agent.id, { project: 'FW' })).rest).toEqual([fw.id])
+    expect((await everyPage(fx, fx.admin.id, { project: 'TBED' })).rest).toEqual([fw.id])
   })
 
   it('leaves out a task stored under another organization', async () => {
