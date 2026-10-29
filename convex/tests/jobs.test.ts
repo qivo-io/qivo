@@ -1339,12 +1339,6 @@ describe('archiveDoneIssues reads only the window since its last run', () => {
       phases[label] = phasesOf(idle)
     }
     console.log('Nightly archive reads', nights)
-    for (const label of Object.keys(phases))
-      expect(phases[label], label).toEqual(['cron', 'window', 'hand'])
-    expect(archived).toEqual({
-      '1 live project': 1,
-      '1,000 live projects in 10 organizations': 1,
-    })
     // the window and idle nights read the same whatever the size
     const { bytes: _small, ...small } = nights['1 live project, idle night 2']
     const { bytes: _large, ...large } =
@@ -1356,6 +1350,12 @@ describe('archiveDoneIssues reads only the window since its last run', () => {
     const { bytes: _w2, ...windowLarge } =
       nights['1,000 live projects in 10 organizations, window night 1']
     expect(windowLarge).toEqual(windowSmall)
+    expect(archived).toEqual({
+      '1 live project': 1,
+      '1,000 live projects in 10 organizations': 1,
+    })
+    for (const label of Object.keys(phases))
+      expect(phases[label], label).toEqual(['cron', 'window', 'hand'])
   })
 
   it('a Done task in an archived project inside the window stays, and the night after its restore archives it', async () => {
