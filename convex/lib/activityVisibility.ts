@@ -83,9 +83,8 @@ const UNCHECKED = Symbol('unchecked')
  * looked up is not checked: a page ends before it, so the next page checks
  * it with room of its own, and taskWriters leaves it out. The read so fails
  * closed instead of failing on Convex's limits. The rest serves the caller:
- * the deprecated commentThread has read its comments already, and REST and
- * MCP read one profile per actor next (machine/records.ts activityOut).
- * Tests may lower it. */
+ * REST and MCP read one profile per actor next (machine/records.ts
+ * activityOut). Tests may lower it. */
 export const NAMED_TASK_ROOM = { room: 0.8 }
 
 /** The most rows one page of a task's history holds over REST and MCP,

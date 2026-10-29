@@ -671,7 +671,6 @@ roadmap:change mutation public {"type":"object","value":{"session_id":{"fieldTyp
 roadmap:expire mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"session_id":{"fieldType":{"type":"string"},"optional":false},"expires_at":{"fieldType":{"type":"number"},"optional":false}}}
 roadmap:undo mutation public {"type":"object","value":{"session_id":{"fieldType":{"type":"string"},"optional":false},"all":{"fieldType":{"type":"boolean"},"optional":false}}}
 search:page query public {"type":"object","value":{"text":{"fieldType":{"type":"string"},"optional":false},"include_archived":{"fieldType":{"type":"boolean"},"optional":false},"scope":{"fieldType":{"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":true}}},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true}}}
-snapshot:commentThread query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:commentsBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:historyBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:threadComments query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1115,10 +1114,8 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // narrows it to, each candidate judged with the seat in its organization.
   search: { page: 'authedQuery' },
   // The task window's live comment page, its live history page (only
-  // while it shows All) and the earlier pages of each. commentThread is the
-  // deprecated thread of both, kept one release for older clients.
+  // while it shows All) and the earlier pages of each.
   snapshot: {
-    commentThread: 'orgQuery',
     commentsBefore: 'orgQuery',
     historyBefore: 'orgQuery',
     threadComments: 'orgQuery',
@@ -1167,7 +1164,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 205
+const PUBLIC_COUNT = 204
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

@@ -75,37 +75,6 @@ export const threadHistory = orgQuery({
   },
 })
 
-/* Deprecated: the task window subscribes to threadComments, and to
- * threadHistory under All. Kept for one release, with the same answer, for
- * browser tabs and desktop clients from before the split; remove it with
- * its manifest line once no served build calls it. It answers the comment
- * page of threadComments and, in `events`, `events_earlier` and
- * `events_next`, the newest HISTORY_PAGE_MAX rows of the task's history the
- * caller receives, read in every run whether the window shows them or not.
- * The history is empty for an archived task or a task in an archived
- * project. */
-export const commentThread = orgQuery({
-  args: { issue_id: v.string() },
-  handler: async (ctx, { issue_id }) => {
-    const { issue, project } = await threadTask(ctx, issue_id)
-    // comments first: the page counts only its own bytes (model/comments.ts
-    // newestComments), so the history page's room checks must see what it spent
-    const page = await threadPage(ctx, issue.id)
-    // the app shows history only for a task in the working set (lib/workingSet.ts);
-    // threadTask already refused a project the caller cannot see
-    const history = inWorkingSet(issue, project, true)
-      ? await taskHistoryPage(ctx, ctx.me, issue)
-      : { rows: [], earlier: false, next: undefined }
-    return {
-      comments: page.comments.map(rowOf),
-      earlier: page.earlier,
-      events: historyOut(history.rows),
-      events_earlier: history.earlier,
-      events_next: history.next?.id ?? null,
-    }
-  },
-})
-
 /* The page of history "Show earlier activity" loads beside the comments. It
  * holds the newest WINDOW_HISTORY_PAGE rows the caller receives before the
  * row `before` (lib/activityVisibility.ts taskHistoryPage), oldest first,

@@ -3,8 +3,7 @@
  * comments, oldest first, with `limit` and `before`. The app's task window
  * subscribes to snapshot.threadComments, the newest COMMENT_PAGE_MAX and
  * whether earlier ones exist, and reads earlier pages with
- * snapshot.commentsBefore (model/comments.ts threadPage). The deprecated
- * snapshot.commentThread answers the same comment page.
+ * snapshot.commentsBefore (model/comments.ts threadPage).
  *
  *   1. Paging: a long thread walks back page by page to an empty page on
  *      both surfaces, a short one answers whole, and the input rules. The
@@ -213,14 +212,13 @@ describe('paging a thread', () => {
     expect(await appPage(empty)).toMatchObject({ comments: [], earlier: false })
   })
 
-  it('answers the comment page the deprecated commentThread answers, and no history', async () => {
+  it('answers the comment page and no history', async () => {
     const fx = await setup()
     await plantThread(fx, 70)
     const args = { org_id: fx.org.id, issue_id: fx.task.id }
     const live = await as(fx.t, fx.guest).query(api.snapshot.threadComments, args)
     expect(Object.keys(live).sort()).toEqual(['comments', 'earlier'])
-    const old = await as(fx.t, fx.guest).query(api.snapshot.commentThread, args)
-    expect(live).toEqual({ comments: old.comments, earlier: old.earlier })
+    expect(live).toMatchObject({ earlier: true })
   })
 
   it("the app's pages keep the thread's order, so the first comment is the next before", async () => {
