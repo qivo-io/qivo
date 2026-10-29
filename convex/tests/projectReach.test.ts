@@ -1171,17 +1171,38 @@ describe('a restore and the work around it', () => {
     await runSteps(t)
     const item = await itemFor(t, f.meta.id)
     expect(item.projects).toHaveLength(25)
+    // a row a step, so the reveal waits for a step of its own
+    TRASH_BUDGET.rows = 1
     await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
+    for (let steps = 0; (await jobFor(t, item.id))?.phase !== 'restore_reveal'; steps++) {
+      expect(steps).toBeLessThan(200)
+      await step(t, item.id)
+    }
+    TRASH_BUDGET.rows = DEFAULT_ROWS
+    // The reveal writes the top-level project back without its icon, and
+    // the leads' rows read it from what the reveal wrote, not once more for
+    // each sub-project (model/deletedItems.ts revealProjects)
+    let topReads = 0
+    await t.run((ctx) =>
+      runStep(
+        meterDb(ctx, {
+          range: () => {},
+          doc: (doc) => {
+            if (typeof doc === 'object' && doc !== null && 'id' in doc && doc.id === f.meta.id)
+              topReads += 1
+          },
+        }),
+        item.id,
+      ),
+    )
+    // one read, by restore_grants after the reveal in the same step, and
+    // none for the 24 leads' rows
+    expect(topReads).toBe(1)
     await runSteps(t)
     // the reveal and every step after it finished
     expect(await jobFor(t, item.id)).toBeNull()
     expect(await t.run((ctx) => byId(ctx, 'deleted_items', item.id))).toBeNull()
-    // the check reads the parent for each person and project in one
-    // transaction, so the icon goes first
-    await t.run(async (ctx) => {
-      const row = await byId(ctx, 'projects', f.meta.id)
-      if (row !== null) await ctx.db.patch(row._id, { icon: undefined })
-    })
+    expect(await projectOf(t, f.meta.id)).not.toHaveProperty('icon')
     await expectAll(t, f)
   }, 120_000)
 

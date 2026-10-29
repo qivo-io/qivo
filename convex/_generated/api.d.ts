@@ -55,6 +55,7 @@ import type * as internal_descriptionsBackfill from "../internal/descriptionsBac
 import type * as internal_guestOrg from "../internal/guestOrg.js";
 import type * as internal_inboxItemsBackfill from "../internal/inboxItemsBackfill.js";
 import type * as internal_labelCountsBackfill from "../internal/labelCountsBackfill.js";
+import type * as internal_legacyIconsBackfill from "../internal/legacyIconsBackfill.js";
 import type * as internal_liveCountsBackfill from "../internal/liveCountsBackfill.js";
 import type * as internal_marketingDemo from "../internal/marketingDemo.js";
 import type * as internal_marketingDemoData from "../internal/marketingDemoData.js";
@@ -305,6 +306,7 @@ declare const fullApi: ApiFromModules<{
   "internal/guestOrg": typeof internal_guestOrg;
   "internal/inboxItemsBackfill": typeof internal_inboxItemsBackfill;
   "internal/labelCountsBackfill": typeof internal_labelCountsBackfill;
+  "internal/legacyIconsBackfill": typeof internal_legacyIconsBackfill;
   "internal/liveCountsBackfill": typeof internal_liveCountsBackfill;
   "internal/marketingDemo": typeof internal_marketingDemo;
   "internal/marketingDemoData": typeof internal_marketingDemoData;
