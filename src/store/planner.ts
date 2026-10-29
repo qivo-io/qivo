@@ -174,6 +174,7 @@ import { createPlannerUpdates, type StoreVersion } from './updates'
 import {
   type ActivityVM,
   type ArchivedIssueVM,
+  type ArchivedListRowVM,
   type ArchivedProjectVM,
   byOrder,
   type CommentVM,
@@ -190,6 +191,7 @@ import {
   type ProjectVM,
   shapeActivity,
   shapeArchivedIssue,
+  shapeArchivedListRow,
   shapeArchivedProject,
   shapeComment,
   shapeLabel,
@@ -210,6 +212,7 @@ import { createWorkspaceBase, deepFreeze } from './workspaceBase'
 export type {
   ActivityVM,
   ArchivedIssueVM,
+  ArchivedListRowVM,
   ArchivedProjectVM,
   AttachmentVM,
   CommentVM,
@@ -4666,6 +4669,10 @@ export type NewProjectInput = {
 /** A project and the project that owns it, for labels such as "Website,
     Design". owner is null for a project shown alone (see P.projectPlace). */
 export type ProjectPlace = { project: ProjectVM; owner: ProjectVM | null }
+/** What the Archived tasks page reads (P.fetchArchivedPage): some projects
+    of organization `org`, a top-level project standing for its
+    sub-projects, or, chosen on purpose, every project of `org`. */
+export type ArchivedScope = { org: string; projectIds: string[] } | { org: string; all: true }
 export type ProjectPatch = Partial<{
   name: string
   lead: string | null
@@ -6702,13 +6709,17 @@ export const PLANNER = {
       row is not in the snapshot. The snapshot pulls the restored rows back
       in reactively, with no refetch. Resolves false on refusal (toasted).
       A subtask whose parent is full, or whose parent's delete still has to
-      detach it, comes back as a top-level task, which is toasted too. */
+      detach it, comes back as a top-level task, which is toasted too. The
+      task's organization is `orgId` when the caller knows it, as an
+      archived row does, else that of the loaded project `projectId`, else
+      the home organization. */
   unarchiveIssue: async (
     issueUuid: string,
     title?: string,
     projectId?: string,
+    orgId?: string,
   ): Promise<boolean> => {
-    const org = orgOfProject(projectId) || HOME_ORG
+    const org = orgId || orgOfProject(projectId) || HOME_ORG
     pendingRestoreIssueIds.add(issueUuid)
     try {
       const out = await sendAwaited(api.issues.unarchive, { org_id: org, id: issueUuid }, 'none')
@@ -6733,24 +6744,30 @@ export const PLANNER = {
     return true
   },
 
-  /** One page of a project's archived tasks for the Archived tasks page,
+  /** One page of archived tasks of `scope` for the Archived tasks page,
       most recently archived first, or null on a transport or server error.
-      Never part of the snapshot. A top-level project includes its
-      sub-projects; the server decides which (issues.archivedPage). With
-      `search` the rows are the matches only, and a page may hold fewer rows
-      than asked, even none, while `nextCursor` says more remain. `scanned`
-      counts the archived tasks the page looked at. */
+      Never part of the snapshot. The scope is some projects of one
+      organization, a top-level project standing for its sub-projects, or
+      every project of the organization this person sees; the server
+      decides which (issues.archivedPage). With `search` the rows are the
+      matches only, and a page may hold fewer rows than asked, even none,
+      while `nextCursor` says more remain. `scanned` counts the archived
+      tasks of the scope the page looked at. */
   fetchArchivedPage: async (
-    projectId: string,
+    scope: ArchivedScope,
     o: { cursor?: string | null; search?: string; limit?: number } = {},
-  ): Promise<{ rows: ArchivedIssueVM[]; nextCursor: string | null; scanned: number } | null> => {
-    // the archive is per project; neither sentinel scope is one, and letting
-    // one through would query for the literal string "all" / "mine"
-    if (projectId === ALL_SCOPE || projectId === MINE_SCOPE) return null
+  ): Promise<{
+    rows: ArchivedListRowVM[]
+    nextCursor: string | null
+    scanned: number
+  } | null> => {
     let data: FunctionReturnType<typeof api.issues.archivedPage>
     try {
       data = await convex.query(api.issues.archivedPage, {
-        project_id: projectId,
+        scope:
+          'all' in scope
+            ? { org_id: scope.org, all: true }
+            : { org_id: scope.org, project_ids: scope.projectIds },
         ...(o.cursor ? { cursor: o.cursor } : {}),
         ...(o.search ? { search: o.search } : {}),
         ...(o.limit !== undefined ? { limit: o.limit } : {}),
@@ -6761,7 +6778,7 @@ export const PLANNER = {
     }
     return {
       rows: data.rows.map((row) =>
-        shapeArchivedIssue(
+        shapeArchivedListRow(
           row,
           handleFor(row.id, row.org_id, `${ISSUE_PREFIX}-${row.num}`),
           `${ISSUE_PREFIX}-${row.num}`,
@@ -6788,10 +6805,6 @@ export const PLANNER = {
     const key = `${ISSUE_PREFIX}-${data.num}`
     return { row: shapeArchivedIssue(data, handleFor(data.id, data.org_id, key), key) }
   },
-  /** Whether the snapshot holds task `uuid` as an active task, such as an
-      archived one that a restore brought back. */
-  isLiveTask: (uuid: string): boolean => rows.issues.has(uuid),
-
   addLink: (srcId: string, type: string, dstId: string) => {
     if (srcId === dstId) return
     const a = keyToUuid.get(srcId)

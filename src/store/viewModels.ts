@@ -442,12 +442,13 @@ export const shapeMessageGroup = (issueUuid: string, newestFirst: MessageVM[]) =
 }
 export type MessageGroupVM = ReturnType<typeof shapeMessageGroup>
 
-/* one archived task of the Archived tasks page (P.fetchArchivedPage),
-   outside the snapshot, so it carries the same handle/key split live ones
+/* one archived task outside the snapshot, as the task window finds it
+   (P.fetchArchivedTask) and as the Archived tasks page lists it
+   (shapeArchivedListRow), so it carries the same handle/key split live ones
    get in rebuild(). The server searches the archive, so a row carries no
    description, labels or links, and it names no parent. */
 export const shapeArchivedIssue = (
-  r: FunctionReturnType<typeof api.issues.archivedPage>['rows'][number],
+  r: NonNullable<FunctionReturnType<typeof api.issues.archivedTask>>,
   id: string,
   key: string,
 ) => ({
@@ -472,3 +473,23 @@ export const shapeArchivedIssue = (
   updatedAt: new Date(r.updated_at).getTime(),
 })
 export type ArchivedIssueVM = ReturnType<typeof shapeArchivedIssue>
+
+/* one row of the Archived tasks page (P.fetchArchivedPage): the archived
+   task with where it lives, its owner's name and whether this person may
+   restore it, as the server answers them, so the page reads none of the
+   planner's projects, people or levels. `place` is "Luma Sensor ›
+   Firmware" for a sub-project and the name alone otherwise. */
+export const shapeArchivedListRow = (
+  r: FunctionReturnType<typeof api.issues.archivedPage>['rows'][number],
+  id: string,
+  key: string,
+) => ({
+  ...shapeArchivedIssue(r, id, key),
+  place:
+    r.place.parent_name === null
+      ? r.place.project_name
+      : `${r.place.parent_name} › ${r.place.project_name}`,
+  ownerName: r.owner_name,
+  canRestore: r.can_restore,
+})
+export type ArchivedListRowVM = ReturnType<typeof shapeArchivedListRow>
