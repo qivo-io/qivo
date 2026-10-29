@@ -296,6 +296,7 @@ export function planRelations({ org, projects, people, present }) {
   if (!present.projects.has(partnerRoot))
     plan.projects.push({
       id: partnerRoot,
+      org_id: org,
       type: 'meta',
       key: 'PART',
       name: 'Partner pilot',
@@ -305,6 +306,7 @@ export function planRelations({ org, projects, people, present }) {
   if (!present.projects.has(partner))
     plan.projects.push({
       id: partner,
+      org_id: org,
       type: 'project',
       parent_id: partnerRoot,
       key: 'PFLD',

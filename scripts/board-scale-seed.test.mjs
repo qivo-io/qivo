@@ -855,9 +855,9 @@ describe('board-scale-seed --relations', () => {
   it('plans a Firmware task at both caps, with every status, owner and relation kind', () => {
     const all = plan()
     const family = relationId('family')
-    expect(all.projects.map((p) => [p.key, p.type, p.lead_id])).toEqual([
-      ['PART', 'meta', 'person-nora'],
-      ['PFLD', 'project', 'person-nora'],
+    expect(all.projects.map((p) => [p.key, p.type, p.lead_id, p.org_id])).toEqual([
+      ['PART', 'meta', 'person-nora', 'org'],
+      ['PFLD', 'project', 'person-nora', 'org'],
     ])
     expect(all.tasks[0]).toMatchObject({
       id: family,
