@@ -117,11 +117,15 @@ export type ProjectRef = { id: string; name: string; key: string; parent_id: str
  * the rules that do not depend on who takes the tasks, so it answers for a
  * new holder who passes the write's own checks of them once the access is
  * gone (model/projectAccess.ts assertCanTakeOver, then the task update's
- * holder rules). The write checks the new holder first, so for one who
- * fails them it refuses with that holder's sentence instead, marked
- * HELD_TASKS_REFUSED; the window offers only new holders who pass. The
- * preview leaves the new holder out because those checks read their access
- * as it is before the removal, which may be one of its people.
+ * holder rules). The write checks a new holder's standing on each task's
+ * project (assertCanTakeOver) before the caller's Edit access, so a new
+ * holder who fails that is refused with their own sentence, marked
+ * HELD_TASKS_REFUSED. It checks whether the new holder can see a subtask's
+ * parent only after the caller's Edit access (updateIssueCore), so where the
+ * caller loses Edit the write refuses with the caller's sentence first. The
+ * window offers only new holders who pass. The preview leaves the new
+ * holder out because those checks read their access as it is before the
+ * removal, which may be one of its people.
  *
  * `keep.targets` are the projects Keep as Viewer would grant Viewer on, and
  * `keep.changers` name, for each person who can still change a listed
