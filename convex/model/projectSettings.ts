@@ -719,9 +719,9 @@ function inGroup<Row>(index: NamedIndex<Row, IdTie>, mark: string): NamedIndex<R
 /* Whether `key` is a position of the Add team or user picker. */
 const markedKey = (key: string): boolean => key.startsWith(TEAM_MARK) || key.startsWith(PERSON_MARK)
 
-/* `stream` with the id of each row that a row of `held` sits at, the same
- * position in the same order, added to `found` before the row is handed
- * out. The Add team or user picker reads a project's shares and grants
+/* `stream` with each row that a row of `held` sits at, the same position
+ * in the same order, passed to `found` before the row is handed out. The
+ * Add team or user picker reads a project's shares and grants
  * beside the organization's teams and people this way, so a choice the
  * project already holds is left out without a lookup of its own: a share or
  * grant copies its team's or person's name key, and its tie is the same id.
@@ -731,7 +731,7 @@ const markedKey = (key: string): boolean => key.startsWith(TEAM_MARK) || key.sta
 function besideHeld<Row extends { id: string }, Held>(
   stream: (reads: NamedReads) => NamedStream<Row>,
   held: (reads: NamedReads) => NamedStream<Held & GenericDocument>,
-  found: Set<string>,
+  found: (row: Row) => void,
 ): (reads: NamedReads) => NamedStream<Row> {
   return (reads) =>
     (async function* () {
@@ -753,7 +753,7 @@ function besideHeld<Row extends { id: string }, Held>(
               }
             }
             if (next === null || next === undefined || compareNamed(next.at, item.at) > 0) break
-            if (compareNamed(next.at, item.at) === 0) found.add(item.row.id)
+            if (compareNamed(next.at, item.at) === 0) found(item.row)
             next = undefined
           }
           yield item
@@ -853,8 +853,11 @@ export async function candidatesOf(
   ]
   const choices = (reads: NamedReads) =>
     mergeNamed<Doc<'teams'> | Doc<'profiles'>>(streams.map((stream) => stream(reads)))
-  // the choices the project holds, by id, as its shares and grants mark them
-  const found = new Set<string>()
+  // the teams and people the project holds, by id, as its shares and
+  // grants mark them; apart, since a team's client-chosen id can be a
+  // person's
+  const heldTeams = new Set<string>()
+  const heldPeople = new Set<string>()
   const held =
     project === null
       ? []
@@ -869,14 +872,14 @@ export async function candidatesOf(
     doc: Doc<'teams'> | Doc<'profiles'>,
     guard: ReadGuard,
   ): Promise<CandidateRow | null> => {
-    if (found.has(doc.id)) return null
     if (!('org_role' in doc)) {
-      if (!matches(nameKey(doc.name))) return null
+      if (heldTeams.has(doc.id) || !matches(nameKey(doc.name))) return null
       if (project !== null && (await guard.lookup(() => shareOn(ctx, project.id, doc.id))) !== null)
         return null
       return { type: 'team', id: doc.id, name: doc.name }
     }
-    if (!doc.active || doc.id === without || !matches(nameKey(doc.name))) return null
+    if (heldPeople.has(doc.id) || !doc.active || doc.id === without) return null
+    if (!matches(nameKey(doc.name))) return null
     if (project !== null && (await guard.lookup(() => grantOn(ctx, project.id, doc.id))) !== null)
       return null
     return { type: 'user', ...personRow(doc), ...choicesOf(doc) }
@@ -891,7 +894,7 @@ export async function candidatesOf(
               mergeNamed<Doc<'project_team_access'> | Doc<'project_access'>>(
                 held.map((stream) => stream(reads)),
               ),
-            found,
+            (doc) => ('org_role' in doc ? heldPeople : heldTeams).add(doc.id),
           ),
     keep,
     limit: LIST_BATCH,

@@ -1227,6 +1227,39 @@ describe('projectSettings.candidates', () => {
     ])
   })
 
+  it('tells a team from a person with the same id when it leaves out what the project holds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const project = await meta(t, f, f.user)
+    // teams take client-chosen ids: Twin has the admin's, Echo the guest's
+    const twin = async (id: string, name: string) =>
+      t.run((ctx) =>
+        ctx.db.insert('teams', {
+          id,
+          org_id: f.org.id,
+          name,
+          track_delay_default: false,
+          created_at: NOW,
+        }),
+      )
+    await twin(f.admin.id, 'Twin')
+    await twin(f.guest.id, 'Echo')
+    await keyOrg(t, f.org.id)
+    // Twin is shared and the guest granted; the admin and Echo are not
+    await share(t, project, f.admin.id, 'twin')
+    await grant(t, project, f.guest.id, 'guest')
+    const batches = await walk((after) =>
+      read.candidates(t, f.admin, { project_id: project.id, after }),
+    )
+    expect(batches.flatMap((b) => b.rows.map((r) => [r.type, r.name]))).toEqual([
+      ['team', 'Echo'],
+      ['team', 'Hardware'],
+      ['user', 'admin'],
+      ['user', 'Relay'],
+      ['user', 'viewer'],
+    ])
+  })
+
   it('offers a new project every team and the active admins, users and viewers, without guests or the chosen lead', async () => {
     const t = newT()
     const f = await withOrg(t)
