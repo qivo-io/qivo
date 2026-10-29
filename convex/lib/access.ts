@@ -234,9 +234,17 @@ function once<T>(cache: Map<string, Promise<T>>, key: string, read: () => Promis
  * team their known shares name, is the organization's, and from `manyTeams`
  * such teams not asked yet reads the organization's teams in one range
  * instead, while they are at most `orgTeams` for each of those teams and at
- * most `orgTeamsMost` and at most `bytes` as JSON, as a legacy team icon has
- * no length limit and the part's hard budget counts this read too. Past
- * any bound it asks team by team. Tests change them. */
+ * most `orgTeamsMost` and at most `bytes` as JSON, as the part's hard budget
+ * counts this read too, and `orgTeamsMost` teams at lib/limits.ts
+ * TEAM_ROW_MAX_BYTES are about 12 MB. 512 KiB holds about 1,700 teams of
+ * the largest row a deployment held on 2026-10-29 (273 bytes, about 307
+ * JSON characters). JSON counts characters where Convex counts UTF-8 bytes,
+ * so at the name caps the read can take up to about 2.3 times `bytes`
+ * (U+3307, whose name key is six katakana, stores 1,905 bytes for 819 JSON
+ * characters), about 1.2 MiB, which the margins that count it hold:
+ * lib/mainSearch.ts SEARCH_RESERVE's extra 2 MiB, the shared reads in
+ * lib/taskWindow.ts TASK_WINDOW and internal/adminAccessReport.ts ROOM.
+ * Past any bound it asks team by team. Tests change them. */
 export const OWN_READS = {
   steps: [32, 128, 512],
   lookups: 64,
