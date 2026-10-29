@@ -1010,8 +1010,9 @@ The nightly archive of Done tasks reads only the tasks whose Done time passed
 the 30-day threshold since its last finished run, which the one
 `archive_runs` row records, and the projects in `archive_rechecks`, which
 every write that can let a task fall due without a new Done time marks, such
-as a project restored from the archive or a child that stops waiting for its
-parent. About every 28th night it makes a full pass over every live project
+as a project restored from the archive, or a subtask that stops counting for
+its Done parent because it is archived, leaves the parent or moves to Deleted
+items. About every 28th night it makes a full pass over every live project
 instead, which catches a task that data written outside the app or a missed
 mark left waiting, at most about four weeks late. Deleting the `archive_runs`
 row makes the next run a full pass. A backup restore rewinds both tables,

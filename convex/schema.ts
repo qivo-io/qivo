@@ -2344,7 +2344,7 @@ export default defineSchema({
 
   // The projects the next nightly archive checks in full, whatever their
   // tasks' done_at: a task there can be due without a new done_at, when its
-  // project was restored from the archive or a child it waited for stopped
+  // project was restored from the archive or a subtask it waited for stopped
   // counting (model/archiveRechecks.ts). Writers insert without reading, so
   // a project can have several rows; the run's hand phase keeps one per
   // project, deletes the others it reads, and hands the project to its
