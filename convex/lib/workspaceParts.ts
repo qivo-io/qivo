@@ -88,7 +88,7 @@ function keyFree<R extends { name_key?: string }>(row: R): KeyFree<R> {
 /** A relation row as the app receives it, without the organization id,
  * the archive mark and the task's window key, which only serve index
  * reads. */
-function relationRow<
+export function relationRow<
   D extends {
     _id: unknown
     _creationTime: number
@@ -123,16 +123,30 @@ const orgRowFor = (
  * sync stamp (model/syncStamps.ts) as sync_at and sync_since. */
 type ProfileRow = KeyFree<AppRow<'profiles'>> & { sync_at?: string; sync_since?: string }
 
-/* A task as the app receives it. The parent id goes out only when the
+/** A task as the app receives it. The parent id goes out only when the
  * reader is shown the parent (lib/workingSet.ts parentLink), and the text
  * comes from the task's description row (model/descriptions.ts
  * descriptionOf). */
-type TaskRow = Omit<AppRow<'issues'>, 'relations_marked' | 'parent_id' | 'window_key'> & {
+export type TaskRow = Omit<AppRow<'issues'>, 'relations_marked' | 'parent_id' | 'window_key'> & {
   parent_id?: string
   /** always sent; absent reads as false, as in rows the app makes */
   has_subtasks?: boolean
   has_hidden_subtasks: boolean
   has_hidden_parent: boolean
+}
+
+/** The fields of task `task` that every app row of it carries: its stored
+ * fields without the server-owned ones, its parent and its text, which each
+ * read adds as its rules allow (TaskRow, lib/taskWindow.ts ShortRow). */
+export function taskFields(task: Doc<'issues'>) {
+  const {
+    parent_id: _parent,
+    relations_marked: _marks,
+    window_key: _window,
+    description: _stored,
+    ...row
+  } = rowOf(task)
+  return row
 }
 
 /** The windowed kinds. */
@@ -730,26 +744,19 @@ export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow)
     roomOf(await ctx.meta.getTransactionMetrics(), PAGE.textReserve),
   )
   if (texts === null) return overflow(w)
-  const issues = tasks.map((task): TaskRow => {
-    const {
-      parent_id: parent,
-      relations_marked: _marks,
-      window_key: _window,
-      description: _stored,
-      ...row
-    } = rowOf(task)
-    return {
-      ...row,
+  const issues = tasks.map(
+    (task): TaskRow => ({
+      ...taskFields(task),
       description: texts.get(task.id) ?? '',
-      ...parentLink(task, () => parent !== undefined && isShown.get(parent) === true),
+      ...parentLink(task, (parent) => isShown.get(parent) === true),
       // an active subtask in a live project makes this task a group, which
       // the app tells while subtasks in later windows are still to come
       has_subtasks: (kids.get(task.id)?.length ?? 0) > 0,
       // one the caller cannot see makes it a group whose subtasks they are
       // not all shown
       has_hidden_subtasks: (kids.get(task.id) ?? []).some((kid) => hiddenKid.get(kid.id)),
-    }
-  })
+    }),
+  )
   return {
     state: 'ok' as const,
     ...chunkLists({

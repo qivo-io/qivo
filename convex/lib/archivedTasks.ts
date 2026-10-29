@@ -726,5 +726,13 @@ export async function archivedTaskCore(
   if (project === null || project.org_id !== task.org_id) return null
   const me = myProfiles.get(project.org_id)
   if (me === undefined || !(await canSeeProject(ctx, me, project))) return null
+  return await archivedRowOf(ctx, task)
+}
+
+/** Archived task `task` as the Archived tasks page shows it
+ * (ArchivedPageRow), for a caller who has checked archivedTaskCore's rule
+ * already: the caller's seat in the task's organization sees its project.
+ * It reads whether the task is a group, one index range. */
+export async function archivedRowOf(ctx: QueryCtx, task: ArchivedTask): Promise<ArchivedPageRow> {
   return await pageRow(task, taskFacts(ctx, task))
 }

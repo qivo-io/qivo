@@ -127,7 +127,7 @@ import { canCreateProjects } from './projectCreators'
 import { taskOwnerId } from './review'
 import { allWordsMatcher, searchPieces, taskSearchText } from './search'
 import type { EventOwner } from './taskEvents'
-import { ISSUE_PREFIX, issueKey } from './taskRefs'
+import { INT4_MAX, issueKey, parseIssueRef, UUID } from './taskRefs'
 import { groupRemainingHours, linkShown, parentLink, type Shown } from './workingSet'
 
 export { machineDetail }
@@ -211,26 +211,14 @@ export async function asMachineCaller(
 }
 
 /* ------------------------------------------------------------- ref grammar
- * core.ts:43,251-291. Stored uuids are lowercase and by_uuid is exact-match,
- * so caller-supplied uuid refs are lowercased before every lookup; keys are
- * uppercased. Numeric refs are int4-bounded — out of range is a clean miss,
- * never a crash (verify-mcp pins QN-3000000000 → not-found). */
+ * Task refs (parseIssueRef, UUID) live in lib/taskRefs.ts, which the app's
+ * task window reads too without this module. Stored uuids are lowercase and
+ * by_uuid is exact-match, so caller-supplied uuid refs are lowercased before
+ * every lookup; keys are uppercased. Numeric refs are int4-bounded — out of
+ * range is a clean miss, never a crash (verify-mcp pins QN-3000000000 →
+ * not-found). */
 
-export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-const INT4_MAX = 2147483647
-const ISSUE_REF = new RegExp(`^(?:${ISSUE_PREFIX}-)?(\\d+)$`, 'i')
-
-export { issueKey } from './taskRefs'
-
-/* "QN-482" / bare "482" (org-scoped num) / uuid. null = nothing it could be. */
-export function parseIssueRef(ref: string): { uuid: string } | { num: number } | null {
-  if (UUID.test(ref)) return { uuid: ref.toLowerCase() }
-  const m = ref.match(ISSUE_REF)
-  if (m === null) return null
-  const num = Number(m[1])
-  return num >= 1 && num <= INT4_MAX ? { num } : null
-}
+export { issueKey, parseIssueRef, UUID } from './taskRefs'
 
 /* Resolve an issue ref inside the caller's org — org-fenced (numbers are
  * org-scoped and a login can span orgs since 0081; the fence is the
