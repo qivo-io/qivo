@@ -10,10 +10,12 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
+  accessOf,
   canAccessProject,
   canManageProjectUsers,
   canSeeProject,
   hasProjectLevel,
+  isAccessUnchecked,
   LEVELS_READ,
   machineAccess,
   type OrgProjectLevels,
@@ -323,6 +325,75 @@ describe('accessFlags', () => {
     // the shapes reach every answer, the parent shown for navigation included
     expect([...seen].sort()).toEqual(['lead', 'null', 'user', 'viewer'])
   }, 240_000)
+
+  it('answers as projectLevel or refuses, never otherwise, under bounds that stop its checks, for every role, kind and grant shape on both paths', async () => {
+    const seen = new Set<string>()
+    for (const [name, plant] of SHAPES) {
+      for (const reach of [false, true]) {
+        const t = newT()
+        const f = await withOrg(t)
+        const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+        await t.run((ctx) => plant(ctx, f, subject))
+        if (reach) await withReach(t)
+        await t.run(async (ctx) => {
+          const projects = await ctx.db.query('projects').collect()
+          for (const org_role of ORG_ROLES) {
+            for (const kind of PROFILE_KINDS) {
+              for (const me of [{ ...subject, org_role, kind }, f.viewer, f.guest, f.otherAdmin]) {
+                // each stops a different read: navigation's own rows and
+                // child rows, the shares of one project, memberships, a
+                // parent's sub-projects, root rows, teams
+                for (const own of [
+                  { navRows: 0, children: 0 },
+                  { projectShares: 0, rows: 0, teamReads: 0 },
+                  { members: 0, lookups: 0 },
+                  { subProjects: 0 },
+                  { roots: 0, navRows: 0 },
+                  { teams: 0, navTeams: 0 },
+                ]) {
+                  Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS), own)
+                  const how = `${name}: ${me.name} as ${me.org_role} ${me.kind}, ${reach ? 'reach rows' : 'legacy'}, ${JSON.stringify(own)}`
+                  const settle = <V>(p: Promise<V>) =>
+                    p.then(
+                      (value): V | 'refused' => value,
+                      (e: unknown) => {
+                        if (isAccessUnchecked(e)) return 'refused' as const
+                        throw e
+                      },
+                    )
+                  const levels = projectLevelsOf(ctx, me)
+                  const access = accessOf(ctx, me)
+                  for (const p of projects) {
+                    for (const navigation of [true, false]) {
+                      const got = await settle(levels.level(p.id, navigation))
+                      seen.add(String(got))
+                      if (got !== 'refused')
+                        expect(got, `${how} on ${p.key}, navigation ${navigation}`).toBe(
+                          await projectLevel(ctx, me, p, navigation),
+                        )
+                    }
+                    const visible = await settle(access.visible(p.id))
+                    if (visible !== 'refused')
+                      expect(visible, `${how}, visible ${p.key}`).toBe(
+                        await canSeeProject(ctx, me, p),
+                      )
+                    const accessible = await settle(access.accessible(p.id))
+                    if (accessible !== 'refused')
+                      expect(accessible, `${how}, accessible ${p.key}`).toBe(
+                        await canAccessProject(ctx, me, p),
+                      )
+                  }
+                }
+                Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+              }
+            }
+          }
+        })
+      }
+    }
+    // the bounds refused some checks and let others answer
+    expect([...seen].sort()).toEqual(['lead', 'null', 'refused', 'user', 'viewer'])
+  }, 300_000)
 
   it('answers null for a missing parent or a cycle where projectLevel refuses, and reads only the projects asked about', async () => {
     const t = newT()
