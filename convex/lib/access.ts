@@ -557,6 +557,12 @@ export function projectLevelsOf(
     shared,
     /** The project with this id, of any organization, or null. */
     project,
+    /** Keeps project `p`, which the caller read in this transaction, so
+     * project() answers it without reading it again. A project already
+     * asked about keeps its first answer. */
+    seen: (p: Doc<'projects'>) => {
+      if (!projects.has(p.id)) projects.set(p.id, Promise.resolve(p))
+    },
     /** projectLevel on the project with this id, null when it is missing. */
     level: (id: string, includeNavigation = true) =>
       once(levels, `${includeNavigation}:${id}`, async () => {
@@ -599,9 +605,18 @@ export function accessOf(
      * for every answer here (lib/mainSearch.ts names a result's projects
      * with it). */
     project: levels.project,
+    /** Keeps a project the caller read in this transaction, so the answers
+     * here do not read it again (main Search's name candidates). */
+    seen: levels.seen,
     /** Whether the caller can see the project with this id
      * (canSeeProject). */
     visible,
+    /** Whether the caller can see the project with this id for a reason
+     * other than navigation to one of its sub-projects (canAccessProject):
+     * as its lead, through a grant or a team share on it or above it, or as
+     * an organization admin. It never reads a top-level project's
+     * sub-projects. */
+    accessible: async (id: string) => (await levels.level(id, false)) !== null,
     /** The caller's level on the project with this id (projectLevel), null
      * where they cannot see it. */
     level: (id: string) => levels.level(id),
