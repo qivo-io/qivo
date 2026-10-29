@@ -292,7 +292,12 @@ long titles and unowned tasks. Their titles read like Northstar's, so the
 Board's card height estimates meet realistic text, and each description
 names the task's number. Run it again to add only the tasks still missing;
 it also finishes a parent and subtasks it stopped in the middle of, under
-the parent it already made. It writes to that local backend alone.
+the parent it already made. `--archived <n>` then archives the first n
+seeded tasks that are not parents, spread over the sub-projects as the
+tasks are, as Nora and without a reason, which gives Archived tasks more
+pages than one, for example `--tasks 400 --archived 160`. A second run
+archives only what is still active and never seeds an archived task
+again. It writes to that local backend alone.
 
 `--inbox <n>`, up to the `--tasks` count, also gives Nora `n` inbox items,
 for checking the Inbox and its bulk actions at scale. On each of the first

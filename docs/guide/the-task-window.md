@@ -262,17 +262,29 @@ which also becomes a comment, but do not require one
 ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
 
 Open **Archived tasks** from a project or sub-project's **…** menu, or from
-**Settings → Projects → Archived tasks**. The page works with one project at
-a time, optionally narrowed to a sub-project. Its search, on desktop and
-phones, looks through every archived task of that project by task ID, title,
-description, status, priority, assignee and label, with words in any order.
-A search reads a large archive in steps. When a step stops before the end,
-the page says how many archived tasks it has searched, and **Search older
-tasks** continues. Without a search, the newest archived tasks come first,
-and **Show 100 older tasks** loads the next 100.
+**Settings → Projects → Archived tasks**. The page lists one project with its
+sub-projects, or one sub-project. To see every project of an organization,
+choose **All projects** in the project list; the page never starts there.
+It lists the projects you can see that are not archived. A sub-project
+archived on its own, and an archived project, show their tasks again once
+they are restored. The page shows 25 tasks at a time, newest archived
+first, and **Next** and **Previous** move between pages. The line above the
+list says which tasks the page shows, such as **Archived tasks 26 to 50**,
+and the last page says these are the oldest.
+
+The search, on desktop and phones, looks through every archived task of
+that choice by task ID, title, description, status, priority, assignee and
+label, with words in any order. A search reads a large archive in steps,
+and each page shows the matches found in its step. When a step stops before
+the end, the page says how many archived tasks it has searched, and
+**Search older tasks** continues from there. Only a search that has read
+every archived task says that nothing matches. With **All projects**, a
+step may also read tasks of projects you cannot see; a page can then show
+no tasks and still offer **Next**.
 
 **Restore** returns a task to its Board and restores archived parents when
-needed. A subtask whose parent already has 100 active subtasks comes back as
+needed. The task leaves the list at once, and the page asks for its tasks
+again, so the next archived task moves up into it. A subtask whose parent already has 100 active subtasks comes back as
 a top-level task, and Qivo says so. Its followers are told it left its
 parent, and you can give it a parent again once there is room, as a restore
 from Deleted items does. If a restore would change a parent task in a
