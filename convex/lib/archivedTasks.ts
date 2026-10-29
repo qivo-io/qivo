@@ -25,13 +25,15 @@
  * read live here too. */
 
 import type { TransactionMetric, TransactionMetrics } from 'convex/server'
-import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import type { Doc } from '../_generated/dataModel'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { descriptionOf } from '../model/descriptions'
-import { canSeeProject, levelRank, projectLevelsOf } from './access'
+import { type Grantee, navReady } from '../model/projectNav'
+import { canSeeProject, levelRank, OWN_READS, projectLevelsOf, receivesTeamAccess } from './access'
 import { digestText, openCursorText, sealCursorText } from './archiveCursorSeal'
 import { byId } from './db'
+import type { ArchiveState } from './enums'
 import { taskOwnerId } from './review'
 import { allWordsMatcher, searchPieces, type TaskSearchFields, taskSearchText } from './search'
 import { issueKey, STATUS_NAMES } from './taskRefs'
@@ -359,9 +361,12 @@ export async function archivedTasksAfter(
  * transaction (4,096 index ranges, 32,000 documents and 16 MiB) once the
  * caller's own reads before the page are done, and never more than the
  * request has left. A page also stops after looking at `tasks` archived
- * tasks. Opening the scope's projects side by side, a task each, may read
- * the `opening` share of the page before the page reads the organization's
- * archive instead (archivedTasksAfter). Tests lower these. */
+ * tasks of its scope. Tasks outside the scope that a read of the
+ * organization's archive passes count only through the reads they cost, so
+ * where a page ends never counts them. Opening the scope's projects side by
+ * side, a task each, may read the `opening` share of the page before the
+ * page reads the organization's archive instead (archivedTasksAfter). Tests
+ * lower these. */
 export const ARCHIVE_PAGE = {
   tasks: 1000,
   ranges: 1500,
@@ -371,17 +376,42 @@ export const ARCHIVE_PAGE = {
 }
 
 /** What an archived page keeps back from the request's limits, for the
- * reads of a row after its last check and of the page's end. The first task
- * a page looks at may use the rest. A task's filters can read whether it is
- * a group and its text, two description rows at most (model/descriptions.ts
- * descriptionOf), before its row's walk checks the room, and past the walk's
- * last check a REST or MCP row reads at most four more documents
- * (lib/core.ts listArchivedIssuesCore): the subtask its walk read last, the
- * first subtask of a group too large to walk, its parent and its newest
- * comment. Its text is the one the filters read, or one more read in its
- * place. The bytes hold seven documents at Convex's size limit. Tests lower
- * these. */
-export const ARCHIVE_RESERVE = { ranges: 16, documents: 64, bytes: 7 * DOCUMENT_MAX_BYTES }
+ * reads one task makes after the page's last check and the reads of the
+ * page's end. The first task a page looks at may use the rest. Between two
+ * checks a task can read, in index ranges and documents:
+ *
+ * - the scope's check of a project not asked before (ArchiveScope holds):
+ *   the project and its parent (2 and 2), the caller's grant on it (1 and
+ *   1), its team shares (1 range), and for each share of a team not asked
+ *   before a membership and the team (2 and 2 a share);
+ * - its filters and search: whether it is a group (1 and 1), its text (1
+ *   and 2, model/descriptions.ts descriptionOf), its labels (1 and at most
+ *   LIMITS.labels.max, 20) and, past ARCHIVE_LABELS.scan, each of those
+ *   labels by id (20 and 20), and its assignee's profile (1 and 1);
+ * - its row: the owner's profile (1 and 1), or past a REST or MCP row's
+ *   walk at most four more documents (lib/core.ts listArchivedIssuesCore):
+ *   the subtask its walk read last, the first subtask of a group too large
+ *   to walk, its parent and its newest comment.
+ *
+ * That is 30 ranges and 51 documents with a few shares and four more for
+ * each further share, so the reserve covers a project shared with about ten
+ * teams. The bytes hold seven documents at Convex's size limit: two
+ * description rows and four REST documents, the rest small. The app's page
+ * keeps LEVEL_STEP_READS back too. Tests lower these. */
+export const ARCHIVE_RESERVE = { ranges: 64, documents: 128, bytes: 7 * DOCUMENT_MAX_BYTES }
+
+/** What the app's page keeps back beyond ARCHIVE_RESERVE: the task whose
+ * scope check asks its levels instance about the 32nd, 128th or 512th
+ * project reads the caller's own grants and memberships, each up to one row
+ * past the step, and the shares of their teams, up to OWN_READS.rows rows
+ * and one range a team, at once (lib/access.ts OWN_READS). A grant, a
+ * membership and a share hold ids and a level, a few hundred bytes at
+ * most. */
+export const LEVEL_STEP_READS = {
+  ranges: 2 + OWN_READS.teams,
+  documents: 2 * (Math.max(...OWN_READS.steps) + 1) + OWN_READS.rows + 1,
+  bytes: 512 << 10,
+}
 
 /** Transaction totals (ctx.meta.getTransactionMetrics) that a read keeps
  * below, in index ranges, documents and bytes read. */
@@ -697,6 +727,9 @@ export type ArchivedPageRules<Row> = {
     ceiling: ReadCeiling,
     first: boolean,
   ): Promise<Row | null>
+  /** What the page keeps back from the request's limits, ARCHIVE_RESERVE
+   * unless given. */
+  reserve?: ReadCeiling
 }
 
 /** One page of archived tasks: its rows, where the next page starts, or
@@ -711,12 +744,14 @@ export type ArchivedTasksPage<Row> = {
 /**
  * One page of the archived tasks of `scope` after `cursor`, in archive
  * order. It stops at `limit` rows, after looking at ARCHIVE_PAGE.tasks
- * tasks, or once it has spent ARCHIVE_PAGE's reads, so it can hold fewer
- * rows than `limit`, even none, while `next` is set. `next` is the last task
- * the page looked at, not the last row, so the next page never rereads tasks
- * `rules.keeps` left out. A task outside the scope's organization, or one
- * the scope does not hold, is never kept or counted in `scanned`, which fails
- * closed when the stream reads the organization's whole archive. Its budget
+ * tasks of the scope, or once it has spent ARCHIVE_PAGE's reads, so it can
+ * hold fewer rows than `limit`, even none, while `next` is set. `next` is the
+ * last task the page looked at, not the last row, so the next page never
+ * rereads tasks `rules.keeps` left out. A task outside the scope's
+ * organization, or one the scope does not hold, is never kept or counted in
+ * `scanned`, which fails closed when the stream reads the organization's
+ * whole archive, and it never counts toward where the page ends, so its rows
+ * and `scanned` tell nothing of how many such tasks it passed. Its budget
  * counts from the request's reads when it starts, so what the caller read
  * before, such as the scope's projects and a search's labels, leaves the
  * page that much less room under the request's limits.
@@ -736,7 +771,7 @@ export async function archivedTasksPage<Row>(
     documents: start.documentsRead.used,
     bytes: start.bytesRead.used,
   }
-  const room = roomOf(start, ARCHIVE_RESERVE)
+  const room = roomOf(start, rules.reserve ?? ARCHIVE_RESERVE)
   const budget: ReadCeiling = {
     ranges: Math.min(room.ranges, used.ranges + ARCHIVE_PAGE.ranges),
     documents: Math.min(room.documents, used.documents + ARCHIVE_PAGE.documents),
@@ -750,12 +785,11 @@ export async function archivedTasksPage<Row>(
   const rows: Row[] = []
   const stream = await archivedTasksAfter(ctx, scope, cursor, () => readsUnder(ctx, opening))
   let last: ArchiveCursor | null = null
-  let looked = 0
   let scanned = 0
   try {
     for (let task = await stream.next(); task !== null; task = await stream.next()) {
-      looked++
-      // a read of the organization's archive hands out other projects' tasks too
+      // a read of the organization's archive hands out other projects' tasks
+      // too, which only the budget counts
       if (task.org_id === scope.orgId && (await scope.holds(task))) {
         scanned++
         const facts = taskFacts(ctx, task)
@@ -774,7 +808,7 @@ export async function archivedTasksPage<Row>(
       last = cursorAfter(task)
       if (
         rows.length >= limit ||
-        looked >= ARCHIVE_PAGE.tasks ||
+        scanned >= ARCHIVE_PAGE.tasks ||
         !(await readsUnder(ctx, budget))
       ) {
         return { rows, next: stream.more() ? last : null, scanned }
@@ -799,17 +833,18 @@ export const ARCHIVED_PAGE_ROWS = 25
  * reloads. A later release lowers it to 25. */
 export const ARCHIVED_PAGE_MOST = 100
 
-/** How far the app's page expands the projects it is asked for, before its
- * read budget starts: at most `ids` distinct project ids (issues.archivedPage
- * refuses more), and at most `subProjects` sub-projects read for the
- * top-level projects among them, each checked for the caller once. A family
- * has no cap on sub-projects (limits plan, item 4), so past that bound the
- * page reads the organization's archive instead and keeps the tasks of the
- * named projects and of the live sub-projects of the named top-level ones
- * that the caller sees. Opening that many projects side by side would mostly
- * pass the page's opening share anyway (ARCHIVE_PAGE.opening). Tests lower
- * `subProjects`. */
-export const ARCHIVED_SCOPE = { ids: 50, subProjects: 200 }
+/** How far the app's page expands its scope before its read budget
+ * starts: at most `ids` distinct project ids (issues.archivedPage refuses
+ * more), and at most `subProjects` live projects merged side by side, the
+ * sub-projects of named top-level projects and, for All projects, the
+ * projects the caller reaches, each checked for the caller once. It reads
+ * the project_reach rows of the caller's seat and of at most `teams` of
+ * their teams. A family has no cap on sub-projects (limits plan, item 4),
+ * so past those bounds the page reads the organization's archive instead
+ * and keeps only the tasks its scope holds. Opening that many projects side
+ * by side would mostly pass the page's opening share anyway
+ * (ARCHIVE_PAGE.opening). Tests lower them. */
+export const ARCHIVED_SCOPE = { ids: 50, subProjects: 200, teams: 64 }
 
 /**
  * The projects whose archived tasks the app's Archived tasks page lists for
@@ -891,20 +926,169 @@ const shownIn = (levels: ProjectLevels, orgId: string) =>
     return (await levels.level(id, false)) !== null
   })
 
+/* The live sub-projects of top-level project `top`, or null when they are
+ * more than `most`. Archived ones never count. A project stored before
+ * archive_state existed has none until internal/navBackfill gives it one, so
+ * those are read too and kept while live. */
+async function liveSubProjects(
+  ctx: QueryCtx,
+  top: Pick<Doc<'projects'>, 'id' | 'org_id'>,
+  most: number,
+): Promise<Doc<'projects'>[] | null> {
+  const range = (state: ArchiveState | undefined) =>
+    ctx.db
+      .query('projects')
+      .withIndex('by_org_parent_state_name', (q) =>
+        q.eq('org_id', top.org_id).eq('parent_id', top.id).eq('archive_state', state),
+      )
+  const out = await range('live').take(most + 1)
+  if (out.length > most) return null
+  for await (const kid of range(undefined)) {
+    if (kid.archived_at !== undefined) continue
+    out.push(kid)
+    if (out.length > most) return null
+  }
+  return out
+}
+
+/* Whose project_reach rows tell what `me` reaches: their seat, and each of
+ * their teams when their role receives team access (a guest's does not).
+ * Null while the organization's rows are not complete (model/projectNav.ts
+ * navReady), or when `me` is in more than ARCHIVED_SCOPE.teams teams. */
+async function granteesOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Grantee[] | null> {
+  if (!(await navReady(ctx, me.org_id))) return null
+  const seat: Grantee = { grantee_kind: 'profile', grantee_id: me.id }
+  if (!receivesTeamAccess(me)) return [seat]
+  const memberships = await ctx.db
+    .query('team_members')
+    .withIndex('by_profile', (q) => q.eq('profile_id', me.id))
+    .take(ARCHIVED_SCOPE.teams + 1)
+  if (memberships.length > ARCHIVED_SCOPE.teams) return null
+  return [
+    seat,
+    ...memberships.map((m): Grantee => ({ grantee_kind: 'team', grantee_id: m.team_id })),
+  ]
+}
+
+/* The live projects of the caller's organization that `grantees` reach
+ * (granteesOf), for All projects: each top-level project on which one holds
+ * a source of its own, with all its live sub-projects, which that source
+ * reaches, and each live sub-project on which one holds one. Null when they
+ * are more than `most`. A row finds a candidate and grants nothing: the
+ * caller checks each (shownIn), and a role that turns no source into access,
+ * such as a viewer's lead, drops out there. `read` holds the projects read
+ * on the way. */
+async function reachedProjects(
+  ctx: QueryCtx,
+  orgId: string,
+  grantees: readonly Grantee[],
+  most: number,
+): Promise<{ ids: string[]; read: Doc<'projects'>[] } | null> {
+  const ids = new Set<string>()
+  const read: Doc<'projects'>[] = []
+  const reach = (g: Grantee, kind: 'root' | 'child') =>
+    ctx.db
+      .query('project_reach')
+      .withIndex('by_grantee_list', (q) =>
+        q
+          .eq('grantee_kind', g.grantee_kind)
+          .eq('grantee_id', g.grantee_id)
+          .eq('kind', kind)
+          .eq('live', true),
+      )
+  for (const g of grantees) {
+    for await (const row of reach(g, 'root')) {
+      // a root row for navigation only reaches the sub-projects of its child rows
+      if (!row.on_root || row.org_id !== orgId || ids.has(row.project_id)) continue
+      ids.add(row.project_id)
+      const kids = await liveSubProjects(
+        ctx,
+        { id: row.project_id, org_id: orgId },
+        most - ids.size,
+      )
+      if (kids === null) return null
+      for (const kid of kids) ids.add(kid.id)
+      read.push(...kids)
+      if (ids.size > most) return null
+    }
+    for await (const row of reach(g, 'child')) {
+      if (row.org_id !== orgId) continue
+      ids.add(row.project_id)
+      if (ids.size > most) return null
+    }
+  }
+  return { ids: [...ids], read }
+}
+
+/* The live sub-projects under top-level project `rootId` on which one of
+ * `grantees` holds a source of its own (project_reach child rows), which a
+ * caller who sees `rootId` only to reach them may see, or null when they are
+ * more than `most`. The caller checks each (shownIn). */
+async function reachedUnder(
+  ctx: QueryCtx,
+  grantees: readonly Grantee[],
+  rootId: string,
+  most: number,
+): Promise<string[] | null> {
+  const ids = new Set<string>()
+  for (const g of grantees) {
+    const rows = ctx.db
+      .query('project_reach')
+      .withIndex('by_grantee_root', (q) =>
+        q
+          .eq('grantee_kind', g.grantee_kind)
+          .eq('grantee_id', g.grantee_id)
+          .eq('root_id', rootId)
+          .eq('kind', 'child')
+          .eq('live', true),
+      )
+    for await (const row of rows) {
+      ids.add(row.project_id)
+      if (ids.size > most) return null
+    }
+  }
+  return [...ids]
+}
+
+/* The scope that merges `candidates`, the ones of them `shown` keeps, or
+ * null when it keeps none. */
+async function mergedScope(
+  orgId: string,
+  candidates: readonly string[],
+  shown: (id: string) => Promise<boolean>,
+): Promise<ArchiveScope | null> {
+  const ids = [...new Set(candidates)]
+  const seen = await Promise.all(ids.map(shown))
+  const projectIds = ids.filter((_, i) => seen[i])
+  return projectIds.length === 0 ? null : projectsScope(orgId, projectIds)
+}
+
 /* The archived tasks `asked` covers for `me`, with the levels instance that
- * answered for its projects, or a null scope when it covers no project.
+ * answered for its projects, or a null scope when it covers no project, which
+ * answers the same empty last page as an empty archive.
  *
- * - `all` reads the organization's archive and holds a task whose project
- *   is live, under a live parent, and seen by `me` (shownIn), each project
- *   asked once. So a sub-project archived on its own under an active parent
- *   stays out, as do archived projects, until they are restored.
- * - `projects` keeps the named live projects of the organization, and for
- *   a top-level one its sub-projects, read within ARCHIVED_SCOPE. Each is
- *   checked through one levels instance, and the page merges those `me`
- *   sees. An archived, unknown, foreign or invisible id drops out alike, so
- *   no answer tells them apart. Past the bound it reads the organization's
- *   archive instead and holds a task of a named project or of a sub-project
- *   of a named top-level one, which shownIn checks as for `all`.
+ * - `all` merges the live projects `me` sees side by side, found through
+ *   the project_reach rows of their seat and teams (reachedProjects) and
+ *   each checked (shownIn), so a page reads no task of a project they cannot
+ *   see, and one who sees none reads nothing. An organization admin, who
+ *   sees every live project, and a caller who reaches more than
+ *   ARCHIVED_SCOPE.subProjects projects or is in more than
+ *   ARCHIVED_SCOPE.teams teams, or whose organization's reach rows are not
+ *   complete, read the organization's archive instead, which holds a task
+ *   whose project is live, under a live parent and seen by `me`. So a
+ *   sub-project archived on its own under an active parent stays out, as do
+ *   archived projects, until they are restored.
+ * - `projects` keeps the named live projects of the organization. A named
+ *   top-level project stands for its live sub-projects that `me` sees: all
+ *   of them when `me` holds access on the top-level project itself, else
+ *   those on which they hold a source of their own (reachedUnder). One `me`
+ *   sees neither way drops out before any of its sub-projects is read, as
+ *   does an archived, unknown or foreign id, so no answer tells them apart.
+ *   A family `me` sees only to reach some of its sub-projects drops out
+ *   too while the organization's reach rows cannot be read, which fails
+ *   closed. Past ARCHIVED_SCOPE.subProjects the page reads the
+ *   organization's archive instead and holds a task of a named project or
+ *   of a sub-project of a family kept, which shownIn checks.
  * - `family` is archiveFamily's list, for the deprecated one-project
  *   argument. */
 async function readScope(
@@ -921,9 +1105,16 @@ async function readScope(
     }
   }
   if (asked.kind === 'all') {
-    const levels = projectLevelsOf(ctx, me)
+    const grantees = me.org_role === 'admin' ? null : await granteesOf(ctx, me)
+    const reached =
+      grantees === null
+        ? null
+        : await reachedProjects(ctx, orgId, grantees, ARCHIVED_SCOPE.subProjects)
+    const levels = projectLevelsOf(ctx, me, reached?.read ?? [])
     const shown = shownIn(levels, orgId)
-    return { scope: { orgId, projectIds: null, holds: (task) => shown(task.project_id) }, levels }
+    if (reached === null)
+      return { scope: { orgId, projectIds: null, holds: (task) => shown(task.project_id) }, levels }
+    return { scope: await mergedScope(orgId, reached.ids, shown), levels }
   }
   const named: Doc<'projects'>[] = []
   for (const id of new Set(asked.projectIds)) {
@@ -931,38 +1122,51 @@ async function readScope(
     if (project !== null && project.org_id === orgId && project.archived_at === undefined)
       named.push(project)
   }
-  const tops = named.filter((p) => p.type === 'meta' && p.parent_id === undefined)
+  const isTop = (p: Doc<'projects'>) => p.type === 'meta' && p.parent_id === undefined
+  // whether `me` holds access on a named top-level project itself, which
+  // reaches all its sub-projects
+  const topLevels = projectLevelsOf(ctx, me, named)
+  const families = new Set<string>()
   const kids: Doc<'projects'>[] = []
+  const reached: string[] = []
+  const room = () => ARCHIVED_SCOPE.subProjects - kids.length - reached.length
+  let grantees: Grantee[] | null | undefined
   let wide = false
-  for (const top of tops) {
-    const room = ARCHIVED_SCOPE.subProjects - kids.length
-    const rows = await ctx.db
-      .query('projects')
-      .withIndex('by_parent', (q) => q.eq('parent_id', top.id))
-      .take(room + 1)
-    if (rows.length > room) {
-      wide = true
-      break
+  for (const top of named.filter(isTop)) {
+    if ((await topLevels.level(top.id, false)) !== null) {
+      families.add(top.id)
+      if (wide) continue
+      const subs = await liveSubProjects(ctx, top, room())
+      if (subs === null) wide = true
+      else kids.push(...subs)
+      continue
     }
-    kids.push(...rows)
+    grantees ??= await granteesOf(ctx, me)
+    if (grantees === null) continue
+    const found = await reachedUnder(ctx, grantees, top.id, wide ? 1 : room())
+    if (found !== null && found.length === 0) continue
+    families.add(top.id)
+    if (found === null) wide = true
+    else if (!wide) reached.push(...found)
   }
   const levels = projectLevelsOf(ctx, me, [...named, ...kids])
   const shown = shownIn(levels, orgId)
+  // the named projects that stand for themselves, and the families kept
+  const own = named.filter((p) => !isTop(p) || families.has(p.id)).map((p) => p.id)
   if (wide) {
-    const namedIds = new Set(named.map((p) => p.id))
-    const topIds = new Set(tops.map((p) => p.id))
+    const ownIds = new Set(own)
     const holds = memoized(async (id) => {
       const project = await levels.project(id)
       if (project === null) return false
-      const inFamily = project.parent_id !== undefined && topIds.has(project.parent_id)
-      return (namedIds.has(project.id) || inFamily) && (await shown(project.id))
+      const inFamily = project.parent_id !== undefined && families.has(project.parent_id)
+      return (ownIds.has(project.id) || inFamily) && (await shown(project.id))
     })
     return { scope: { orgId, projectIds: null, holds: (task) => holds(task.project_id) }, levels }
   }
-  const candidates = [...new Set([...named, ...kids].map((p) => p.id))]
-  const seen = await Promise.all(candidates.map(shown))
-  const projectIds = candidates.filter((_, i) => seen[i])
-  return { scope: projectIds.length === 0 ? null : projectsScope(orgId, projectIds), levels }
+  return {
+    scope: await mergedScope(orgId, [...own, ...kids.map((p) => p.id), ...reached], shown),
+    levels,
+  }
 }
 
 /**
@@ -972,17 +1176,16 @@ async function readScope(
  * (archivedTaskMatcher), and a page may stop early under the read budget;
  * the caller passes `next` back until it is null. `scanned` counts the
  * scope's archived tasks the page looked at, so the page can say how far a
- * search reached. A scope that covers no project answers an empty last page.
+ * search reached. A scope that covers no project answers an empty last page,
+ * the same as an empty archive.
  *
- * An `all` page, and a page past ARCHIVED_SCOPE, read the organization's
- * archive, so where `me` sees few of its projects a page looks at up to
- * ARCHIVE_PAGE.tasks tasks and keeps few, and answers fewer rows than
- * `limit`, even none, with `next` set. `scanned` counts only tasks in scope
- * and the caller gets `next` sealed, so neither tells how many hidden
- * archived tasks the organization has; a short page with a next cursor tells
- * no more than a family's read of the organization's archive did before
- * (archivedTasksAfter). For the deprecated `family` request the caller has
- * already checked that `me` sees the project.
+ * Where a page reads the organization's archive (readScope), tasks the
+ * caller cannot see count toward neither its rows, its `scanned` nor where
+ * it ends (archivedTasksPage), and the caller gets `next` sealed, so no
+ * answer counts them. A page can end on its read budget before it fills,
+ * with `next` set, which tells only that the budget ran out. For the
+ * deprecated `family` request the caller has already checked that `me`
+ * sees the project.
  */
 export async function archivedPageCore(
   ctx: QueryCtx,
@@ -999,6 +1202,11 @@ export async function archivedPageCore(
   return await archivedTasksPage(ctx, scope, o.cursor, o.limit, {
     keeps: async (task, facts) => matches === null || (await matches(task, facts)),
     row: (task, facts) => listRow(task, facts, levels, nameOf),
+    reserve: {
+      ranges: ARCHIVE_RESERVE.ranges + LEVEL_STEP_READS.ranges,
+      documents: ARCHIVE_RESERVE.documents + LEVEL_STEP_READS.documents,
+      bytes: ARCHIVE_RESERVE.bytes + LEVEL_STEP_READS.bytes,
+    },
   })
 }
 

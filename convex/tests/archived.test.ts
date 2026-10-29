@@ -13,7 +13,7 @@
 
 import type { FunctionArgs, FunctionReturnType } from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import {
   ARCHIVE_LABELS,
@@ -262,6 +262,40 @@ const grantAgent = (t: T, f: OrgFixture) =>
       level: 'user',
     }),
   )
+
+/** Writes every organization's archive states and project_reach rows, as
+ * internal/navBackfill does on a deployment, and stamps its name keys, so
+ * the reads that wait for navigation data take them (model/projectNav.ts
+ * navReady). A grant planted after it gets no row. */
+async function withReach(t: T): Promise<void> {
+  let cursor: FunctionArgs<typeof internal.internal.navBackfill.run>['cursor']
+  do {
+    const done = await t.action(internal.internal.navBackfill.run, {
+      dry_run: false,
+      ...(cursor ? { cursor } : {}),
+    })
+    cursor = done.cursor ?? undefined
+  } while (cursor !== undefined)
+  await t.run(async (ctx) => {
+    for (const row of await ctx.db.query('org_ready').collect())
+      await ctx.db.patch(row._id, { name_keys_at: NOW })
+  })
+}
+
+/** Makes the archived tasks `ids` active again. */
+const unarchive = (t: T, ids: readonly string[]) =>
+  t.run(async (ctx) => {
+    for (const id of ids) {
+      const row = await ctx.db
+        .query('issues')
+        .withIndex('by_uuid', (q) => q.eq('id', id))
+        .unique()
+      if (row !== null) await ctx.db.patch(row._id, { archived_at: undefined })
+    }
+  })
+
+/** The empty last page, as for an unknown id or an empty archive. */
+const EMPTY = { rows: [], next_cursor: null, scanned: 0 }
 
 /** A person of `f`'s organization who can sign in, with role `org_role` and
  * no grant on any project. */
@@ -875,13 +909,13 @@ describe('issues.archivedPage', () => {
     }
     const visible = (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id])).map((row) => row.id)
     // no share for opening projects one by one, so the family's pages read
-    // the organization's archive and look at two tasks each, as All
-    // projects always does
+    // the organization's archive, as All projects does without reach rows,
+    // and a budget of one document ends each page after its first task
     ARCHIVE_PAGE.opening = 0
-    ARCHIVE_PAGE.tasks = 2
+    ARCHIVE_PAGE.documents = 1
     for (const scope of [scopeOf(f.org.id, f.meta.id), allOf(f.org.id)]) {
       const first = await pageOf(t, f.guest, scope)
-      // a page that looked only at hidden tasks: no rows, none counted, more to read
+      // the budget ran out on a hidden task: no rows, none counted, more to read
       expect(first.rows).toEqual([])
       expect(first.scanned).toBe(0)
       expect(first.next_cursor).toMatch(/^3~[0-9a-f]+$/)
@@ -1025,6 +1059,8 @@ describe('issues.archivedPage', () => {
         level: 'user',
       })
     })
+    // the guest sees TBED only to reach their sub-projects, through their reach rows
+    await withReach(t)
     const projects = [f.sub.id, f.sub2.id, sibling.id, doc.id, shelved.id, otherSub.id, f.hidden.id]
     await plantMany(t, f, 70, (i) => ({
       project_id: projects[i % projects.length],
@@ -1089,16 +1125,21 @@ describe('issues.archivedPage', () => {
     const order = async (ids: string[]) =>
       (await archiveOrder(t, f.org.id, ids)).map((row) => row.id)
     const scope = allOf(f.org.id)
-    // an admin sees every live project, Skunkworks too
-    expect((await everyPage(t, f.admin, scope)).ids).toEqual(
-      await order([f.sub.id, f.sub2.id, skunkSub.id]),
-    )
-    // a guest sees TBED's sub-projects through their grant
-    expect((await everyPage(t, f.guest, scope)).ids).toEqual(await order([f.sub.id, f.sub2.id]))
-    // a member without a grant sees none
-    const none = await everyPage(t, ungranted, scope)
-    expect(none.ids).toEqual([])
-    expect(none.scanned).toBe(0)
+    // through the organization's archive, then merging the projects each
+    // person's reach rows find
+    for (const ready of [false, true]) {
+      if (ready) await withReach(t)
+      // an admin sees every live project, Skunkworks too
+      expect((await everyPage(t, f.admin, scope)).ids).toEqual(
+        await order([f.sub.id, f.sub2.id, skunkSub.id]),
+      )
+      // a guest sees TBED's sub-projects through their grant
+      expect((await everyPage(t, f.guest, scope)).ids).toEqual(await order([f.sub.id, f.sub2.id]))
+      // a member without a grant sees none
+      const none = await everyPage(t, ungranted, scope)
+      expect(none.ids).toEqual([])
+      expect(none.scanned).toBe(0)
+    }
   })
 
   it('lists only the sub-projects a guest can see under the top-level project', async () => {
@@ -1121,10 +1162,270 @@ describe('issues.archivedPage', () => {
       })
       return f.guest
     })
+    await withReach(t)
     const { rows } = await pageOf(t, reader, scopeOf(f.org.id, f.meta.id))
     expect(rows.map((row) => row.id)).toEqual([fw.id])
     expect((await pageOf(t, reader, scopeOf(f.org.id, f.sub2.id))).rows).toEqual([])
     expect((await pageOf(t, reader, allOf(f.org.id))).rows.map((row) => row.id)).toEqual([fw.id])
+  })
+
+  it('lets neither a guest nor a member without access count hidden archived tasks', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const ungranted = await plantPerson(t, f)
+    const skunkSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    await withReach(t)
+    // 12 tasks the guest sees among 60 they cannot, interleaved in archive order
+    await plantMany(t, f, 12, (i) => ({
+      project_id: i % 2 ? f.sub.id : f.sub2.id,
+      archived_at: day(1 + 2 * i),
+    }))
+    const hidden = await plantMany(t, f, 60, (i) => ({
+      project_id: skunkSub.id,
+      archived_at: day(1 + (i % 25)),
+    }))
+    const visible = (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id])).map((row) => row.id)
+    ARCHIVE_PAGE.tasks = 5
+    /** Every page as the guest, merged side by side and then, past a bound
+     * of one project, through the organization's archive: each page's
+     * rows, scanned and whether more follow, which is all a caller sees. */
+    const walks = async () => {
+      const out = []
+      for (const bound of [200, 1]) {
+        ARCHIVED_SCOPE.subProjects = bound
+        for (const scope of [allOf(f.org.id), scopeOf(f.org.id, f.meta.id)]) {
+          const pages = []
+          let cursor: string | undefined
+          do {
+            const page = await pageOf(t, f.guest, { ...scope, cursor, limit: 4 })
+            pages.push({
+              ids: page.rows.map((row) => row.id),
+              scanned: page.scanned,
+              more: page.next_cursor !== null,
+            })
+            cursor = page.next_cursor ?? undefined
+          } while (cursor !== undefined)
+          out.push(pages)
+        }
+      }
+      return out
+    }
+    const withHidden = await walks()
+    for (const pages of withHidden) expect(pages.flatMap((page) => page.ids)).toEqual(visible)
+    // a member who sees nothing gets an empty archive's answer, without
+    // reading the archive, so even a budget of one document changes nothing
+    for (const bound of [200, 1]) {
+      ARCHIVED_SCOPE.subProjects = bound
+      expect(await pageOf(t, ungranted, allOf(f.org.id))).toEqual(EMPTY)
+    }
+    ARCHIVE_PAGE.documents = 1
+    expect(await pageOf(t, ungranted, allOf(f.org.id))).toEqual(EMPTY)
+    ARCHIVE_PAGE.documents = page.documents
+    // the same pages, page for page, once the hidden tasks are active again
+    await unarchive(t, hidden)
+    expect(await walks()).toEqual(withHidden)
+  })
+
+  it('answers a family the caller cannot see past the bound as it answers an unknown id', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // Skunkworks gets three sub-projects, none of which the guest can see
+    const subs: Doc<'projects'>[] = []
+    for (let i = 0; i < 3; i++)
+      subs.push(
+        await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.hidden.id }),
+      )
+    await withReach(t)
+    await plantMany(t, f, 9, (i) => ({ project_id: subs[i % 3].id, archived_at: day(1 + i) }))
+    ARCHIVED_SCOPE.subProjects = 2
+    // a read of the organization's archive would end after one task, with more to read
+    ARCHIVE_PAGE.documents = 1
+    expect(await pageOf(t, f.guest, scopeOf(f.org.id, f.hidden.id))).toEqual(EMPTY)
+    expect(await pageOf(t, f.guest, scopeOf(f.org.id, uuid()))).toEqual(EMPTY)
+    // its lead sees it, past the bound through the organization's archive
+    expect((await everyPage(t, f.user, scopeOf(f.org.id, f.hidden.id))).ids).toHaveLength(9)
+  })
+
+  it('counts only live sub-projects toward the bound, with or without their archive state', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // five archived sub-projects beside TBED's two live ones
+    for (let i = 0; i < 5; i++)
+      await plantProject(t, {
+        org_id: f.org.id,
+        type: 'project',
+        parent_id: f.meta.id,
+        archived_at: day(1),
+      })
+    const other = await plantProject(t, { org_id: f.org.id, type: 'meta' })
+    const otherSub = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: other.id,
+    })
+    // 60 newer archived tasks outside the scope, which only a read of the
+    // organization's archive passes
+    await plantMany(t, f, 60, () => ({ project_id: otherSub.id, archived_at: day(20) }))
+    const kept = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      archived_at: day(2),
+    })
+    ARCHIVED_SCOPE.subProjects = 2
+    const read = () =>
+      t.run(async (ctx) => {
+        const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        const page = await archivedPageCore(
+          ctx,
+          f.admin,
+          { kind: 'projects', orgId: f.org.id, projectIds: [f.meta.id] },
+          { cursor: null, search: '', limit: 1 },
+        )
+        const after = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        return { ids: page.rows.map((row) => row.id), read: after - before }
+      })
+    // before the backfill wrote archive states, and after
+    for (const ready of [false, true]) {
+      if (ready) await withReach(t)
+      const page = await read()
+      expect(page.ids).toEqual([kept.id])
+      // TBED's two live sub-projects merge side by side, reading none of the 60
+      expect(page.read).toBeLessThan(40)
+    }
+  })
+
+  it('answers Restore and owners on All projects and past the bound, for a Viewer and a guest', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await withReach(t)
+    const owned = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      archived_at: day(3),
+      assignee_id: f.user.id,
+    })
+    const reviewed = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub2.id,
+      archived_at: day(2),
+      status: 'review',
+      assignee_id: f.user.id,
+      reviewer_id: f.guest.id,
+    })
+    const shown = (page: Page) => page.rows.map((row) => [row.id, row.owner_name, row.can_restore])
+    for (const bound of [200, 1]) {
+      ARCHIVED_SCOPE.subProjects = bound
+      for (const scope of [allOf(f.org.id), scopeOf(f.org.id, f.meta.id)]) {
+        // a Viewer may not restore, a guest with Edit may
+        expect(shown(await pageOf(t, f.viewer, scope)), String(bound)).toEqual([
+          [owned.id, 'user', false],
+          [reviewed.id, 'guest', false],
+        ])
+        expect(shown(await pageOf(t, f.guest, scope)), String(bound)).toEqual([
+          [owned.id, 'user', true],
+          [reviewed.id, 'guest', true],
+        ])
+      }
+    }
+  })
+
+  it('leaves out a task stored in a top-level project its caller sees only to reach a sub-project', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the guest's grant moves from TBED onto FW
+    await t.run(async (ctx) => {
+      const grant = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.meta.id).eq('profile_id', f.guest.id),
+        )
+        .unique()
+      if (grant !== null) await ctx.db.delete(grant._id)
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: f.guest.id,
+        level: 'user',
+      })
+    })
+    await withReach(t)
+    // a task stored in TBED itself, which no write makes now
+    const inTop = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.meta.id,
+      archived_at: day(5),
+    })
+    const fw = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: day(3) })
+    const ids = async (profile: Doc<'profiles'>, args: PageArgs) =>
+      (await everyPage(t, profile, args)).ids
+    for (const bound of [200, 0]) {
+      ARCHIVED_SCOPE.subProjects = bound
+      for (const scope of [
+        allOf(f.org.id),
+        scopeOf(f.org.id, f.meta.id),
+        scopeOf(f.org.id, f.meta.id, f.sub.id),
+      ])
+        expect(await ids(f.guest, scope), `${bound} ${JSON.stringify(scope)}`).toEqual([fw.id])
+      // the admin sees both
+      expect(await ids(f.admin, allOf(f.org.id))).toEqual([inTop.id, fw.id])
+    }
+  })
+
+  it('answers each organization of a login with two seats through its seat there', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the user also holds a guest seat in Other, with Viewer on one of two sub-projects
+    const away = await plantProject(t, {
+      org_id: f.otherOrg.id,
+      type: 'project',
+      parent_id: f.otherProject.id,
+    })
+    const elsewhere = await plantProject(t, {
+      org_id: f.otherOrg.id,
+      type: 'project',
+      parent_id: f.otherProject.id,
+    })
+    const seat = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      name: 'user',
+      org_role: 'guest',
+      auth_user_id: f.user.auth_user_id,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: away.id,
+        profile_id: seat.id,
+        level: 'viewer',
+      })
+    })
+    await withReach(t)
+    const home = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      archived_at: day(2),
+      assignee_id: f.user.id,
+    })
+    const there = await plantIssue(t, {
+      org_id: f.otherOrg.id,
+      project_id: away.id,
+      archived_at: day(3),
+      assignee_id: f.otherAdmin.id,
+    })
+    await plantIssue(t, { org_id: f.otherOrg.id, project_id: elsewhere.id, archived_at: day(4) })
+    const shown = (page: Page) => page.rows.map((row) => [row.id, row.owner_name, row.can_restore])
+    // the lead of TBED at home, a Viewer guest in Other
+    expect(shown(await pageOf(t, f.user, allOf(f.org.id)))).toEqual([[home.id, 'user', true]])
+    expect(shown(await pageOf(t, f.user, allOf(f.otherOrg.id)))).toEqual([
+      [there.id, 'otherAdmin', false],
+    ])
+    expect(shown(await pageOf(t, f.user, scopeOf(f.otherOrg.id, f.otherProject.id)))).toEqual([
+      [there.id, 'otherAdmin', false],
+    ])
+    // a project of Other named in a scope of the home organization answers nothing
+    expect(await pageOf(t, f.user, scopeOf(f.org.id, away.id))).toEqual(EMPTY)
   })
 
   it('leaves out a sub-project archived on its own, which only the deprecated argument names', async () => {
