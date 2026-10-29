@@ -4,6 +4,7 @@ import { LIMITS } from '../convex/lib/limits'
 import {
   inboxCommentId,
   parseSeedArgs,
+  planArchive,
   planInbox,
   planSeed,
   runBoardScaleSeed,
@@ -13,12 +14,15 @@ import {
 
 /* A local backend the seed talks to: Nora and the people in `fake.people`,
    Northstar with one sub-project, the tasks `fake.issues` holds, in the
-   workspace parts, the personal tokens, agent keys and usage rows
-   `fake.tokens`, `fake.keys` and `fake.usage` hold, and every mutation it
-   receives, with the login it came as. A comment whose id `fake.comments`
-   holds is refused as taken. */
+   workspace parts, the archived ones `fake.archived` holds, in the issues
+   table two rows a page beside a task of another organization, the personal
+   tokens, agent keys and usage rows `fake.tokens`, `fake.keys` and
+   `fake.usage` hold, and every mutation it receives, with the login it came
+   as. A comment whose id `fake.comments` holds is refused as taken, and an
+   archive marks its task in `fake.issues` archived. */
 const fake = vi.hoisted(() => ({
   issues: [],
+  archived: [],
   calls: [],
   people: [],
   comments: new Set(),
@@ -36,6 +40,19 @@ vi.mock('convex/browser', () => ({
       // a system table answers the admin itself, never a person it acts as
       if (name === '_system/cli/tableData' && this.login)
         throw new Error("You don't have permission to perform this operation.")
+      if (name === '_system/cli/tableData' && args.table === 'issues') {
+        const rows = [
+          ...fake.archived,
+          { id: 'elsewhere', org_id: 'other', archived_at: 'x' },
+          ...fake.issues,
+        ]
+        const at = Number(args.paginationOpts.cursor ?? 0)
+        return {
+          page: rows.slice(at, at + 2),
+          isDone: at + 2 >= rows.length,
+          continueCursor: String(at + 2),
+        }
+      }
       if (name === '_system/cli/tableData')
         return {
           page: {
@@ -96,6 +113,10 @@ vi.mock('convex/browser', () => ({
     async mutation(ref, fields) {
       const name = getFunctionName(ref)
       fake.calls.push([name, fields, this.login])
+      if (name === 'issues:archive') {
+        const task = fake.issues.find((issue) => issue.id === fields.id)
+        if (task) task.archived_at = '2026-10-29T00:00:00.000Z'
+      }
       if (name !== 'comments:create') return
       if (fake.comments.has(fields.id))
         throw Object.assign(new Error('taken'), {
@@ -128,6 +149,19 @@ describe('board-scale-seed', () => {
     // no tasks hold no inbox items
     expect(parseSeedArgs([...local, '--tasks', '0']).inbox).toBe(0)
     expect(() => parseSeedArgs([...local, '--tasks', '0', '--inbox', '1'])).toThrow(/--inbox/)
+  })
+
+  it('takes an archived count up to the task count', () => {
+    expect(parseSeedArgs([...local, '--tasks', '400', '--archived', '160']).archived).toBe(160)
+    expect(parseSeedArgs([...local, '--tasks', '400', '--archived', '400']).archived).toBe(400)
+    expect(parseSeedArgs(local).archived).toBe(0)
+    for (const archived of ['-1', '2.5', '401', 'many'])
+      expect(() => parseSeedArgs([...local, '--tasks', '400', '--archived', archived])).toThrow(
+        '--archived takes a whole number from 0 up to the --tasks count.',
+      )
+    // no tasks hold none to archive
+    expect(parseSeedArgs([...local, '--tasks', '0']).archived).toBe(0)
+    expect(() => parseSeedArgs([...local, '--tasks', '0', '--archived', '1'])).toThrow(/--archived/)
   })
 
   it('refuses anything but a disposable local backend before it connects', async () => {
@@ -302,6 +336,118 @@ function doneUpTo(n) {
     { task: { id: `t${i}` }, parent: i % 25 > 3 ? null : 'p0' },
   ])
 }
+
+describe('archiving seeded tasks', () => {
+  it('archives the first seeded tasks that are not parents, only those still active', () => {
+    const seeded = new Map(
+      [0, 1, 2, 3, 4, 5].map((n) => [
+        n,
+        { task: { id: `t${n}`, ...(n === 1 ? { archived_at: 'x' } : {}) }, parent: null },
+      ]),
+    )
+    // t2 has subtasks, so t0, t1, t3 and t4 are the first four
+    expect(planArchive(4, seeded, new Set(['t2']))).toEqual(['t0', 't3', 't4'])
+    expect(planArchive(0, seeded, new Set())).toEqual([])
+    // more than there are archives what there is
+    expect(planArchive(10, seeded, new Set())).toEqual(['t0', 't2', 't3', 't4', 't5'])
+  })
+
+  it('archives as it seeds, and a rerun archives and seeds nothing again', async () => {
+    const seeded = (n, more = {}) => ({
+      ...seededTask(n, 'org', 'sub', 'owner'),
+      id: `task${n}`,
+      parent_id: null,
+      ...more,
+    })
+    const done = '2026-10-01T00:00:00.000Z'
+    // tasks 0 to 1 of an earlier run, the first archived since
+    fake.issues = [seeded(1)]
+    fake.archived = [seeded(0, { archived_at: done })]
+    fake.calls = []
+    await runBoardScaleSeed([...local, '--tasks', '3', '--archived', '2'], { env, log: () => {} })
+    // the archived task counts as seeded, so only task 2 is new
+    const [made, ...rest] = fake.calls
+    expect(made[0]).toBe('issues:create')
+    expect(made[1].description).toBe('Seeded by board-scale-seed as task 3.')
+    expect(rest).toEqual([['issues:archive', { id: 'task1', org_id: 'org' }, 'nora-login']])
+    // once that is archived too, a rerun has nothing left to do
+    fake.archived.push({ ...fake.issues[0], archived_at: done })
+    fake.issues = [{ ...made[1], parent_id: null }]
+    fake.calls = []
+    await runBoardScaleSeed([...local, '--tasks', '3', '--archived', '2'], { env, log: () => {} })
+    expect(fake.calls).toEqual([])
+    // a larger count archives the next one, the task the first run made
+    await runBoardScaleSeed([...local, '--tasks', '3', '--archived', '3'], { env, log: () => {} })
+    expect(fake.calls).toEqual([
+      ['issues:archive', { id: made[1].id, org_id: 'org' }, 'nora-login'],
+    ])
+    fake.issues = []
+    fake.archived = []
+  })
+
+  it('leaves an archived subtask in its family on a rerun', async () => {
+    // a whole family, 0 to 3 under parent0, with subtask 2 archived
+    const member = (n) => ({
+      ...seededTask(n, 'org', 'sub', 'owner'),
+      id: `task${n}`,
+      parent_id: 'parent0',
+    })
+    fake.issues = [member(0), member(1), member(3)]
+    fake.archived = [{ ...member(2), archived_at: '2026-10-01T00:00:00.000Z' }]
+    fake.calls = []
+    await runBoardScaleSeed([...local, '--tasks', '4'], { env, log: () => {} })
+    expect(fake.calls).toEqual([])
+    fake.issues = []
+    fake.archived = []
+  })
+
+  it('makes credentials, then tasks, then archives, then posts inbox comments, each as its login', async () => {
+    const ana = {
+      id: 'ana',
+      name: 'Ana',
+      auth_user_id: 'ana-login',
+      org_id: 'org',
+      kind: 'person',
+      active: true,
+      org_role: 'user',
+    }
+    fake.people = [ana]
+    // tasks 0 and 1 are Ana's; the run adds task 2
+    fake.issues = [0, 1].map((n) => ({
+      ...seededTask(n, 'org', 'sub', 'ana'),
+      id: `task${n}`,
+      parent_id: null,
+    }))
+    fake.comments = new Set()
+    fake.calls = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, headers: new Headers() })),
+    )
+    try {
+      await runBoardScaleSeed(
+        [
+          ...local,
+          ...['--tasks', '3', '--archived', '1', '--inbox', '1'],
+          ...['--credentials', '1', '--api-url', 'http://127.0.0.1:3215'],
+        ],
+        { env, log: () => {} },
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    // the comment skips the task the run archived, so it arrives unread
+    expect(fake.calls.map(([name, fields, as]) => [name, fields.issue_id ?? null, as])).toEqual([
+      ['tokens:createMcpToken', null, 'ana-login'],
+      ['issues:create', null, 'nora-login'],
+      ['issues:archive', null, 'nora-login'],
+      ['comments:create', 'task1', 'ana-login'],
+    ])
+    expect(fake.calls[2][1]).toEqual({ id: 'task0', org_id: 'org' })
+    fake.people = []
+    fake.issues = []
+  })
+})
 
 describe('a rerun of board-scale-seed', () => {
   it('finishes a partial family under the parent it made, with the existing task', async () => {
