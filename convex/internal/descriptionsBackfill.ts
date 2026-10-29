@@ -44,10 +44,10 @@
  * is clean when `missing`, `differ`, `duplicates` and `orphans` are zero,
  * and `waiting` only while a teardown runs, and it is cleared once `held` is
  * zero too. Main Search's palette ships only once a dry run on every
- * deployment reports it clean (search.ts). The release 2 backfill of
- * v0.1.98 to v0.1.100 skips a task without a copy before it looks for a
- * second row, so after a rollback to one of them only this release's dry
- * run counts such duplicates.
+ * deployment reports it clean (search.ts). The backfill of the releases
+ * from v0.1.98 up to this one skips a task without a copy before it looks
+ * for a second row, so after a rollback to one of them only this release's
+ * dry run counts such duplicates.
  *
  * Every document a page reads counts toward PAGE.bytes, those a patch or a
  * delete reads again included. A task row and a description row can each

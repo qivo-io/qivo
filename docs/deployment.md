@@ -683,8 +683,8 @@ partway.
 The second release is the backend's rollback floor from the moment the
 third deploys, not from the clear, because the third's first create or
 description edit writes a task without a copy. The second release and the
-ones after it before the third (v0.1.98 to v0.1.100) read the rows, so
-every description shows, and their writers write copies equal to the rows
+ones after it before the third, from v0.1.98 on, read the rows, so every
+description shows, and their writers write copies equal to the rows
 again, which the next clear unsets after rolling forward. Their dry run
 counts every task without a copy as `skipped`, which is no fault there,
 and does not count a second row of a task without a copy, so only the third
