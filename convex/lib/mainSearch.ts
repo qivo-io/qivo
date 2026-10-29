@@ -270,9 +270,10 @@ type Stops = {
  * searched whole reads within an equal share of what they left, counted at
  * the reads' real size, so how far a seat gets does not depend on what a
  * whole-organization search read. A step of reads may pass its share by
- * the documents it reads, three at most, and only Convex's own limits stop
- * the overshoot, so only tasks near Convex's 1 MiB document size could make
- * one seat's reads felt in another's.
+ * the documents it reads, three at most, and the gathering's own limit
+ * still holds every share, so only rows near Convex's 1 MiB document size,
+ * of tasks or projects, could make one seat's reads felt in another's, and
+ * never in the room the page reads in.
  *
  * `stopped` names `projects` first, then the budget (`reads`), then a
  * source's cap (`candidates`), each of which means that matches in the
@@ -324,7 +325,8 @@ class OutOfRoom extends Error {}
  * With `share`, the reads also stop once they have reached it, counted at
  * their real size from the request's metrics before each step, so a share
  * smaller than a few documents at Convex's size limit still reads and
- * judges small documents, and a step may pass it by what it reads. */
+ * judges small documents, and a step may pass it by what it reads, never
+ * `ceiling`. */
 function readBudget(ctx: QueryCtx, ceiling: ReadCeiling, share?: ReadCeiling) {
   // what was left at the last look, less what was asked for since
   let ranges = 0
@@ -925,7 +927,7 @@ export async function mainSearchPage(
 
   // the seats searched exactly, then each seat searched whole within an
   // equal share of what they left, counted at the reads' real size, under
-  // Convex's own limits less the reserve (coverageOf)
+  // the gathering's own limit, so the page keeps its room (coverageOf)
   for (const seat of planned) if (!seat.wide) await searchSeat(seat)
   const wide = planned.filter((seat) => seat.wide)
   if (wide.length > 0) {
@@ -937,7 +939,7 @@ export async function mainSearchPage(
     }
     for (const seat of wide) {
       const now = await ctx.meta.getTransactionMetrics()
-      gather = readBudget(ctx, room, {
+      gather = readBudget(ctx, ceiling, {
         ranges: now.databaseQueries.used + share.ranges,
         documents: now.documentsRead.used + share.documents,
         bytes: now.bytesRead.used + share.bytes,

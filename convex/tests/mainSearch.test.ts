@@ -119,6 +119,39 @@ const seatsOf = (t: T, profile: Doc<'profiles'>) =>
     ).filter((seat) => seat.id !== profile.id && seat.active),
   )
 
+/** An organization of its own for login `login`, in which a guest seat
+ * sees one top-level project with two sub-projects, `sub` among them. */
+async function broadSeat(t: T, login: string, i: number) {
+  const org = await t.run(async (ctx) => {
+    const id = uuid()
+    await ctx.db.insert('organizations', {
+      id,
+      name: `Broad ${i}`,
+      slug: `broad-${i}`,
+      created_at: NOW,
+      date_format: 'iso',
+      week_start: 1,
+      week_one_rule: 'first4day',
+      default_plannable_hours: 40,
+    })
+    await ctx.db.insert('org_counters', { org_id: id, next_issue_num: 1, next_project_num: 4 })
+    return id
+  })
+  const meta = await plantProject(t, { org_id: org })
+  const sub = await plantProject(t, { org_id: org, type: 'project', parent_id: meta.id })
+  await plantProject(t, { org_id: org, type: 'project', parent_id: meta.id })
+  const seat = await plantSeat(t, {
+    org_id: org,
+    auth_user_id: login,
+    org_role: 'guest',
+    accepted_at: NOW,
+  })
+  await t.run((ctx) =>
+    ctx.db.insert('project_access', { project_id: meta.id, profile_id: seat.id, level: 'user' }),
+  )
+  return { org, sub, seat }
+}
+
 /** A task in `project` of the fixture's organization. */
 const task = (
   t: T,
@@ -376,43 +409,48 @@ describe('seats', () => {
     const seats: Doc<'profiles'>[] = []
     const found: string[] = []
     for (let i = 0; i < 8; i++) {
-      const org = await t.run(async (ctx) => {
-        const id = uuid()
-        await ctx.db.insert('organizations', {
-          id,
-          name: `Broad ${i}`,
-          slug: `broad-${i}`,
-          created_at: NOW,
-          date_format: 'iso',
-          week_start: 1,
-          week_one_rule: 'first4day',
-          default_plannable_hours: 40,
-        })
-        await ctx.db.insert('org_counters', { org_id: id, next_issue_num: 1, next_project_num: 4 })
-        return id
-      })
-      const meta = await plantProject(t, { org_id: org })
-      const sub = await plantProject(t, { org_id: org, type: 'project', parent_id: meta.id })
-      await plantProject(t, { org_id: org, type: 'project', parent_id: meta.id })
-      const seat = await plantSeat(t, {
-        org_id: org,
-        auth_user_id: login,
-        org_role: 'guest',
-        accepted_at: NOW,
-      })
-      await t.run((ctx) =>
-        ctx.db.insert('project_access', {
-          project_id: meta.id,
-          profile_id: seat.id,
-          level: 'user',
-        }),
-      )
+      const { org, sub, seat } = await broadSeat(t, login, i)
       seats.push(seat)
       found.push((await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox' })).id)
     }
     const run = await searchRun(t, seats, { text: 'gearbox' })
     expect(ids(run.page).sort()).toEqual([...found].sort())
     expect(run.page.coverage).toEqual(stopped('projects', 8, 8))
+  })
+
+  it('keeps the page its room when seats searched whole read large project rows', async () => {
+    const t = newT({ transactionLimits: true })
+    const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
+    MAIN_SEARCH.projects = 1
+    const huge = 'x'.repeat(900_000)
+    const seats: Doc<'profiles'>[] = []
+    const found = new Set<string>()
+    for (let i = 0; i < 4; i++) {
+      const { org, sub, seat } = await broadSeat(t, login, i)
+      seats.push(seat)
+      // the guest's match first, as convex-test's search returns tasks in
+      // the order they were made
+      found.add((await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox' })).id)
+      // hidden matches, each in a project whose row and whose top-level
+      // project's row are near Convex's 1 MiB, as older rows can be
+      for (let k = 0; k < 4; k++) {
+        const root = await plantProject(t, { org_id: org, description: huge })
+        const hidden = await plantProject(t, {
+          org_id: org,
+          type: 'project',
+          parent_id: root.id,
+          description: huge,
+        })
+        await plantIssue(t, { org_id: org, project_id: hidden.id, title: 'Gearbox' })
+      }
+    }
+    const run = await searchRun(t, seats, { text: 'gearbox' })
+    console.log('4 broad seats, large project rows', run.read, run.page.rows.length)
+    // the seats that judged their match before the gathering's limit show it
+    expect(run.page.rows.length).toBeGreaterThanOrEqual(2)
+    for (const row of run.page.rows) expect(found.has(row.id)).toBe(true)
+    expect(run.page.coverage).toEqual(stopped('projects', 4, 4))
+    expect(run.read.bytes).toBeLessThan(16 << 20)
   })
 
   it('counts only the seats whose reads began when task numbers spend the budget', async () => {
