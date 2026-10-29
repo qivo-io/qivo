@@ -379,6 +379,65 @@ describe('searching project by project', () => {
     expect(admin.page.coverage).toEqual(stopped('candidates'))
   })
 
+  it("lists a person's projects through team shares, never another organization's team", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const a = await task(t, f, f.sub, 'Gearbox teardown')
+    const b = await task(t, f, f.sub2, 'Gearbox rebuild')
+    const member = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
+    const share = (team_id: string, project_id: string) =>
+      t.run((ctx) => ctx.db.insert('project_team_access', { team_id, project_id, level: 'user' }))
+    await t.run((ctx) =>
+      ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: member.id,
+        is_leader: false,
+      }),
+    )
+    // a team of another organization, sharing a project of this one
+    const foreign = uuid()
+    await t.run(async (ctx) => {
+      await ctx.db.insert('teams', {
+        id: foreign,
+        org_id: f.otherOrg.id,
+        name: 'Foreign',
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('team_members', {
+        team_id: foreign,
+        profile_id: member.id,
+        is_leader: false,
+      })
+    })
+    await share(foreign, f.sub.id)
+    const none = await searchRun(t, [member], { text: 'gearbox' })
+    expect(none.page).toEqual(EMPTY)
+    expect(none.searches).toBe(0)
+    // a share on a sub-project
+    const onSub = await share(f.team.id, f.sub.id)
+    const one = await searchRun(t, [member], { text: 'gearbox' })
+    expect(ids(one.page)).toEqual([a.id])
+    expect(one.searches).toBe(2)
+    // a share on the top-level project reaches its sub-projects
+    await t.run((ctx) => ctx.db.delete(onSub))
+    await share(f.team.id, f.meta.id)
+    const all = await searchRun(t, [member], { text: 'gearbox' })
+    expect(ids(all.page).sort()).toEqual([a.id, b.id].sort())
+    expect(all.searches).toBe(4)
+    expect(all.page.coverage).toEqual(COMPLETE)
+  })
+
+  it("lists a viewer seat's projects", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const a = await task(t, f, f.sub, 'Gearbox teardown')
+    const run = await searchRun(t, [f.viewer], { text: 'gearbox' })
+    expect(ids(run.page)).toEqual([a.id])
+    expect(run.searches).toBe(4)
+    expect(run.page.coverage).toEqual(COMPLETE)
+  })
+
   it('searches the organization for a person who sees more sub-projects', async () => {
     const t = newT()
     const f = await withOrg(t)
