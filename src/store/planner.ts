@@ -6430,6 +6430,9 @@ export const PLANNER = {
       arrived, from 0 to 1; null once every task did. Counts, totals and
       verdicts over many tasks wait for null (store/liveParts.ts). */
   stillLoading: (): number | null => stillLoading,
+  /** Task `it`'s subtasks, links and attachment count as the cap checks
+      before a write count them: the larger of the workspace's and its whole
+      section lists' (capInputs). */
   capInputs,
   /** Task `uuid` as a row of Parent, Subtasks or Linked tasks
       (RelatedTaskVM), from the workspace's view of it, or null when the
