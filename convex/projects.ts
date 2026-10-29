@@ -1,7 +1,8 @@
 /* The project domain's public surface (phase 5): create / update /
  * setAccess / removeAccess / archive / unarchive / deleteDeep / removalSummary /
  * inviteGuest, plus the milestone writes (milestones.ts holds the app's
- * milestone reads). Thin wrappers over the shared cores REST and MCP use
+ * milestone reads, projectSettings.ts the reads of a project's Settings page
+ * and its access lists and pickers). Thin wrappers over the shared cores REST and MCP use
  * too (model/projects.ts, model/projectAccess.ts, model/milestones.ts) and
  * over lib/access, model/orgs and model/cascade —
  * orgMutation → resolve by uuid → core (access predicate → guards → writes →
@@ -39,7 +40,12 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
-import { canManageOwnProjectAccess, canManageProjectUsers, hasProjectLevel } from './lib/access'
+import {
+  canManageOwnProjectAccess,
+  canManageProjectUsers,
+  hasProjectLevel,
+  NO_USER_MANAGEMENT,
+} from './lib/access'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
@@ -366,7 +372,7 @@ export const inviteGuest = orgMutation({
     const now = new Date().toISOString()
     const project = await myProject(ctx, project_id)
     if (!(await canManageProjectUsers(ctx, ctx.me, project))) {
-      throw rule('no permission to manage users on this project')
+      throw rule(NO_USER_MANAGEMENT)
     }
     if (level !== 'user' && level !== 'viewer') {
       throw rule('a project role is lead, member or viewer')

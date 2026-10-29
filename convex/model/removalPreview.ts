@@ -40,6 +40,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
   levelRank,
+  NO_USER_MANAGEMENT,
   type OrgProjectLevels,
   projectLevelsForPeople,
   type RemovedAccess,
@@ -60,7 +61,6 @@ import {
   grantKeepRefusal,
   grantOf,
   type Lost,
-  NO_USER_MANAGEMENT,
   peopleOf,
   REMOVAL_FULL,
   reachedProjects,

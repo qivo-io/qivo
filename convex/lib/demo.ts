@@ -53,9 +53,11 @@ export function demoRefusal(message = 'Your demo has expired.', reason = 'demo_e
   return new ConvexError({ code: 'forbidden' as const, message, reason })
 }
 
+/** The refusal of a feature the demo leaves out (refuseDemoFeature). */
+export const DEMO_FEATURE_REFUSAL = 'This feature requires a regular workspace.'
+
 export function refuseDemoFeature(): void {
-  if (isDemoDeployment())
-    throw demoRefusal('This feature requires a regular workspace.', 'demo_feature_unavailable')
+  if (isDemoDeployment()) throw demoRefusal(DEMO_FEATURE_REFUSAL, 'demo_feature_unavailable')
 }
 
 export async function demoForAuth(ctx: QueryCtx, authUserId: string) {

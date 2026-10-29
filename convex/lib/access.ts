@@ -723,6 +723,10 @@ export function canChangeAccess(me: Pick<Doc<'profiles'>, 'kind'>): boolean {
 
 export const ACCESS_NEEDS_A_PERSON = 'only people can change who has access, not agents'
 
+/** The refusal of a caller who may not manage a project's users or teams
+ * (canManageProjectUsers, canManageProjectTeams). */
+export const NO_USER_MANAGEMENT = 'no permission to manage users on this project'
+
 /* Team leadership requires canLeadTeams and a same-org leader row; leader
  * rows held by guests, viewers or agents grant nothing. */
 export async function isTeamLeader(

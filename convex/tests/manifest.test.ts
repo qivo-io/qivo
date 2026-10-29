@@ -652,6 +652,12 @@ profiles:setDisplayName mutation public {"type":"object","value":{"name":{"field
 profiles:setMessageRetention mutation public {"type":"object","value":{"days":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":false}}}
 profiles:setPlannableHours mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"hours":{"fieldType":{"type":"number"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"plannable_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 profiles:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"org_role":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admin"},{"type":"literal","value":"user"},{"type":"literal","value":"guest"},{"type":"literal","value":"viewer"}]},"optional":true},"active":{"fieldType":{"type":"boolean"},"optional":true},"name":{"fieldType":{"type":"string"},"optional":true},"email":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"teams":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":true},"can_create_projects":{"fieldType":{"type":"boolean"},"optional":true}}},"optional":false},"expected":{"fieldType":{"type":"object","value":{"org_role":{"fieldType":{"type":"string"},"optional":true},"active":{"fieldType":{"type":"boolean"},"optional":true},"name":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"email":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"can_create_projects":{"fieldType":{"type":"union","value":[{"type":"boolean"},{"type":"null"}]},"optional":true},"plannable_hours":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true},"avatar_storage_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projectSettings:candidates query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"lead_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projectSettings:get query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
+projectSettings:inviteTarget query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projectSettings:leadCandidates query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"parent_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projectSettings:teams query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projectSettings:users query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:addMilestone mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"week":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:archive mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"type":{"fieldType":{"type":"union","value":[{"type":"literal","value":"meta"},{"type":"literal","value":"project"}]},"optional":false},"team_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"parent_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"key":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"lead_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"description":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"sort_order":{"fieldType":{"type":"number"},"optional":false},"track_delay":{"fieldType":{"type":"boolean"},"optional":true},"access":{"fieldType":{"type":"record","keys":{"type":"string"},"values":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},{"type":"literal","value":"lead"},{"type":"null"}]},"optional":false}},"optional":true},"team_access":{"fieldType":{"type":"record","keys":{"type":"string"},"values":{"fieldType":{"type":"union","value":[{"type":"literal","value":"user"},{"type":"literal","value":"viewer"}]},"optional":false}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1102,6 +1108,19 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     updateMilestone: 'orgMutation',
     removeMilestone: 'orgMutation',
   },
+  // A project's Settings page read from the server. get addresses a project
+  // by id and judges it with the caller's seat in its organization; the
+  // lists and pickers take the organization. Whoever sees or manages the
+  // project reads its settings and lists; a picker refuses whom the write
+  // would refuse.
+  projectSettings: {
+    get: 'authedQuery',
+    users: 'orgQuery',
+    teams: 'orgQuery',
+    candidates: 'orgQuery',
+    leadCandidates: 'orgQuery',
+    inviteTarget: 'orgQuery',
+  },
   // Main Search spans organizations like Deleted items: one page of task
   // results across every active seat, or one organization the caller
   // narrows it to, each candidate judged with the seat in its organization.
@@ -1157,7 +1176,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 202
+const PUBLIC_COUNT = 208
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

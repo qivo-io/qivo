@@ -17,14 +17,20 @@
  *
  * org_ready.name_keys_at says that every row of an organization holds its
  * key. A reader in name order checks nameKeysReady and refuses without it,
- * because a row without a key sorts first and a search by name misses it. */
+ * because a row without a key sorts first and a search by name misses it.
+ *
+ * The indexes of keyed rows that name-ordered readers walk are defined here
+ * once (lib/namedPages.ts NamedIndex): an organization's people, all of them
+ * or one role, its teams, and a project's user grants and team shares, each
+ * ordered by its name key and then one id. */
 
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import type { NameSource } from '../lib/enums'
+import type { NameSource, OrgRole } from '../lib/enums'
 import { MIB } from '../lib/limits'
+import type { NamedAt, NamedIndex } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 
 /** What a rename may spend on copies in its own transaction, shared by
@@ -211,4 +217,136 @@ export const readyRow = (ctx: QueryCtx, orgId: string) =>
  * name order refuses while it is not, instead of leaving rows out. */
 export async function nameKeysReady(ctx: QueryCtx, orgId: string): Promise<boolean> {
   return (await readyRow(ctx, orgId))?.name_keys_at !== undefined
+}
+
+/* ----------------------------------------------------- the name indexes */
+
+/** The tie of an index that orders equal name keys by one id. */
+export type IdTie = readonly [string]
+
+/* The position of a row of a name index tied by `id`. Readers refuse until
+ * the organization is keyed (nameKeysReady), so a row without a key here
+ * passed that check and is refused rather than placed first. */
+function keyedAt(key: string | undefined, id: string, what: string): NamedAt<IdTie> {
+  if (key === undefined) throw new Error(`an unkeyed ${what} passed the readiness check`)
+  return { key, tie: [id] }
+}
+
+/** The people and agents of organization `orgId` in name order
+ * (profiles.by_org_name): name key, then id. */
+export function profileIndex(ctx: QueryCtx, orgId: string): NamedIndex<Doc<'profiles'>, IdTie> {
+  const profiles = () => ctx.db.query('profiles')
+  return {
+    all: () => profiles().withIndex('by_org_name', (q) => q.eq('org_id', orgId)),
+    after: ({ key, tie: [id] }) => [
+      () =>
+        profiles().withIndex('by_org_name', (q) =>
+          q.eq('org_id', orgId).eq('name_key', key).gt('id', id),
+        ),
+      () => profiles().withIndex('by_org_name', (q) => q.eq('org_id', orgId).gt('name_key', key)),
+    ],
+    at: (profile) => keyedAt(profile.name_key, profile.id, 'profile'),
+  }
+}
+
+/** The people and agents of organization `orgId` with role `role` in name
+ * order (profiles.by_org_role_name): name key, then id. Several roles merge
+ * into one list with lib/namedPages.ts mergeNamed. */
+export function profileRoleIndex(
+  ctx: QueryCtx,
+  orgId: string,
+  role: OrgRole,
+): NamedIndex<Doc<'profiles'>, IdTie> {
+  const profiles = () => ctx.db.query('profiles')
+  return {
+    all: () =>
+      profiles().withIndex('by_org_role_name', (q) => q.eq('org_id', orgId).eq('org_role', role)),
+    after: ({ key, tie: [id] }) => [
+      () =>
+        profiles().withIndex('by_org_role_name', (q) =>
+          q.eq('org_id', orgId).eq('org_role', role).eq('name_key', key).gt('id', id),
+        ),
+      () =>
+        profiles().withIndex('by_org_role_name', (q) =>
+          q.eq('org_id', orgId).eq('org_role', role).gt('name_key', key),
+        ),
+    ],
+    at: (profile) => keyedAt(profile.name_key, profile.id, 'profile'),
+  }
+}
+
+/** The teams of organization `orgId` in name order (teams.by_org_name):
+ * name key, then id. */
+export function teamIndex(ctx: QueryCtx, orgId: string): NamedIndex<Doc<'teams'>, IdTie> {
+  const teams = () => ctx.db.query('teams')
+  return {
+    all: () => teams().withIndex('by_org_name', (q) => q.eq('org_id', orgId)),
+    after: ({ key, tie: [id] }) => [
+      () =>
+        teams().withIndex('by_org_name', (q) =>
+          q.eq('org_id', orgId).eq('name_key', key).gt('id', id),
+        ),
+      () => teams().withIndex('by_org_name', (q) => q.eq('org_id', orgId).gt('name_key', key)),
+    ],
+    at: (team) => keyedAt(team.name_key, team.id, 'team'),
+  }
+}
+
+/** The user grants on project `projectId` in the order of their copies of
+ * the person's name key (project_access.by_project_name): copied key, then
+ * profile id. A copy can trail a rename for a moment, which places its row
+ * by the earlier name. It holds only grants with a copy: one without sorts
+ * first, and is a grant a removed person left before the backfill keyed
+ * the organization, which a reader checks apart (model/projectSettings.ts
+ * unkeyedOrphans). */
+export function projectGrantIndex(
+  ctx: QueryCtx,
+  projectId: string,
+): NamedIndex<Doc<'project_access'>, IdTie> {
+  const grants = () => ctx.db.query('project_access')
+  return {
+    all: () =>
+      grants().withIndex('by_project_name', (q) =>
+        q.eq('project_id', projectId).gte('name_key', ''),
+      ),
+    after: ({ key, tie: [id] }) => [
+      () =>
+        grants().withIndex('by_project_name', (q) =>
+          q.eq('project_id', projectId).eq('name_key', key).gt('profile_id', id),
+        ),
+      () =>
+        grants().withIndex('by_project_name', (q) =>
+          q.eq('project_id', projectId).gt('name_key', key),
+        ),
+    ],
+    at: (grant) => keyedAt(grant.name_key, grant.profile_id, 'grant'),
+  }
+}
+
+/** The team shares on project `projectId` in the order of their copies of
+ * the team's name key (project_team_access.by_project_name): copied key,
+ * then team id, with the same lag as projectGrantIndex. Like it, it holds
+ * only shares with a copy. */
+export function projectShareIndex(
+  ctx: QueryCtx,
+  projectId: string,
+): NamedIndex<Doc<'project_team_access'>, IdTie> {
+  const shares = () => ctx.db.query('project_team_access')
+  return {
+    all: () =>
+      shares().withIndex('by_project_name', (q) =>
+        q.eq('project_id', projectId).gte('name_key', ''),
+      ),
+    after: ({ key, tie: [id] }) => [
+      () =>
+        shares().withIndex('by_project_name', (q) =>
+          q.eq('project_id', projectId).eq('name_key', key).gt('team_id', id),
+        ),
+      () =>
+        shares().withIndex('by_project_name', (q) =>
+          q.eq('project_id', projectId).gt('name_key', key),
+        ),
+    ],
+    at: (share) => keyedAt(share.name_key, share.team_id, 'team share'),
+  }
 }
