@@ -5217,7 +5217,8 @@ type SearchPageData = FunctionReturnType<typeof api.search.page>
     organization: one organization, and in it one project. */
 export type SearchScope = NonNullable<FunctionArgs<typeof api.search.page>['scope']>
 /** A task result of main Search, with its display key ("QN-12") and the
-    handle the app opens it by (handleFor). */
+    handle the app had for it when the page arrived (handleFor), which the
+    list names its row by. Opening it reads the handle again (handleNow). */
 export type SearchTaskRow = Extract<SearchPageData['rows'][number], { kind: 'task' }> & {
   key: string
   handle: string
@@ -6547,6 +6548,12 @@ export const PLANNER = {
       outlasts a moment, such as an image upload, follows a task by uuid,
       because a new task's handle can move to another task meanwhile. */
   handleOf: (uuid: string): string | null => uuidToKey.get(uuid) ?? null,
+  /** The handle task `uuid`, number `num` of organization `orgId` opens by
+      now: the store's when it holds the task, else the home organization's
+      key or another organization's uuid (handleFor). Read when the task
+      opens, as a role change since a search answered can change it. */
+  handleNow: (uuid: string, orgId: string, num: number): string =>
+    uuidToKey.get(uuid) ?? handleFor(uuid, orgId, `${ISSUE_PREFIX}-${num}`),
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
@@ -7401,7 +7408,7 @@ export const PLANNER = {
       results ranked together across every organization of this login, or
       the narrower `scope`, with archived tasks when `includeArchived`, from
       `cursor`, the next_cursor of the page before (none for the first). A
-      task row gains its display key and the handle the app opens it by,
+      task row gains its display key and the handle the app has for it now,
       the key for a home organization's task and the uuid for another's. A
       refusal answers its code and sentence, and any other failure
       `failed`. One-shot, never part of the snapshot, so a hidden tab reads

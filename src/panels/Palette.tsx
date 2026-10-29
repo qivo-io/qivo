@@ -157,14 +157,17 @@ function scopeChoices(): {
 }
 
 /**
- * Opens task result `row` by its handle with `open` (App openNav). It notes
- * the task first in the opened-task registry (lib/openedTasks.ts), so a
- * task window opened on a task the workspace does not hold, archived,
- * deleted or moved out of sight since the search, says what became of it.
- * t3/limits-direct-links opens such a task by itself instead.
+ * Opens task result `row` with `open` (App openNav) by the handle the store
+ * gives it now (P.handleNow), not the one its page arrived with, as a role
+ * change meanwhile can change it. It notes the task first in the
+ * opened-task registry (lib/openedTasks.ts), so a task window opened on a
+ * task the workspace does not hold, archived, deleted or moved out of sight
+ * since the search, says what became of it. t3/limits-direct-links opens
+ * such a task by itself instead.
  */
 function openTaskResult(row: SearchTaskRow, open: (handle: string) => void): void {
-  noteOpenedTask(row.handle, {
+  const handle = P.handleNow(row.id, row.org_id, row.num)
+  noteOpenedTask(handle, {
     uuid: row.id,
     key: row.key,
     title: row.title,
@@ -172,7 +175,7 @@ function openTaskResult(row: SearchTaskRow, open: (handle: string) => void): voi
     org: row.org_id,
     archived: row.archived,
   })
-  open(row.handle)
+  open(handle)
 }
 
 /** The name of organization `org` when it is not the home organization,
