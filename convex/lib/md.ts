@@ -458,6 +458,55 @@ export function parseMd(src: string): MdBlock[] {
   return blocks
 }
 
+/* The text inline nodes show, each piece apart: a link's text but not its
+   destination, an image's alt text but not its source, a mention's name but
+   not its id. */
+function inlineText(nodes: readonly MdInline[]): string {
+  return nodes
+    .map((node) => {
+      switch (node.t) {
+        case 'text':
+        case 'code':
+          return node.text
+        case 'br':
+          return '\n'
+        case 'image':
+          return node.alt
+        case 'mention':
+          return node.name
+        default:
+          return inlineText(node.children)
+      }
+    })
+    .join(' ')
+}
+
+/** The text a description shows, which main Search matches
+    (lib/mainSearch.ts): its text, code, link text, image alt text and
+    mention names, without link destinations, image sources (`att:`
+    references) or mention ids (MENTION_DEST). A bare autolink is shown text
+    and stays. The pieces join with a space, as the markup between them
+    ends a word in the stored text too, so the words are those of the
+    stored text without its hidden parts. Only a link, an image or a
+    mention hides text, and each needs `](`, so a text without it is
+    answered as it is, unparsed. */
+export function readableText(markdown: string): string {
+  if (!markdown.includes('](')) return markdown
+  return parseMd(markdown)
+    .map((block) => {
+      switch (block.t) {
+        case 'codeblock':
+          return block.text
+        case 'ul':
+        case 'ol':
+          return block.items.map(inlineText).join('\n')
+        default:
+          return inlineText(block.children)
+      }
+    })
+    .join('\n')
+}
+
 /** Only plain web/mail links survive; anything else (javascript:, data:,
     relative paths…) renders as text. */
 export function sanitizeHref(href: string): string | null {

@@ -141,6 +141,7 @@ import type * as lib_projectKeys from "../lib/projectKeys.js";
 import type * as lib_requestBody from "../lib/requestBody.js";
 import type * as lib_review from "../lib/review.js";
 import type * as lib_search from "../lib/search.js";
+import type * as lib_searchTerms from "../lib/searchTerms.js";
 import type * as lib_sessionEnd from "../lib/sessionEnd.js";
 import type * as lib_signIns from "../lib/signIns.js";
 import type * as lib_taskEvents from "../lib/taskEvents.js";
@@ -387,6 +388,7 @@ declare const fullApi: ApiFromModules<{
   "lib/requestBody": typeof lib_requestBody;
   "lib/review": typeof lib_review;
   "lib/search": typeof lib_search;
+  "lib/searchTerms": typeof lib_searchTerms;
   "lib/sessionEnd": typeof lib_sessionEnd;
   "lib/signIns": typeof lib_signIns;
   "lib/taskEvents": typeof lib_taskEvents;
