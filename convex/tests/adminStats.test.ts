@@ -223,6 +223,13 @@ const measuredBytes = (t: T, orgId: string) =>
           .collect(),
       )
     }
+    // the tasks' texts, which their description rows hold
+    bytes += sum(
+      await ctx.db
+        .query('issue_descriptions')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect(),
+    )
     bytes += sum(
       await ctx.db
         .query('activity_events')
