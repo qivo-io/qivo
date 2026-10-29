@@ -2055,6 +2055,11 @@ describe('the backfill', () => {
     )
     const created = (await create(t, f, { description: 'Written by this release' })).id
     await copyTaskTexts(t, f.org.id, ids)
+    // a webhook of the first held task sees a write that changes it
+    const events = await watchEvents(t, f, ids[0])
+    await edit(t, f, ids[0], { title: 'Renamed before the clear' })
+    expect(await events.after(0)).toEqual([['title']])
+    const sent = await events.count()
     const activity = (await activityFor(t, f.org.id)).length
     const rowsBefore = (await snapshot(t)).rows
     expect(await backfill(t, { dry_run: true })).toMatchObject({
@@ -2075,12 +2080,13 @@ describe('the backfill', () => {
     })
     await expectNoCopy(t, [...ids, created])
     const settled = await snapshot(t)
-    // only the copies went: no updated_at, no row, no activity
+    // only the copies went: no updated_at, no row, no activity, no event
     expect(settled.rows).toEqual(rowsBefore)
     expect(settled.tasks.map(({ description: _d, ...task }) => task)).toEqual(
       tasksBefore.map(({ description: _d, ...task }) => task),
     )
     expect(await activityFor(t, f.org.id)).toHaveLength(activity)
+    expect(await events.count()).toBe(sent)
     expect(await expectDescriptions(t, f.org.id)).toBe(5)
     expect(await backfill(t, { dry_run: true })).toMatchObject({ held: 0, skipped: 5 })
     expect(await backfill(t, { dry_run: false, clear: true })).toMatchObject({ cleared: 0 })
