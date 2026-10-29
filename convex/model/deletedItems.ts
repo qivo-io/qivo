@@ -982,7 +982,8 @@ async function idTaken(run: Run, taskId: string): Promise<boolean> {
  * the next step picks it up. A task too large to store goes in cut to the
  * caps (fitToStore). A task that a restore wrote back without its parent, and that still waits
  * for it, is stored with that parent again (takeParent). Tasks of a deleted
- * project emit no task.deleted. */
+ * project emit no task.deleted. A purge marks the project of an open task's
+ * parent outside the item for the nightly archive (markPurgedParent). */
 async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boolean> {
   for (const relation of TASK_ROWS) {
     // the task stays live until its own row goes, below
@@ -1017,11 +1018,38 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
     }
     const stored = fitToStore(run.item, { ...described.task, parent_id })
     await storeTask(run.ctx, run.item, tallyOf(run), stored)
-  } else await discard(run.ctx, { table: 'issues', doc: task })
+  } else {
+    await discard(run.ctx, { table: 'issues', doc: task })
+    await markPurgedParent(run, task)
+  }
   await dropTaskDescription(run.ctx, run.budget, task.id, row)
   run.budget.tasks -= 1
   charge(run.budget, task)
   return true
+}
+
+/* The parents a purge step read for its open tasks, so the siblings of a
+ * task read theirs no more that step (markPurgedParent). */
+const purgedParents = new WeakMap<Run, Set<string>>()
+
+/** Marks the project of `task`'s parent for the nightly archive
+ * (model/archiveRechecks.ts) as a purge deletes `task`, an open task, for
+ * good, when the parent lies outside the item and waits for its children.
+ * Only a project item whose move got stuck before moveEdges reached the
+ * task leaves it live; moveEdges would have marked the parent. The parent's
+ * project is known only from the parent, so the step reads each parent
+ * once, charged to its budget, and a parent inside the item, which goes
+ * too, marks nothing. */
+async function markPurgedParent(run: Run, task: Doc<'issues'>): Promise<void> {
+  if (task.archived_at !== undefined || task.parent_id === undefined) return
+  const read = purgedParents.get(run) ?? new Set<string>()
+  purgedParents.set(run, read)
+  if (read.has(task.parent_id)) return
+  read.add(task.parent_id)
+  const parent = await byId(run.ctx, 'issues', task.parent_id)
+  if (parent !== null) chargeRead(run.budget, parent)
+  if (waitsForChildren(parent) && !itemProjectIds(run.item).includes(parent.project_id))
+    await recheckProject(run.ctx.db, { org_id: parent.org_id, project_id: parent.project_id })
 }
 
 /** Whether `task`, which a restore of project item `item` wrote back

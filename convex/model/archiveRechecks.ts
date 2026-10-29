@@ -7,8 +7,10 @@
  * - a Done parent that waited for an unarchived child, once that child
  *   stops counting for it: the child is archived (model/issues.ts
  *   archiveIssueCore, updateIssueCore's machine toggle, jobs.ts archiveLeg),
- *   leaves the parent (updateIssueCore, moveIssueCore) or moves to Deleted
- *   items without it (model/deletedItems.ts moveTasksToTrash, moveEdges);
+ *   leaves the parent (updateIssueCore, moveIssueCore), moves to Deleted
+ *   items without it (model/deletedItems.ts moveTasksToTrash, moveEdges) or
+ *   is deleted for good with a project item whose move got stuck
+ *   (model/deletedItems.ts clearTask);
  * - a seeded Done task whose done_at may already lie before the last run's
  *   threshold (model/demoSeed.ts).
  * A write that sets done_at to its own time needs no row, because the
