@@ -2183,7 +2183,12 @@ function IssueDetail({
     topLevelOf: P.topLevelOf,
     canWrite: (pid: string) => P.canWrite(pid),
   }
-  const subCandidates = it && subAnchor ? subtaskCandidatesFor(it, P.issues, relationView) : []
+  // the picker counts the subtasks as the Add subtask button does
+  // (P.capInputs), so a whole list at the cap offers nothing more
+  const subCandidates =
+    it && subAnchor
+      ? subtaskCandidatesFor({ ...it, children: P.capInputs(it).children }, P.issues, relationView)
+      : []
   const parentCandidates = it && parentAnchor ? parentCandidatesFor(it, P.issues, relationView) : []
   // one level of subtasks, at most LIMITS.subtasks.max active ones: why this task can
   // take no subtask, or no parent, if it cannot

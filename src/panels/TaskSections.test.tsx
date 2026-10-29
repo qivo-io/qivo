@@ -221,6 +221,15 @@ async function load(next = fixture(), beforeBoot?: () => Promise<void>) {
 beforeEach(() => {
   Element.prototype.scrollIntoView = () => {}
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  // a picker follows its own size
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  )
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
@@ -590,6 +599,34 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
       'Additional work is outside this view.',
     ])
     expect(rollup()).toEqual(['visible', 'Σ 3h'])
+  })
+
+  it('offers no new subtask in the picker once the whole list holds the cap', async () => {
+    await load()
+    await openTask()
+    await act(async () =>
+      document.querySelector<HTMLElement>('button[aria-label="Add subtask"]')?.click(),
+    )
+    // the picker opens a frame after the press
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+    // the candidates, by key: a picker row starts with its key
+    const offered = () =>
+      [...document.querySelectorAll('button')]
+        .map((b) => b.textContent ?? '')
+        .filter((text) => /^QN-\d+/.test(text))
+        .map((text) => text.match(/^QN-\d+/)?.[0])
+    expect(offered()).toContain('QN-31')
+    // the server lists 100 subtasks while the workspace holds three
+    const far = Array.from({ length: LIMITS.subtasks.max - 3 }, (_, n) =>
+      short(task(`far-${n}`, 100 + n, { title: `Step ${n}`, parent_id: 'fam' })),
+    )
+    await answer(
+      'taskWindow:task',
+      taskAnswer([short(row('kid-1')), short(row('kid-2')), short(row('kid-ro')), ...far]),
+    )
+    expect(offered()).not.toContain('QN-31')
+    // the current subtasks Mira can edit stay listed, to take off
+    expect(offered()).toEqual(expect.arrayContaining(['QN-28', 'QN-29']))
   })
 
   it("never shows a task's lists under the subtask opened from them", async () => {
