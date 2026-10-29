@@ -128,26 +128,31 @@ type Reads = { bytes: number; documents: number; ranges: number }
  * open. */
 const BODY: Reads = { bytes: DOCUMENT_MAX_BYTES, documents: 1, ranges: 1 }
 
-/** The team shares PROJECT holds on a project and on its top-level
- * project each: as many as lib/access.ts projectLevelsOf reads of one
- * project's shares before it turns to the caller's own rows,
- * OWN_READS.projectShares and the one more that tells it to. */
+/** The team shares one question of lib/access.ts projectLevelsOf reads of
+ * a project, and of its top-level project, before it turns to the caller's
+ * own rows: OWN_READS.projectShares and the one more that tells it to. */
 const SHARES = OWN_READS.projectShares + 1
+
+/** The team shares PROJECT's bytes hold at the name caps, as
+ * lib/archivedTasks.ts ARCHIVE_RESERVE holds a project shared with about ten
+ * teams; at ordinary name lengths, about 300 bytes a row, they hold SHARES. */
+const SHARE_BYTES = 10
 
 /** What the caller's access reads for a project it has not read yet, one
  * question at its worst (lib/access.ts projectLevelsOf), on the project and
  * on its top-level project: the row, at most lib/limits.ts
  * PROJECT_ROW_MAX_BYTES, the caller's grant and the range of its team
  * shares, and for each of SHARES shares the share, the caller's membership
- * and the team, each at most TEAM_ROW_MAX_BYTES and read once a query. Past
- * SHARES the access reads the caller's own rows, once a query, which
- * budgetIn leaves out as shared, or asks the caller's teams one by one,
- * within OWN_READS.shareLookups for the query. The next look at the budget
- * counts those, before the read asks about another project (inOrder), as
- * it counts navigation under a top-level project the caller holds no level
- * on. */
+ * and the team, each read once a query. Its bytes count SHARE_BYTES of those
+ * at TEAM_ROW_MAX_BYTES, so a project shared with more teams at the name
+ * caps passes them by up to about 1.3 MiB, past which the access reads the
+ * caller's own rows, counted as shared, or asks their teams one by one,
+ * within OWN_READS.teamReads for the query. The next look at the budget
+ * counts what it read, before the read asks about another project
+ * (inOrder), as it counts navigation under a top-level project the caller
+ * holds no level on. */
 const PROJECT: Reads = {
-  bytes: 2 * (PROJECT_ROW_MAX_BYTES + (1 + 3 * SHARES) * TEAM_ROW_MAX_BYTES),
+  bytes: 2 * (PROJECT_ROW_MAX_BYTES + (1 + 3 * SHARE_BYTES) * TEAM_ROW_MAX_BYTES),
   documents: 2 * (2 + 3 * SHARES),
   ranges: 2 * (3 + 2 * SHARES),
 }
