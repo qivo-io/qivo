@@ -418,10 +418,11 @@ type Stops = {
  *   SLACK under it, so it stops a read before the read's own allowance
  *   does only once earlier reads passed what they were counted at by more
  *   than SLACK holds: rows near Convex's 1 MiB document size (a task, or a
- *   project whose legacy icon or older description is that large), a
- *   number lookup that reads more than LOOKUP holds (a hidden task or
- *   project row over the caps), or an access check that reads many rows,
- *   for a person in many teams or a project shared with many.
+ *   project whose older description, or legacy icon until
+ *   internal/legacyIconsBackfill clears it, is that large), a number
+ *   lookup that reads more than LOOKUP holds (a hidden task or project row
+ *   over the caps), or an access check that reads many rows, for a person
+ *   in many teams or a project shared with many.
  * - A description row a rollback left with stale copies, which name a
  *   project the seat sees while the row's live task is hidden. The seat
  *   reads and parses the row as one of its candidates, and the seat or the
