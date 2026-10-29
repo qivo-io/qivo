@@ -15,9 +15,12 @@
  * erase (files.ts eraseHeldFile) ends the hold at that time. eraseFile
  * erases a file at once. It is for a file that no committed row ever named,
  * such as an upload refused in the same transaction or bytes nobody
- * confirmed, for the public demo and for the operator's panorama library,
+ * confirmed, for the public demo, for the operator's panorama library,
  * whose storage URLs are permanent and public (panoramaImages.ts remove, and
- * a replaced library preview in backgroundPreviews.ts attach). releaseFileNow
+ * a replaced library preview in backgroundPreviews.ts attach), and for the
+ * parts of an organization export's archive (model/orgExports.ts), a
+ * temporary copy of data the organization's own rows still hold, which no
+ * restore needs. releaseFileNow
  * lets go of a file at once, for the backgrounds and previews of a login that
  * the orphan sweep finds removed outside the app (files.ts reapOrphans), so a
  * restore of a backup from before that removal brings back the login's
