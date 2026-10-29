@@ -942,19 +942,19 @@ describe('public demo archive rechecks', () => {
       await a.as.mutation(api.projects.unarchive, { org_id, id: project.id })
     }
     expect(await rechecksOf(org_id)).toEqual([project.id])
-    // a row a run's leg wrote is no reason to skip a visitor's
-    await t.run(async (ctx) => {
-      for (const row of await ctx.db.query('archive_rechecks').collect())
-        await ctx.db.delete(row._id)
-      await ctx.db.insert('archive_rechecks', {
-        org_id,
-        project_id: project.id,
-        from_run: '2026-09-14T02:30:00.000Z',
+    // a row a run's leg or find phase wrote, or one a run's chain holds and
+    // deletes once it is done, is no reason to skip a visitor's
+    const stamp = '2026-09-14T02:30:00.000Z'
+    for (const other of [{ from_run: stamp }, { due_by: stamp }, { handed_at: stamp }]) {
+      await t.run(async (ctx) => {
+        for (const row of await ctx.db.query('archive_rechecks').collect())
+          await ctx.db.delete(row._id)
+        await ctx.db.insert('archive_rechecks', { org_id, project_id: project.id, ...other })
       })
-    })
-    await a.as.mutation(api.projects.archive, { org_id, id: project.id })
-    await a.as.mutation(api.projects.unarchive, { org_id, id: project.id })
-    expect(await rechecksOf(org_id)).toEqual([project.id, project.id])
+      await a.as.mutation(api.projects.archive, { org_id, id: project.id })
+      await a.as.mutation(api.projects.unarchive, { org_id, id: project.id })
+      expect(await rechecksOf(org_id), Object.keys(other)[0]).toEqual([project.id, project.id])
+    }
   })
 })
 

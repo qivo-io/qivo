@@ -26,8 +26,8 @@
  *   chain for each organization, which archives its projects one after
  *   another, so its legs never write the organization's counters at the
  *   same time. An idle night is three calls that read one empty range a
- *   phase and the archive_runs row, however many organizations and live
- *   projects there are.
+ *   phase and the archive_runs row, which its find phase also stamps,
+ *   however many organizations and live projects there are.
  * - An archive leg reads one page of one project's due Done tasks by index,
  *   at most ARCHIVE_LIMITS.tasks tasks and ARCHIVE_LIMITS.bytes bytes. The
  *   leaf guard reads at most one child per candidate, by index. A leg stops
@@ -55,7 +55,8 @@
  * Its earlier legs stay committed, every other chain runs on, and the next
  * night retries it, because what it left is still due: an archive chain
  * deletes a project's archive_rechecks row only once it is done with the
- * project, and a dispatcher that fails leaves archive_runs where it was.
+ * project, the next run takes over the rows a failed chain still holds, and
+ * a dispatcher that fails leaves archive_runs where it was.
  * Failures show in the Convex logs as failed scheduled functions with their
  * arguments.
  *
@@ -192,7 +193,8 @@ const archiveProjectArgs = {
   next: v.optional(v.array(v.string())),
   // the archive_rechecks rows the hand phase handed with `project_id` and
   // then each of `next`, in that order, which the chain deletes once it is
-  // done with their project. Absent on a leg the release before queued.
+  // done with their project, if it still holds them (handed_at). Absent on
+  // a leg the release before queued.
   rows: v.optional(vRechecks),
 }
 
@@ -339,19 +341,25 @@ function finishChain(a: {
   return null
 }
 
-/* Deletes the archive_rechecks rows `ids` that are still there. */
-async function dropRechecks(ctx: MutationCtx, ids: readonly Id<'archive_rechecks'>[]) {
-  for (const id of ids) if ((await ctx.db.get(id)) !== null) await ctx.db.delete(id)
+/* Deletes the archive_rechecks rows `ids` that the chain of the run at
+ * `now` still holds (handed_at). A newer run's hand phase may have taken a
+ * row over since, and its own chain deletes it then. */
+async function dropRechecks(
+  ctx: MutationCtx,
+  ids: readonly Id<'archive_rechecks'>[],
+  now: string,
+): Promise<void> {
+  for (const id of ids) if ((await ctx.db.get(id))?.handed_at === now) await ctx.db.delete(id)
 }
 
 /* Logs what the chain archived in its project, deletes the row the chain
- * was handed with it, and returns the first leg of the organization's next
- * project, or null when the chain is done. A row written for the project
- * since stays for the next run. */
+ * was handed with it while the chain still holds it, and returns the first
+ * leg of the organization's next project, or null when the chain is done. A
+ * row written for the project since stays for the next run. */
 async function nextProject(ctx: MutationCtx, a: ArchiveLeg): Promise<ArchiveLeg | null> {
   finishChain({ ...a, flagged: 0 })
   const [row, ...rows] = a.rows ?? []
-  if (row !== undefined) await dropRechecks(ctx, [row])
+  if (row !== undefined) await dropRechecks(ctx, [row], a.now)
   const [project_id, ...next] = a.next ?? []
   if (project_id === undefined) return null
   return {
@@ -566,10 +574,20 @@ async function flaggedStep(ctx: MutationCtx, a: RunStep): Promise<void> {
 /* The first step of a run's find phase at `now`: the full pass when no run
  * has finished one (archive_runs), so tasks may be due that no window
  * reaches, or when the last one started ARCHIVE_FULL_AFTER_MS or more
- * before. Otherwise the window from the last finished run's threshold. */
-async function findStep(ctx: QueryCtx, now: string, repairs: number): Promise<ArchiveRun> {
+ * before. Otherwise the window from the last finished run's threshold. It
+ * records the run as the newest to begin its find phase (`started`), never
+ * moving that back, so the hand phase of an older run that overlaps it
+ * leaves writers' rows to it (handStep). */
+async function findStep(ctx: MutationCtx, now: string, repairs: number): Promise<ArchiveRun> {
   const state = await ctx.db.query('archive_runs').first()
-  if (state === null || Date.parse(now) - Date.parse(state.full_at) >= ARCHIVE_FULL_AFTER_MS)
+  if (state === null) await ctx.db.insert('archive_runs', { started: now })
+  else if (state.started === undefined || state.started < now)
+    await ctx.db.patch(state._id, { started: now })
+  if (
+    state?.through === undefined ||
+    state.full_at === undefined ||
+    Date.parse(now) - Date.parse(state.full_at) >= ARCHIVE_FULL_AFTER_MS
+  )
     return { phase: 'projects', now, repairs }
   return { phase: 'window', since: state.through, now, repairs }
 }
@@ -684,32 +702,20 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   })
 }
 
-/* The earliest threshold of a run that may hand `row`: its find phase's
- * due_by, archiveCutoff of the `now` of the run whose leg wrote it, as only
- * later runs hand it, or '' for a writer's row, which any run may hand. Of
- * a project's rows a hand step keeps the one with the latest, so no older
- * run's chain still holds it. Such a chain checks at its older threshold and
- * deletes the row it holds when it is done with the project, so if the
- * newer run kept that row and its own chain then failed, no row would be
- * left for the tasks due only at the newer threshold. */
-const handFloor = (row: Doc<'archive_rechecks'>): string =>
-  row.due_by ?? (row.from_run === undefined ? '' : archiveCutoff(row.from_run))
-
 /* One step of the hand phase. It reads one page of archive_rechecks in
  * organization and project order, at most ARCHIVE_LIMITS.projects rows,
- * every row from before the run and those its find phase or a person wrote
- * since, except a row one of this run's legs wrote (from_run), which waits
- * for the next run. A run that overlaps a newer one, after the scheduler
- * fell a day behind, also leaves the rows the newer run's find phase
- * (due_by after its own threshold) or legs (from_run after its own `now`)
- * wrote, because its chains check at its older threshold and would delete
- * them unchecked. It keeps one row a project, the one whose hand floor is
- * latest (handFloor), deletes the others it reads with it, also across
- * steps, and gathers an organization's projects with their rows, also
- * across steps, into one chain, which it starts once it passes them or once
- * they reach ARCHIVE_LIMITS.projects. So a step writes at most one delete a
- * row, reads at most one kept row again, and schedules at most one chain a
- * row. The
+ * the rows it may check (model/archiveRechecks.ts says why each rule holds
+ * the archive's invariant): every row from before the run and those its
+ * find phase or a person wrote since, and rows an older run holds, which it
+ * takes over. It leaves a row its own or a newer run's leg wrote (from_run),
+ * a newer run's find row (due_by after its threshold), a writer's row once a
+ * newer run began its find phase (archive_runs.started) and a row a newer
+ * run holds (handed_at). It keeps one row a project, marks it handed to its
+ * chain, deletes the others it reads with it, also across steps, and gathers
+ * an organization's projects with their rows, also across steps, into one
+ * chain, which it starts once it passes them or once they reach
+ * ARCHIVE_LIMITS.projects. So a step writes at most one mark or delete a
+ * row, reads archive_runs once, and schedules at most one chain a row. The
  * phase's last step writes the run's audit row and moves archive_runs to
  * the run's threshold, and to its start as the last full pass after a full
  * one. Only that step moves it, so a run whose dispatcher fails before it
@@ -738,35 +744,35 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   }
 
   const cutoff = archiveCutoff(a.now)
+  // a newer run began its find phase, so it hands the writers' rows
+  const newer = (await ctx.db.query('archive_runs').first())?.started
   const page = await ctx.db
     .query('archive_rechecks')
-    .withIndex('by_org_project_run')
+    .withIndex('by_org_project_run_due')
     .paginate({ cursor: a.cursor ?? null, numItems: ARCHIVE_LIMITS.projects })
-  // the row kept for the last project gathered, read again when the step
-  // before kept it, or null when it is gone
-  let kept: Doc<'archive_rechecks'> | null | undefined
   for (const row of page.page) {
-    // this run's or a newer run's, which that run or a later one hands
     if (row.from_run !== undefined && row.from_run >= a.now) continue
     if (row.due_by !== undefined && row.due_by > cutoff) continue
+    if (
+      row.from_run === undefined &&
+      row.due_by === undefined &&
+      newer !== undefined &&
+      newer > a.now
+    )
+      continue
+    if (row.handed_at !== undefined && row.handed_at >= a.now) continue
     if (due?.org_id === row.org_id && due.projects.at(-1) === row.project_id) {
-      const last = due.rows.length - 1
-      kept ??= await ctx.db.get(due.rows[last])
-      // the row with the latest hand floor stays, on a tie the later one
-      if (kept === null || handFloor(row) >= handFloor(kept)) {
-        if (kept !== null) await ctx.db.delete(kept._id)
-        due.rows[last] = row._id
-        kept = row
-      } else await ctx.db.delete(row._id)
+      await ctx.db.delete(row._id)
       continue
     }
     if (due?.org_id !== row.org_id || due.projects.length >= ARCHIVE_LIMITS.projects) {
       await hand()
       due = { org_id: row.org_id, projects: [], rows: [] }
     }
+    // this run's chain holds it now; an older one's no longer deletes it
+    await ctx.db.patch(row._id, { handed_at: a.now })
     due.projects.push(row.project_id)
     due.rows.push(row._id)
-    kept = row
     projects += 1
   }
   const step = { now: a.now, repairs: a.repairs, tasks: a.tasks, full: a.full }
@@ -793,8 +799,8 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   // A row deleted while an incremental run ran stays deleted, so the next
   // run is full.
   if (state === null) {
-    if (full) await ctx.db.insert('archive_runs', { through, full_at: a.now })
-  } else await ctx.db.patch(state._id, { through, full_at: full ? a.now : state.full_at })
+    if (full) await ctx.db.insert('archive_runs', { through, full_at: a.now, started: a.now })
+  } else await ctx.db.patch(state._id, { through, ...(full ? { full_at: a.now } : {}) })
 }
 
 /** One leg of an organization's nightly archive chain. The chain pages
@@ -802,17 +808,18 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
  * check in turn (`project_id`, then `next`), each leg scheduling the next
  * with the project's running count, and logs each project's count when it
  * is done with the project. Then it deletes the archive_rechecks row it was
- * handed with the project, so a chain that fails leaves the rows of the
- * projects it did not finish for the next run. A project archived, deleted
- * or left without its root since the dispatcher read it is skipped. The
- * organization's deletion ends the chain (chainEnds), which then deletes
- * every row it was handed, because nothing of the organization is archived
- * again. */
+ * handed with the project, unless a newer run took the row over since, so a
+ * chain that fails leaves the rows of the projects it did not finish for the
+ * next run, and a chain that runs late deletes no row a newer run holds. A
+ * project archived, deleted or left without its root since the dispatcher
+ * read it is skipped. The organization's deletion ends the chain
+ * (chainEnds), which then deletes every row it still holds, because nothing
+ * of the organization is archived again. */
 export const archiveProject = internalMutation({
   args: archiveProjectArgs,
   handler: async (ctx, a): Promise<null> => {
     const ends = await chainEnds(ctx, a.org_id)
-    if (ends !== null) await dropRechecks(ctx, a.rows ?? [])
+    if (ends !== null) await dropRechecks(ctx, a.rows ?? [], a.now)
     if (ends === 'gone') return null
     if (ends === 'deleting') return finishChain({ ...a, flagged: 0 })
     const next = await archiveLeg(ctx, a)

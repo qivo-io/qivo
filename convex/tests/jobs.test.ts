@@ -1349,8 +1349,9 @@ describe('archiveDoneIssues reads only the window since its last run', () => {
     const { bytes: _large, ...large } =
       nights['1,000 live projects in 10 organizations, idle night 2']
     expect(large).toEqual(small)
+    // one empty range a phase, and archive_runs read and written twice
     expect(large.ranges).toBeLessThanOrEqual(6)
-    expect(large.documents).toBeLessThanOrEqual(3)
+    expect(large.documents).toBeLessThanOrEqual(5)
     const { bytes: _w1, ...windowSmall } = nights['1 live project, window night 1']
     const { bytes: _w2, ...windowLarge } =
       nights['1,000 live projects in 10 organizations, window night 1']
@@ -1965,13 +1966,15 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
 describe('archiveDoneIssues and two runs that overlap', () => {
   /* Runs the pending archive calls of the run at `now`, one at a time in
    * schedule order, each in a transaction of its own, until none is left or
-   * `stop` holds for the next one. `ran` holds the calls run already. Call
-   * on fake timers, so nothing runs by itself. */
+   * `stop` holds for the next one. `ran` holds the calls run already, and
+   * `only`, when given, picks the calls to run and leaves the others
+   * pending. Call on fake timers, so nothing runs by itself. */
   async function runOf(
     t: T,
     now: string,
     ran: Set<string>,
     stop?: (name: string, args: Record<string, unknown>) => boolean | Promise<boolean>,
+    only: (name: string) => boolean = () => true,
   ): Promise<void> {
     for (let guard = 0; guard < 1000; guard++) {
       const job = (
@@ -1981,6 +1984,7 @@ describe('archiveDoneIssues and two runs that overlap', () => {
           j.state.kind === 'pending' &&
           !ran.has(j._id) &&
           ARCHIVE_CALLS.test(j.name) &&
+          only(j.name) &&
           (j.args[0] as { now?: string }).now === now,
       )
       if (job === undefined) return
@@ -2089,7 +2093,7 @@ describe('archiveDoneIssues and two runs that overlap', () => {
     expect((await issueRow(t, parent.id))?.archived_at).toBe(night(3))
   })
 
-  it("a newer run keeps its own row of a project an older run's chain still holds, so its failed chain leaves a row", async () => {
+  it("a newer run takes over the row of a project an older run's chain still holds, so its failed chain leaves a row", async () => {
     // a leg reads one task, so a chain can fail partway through a project
     ARCHIVE_LIMITS.tasks = 1
     const t = newT()
@@ -2130,14 +2134,192 @@ describe('archiveDoneIssues and two runs that overlap', () => {
     }
     expect(await runState(t)).toMatchObject({ through: cutoffAt(b) })
     for (const task of later) expect((await issueRow(t, task.id))?.archived_at).toBeUndefined()
-    // B's row is left for the next night, whose window starts after both tasks
-    expect((await rechecks(t)).map((row) => [row.project_id, row.due_by])).toEqual([
-      [f.sub.id, cutoffAt(b)],
+    // the row B took over from A, which A's chain no longer deleted, is left
+    // for the next night, whose window starts after both tasks
+    expect((await rechecks(t)).map((row) => [row.project_id, row.handed_at])).toEqual([
+      [f.sub.id, b],
     ])
     expect(await runArchive(t, night(3))).toBe(2)
     for (const task of later) expect((await issueRow(t, task.id))?.archived_at).toBe(night(3))
     expect(await rechecks(t)).toEqual([])
   })
+
+  /* Cancels the run at `now`'s pending archive calls: a leg that fails
+   * commits nothing and schedules nothing, as if its chain stopped there. */
+  const fail = (t: T, now: string) =>
+    t.run(async (ctx) => {
+      for (const job of await ctx.db.system.query('_scheduled_functions').collect())
+        if (job.state.kind === 'pending' && (job.args[0] as { now?: string }).now === now)
+          await ctx.scheduler.cancel(job._id)
+    })
+
+  it("an older run's hand phase leaves a row a newer run's chain holds, though it could check it", async () => {
+    const { t, subs, pastCutoff, done } = await overlapScene()
+    const [first, , , last] = subs
+    // the first project holds a task due at A's threshold and one due only
+    // at B's, and the last a task due at A's, so A's hand phase pages on
+    const tasks = [
+      await done(first, pastCutoff(0)),
+      await done(first, pastCutoff(1)),
+      await done(last, pastCutoff(0)),
+    ]
+    const [a, b] = [night(1), night(2)]
+    const ran = new Set<string>()
+    const dispatcher = (name: string) => name === 'jobs:archiveDoneIssues'
+    vi.useFakeTimers()
+    try {
+      await start(t, a)
+      await runOf(t, a, ran, (_, args) => args.phase === 'hand')
+      // B's hand phase takes A's row of the first project, the first it
+      // reads, deletes its own as a duplicate, and starts its chain
+      await start(t, b)
+      await runOf(t, b, ran, (name) => name === 'jobs:archiveProject')
+      expect(
+        (await rechecks(t)).filter((row) => row.project_id === first.id).map((r) => r.handed_at),
+      ).toEqual([b])
+      // A's hand phase runs to its end, then B's, which finishes last
+      await runOf(t, a, ran, (name) => name === 'jobs:archiveProject')
+      await runOf(t, b, ran, undefined, dispatcher)
+      // A's chains finish at its older threshold, and B's fail
+      await runOf(t, a, ran)
+      await fail(t, b)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(b) })
+    await runArchive(t, night(3))
+    for (const task of tasks) expect((await issueRow(t, task.id))?.archived_at).toBeDefined()
+    expect(await rechecks(t)).toEqual([])
+  })
+
+  it("a newer run keeps the writer's row of a restore between its find and hand phases, while an older chain holds a leg's row", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const shelf = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
+    await as(t, f.user).mutation(api.projects.archive, { org_id, id: shelf.id })
+    expect(await runArchive(t, night(0))).toBe(0)
+    // a previous night's leg marked the archived project for a later run
+    await t.run((ctx) =>
+      ctx.db.insert('archive_rechecks', { org_id, project_id: shelf.id, from_run: night(0) }),
+    )
+    // a Done task due only at run B's threshold
+    const task = await plantIssue(t, {
+      org_id,
+      project_id: shelf.id,
+      status: 'done',
+      done_at: new Date(Date.parse(cutoffAt(night(1))) + DAY / 2).toISOString(),
+    })
+    const [a, b] = [night(1), night(2)]
+    const ran = new Set<string>()
+    vi.useFakeTimers()
+    try {
+      // A hands the leg's row to its chain, which runs a day late
+      await start(t, a)
+      await runOf(t, a, ran, (name) => name === 'jobs:archiveProject')
+      // B's find phase skips the project, still archived
+      await start(t, b)
+      await runOf(t, b, ran, (_, args) => args.phase === 'hand')
+      // someone restores it before B's hand phase, which marks it again
+      await as(t, f.user).mutation(api.projects.unarchive, { org_id, id: shelf.id })
+      await runOf(t, b, ran, (name) => name === 'jobs:archiveProject')
+      // A's chain finishes at its older threshold, and B's chain fails
+      await runOf(t, a, ran)
+      await fail(t, b)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect((await issueRow(t, task.id))?.archived_at).toBeUndefined()
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(b) })
+    expect(await rechecks(t)).toEqual([
+      expect.objectContaining({ project_id: shelf.id, handed_at: b }),
+    ])
+    expect(await runArchive(t, night(3))).toBe(1)
+    expect((await issueRow(t, task.id))?.archived_at).toBe(night(3))
+  })
+
+  it('every due task archives by the next night, however two runs and a writer interleave', async () => {
+    type Step = 'A find' | 'A hand' | 'A chain' | 'B find' | 'B hand' | 'B chain'
+    // every order of B's steps among A's after A's find phase, the older run first
+    const merges = (x: Step[], y: Step[]): Step[][] =>
+      x.length === 0 || y.length === 0
+        ? [[...x, ...y]]
+        : [
+            ...merges(x.slice(1), y).map((rest) => [x[0], ...rest]),
+            ...merges(x, y.slice(1)).map((rest) => [y[0], ...rest]),
+          ]
+    const orders = merges(['A hand', 'A chain'], ['B find', 'B hand', 'B chain']).map(
+      (rest): Step[] => ['A find', ...rest],
+    )
+    const failed: string[] = []
+    // before which step a person restores an archived project, or never
+    const writers = [null, 0, 1, 2, 3, 4, 5, 6]
+    for (const order of orders)
+      for (const outcome of ['finishes', 'fails'] as const)
+        for (const writer of writers) {
+          const label = `${order.join(', ')}; B's chain ${outcome}; writer ${writer ?? 'never'}`
+          const t = newT()
+          const f = await withOrg(t)
+          const org_id = f.org.id
+          const pastCutoff = (n: number) =>
+            new Date(Date.parse(cutoffAt(night(n))) + DAY / 2).toISOString()
+          const done = (done_at: string) =>
+            plantIssue(t, { org_id, project_id: f.sub.id, status: 'done', done_at })
+          // due at A's threshold and due only at B's, and one due only at
+          // B's in an archived project, which only a restore marks once B's
+          // find phase has skipped it
+          const tasks = [await done(pastCutoff(0)), await done(pastCutoff(1))]
+          const shelf = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
+          await as(t, f.user).mutation(api.projects.archive, { org_id, id: shelf.id })
+          const shelved = await plantIssue(t, {
+            org_id,
+            project_id: shelf.id,
+            status: 'done',
+            done_at: pastCutoff(1),
+          })
+          await runArchive(t, night(0))
+          const [a, b] = [night(1), night(2)]
+          const ran = new Set<string>()
+          const run: Record<Step, () => Promise<unknown>> = {
+            'A find': async () => {
+              await start(t, a)
+              await runOf(t, a, ran, (_, args) => args.phase === 'hand')
+            },
+            'A hand': () => runOf(t, a, ran, (name) => name === 'jobs:archiveProject'),
+            'A chain': () => runOf(t, a, ran),
+            'B find': async () => {
+              await start(t, b)
+              await runOf(t, b, ran, (_, args) => args.phase === 'hand')
+            },
+            'B hand': () => runOf(t, b, ran, (name) => name === 'jobs:archiveProject'),
+            'B chain': () => (outcome === 'finishes' ? runOf(t, b, ran) : fail(t, b)),
+          }
+          // the app's restore, which marks the project
+          const write = () =>
+            as(t, f.user).mutation(api.projects.unarchive, { org_id, id: shelf.id })
+          vi.useFakeTimers()
+          try {
+            for (const [i, step] of order.entries()) {
+              if (writer === i) await write()
+              await run[step]()
+            }
+            if (writer === order.length) await write()
+          } finally {
+            vi.useRealTimers()
+          }
+          await runArchive(t, night(3))
+          const due = [...tasks, ...(writer === null ? [] : [shelved])]
+          for (const task of due)
+            if ((await issueRow(t, task.id))?.archived_at === undefined) failed.push(label)
+          // without the restore its project stays archived, and so does
+          // nothing else mark it
+          if (writer === null && (await issueRow(t, shelved.id))?.archived_at !== undefined)
+            failed.push(`${label}: archived in an archived project`)
+          if ((await rechecks(t)).length > 0) failed.push(`${label}: rows left`)
+        }
+    expect(orders).toHaveLength(10)
+    expect(failed).toEqual([])
+  }, 300_000)
 })
 
 describe('archiveDoneIssues runs what the release before queued', () => {
