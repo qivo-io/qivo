@@ -115,8 +115,15 @@ Deleted items are not included yet. Tasks and projects in the organization's
 Deleted items, with their comments, labels, links and attachment metadata,
 are left out; restore an item to include its work in a later export. A task
 whose project was moving to or back from Deleted items while the export read
-it is left out too, with its comments, labels, links and attachment
-metadata, and manifest.json counts such tasks under skipped.
+tasks is left out of tasks too, and manifest.json counts such tasks under
+skipped.
+
+Each table is read live on its own, at its own time. So a related table,
+such as comments, task_labels, task_links or task_attachments, can name a
+task that tasks does not hold: one created after tasks was read, one left
+out as skipped, or one that moved meanwhile. It can also lack rows of a task
+that tasks holds, when the task moved or was deleted before the related
+table was read.
 
 Folders: data/<table>/ holds each table's records in numbered files,
 0001.json, 0002.json and so on. Each file is a JSON array of records with
@@ -199,7 +206,7 @@ export function jobManifest(a: {
       skipped: {
         tasks: a.skipped_tasks,
         reason:
-          'Tasks whose project was moving to or back from Deleted items while the export read them, left out with their comments, labels, links and attachment metadata.',
+          'Tasks whose project was moving to or back from Deleted items while the export read tasks, left out of tasks. Each table is read live on its own, so related tables can still hold rows of these tasks.',
       },
     },
     null,

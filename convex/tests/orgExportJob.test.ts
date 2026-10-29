@@ -225,7 +225,7 @@ async function archiveOf(t: T, exportId: string) {
       collection_completed_at: string
       organization: { id: string; name?: string; slug?: string }
       tables: Record<string, { files: string[]; records: number }>
-      skipped: { tasks: number }
+      skipped: { tasks: number; reason: string }
       exclusions: string[]
     },
   }
@@ -506,6 +506,13 @@ describe('organization export job', () => {
     expect(archive.readme).toContain(LIVE_READ_WARNING)
     expect(archive.readme).toMatch(/no import or restore/)
     expect(archive.readme).toMatch(/Deleted items are not included yet/)
+    // each table is read on its own, so a related table may name a task
+    // that tasks does not hold, and the archive says so
+    expect(archive.readme).toMatch(/Each table is read live on its own/)
+    expect(archive.readme).toMatch(/can name\s+a?\s*task that tasks does not hold/)
+    expect(archive.manifest.skipped).toMatchObject({
+      reason: expect.stringMatching(/related tables can still hold rows of these tasks/),
+    })
     expect(archive.readme).toMatch(/no attachment contents/)
     // no uploaded file is in the archive
     expect(archive.parts.filter((part) => !part.entry.startsWith('data/'))).toHaveLength(2)
