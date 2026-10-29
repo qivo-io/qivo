@@ -308,6 +308,21 @@ export async function writeUsageRow(
   await addRankedCalls(ctx, key.org_id, key.period_start, key.profile_id, calls - counted)
 }
 
+/** The first usage row of organization `orgId` that names profile
+ * `profileId`, in any bucket, or null. One read. */
+export async function firstUsageOf(
+  ctx: QueryCtx,
+  orgId: string,
+  profileId: string,
+): Promise<Doc<'billing_usage'> | null> {
+  return await ctx.db
+    .query('billing_usage')
+    .withIndex('by_subject_credential_period', (q) =>
+      q.eq('org_id', orgId).eq('profile_id', profileId),
+    )
+    .first()
+}
+
 /** Whether API usage of organization `orgId` names profile `profileId`.
  * Usage rows and their account rows outlive the profile, so a new seat of
  * the organization must not take that id and with it the calls. One read. */
@@ -316,13 +331,7 @@ export async function usageNamesProfile(
   orgId: string,
   profileId: string,
 ): Promise<boolean> {
-  const row = await ctx.db
-    .query('billing_usage')
-    .withIndex('by_subject_credential_period', (q) =>
-      q.eq('org_id', orgId).eq('profile_id', profileId),
-    )
-    .first()
-  return row !== null
+  return (await firstUsageOf(ctx, orgId, profileId)) !== null
 }
 
 /** Whether every usage row of bucket `period` of organization `orgId`, or
@@ -478,8 +487,8 @@ export async function recordApiCall(
     .unique()
   await writeUsageRow(ctx, usage, key, (usage?.calls ?? 0) + 1, args.credential_name)
   // A calendar month has no allowance and is never charged, so its total is
-  // only the shards writeUsageRow counted on (apiAccess.ts and
-  // model/billing.ts still sum the usage rows).
+  // only the shards writeUsageRow counted on, which API access reads
+  // (periodCalls; model/billing.ts still sums the usage rows).
   if (kind === 'month') return true
   const total = await ctx.db
     .query('billing_usage_totals')

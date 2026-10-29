@@ -4,7 +4,7 @@
  *   QIVO_FIXTURE_LOCAL=true QIVO_LOCAL_ADMIN_KEY=… \
  *     node scripts/board-scale-seed.mjs --local --deployment local-<name>-<port> \
  *       --url http://127.0.0.1:<port> [--site-url http://localhost:5199] [--tasks 10000] \
- *       [--inbox 600]
+ *       [--inbox 600] [--credentials 45 --api-url http://127.0.0.1:<site port>]
  *
  * It takes the same loopback-only target as `marketing-demo.mjs --local`, and
  * the same refusals: no deploy key, no staging, production or demo
@@ -20,7 +20,7 @@
  * workspace: every status, a parent with three subtasks every 25th task, a
  * due date every 7th (every other one past), a pause every 31st, a title of
  * the most characters a title holds (LIMITS.title) every 13th and no owner
- * every 11th.
+ * every 11th. `--tasks 0` adds none.
  *
  * `--inbox <n>` then gives Nora n inbox items, for checking the Inbox and
  * its bulk actions at scale: on each of the first n seeded tasks that are
@@ -31,7 +31,21 @@
  * as Nora, because Nora's mention of herself writes no message and an agent
  * has no login. Each comment's id comes from its task's id, so a rerun
  * posts only on the tasks that have none yet, and a larger --inbox adds
- * items for the next tasks. */
+ * items for the next tasks.
+ *
+ * `--credentials N --api-url <site origin>` also adds up to N API
+ * credentials, for paging Settings > API access: every fourth an agent key
+ * of one of Northstar's agents, made by Nora, and the rest personal tokens
+ * of its people, each made as its owner (tokens:createAgentKey,
+ * tokens:createMcpToken). Each new one makes 1 to 4 GET /v1/me calls on the
+ * local backend's site origin, so the call path itself writes its usage and
+ * aggregates. A second run adds only the credentials still missing. A
+ * number counts as made once one of its credentials has all its calls in
+ * the usage rows. A stopped run can leave one short, and its secret is
+ * gone, so the number gets a new credential under a name no run used before
+ * ("(scale N, try 2)", then 3), with all its calls. The seed deletes and
+ * changes no credential, so the short one, and any credential a person
+ * named the same way, stay as they are. */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -39,7 +53,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { LIMITS } from './limits.mjs'
-import { DemoCliError, resolveTarget } from './marketing-demo.mjs'
+import { DemoCliError, isLoopbackOrigin, resolveTarget } from './marketing-demo.mjs'
 import { readWorkspace } from './workspaceJoin.mjs'
 
 const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -122,12 +136,21 @@ const COMMENT_TAKEN = 'a comment with this id already exists'
    this size in windows (convex/workspace.ts), each far inside Convex's
    limits, and this keeps the seed's own run a few hours at most. */
 const MOST_TASKS = 30_000
+/* The most seeded credentials: enough for many API access pages of 25,
+   with every call well inside the per-profile request rate. */
+const MOST_CREDENTIALS = 500
+/* Seeded credential names, by what each one is for, then its number. */
+const TOOLS = ['Cursor', 'Raycast', 'Zed', 'Sheets sync', 'Claude Code', 'Notion export']
+const JOBS = ['Nightly build', 'Release notes', 'Telemetry import', 'Backup check']
+/* What ends a seeded credential's name: its number, and from the second
+   credential the seed makes for that number on, which try it is. */
+const CREDENTIAL_MARK = /\(scale (\d+)(?:, try (\d+))?\)$/
 
 const ref = (name) => makeFunctionReference(name)
 
 /** The options, or a DemoCliError naming what is wrong. */
 export function parseSeedArgs(args) {
-  const options = { target: null, tasks: 10_000, inbox: 0 }
+  const options = { target: null, tasks: 10_000, inbox: 0, credentials: 0 }
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     const value = () => {
@@ -142,14 +165,21 @@ export function parseSeedArgs(args) {
     else if (arg === '--site-url') options.siteUrl = value()
     else if (arg === '--tasks') options.tasks = Number(value())
     else if (arg === '--inbox') options.inbox = Number(value())
+    else if (arg === '--credentials') options.credentials = Number(value())
+    else if (arg === '--api-url') options.apiUrl = value()
     else throw new DemoCliError(`Unknown option ${arg}.`)
   }
   if (options.target !== 'local')
     throw new DemoCliError('board-scale-seed writes to a disposable --local backend only.')
-  if (!Number.isInteger(options.tasks) || options.tasks < 1 || options.tasks > MOST_TASKS)
-    throw new DemoCliError(`--tasks takes a whole number from 1 to ${MOST_TASKS}.`)
+  if (!Number.isInteger(options.tasks) || options.tasks < 0 || options.tasks > MOST_TASKS)
+    throw new DemoCliError(`--tasks takes a whole number from 0 to ${MOST_TASKS}.`)
   if (!Number.isInteger(options.inbox) || options.inbox < 0 || options.inbox > options.tasks)
     throw new DemoCliError('--inbox takes a whole number from 0 up to the --tasks count.')
+  const credentials = options.credentials
+  if (!Number.isInteger(credentials) || credentials < 0 || credentials > MOST_CREDENTIALS)
+    throw new DemoCliError(`--credentials takes a whole number from 0 to ${MOST_CREDENTIALS}.`)
+  if (credentials > 0 && !isLoopbackOrigin(options.apiUrl ?? ''))
+    throw new DemoCliError('--credentials needs --api-url, the local backend site origin.')
   return options
 }
 
@@ -186,6 +216,127 @@ export function planInbox(count, present, posters, nora) {
     })
   }
   return out
+}
+
+/** A credential secret as the app mints one (src/store/planner.ts
+    mintCredential), with its id and its SHA-256 hash. */
+async function mintCredential(scheme) {
+  const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+  const secret = `${scheme}_${hex(crypto.getRandomValues(new Uint8Array(24)))}`
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))
+  return { id: crypto.randomUUID(), secret, hash: hex(new Uint8Array(digest)) }
+}
+
+/** Every row of `table` as the local admin reads it, page by page. */
+async function tableRows(client, table) {
+  const rows = []
+  for (let cursor = null; ; ) {
+    const page = await client.query(ref('_system/cli/tableData'), {
+      table,
+      order: 'asc',
+      paginationOpts: { cursor, numItems: 1000 },
+    })
+    rows.push(...page.page)
+    if (page.isDone !== false) return rows
+    cursor = page.continueCursor
+  }
+}
+
+/** `calls` GET /v1/me calls with `secret` on `apiUrl`, waiting out a
+    refused minute (Retry-After) and refusing any other answer. */
+async function callApi(apiUrl, secret, calls) {
+  for (let made = 0; made < calls; ) {
+    const res = await fetch(`${apiUrl}/v1/me`, { headers: { Authorization: `Bearer ${secret}` } })
+    if (res.status === 429) {
+      const wait = Number(res.headers.get('Retry-After') ?? '60')
+      await new Promise((done) => setTimeout(done, Math.max(1, wait) * 1000))
+      continue
+    }
+    if (!res.ok) throw new DemoCliError(`GET /v1/me answered ${res.status}.`)
+    made++
+  }
+}
+
+/** The calls the seed makes with seeded credential number `n`. */
+const plannedCalls = (n) => 1 + (n % 4)
+
+/** Adds the seeded credentials still missing up to `count` in organization
+    `org` (see the file comment), acting as `actor` or as each token's
+    owner with the local admin key `key`, and answers how many it added. A
+    number is made when one of its credentials has all its calls in the
+    usage rows; one that is not gets a credential named with its next try. */
+export async function seedCredentials(client, { key, org, actor, count, apiUrl, log }) {
+  // the system tables answer the admin itself, not a person it acts as
+  client.setAdminAuth(key)
+  const profiles = (await tableRows(client, 'profiles')).filter(
+    (profile) => profile.org_id === org && profile.active,
+  )
+  const people = profiles.filter((profile) => profile.kind === 'person' && profile.auth_user_id)
+  const agents = profiles.filter((profile) => profile.kind === 'agent')
+  const members = new Set(profiles.map((profile) => profile.id))
+  // the calls each credential made, as its usage rows record them
+  const used = new Map()
+  for (const row of await tableRows(client, 'billing_usage'))
+    if (row.org_id === org)
+      used.set(row.credential_id, (used.get(row.credential_id) ?? 0) + row.calls)
+  // each number's highest try so far, and whether one of them made all its calls
+  const seeded = new Map()
+  for (const table of ['mcp_tokens', 'agent_keys'])
+    for (const row of await tableRows(client, table)) {
+      const mark = CREDENTIAL_MARK.exec(row.name)
+      const number = Number(mark?.[1])
+      if (!mark || !number || !members.has(row.profile_id)) continue
+      const known = seeded.get(number) ?? { tries: 0, done: false }
+      seeded.set(number, {
+        tries: Math.max(known.tries, Number(mark[2] ?? 1)),
+        done: known.done || (used.get(`${table}:${row.id}`) ?? 0) >= plannedCalls(number),
+      })
+    }
+  const as = (profile) => client.setAdminAuth(key, identityOf(profile.auth_user_id))
+  let added = 0
+  for (let n = 1; n <= count; n++) {
+    const known = seeded.get(n) ?? { tries: 0, done: false }
+    if (known.done) continue
+    // a credential of this number without all its calls keeps its name and
+    // its calls; the new one is named with the next try
+    const attempt = known.tries + 1
+    const mark = attempt === 1 ? `(scale ${n})` : `(scale ${n}, try ${attempt})`
+    const agent = n % 4 === 0 && agents.length ? agents[(n / 4) % agents.length] : null
+    const minted = await mintCredential(agent ? 'qva' : 'qvt')
+    try {
+      if (agent) {
+        as(actor)
+        await client.mutation(ref('tokens:createAgentKey'), {
+          org_id: org,
+          id: minted.id,
+          agent_id: agent.id,
+          name: `${JOBS[n % JOBS.length]} ${mark}`,
+          key_prefix: `${minted.secret.slice(0, 7)}...${minted.secret.slice(-5)}`,
+          key_hash: minted.hash,
+        })
+      } else {
+        const owner = people[n % people.length]
+        as(owner)
+        await client.mutation(ref('tokens:createMcpToken'), {
+          id: minted.id,
+          profile_id: owner.id,
+          name: `${TOOLS[n % TOOLS.length]} ${mark}`,
+          token_prefix: minted.secret.slice(0, 11),
+          token_hash: minted.hash,
+          access: n % 3 ? 'read' : 'write',
+        })
+      }
+    } catch (error) {
+      throw new DemoCliError(
+        `a seeded credential was refused: ${error.data?.message ?? error.message}`,
+      )
+    }
+    await callApi(apiUrl, minted.secret, plannedCalls(n))
+    added++
+  }
+  as(actor)
+  log(`${added} seeded credentials added, with their calls.`)
+  return added
 }
 
 /** A date `days` from today, as the app stores due dates. */
@@ -314,6 +465,15 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       owners.get(issue.project_id).add(issue.assignee_id)
   const projects = [...owners.keys()]
   if (!projects.length) throw new DemoCliError('Northstar has no sub-projects to fill.')
+  if (options.credentials > 0)
+    await seedCredentials(client, {
+      key: target.key,
+      org,
+      actor,
+      count: options.credentials,
+      apiUrl: new URL(options.apiUrl).origin,
+      log,
+    })
   const jobs = planSeed(options.tasks, seededTasks(issues))
   log(`${jobs.added} seeded tasks to add in ${projects.length} sub-projects.`)
   let made = 0

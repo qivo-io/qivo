@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { PageTitle, SettingsField, SettingsSection } from '@/components/settingsPage'
 import { Button } from '@/components/ui/button'
+import type { ApiAccessEntry } from '@/lib/apiAccess'
 import { billingDate, billingError } from '@/lib/billingDisplay'
 import { convex } from '@/lib/convex'
 import { DEMO_MODE, WORKSPACE_SIGNUP_URL } from '@/lib/demoMode'
@@ -16,8 +17,15 @@ import { BillingOverview } from './BillingOverview'
 import { BillingUsage } from './BillingUsage'
 
 /** The organization's Billing page. `setPage` opens another settings page,
- * such as the export before cancelling. */
-export function BillingSettings({ setPage }: { setPage: (page: string) => void }) {
+ * such as the export before cancelling, and `onViewCredentials` opens API
+ * access on one account and period of the usage report. */
+export function BillingSettings({
+  setPage,
+  onViewCredentials,
+}: {
+  setPage: (page: string) => void
+  onViewCredentials: (entry: ApiAccessEntry) => void
+}) {
   if (DEMO_MODE) {
     return (
       <>
@@ -44,16 +52,25 @@ export function BillingSettings({ setPage }: { setPage: (page: string) => void }
       </>
     )
   }
-  return <LiveBillingSettings key={P.org.id} orgId={P.org.id} setPage={setPage} />
+  return (
+    <LiveBillingSettings
+      key={P.org.id}
+      orgId={P.org.id}
+      setPage={setPage}
+      onViewCredentials={onViewCredentials}
+    />
+  )
 }
 
 /** Billing for one organization outside the demo. */
 function LiveBillingSettings({
   orgId,
   setPage,
+  onViewCredentials,
 }: {
   orgId: string
   setPage: (page: string) => void
+  onViewCredentials: (entry: ApiAccessEntry) => void
 }) {
   const [summary, setSummary] = useState<BillingSummary | null>(null)
   const [usage, setUsage] = useState<BillingUsageData | null>(null)
@@ -219,7 +236,13 @@ function LiveBillingSettings({
         </p>
       )}
       {usage && summary && (
-        <BillingUsage usage={usage} currency={summary.plan?.currency} measuredAt={measuredAt} />
+        <BillingUsage
+          usage={usage}
+          currency={summary.plan?.currency}
+          measuredAt={measuredAt}
+          orgId={orgId}
+          onViewCredentials={onViewCredentials}
+        />
       )}
     </>
   )

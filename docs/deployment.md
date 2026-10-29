@@ -284,7 +284,7 @@ which takes the same loopback origins, `QIVO_FIXTURE_LOCAL=true` and
 `QIVO_LOCAL_ADMIN_KEY` as the Northstar seed and refuses every other
 target. It adds 10,000 tasks and a parent for every 25 of them, as Nora,
 the organization's admin, through the app's own task mutations, one at a
-time. `--tasks` sets any count from 1 to 30,000, which the app's workspace
+time. `--tasks` sets any count from 0 to 30,000, which the app's workspace
 parts load in windows. The tasks come in every status, with subtasks, due dates, pauses,
 long titles and unowned tasks. Their titles read like Northstar's, so the
 Board's card height estimates meet realistic text, and each description
@@ -301,6 +301,17 @@ message and an agent has no login. Each comment's id comes from its task's
 id, so a rerun posts only where no comment is yet, and a larger `--inbox`
 adds items on the next tasks. For example, `--tasks 1300 --inbox 600` and
 then `--tasks 1300 --inbox 1200` give Nora 600 more unread items.
+
+To page **Settings → Organization → API access**, add
+`--credentials <count> --api-url <backend site origin>` (up to 500, with
+`--tasks 0` for no tasks). Every fourth credential is an agent key of one of
+Northstar's agents and the rest are personal tokens of its people, each
+made through the app's own mutations, and each new one makes one to four
+`GET /v1/me` calls on the site origin, so the calls write their own usage.
+A second run adds only the credentials still missing. A credential a
+stopped run saved without all its calls stays as it is, and its number gets
+a new credential named with the next try, such as `(scale 7, try 2)`, with
+all its calls. The seed deletes and changes no credential.
 
 ## Production release
 
@@ -872,15 +883,18 @@ until `remaining` reports 0 on every page, and then deploy the later commit.
 
 Every agent key and personal token holds its owner's organization and a
 `name_key`, and every OAuth connection a `name_key` (`convex/lib/nameKey.ts`),
-which API access is to page them by. Every API usage row holds a rank
+which API access pages them by. Every API usage row holds a rank
 (`neg_calls` and `name_key`), and the transaction that records a call also
 counts it on its account's `billing_usage_accounts` row and, in a calendar
 month, on the organization's `billing_month_totals`. A row stored before
 the release that added them has none until the one-time
 `internal/credentialKeysBackfill` and `internal/usageRanksBackfill` give it
-them, and the next call of a credential ranks its row as well. Nothing reads
-them yet. Run both backfills on every hosted deployment once it serves that
-release, as the modules' headers say. Read each dry run first, then run it.
+them, and the next call of a credential ranks its row as well. API access
+reads them. Until both backfills report nothing left, it says it is not
+ready to list credentials, and a calendar month whose rows are not all
+ranked shows its total as not available yet. Run both backfills on every
+hosted deployment once it serves that release, as the modules' headers say.
+Read each dry run first, then run it.
 A call that does not finish in about five minutes answers where to go on:
 `internal/credentialKeysBackfill` a `table` and a `cursor`, which can be
 null where a table starts, and `internal/usageRanksBackfill` a `cursor`.

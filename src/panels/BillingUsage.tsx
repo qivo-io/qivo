@@ -1,4 +1,6 @@
 import { FieldHint, SettingsField, SettingsGroup, SettingsSection } from '@/components/settingsPage'
+import { Button } from '@/components/ui/button'
+import type { ApiAccessEntry } from '@/lib/apiAccess'
 import { billingBytes, billingDate, usageHints } from '@/lib/billingDisplay'
 import type { BillingUsage as BillingUsageData } from '../../convex/lib/billingTypes'
 
@@ -13,15 +15,22 @@ function periodLabel(usage: BillingUsageData): string {
 }
 
 /** Usage for the bucket API calls are recorded in now. `currency` is the
- * plan's; amounts are only shown for a charged period, which always has one. */
+ * plan's; amounts are only shown for a charged period, which always has one.
+ * Each account shows its total, and View credentials hands `onViewCredentials`
+ * the organization `orgId` the report was read for, the account and the
+ * report's period, for API access to open on. */
 export function BillingUsage({
   usage,
   currency,
   measuredAt,
+  orgId,
+  onViewCredentials,
 }: {
   usage: BillingUsageData
   currency: string | undefined
   measuredAt: number
+  orgId: string
+  onViewCredentials: (entry: ApiAccessEntry) => void
 }) {
   const month = usage.period_kind === 'month'
   const hints = usageHints(usage, currency)
@@ -68,7 +77,7 @@ export function BillingUsage({
       </SettingsField>
       <SettingsGroup
         legend="API calls by account"
-        description="Each account’s total includes its keys."
+        description="Each account’s total covers all of its credentials."
       >
         {usage.users.length === 0 ? (
           <p className="text-sm text-text-2">No recorded API calls this period.</p>
@@ -79,17 +88,24 @@ export function BillingUsage({
               .map((account) => (
                 <div key={account.profile_id} data-billing-account={account.profile_id}>
                   <dt className="break-words text-sm font-semibold">{account.name}</dt>
-                  <dd className="mt-1 text-sm text-text-2">
+                  <dd className="mt-1 flex flex-wrap items-baseline gap-x-3 text-sm text-text-2">
                     {account.calls.toLocaleString()} calls
-                    {account.keys.length > 0 && (
-                      <ul className="mt-1 space-y-1 pl-3">
-                        {account.keys.map((key) => (
-                          <li key={key.id} className="break-words">
-                            {key.name}: {key.calls.toLocaleString()} calls
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                    <Button
+                      type="button"
+                      variant="unstyled"
+                      data-billing-view-credentials={account.profile_id}
+                      aria-label={`View credentials of ${account.name}`}
+                      onClick={() =>
+                        onViewCredentials({
+                          org_id: orgId,
+                          profile_id: account.profile_id,
+                          period_key: usage.period_key,
+                        })
+                      }
+                      className="align-baseline font-normal text-text-1 underline underline-offset-4"
+                    >
+                      View credentials
+                    </Button>
                   </dd>
                 </div>
               ))}

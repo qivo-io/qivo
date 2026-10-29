@@ -405,9 +405,12 @@ export async function usageAllowance(
 /** The admin Billing page's usage report without its storage figures. It
  * reads the same bucket the API-call writer is filling now (`usagePeriod`):
  * the live paid period, the pending interval after it, or the current UTC
- * calendar month. Allowances come from the subscription's plan, or the
- * default plan before enrollment, and are null when there is no plan. A
- * calendar month and a pending interval are always waived. */
+ * calendar month, and names its key, which View credentials hands to API
+ * access. Allowances come from the subscription's plan, or the default plan
+ * before enrollment, and are null when there is no plan. A calendar month
+ * and a pending interval are always waived. Each account still lists its
+ * credentials (`keys`) for apps of the release before (lib/billingTypes.ts
+ * BillingUsage). */
 export async function billingUsageHead(
   ctx: QueryCtx,
   orgId: string,
@@ -459,6 +462,7 @@ export async function billingUsageHead(
     (!!sub.complimentary_until && Date.parse(sub.complimentary_until) > now)
   return {
     period_kind: period.kind,
+    period_key: period.key,
     period_start: period.start,
     period_end: period.end,
     calls,

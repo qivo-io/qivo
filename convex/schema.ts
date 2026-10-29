@@ -2336,8 +2336,10 @@ export default defineSchema({
    * person in name order. Never sent to clients, REST, MCP, webhooks or the
    * export. A row stored before they existed has neither until
    * internal/credentialKeysBackfill gives it both, so a reader that pages by
-   * organization first checks that no row is left without an org_id (one
-   * read of by_org_name with org_id undefined). */
+   * organization first checks that no row of its organization's live
+   * profiles is left without an org_id: it reads the rows of by_org_name
+   * with org_id undefined, a few at most, and their owners (apiAccess.ts
+   * credentialsKeyed). */
   agent_keys: defineTable({
     id: v.string(),
     profile_id: v.string(), // always a kind='agent' profile

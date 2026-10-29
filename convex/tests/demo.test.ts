@@ -527,11 +527,13 @@ describe('demo lifetime and capabilities', () => {
       }),
     ).toBeNull()
     // API access lists and revokes nothing in a demo, even for its admin
-    await expectRefusal(
+    for (const read of [
       a.as.query(api.apiAccess.list, { org_id: a.demo.orgId! }),
-      'forbidden',
-      /regular workspace/,
-    )
+      a.as.query(api.apiAccess.summary, { org_id: a.demo.orgId! }),
+      a.as.query(api.apiAccess.page, { org_id: a.demo.orgId!, kind: 'all', state: 'all' }),
+      a.as.query(api.apiAccess.people, { org_id: a.demo.orgId! }),
+    ])
+      await expectRefusal(read, 'forbidden', /regular workspace/)
     await expectRefusal(
       a.as.mutation(api.apiAccess.revoke, {
         org_id: a.demo.orgId!,

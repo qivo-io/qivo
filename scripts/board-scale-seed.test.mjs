@@ -1,5 +1,5 @@
 import { getFunctionName } from 'convex/server'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../convex/lib/limits'
 import {
   inboxCommentId,
@@ -13,28 +13,49 @@ import {
 
 /* A local backend the seed talks to: Nora and the people in `fake.people`,
    Northstar with one sub-project, the tasks `fake.issues` holds, in the
-   workspace parts, and every mutation it receives, with the login it came
-   as. A comment whose id `fake.comments` holds is refused as taken. */
-const fake = vi.hoisted(() => ({ issues: [], calls: [], people: [], comments: new Set() }))
+   workspace parts, the personal tokens, agent keys and usage rows
+   `fake.tokens`, `fake.keys` and `fake.usage` hold, and every mutation it
+   receives, with the login it came as. A comment whose id `fake.comments`
+   holds is refused as taken. */
+const fake = vi.hoisted(() => ({
+  issues: [],
+  calls: [],
+  people: [],
+  comments: new Set(),
+  tokens: [],
+  keys: [],
+  usage: [],
+}))
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
     setAdminAuth(_key, identity) {
       this.login = identity?.subject
     }
-    async query(ref) {
+    async query(ref, args) {
       const name = getFunctionName(ref)
+      // a system table answers the admin itself, never a person it acts as
+      if (name === '_system/cli/tableData' && this.login)
+        throw new Error("You don't have permission to perform this operation.")
       if (name === '_system/cli/tableData')
         return {
-          page: [
-            {
-              email: 'nora@demo.qivo.io',
-              auth_user_id: 'nora-login',
-              id: 'nora',
-              name: 'Nora Lindqvist',
-              org_id: 'org',
-            },
-            ...fake.people,
-          ],
+          page: {
+            profiles: [
+              {
+                email: 'nora@demo.qivo.io',
+                auth_user_id: 'nora-login',
+                id: 'nora',
+                name: 'Nora Lindqvist',
+                org_id: 'org',
+                kind: 'person',
+                active: true,
+              },
+              ...fake.people,
+            ],
+            mcp_tokens: fake.tokens,
+            agent_keys: fake.keys,
+            billing_usage: fake.usage,
+          }[args.table],
+          isDone: true,
         }
       // the workspace parts (convex/workspace.ts), one window of each kind
       return {
@@ -104,12 +125,24 @@ describe('board-scale-seed', () => {
     expect(() => parseSeedArgs([...local, '--tasks', '100', '--inbox', '101'])).toThrow(/--inbox/)
     expect(() => parseSeedArgs([...local, '--inbox', '-1'])).toThrow(/--inbox/)
     expect(() => parseSeedArgs([...local, '--inbox', '2.5'])).toThrow(/--inbox/)
+    // no tasks hold no inbox items
+    expect(parseSeedArgs([...local, '--tasks', '0']).inbox).toBe(0)
+    expect(() => parseSeedArgs([...local, '--tasks', '0', '--inbox', '1'])).toThrow(/--inbox/)
   })
 
   it('refuses anything but a disposable local backend before it connects', async () => {
     expect(() => parseSeedArgs(['--url', 'http://127.0.0.1:3214'])).toThrow(/--local backend only/)
-    expect(() => parseSeedArgs([...local, '--tasks', '0'])).toThrow(/--tasks/)
-    expect(() => parseSeedArgs([...local, '--tasks', '30001'])).toThrow(/1 to 30000/)
+    expect(() => parseSeedArgs([...local, '--tasks', '-1'])).toThrow(/--tasks/)
+    expect(() => parseSeedArgs([...local, '--tasks', '30001'])).toThrow(/0 to 30000/)
+    expect(parseSeedArgs([...local, '--tasks', '0']).tasks).toBe(0)
+    // credentials call the backend's own site origin, on loopback only
+    expect(() => parseSeedArgs([...local, '--credentials', '5'])).toThrow(/--api-url/)
+    expect(() =>
+      parseSeedArgs([...local, '--credentials', '5', '--api-url', 'https://x.convex.site']),
+    ).toThrow(/--api-url/)
+    expect(() =>
+      parseSeedArgs([...local, '--credentials', '501', '--api-url', 'http://127.0.0.1:3215']),
+    ).toThrow(/0 to 500/)
     expect(parseSeedArgs([...local, '--tasks', '30000']).tasks).toBe(30_000)
     const refused = (args, extra = {}) =>
       runBoardScaleSeed(args, { env: { ...env, ...extra }, log: () => {} })
@@ -409,5 +442,153 @@ describe('board-scale-seed --inbox', () => {
     expect(fake.comments.size).toBe(6)
     expect(lines.at(-1)).toBe('Done: 2 inbox comments posted for Nora, 4 there before.')
     fake.people = []
+  })
+})
+
+describe('board-scale-seed credentials', () => {
+  // a person with a login and an agent beside Nora
+  beforeEach(() => {
+    fake.people = [
+      { auth_user_id: 'leo-login', id: 'leo', org_id: 'org', kind: 'person', active: true },
+      { id: 'atlas', org_id: 'org', kind: 'agent', active: true },
+    ]
+  })
+  afterEach(() => {
+    fake.people = []
+  })
+
+  it('adds tokens as their owners and agent keys as Nora, each with its calls, and only the missing ones again', async () => {
+    fake.calls = []
+    fake.issues = []
+    // number 1 made its two calls in an earlier run
+    fake.tokens = [{ id: 'made', name: 'Raycast (scale 1)', profile_id: 'leo' }]
+    fake.usage = [{ org_id: 'org', credential_id: 'mcp_tokens:made', calls: 2 }]
+    const fetched = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url, init) => {
+        fetched.push([url, init.headers.Authorization.slice(0, 4)])
+        return { ok: true, status: 200, headers: new Headers() }
+      }),
+    )
+    await runBoardScaleSeed(
+      [...local, '--tasks', '0', '--credentials', '4', '--api-url', 'http://127.0.0.1:3215'],
+      { env, log: () => {} },
+    )
+    vi.unstubAllGlobals()
+    // number 1 is there already; 2 and 3 are tokens, 4 an agent key
+    expect(fake.calls.map(([name, fields, as]) => [name, fields.name, as])).toEqual([
+      ['tokens:createMcpToken', 'Zed (scale 2)', 'nora-login'],
+      ['tokens:createMcpToken', 'Sheets sync (scale 3)', 'leo-login'],
+      ['tokens:createAgentKey', 'Nightly build (scale 4)', 'nora-login'],
+    ])
+    expect(fake.calls[0][1]).toMatchObject({ profile_id: 'nora', access: 'read' })
+    expect(fake.calls[0][1].token_prefix).toMatch(/^qvt_[0-9a-f]{7}$/)
+    expect(fake.calls[2][1]).toMatchObject({ org_id: 'org', agent_id: 'atlas' })
+    expect(fake.calls[2][1].key_prefix).toMatch(/^qva_[0-9a-f]{3}\.\.\.[0-9a-f]{5}$/)
+    // 1 + n % 4 calls each, with the new secrets, on the site origin
+    expect(fetched.map(([, scheme]) => scheme)).toEqual([
+      ...Array(3).fill('Bear'),
+      ...Array(4).fill('Bear'),
+      'Bear',
+    ])
+    expect(new Set(fetched.map(([url]) => url))).toEqual(new Set(['http://127.0.0.1:3215/v1/me']))
+  })
+
+  /* Runs the credentials seed for `count` numbers against the fake backend,
+     and answers the URLs it called. */
+  async function seedCalls(count) {
+    fake.calls = []
+    const fetched = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url) => {
+        fetched.push(url)
+        return { ok: true, status: 200, headers: new Headers() }
+      }),
+    )
+    try {
+      await runBoardScaleSeed(
+        [
+          ...local,
+          '--tasks',
+          '0',
+          '--credentials',
+          String(count),
+          '--api-url',
+          'http://127.0.0.1:3215',
+        ],
+        { env, log: () => {} },
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    return fetched
+  }
+
+  it('gives a number a stopped run left short a new credential under its next try, and leaves the short one', async () => {
+    // number 2 was saved but made one of its three calls; number 3 has made
+    // none in two tries
+    fake.tokens = [
+      { id: 'short', name: 'Zed (scale 2)', profile_id: 'nora' },
+      { id: 'bare', name: 'Sheets sync (scale 3)', profile_id: 'leo' },
+      { id: 'bare-again', name: 'Sheets sync (scale 3, try 2)', profile_id: 'leo' },
+    ]
+    fake.usage = [
+      { org_id: 'org', credential_id: 'mcp_tokens:short', calls: 1 },
+      // another organization's calls of the same id count for nothing here
+      { org_id: 'elsewhere', credential_id: 'mcp_tokens:bare', calls: 9 },
+    ]
+    const fetched = await seedCalls(3)
+    // nothing is deleted or changed, only made
+    expect(fake.calls.map(([name]) => name)).toEqual([
+      'tokens:createMcpToken',
+      'tokens:createMcpToken',
+      'tokens:createMcpToken',
+    ])
+    expect(fake.calls.map(([, f, as]) => [f.name, as])).toEqual([
+      ['Raycast (scale 1)', 'leo-login'],
+      ['Zed (scale 2, try 2)', 'nora-login'],
+      ['Sheets sync (scale 3, try 3)', 'leo-login'],
+    ])
+    // every new credential makes all its calls: 2, 3 and 4
+    expect(fetched).toHaveLength(9)
+    // a later run finds them made
+    fake.tokens.push(
+      ...fake.calls.map(([, f]) => ({ id: f.id, name: f.name, profile_id: f.profile_id })),
+    )
+    fake.usage.push(
+      ...fake.calls.map(([, f], i) => ({
+        org_id: 'org',
+        credential_id: `mcp_tokens:${f.id}`,
+        calls: [2, 3, 4][i],
+      })),
+    )
+    expect(await seedCalls(3)).toEqual([])
+    expect(fake.calls).toEqual([])
+    fake.tokens = []
+    fake.usage = []
+  })
+
+  it('leaves a token and an agent key a person named like the seed’s alone', async () => {
+    // made by hand in the app, with no calls
+    fake.tokens = [{ id: 'by-hand', name: 'Cursor (scale 1)', profile_id: 'nora' }]
+    fake.keys = [{ id: 'key-by-hand', name: 'Nightly build (scale 4)', profile_id: 'atlas' }]
+    await seedCalls(4)
+    expect(fake.calls.map(([name]) => name)).not.toContain('tokens:deleteMcpToken')
+    expect(fake.calls.map(([name]) => name)).not.toContain('tokens:deleteAgentKey')
+    // no call names them; their numbers get credentials of their own
+    for (const [, fields] of fake.calls) {
+      expect(fields.id).not.toBe('by-hand')
+      expect(fields.id).not.toBe('key-by-hand')
+    }
+    expect(fake.calls.map(([name, f]) => [name, f.name])).toEqual([
+      ['tokens:createMcpToken', 'Raycast (scale 1, try 2)'],
+      ['tokens:createMcpToken', 'Zed (scale 2)'],
+      ['tokens:createMcpToken', 'Sheets sync (scale 3)'],
+      ['tokens:createAgentKey', 'Nightly build (scale 4, try 2)'],
+    ])
+    fake.tokens = []
+    fake.keys = []
   })
 })
