@@ -278,13 +278,16 @@ label, with words in any order. A search reads a large archive in steps,
 and each page shows the matches found in its step. When a step stops before
 the end, the page says how many archived tasks it has searched, and
 **Search older tasks** continues from there. Only a search that has read
-every archived task says that nothing matches. With **All projects**, a
-step may also read tasks of projects you cannot see; a page can then show
-no tasks and still offer **Next**.
+every archived task says that nothing matches. To find your tasks, a step
+may read the whole organization's archive, as for **All projects** when you
+can see very many projects, and for a project with very many sub-projects.
+Such a step can stop before it finds one of yours, and the page then shows
+no tasks and still offers **Next**.
 
 **Restore** returns a task to its Board and restores archived parents when
 needed. The task leaves the list at once, and the page asks for its tasks
-again, so the next archived task moves up into it. A subtask whose parent already has 100 active subtasks comes back as
+again, so the next archived task moves up into it. A task someone else
+restores leaves the list too. A subtask whose parent already has 100 active subtasks comes back as
 a top-level task, and Qivo says so. Its followers are told it left its
 parent, and you can give it a parent again once there is room, as a restore
 from Deleted items does. If a restore would change a parent task in a
