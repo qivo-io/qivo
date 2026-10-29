@@ -34,6 +34,7 @@ import {
   plantHiddenSibling,
   plantIssue,
   plantLogin,
+  plantLogins,
   plantProject,
   plantSeat,
   type T,
@@ -366,6 +367,54 @@ describe('who main Search shows a task to', () => {
 })
 
 describe('seats', () => {
+  it('searches eight seats that each search their organization whole', async () => {
+    const t = newT()
+    const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
+    // eight organizations, in each a guest who sees two sub-projects, more
+    // than one by one allows here, with a small task in one of them
+    MAIN_SEARCH.projects = 1
+    const seats: Doc<'profiles'>[] = []
+    const found: string[] = []
+    for (let i = 0; i < 8; i++) {
+      const org = await t.run(async (ctx) => {
+        const id = uuid()
+        await ctx.db.insert('organizations', {
+          id,
+          name: `Broad ${i}`,
+          slug: `broad-${i}`,
+          created_at: NOW,
+          date_format: 'iso',
+          week_start: 1,
+          week_one_rule: 'first4day',
+          default_plannable_hours: 40,
+        })
+        await ctx.db.insert('org_counters', { org_id: id, next_issue_num: 1, next_project_num: 4 })
+        return id
+      })
+      const meta = await plantProject(t, { org_id: org })
+      const sub = await plantProject(t, { org_id: org, type: 'project', parent_id: meta.id })
+      await plantProject(t, { org_id: org, type: 'project', parent_id: meta.id })
+      const seat = await plantSeat(t, {
+        org_id: org,
+        auth_user_id: login,
+        org_role: 'guest',
+        accepted_at: NOW,
+      })
+      await t.run((ctx) =>
+        ctx.db.insert('project_access', {
+          project_id: meta.id,
+          profile_id: seat.id,
+          level: 'user',
+        }),
+      )
+      seats.push(seat)
+      found.push((await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox' })).id)
+    }
+    const run = await searchRun(t, seats, { text: 'gearbox' })
+    expect(ids(run.page).sort()).toEqual([...found].sort())
+    expect(run.page.coverage).toEqual(stopped('projects', 8, 8))
+  })
+
   it("reads every seat's task numbers before any source", async () => {
     const t = newT()
     const f = await withOrg(t)

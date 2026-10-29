@@ -267,8 +267,12 @@ type Stops = {
  * fully. A seat searched project by project reads only tasks of projects it
  * sees, and a seat that sees every project hides nothing from itself, so
  * their stops are reported exactly. They are searched first, and each seat
- * searched whole reads within an equal share of what they left, so how far
- * a seat gets never depends on what a whole-organization search read.
+ * searched whole reads within an equal share of what they left, counted at
+ * the reads' real size, so how far a seat gets does not depend on what a
+ * whole-organization search read. A step of reads may pass its share by
+ * the documents it reads, three at most, and only Convex's own limits stop
+ * the overshoot, so only tasks near Convex's 1 MiB document size could make
+ * one seat's reads felt in another's.
  *
  * `stopped` names `projects` first, then the budget (`reads`), then a
  * source's cap (`candidates`), each of which means that matches in the
@@ -315,8 +319,13 @@ class OutOfRoom extends Error {}
  * asked about, such as an access check. lib/archivedTasks.ts ceilingGuard
  * is asked after each read instead, so it lets one document past its
  * ceiling, which its callers' reserves hold; main Search reads up to three
- * documents after one check, so it asks before. */
-function readBudget(ctx: QueryCtx, ceiling: ReadCeiling) {
+ * documents after one check, so it asks before.
+ *
+ * With `share`, the reads also stop once they have reached it, counted at
+ * their real size from the request's metrics before each step, so a share
+ * smaller than a few documents at Convex's size limit still reads and
+ * judges small documents, and a step may pass it by what it reads. */
+function readBudget(ctx: QueryCtx, ceiling: ReadCeiling, share?: ReadCeiling) {
   // what was left at the last look, less what was asked for since
   let ranges = 0
   let documents = 0
@@ -324,6 +333,15 @@ function readBudget(ctx: QueryCtx, ceiling: ReadCeiling) {
     /** Throws OutOfRoom unless `r` more index ranges and `d` more documents
      * of any size fit. */
     async need(r: number, d: number): Promise<void> {
+      if (share !== undefined) {
+        const m = await ctx.meta.getTransactionMetrics()
+        if (
+          m.databaseQueries.used + r > share.ranges ||
+          m.documentsRead.used + d > share.documents ||
+          m.bytesRead.used >= share.bytes
+        )
+          throw new OutOfRoom()
+      }
       if (ranges < r || documents < d) {
         const m = await ctx.meta.getTransactionMetrics()
         ranges = ceiling.ranges - m.databaseQueries.used
@@ -905,7 +923,8 @@ export async function mainSearchPage(
   }
 
   // the seats searched exactly, then each seat searched whole within an
-  // equal share of what they left (coverageOf)
+  // equal share of what they left, counted at the reads' real size, under
+  // Convex's own limits less the reserve (coverageOf)
   for (const seat of planned) if (!seat.wide) await searchSeat(seat)
   const wide = planned.filter((seat) => seat.wide)
   if (wide.length > 0) {
@@ -917,10 +936,10 @@ export async function mainSearchPage(
     }
     for (const seat of wide) {
       const now = await ctx.meta.getTransactionMetrics()
-      gather = readBudget(ctx, {
-        ranges: Math.min(ceiling.ranges, now.databaseQueries.used + share.ranges),
-        documents: Math.min(ceiling.documents, now.documentsRead.used + share.documents),
-        bytes: Math.min(ceiling.bytes, now.bytesRead.used + share.bytes),
+      gather = readBudget(ctx, room, {
+        ranges: now.databaseQueries.used + share.ranges,
+        documents: now.documentsRead.used + share.documents,
+        bytes: now.bytesRead.used + share.bytes,
       })
       await searchSeat(seat)
     }
