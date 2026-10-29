@@ -215,7 +215,14 @@ async function boot(address: string, phone: boolean, second = false) {
     next.projects = next.projects.filter((p) => p.id !== 'work')
     return act(async () => publish(next))
   }
-  return Object.assign(drop, { dropWork })
+  // publishes the workspace after `edit`, as a later delivery
+  const change = (edit: (next: Snapshot) => void) => {
+    const next = structuredClone(snap)
+    edit(next)
+    next.delivered_at = '2026-09-15T09:00:00.000Z'
+    return act(async () => publish(next))
+  }
+  return Object.assign(drop, { dropWork, change })
 }
 
 describe('a phone layer that closes with the move it started', { timeout: 30_000 }, () => {
@@ -493,15 +500,12 @@ describe('a pick from the Back menu past a task with a comment not yet sent', {
 
 describe('an archived task Search opened', { timeout: 30_000 }, () => {
   /** Boots on the project's Board on a desktop, opens Search, and opens
-      the archived QN-7 from it. Answers the page's address and the task's. */
-  async function openArchived() {
-    await boot('/app/testbed/board/p/1', false)
+      from it the archived QN-7, or with `active` the active QN-1. Answers
+      the page's address, the task's, and boot's publisher of a change. */
+  async function openFromSearch(active = false) {
+    const booted = await boot('/app/testbed/board/p/1', false)
     network.query.mockClear()
     const board = location.pathname
-    const now = structuredClone(
-      (await import('./store/planner')).P.issues.find((i) => i.title === 'Calibrate the sensor'),
-    )
-    if (!now) throw new Error('missing the task')
     archive = [
       {
         id: crypto.randomUUID(),
@@ -530,23 +534,79 @@ describe('an archived task Search opened', { timeout: 30_000 }, () => {
       () => document.querySelector<HTMLInputElement>('[cmdk-root] input'),
       'the search box',
     )
-    await type(search, 'Recalibrate')
-    const toggle = await waitFor(
-      () => document.querySelector<HTMLElement>('[data-palette-archived]'),
-      'the toggle',
-    )
-    await act(async () => toggle.click())
+    await type(search, active ? 'Calibrate' : 'Recalibrate')
+    if (!active) {
+      const toggle = await waitFor(
+        () => document.querySelector<HTMLElement>('[data-palette-archived]'),
+        'the toggle',
+      )
+      await act(async () => toggle.click())
+    }
     const result = await waitFor(
       () =>
         [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find((item) =>
-          item.querySelector('[data-result-archived]'),
+          active
+            ? item.textContent?.includes('Calibrate the sensor')
+            : item.querySelector('[data-result-archived]'),
         ),
-      'the archived result',
+      'the result',
     )
     await act(async () => result.click())
-    await archivedNote()
+    if (active) await shows('Calibrate the sensor')
+    else await archivedNote()
     await settle()
-    return { board, task: location.pathname }
+    return { board, task: location.pathname, change: booted.change }
+  }
+  const openArchived = () => openFromSearch()
+  /* Waits for an open task window that shows `title`. */
+  const shows = (title: string) =>
+    waitFor(
+      () =>
+        document
+          .querySelector('[data-task-chrome]')
+          ?.closest('[role="dialog"]')
+          ?.textContent?.includes(title),
+      title,
+    )
+  /* Makes the Testbed seat a guest seat and Other Co, a new seat, the home
+     organization, whose active QN-1 and QN-7 take the numbers of Testbed's
+     tasks. The Testbed seat keeps its grant on the project. */
+  let otherOrg = ''
+  const swapHome = (next: Snapshot) => {
+    otherOrg = crypto.randomUUID()
+    const seat = crypto.randomUUID()
+    const meta = crypto.randomUUID()
+    const sub = crypto.randomUUID()
+    const [base, work] = next.projects
+    next.orgs.push({ ...next.orgs[0], id: otherOrg, name: 'Other Co', slug: 'other' })
+    next.profiles[0].org_role = 'guest'
+    next.profiles.push({ ...next.profiles[0], id: seat, org_id: otherOrg, org_role: 'user' })
+    next.myProfileIds.push(seat)
+    next.access.push({ project_id: base.id, profile_id: next.profiles[0].id, level: 'user' })
+    next.projects.push(
+      { ...base, id: meta, org_id: otherOrg, key: 'OTH', num: 1, name: 'Other', lead_id: seat },
+      {
+        ...work,
+        id: sub,
+        org_id: otherOrg,
+        key: 'OTHW',
+        num: 2,
+        name: 'Other work',
+        parent_id: meta,
+      },
+    )
+    for (const [num, title] of [
+      [1, 'Plan the other rollout'],
+      [7, 'Ship the other kit'],
+    ] as const)
+      next.issues.push({
+        ...next.issues[0],
+        id: crypto.randomUUID(),
+        org_id: otherOrg,
+        project_id: sub,
+        num,
+        title,
+      })
   }
   /* Waits for the window's note that the task was archived. */
   const archivedNote = () =>
@@ -580,6 +640,47 @@ describe('an archived task Search opened', { timeout: 30_000 }, () => {
     await archivedNote()
     // the window asks the archive again
     expect(asked()).toBe(2)
+  })
+
+  it('opens again on Forward after the home organization changed, not the new home task of its number', async () => {
+    const { board, task, change } = await openArchived()
+    await act(async () => history.back())
+    await waitFor(() => !document.querySelector('[data-task-gone]'), 'the window to close')
+    await settle()
+    expect(location.pathname).toBe(board)
+    // Testbed becomes a guest seat, and Other Co's active QN-7 the home QN-7
+    await change(swapHome)
+    await settle()
+    const { P } = await import('./store/planner')
+    expect(P.homeOrg).toBe(otherOrg)
+    expect(P.issueById['QN-7']?.title).toBe('Ship the other kit')
+    await act(async () => history.forward())
+    await settle()
+    expect(location.pathname).toBe(task)
+    await archivedNote()
+    const window = document.querySelector('[data-task-gone]')?.closest('[role="dialog"]')
+    expect(window?.textContent).toContain('Recalibrate the old sensor')
+    expect(document.body.textContent).not.toContain('Ship the other kit')
+  })
+
+  it('opens an active result again after the home organization changed', async () => {
+    const { board, task, change } = await openFromSearch(true)
+    expect(task).toBe('/app/testbed/board/tasks/qn-1')
+    await act(async () => history.back())
+    await waitFor(() => !document.querySelector('[data-task-chrome]'), 'the window to close')
+    await settle()
+    expect(location.pathname).toBe(board)
+    await change(swapHome)
+    await settle()
+    const { P } = await import('./store/planner')
+    expect(P.issueById['QN-1']?.title).toBe('Plan the other rollout')
+    await act(async () => history.forward())
+    await settle()
+    expect(location.pathname).toBe(task)
+    await shows('Calibrate the sensor')
+    expect(
+      document.querySelector('[data-task-chrome]')?.closest('[role="dialog"]')?.textContent,
+    ).not.toContain('Plan the other rollout')
   })
 
   it('opens again on Forward after Back closed it', async () => {

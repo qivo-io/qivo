@@ -43,6 +43,7 @@ const store = {} as {
   orgBySlug: (s: string) => FakeOrg | undefined
   project: (id: string) => FakeProject | undefined
   issueRefIn: (org: string, key: string) => string | null
+  handleNow: (uuid: string, org: string, num: number) => string
   isMine: (it: FakeIssue) => boolean
 }
 
@@ -131,6 +132,10 @@ beforeEach(() => {
   store.issueById = Object.fromEntries(issues.map((i) => [i.id, i] as const))
   store.orgBySlug = (s: string) => store.orgs.find((o) => o.slug === s)
   store.project = (id: string) => projects.find((p) => p.id === id)
+  // as the store gives a handle: its own for a task it holds, else the home
+  // organization's key or another organization's uuid
+  store.handleNow = (uuid: string, org: string, num: number) =>
+    store.issues.find((i) => i.uuid === uuid)?.id ?? (org === store.homeOrg ? `QN-${num}` : uuid)
   store.issueRefIn = (org: string, key: string) => {
     const it = issues.find((i) => i.org === org && i.key === key)
     return it ? it.id : null
@@ -359,16 +364,18 @@ describe('buildPath', () => {
 
   it('names a task Search opened that the store does not hold by its organization and key', () => {
     // as Search opens an archived home task by its key, and a guest seat's by its uuid
-    noteOpenedTask('QN-40', {
+    noteOpenedTask({
       uuid: 'uuid-home-40',
+      num: 40,
       key: 'QN-40',
       title: 'Archived home task',
       project: 'p-home-1a',
       org: HOME,
       archived: true,
     })
-    noteOpenedTask('uuid-acme-8', {
+    noteOpenedTask({
       uuid: 'uuid-acme-8',
+      num: 8,
       key: 'QN-8',
       title: 'Archived Acme task',
       project: 'p-acme-1',
@@ -390,16 +397,18 @@ describe('buildPath', () => {
   })
 
   it('reads the address of a task Search opened as that task, in its own organization only', () => {
-    noteOpenedTask('QN-41', {
+    noteOpenedTask({
       uuid: 'uuid-home-41',
+      num: 41,
       key: 'QN-41',
       title: 'Archived home task',
       project: 'p-home-1a',
       org: HOME,
       archived: true,
     })
-    noteOpenedTask('uuid-acme-41', {
+    noteOpenedTask({
       uuid: 'uuid-acme-41',
+      num: 41,
       key: 'QN-41',
       title: 'Archived Acme task',
       project: 'p-acme-1',
@@ -428,6 +437,49 @@ describe('buildPath', () => {
         openIssue: null,
       }),
     ).toBe(false)
+  })
+
+  it('resolves a task Search opened to the handle it has now, after the home organization changed', () => {
+    // Search opened Home's archived QN-43 while Home was the home organization
+    noteOpenedTask({
+      uuid: 'uuid-home-43',
+      num: 43,
+      key: 'QN-43',
+      title: 'Archived home task',
+      project: 'p-home-1a',
+      org: HOME,
+      archived: true,
+    })
+    expect(parsePath('/app/home/board/all/tasks/qn-43')?.issue).toBe('QN-43')
+    // Home becomes a guest seat and Acme the home organization, where an
+    // active QN-43 exists
+    store.homeOrg = ACME
+    const acme43 = {
+      id: 'QN-43',
+      key: 'QN-43',
+      uuid: 'uuid-acme-43',
+      org: ACME,
+      project: 'p-acme-1',
+      assignee: 'me',
+    }
+    store.issues = [...store.issues, acme43]
+    store.issueById['QN-43'] = acme43
+    store.issueRefIn = (org: string, key: string) =>
+      store.issues.find((i) => i.org === org && i.key === key)?.id ?? null
+    // Home's address opens Home's archived task by its uuid, not Acme's QN-43
+    expect(parsePath('/app/home/board/all/tasks/qn-43')?.issue).toBe('uuid-home-43')
+    expect(parsePath('/app/home/inbox/tasks/uuid-home-43')?.issue).toBe('uuid-home-43')
+    // Acme's address, and `~`, now read the home organization's live QN-43
+    expect(parsePath('/app/acme/board/all/tasks/qn-43')?.issue).toBe('QN-43')
+    expect(parsePath('/app/~/board/tasks/43')?.issue).toBe('QN-43')
+    // and the window on Home's task names Home's address, by its key
+    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-home-43' })).toBe(
+      '/app/home/board/all/tasks/qn-43',
+    )
+    // the old handle no longer names Home's task
+    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'QN-43' })).toBe(
+      '/app/acme/board/all/tasks/qn-43',
+    )
   })
 
   it("names a task by its uuid once its organization left too, never the home organization's task of that number", () => {

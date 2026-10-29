@@ -180,16 +180,16 @@ function scopeChoices(): {
  * such a task by itself instead.
  */
 function openTaskResult(row: SearchTaskRow, open: (handle: string) => void): void {
-  const handle = P.handleNow(row.id, row.org_id, row.num)
-  noteOpenedTask(handle, {
+  noteOpenedTask({
     uuid: row.id,
+    num: row.num,
     key: row.key,
     title: row.title,
     project: row.project.id,
     org: row.org_id,
     archived: row.archived,
   })
-  open(handle)
+  open(P.handleNow(row.id, row.org_id, row.num))
 }
 
 /** The name of organization `org` when it is not the home organization,

@@ -832,8 +832,9 @@ async function openFound({
   await store.initStore()
   expect(store.P.stillLoading() !== null).toBe(loading)
   const { noteOpenedTask } = await import('../lib/openedTasks')
-  noteOpenedTask(FOUND.key, {
+  noteOpenedTask({
     ...FOUND,
+    num: 27,
     archived,
     project: snap.projects[0].id,
     org: snap.orgs[0].id,

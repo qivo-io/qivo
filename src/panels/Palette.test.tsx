@@ -62,6 +62,7 @@ let PARTNER: string
 let PORTAL: string
 let palette: typeof import('./Palette')
 let opened: typeof import('../lib/openedTasks')
+let planner: typeof import('../store/planner')
 let pageStarts: typeof import('../lib/pageStarts')
 
 /* Lets answers and renders land. */
@@ -173,6 +174,7 @@ async function open({ partner = false } = {}) {
   await store.initStore()
   palette = await import('./Palette')
   opened = await import('../lib/openedTasks')
+  planner = store
   pageStarts = await import('../lib/pageStarts')
   const version = await import('../store/usePlannerVersion')
   ctx = {
@@ -244,6 +246,10 @@ const last = () => {
   if (!call) throw new Error('nothing was asked')
   return call
 }
+/** What Search noted of the task `handle` names now, as the router and
+    the task window read the registry. */
+const noted = (handle: string) =>
+  opened.openedTask(handle, (task) => planner.P.handleNow(task.uuid, task.org, task.num))
 const pageButton = (to: 'previous' | 'next') =>
   document.querySelector<HTMLButtonElement>(`[data-palette-page="${to}"]`)
 
@@ -776,11 +782,11 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     const rows = () => [...document.querySelectorAll<HTMLElement>('[cmdk-item]')]
     await click(rows()[0])
     expect(ctx.openIssue).toHaveBeenLastCalledWith('task-14')
-    expect(opened.openedTask('task-14')).toMatchObject({ key: 'QN-14', org: ORG })
-    expect(opened.openedTask('QN-14')).toBeUndefined()
+    expect(noted('task-14')).toMatchObject({ key: 'QN-14', org: ORG })
+    expect(noted('QN-14')).toBeUndefined()
     await click(rows()[1])
     expect(ctx.openIssue).toHaveBeenLastCalledWith('task-15')
-    expect(opened.openedTask('task-15')).toMatchObject({ key: 'QN-15' })
+    expect(noted('task-15')).toMatchObject({ key: 'QN-15' })
   })
 
   it('opens a task by its handle, noting it, and a project the workspace holds as the scope', async () => {
@@ -802,8 +808,9 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     const rows = () => [...document.querySelectorAll<HTMLElement>('[cmdk-item]')]
     await click(rows()[1])
     expect(ctx.openIssue).toHaveBeenLastCalledWith('QN-16')
-    expect(opened.openedTask('QN-16')).toEqual({
+    expect(noted('QN-16')).toEqual({
       uuid: 'task-16',
+      num: 16,
       key: 'QN-16',
       title: 'Old firmware notes',
       project: FW,
@@ -812,10 +819,10 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     })
     await click(rows()[2])
     expect(ctx.openIssue).toHaveBeenLastCalledWith('partner-task')
-    expect(opened.openedTask('partner-task')).toMatchObject({ key: 'QN-5', org: PARTNER })
+    expect(noted('partner-task')).toMatchObject({ key: 'QN-5', org: PARTNER })
     await click(rows()[0])
     expect(ctx.openIssue).toHaveBeenLastCalledWith('QN-14')
-    expect(opened.openedTask('QN-14')).toMatchObject({ archived: false })
+    expect(noted('QN-14')).toMatchObject({ archived: false })
     await click(rows()[3])
     expect(ctx.setScope).toHaveBeenCalledWith(FW)
     // a project the workspace does not hold yet stays unopened

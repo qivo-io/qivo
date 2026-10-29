@@ -24,7 +24,7 @@
 
 import { ALL_SCOPE, ISSUE_PREFIX, MINE_SCOPE, P } from '../store/planner'
 import type { IssueVM } from '../store/viewModels'
-import { openedHandle, openedTask } from './openedTasks'
+import { type OpenedTask, openedTask, openedTaskMatching } from './openedTasks'
 
 export type Route = {
   scope?: string
@@ -91,10 +91,22 @@ const findProject = (s: string | undefined, org?: string) => {
   }
   return P.projects.find((p) => p.id === s.toLowerCase())
 }
+/** The handle a task Search opened (lib/openedTasks.ts) opens by now,
+    derived from its identity, as a home organization that changed since
+    gives it another one. */
+const handleOfOpened = (task: OpenedTask) => P.handleNow(task.uuid, task.org, task.num)
+
+/* The handle of the task Search opened that `match` names, if any. */
+const openedHandle = (match: Parameters<typeof openedTaskMatching>[0]) => {
+  const task = openedTaskMatching(match)
+  return task && handleOfOpened(task)
+}
+
 /* A task the store does not hold that Search opened, such as an archived
-   one, resolves to the handle Search opened it by (lib/openedTasks.ts), so
-   closing its window earns an entry and Back or Forward to its address
-   opens it again, as they do a loaded task. */
+   one, resolves by its organization and key, or its uuid, to the handle it
+   opens by now (lib/openedTasks.ts), so closing its window earns an entry
+   and Back or Forward to its address opens it again, as they do a loaded
+   task, also after the home organization changed. */
 const findIssueKey = (s: string | undefined, org?: string) => {
   if (!s) return undefined
   const m = new RegExp(`^(?:${ISSUE_PREFIX}-)?(\\d+)$`, 'i').exec(s)
@@ -342,14 +354,12 @@ const NAMED_MAX = 64
 
 /* Names, as `named` does, a task Search opened that the store does not
    hold, such as an archived one (lib/openedTasks.ts), so the address names
-   its organization and key from the start. */
+   its organization and key from the start. It is derived on every call and
+   kept nowhere, as the handle `open` names can change with the home
+   organization. */
 function namedOpened(open: string) {
-  const task = openedTask(open)
-  if (!task) return undefined
-  const was = { org: task.org, key: task.key, uuid: task.uuid, seg: orgSegment(task.org) }
-  named.set(open, was)
-  if (named.size > NAMED_MAX) named.delete(named.keys().next().value ?? open)
-  return was
+  const task = openedTask(open, handleOfOpened)
+  return task && { org: task.org, key: task.key, uuid: task.uuid, seg: orgSegment(task.org) }
 }
 
 /** The task handle `open` names: the live task, or the one it last was. */

@@ -1723,8 +1723,12 @@ function IssueDetail({
   }, [onClose, embedded])
 
   const it = issueId ? P.issueById[issueId] : null
-  // what Search noted of a task it opened by this handle (lib/openedTasks.ts)
-  const opened = !it && issueId ? openedTask(issueId) : undefined
+  // what Search noted of a task it opened that this handle names now
+  // (lib/openedTasks.ts), the handle derived as the router derives it
+  const opened =
+    !it && issueId
+      ? openedTask(issueId, (task) => P.handleNow(task.uuid, task.org, task.num))
+      : undefined
   // what the window last showed of this task, kept for once it is gone, or
   // what Search noted of it when the window has shown nothing of it
   const shownTask = useRefID<{ at: string; task: ShownTask } | null>(null)
