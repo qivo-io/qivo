@@ -563,7 +563,7 @@ describe('seats', () => {
     expect(without.page.coverage).toMatchObject({ complete: false, stopped: 'projects', of: 7 })
   })
 
-  it('counts only the seats whose reads began when task numbers spend the budget', async () => {
+  it('counts only the seats whose search began when task numbers spend the budget', async () => {
     const t = newT()
     const f = await withOrg(t)
     await secondSeat(t, f)
@@ -573,8 +573,9 @@ describe('seats', () => {
     for (const num of nums)
       await task(t, f, f.sub, `Gearbox ${num}`, { num, description: 'x'.repeat(900_000) })
     SEAT_SHARE.bytes = 4 << 20
-    // every term must match, so no task does, and the guest seat, whose
-    // reads never began, is not counted as searched
+    // every term must match, so no task does, and the guest seat, which no
+    // allowance was left for and whose search never began, is not counted
+    // as searched
     expect(await search(t, f.user, { text: nums.join(' ') })).toEqual({
       rows: [],
       next_cursor: null,
@@ -702,7 +703,7 @@ describe('main Search across seats', () => {
     expect(absent).toEqual({ rows: [], coverage: COMPLETE, more: false })
   })
 
-  it('counts no seat whose first number lookup the real limit refuses', async () => {
+  it('counts a seat whose first number lookup the real limit refuses only when it matched the names of projects it sees', async () => {
     const t = newT()
     const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
     const orgs: string[] = []
@@ -723,7 +724,7 @@ describe('main Search across seats', () => {
     // of them sees, which spend the real limit while each lookup counts as
     // LOOKUP, so no later seat's first lookup fits
     const nums = Array.from({ length: 16 }, (_, i) => 901 + i)
-    const [first] = [...orgs].sort()
+    const [first, ...later] = [...orgs].sort()
     const root = await plantProject(t, { org_id: first })
     const hidden = await plantProject(t, { org_id: first, type: 'project', parent_id: root.id })
     for (const num of nums)
@@ -733,8 +734,17 @@ describe('main Search across seats', () => {
         num,
         description: 'x'.repeat(900_000),
       })
-    const { page } = await searchRun(t, seats, { text: nums.map((num) => `QN-${num}`).join(' ') })
-    expect(page.coverage).toEqual(stopped('reads', 1, 8))
+    const text = nums.map((num) => `QN-${num}`).join(' ')
+    expect((await searchRun(t, seats, { text })).page.coverage).toEqual(stopped('reads', 1, 8))
+    // the next three seats see a project each, whose names they match with
+    // no read, so they count as searched although no read of theirs fits
+    for (const org of later.slice(0, 3)) {
+      const shared = await plantProject(t, { org_id: org })
+      const seat = seats.find((s) => s.org_id === org)
+      if (seat === undefined) throw new Error('no seat')
+      await grant(t, shared, seat)
+    }
+    expect((await searchRun(t, seats, { text })).page.coverage).toEqual(stopped('reads', 4, 8))
   })
 
   it('keeps later seats and coverage alike whatever hidden tasks earlier organizations hold', async () => {

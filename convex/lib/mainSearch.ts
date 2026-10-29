@@ -342,8 +342,9 @@ export async function parseSearchCursor(text: string, key: string): Promise<Posi
  * left its project names out because its organization's reach rows are not
  * complete (`unready`, model/projectNav.ts reachReady), a source returned
  * its cap (`candidates`), the budget stopped a source or the judging
- * (`reads`), and how many of the seats asked about began to read
- * (`searched` of `of`). */
+ * (`reads`), and how many of the seats asked about began their search
+ * (`searched` of `of`): matched the names of the projects they see, which
+ * reads nothing, or began to read. */
 type Stops = {
   wide: boolean
   unready: boolean
@@ -855,7 +856,8 @@ type Seat = {
   wide: boolean
   /** the tasks its number and title sources returned */
   returned: Set<string>
-  /** whether its search began to read */
+  /** whether its search began: it matched the names of the projects it
+   * sees, which reads nothing, or a read of it fitted (begin) */
   started: boolean
   /** Whether a task of the project with this id may show: the project is
    * the organization's, live, inside the scope and visible. Each project
@@ -1087,7 +1089,10 @@ export async function mainSearchPage(
     })
   }
 
-  /* Counts `seat` as searched once its search begins to read. */
+  /* Counts `seat` as searched once its search begins: when it matches the
+   * names of the projects it sees, all of which it then searched with no
+   * read, or at its first read that fits. A seat that matches no listed
+   * names and whose first read does not fit counts as not searched. */
   const begin = (seat: Seat) => {
     if (seat.started) return
     seat.started = true
@@ -1251,7 +1256,8 @@ export async function mainSearchPage(
         let shown: Doc<'issues'> | null = null
         try {
           await gather.need(1, 1)
-          // the seat counts as searched once a read fits, not before
+          // a seat that matched no listed names counts as searched once a
+          // read fits, not before
           begin(seat)
           const task = await ctx.db
             .query('issues')
