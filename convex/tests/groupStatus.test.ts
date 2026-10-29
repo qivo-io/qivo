@@ -253,7 +253,10 @@ describe('parent task status', () => {
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id })
     await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: parent.id })
-    const archived = await as(t, f.admin).query(api.issues.archivedFor, { project_ids: [f.sub.id] })
+    const { rows: archived } = await as(t, f.admin).query(api.issues.archivedPage, {
+      scope: { org_id: f.org.id, project_ids: [f.sub.id] },
+    })
+    expect(archived).toHaveLength(2)
     expect(archived.find((i) => i.id === parent.id)?.is_group).toBe(true)
     expect(archived.find((i) => i.id !== parent.id)?.is_group).toBe(false)
     expect(

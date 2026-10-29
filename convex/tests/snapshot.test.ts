@@ -1535,11 +1535,9 @@ describe('hidden parents', () => {
     })
     expect(adminUpdated.parent_id).toBe(hiddenParent.id)
     await t.run((ctx) => ctx.db.patch(child._id, { archived_at: NOW }))
-    const archived = await as(t, f.guest).query(api.issues.archivedFor, {
-      project_ids: [f.sub.id],
-    })
-    const row = archived.find((i) => i.id === child.id)
-    expect(row && 'parent_id' in row).toBe(false)
+    const row = await as(t, f.guest).query(api.issues.archivedTask, { id: child.id })
+    expect(row).toMatchObject({ id: child.id })
+    expect(JSON.stringify(row)).not.toContain(hiddenParent.id)
   })
 
   it("no task id outside a person's working set leaves the snapshot", async () => {

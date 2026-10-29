@@ -82,7 +82,6 @@ import {
   assertCanEdit,
   assertTaskExpected,
   createIssueCore,
-  hasSubtasks,
   moveIssueCore,
   subtasksWouldMove,
   unarchiveIssueCore,
@@ -99,7 +98,7 @@ type MeCtx = QueryCtx & { me: Doc<'profiles'> }
  * window_key (where the app's windows place the task) stay internal too.
  * The text stays out: the app reads only the number, the parent's number
  * and the archive answer from a write, and the text is the task's
- * description row (model/descriptions.ts), which archivedFor reads. */
+ * description row (model/descriptions.ts). */
 const pub = ({
   _id,
   _creationTime,
@@ -110,27 +109,20 @@ const pub = ({
 }: Doc<'issues'>) => row
 
 /* A returned row names its parent only when the caller can see the parent's
- * project, so no hidden task id leaves a read or a write's result (the
- * snapshot's has_hidden_parent rule). `seen` caches project visibility for
- * list reads. */
+ * project, so no hidden task id leaves a write's result (the snapshot's
+ * has_hidden_parent rule). */
 async function pubFor(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   issue: Doc<'issues'>,
-  seen = new Map<string, Promise<boolean>>(),
 ): Promise<ReturnType<typeof pub>> {
   const { parent_id, ...row } = pub(issue)
   if (parent_id === undefined) return row
   const parent = await byId(ctx, 'issues', parent_id)
   if (parent === null || parent.org_id !== me.org_id) return row
-  let visible = seen.get(parent.project_id)
-  if (visible === undefined) {
-    visible = byId(ctx, 'projects', parent.project_id).then(
-      async (project) => project !== null && (await canSeeProject(ctx, me, project)),
-    )
-    seen.set(parent.project_id, visible)
-  }
-  return (await visible) ? { ...row, parent_id } : row
+  const project = await byId(ctx, 'projects', parent.project_id)
+  const visible = project !== null && (await canSeeProject(ctx, me, project))
+  return visible ? { ...row, parent_id } : row
 }
 
 /* Resolve an issue uuid inside the caller's org — missing and foreign rows
@@ -149,10 +141,8 @@ const assertWritable = (ctx: MeCtx, projectId: string): Promise<void> =>
 
 /* --------------------------------------------------------------- archived
  * Issue reads that live OUTSIDE the snapshot: the Archived tasks page's
- * paged list (P.fetchArchivedPage), the task window's look-up of its own
- * task (P.fetchArchivedTask) and, deprecated, the whole-archive read that
- * browser tabs and desktop clients from before the paged list may still
- * call.
+ * paged list (P.fetchArchivedPage) and the task window's look-up of its own
+ * task (P.fetchArchivedTask).
  *
  * issues_select stayed can_see_project(project_id) (0003:165) for archived
  * rows too — fetchAll excluded them by filter, not by policy — so the fence
@@ -298,67 +288,6 @@ export const archivedTask = authedQuery({
   args: { id: v.string() },
   handler: async (ctx, { id }): Promise<ArchivedPageRow | null> =>
     await archivedTaskCore(ctx, ctx.myProfiles, id),
-})
-
-/** Deprecated: the Archived tasks page reads archivedPage. Kept for one
- * release, with the same answer, for browser tabs and desktop clients from
- * before it; remove it with its manifest line once no served build calls
- * it. It reads every archived task of the named projects at once, which
- * passes a transaction's limits for a large archive. */
-export const archivedFor = authedQuery({
-  args: { project_ids: v.array(v.string()) },
-  handler: async (ctx, { project_ids }) => {
-    const out: Doc<'issues'>[] = []
-    const seen = new Set<string>()
-    for (const pid of project_ids) {
-      if (seen.has(pid)) continue
-      seen.add(pid)
-      const project = await byId(ctx, 'projects', pid)
-      if (project === null) continue
-      const me = ctx.myProfiles.get(project.org_id)
-      if (me === undefined) continue
-      if (!(await canSeeProject(ctx, me, project))) continue
-      // only archived rows, never the project's active tasks
-      const projectIssues = await ctx.db
-        .query('issues')
-        .withIndex('by_project_archived', (q) =>
-          q.eq('project_id', pid).gt('archived_at', undefined),
-        )
-        .collect()
-      out.push(...projectIssues)
-    }
-    // the old client's order: archived_at desc, num desc
-    out.sort((a, b) =>
-      a.archived_at === b.archived_at
-        ? b.num - a.num
-        : (a.archived_at as string) < (b.archived_at as string)
-          ? 1
-          : -1,
-    )
-    // per organization: each row is fenced through the caller's seat there
-    const seenByOrg = new Map<string, Map<string, Promise<boolean>>>()
-    return await Promise.all(
-      out.map(async (issue) => {
-        const me = ctx.myProfiles.get(issue.org_id) as Doc<'profiles'>
-        let seen = seenByOrg.get(issue.org_id)
-        if (seen === undefined) {
-          seen = new Map()
-          seenByOrg.set(issue.org_id, seen)
-        }
-        const issueLabels = await ctx.db
-          .query('issue_labels')
-          .withIndex('by_issue', (q) => q.eq('issue_id', issue.id))
-          .collect()
-        return {
-          ...(await pubFor(ctx, me, issue, seen)),
-          // the old page searched it
-          description: await descriptionOf(ctx.db, issue),
-          is_group: await hasSubtasks(ctx, issue),
-          label_ids: issueLabels.map((label) => label.label_id),
-        }
-      }),
-    )
-  },
 })
 
 /* ----------------------------------------------------------------- create
