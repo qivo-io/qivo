@@ -172,8 +172,9 @@ const projectsTable = defineTable({
   .index('by_lead', ['lead_id']) // projects_lead_idx — removeProfile's SET NULL
   // The nightly archive pages the live projects (archived_at absent).
   .index('by_archived_org', ['archived_at', 'org_id'])
-  // Name search of the directory, Settings and Archived projects, within
-  // one organization and archive state.
+  // Name search of main Search (search.ts, its seats searched whole), the
+  // directory, Settings and Archived projects, within one organization and
+  // archive state.
   .searchIndex('search_name', { searchField: 'name', filterFields: ['org_id', 'archive_state'] })
 
 /* `name_key` on a membership, a grant or a team share is a server-owned copy
@@ -1136,7 +1137,8 @@ export default defineSchema({
   // writer keeps them gets it at its creation. `nav_at` says the same of
   // every project's archive_state and every lead's, grant's and team share's
   // project_reach rows (internal/navBackfill.ts); a reader in name order
-  // needs both (model/projectNav.ts navReady).
+  // needs both (model/projectNav.ts navReady), and main Search's project
+  // names wait for nav_at alone (model/projectNav.ts reachReady).
   org_ready: defineTable({
     org_id: v.string(),
     name_keys_at: v.optional(v.string()),

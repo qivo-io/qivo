@@ -688,9 +688,10 @@ the backfill with `"repair": true`, which writes the copies from each task,
 and call it again with the `cursor` it answers until it answers `done`. A
 task without a row gets none from a move or an archive, and the backfill
 inserts its row with the copies. Main Search's query, `search:page`
-(`convex/search.ts`), matches descriptions through `search_description`
-and titles through the `search_title` index of `issues`, which Convex builds
-at deploy without a backfill. The query ships before the app calls it. The
+(`convex/search.ts`), matches descriptions through `search_description`,
+titles through the `search_title` index of `issues` and project names
+through the `search_name` index of `projects`, which Convex builds at
+deploy without a backfill. The query ships before the app calls it. The
 release whose app calls it ships only once a dry run on development,
 staging, production and the demo reports zero `missing`, `differ`,
 `duplicates`, `orphans` and `skipped`.
@@ -875,7 +876,12 @@ the one-time `internal/navBackfill` writes them. The backfill walks the
 projects, grants, team shares and reach rows of every organization, then
 stamps each organization in `org_ready` (`nav_at`); an organization created
 since that release is stamped at its creation. A navigation list refuses an
-organization without both that stamp and the name keys stamp. Run the
+organization without both that stamp and the name keys stamp. Main Search
+(`search:page`) needs `nav_at` alone, and only where it searches a whole
+organization: there it leaves the organization's project names out and
+reports its search incomplete while the stamp is missing. A seat it searches
+project by project finds its project names without the stamp, from the
+projects, leads, grants and shares it already read. Run the
 backfill on every hosted deployment once it serves that release, as the
 module's header says. Read its dry run first, then run it. A call that does
 not finish in about five minutes answers a `cursor`; call it again with the
