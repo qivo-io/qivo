@@ -278,14 +278,16 @@ async function click(element: HTMLElement | null) {
   await act(async () => element.click())
   await settle()
 }
-/** Chooses `value` under Search in. */
-async function choose(value: string) {
+/** Chooses `value` under Search in from the keyboard, and with `rest`
+    waits past the pause such a choice rests for. */
+async function choose(value: string, { rest = true } = {}) {
   const select = find<HTMLSelectElement>('[data-palette-scope]')
   await act(async () => {
     select.value = value
     select.dispatchEvent(new Event('change', { bubbles: true }))
   })
-  await settle()
+  if (rest) await wait(300)
+  else await settle()
 }
 const toggle = () => click(find('[data-palette-archived]'))
 
@@ -358,6 +360,35 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     await choose('')
     expect(last().args).toEqual({ text: 'firm', include_archived: true })
     expect(calls).toHaveLength(6)
+  })
+
+  it('asks once for a scope scanned with the keyboard, and at once for one picked with the pointer', async () => {
+    await open()
+    await type('firm')
+    await last().answer([task(14)])
+    // the arrows walk the list, each step a change
+    for (const value of [META, FW, '', META]) await choose(value, { rest: false })
+    expect(calls).toHaveLength(1)
+    expect(status()).toBe('Updating results…')
+    expect(find('[cmdk-list]').getAttribute('aria-busy')).toBe('true')
+    await wait(300)
+    expect(calls).toHaveLength(2)
+    expect(last().args.scope).toEqual({ org_id: ORG, project_id: META })
+    await last().answer([task(14)])
+    // a walk back to the scope on screen asks nothing
+    await choose(FW, { rest: false })
+    await choose(META, { rest: false })
+    await wait(300)
+    expect(calls).toHaveLength(2)
+    // a pointer pick asks at once
+    document.documentElement.dataset.focusModality = 'pointer'
+    try {
+      await choose(FW, { rest: false })
+      expect(calls).toHaveLength(3)
+      expect(last().args.scope).toEqual({ org_id: ORG, project_id: FW })
+    } finally {
+      delete document.documentElement.dataset.focusModality
+    }
   })
 
   it('shows only the newest answer, also when an older one lands later', async () => {

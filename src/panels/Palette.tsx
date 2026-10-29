@@ -3,8 +3,10 @@
    search:page): every project the person can open in every organization of
    the login, whatever page it opened on, or the narrower scope chosen under
    Search in, which lasts while the palette is open. Typing rests 250 ms
-   before a request, a change of scope or of Include archived tasks asks at
-   once, and any change starts at the first page. Only the newest request's
+   before a request, and so does a scope picked from the keyboard, which
+   scanning the list walks through; a scope picked with the pointer or a
+   change of Include archived tasks asks at once, and any change starts at
+   the first page. Only the newest request's
    answer shows. One list in the server's order, 25 rows a page at most,
    with Previous and Next, and a note when the search could not cover
    everything (lib/searchNote.ts), which it never calls no results. An empty
@@ -29,7 +31,7 @@ import { LIMITS } from '../../convex/lib/limits'
 import { searchTerms } from '../../convex/lib/searchTerms'
 import { Icon, IssueKey, ProjectName, StatusDot } from '../components/qivo'
 import { limitSentence, overLimit } from '../lib/fieldLimits'
-import { restoreFocus } from '../lib/focusVisibility'
+import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
 import { noteOpenedTask } from '../lib/openedTasks'
 import { withStart } from '../lib/pageStarts'
 import { type SearchCoverage, searchNote } from '../lib/searchNote'
@@ -207,8 +209,10 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
   // when a control changes or the text holds no term
   const [settled, setSettled] = useState('')
   const [includeArchived, setIncludeArchived] = useState(false)
-  // the Search in choice, '' for All projects
+  // the Search in choice, '' for All projects, and the one a search asks
+  // with, which waits for a choice from the keyboard to rest
   const [choice, setChoice] = useState('')
+  const [settledChoice, setSettledChoice] = useState('')
   const [shown, setShown] = useState<Shown | null>(null)
   const [running, setRunning] = useState<Running | null>(null)
   const [failed, setFailed] = useState<Failed | null>(null)
@@ -265,9 +269,30 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
   const chosen = offered.find((c) => c.value === choice)
   const left = !chosen
   useEffect(() => {
-    if (left) setChoice('')
+    if (!left) return
+    setChoice('')
+    setSettledChoice('')
   }, [left])
   const scope = chosen?.scope ?? null
+  const askedScope = offered.find((c) => c.value === settledChoice)?.scope ?? null
+  // the text as typed now, for a choice that rests
+  const textRef = useRef(text)
+  textRef.current = text
+  // whether the newest choice came from the pointer, which asks at once
+  const pickedByPointer = useRef(false)
+  useEffect(() => {
+    if (choice === settledChoice) return
+    const settle = () => {
+      setSettledChoice(choice)
+      setSettled(textRef.current)
+    }
+    if (pickedByPointer.current) {
+      settle()
+      return
+    }
+    const timer = window.setTimeout(settle, SEARCH_DELAY_MS)
+    return () => window.clearTimeout(timer)
+  }, [choice])
 
   const tooLong = overLimit(LIMITS.search, text)
   // the search the input and the controls describe now, and the one the
@@ -275,7 +300,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
   const typed = tooLong ? TOO_LONG : searchKeyOf(text, includeArchived, scope)
   const wanted = overLimit(LIMITS.search, settled)
     ? TOO_LONG
-    : searchKeyOf(settled, includeArchived, scope)
+    : searchKeyOf(settled, includeArchived, askedScope)
   useEffect(() => {
     if (text === settled) return
     if (searchKeyOf(text, false, null) === null) {
@@ -348,7 +373,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
       setFailed(null)
       return
     }
-    ask({ key: wanted, text: settled, includeArchived, scope }, [null], 'first')
+    ask({ key: wanted, text: settled, includeArchived, scope: askedScope }, [null], 'first')
   }, [wanted])
 
   /* Moves to the next or the previous page of the search on screen. */
@@ -515,8 +540,8 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
             size="sm"
             value={chosen ? choice : ''}
             onChange={(event) => {
+              pickedByPointer.current = lastInputWasPointer()
               setChoice(event.target.value)
-              setSettled(text)
             }}
             className="h-control-sm max-w-[260px] cursor-pointer bg-surface-1 font-sans text-sm"
           >
@@ -546,8 +571,10 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
             data-palette-archived
             checked={includeArchived}
             onCheckedChange={(checked) => {
+              // the toggle asks at once, with the scope chosen so far
               setIncludeArchived(checked === true)
               setSettled(text)
+              setSettledChoice(chosen ? choice : '')
             }}
           />
           <Label htmlFor="palette-archived" className="text-sm font-normal text-text-2">
