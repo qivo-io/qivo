@@ -279,25 +279,34 @@ export const isRoomSpent = (e: unknown): boolean => e instanceof RoomSpent
  * rows at the largest step, and answers from their teams' shares when those
  * fit; else it asks each of the person's teams that may hold one
  * (project_team_access by_project_team). Once the organization's reach rows
- * are complete, those are their teams that hold a root row on the
- * project's top-level project, and else all their teams while they are at
- * most `lookups`. One instance asks at most `shareLookups` such teams in all;
- * past that, or past `lookups` teams, the question refuses.
+ * are complete, those are, for a top-level project, their teams whose root
+ * row on it records a source on it (on_root), and for a sub-project, their
+ * teams that hold a root row on its top-level project; else all their
+ * teams.
  *
  * Navigation from reach rows, once the organization's rows are complete
  * (org_ready nav_at), reads the person's memberships, at most `navTeams`
  * teams, and the root rows of their seat and those teams, at most `roots`
  * in all, each once. For a parent it then reads the child rows of the
- * grantees that hold a root row on it, at most `children` rows checked in
- * all and `children` + 1 grantees read. Past `navTeams` or `roots` every navigation
- * question takes the legacy path, and a parent whose rows past `children`
- * may still show it takes it for that parent.
+ * grantees that hold a root row on it, or of every grantee past `roots`,
+ * at most `children` rows checked in all, each with one read of the source
+ * the row records. Past `navTeams` every navigation question takes the
+ * legacy path, and a parent whose rows past `children` may still show it
+ * takes it for that parent.
+ *
+ * Reads of one row at a time past those bounds come out of `teamReads` for
+ * the instance: a team asked by itself on a project, a team's row, a
+ * grantee's child rows past a parent's first grantee and a row's check past
+ * a parent's first. Past it a question refuses with roomSpent, which a
+ * caller that can ask about fewer projects at once, as a workspace part can
+ * cut its window, answers by asking again in pieces.
  *
  * The legacy path reads the person's grants and their teams' shares, at
  * most `navRows` rows each, at most `teams` teams, and the parent's
  * sub-projects, at most `subProjects` rows and `subBytes` bytes as Convex
  * counts them.
- * From `manyTeams` teams to ask about it reads the organization's teams in
+ * From `manyTeams` teams to ask about, here or for the teams of the
+ * person's shares, it reads the organization's teams in
  * one range instead, while they are at most `orgTeams` for each of those
  * teams, at most `orgTeamsMost` and at most `bytes` as JSON, as the part's
  * hard budget counts this read too; past that it asks team by team.
@@ -319,46 +328,44 @@ export const isRoomSpent = (e: unknown): boolean => e instanceof RoomSpent
  * at ordinary name lengths and up to about 3 KB at the 80-character name
  * caps, so their bytes follow their documents.
  *
- * - One question, a project not asked before: its project and its parent,
+ * - One question, a project not asked before: a sub-project, its parent,
  *   the person's grant on each and the team shares on each, at most 6
  *   ranges and 134 documents (2 + 2 + 2 × 65), none of the grants and
- *   shares once those are known at once. A top-level project that shows
- *   only for navigation adds, from reach rows, at most 5 ranges of child
- *   rows (9 documents) and 4 sub-projects' checks of at most 3 ranges and
- *   67 documents each, so 17 ranges and 277 documents; on the legacy path,
- *   1 range and up to 4,001 sub-projects or 4 MiB.
+ *   shares once those are known at once; a top-level project that shows
+ *   only for navigation, its row, grant and shares and its first grantee's
+ *   child rows with the first row's project and source, 6 ranges and at
+ *   most 74 documents. On the legacy path navigation adds 1 range and up
+ *   to 4,001 sub-projects or 4 MiB.
  * - Once an instance, beside its questions: membership asked team by team,
- *   at most 65 ranges, each team of theirs a share names checked once, one
- *   range a team, and the teams asked one by one past projectShares, at
- *   most 128 ranges and 256 documents.
- * - Once an instance, in `shared`: the steps' grants and memberships (6
- *   ranges, 1,350 documents), their teams' shares (one range a team, 1,001
- *   documents, read once for the steps, sharesOn and the legacy path), the
- *   readiness row (1, 1) and the legacy path's grants (1, 1,001). The reach
- *   path adds all their memberships, at most 129 (1 range), and the root
- *   rows (129 ranges, 1,001), so at most 267 ranges and 6,532 documents
- *   with the organization's teams for a parent it hands to the legacy path
- *   (2,049 rows). Past navTeams the legacy path adds the memberships, at most
- *   257, and the organization's teams (1 range, 4,001 rows, 512 KiB), so at
- *   most 266 ranges and 7,611 documents, or 522 ranges where the
- *   organization's teams are past their bounds and each team is read by
- *   itself. Past `teams` teams it refuses after the memberships (4,001), at
- *   most 9 ranges and 6,353 documents. So one instance reads at most 267
- *   ranges and 7,611 documents in `shared`, 522 ranges in that one case.
+ *   at most 65 ranges and documents, and `teamReads`, at most 128 ranges
+ *   and 640 documents (a grantee's child rows are at most `children` + 1);
+ *   the team rows among them count in `shared` too.
+ * - Once an instance, in `shared`: the readiness row (1 range, 1 document),
+ *   the steps' grants and memberships (6 ranges, at most 675 documents
+ *   each), the legacy path's grants (1, 1,001) and their teams' shares (one
+ *   range a team, 1,001 documents, read once for the steps, sharesOn and the
+ *   legacy path). On the reach path, at most 128 teams, those add all their
+ *   memberships (1 range), the root rows (129 ranges, 1,001 documents) and
+ *   the organization's teams (1 range, 2,049 rows): at most 266 ranges and
+ *   6,020 documents. Past navTeams, at most 256 teams, the legacy path adds
+ *   the memberships and the organization's teams (1 range, 4,001 rows): at
+ *   most 265 ranges and 7,098 documents, or 521 ranges where the
+ *   organization's teams are past their bounds and it reads each of the
+ *   person's teams by itself. Past `teams` teams it refuses after the
+ *   memberships (4,001): at most 9 ranges and 6,353 documents.
  *
  * A caller keeps room for those past its last look at its reads. A
  * workspace part's batch of 64 questions (lib/workspaceParts.ts PAGE.batch)
  * takes at most 384 ranges and 8,576 documents of questions, and with every
- * shared and instance read in the same batch 844 ranges and 16,508
- * documents, past the 896 and 16,000 Convex leaves past PAGE.hard by 508
- * documents. That needs a person in 129 to 256 teams with hundreds of
- * grants, whose first navigation question comes after PAGE.hard's last
- * look in a window of projects each shared with 64 teams; the person of the
- * review's finding (20 teams of 1,600 shares) reads 25 ranges and 1,342
- * documents in `shared`. A batch of navigation questions whose reach rows
- * fail (stale rows, a viewer's leads) can take 17 ranges a question more,
- * and on the legacy path a parent's sub-projects, as at the release before
- * these bounds. lib/mainSearch.ts searchReads lowers them for main Search,
+ * shared and instance read in the same batch at most 843 ranges and 15,995
+ * documents, inside the 896 and 16,000 Convex leaves past PAGE.hard. One case
+ * passes them: on the legacy path, for a person in 129 to 256 teams of an
+ * organization whose teams are past the organization-teams read's bounds
+ * (more than 16 for each of those teams, or 512 KiB as JSON), the 256 reads
+ * of their teams make 1,098 ranges, which a batch reaches only when that
+ * read comes after PAGE.hard's last look. The person of the review's
+ * finding (20 teams of 1,600 shares) reads 24 ranges and 362 documents in
+ * `shared`. lib/mainSearch.ts searchReads lowers these for main Search,
  * whose one check and its shared reads stay inside SEARCH_RESERVE. */
 export const OWN_READS = {
   steps: [32, 128, 512],

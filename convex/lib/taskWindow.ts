@@ -72,19 +72,21 @@ import { relationRow, type TaskRow, taskFields } from './workspaceParts'
  * at a time, each only while PROJECT fits (inOrder). Only a group check may
  * take one body more while some of every count is left. So a read passes
  * a cap by one task body at most, or by what the project it asked about
- * last reads past PROJECT: nothing bounds the team shares on one project,
- * and each share past PROJECT's costs about 9 KB at the name caps with the
- * caller's membership and the team. Besides that, its worst case is the
- * cap, 1 MiB past it and the shared reads: up to about 1.2 MiB of the
- * organization's teams at OWN_READS's 512 KiB, which counts JSON, and the
- * person's own rows. With few of those rows a task reads at most about 10
- * MiB and its links about 15 MiB, under Convex's 16 MiB. Nothing bounds
- * them yet: once 32 projects were asked they can be 33 grants, 33
- * memberships and 1,001 team shares, about 2.85 MiB at the name caps, and
- * more at OWN_READS's later steps and for navigation, so a person with many
- * of them near the name caps can make a read of links pass Convex's 16
- * MiB. The shared reads' ranges and documents count past `ranges` and
- * `documents` too, under 4,096 and 32,000 while those rows are few. At
+ * last reads past PROJECT: past the ten shares PROJECT's bytes hold at the
+ * name caps, up to lib/access.ts OWN_READS.projectShares and one more on
+ * the project and on its top-level project, about 1.3 MiB more at the
+ * caps, and past those the caller's own rows, which count as shared.
+ * Besides that, its worst case is the cap, 1 MiB past it and the shared
+ * reads (OWN_READS states them): at most 266 ranges and 7,098 documents,
+ * up to about 1.2 MiB of the organization's teams, which counts JSON, and
+ * the person's own rows, a few hundred bytes each at ordinary name
+ * lengths. A task's project is a sub-project, so the window navigates only
+ * for a task an earlier version stored on a top-level project. With few of
+ * those rows a task reads at most about 10 MiB and its links about 15.2 to
+ * 15.5 MiB, under Convex's 16 MiB; a person with thousands of those rows
+ * near the name caps can still make a read of links pass it. The shared
+ * reads and the instance's own (at most 193 ranges and 705 documents)
+ * count past `ranges` and `documents` too, under 4,096 and 32,000. At
  * the 20,000-character description cap in a three-byte script, 100
  * subtasks read about 6.1 MB, and fit in `bytes` with the task, its text
  * and its parent. A linked group also reads its first counting subtask

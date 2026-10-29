@@ -192,21 +192,18 @@ export const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 
 
 /** What a call keeps back from Convex's limits for the reads its budget
  * does not count one by one, which are one access check past the budget's
- * last look, with every read of the caller's own rows it may start, at searchReads'
- * bounds (lib/access.ts OWN_READS states the figures). That is one
- * question's project, parent, grants and team shares and its navigation
- * from reach rows, at most 23 ranges and 411 documents; the instance's
- * memberships asked team by team (17 ranges), its teams asked one by one
- * past projectShares (32) and each team of the caller's a share names (at
- * most 64); and its shared reads, at most 139 ranges and 4,956 documents on
- * either path, or 64 ranges more where the organization's teams are past
- * their bounds. So at most 275 ranges and about 5,500 documents, or 339
- * ranges in that one case, which passes 320 by at most 19, while convex-test
- * counts a range the transaction read before again and a deployment does
- * not. The listing reads its rows one at a time under the budget, and the
- * seats and the page read within their own allowances (allowancesOf). Each
- * team read costs at most lib/limits.ts TEAM_ROW_MAX_BYTES. Tests lower
- * it. */
+ * last look, with every read of the caller's own rows it may start, at
+ * searchReads' bounds (lib/access.ts OWN_READS states how they add up).
+ * That is one question, at most 6 ranges and 134 documents; the instance's
+ * memberships asked team by team (9) and its single-row reads past the
+ * bounds (teamReads, 32 ranges and 160 documents); and its shared reads,
+ * on the reach path for up to 128 teams at most 203 ranges and 5,020
+ * documents, and on the legacy path at most 138 ranges and 4,443 documents
+ * with a parent's sub-projects (513). So at most 250 ranges and about
+ * 5,300 documents. The listing reads its rows one at a time under the
+ * budget, and the seats and the page read within their own allowances
+ * (allowancesOf). Each team read costs at most lib/limits.ts
+ * TEAM_ROW_MAX_BYTES. Tests lower it. */
 export const SEARCH_RESERVE: ReadCeiling = {
   ranges: OWN_READS.teams + 64,
   documents: 2 * OWN_READS.rows + OWN_READS.orgTeamsMost,
