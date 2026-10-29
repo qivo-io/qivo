@@ -32,6 +32,7 @@
  * stale, so a description match goes out only after its live task row is
  * judged again. */
 
+import type { TransactionMetrics } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
@@ -64,11 +65,12 @@ import {
  * one by one, listed from reads of at most `listing` rows each, and a seat
  * that sees more searches its organization. At most `seats` seats and
  * `searches` search queries a call, two of them kept for each seat not
- * planned yet. Gathering the candidates stops after `ranges` index ranges,
+ * planned yet. The seats together read at most `ranges` index ranges,
  * `documents` documents and `bytes` bytes, counted from the call's start,
- * and after parsing `parse` characters of descriptions that hide words
- * (lib/md.ts hidesWords). The page parses up to `pageParse` more, a page of
- * descriptions at LIMITS.description, and always its first row. Every
+ * and parse at most `parse` characters of descriptions that hide words
+ * (lib/md.ts hidesWords), split into equal allowances (allowancesOf). The
+ * page parses up to `pageParse` more, a page of descriptions at
+ * LIMITS.description, and always its first row. Every
  * search result costs an index range, so `ranges` binds first. On a local
  * backend (2026-10-29) 2,000 results took 0.25 to 0.45 s of the 1 s Convex
  * gives a query's own code, and parsing 1,000,000 characters of
@@ -90,30 +92,49 @@ export const MAIN_SEARCH = {
   pageParse: 500_000,
 }
 
-/** The least share of the gathering's reads that a seat searched whole is
- * searched with (coverageOf). When the reads left cannot give every such
- * seat this much and its step's headroom (STEP), the later ones in seat
- * order are left unsearched. Tests lower it. */
-export const WIDE_SHARE: ReadCeiling = { ranges: 32, documents: 32, bytes: 256 << 10 }
+/** The least allowance a seat is searched with (allowancesOf). When what
+ * the seats may read cannot give each this much, the later ones in seat
+ * order are left unsearched. Tests raise and lower it. */
+export const SEAT_SHARE: ReadCeiling = { ranges: 32, documents: 32, bytes: 256 << 10 }
 
-/* What one step of a seat searched whole can read past its share, which
- * each step checks first (readBudget): the documents of its largest step at
+/** What the page may read for its rows, counted at the reads' real size
+ * from its own start: a page of rows whose tasks and descriptions are at
+ * LIMITS.description, with their projects and first subtasks. Tests lower
+ * it. */
+export const PAGE_READS: ReadCeiling = { ranges: 300, documents: 1_000, bytes: 3 << 20 }
+
+/* The most one step of a seat or of the page reserves, which it reserves
+ * against the real limit before it reads (readBudget): two documents at
  * Convex's size limit, a task's two description rows or a project and the
  * top-level project above it, and the access rows a project's first check
- * reads after its share was checked (grants and team shares of the project
- * and its top-level project, and the teams they name). */
+ * reads after the reservation. */
 const STEP: ReadCeiling = {
   ranges: 16,
   documents: 64,
   bytes: 2 * DOCUMENT_MAX_BYTES + (64 << 10),
 }
 
+/* What the seats' allowances leave under their real limit besides STEP:
+ * room for each allowance to be passed by the one step that crosses it,
+ * at the sizes rows have under the caps. Only steps whose rows are near
+ * Convex's 1 MiB document size pass it, and only those can make the real
+ * limit stop a seat before its own allowance does. */
+const SLACK: ReadCeiling = { ranges: 64, documents: 256, bytes: 512 << 10 }
+
+/* What a number lookup counts against its seat's allowance when it shows
+ * the seat no task: whether a task the seat cannot see holds the number or
+ * none does, it costs the same, so the seat's reads never tell. It holds
+ * what such a lookup reads at the sizes rows have under the caps: the task
+ * row, the project and top-level project its judging reads, and their
+ * access rows. */
+const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 }
+
 /** What a call keeps back from Convex's limits for the reads its budget
  * does not count one by one: the caller's own access rows that one access
  * check may read at once (lib/access.ts OWN_READS, at most its teams and a
  * few ranges, its rows and the organization's teams). The listing reads
- * its rows one at a time under the budget. The page's rows read up to the
- * rest, so a page of large tasks ends early instead. What no budget bounds
+ * its rows one at a time under the budget, and the seats and the page read
+ * within their own allowances (allowancesOf). What no budget bounds
  * is accessOf's own reads when it asks whether a top-level project shows
  * for navigation: all of the person's grants, memberships and team shares,
  * and the teams those name, which lib/access.ts reads whole, and a team row
@@ -284,20 +305,22 @@ type Stops = {
  * `projects`, whatever it read: choosing a project searches that project
  * fully. A seat searched project by project reads only tasks of projects it
  * sees, and a seat that sees every project hides nothing from itself, so
- * their stops are reported exactly. They are searched first.
+ * their stops are reported exactly.
  *
- * Across seats, what one seat searched whole read never changes what
- * another may read. Before any of them reads, the search decides from what
- * the caller can see alone, the number of such seats and the reads before
- * them, how many it searches, in seat order, and how much each may read:
- * an equal share of the gathering's reads left, counted at the reads' real
- * size from the seat's own start, and never less than WIDE_SHARE. Each step
- * checks the share before it reads, so a seat reads at most its share and
- * one step past it (STEP), and the shares and their steps together fit
- * under the gathering's limit, which so never stops a seat first and keeps
- * the page's room. The seats left out count as not searched. Inside one
- * seat, its rows and stops can still depend on its organization's hidden
- * tasks, which its coverage, `projects`, always admits.
+ * Across seats, what one seat reads never changes what another or the
+ * page may read (allowancesOf). Right after planning, whose reads are of
+ * what the caller can see, and before any read that can reach a hidden
+ * task, the search splits what the transaction may still read into fixed
+ * allowances, one for each seat it searches and one for the page, from the
+ * reads up to that point alone. Each seat and the page count their reads
+ * against their own allowance from their own start, at the reads' real
+ * size, and that alone stops them while rows keep to the caps; no unused
+ * part passes on. The page's room is set aside first, so no seat reads
+ * into it. The seats left out count as not searched. A number lookup that shows a seat no task counts as LOOKUP
+ * whatever it read, so not even a seat searched project by project reads
+ * differently for a task it cannot see. Inside one seat searched whole,
+ * its rows and stops can still depend on its organization's hidden tasks,
+ * which its coverage, `projects`, always admits.
  *
  * `stopped` names `projects` first, then the budget (`reads`), then a
  * source's cap (`candidates`), each of which means that matches in the
@@ -306,16 +329,20 @@ type Stops = {
  * (`organizations`). `searched` of `of` seats says whether seats were left
  * out, also beside another stop.
  *
- * What remains. The number source reads the task each reference names in
- * each seat's organization, whichever project holds it, and that task's
- * size counts toward the budget, which only a task near Convex's 1 MiB
- * document size could make felt. The rows, not the coverage, of a seat
- * searched whole can differ with its organization's hidden tasks, which
- * take candidates a visible match would have had; its coverage always says
- * that results may be missing. And an access check that reads more rows
- * than STEP holds, for a person in many teams or a project shared with
- * many, passes its seat's step by them; only then could a later seat's
- * reads be cut by the gathering's limit.
+ * What remains. The allowances share one thing, the real limit: the
+ * transaction's, less the page's room for the seats. Each step reserves
+ * its documents at Convex's 1 MiB size against it (STEP), and the
+ * allowances leave STEP and SLACK under it, so it stops a seat before the
+ * seat's own allowance does only when earlier steps passed their
+ * allowances by more than SLACK holds: steps whose rows are near Convex's
+ * 1 MiB document size, a number lookup whose task or projects are larger
+ * than LOOKUP holds, or an access check that reads many rows, for a person
+ * in many teams or a project shared with many. The rows, not the coverage, of a seat searched whole
+ * can differ with its organization's hidden tasks, which take candidates a
+ * visible match would have had; its coverage always says that results may
+ * be missing. Planning reads hidden projects in one case: whether a
+ * top-level project of the scope shows only for navigation, which reads its
+ * sub-projects; never a task.
  */
 export function coverageOf(stops: Stops): Coverage {
   const left = stops.searched < stops.of
@@ -349,25 +376,28 @@ class OutOfRoom extends Error {}
  * ceiling, which its callers' reserves hold; main Search reads up to three
  * documents after one check, so it asks before.
  *
- * With `share`, the reads also stop once they have reached it, counted at
- * their real size from the request's metrics before each step, so a share
- * smaller than a few documents at Convex's size limit still reads and
- * judges small documents, and a step may pass it by what it reads, never
- * `ceiling`. */
+ * With `share`, an allowance as transaction totals, the reads also stop
+ * once they have reached it, counted at their real size from the request's
+ * metrics before each step, so a share smaller than a few documents at
+ * Convex's size limit still reads and judges small documents, and a step
+ * may pass it by what it reads, never `ceiling`. `charge` counts some
+ * reads at a fixed size instead. */
 function readBudget(ctx: QueryCtx, ceiling: ReadCeiling, share?: ReadCeiling) {
   // what was left at the last look, less what was asked for since
   let ranges = 0
   let documents = 0
+  // what the share counts apart from the request's metrics (charge)
+  const credit: ReadCeiling = { ranges: 0, documents: 0, bytes: 0 }
   return {
     /** Throws OutOfRoom unless `r` more index ranges and `d` more documents
      * of any size fit. */
     async need(r: number, d: number): Promise<void> {
       if (share !== undefined) {
-        const m = await ctx.meta.getTransactionMetrics()
+        const m = countsOf(await ctx.meta.getTransactionMetrics())
         if (
-          m.databaseQueries.used + r > share.ranges ||
-          m.documentsRead.used + d > share.documents ||
-          m.bytesRead.used >= share.bytes
+          m.ranges - credit.ranges + r > share.ranges ||
+          m.documents - credit.documents + d > share.documents ||
+          m.bytes - credit.bytes >= share.bytes
         )
           throw new OutOfRoom()
       }
@@ -387,10 +417,70 @@ function readBudget(ctx: QueryCtx, ceiling: ReadCeiling, share?: ReadCeiling) {
       ranges = 0
       documents = 0
     },
+    /** Counts the reads since `before`, the request's totals then, as
+     * `fixed` against the share. */
+    async charge(before: ReadCeiling, fixed: ReadCeiling): Promise<void> {
+      const now = countsOf(await ctx.meta.getTransactionMetrics())
+      credit.ranges += now.ranges - before.ranges - fixed.ranges
+      credit.documents += now.documents - before.documents - fixed.documents
+      credit.bytes += now.bytes - before.bytes - fixed.bytes
+      this.recount()
+    },
   }
 }
 
 type ReadBudget = ReturnType<typeof readBudget>
+
+/* A transaction's reads so far, in the units of a ReadCeiling. */
+const countsOf = (m: TransactionMetrics): ReadCeiling => ({
+  ranges: m.databaseQueries.used,
+  documents: m.documentsRead.used,
+  bytes: m.bytesRead.used,
+})
+
+/* `a` plus `b`, count by count. */
+const plus = (a: ReadCeiling, b: ReadCeiling): ReadCeiling => ({
+  ranges: a.ranges + b.ranges,
+  documents: a.documents + b.documents,
+  bytes: a.bytes + b.bytes,
+})
+
+/**
+ * How many of `planned` seats the search reads, in seat order, and what
+ * each and the page may read, decided right after planning from the
+ * request's reads up to then (`now`) alone (coverageOf). The page gets
+ * PAGE_READS, and the seats' real limit (`limit`) is the transaction's
+ * (`room`) less the page's allowance and STEP, so no seat reads into the
+ * page's room. The seats share equally what is left of MAIN_SEARCH's
+ * totals, counted from the call's `start`, and of their real limit less
+ * STEP and SLACK: as many seats as get at least SEAT_SHARE each, and each an
+ * equal part of MAIN_SEARCH.parse.
+ */
+export function allowancesOf(
+  planned: number,
+  start: ReadCeiling,
+  now: ReadCeiling,
+  room: ReadCeiling,
+): { seats: number; seat: ReadCeiling; parse: number; limit: ReadCeiling } {
+  const counts = ['ranges', 'documents', 'bytes'] as const
+  const limit = (count: (typeof counts)[number]) => room[count] - PAGE_READS[count] - STEP[count]
+  const total = (count: (typeof counts)[number]) =>
+    Math.min(
+      start[count] + MAIN_SEARCH[count] - now[count],
+      limit(count) - now[count] - STEP[count] - SLACK[count],
+    )
+  let seats = planned
+  while (seats > 0 && counts.some((count) => Math.floor(total(count) / seats) < SEAT_SHARE[count]))
+    seats--
+  const each = (count: (typeof counts)[number]) =>
+    seats === 0 ? 0 : Math.floor(total(count) / seats)
+  return {
+    seats,
+    seat: { ranges: each('ranges'), documents: each('documents'), bytes: each('bytes') },
+    parse: seats === 0 ? 0 : Math.floor(MAIN_SEARCH.parse / seats),
+    limit: { ranges: limit('ranges'), documents: limit('documents'), bytes: limit('bytes') },
+  }
+}
 
 /* A parse allowance of `limit` characters. Each call adds what parsing one
  * text costs and throws OutOfRoom once the total passes the limit, unless
@@ -682,9 +772,10 @@ const TITLE_TIERS = 2e7
  * when given, gets what the call did.
  *
  * It plans each seat's places first (searchPlaces), keeping two searches
- * for each seat after it, then reads every seat's task numbers, then
- * searches the seats it searches exactly and last the seats it searches
- * whole (coverageOf).
+ * for each seat after it, then splits what is left to read into fixed
+ * allowances (allowancesOf), then searches each seat in seat order, its
+ * task numbers first, within its own allowance, and reads the page's rows
+ * within the page's (coverageOf).
  */
 export async function mainSearchPage(
   ctx: QueryCtx,
@@ -705,15 +796,16 @@ export async function mainSearchPage(
     .sort((a, b) => (seatKey(a) < seatKey(b) ? -1 : 1))
   if (seats.length === 0) return empty
 
-  // the gathering's budget, inside the room the page's rows read up to
+  // the planning's budget, MAIN_SEARCH's totals inside the transaction's
+  // real limit less the reserve (room)
   const start = await ctx.meta.getTransactionMetrics()
   const room = roomOf(start, SEARCH_RESERVE)
-  const ceiling: ReadCeiling = {
-    ranges: Math.min(room.ranges, start.databaseQueries.used + MAIN_SEARCH.ranges),
-    documents: Math.min(room.documents, start.documentsRead.used + MAIN_SEARCH.documents),
-    bytes: Math.min(room.bytes, start.bytesRead.used + MAIN_SEARCH.bytes),
-  }
-  let gather = readBudget(ctx, ceiling)
+  const opening = countsOf(start)
+  let gather = readBudget(ctx, {
+    ranges: Math.min(room.ranges, opening.ranges + MAIN_SEARCH.ranges),
+    documents: Math.min(room.documents, opening.documents + MAIN_SEARCH.documents),
+    bytes: Math.min(room.bytes, opening.bytes + MAIN_SEARCH.bytes),
+  })
   const stops: Stops = {
     wide: false,
     candidates: false,
@@ -755,7 +847,8 @@ export async function mainSearchPage(
   const activeByIndex = !include && ARCHIVED_FILTER.byIndex
   // whether a text no search source returned holds none of the terms
   const sourcesTakeAll = convexTakesAll(terms)
-  const gatherParse = parseAllowance(MAIN_SEARCH.parse)
+  // the parse allowance of the seat searched now
+  let seatParse = parseAllowance(0)
 
   /* The readable text of description `raw` when a task with `fields` and
    * that text matches every term, else null, its parse counted by `spend`.
@@ -766,7 +859,7 @@ export async function mainSearchPage(
   const matchedText = (
     fields: SearchFields,
     raw: string,
-    spend: (chars: number) => void = gatherParse,
+    spend: (chars: number) => void = seatParse,
   ): string | null => {
     if (!matchesTerms(terms, { ...fields, description: raw })) return null
     if (!hidesWords(raw)) return raw
@@ -791,17 +884,17 @@ export async function mainSearchPage(
   }
 
   /* Judges task `task` for `seat` and adds it when it matches, reading its
-   * text (descriptionOf) when its title and number do not hold every
-   * term. */
-  const judgeTask = async (seat: Seat, task: Doc<'issues'>) => {
-    if (task.org_id !== seat.me.org_id) return
-    if (!include && task.archived_at !== undefined) return
-    if (!(await seat.shows(task.project_id, gather))) return
+   * text (descriptionOf) when its title and number do not hold every term.
+   * Answers whether the seat may be shown the task at all. */
+  const judgeTask = async (seat: Seat, task: Doc<'issues'>): Promise<boolean> => {
+    if (task.org_id !== seat.me.org_id) return false
+    if (!include && task.archived_at !== undefined) return false
+    if (!(await seat.shows(task.project_id, gather))) return false
     const fields: SearchFields = { num: task.num, title: task.title, description: '' }
     if (!matchesTerms(terms, fields)) {
       await gather.need(1, 2)
       const readable = matchedText(fields, await descriptionOf(ctx.db, task))
-      if (readable === null) return
+      if (readable === null) return true
       fields.description = readable
     }
     const score = scoreOf(terms, fields)
@@ -814,6 +907,7 @@ export async function mainSearchPage(
       at: seat,
       task: keysOf(task),
     })
+    return true
   }
 
   /* Judges description row `row`, which neither the number nor the title
@@ -871,10 +965,27 @@ export async function mainSearchPage(
     return true
   }
 
-  /* Searches the places of `seat` and adds its matches. */
+  /* Searches `seat`, its task numbers first and then its places, and adds
+   * its matches. A number lookup that shows the seat no task counts as
+   * LOOKUP. */
   const searchSeat = async (seat: Seat) => {
     const { me } = seat
     try {
+      for (const num of numbers) {
+        await gather.need(1, 1)
+        begin(seat)
+        const before = countsOf(await ctx.meta.getTransactionMetrics())
+        const task = await ctx.db
+          .query('issues')
+          .withIndex('by_org_num', (q) => q.eq('org_id', me.org_id).eq('num', num))
+          .first()
+        let shown = false
+        if (task !== null && !seat.returned.has(task.id)) {
+          seat.returned.add(task.id)
+          shown = await judgeTask(seat, task)
+        }
+        if (!shown) await gather.charge(before, LOOKUP)
+      }
       for (const place of seat.places) {
         const titles = ctx.db.query('issues').withSearchIndex('search_title', (q) => {
           let f = q.search('title', text).eq('org_id', me.org_id)
@@ -933,64 +1044,34 @@ export async function mainSearchPage(
     stops.reads = true
   }
 
-  // every seat's task numbers first, one read each, the surest matches
-  try {
-    for (const seat of planned)
-      for (const num of numbers) {
-        await gather.need(1, 1)
-        begin(seat)
-        const task = await ctx.db
-          .query('issues')
-          .withIndex('by_org_num', (q) => q.eq('org_id', seat.me.org_id).eq('num', num))
-          .first()
-        if (task === null || seat.returned.has(task.id)) continue
-        seat.returned.add(task.id)
-        await judgeTask(seat, task)
-      }
-  } catch (e) {
-    if (!(e instanceof OutOfRoom)) throw e
-    stops.reads = true
-  }
-
-  // the seats searched exactly, then the seats searched whole, as many as
-  // get WIDE_SHARE and STEP, each within an equal share of what was left
-  // before any of them read, counted at the reads' real size from its own
-  // start (coverageOf)
-  for (const seat of planned) if (!seat.wide) await searchSeat(seat)
-  const wide = planned.filter((seat) => seat.wide)
-  if (wide.length > 0) {
-    const m = await ctx.meta.getTransactionMetrics()
-    const left: ReadCeiling = {
-      ranges: ceiling.ranges - m.databaseQueries.used,
-      documents: ceiling.documents - m.documentsRead.used,
-      bytes: ceiling.bytes - m.bytesRead.used,
-    }
-    const fits = (n: number) =>
-      (['ranges', 'documents', 'bytes'] as const).every(
-        (count) => n * (WIDE_SHARE[count] + STEP[count]) <= left[count],
-      )
-    let searchable = wide.length
-    while (searchable > 0 && !fits(searchable)) searchable--
-    const share = (count: keyof ReadCeiling) => Math.floor(left[count] / searchable) - STEP[count]
-    for (const seat of wide.slice(0, searchable)) {
-      const now = await ctx.meta.getTransactionMetrics()
-      gather = readBudget(ctx, ceiling, {
-        ranges: now.databaseQueries.used + share('ranges'),
-        documents: now.documentsRead.used + share('documents'),
-        bytes: now.bytesRead.used + share('bytes'),
-      })
-      await searchSeat(seat)
-    }
+  // what is left to read, split right after planning into the seats'
+  // allowances and the page's, each seat searched within its own, under
+  // the seats' real limit (coverageOf)
+  const allowances = allowancesOf(
+    planned.length,
+    opening,
+    countsOf(await ctx.meta.getTransactionMetrics()),
+    room,
+  )
+  for (const seat of planned.slice(0, allowances.seats)) {
+    const now = countsOf(await ctx.meta.getTransactionMetrics())
+    gather = readBudget(ctx, allowances.limit, plus(now, allowances.seat))
+    seatParse = parseAllowance(allowances.parse)
+    await searchSeat(seat)
   }
 
   // the page holds the matches after the cursor, each judged again from
-  // its live task row before it goes out, with its own parse allowance, of
-  // which its first row may take any
+  // its live task row before it goes out, within its own allowance and
+  // parse allowance, of which its first row may take any
   const order = [...matches.values()].sort(comparePositions)
   let at = after === null ? 0 : order.findIndex((m) => comparePositions(m, after) > 0)
   if (at < 0) at = order.length
   const rows: TaskResult[] = []
-  const reads = readBudget(ctx, room)
+  const reads = readBudget(
+    ctx,
+    room,
+    plus(countsOf(await ctx.meta.getTransactionMetrics()), PAGE_READS),
+  )
   const pageParse = parseAllowance(MAIN_SEARCH.pageParse)
   let last: Match | null = null
   let ranOut = false
@@ -1048,11 +1129,14 @@ async function rowOf(
     if (matched({ num: live.num, title: live.title, description: '' }, raw) === null) return null
     task = keysOf(live)
   }
-  // the project, the top-level project above it, and a first subtask
-  await reads.need(3, 3)
+  // the project, the top-level project above it, and a first subtask, each
+  // reserved as it is read, so no step reserves more than STEP
+  await reads.need(1, 1)
   const project = await access.project(task.project_id)
   if (project === null) return null
+  await reads.need(1, 1)
   const parent = project.parent_id === undefined ? null : await access.project(project.parent_id)
+  await reads.need(1, 1)
   const live: Liveness = async (projectId) => {
     // each later subtask the walk reads, and its project
     await reads.need(1, 2)

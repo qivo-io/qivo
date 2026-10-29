@@ -22,6 +22,7 @@ import {
   type MainSearchPage,
   mainSearchPage,
   SEARCH_RESERVE,
+  SEAT_SHARE,
   type SearchScope,
 } from '../lib/mainSearch'
 import { insertTask } from '../model/descriptions'
@@ -54,7 +55,9 @@ installTrashTimers()
 const DEFAULT_SEARCH = { ...MAIN_SEARCH }
 const DEFAULT_RESERVE = { ...SEARCH_RESERVE }
 const DEFAULT_FILTER = { ...ARCHIVED_FILTER }
+const DEFAULT_SHARE = { ...SEAT_SHARE }
 afterEach(() => {
+  Object.assign(SEAT_SHARE, DEFAULT_SHARE)
   Object.assign(MAIN_SEARCH, DEFAULT_SEARCH)
   Object.assign(SEARCH_RESERVE, DEFAULT_RESERVE)
   Object.assign(ARCHIVED_FILTER, DEFAULT_FILTER)
@@ -150,6 +153,37 @@ async function broadSeat(t: T, login: string, i: number) {
     ctx.db.insert('project_access', { project_id: meta.id, profile_id: seat.id, level: 'user' }),
   )
   return { org, sub, seat }
+}
+
+/** `n` broadSeat organizations for `login`, in seat order. */
+async function broadSeats(t: T, login: string, n: number) {
+  const built = []
+  for (let i = 0; i < n; i++) built.push(await broadSeat(t, login, i))
+  return built.sort((a, b) => (a.org < b.org ? -1 : 1))
+}
+
+/** Sets the text of task `task`, on its row and its description row. */
+const setText = (t: T, task: Doc<'issues'>, description: string) =>
+  t.run(async (ctx) => {
+    await ctx.db.patch(task._id, { description })
+    const row = await ctx.db
+      .query('issue_descriptions')
+      .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+      .unique()
+    if (row !== null) await ctx.db.patch(row._id, { description })
+  })
+
+/** A seeded stream of numbers from 0 up to 1 (mulberry32), so a failing
+ * seed fails again. */
+function seeded(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let z = a
+    z = Math.imul(z ^ (z >>> 15), z | 1)
+    z ^= z + Math.imul(z ^ (z >>> 7), z | 61)
+    return ((z ^ (z >>> 14)) >>> 0) / 4294967296
+  }
 }
 
 /** A task in `project` of the fixture's organization. */
@@ -498,11 +532,12 @@ describe('seats', () => {
     const t = newT()
     const f = await withOrg(t)
     await secondSeat(t, f)
-    // home tasks large enough to spend the budget in the home seat's
-    // number lookups
+    // home tasks large enough to spend the home seat's allowance in its
+    // number lookups, and an allowance only one seat gets
     const nums = Array.from({ length: 10 }, (_, i) => 900 + i)
     for (const num of nums)
       await task(t, f, f.sub, `Gearbox ${num}`, { num, description: 'x'.repeat(900_000) })
+    SEAT_SHARE.bytes = 4 << 20
     // every term must match, so no task does, and the guest seat, whose
     // reads never began, is not counted as searched
     expect(await search(t, f.user, { text: nums.join(' ') })).toEqual({
@@ -548,6 +583,129 @@ describe('seats', () => {
     expect(run.searches).toBe(4)
     // the home seat searched its organization whole, which is never complete
     expect(run.page.coverage).toEqual(stopped('projects', 2, 2))
+  })
+})
+
+describe('main Search across seats', () => {
+  it('answers alike whatever a hidden numbered task holds, at any allocation threshold', async () => {
+    const t = newT()
+    const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
+    MAIN_SEARCH.projects = 1
+    const built = await broadSeats(t, login, 4)
+    const seats = built.map((b) => b.seat)
+    const nums = Array.from({ length: 11 }, (_, i) => 901 + i)
+    const text = [...nums.map((num) => `QN-${num}`), 'gearbox'].join(' ')
+    // visible matches in the later organizations
+    for (const { org, sub } of built.slice(1))
+      await plantIssue(t, {
+        org_id: org,
+        project_id: sub.id,
+        title: `Gearbox ${nums.join(' ')}`,
+        num: 50,
+      })
+    // in the first organization, numbered tasks the guest sees, whose
+    // descriptions at LIMITS.description fill the reads before the old
+    // allocation to its threshold, and one numbered task they cannot see
+    const [{ org, sub }] = built
+    for (const [i, num] of nums.slice(0, -1).entries())
+      await plantIssue(t, {
+        org_id: org,
+        project_id: sub.id,
+        num,
+        description: i === 0 ? '' : '中'.repeat(LIMITS.description.max - 10),
+      })
+    const root = await plantProject(t, { org_id: org })
+    const hidden = await plantProject(t, { org_id: org, type: 'project', parent_id: root.id })
+    const secret = await plantIssue(t, { org_id: org, project_id: hidden.id, num: nums[10] })
+    // its text grows 600 bytes at a time across the old threshold
+    const pages: MainSearchPage[] = []
+    for (let chars = 6_000; chars <= 8_600; chars += 200) {
+      await setText(t, secret, '中'.repeat(chars))
+      pages.push((await searchRun(t, seats, { text })).page)
+    }
+    for (const page of pages) expect(page).toEqual(pages[0])
+    expect(pages[0].rows).toHaveLength(3)
+  })
+
+  it('keeps later seats and coverage alike whatever hidden tasks earlier organizations hold', async () => {
+    const t = newT()
+    const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
+    const built = await broadSeats(t, login, 4)
+    const seats = built.map((b) => b.seat)
+    const text = 'QN-7 gearbox'
+    const [earlier, later] = [built.slice(0, 2), built.slice(2)]
+    // visible matches everywhere, and in the later organizations a task the
+    // number names
+    for (const { org, sub } of built)
+      await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox 7 notes', num: 50 })
+    for (const { org, sub } of later)
+      await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox', num: 7 })
+    const laterOrgs = new Set(later.map((b) => b.org))
+    // each seat searches its organization whole, or project by project,
+    // with the default budget and with read caps across a band tight enough
+    // that some cap sits beside any threshold a read could cross
+    const modes = [1, DEFAULT_SEARCH.projects].flatMap((projects) => [
+      { projects, ranges: DEFAULT_SEARCH.ranges },
+      ...Array.from({ length: 16 }, (_, i) => ({ projects, ranges: 180 + 9 * i })),
+    ])
+    const answer = async ({ projects, ranges }: (typeof modes)[number]) => {
+      MAIN_SEARCH.projects = projects
+      MAIN_SEARCH.ranges = ranges
+      SEAT_SHARE.ranges = ranges < DEFAULT_SEARCH.ranges ? 8 : DEFAULT_SHARE.ranges
+      const { page } = await searchRun(t, seats, { text })
+      return {
+        later: page.rows.filter((row) => laterOrgs.has(row.org_id)),
+        coverage: page.coverage,
+        more: page.next_cursor !== null,
+      }
+    }
+    const base = []
+    for (const mode of modes) base.push(await answer(mode))
+    for (const seed of [1, 2, 3, 4, 5]) {
+      // hidden matches and hidden numbered tasks in the earlier
+      // organizations, with descriptions within LIMITS.description
+      const random = seeded(seed * 7919)
+      const made: Doc<'projects'>[] = []
+      for (const { org } of earlier) {
+        const root = await plantProject(t, { org_id: org })
+        const hidden = await plantProject(t, { org_id: org, type: 'project', parent_id: root.id })
+        made.push(root, hidden)
+        const size = () => '中'.repeat(Math.floor(random() * (LIMITS.description.max - 20)))
+        await plantMany(t, Math.floor(random() * 30), () => ({
+          org_id: org,
+          project_id: hidden.id,
+          title: random() < 0.5 ? 'Gearbox 7' : 'Planted',
+          description: `${size()} gearbox 7`,
+        }))
+        if (random() < 0.7)
+          await plantIssue(t, {
+            org_id: org,
+            project_id: hidden.id,
+            num: 7,
+            title: random() < 0.5 ? 'Gearbox' : 'Planted',
+            description: size(),
+          })
+      }
+      for (const [i, mode] of modes.entries()) expect(await answer(mode)).toEqual(base[i])
+      // the next seed starts from the same visible data
+      await t.run(async (ctx) => {
+        for (const project of made) {
+          const tasks = await ctx.db
+            .query('issues')
+            .withIndex('by_project', (q) => q.eq('project_id', project.id))
+            .collect()
+          for (const task of tasks) {
+            for (const row of await ctx.db
+              .query('issue_descriptions')
+              .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+              .collect())
+              await ctx.db.delete(row._id)
+            await ctx.db.delete(task._id)
+          }
+          await ctx.db.delete(project._id)
+        }
+      })
+    }
   })
 })
 
