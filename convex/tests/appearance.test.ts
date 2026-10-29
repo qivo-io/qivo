@@ -320,21 +320,12 @@ describe('account appearance preferences', () => {
     },
   )
 
-  it('saves Blue from a tab loaded before Blue retired as Dark', async () => {
-    const { t, owner } = await setup()
-    await owner.caller.mutation(api.appearance.save, { mode: 'light', image_source: 'none' })
-    expect(
-      await owner.caller.mutation(api.appearance.save, { mode: 'blue', image_source: 'custom' }),
-    ).toMatchObject({ mode: 'dark', image_source: 'custom' })
-    const [row] = await t.run((ctx) => ctx.db.query('account_appearance').collect())
-    expect(row.mode).toBe('dark')
-  })
-
   it('rejects unsupported modes, sources and owner-selection arguments at the public wire', async () => {
     const { t, owner, other } = await setup()
     for (const args of [
       { mode: 'automatic', image_source: 'daily' },
-      // Canvas is the background choice now, no longer a theme.
+      // Blue retired, and Canvas is the background choice now, no longer a theme.
+      { mode: 'blue', image_source: 'daily' },
       { mode: 'image', image_source: 'daily' },
       { mode: 'dark', image_source: 'random' },
       { mode: 'dark', image_source: 'daily', auth_user_id: other.id },

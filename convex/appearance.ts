@@ -2,13 +2,12 @@
  * remain private and never enter platform curation. */
 
 import { v } from 'convex/values'
-import { literals } from 'convex-helpers/validators'
 import { internal } from './_generated/api'
 import type { MutationCtx } from './_generated/server'
 import { internalMutation, internalQuery } from './_generated/server'
 import { storageIdInUse } from './files'
 import { isDemoDeployment } from './lib/demo'
-import { APPEARANCE_MODES, vImageSource } from './lib/enums'
+import { vAppearanceMode, vImageSource } from './lib/enums'
 import {
   backgroundFileUrl,
   backgroundUploadUrl,
@@ -93,17 +92,16 @@ export const publicCanvas = internalQuery({
 
 export const save = authedMutation({
   args: {
-    // A tab loaded before Blue retired still offers it. Backend changes stay
-    // compatible with open tabs (docs/deployment.md), so 'blue' saves as
-    // Dark. Drop it once no served build offers Blue.
-    mode: literals(...APPEARANCE_MODES, 'blue'),
+    // Dark or Light. A stored retired theme reads as Dark until this saves
+    // over it (model/appearance.ts appearanceSettings).
+    mode: vAppearanceMode,
     image_source: vImageSource,
   },
   handler: async (ctx, { mode, image_source }): Promise<AppearanceSettings> => {
     await requireAppearanceAccount(ctx, ctx.authUserId)
     const settings = await ensureSettings(ctx, ctx.authUserId)
     await ctx.db.patch(settings._id, {
-      mode: mode === 'blue' ? 'dark' : mode,
+      mode,
       image_source,
       updated_at: new Date().toISOString(),
     })
