@@ -897,6 +897,96 @@ describe('organization export job', () => {
     expect(await storedFiles(t)).toBe(baseline)
   })
 
+  it('stops at EXPORT_LIMITS.parts data parts as too large, and finishes that many within the limits', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    /** A collecting job of the fixture asked for by its admin, at `step`. */
+    const plantJob = (step: Partial<Doc<'org_exports'>['step']>) =>
+      t.run(async (ctx) => {
+        const id = uuid()
+        await ctx.db.insert('org_exports', {
+          id,
+          org_id: f.org.id,
+          state: 'collecting',
+          requested_by: f.admin.id,
+          started_at: NOW,
+          progress_at: NOW,
+          progress: { section: '', records: 0, sections_done: 0, sections_total: 16 },
+          step: { n: 0, section: 0, cursor: null, part: 1, seq: 2, bytes: 0, counts: {}, ...step },
+          attempts: 0,
+          format_version: 3,
+        })
+        await ctx.db.insert('org_export_requests', {
+          export_id: id,
+          org_id: f.org.id,
+          profile_id: f.admin.id,
+          requested_at: NOW,
+        })
+        return id
+      })
+    const stored = async () => ({
+      storage_id: await t.run((ctx) => ctx.storage.store(new Blob(['[]\n']))),
+      raw_bytes: 3,
+      stored_bytes: 3,
+      crc32: 0,
+    })
+    const last = ORG_EXPORT_ORDER.length - 1
+    const commit = async (exportId: string) =>
+      t.mutation(internal.orgExport.commitPart, {
+        export_id: exportId,
+        n: 0,
+        at: { section: last, cursor: null },
+        done: false,
+        records: 0,
+        skipped: 0,
+        part: await stored(),
+      })
+    // data part EXPORT_LIMITS.parts is the last that commits
+    expect(await commit(await plantJob({ section: last, seq: EXPORT_LIMITS.parts + 1 }))).toBe(true)
+    const over = await plantJob({ section: last, seq: EXPORT_LIMITS.parts + 2 })
+    expect(await commit(over)).toBe(false)
+    expect(await jobOf(t, over)).toMatchObject({ state: 'failed', error: { code: 'too_large' } })
+
+    // the finish of an archive with that many data parts stays within
+    // Convex's 4,096 ranges: every table's first file, the rest tasks
+    const entries = ORG_EXPORT_ORDER.flatMap((section) =>
+      Array.from(
+        { length: section === 'issues' ? EXPORT_LIMITS.parts - last : 1 },
+        (_, i) => `data/${exportName(section)}/${String(i + 1).padStart(4, '0')}.json`,
+      ),
+    )
+    expect(entries).toHaveLength(EXPORT_LIMITS.parts)
+    const full = await plantJob({ n: 7, section: ORG_EXPORT_ORDER.length, seq: entries.length + 2 })
+    for (let from = 0; from < entries.length; from += 500)
+      await t.run(async (ctx) => {
+        for (const [i, entry] of entries.slice(from, from + 500).entries())
+          await ctx.db.insert('org_export_parts', {
+            export_id: full,
+            org_id: f.org.id,
+            seq: from + i + 2,
+            entry,
+            kind: 'data',
+            storage_id: await ctx.storage.store(new Blob(['[]\n'])),
+            raw_bytes: 3,
+            stored_bytes: 3,
+            crc32: 0,
+            records: 0,
+          })
+      })
+    expect(
+      await t.mutation(internal.orgExport.commitFinish, {
+        export_id: full,
+        n: 7,
+        readme: await stored(),
+        manifest: await stored(),
+      }),
+    ).toBe(true)
+    expect(await jobOf(t, full)).toMatchObject({
+      state: 'ready',
+      archive: { parts: EXPORT_LIMITS.parts + 2 },
+    })
+  }, 300_000)
+
   it('splits large texts across parts by bytes within every query limit', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)

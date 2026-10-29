@@ -38,21 +38,29 @@ export const PART_RAW_BYTES = 4 * 1024 * 1024
  * in export parts, which count against no upload budget. */
 export const DEMO_ARCHIVE_BYTES = 2 * 1024 * 1024
 
-/** The job's limits, a mutable object so tests can lower them: the
- * archive's bytes (MAX_ARCHIVE_BYTES, DEMO_ARCHIVE_BYTES on the public
- * demo), the JSON one part collects
- * (PART_RAW_BYTES), the reads one step makes before it stores what it has
- * (each readBatch is a bounded query, so a step stays far under Convex's
- * action time limit), the parts one archive may have, so the finish reads
- * every part row within one transaction's limits and the ZIP stays far
- * under its 65,535 entries, and the parts one erase leg erases (each a row
- * delete and a file delete, both writes). */
+/** The job's limits, a mutable object so tests can lower them:
+ * - archive, demoArchive: the archive's bytes (MAX_ARCHIVE_BYTES, and
+ *   DEMO_ARCHIVE_BYTES on the public demo);
+ * - part: the JSON one part collects (PART_RAW_BYTES);
+ * - reads: the reads one step makes before it stores what it has (each
+ *   readBatch is a bounded query, so a step stays far under Convex's action
+ *   time limit);
+ * - parts: the data parts one archive may have. The finish (orgExport.ts
+ *   commitFinish) reads every data part's row in one index range and looks
+ *   up each part's file, one range each, so 4,000 parts take 4,001 ranges.
+ *   Its own reads take at most about 50 more: the job, its two new files,
+ *   the stop check (the removal, a demo's receipt, the request rows and up
+ *   to 32 profiles) and the earlier ready archives it ends with their
+ *   scheduled functions. That stays under Convex's 4,096 ranges, and the
+ *   ZIP far under its 65,535 entries;
+ * - erase: the parts one erase leg erases (each a row delete and a file
+ *   delete, both writes). */
 export const EXPORT_LIMITS = {
   archive: MAX_ARCHIVE_BYTES,
   demoArchive: DEMO_ARCHIVE_BYTES,
   part: PART_RAW_BYTES,
   reads: 512,
-  parts: 4096,
+  parts: 4000,
   erase: 128,
 }
 

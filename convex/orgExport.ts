@@ -412,7 +412,7 @@ export const finishInfo = internalQuery({
     const job = await exportOf(ctx, export_id)
     if (job === null || job.state !== 'collecting') return null
     const org = await byId(ctx, 'organizations', job.org_id)
-    const parts = await partsOf(ctx, export_id).take(EXPORT_LIMITS.parts)
+    const parts = await partsOf(ctx, export_id).take(EXPORT_LIMITS.parts + 1)
     return {
       organization:
         org === null ? { id: job.org_id } : { id: org.id, name: org.name, slug: org.slug },
@@ -558,8 +558,8 @@ export const step = internalAction({
  * Answers false, changing nothing, when the job is not collecting, another
  * commit took this step or the part's file is gone. Ends the job as failed
  * and answers false when it must stop (model/orgExports.ts stopReason) or
- * the part would take the archive past its cap (archiveCap) or
- * EXPORT_LIMITS.parts. */
+ * the part would take the archive past its cap (archiveCap) or its data
+ * parts past EXPORT_LIMITS.parts. */
 export const commitPart = internalMutation({
   args: {
     export_id: v.string(),
@@ -586,8 +586,8 @@ export const commitPart = internalMutation({
     if (a.part !== undefined) {
       const entry = partEntry(name, part)
       bytes += a.part.stored_bytes + zipEntryBytes(entry)
-      // this part, then the README and the manifest
-      if (bytes + ZIP_END_BYTES > archiveCap() || seq + 1 > EXPORT_LIMITS.parts) {
+      // data parts start at seq 2, so this is data part seq - 1
+      if (bytes + ZIP_END_BYTES > archiveCap() || seq - 1 > EXPORT_LIMITS.parts) {
         await endJob(ctx, job, { state: 'failed', code: 'too_large' })
         return false
       }
@@ -657,7 +657,11 @@ export const commitFinish = internalMutation({
       await endJob(ctx, job, { state: 'failed', code: stop })
       return false
     }
-    const parts = await partsOf(ctx, job.id).take(EXPORT_LIMITS.parts)
+    const parts = await partsOf(ctx, job.id).take(EXPORT_LIMITS.parts + 1)
+    if (parts.length > EXPORT_LIMITS.parts) {
+      await endJob(ctx, job, { state: 'failed', code: 'too_large' })
+      return false
+    }
     let whole = archiveTables(parts) !== null
     for (const part of parts)
       if (whole && (await ctx.db.system.get(part.storage_id)) === null) whole = false
