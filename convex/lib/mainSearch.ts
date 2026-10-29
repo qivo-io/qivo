@@ -214,19 +214,21 @@ export const SEARCH_RESERVE: ReadCeiling = {
 }
 
 /** The bounds of each seat's access reads (lib/access.ts OWN_READS), below
- * the workspace parts' where theirs would not fit SEARCH_RESERVE: one check
- * and every read of the person's own rows it may start, past the budget's
- * last look, stay inside it (OWN_READS states the figures). A person past
- * them is not checked in full here, which stops the search's reads
- * (endsReads), never shows less as complete. Computed from OWN_READS when
- * a seat is read, so tests that lower it lower these too. */
+ * the workspace parts' where theirs would not fit SEARCH_RESERVE: the
+ * shares of at most 64 teams read at once, memberships asked one by one
+ * for 8 teams and read whole up to 128, the organization's teams up to
+ * 1,024, and fewer root rows, sub-projects and single-row reads. A person
+ * in up to 128 teams is checked in full; past that, or past those bounds,
+ * a check refuses, which stops the search's reads (endsReads) and never
+ * shows less as complete. Computed from OWN_READS when a seat is read, so
+ * tests that lower it lower these too. */
 export const searchReads = (): OwnReads => ({
   ...OWN_READS,
   teams: Math.min(OWN_READS.teams, 64),
-  navTeams: Math.min(OWN_READS.navTeams, 64),
-  lookups: Math.min(OWN_READS.lookups, 16),
-  members: Math.min(OWN_READS.members, 64),
+  lookups: Math.min(OWN_READS.lookups, 8),
+  members: Math.min(OWN_READS.members, 128),
   roots: Math.min(OWN_READS.roots, 512),
+  orgTeamsMost: Math.min(OWN_READS.orgTeamsMost, 1024),
   subProjects: Math.min(OWN_READS.subProjects, 512),
   subBytes: Math.min(OWN_READS.subBytes, 512 << 10),
   teamReads: Math.min(OWN_READS.teamReads, 32),
@@ -1465,6 +1467,9 @@ export async function mainSearchPage(
     } catch (e) {
       if (!endsReads(e)) throw e
       ranOut = true
+      // an access check a bound stopped leaves this row unjudged, which the
+      // next page would meet again, so the coverage says so
+      if (isAccessUnchecked(e)) stops.reads = true
       break
     }
   }

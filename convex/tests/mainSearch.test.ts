@@ -2470,4 +2470,86 @@ describe('a check of the caller access that a bound stops', () => {
       Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
     }
   })
+
+  it('reports coverage reads where a later row of the page meets a check a bound stops', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const member = await plantMember(t, f)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: member.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    // a sub-project of TBED the member's team does not share, shared with
+    // 65 other teams, past OWN_READS.projectShares
+    const elsewhere = await subOf(t, f, f.meta)
+    const first = await task(t, f, f.sub, 'Zephyr first')
+    // its description row says FW, and its task row moved to `elsewhere`,
+    // as a release from before the table leaves them
+    const moved = await task(t, f, f.sub, 'Planted', { description: 'zephyr notes' })
+    await withReach(t)
+    await t.run(async (ctx) => {
+      await ctx.db.patch(moved._id, { project_id: elsewhere.id })
+      for (let i = 0; i <= OWN_READS.projectShares; i++)
+        await ctx.db.insert('project_team_access', {
+          project_id: elsewhere.id,
+          team_id: uuid(),
+          level: 'user',
+        })
+    })
+    const page = async () => (await searchRun(t, [member], { text: 'zephyr' })).page
+    const usual = await page()
+    expect(ids(usual)).toEqual([first.id])
+    expect(usual.coverage).toEqual({ complete: true })
+    // none of the team's shares read at once, so `elsewhere`'s team is asked
+    // by itself, and room for the team's own row, which FW's check reads,
+    // and not for its share on `elsewhere`, which the page's second row asks
+    Object.assign(OWN_READS, { rows: 0, teamReads: 1 })
+    const stopped = await page()
+    expect(ids(stopped)).toEqual([first.id])
+    expect(stopped.coverage).toMatchObject({ complete: false, stopped: 'reads' })
+  })
+
+  it("checks a person's results in up to 128 teams, searched whole as before these bounds, and leaves out what it cannot check past them", async () => {
+    for (const many of [100, 129]) {
+      const t = newT()
+      const f = await withOrg(t)
+      const member = await plantMember(t, f)
+      await t.run(async (ctx) => {
+        for (let i = 0; i < many; i++) {
+          const team_id = i === 0 ? f.team.id : uuid()
+          if (i > 0)
+            await ctx.db.insert('teams', {
+              id: team_id,
+              org_id: f.org.id,
+              name: `Team ${i}`,
+              track_delay_default: false,
+              created_at: NOW,
+            })
+          await ctx.db.insert('team_members', { team_id, profile_id: member.id, is_leader: false })
+          // ten of them share FW, more than searchReads asks one by one
+          if (i < 10)
+            await ctx.db.insert('project_team_access', {
+              project_id: f.sub.id,
+              team_id,
+              level: 'user',
+            })
+        }
+      })
+      const found = await task(t, f, f.sub, 'Zephyr fix')
+      await withReach(t)
+      const { page } = await searchRun(t, [member], { text: 'zephyr' })
+      // more teams than MAIN_SEARCH.listing reads make a seat searched
+      // whole, which never reports complete coverage
+      expect(page.coverage.complete, `${many} teams`).toBe(false)
+      expect(ids(page), `${many} teams`).toEqual(many <= 128 ? [found.id] : [])
+    }
+  })
 })
