@@ -475,6 +475,15 @@ describe('deleteOrgDeep', () => {
       }
     })
 
+    // the nightly archive's rechecks of a project of each organization
+    await t.run(async (ctx) => {
+      await ctx.db.insert('archive_rechecks', { org_id: f.org.id, project_id: f.sub.id })
+      await ctx.db.insert('archive_rechecks', {
+        org_id: f.otherOrg.id,
+        project_id: f.otherProject.id,
+      })
+    })
+
     await t.run(async (ctx) => {
       const org = (await ctx.db.get(f.org._id)) as Doc<'organizations'>
       await deleteOrgDeep(ctx, org)
@@ -491,13 +500,19 @@ describe('deleteOrgDeep', () => {
       'org_counters',
       'task_comment_counts',
       'comment_rates',
+      'archive_rechecks',
     ] as const) {
       const rows = await t.run(async (ctx) => await ctx.db.query(table).collect())
       expect(
         rows.some((r) => r.org_id === f.org.id),
         table,
       ).toBe(false)
-      if (table === 'org_counters' || table === 'task_comment_counts' || table === 'comment_rates')
+      if (
+        table === 'org_counters' ||
+        table === 'task_comment_counts' ||
+        table === 'comment_rates' ||
+        table === 'archive_rechecks'
+      )
         expect(
           rows.map((r) => r.org_id),
           table,

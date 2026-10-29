@@ -76,6 +76,10 @@ const EXCLUDED_TABLES = [
   // checked every profile: maintenance state, not workspace content.
   'message_sweeps',
   'message_sweep_seeds',
+  // How far the nightly archive got, and the projects it checks next:
+  // maintenance state, not workspace content.
+  'archive_runs',
+  'archive_rechecks',
   // An inbox's items and their build state, made from its messages, which
   // are not exported either.
   'inbox_items',

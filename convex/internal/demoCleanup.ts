@@ -20,6 +20,7 @@ import { internalMutation, type MutationCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import { requireDemoDeployment } from '../lib/demo'
 import { require, rule } from '../lib/functions'
+import { rechecksOfOrg } from '../model/archiveRechecks'
 import { clearOrgTrash } from '../model/deletedItems'
 import { recordDemoCreated } from '../model/demoMetrics'
 import { drainDemoUploads } from '../model/demoUploads'
@@ -270,6 +271,9 @@ async function projectRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
   // the reach rows of every project, and of any a move left absent
   // (model/projectNav.ts)
   if (!(await drain(ctx, budget, (n) => reachOfOrg(ctx, orgId).take(n)))) return false
+  // the nightly archive's rechecks of its projects, which the tasks phase
+  // before leaves nothing to write (model/archiveRechecks.ts)
+  if (!(await drain(ctx, budget, (n) => rechecksOfOrg(ctx, orgId).take(n)))) return false
   while (budget.left > 0) {
     const project = await ctx.db
       .query('projects')
@@ -727,6 +731,13 @@ export const purge = internalMutation({
       // Export rows an earlier release left past the activity phase, which
       // knew no export tables, as a cleanup that spans a rollback does.
       else if (phase === 'finish' && orgId && !(await exportRows(ctx, orgId, budget))) done = false
+      // Likewise rechecks an earlier release left past the projects phase.
+      else if (
+        phase === 'finish' &&
+        orgId &&
+        !(await drain(ctx, budget, (n) => rechecksOfOrg(ctx, orgId).take(n)))
+      )
+        done = false
       else if (phase === 'finish') {
         // No owner/work should reappear after the drained phases: all public
         // and background finalization paths fence against deleting receipts.
@@ -752,6 +763,9 @@ export const purge = internalMutation({
               .query(table)
               .withIndex('by_org', (q) => q.eq('org_id', orgId))
               .first()) === null, rule('Demo cleanup left organization data'))
+          require((await rechecksOfOrg(ctx, orgId).first()) === null, rule(
+            'Demo cleanup left organization data',
+          ))
           const trash = [
             await ctx.db
               .query('deleted_items')
