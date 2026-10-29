@@ -283,14 +283,13 @@ export const status = orgQuery({
   handler: async (ctx): Promise<{ latest: ExportSummary | null; ready: ExportSummary | null }> => {
     if (ctx.me.org_role !== 'admin') throw forbidden(ADMINS_ONLY)
     const me = ctx.me
-    // A profile's name, when it is still in the organization and is older
-    // than the job; a later profile can take a removed one's id.
-    const nameOf = async (job: Doc<'org_exports'>, id: string | undefined) => {
+    // A profile's name, when it is still in the organization and was
+    // created by `before` (epoch milliseconds), when it acted on the job; a
+    // later profile can take a removed one's id.
+    const nameOf = async (id: string | undefined, before: number) => {
       if (id === undefined) return null
       const profile = await byId(ctx, 'profiles', id)
-      return profile !== null &&
-        profile.org_id === me.org_id &&
-        profile._creationTime < job._creationTime
+      return profile !== null && profile.org_id === me.org_id && profile._creationTime < before
         ? profile.name
         : null
     }
@@ -311,8 +310,14 @@ export const status = orgQuery({
         error: job.error ?? null,
         archive_bytes: job.archive?.bytes ?? null,
         skipped_tasks: job.skipped ?? 0,
-        requested_by: await nameOf(job, job.requested_by),
-        cancelled_by: await nameOf(job, job.cancelled_by),
+        // the first requester started the job; the canceller ended it, and
+        // may have joined the organization while it collected (ended_at is
+        // to the millisecond, so a profile of that millisecond counts)
+        requested_by: await nameOf(job.requested_by, job._creationTime),
+        cancelled_by: await nameOf(
+          job.cancelled_by,
+          job.ended_at === undefined ? job._creationTime : Date.parse(job.ended_at) + 1,
+        ),
         requested: mine !== null && me._creationTime < mine._creationTime,
       }
     }

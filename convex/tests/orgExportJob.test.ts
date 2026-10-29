@@ -46,7 +46,9 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
+  plantLogin,
   plantProject,
+  plantSeat,
   reap,
   type T,
   uuid,
@@ -712,6 +714,36 @@ describe('organization export job', () => {
     expect(
       (await as(t, f.admin).query(api.orgExport.status, { org_id: f.org.id })).latest,
     ).toMatchObject({ state: 'cancelled', cancelled_by: f.user.name })
+  })
+
+  it('names a canceller whose profile is newer than the job, and no profile that takes a removed id later', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, {
+      org_id: f.org.id,
+    })
+    vi.advanceTimersByTime(60_000)
+    // an admin who joined the organization while the job collected
+    const newcomer = await plantLogin(
+      t,
+      await plantSeat(t, { org_id: f.org.id, name: 'Nadia Newcomer', org_role: 'admin' }),
+    )
+    vi.advanceTimersByTime(60_000)
+    await as(t, newcomer).mutation(api.orgExport.cancel, { org_id: f.org.id, export_id })
+    const status = () => as(t, f.admin).query(api.orgExport.status, { org_id: f.org.id })
+    expect((await status()).latest).toMatchObject({
+      state: 'cancelled',
+      cancelled_by: 'Nadia Newcomer',
+      requested_by: f.admin.name,
+    })
+    // a profile created after the cancel with the canceller's id is not them
+    vi.advanceTimersByTime(60_000)
+    await t.run(async (ctx) => {
+      const { _id, _creationTime, ...seat } = newcomer
+      await ctx.db.delete(_id)
+      await ctx.db.insert('profiles', { ...seat, name: 'Someone Else' })
+    })
+    expect((await status()).latest).toMatchObject({ cancelled_by: null })
   })
 
   it('keeps a ready archive from the orphan sweeps, expires it after four hours and deletes its history after 30 days', async () => {
