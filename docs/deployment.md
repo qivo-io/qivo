@@ -930,8 +930,11 @@ main Search, Archived tasks, milestones and project settings
 (`convex/lib/access.ts` `projectLevelsOf`) answer whether a top-level project
 shows a person only for navigation to one of its sub-projects from these
 rows, not from the project's sub-projects and every team share of the
-person. A row an earlier release left missing hides such a project until a
-backfill run writes it, which narrows the answer and never widens it. Main Search
+person. They also tell which of a person's teams to ask about a project
+shared with more than 64 teams once the person's teams share more than
+1,000 projects. A row an earlier release left missing hides such a
+top-level project, or a team's share on such a project, until a backfill
+run writes it, which narrows the answer and never widens it. Main Search
 (`search:page`) needs `nav_at` alone, and only where it searches a whole
 organization: there it leaves the organization's project names out and
 reports its search incomplete while the stamp is missing. A seat it searches

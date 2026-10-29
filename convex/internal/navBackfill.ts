@@ -4,6 +4,12 @@
  * organization in org_ready (`nav_at`). Navigation lists read those rows
  * and refuse an organization without the stamp (model/projectNav.ts
  * navReady), because a missing row leaves a project out of a person's list.
+ * Once the stamp holds, access checks read them too (lib/access.ts
+ * projectLevelsOf): whether a top-level project shows a person only for
+ * navigation, and which of their teams to ask about a project shared with
+ * more teams than OWN_READS.projectShares. A row missing then hides that
+ * project, or that team's share on it, until a run writes it, a narrower
+ * answer, never a wider one.
  * New projects, grants and shares get theirs from their writers, and an
  * organization created since this release is stamped at its creation
  * (model/orgs.ts insertOrgRows).

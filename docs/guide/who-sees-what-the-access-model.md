@@ -79,13 +79,13 @@ A stronger grant on the sub-project takes precedence. Access granted only to
 a sub-project makes its parent visible for read-only navigation, without
 opening sibling projects or the change history of the parent's own tasks.
 
-Qivo checks what you can see within fixed limits on every request. Very
-large access of your own can pass them, for example when you belong to more
-than 256 teams, or to more than 128 teams that together share over 1,000
-projects, or when your teams have to be checked one by one on many projects
-that are each shared with more than 64 teams. Qivo then says it could not
-finish checking which projects you can see and asks you to contact support,
-instead of leaving projects or their tasks out.
+Qivo checks what you can see within fixed limits on every request. Your
+own access can pass them if you belong to more than 256 teams, or to more
+than 128 teams that together hold more than 1,000 team shares. The
+workspace then does not open. Qivo says it could not finish checking which
+projects you can see and asks you to contact support, instead of leaving
+projects or their tasks out. **Archived tasks** shows **Couldn't load the
+archive.** with **Retry**.
 
 An organization-level **Viewer** role ([User roles](./administration-guard-rails-and-the-demo.md#four-ways-to-be-a-user)) limits all project access to
 reading, even if the person has a stronger project role. It does not make

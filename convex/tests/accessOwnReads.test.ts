@@ -1034,6 +1034,45 @@ describe('projectLevelsOf past its bounds of own rows', () => {
     expect(await ask()).toEqual(['viewer', null])
   }, 240_000)
 
+  it("answers a project shared with many teams narrower, never wider, where a team's root row is missing", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      // FW shared with the member's team and 64 others, and the team's
+      // shares past OWN_READS.rows, so its share on FW is asked by itself
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+      for (let i = 0; i < OWN_READS.projectShares; i++)
+        await ctx.db.insert('project_team_access', {
+          project_id: f.sub.id,
+          team_id: uuid(),
+          level: 'user',
+        })
+      await plantShares(ctx, f.team.id, OWN_READS.rows)
+      await plantShareReach(ctx, f.team.id, f.meta, f.sub)
+      await ctx.db.insert('org_ready', { org_id: f.org.id, nav_at: NOW, name_keys_at: NOW })
+    })
+    const ask = () => t.run((ctx) => projectLevelsOf(ctx, me).level(f.sub.id))
+    expect(await ask()).toBe('user')
+    expect(await t.run((ctx) => projectLevel(ctx, me, f.sub))).toBe('user')
+    // a root row an earlier release left missing until a backfill run
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query('project_reach').collect())
+        if (row.kind === 'root' && row.grantee_id === f.team.id) await ctx.db.delete(row._id)
+    })
+    expect(await ask()).toBeNull()
+    expect(await t.run((ctx) => projectLevel(ctx, me, f.sub))).toBe('user')
+  })
+
   it('shows a sub-project from the level it inherits where its own check refuses, and level() refuses', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -1163,3 +1202,22 @@ describe('a workspace batch at the name caps', () => {
   }, 600_000)
 })
 
+describe('the access guide', () => {
+  it("names the bounds past which a person's own access is refused, as OWN_READS sets them", () => {
+    const docs = import.meta.glob('../../docs/guide/who-sees-what-the-access-model.md', {
+      eager: true,
+      query: '?raw',
+      import: 'default',
+    }) as Record<string, string>
+    const [text] = Object.values(docs)
+    // a wrapped line reads as one space
+    const prose = text.replace(/\s+/g, ' ')
+    const n = (value: number) => value.toLocaleString('en-US')
+    expect(prose).toContain(
+      `if you belong to more than ${n(DEFAULT_OWN_READS.teams)} teams, or to more than ${n(DEFAULT_OWN_READS.navTeams)} teams that together hold more than ${n(DEFAULT_OWN_READS.navRows)} team shares.`,
+    )
+    // the legacy path refuses past navRows only once readOwn found more than
+    // rows, which it may read again past it
+    expect(DEFAULT_OWN_READS.navRows).toBeLessThanOrEqual(DEFAULT_OWN_READS.rows)
+  })
+})
