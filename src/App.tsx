@@ -1910,12 +1910,14 @@ function App() {
     P.saveUI(patch)
   }
 
-  // the palette searches and nothing else, so it needs only the two ways to
-  // open what it found
-  // a task picked in search while the Board shows opens over its revealed card
+  // the palette searches on the server (Palette.tsx) and needs only the two
+  // ways to open what it found, a project as the scope and a task by its
+  // handle, which may name a task the workspace does not hold, such as an
+  // archived one. A task picked while the Board shows opens over its
+  // revealed card when the workspace holds it, as only such a task has one.
   const paletteCtx = {
     setScope: navScope,
-    openIssue: (id: string) => openNav(id, boardActive),
+    openIssue: (id: string) => openNav(id, boardActive && !!P.issueById[id]),
   }
 
   /* An address that now names a DIFFERENT organization than the last time this

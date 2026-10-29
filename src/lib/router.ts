@@ -21,8 +21,10 @@
    Tasks resolve their own project scope except under all/mine or inbox.
    Legacy #/ links share parseSegments and are replaced by path routes;
    unrelated hashes, including auth fragments, are ignored. */
+
 import { ALL_SCOPE, ISSUE_PREFIX, MINE_SCOPE, P } from '../store/planner'
 import type { IssueVM } from '../store/viewModels'
+import { type OpenedTask, openedTask, openedTaskMatching } from './openedTasks'
 
 export type Route = {
   scope?: string
@@ -89,18 +91,35 @@ const findProject = (s: string | undefined, org?: string) => {
   }
   return P.projects.find((p) => p.id === s.toLowerCase())
 }
+/** The handle a task Search opened (lib/openedTasks.ts) opens by now,
+    derived from its identity, as a home organization that changed since
+    gives it another one. */
+const handleOfOpened = (task: OpenedTask) => P.handleNow(task.uuid, task.org, task.num)
+
+/* The handle of the task Search opened that `match` names, if any. */
+const openedHandle = (match: Parameters<typeof openedTaskMatching>[0]) => {
+  const task = openedTaskMatching(match)
+  return task && handleOfOpened(task)
+}
+
+/* A task the store does not hold that Search opened, such as an archived
+   one, resolves by its organization and key, or its uuid, to the handle it
+   opens by now (lib/openedTasks.ts), so closing its window earns an entry
+   and Back or Forward to its address opens it again, as they do a loaded
+   task, also after the home organization changed. */
 const findIssueKey = (s: string | undefined, org?: string) => {
   if (!s) return undefined
   const m = new RegExp(`^(?:${ISSUE_PREFIX}-)?(\\d+)$`, 'i').exec(s)
   if (m) {
     const key = `${ISSUE_PREFIX}-${Number(m[1])}`
-    if (org) return P.issueRefIn(org, key) || undefined
+    if (org) return P.issueRefIn(org, key) || openedHandle({ org, key })
     // unpinned: the home organization's handle IS the key
-    return P.issueById[key] ? key : undefined
+    if (P.issueById[key]) return key
+    return P.homeOrg ? openedHandle({ org: P.homeOrg, key }) : undefined
   }
   const lc = s.toLowerCase()
   const it = P.issues.find((i) => i.uuid === lc)
-  return it ? it.id : undefined
+  return it ? it.id : openedHandle({ uuid: lc })
 }
 
 /** The org segment for content owned by `orgId` — its slug, or `~` when there
@@ -333,11 +352,21 @@ const refOf = (open: string) => heldRef(open) ?? open
 const named = new Map<string, Pick<IssueVM, 'org' | 'key' | 'uuid'> & { seg: string }>()
 const NAMED_MAX = 64
 
+/* Names, as `named` does, a task Search opened that the store does not
+   hold, such as an archived one (lib/openedTasks.ts), so the address names
+   its organization and key from the start. It is derived on every call and
+   kept nowhere, as the handle `open` names can change with the home
+   organization. */
+function namedOpened(open: string) {
+  const task = openedTask(open, handleOfOpened)
+  return task && { org: task.org, key: task.key, uuid: task.uuid, seg: orgSegment(task.org) }
+}
+
 /** The task handle `open` names: the live task, or the one it last was. */
 function taskNamed(open: string) {
   const it = P.issueById[open]
   if (!it) {
-    const was = named.get(open)
+    const was = named.get(open) ?? namedOpened(open)
     if (!was) return was
     const seg = orgSegment(was.org)
     if (seg === ORG_NONE) return { ...was, key: was.uuid }

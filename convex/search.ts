@@ -1,12 +1,14 @@
 /* Main Search, the search that Search in the left menu opens, on the
- * server. Nothing in the app calls it yet: the palette stage switches the
- * app's Search to it in a later release, which ships only once a dry run of
- * internal/descriptionsBackfill reports zero `missing`, `differ`,
- * `duplicates` and `orphans` on development, staging, production and the
- * demo (docs/deployment.md), as this query trusts the description rows'
- * project and archived copies to narrow its candidates. Its `skipped`
- * counts the tasks whose task row holds no copy of the text, which is
- * normal from the third release of the description move.
+ * server. The app's Search palette (src/panels/Palette.tsx) calls it once
+ * typing rests for 250 ms, and once for each page, and never for a text
+ * without terms or for the search it already shows. The release whose app
+ * first calls it ships only once a dry run of internal/descriptionsBackfill
+ * from the third release of the description move reports every deployment
+ * clean, zero `missing`, `differ`, `duplicates` and `orphans` on
+ * development, staging, production and the demo (docs/deployment.md), as
+ * this query trusts the description rows' project and archived copies to
+ * narrow its candidates. Its `skipped` counts the tasks whose text the
+ * clear took off their task row, and is no gate.
  *
  * - page: one page of up to 25 task and project results for a search text,
  *   ranked together across every organization where the login holds a

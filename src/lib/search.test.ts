@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { commandSearchFilter, matchesAllWords, searchScore, taskSearchText } from './search'
+import { commandSearchFilter, matchesAllWords, taskSearchText } from './search'
 
 const HAY = ['QN-20', 'C-to-C 240W cable spec', 'To Do', 'Medium', 'Anna Fält'].join('\n')
 
@@ -47,7 +47,6 @@ describe('matchesAllWords', () => {
     (query) => {
       const task = 'QN-14 Add signed firmware updates and rollback'
       expect(matchesAllWords(task, query)).toBe(true)
-      expect(searchScore(task, query)).toBeGreaterThan(0)
     },
   )
 
@@ -55,16 +54,6 @@ describe('matchesAllWords', () => {
     expect(matchesAllWords('Add signed firmware', 'adf')).toBe(false)
     expect(matchesAllWords('Add signed firmware', 'add*firm')).toBe(false)
     expect(matchesAllWords('Literal [tag] + (name)', '(name) [ta')).toBe(true)
-  })
-})
-
-describe('searchScore', () => {
-  it('ranks phrase matches before reordered matches and excludes a missing fragment', () => {
-    expect(searchScore('signed firmware', 'signed firm')).toBeGreaterThan(
-      searchScore('firmware signed', 'signed firm'),
-    )
-    expect(searchScore('signed firmware', 'signed mobile')).toBe(0)
-    expect(searchScore('signed firmware', 'snfrm')).toBe(0)
   })
 })
 

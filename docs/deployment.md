@@ -170,7 +170,11 @@ ticket, confirmed, downloaded and deleted again, which shows whether the
 deployment takes a body that large. It also
 checks task progress, last comment times, delay and project completion, the
 rule that a subtask in an archived project makes no group, and in the browser
-the search on **Settings → Projects → Archived tasks**. Everything it creates
+the search on **Settings → Projects → Archived tasks** and main Search, where
+an active task the run made must show with **Include archived tasks** off
+and a task the run archived only with it on. That shows whether the
+deployment's search index takes the filter for an absent `archived_at` and
+still returns active matches. Everything it creates
 carries a run tag such as `stgchk-1a2b3c`, and its tasks live in projects it
 creates. It deletes all of it at the end, also after a failure. Its deleted
 projects and tasks then wait in Deleted items for 30 days, where an admin can
@@ -737,12 +741,13 @@ inserts its row with the copies. Main Search's query, `search:page`
 (`convex/search.ts`), matches descriptions through `search_description`,
 titles through the `search_title` index of `issues` and project names
 through the `search_name` index of `projects`, which Convex builds at
-deploy without a backfill. The query ships before the app calls it. The
-release whose app calls it ships only once a dry run on development,
-staging, production and the demo reports the deployment clean, zero
-`missing`, `differ`, `duplicates` and `orphans`. `skipped` no longer counts
-against it, because from the third release of the description move it
-counts every task whose row in `issues` holds no copy of its text.
+deploy without a backfill. The query shipped before the app called it. The
+app's Search palette calls it, once typing rests and once for each page,
+and the release that first ships that palette goes out only once a dry run
+from the third release of the description move reports development,
+staging, production and the demo clean, zero `missing`, `differ`,
+`duplicates` and `orphans`. `skipped` is no gate there, because it counts
+every task whose text the clear took off its row in `issues`.
 Data restored from a backup taken before the copies leaves rows without
 them, and a dry run lists them as `differ` until a repair mends them.
 Code that lists `issue_descriptions` without the copy fields does not

@@ -16,16 +16,31 @@ import {
   marketingId,
   marketingInstant,
   marketingWeek,
+  mentionOf,
   northstarTaskTimes,
+  resolveMentions,
 } from '../internal/marketingDemoData'
 import { LIMITS, type Limit } from '../lib/limits'
+import { readableText } from '../lib/md'
 import { taskOwnerId } from '../lib/review'
+import { wordsOf } from '../lib/searchTerms'
 import { isLabelColor } from '../model/labels'
 import { newOrgDefaults } from '../model/orgs'
 import { avatarColor } from '../model/people'
 
 const { people, teams, projects, issues, labels, links, milestones, comments, history } =
   MARKETING_DEMO
+// A fixed profile id for each person, for the descriptions as the seed
+// writes them, with each mention naming its person by id (resolveMentions).
+const PERSON_IDS = new Map(
+  people.map((p, i) => [p.key, `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`]),
+)
+const written = (description: string) =>
+  resolveMentions(description, (key) => {
+    const id = PERSON_IDS.get(key)
+    if (id === undefined) throw new Error(`no person ${key}`)
+    return id
+  })
 const defaultCapacity = newOrgDefaults('2026-09-07T00:00:00.000Z').default_plannable_hours
 // Whose week a task's hours count against: the app's one Reviewer rule.
 const ownerOf = (i: (typeof issues)[number]) =>
@@ -649,8 +664,10 @@ describe('marketing text uses the application Markdown dialect', () => {
   })
 
   it('keeps every description and comment readable through an editor round trip', () => {
+    // as the seed writes them, with each mention naming its profile
     for (const issue of issues) {
-      const blocks = parseMd(issue.description)
+      const description = written(issue.description)
+      const blocks = parseMd(description)
       expect(
         blocks.map((block) => block.t),
         issue.key,
@@ -659,8 +676,8 @@ describe('marketing text uses the application Markdown dialect', () => {
         t: 'p',
         children: [{ t: 'bold', children: [{ t: 'text', text: 'Acceptance criteria' }] }],
       })
-      expect(astToMd(blocks), issue.key).toBe(issue.description)
-      expect(issue.description, issue.key).not.toMatch(/<\/?(?:p|strong|ul|li)>|&(?:amp|lt|gt);/)
+      expect(astToMd(blocks), issue.key).toBe(description)
+      expect(description, issue.key).not.toMatch(/<\/?(?:p|strong|ul|li)>|&(?:amp|lt|gt);/)
     }
     for (const text of [
       ...projects.map((project) => project.description),
@@ -683,7 +700,7 @@ describe('marketing text uses the application Markdown dialect', () => {
       [LIMITS.personName, people.map((person) => person.name)],
       [LIMITS.labelName, labels.map((label) => label.name)],
       [LIMITS.title, issues.map((issue) => issue.title)],
-      [LIMITS.description, issues.map((issue) => issue.description)],
+      [LIMITS.description, issues.map((issue) => written(issue.description))],
       [LIMITS.comment, comments.map((comment) => comment.body)],
     ]
     for (const [limit, texts] of checks) {
@@ -694,6 +711,78 @@ describe('marketing text uses the application Markdown dialect', () => {
         expect(text.trim().length, `${limit.label}: ${text}`).toBeLessThanOrEqual(limit.max)
       }
     }
+  })
+})
+
+describe('the link and the mention main Search reads past', () => {
+  const description = (key: string) => {
+    const issue = issues.find((i) => i.key === key)
+    if (issue === undefined) throw new Error(`no task ${key}`)
+    return written(issue.description)
+  }
+  // every text main Search reads of Northstar: task titles, the text task
+  // descriptions show, and project names
+  const searchable = [
+    ...issues.flatMap((i) => [i.title, readableText(written(i.description))]),
+    ...projects.map((p) => p.name),
+  ]
+
+  it('mentions Leo in a task he reviews, as one mention the editor keeps', () => {
+    const text = description('offline-buffer')
+    const leo = PERSON_IDS.get('leo')
+    expect(text).toContain(`@[Leo Martins](user:${leo})`)
+    const mentions = parseMd(text)
+      .flatMap((block) => (block.t === 'p' ? block.children : []))
+      .filter((node) => node.t === 'mention')
+    expect(mentions).toEqual([{ t: 'mention', id: leo, name: 'Leo Martins' }])
+    // the public demo's visitor is Nora, whose Inbox stays as it was
+    expect(issues.find((i) => i.key === 'offline-buffer')?.reviewer).toBe('leo')
+    // a placeholder only the seed resolves, never a profile id
+    expect(issues.find((i) => i.key === 'offline-buffer')?.description).toContain(
+      '@[Leo Martins](person:leo)',
+    )
+    expect(wordsOf(readableText(text))).toEqual(expect.arrayContaining(['leo', 'martins']))
+    expect(wordsOf(readableText(text))).not.toContain('user')
+  })
+
+  it('links the update signing runbook, whose address holds words no searchable text holds', () => {
+    const text = description('safe-updates')
+    const link = parseMd(text)
+      .flatMap((block) => (block.t === 'p' ? block.children : []))
+      .find((node) => node.t === 'link')
+    expect(link).toMatchObject({
+      t: 'link',
+      href: 'https://docs.northstar.example/fw/ota-keys',
+      children: [{ t: 'text', text: 'update signing runbook' }],
+    })
+    expect(wordsOf(readableText(text))).toEqual(expect.arrayContaining(['signing', 'runbook']))
+    // the address's own words, which only the link's hidden part holds
+    for (const word of ['https', 'docs', 'ota'])
+      for (const t of searchable) expect(wordsOf(t), `${word} in ${t}`).not.toContain(word)
+  })
+
+  it('resolves a mention of each person to that person only, and leaves other text alone', () => {
+    expect(written('Ask @[Leo Martins](person:leo) and @[Nora Berg](person:nora).')).toBe(
+      `Ask @[Leo Martins](user:${PERSON_IDS.get('leo')}) and @[Nora Berg](user:${PERSON_IDS.get('nora')}).`,
+    )
+    expect(written('See [the plan](https://example.com/person:leo).')).toBe(
+      'See [the plan](https://example.com/person:leo).',
+    )
+    expect(() => written('@[Nobody](person:nobody)')).toThrow('no person nobody')
+  })
+
+  it('writes a mention of every person that resolves to that person, and refuses other keys', () => {
+    for (const person of people) {
+      const text = written(`Ask ${mentionOf(person.key)} first.`)
+      expect(text, person.key).toBe(
+        `Ask @[${person.name}](user:${PERSON_IDS.get(person.key)}) first.`,
+      )
+      expect(text, person.key).not.toContain('person:')
+    }
+    // a key the placeholder cannot name would stay unresolved, so it is refused
+    expect(() => mentionOf('Leo')).toThrow('cannot name the person key Leo')
+    expect(() => mentionOf('leo martins')).toThrow('cannot name the person key')
+    expect(() => mentionOf('nobody')).toThrow('no person nobody')
   })
 })
 

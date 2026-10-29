@@ -17,7 +17,13 @@
  * little more than a page of comments and of history, pages that history
  * over REST and MCP, and in the browser presses Show earlier comments and
  * Show earlier activity in its task window. It opens the Settings page
- * Archived tasks in the browser. Every task, comment, grant and file lives
+ * Archived tasks in the browser, and searches main Search there for an
+ * active task it made, which must show with Include archived tasks off, and
+ * for a task it archived, which must show only with it on, marked Archived
+ * (ui/search-archived), which checks that the deployment's search index
+ * takes the absent archived_at filter and still returns active matches
+ * (convex/lib/mainSearch.ts ARCHIVED_FILTER). Every task, comment, grant and
+ * file lives
  * in projects the run creates and names with its run tag. It revokes every
  * credential in the app, checks that the next call is refused, and removes
  * everything it made, also after a failure (try/finally, and --cleanup for
@@ -3437,6 +3443,66 @@ async function archivedTasksPageCheck(target) {
   })
 }
 
+/** Main Search in the browser finds `active`, an active task the run made,
+ *  with Include archived tasks off, and `target`, a task the run archived,
+ *  only with it on, marked Archived. It searches each task's title, whose
+ *  run tag no other run's task holds, as Nora, whose admin seat is searched
+ *  whole, and only reads. It must run before the run archives its project,
+ *  as Search leaves out the tasks of archived projects. With the toggle
+ *  off, the search filters archived tasks out in the search index
+ *  (convex/lib/mainSearch.ts ARCHIVED_FILTER), so this checks on the
+ *  deployment that the filter is accepted and still returns active
+ *  matches. */
+async function paletteSearchCheck(target, active) {
+  await check('ui/search-archived', async () => {
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/all`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const open = app.locator('button[data-sidebar-search]')
+    await open.waitFor({ timeout: 60_000 })
+    await open.click()
+    const palette = app.getByRole('dialog', { name: 'Search tasks and projects', exact: true })
+    const input = palette.getByRole('combobox', { name: 'Search tasks and projects' })
+    await input.waitFor()
+    expect(active, 'the run made no active task to search')
+    const row = palette.locator(`[cmdk-item][data-value="issue-${target.key}"]`)
+    // the search for the text has answered: the list is busy only while a
+    // request runs or typing rests before one (src/panels/Palette.tsx), so
+    // a failed or refused search answers too, and the Retry check sees it
+    const answered = async () =>
+      (await palette.locator('[cmdk-list]').getAttribute('aria-busy')) === null
+    // the filter returns active matches
+    await input.fill(active.title)
+    expect(
+      await until(
+        async () =>
+          (await answered()) &&
+          (await palette.locator(`[cmdk-item][data-value="issue-${active.key}"]`).count()) === 1,
+      ),
+      `Search did not find the active ${active.key} with Include archived tasks off`,
+    )
+    // and leaves archived ones out
+    await input.fill(target.title)
+    expect(await until(answered), 'Search did not answer with the toggle off')
+    eq(await row.count(), 0, 'the archived task with Include archived tasks off')
+    const failed = await palette.locator('[data-palette-retry]').count()
+    eq(failed, 0, 'a failed search with the toggle off')
+    await palette.locator('[data-palette-archived]').click()
+    expect(
+      await until(async () => (await answered()) && (await row.count()) === 1),
+      `Search did not find ${target.key} with Include archived tasks on`,
+    )
+    eq(
+      (await row.locator('[data-result-archived]').textContent())?.trim(),
+      'Archived',
+      'the mark on the archived result',
+    )
+    await input.press('Escape')
+    await palette.waitFor({ state: 'detached', timeout: 10_000 })
+    return `found the active ${active.key} with the toggle off, and the archived ${target.key} only with it on`
+  })
+}
+
 /** Archived task lists need a project and page with a cursor; archived
  *  projects are listed first (#128). Archives the run's project at the end. */
 async function archiveChecks() {
@@ -3578,12 +3644,14 @@ async function archiveChecks() {
         expect(!mcpRows.some((t) => t.id === id), 'MCP lists an archived task')
     })
     await archivedTasksPageCheck(archivedTasks[2])
+    await paletteSearchCheck(archivedTasks[2], run.parent)
   } else
     for (const id of [
       'archived-lists/rest/cursor-pages',
       'archived-lists/mcp',
       'task-lists/active-only',
       'ui/archived-tasks-page',
+      'ui/search-archived',
     ])
       skip(id, 'the three archived tasks could not be made')
 

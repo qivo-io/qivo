@@ -7,15 +7,21 @@ import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* The task window when someone else archives or deletes its task while it
-   is open (IssueDetail TaskGone), on the real store. Deliveries come by
-   hand, and the archive answers what `archive` holds, through `lookup`
-   when a test answers otherwise. */
+   is open (IssueDetail TaskGone), and when Search opens a task the
+   workspace does not hold, on the real store. Deliveries come by hand, and
+   the archive answers what `archive` holds, through `lookup` when a test
+   answers otherwise. A test can hold back a task window of the workspace,
+   so it still loads (holdWindow). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-vi.mock('../lib/convex', async () => ({
-  convex: network,
-  live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
+const double = vi.hoisted(() => ({
+  live: null as null | { holdWindow(from: string | null): void },
 }))
+vi.mock('../lib/convex', async () => {
+  const { liveOver } = await import('../store/guard/liveDouble.setup')
+  double.live = liveOver(network)
+  return { convex: network, live: double.live }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: {
@@ -228,6 +234,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
+  double.live?.holdWindow(null)
   container.remove()
   document.body.innerHTML = ''
   localStorage.clear()
@@ -741,5 +748,225 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     expect(document.querySelector('[data-task-gone]')).toBeNull()
     expect(asked('issues:archivedTask')).toEqual([])
     expect(onClose).toHaveBeenCalledOnce()
+  })
+})
+
+/* The task Search found as `task-a`, QN-27, which the workspace does not
+   hold: archived, unless `archived` is false, as Search's row said. */
+const FOUND = {
+  uuid: 'task-a',
+  key: 'QN-27',
+  title: 'Run the soak test',
+  archived: true,
+}
+
+/* Opens the window on QN-27 as Search opens a result the workspace does not
+   hold, noted as Palette.tsx openTaskResult notes it, as `role` with
+   `level` on its project when the role is not admin. The archive answers
+   when the test calls the function this answers. With `loading`, the
+   workspace still loads its last task window. */
+async function openFound({
+  role = 'admin',
+  level,
+  archived = true,
+  inArchive = true,
+  loading = false,
+  archivedAt = '2026-09-14T09:00:00.000Z',
+}: {
+  role?: 'admin' | 'user'
+  level?: 'viewer' | 'user'
+  archived?: boolean
+  inArchive?: boolean
+  loading?: boolean
+  archivedAt?: string
+} = {}) {
+  vi.resetModules()
+  snap = plannerFixture()
+  snap.profiles[0].org_role = role
+  if (level)
+    snap.access.push({ project_id: snap.projects[0].id, profile_id: snap.profiles[0].id, level })
+  // 12,800 task numbers make 64 task windows; the last starts at fc000000
+  if (loading) snap.orgs[0].next_issue_num = 64 * 200
+  const row: Task = {
+    id: 'task-a',
+    org_id: snap.orgs[0].id,
+    project_id: snap.projects[0].id,
+    num: 27,
+    title: 'Run the soak test',
+    description: 'Measure the drift.',
+    status: 'progress',
+    priority: 'medium',
+    paused: false,
+    created_at: AT,
+    updated_at: AT,
+    has_hidden_subtasks: false,
+    has_hidden_parent: false,
+  }
+  archive = inArchive ? [{ ...row, archived_at: archivedAt }] : []
+  let answer = () => {}
+  lookup = (id) =>
+    new Promise((resolve) => {
+      answer = () => {
+        const found = archive.find((task) => task.id === id)
+        resolve(found ? { ...found, is_group: false } : null)
+      }
+    })
+  network.onUpdate.mockImplementation((ref, _args, next) => {
+    const name = getFunctionName(ref)
+    if (name === 'workspace:whole') {
+      deliver = (snapshot) => next(structuredClone(snapshot))
+      deliver(snap)
+    } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    return () => {}
+  })
+  network.query.mockReset()
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'issues:archivedTask' ? lookup(args.id) : null,
+  )
+  network.mutation.mockReset()
+  network.mutation.mockImplementation(async (ref) =>
+    getFunctionName(ref) === 'issues:unarchive' ? {} : null,
+  )
+  const store = await import('../store/planner')
+  if (loading) double.live?.holdWindow('fc000000')
+  await store.initStore()
+  expect(store.P.stillLoading() !== null).toBe(loading)
+  const { noteOpenedTask } = await import('../lib/openedTasks')
+  noteOpenedTask({
+    ...FOUND,
+    num: 27,
+    archived,
+    project: snap.projects[0].id,
+    org: snap.orgs[0].id,
+  })
+  const { IssueDetail } = await import('./IssueDetail')
+  onClose = vi.fn<() => void>()
+  await act(async () =>
+    root.render(
+      <TooltipProvider>
+        <IssueDetail issueId={FOUND.key} onClose={onClose} onOpen={vi.fn()} />
+      </TooltipProvider>,
+    ),
+  )
+  return {
+    store,
+    answer: () => act(async () => answer()),
+    row,
+  }
+}
+
+const details = () => document.querySelector<HTMLElement>('[data-task-gone-task]')
+
+describe('the task window on a task Search found that the workspace does not hold', {
+  timeout: 20_000,
+}, () => {
+  it('shows an archived result with its title, place and date, and restores it into the window', async () => {
+    const { answer, row } = await openFound()
+    // while the archive is asked, the window does not say the task left
+    expect(note()?.textContent).toBe('Loading QN-27…')
+    expect(dialog()?.textContent).not.toContain('no longer on the board')
+    expect(details()?.textContent).toContain('QN-27')
+    expect(details()?.textContent).toContain('Run the soak test')
+    await answer()
+    expect(note()?.textContent).toBe(
+      'QN-27 was archived. Restore it to bring it back to the board.',
+    )
+    expect(details()?.querySelector('[data-task-gone-place]')?.textContent).toBe(
+      'Task creation fixture',
+    )
+    expect(details()?.querySelector('[data-task-gone-archived]')?.textContent).toMatch(
+      /^Archived on \d+ \w+/,
+    )
+    expect(asked('issues:archivedTask')).toEqual([{ id: 'task-a' }])
+    await click(button('Restore'))
+    const restores = network.mutation.mock.calls.filter(
+      ([ref]) => getFunctionName(ref) === 'issues:unarchive',
+    )
+    // the archived row's own organization
+    expect(restores.map(([, args]) => args)).toEqual([{ org_id: snap.orgs[0].id, id: 'task-a' }])
+    // the restored task comes back with the next delivery, into this window
+    snap.issues.push(row)
+    await act(async () => deliver(snap))
+    expect(document.querySelector('[data-task-gone]')).toBeNull()
+    expect(dialog()?.textContent).toContain('Run the soak test')
+    expect(dialog()?.textContent).toContain('Measure the drift.')
+  })
+
+  it('says when it was archived as the app says a day inside a sentence', async () => {
+    // the clock reads 15:00 local time on 16 Oct 2026
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 9, 16, 15, 0))
+    try {
+      for (const [at, says] of [
+        [new Date(2026, 9, 16, 9, 30), 'Archived today'],
+        [new Date(2026, 9, 15, 18, 0), 'Archived yesterday'],
+        [new Date(2026, 9, 12, 9, 0), 'Archived on 12 Oct'],
+        [new Date(2025, 11, 20, 9, 0), 'Archived on 20 Dec 2025'],
+      ] as const) {
+        await act(async () => root.unmount())
+        root = createRoot(container)
+        const { answer } = await openFound({ archivedAt: at.toISOString() })
+        await answer()
+        expect(details()?.querySelector('[data-task-gone-archived]')?.textContent).toBe(says)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('offers no Restore to someone who can only read its project', async () => {
+    const { answer } = await openFound({ role: 'user', level: 'viewer' })
+    await answer()
+    expect(note()?.textContent).toBe(
+      'QN-27 was archived. Someone who can edit its project can restore it from Archived tasks.',
+    )
+    expect(button('Restore')).toBeUndefined()
+    expect(details()?.textContent).toContain('Run the soak test')
+  })
+
+  it('says an active result the archive does not hold may still arrive, and shows it when it does', async () => {
+    const { answer, row } = await openFound({ archived: false, inArchive: false })
+    expect(note()?.textContent).toBe('Loading QN-27…')
+    await answer()
+    // Search found it active, so the window does not say it was deleted
+    expect(note()?.textContent).toBe(
+      'QN-27 is not here yet. It may still be on its way, or you can no longer open it.',
+    )
+    expect(note()?.textContent).not.toContain('deleted')
+    expect(button('Restore')).toBeUndefined()
+    // the workspace brings it in, as once a held part arrives
+    snap.issues.push(row)
+    await act(async () => deliver(snap))
+    expect(document.querySelector('[data-task-gone]')).toBeNull()
+    expect(dialog()?.textContent).toContain('Run the soak test')
+  })
+
+  it('says an archived result the archive no longer holds is no longer here', async () => {
+    const { answer } = await openFound({ archived: true, inArchive: false })
+    await answer()
+    expect(note()?.textContent).toBe(
+      'QN-27 is no longer here. It was deleted, or you can no longer open it.',
+    )
+    expect(button('Restore')).toBeUndefined()
+    await click(button('Close'))
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('opens an archived result at once while tasks still load, and waits for an active one', async () => {
+    const archived = await openFound({ loading: true })
+    expect(document.querySelector('[data-task-loading]')).toBeNull()
+    await archived.answer()
+    expect(note()?.textContent).toBe(
+      'QN-27 was archived. Restore it to bring it back to the board.',
+    )
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    double.live?.holdWindow(null)
+    await openFound({ loading: true, archived: false })
+    // an active result may be among the tasks still to arrive
+    expect(document.querySelector('[data-task-loading]')?.textContent).toContain(
+      'Loading this task…',
+    )
+    expect(document.querySelector('[data-task-gone]')).toBeNull()
   })
 })

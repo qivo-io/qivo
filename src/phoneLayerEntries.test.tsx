@@ -11,7 +11,9 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    store. A layer that closes with the move it started, as Create and a
    search result do, gives that move its entry, so Back returns to the page
    the layer opened on. A task that someone else removes keeps the address
-   its window shows. A refused Back returns to the entry it left. */
+   its window shows. A refused Back returns to the entry it left. An
+   archived task Search opened closes with an entry of its own, and Back and
+   Forward to its address open its window again. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => {
@@ -31,6 +33,9 @@ const AT = '2026-09-14T08:00:00.000Z'
 let container: HTMLDivElement
 let root: Root
 let removeHistory = () => {}
+// the archived tasks Search finds with Include archived tasks and the
+// archive answers (issues.archivedTask), which a test sets after boot
+let archive: (Snapshot['issues'][number] & { archived_at: string })[] = []
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -150,7 +155,34 @@ async function boot(address: string, phone: boolean, second = false) {
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // main Search (search:page) answers the tasks whose titles hold every
+  // word of the text, in the Work sub-project, and with Include archived
+  // tasks the archived ones too
+  archive = []
+  network.query.mockImplementation(async (ref, args) => {
+    const name = getFunctionName(ref)
+    if (name === 'issues:archivedTask') {
+      const row = archive.find((task) => task.id === args.id)
+      return row ? { ...row, is_group: false } : null
+    }
+    if (name !== 'search:page') return null
+    const words: string[] = args.text.toLowerCase().split(/\s+/).filter(Boolean)
+    const rows = [...snap.issues, ...(args.include_archived ? archive : [])]
+      .filter((issue) => words.every((word) => issue.title.toLowerCase().includes(word)))
+      .map((issue) => ({
+        kind: 'task',
+        org_id: issue.org_id,
+        id: issue.id,
+        num: issue.num,
+        title: issue.title,
+        status: issue.status,
+        is_group: false,
+        archived: 'archived_at' in issue,
+        project: { id: 'work', name: 'Work' },
+        parent: { id: base.id, name: base.name },
+      }))
+    return { rows, next_cursor: null, coverage: { complete: true } }
+  })
   network.mutation.mockImplementation((ref) =>
     getFunctionName(ref).startsWith('comments:') ? new Promise(() => {}) : Promise.resolve(null),
   )
@@ -183,7 +215,14 @@ async function boot(address: string, phone: boolean, second = false) {
     next.projects = next.projects.filter((p) => p.id !== 'work')
     return act(async () => publish(next))
   }
-  return Object.assign(drop, { dropWork })
+  // publishes the workspace after `edit`, as a later delivery
+  const change = (edit: (next: Snapshot) => void) => {
+    const next = structuredClone(snap)
+    edit(next)
+    next.delivered_at = '2026-09-15T09:00:00.000Z'
+    return act(async () => publish(next))
+  }
+  return Object.assign(drop, { dropWork, change })
 }
 
 describe('a phone layer that closes with the move it started', { timeout: 30_000 }, () => {
@@ -456,5 +495,204 @@ describe('a pick from the Back menu past a task with a comment not yet sent', {
     expect(question()).toBeNull()
     expect(document.querySelector('[data-modal-shell]')).not.toBeNull()
     expect(location.pathname).toBe(task)
+  })
+})
+
+describe('an archived task Search opened', { timeout: 30_000 }, () => {
+  /** Boots on the project's Board on a desktop, opens Search, and opens
+      from it the archived QN-7, or with `active` the active QN-1. Answers
+      the page's address, the task's, and boot's publisher of a change. */
+  async function openFromSearch(active = false) {
+    const booted = await boot('/app/testbed/board/p/1', false)
+    network.query.mockClear()
+    const board = location.pathname
+    archive = [
+      {
+        id: crypto.randomUUID(),
+        org_id: (await import('./store/planner')).P.homeOrg,
+        project_id: 'work',
+        num: 7,
+        title: 'Recalibrate the old sensor',
+        description: '',
+        status: 'done',
+        priority: 'medium',
+        paused: false,
+        created_at: AT,
+        updated_at: AT,
+        archived_at: '2026-09-14T09:00:00.000Z',
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+      },
+    ]
+    const open = await waitFor(
+      () => document.querySelector<HTMLButtonElement>('button[data-sidebar-search]'),
+      'the sidebar search',
+    )
+    await settle()
+    await act(async () => open.click())
+    const search = await waitFor(
+      () => document.querySelector<HTMLInputElement>('[cmdk-root] input'),
+      'the search box',
+    )
+    await type(search, active ? 'Calibrate' : 'Recalibrate')
+    if (!active) {
+      const toggle = await waitFor(
+        () => document.querySelector<HTMLElement>('[data-palette-archived]'),
+        'the toggle',
+      )
+      await act(async () => toggle.click())
+    }
+    const result = await waitFor(
+      () =>
+        [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find((item) =>
+          active
+            ? item.textContent?.includes('Calibrate the sensor')
+            : item.querySelector('[data-result-archived]'),
+        ),
+      'the result',
+    )
+    await act(async () => result.click())
+    if (active) await shows('Calibrate the sensor')
+    else await archivedNote()
+    await settle()
+    return { board, task: location.pathname, change: booted.change }
+  }
+  const openArchived = () => openFromSearch()
+  /* Waits for an open task window that shows `title`. */
+  const shows = (title: string) =>
+    waitFor(
+      () =>
+        document
+          .querySelector('[data-task-chrome]')
+          ?.closest('[role="dialog"]')
+          ?.textContent?.includes(title),
+      title,
+    )
+  /* Makes the Testbed seat a guest seat and Other Co, a new seat, the home
+     organization, whose active QN-1 and QN-7 take the numbers of Testbed's
+     tasks. The Testbed seat keeps its grant on the project. */
+  let otherOrg = ''
+  const swapHome = (next: Snapshot) => {
+    otherOrg = crypto.randomUUID()
+    const seat = crypto.randomUUID()
+    const meta = crypto.randomUUID()
+    const sub = crypto.randomUUID()
+    const [base, work] = next.projects
+    next.orgs.push({ ...next.orgs[0], id: otherOrg, name: 'Other Co', slug: 'other' })
+    next.profiles[0].org_role = 'guest'
+    next.profiles.push({ ...next.profiles[0], id: seat, org_id: otherOrg, org_role: 'user' })
+    next.myProfileIds.push(seat)
+    next.access.push({ project_id: base.id, profile_id: next.profiles[0].id, level: 'user' })
+    next.projects.push(
+      { ...base, id: meta, org_id: otherOrg, key: 'OTH', num: 1, name: 'Other', lead_id: seat },
+      {
+        ...work,
+        id: sub,
+        org_id: otherOrg,
+        key: 'OTHW',
+        num: 2,
+        name: 'Other work',
+        parent_id: meta,
+      },
+    )
+    for (const [num, title] of [
+      [1, 'Plan the other rollout'],
+      [7, 'Ship the other kit'],
+    ] as const)
+      next.issues.push({
+        ...next.issues[0],
+        id: crypto.randomUUID(),
+        org_id: otherOrg,
+        project_id: sub,
+        num,
+        title,
+      })
+  }
+  /* Waits for the window's note that the task was archived. */
+  const archivedNote = () =>
+    waitFor(
+      () =>
+        document
+          .querySelector('[data-task-gone] [role="status"]')
+          ?.textContent?.includes('was archived'),
+      'the archived note',
+    )
+  const asked = () =>
+    network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === 'issues:archivedTask')
+      .length
+
+  it('closes with an entry of its own, so Back opens it again', async () => {
+    const { board, task } = await openArchived()
+    expect(task).toBe('/app/testbed/board/tasks/qn-7')
+    const entries = history.length
+    const close = [...document.querySelectorAll<HTMLButtonElement>('[data-task-gone] button')].find(
+      (b) => b.textContent === 'Close',
+    )
+    await act(async () => close?.click())
+    await waitFor(() => !document.querySelector('[data-task-gone]'), 'the window to close')
+    await settle()
+    // the page below gets a new entry, as closing a loaded task does
+    expect(location.pathname).toBe(board)
+    expect(history.length).toBe(entries + 1)
+    await act(async () => history.back())
+    await settle()
+    expect(location.pathname).toBe(task)
+    await archivedNote()
+    // the window asks the archive again
+    expect(asked()).toBe(2)
+  })
+
+  it('opens again on Forward after the home organization changed, not the new home task of its number', async () => {
+    const { board, task, change } = await openArchived()
+    await act(async () => history.back())
+    await waitFor(() => !document.querySelector('[data-task-gone]'), 'the window to close')
+    await settle()
+    expect(location.pathname).toBe(board)
+    // Testbed becomes a guest seat, and Other Co's active QN-7 the home QN-7
+    await change(swapHome)
+    await settle()
+    const { P } = await import('./store/planner')
+    expect(P.homeOrg).toBe(otherOrg)
+    expect(P.issueById['QN-7']?.title).toBe('Ship the other kit')
+    await act(async () => history.forward())
+    await settle()
+    expect(location.pathname).toBe(task)
+    await archivedNote()
+    const window = document.querySelector('[data-task-gone]')?.closest('[role="dialog"]')
+    expect(window?.textContent).toContain('Recalibrate the old sensor')
+    expect(document.body.textContent).not.toContain('Ship the other kit')
+  })
+
+  it('opens an active result again after the home organization changed', async () => {
+    const { board, task, change } = await openFromSearch(true)
+    expect(task).toBe('/app/testbed/board/tasks/qn-1')
+    await act(async () => history.back())
+    await waitFor(() => !document.querySelector('[data-task-chrome]'), 'the window to close')
+    await settle()
+    expect(location.pathname).toBe(board)
+    await change(swapHome)
+    await settle()
+    const { P } = await import('./store/planner')
+    expect(P.issueById['QN-1']?.title).toBe('Plan the other rollout')
+    await act(async () => history.forward())
+    await settle()
+    expect(location.pathname).toBe(task)
+    await shows('Calibrate the sensor')
+    expect(
+      document.querySelector('[data-task-chrome]')?.closest('[role="dialog"]')?.textContent,
+    ).not.toContain('Plan the other rollout')
+  })
+
+  it('opens again on Forward after Back closed it', async () => {
+    const { board, task } = await openArchived()
+    await act(async () => history.back())
+    await waitFor(() => !document.querySelector('[data-task-gone]'), 'the window to close')
+    await settle()
+    expect(location.pathname).toBe(board)
+    await act(async () => history.forward())
+    await settle()
+    expect(location.pathname).toBe(task)
+    await archivedNote()
+    expect(asked()).toBe(2)
   })
 })

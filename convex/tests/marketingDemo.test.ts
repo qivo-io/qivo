@@ -809,6 +809,31 @@ describe('marketing demo rebuild ownership', () => {
     await assertNoDanglingRefs(t, 'marketing demo conversations')
   })
 
+  it('tells Leo of the mention of him in a seeded description, from Atlas, and no one else', async () => {
+    const t = newAuthT()
+    await seeded(t)
+    const task = await demoId('issue:offline-buffer')
+    const leo = await demoId('person:leo')
+    const atlas = await demoId('person:atlas')
+    await t.run(async (ctx) => {
+      const messages = await ctx.db.query('messages').collect()
+      expect(
+        messages
+          .filter((message) => message.kind === 'mention')
+          .map((message) => [
+            message.issue_id,
+            message.recipient_id,
+            message.actor_id,
+            message.detail,
+          ]),
+      ).toEqual([[task, leo, atlas, 'Mentioned you in the description']])
+      const follows = await ctx.db.query('issue_subscriptions').collect()
+      expect(follows.filter((row) => row.issue_id === task && row.profile_id === leo)).toHaveLength(
+        1,
+      )
+    })
+  })
+
   it('hands seeded Review tasks to their reviewers and leaves In Progress and Done reviewers unnotified', async () => {
     const t = newAuthT()
     await seeded(t)
@@ -818,6 +843,9 @@ describe('marketing demo rebuild ownership', () => {
         status: task.status,
         id: await demoId(`issue:${task.key}`),
         reviewer: task.reviewer ? await demoId(`person:${task.reviewer}`) : undefined,
+        // a mention in the description makes its person follow at import
+        mentionsReviewer:
+          task.reviewer !== undefined && task.description.includes(`](person:${task.reviewer})`),
       })),
     )
     await t.run(async (ctx) => {
@@ -833,7 +861,12 @@ describe('marketing demo rebuild ownership', () => {
       expect(reviewed.filter((task) => task.status === 'review').length).toBeGreaterThan(0)
       expect(reviewed.filter((task) => task.status === 'progress').length).toBeGreaterThan(0)
       expect(reviewed.filter((task) => task.status === 'done').length).toBeGreaterThan(0)
-      for (const { key, status, id, reviewer } of reviewed) {
+      // the data mentions a reviewer of a task in progress, who follows it
+      // for the mention and still gets no handoff
+      expect(reviewed.some((task) => task.status === 'progress' && task.mentionsReviewer)).toBe(
+        true,
+      )
+      for (const { key, status, id, reviewer, mentionsReviewer } of reviewed) {
         const handoffs = messages.filter(
           (message) =>
             message.issue_id === id &&
@@ -854,7 +887,7 @@ describe('marketing demo rebuild ownership', () => {
           expect(followsFromImport, key).toBe(true)
         } else {
           expect(handoffs, key).toEqual([])
-          expect(followsFromImport, key).toBe(false)
+          expect(followsFromImport, key).toBe(mentionsReviewer)
         }
       }
     })

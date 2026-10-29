@@ -1524,9 +1524,10 @@ export default defineSchema({
    * older backup, holds none, and a release from before the table, which
    * still deploys, leaves rows with stale ones when it moves or archives
    * tasks. The same backfill reports and mends both (`differ`). Main Search
-   * (search.ts, lib/mainSearch.ts) reads search_description, and the app
-   * calls it only after a dry run on every deployment reports zero
-   * `missing`, `differ`, `duplicates` and `orphans` (docs/deployment.md). */
+   * (search.ts, lib/mainSearch.ts) reads search_description, and the
+   * release whose Search palette first calls it ships only once a dry run
+   * from the third release on every deployment reports zero `missing`,
+   * `differ`, `duplicates` and `orphans` (docs/deployment.md). */
   issue_descriptions: defineTable({
     issue_id: v.string(),
     org_id: v.string(), // the task's, for the teardowns that delete an organization's rows

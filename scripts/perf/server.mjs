@@ -42,8 +42,13 @@
 //   mbps (8)             bandwidth every result waits for
 //   appearance (dark)    the signed-in person's appearance mode, dark or
 //                        light, which the app reads from appearance:get
+//
+// Main Search (search:page) is a stand-in too (searchPage): it matches the
+// visible tasks and projects with the server's word rules and ranks them
+// as the server does, but reads no access, budget or archive.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
+import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
@@ -617,6 +622,82 @@ function readTaskWindow(name, args) {
     complete: true,
   }
 }
+/* The rows of a page of main Search. */
+const SEARCH_ROWS = 25
+/**
+ * A stand-in for main Search (convex/search.ts page): one page for `text`
+ * over the visible tasks' numbers, titles and descriptions and the visible
+ * projects' names, matched and scored with the server's own word rules
+ * (convex/lib/searchTerms.ts), in the server's order: by score, then tasks
+ * before projects, then the newest number. 25 rows a page, an opaque
+ * cursor that holds the search and where the next page starts, and always
+ * complete coverage. A narrower scope keeps the tasks and projects of its
+ * project. It reads no access, budget or archive, holds no archived task,
+ * and refuses a cursor of another search only as an error.
+ */
+function searchPage({ text, include_archived, scope, cursor }) {
+  const terms = searchTerms(text)
+  const key = JSON.stringify([text, include_archived, scope ?? null])
+  let from = 0
+  if (cursor !== undefined) {
+    const [of, at] = JSON.parse(cursor)
+    if (of !== key) throw new Error('cursor must be the next_cursor of an earlier page')
+    from = at
+  }
+  const parent = { id: visible.meta.id, name: visible.meta.name }
+  const inScope = (project) =>
+    !scope?.project_id || project.id === scope.project_id || project.parent_id === scope.project_id
+  const matches = []
+  if (terms.length > 0) {
+    for (const row of tasks) {
+      const project = projects.find((p) => p.id === row.project_id)
+      if (!project || !inScope(project)) continue
+      const fields = { num: row.num, title: row.title, description: row.description ?? '' }
+      if (!matchesTerms(terms, fields)) continue
+      const group = parents.has(row.id)
+      matches.push({
+        score: scoreOf(terms, fields),
+        kind: 0,
+        num: row.num,
+        row: {
+          kind: 'task',
+          org_id: org,
+          id: row.id,
+          num: row.num,
+          title: row.title,
+          status: group ? null : row.status,
+          is_group: group,
+          archived: false,
+          project: { id: project.id, name: project.name },
+          parent,
+        },
+      })
+    }
+    for (const project of [visible.meta, ...projects]) {
+      const fields = { title: project.name, description: '' }
+      if (!inScope(project) || !matchesTerms(terms, fields)) continue
+      matches.push({
+        score: scoreOf(terms, fields),
+        kind: 1,
+        num: project.num,
+        row: {
+          kind: 'project',
+          org_id: org,
+          id: project.id,
+          name: project.name,
+          parent: project.parent_id ? parent : null,
+        },
+      })
+    }
+  }
+  matches.sort((a, b) => b.score - a.score || a.kind - b.kind || b.num - a.num)
+  const next = from + SEARCH_ROWS < matches.length ? from + SEARCH_ROWS : null
+  return {
+    rows: matches.slice(from, from + SEARCH_ROWS).map((match) => match.row),
+    next_cursor: next === null ? null : JSON.stringify([key, next]),
+    coverage: { complete: true },
+  }
+}
 const read = (name, args = {}) => {
   if (name.startsWith('workspace:')) return readPart(name, args)
   if (name.startsWith('taskWindow:')) return readTaskWindow(name, args)
@@ -649,6 +730,8 @@ const read = (name, args = {}) => {
       return { rows: [], complete: true }
     case 'admin:isOperator':
       return false
+    case 'search:page':
+      return searchPage(args)
     case 'messages:bulkReach':
       // as convex/model/messages.ts readBulkReach does, per seat
       return {

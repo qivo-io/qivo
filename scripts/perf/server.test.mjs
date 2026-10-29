@@ -109,6 +109,42 @@ describe('the benchmark server', () => {
     expect(posted.find((m) => m.to === 'known').text).toBeTruthy()
   })
 
+  it('answers main Search a page at a time, tasks before projects, by the server word rules', async () => {
+    const { posted, send } = await server('tasks=40&latency=0&mbps=100000')
+    const page = async (id, args) => {
+      await send({ type: 'query', id, name: 'search:page', args })
+      const answer = posted.find((m) => m.to === id)
+      if (answer.error) throw new Error(answer.error)
+      return JSON.parse(answer.text)
+    }
+    // every visible title holds "signed" and a word that starts with "firm"
+    const first = await page('first', { text: 'signed firm', include_archived: false })
+    expect(first.rows).toHaveLength(25)
+    expect(first.coverage).toEqual({ complete: true })
+    expect(first.rows.every((row) => row.kind === 'task')).toBe(true)
+    // a phrase in order ranks first, then the newest number
+    expect(first.rows[0].title).toMatch(/signed firmware/)
+    const second = await page('second', {
+      text: 'signed firm',
+      include_archived: false,
+      cursor: first.next_cursor,
+    })
+    expect(second.rows).toHaveLength(15)
+    expect(second.next_cursor).toBeNull()
+    const ids = [...first.rows, ...second.rows].map((row) => row.id)
+    expect(new Set(ids).size).toBe(40)
+    // only the last word may be the start of a longer one, and a project's
+    // name finds the project, not its tasks
+    expect((await page('order', { text: 'firm signed', include_archived: false })).rows).toEqual([])
+    const projects = await page('projects', { text: 'testbed project', include_archived: false })
+    expect(projects.rows.map((row) => row.kind)).toEqual(Array(10).fill('project'))
+    expect(projects.rows[0].parent?.name).toBe('Testbed program')
+    // a cursor of another search is refused
+    await expect(
+      page('other', { text: 'firmware', include_archived: false, cursor: first.next_cursor }),
+    ).rejects.toThrow('cursor must be the next_cursor of an earlier page')
+  })
+
   it("answers the task window's comment page and, apart, its history page", async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     const args = { issue_id: TASK_1 }

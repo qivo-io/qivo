@@ -86,8 +86,8 @@ card in its saved status column.
 
 Some links open a task's window over the Board and show its card behind
 it: **Board** on a Team sync row, **Open task in board** in the Inbox, the
-breadcrumb in a task window and a search result picked while the Board is
-open. The Board scrolls the card to the middle of the screen and rings it
+breadcrumb in a task window and an active task picked in Search while the
+Board is open. The Board scrolls the card to the middle of the screen and rings it
 until a moment after you close the window, following the task to its new
 card if a change in the window moved it. A subtask under a parent heading
 rings its own row, and a parent task rings the first card under its heading.

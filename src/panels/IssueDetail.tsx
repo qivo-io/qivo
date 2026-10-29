@@ -49,6 +49,7 @@ import { ViewBoundary } from '../components/ViewBoundary'
 import { fmtSize, useWindowDropGuard } from '../lib/attachments'
 import { copyText } from '../lib/clipboard'
 import { DELAY_MARK } from '../lib/delay'
+import { dayInSentence, deletedAtFull } from '../lib/deletedTime'
 import { closeOrAsk, questionOpen } from '../lib/discardQuestion'
 import { limitSentence, overLimit } from '../lib/fieldLimits'
 import { roomBeside, useFloatInsets } from '../lib/floatStack'
@@ -61,6 +62,7 @@ import {
   useUnsaved,
   useUnsentScope,
 } from '../lib/leaveGuard'
+import { openedTask } from '../lib/openedTasks'
 import {
   parentBlock,
   parentCandidatesFor,
@@ -1147,8 +1149,12 @@ function LoadFailure({
   )
 }
 
-/** What the window keeps of the task it shows, for once the task is gone. */
-type ShownTask = Pick<IssueVM, 'uuid' | 'key' | 'title' | 'project'>
+/** What the window keeps of the task it shows, for once the task is gone.
+    A task Search opened that the window has not shown (lib/openedTasks.ts)
+    has `opened`, with whether Search found it archived. */
+type ShownTask = Pick<IssueVM, 'uuid' | 'key' | 'title' | 'project'> & {
+  opened?: { archived: boolean }
+}
 
 /* The window's content once its task left the board while the window was
    open, because someone archived or deleted it, or it moved where this
@@ -1161,7 +1167,10 @@ type ShownTask = Pick<IssueVM, 'uuid' | 'key' | 'title' | 'project'>
    note when it was in the task's content, which went with the task, and
    never to a button, which the next key typed for that content would press.
    On a phone the note takes the width of the screen and the buttons go
-   below it. */
+   below it. A task Search opened that the window never showed, such as an
+   archived result, shows its key and title from the search, and once the
+   archive answers, its place and when it was archived; while the archive is
+   asked, the note says it is loading rather than that the task left. */
 function TaskGone({
   task,
   unusedReason,
@@ -1218,7 +1227,7 @@ function TaskGone({
   const restore = () => {
     if (!row) return
     setRestoring(true)
-    void P.unarchiveIssue(row.uuid, row.title, row.project).then((ok) => {
+    void P.unarchiveIssue(row.uuid, row.title, row.project, row.org).then((ok) => {
       // a restored task comes back into this window, which leaves this note
       if (ok) window.showToast?.(`Restored ${task.key}`)
       else setRestoring(false) // unarchiveIssue toasted why
@@ -1229,23 +1238,53 @@ function TaskGone({
     noteRef.current?.focus()
     setAttempt((n) => n + 1)
   }
+  const opened = !!task.opened
   const text =
     found === undefined
-      ? `${task.key} is no longer on the board.`
+      ? opened
+        ? `Loading ${task.key}…`
+        : `${task.key} is no longer on the board.`
       : found === 'failed'
-        ? `${task.key} is no longer on the board. Couldn't check the archive.`
+        ? opened
+          ? `Couldn't open ${task.key}. Couldn't check the archive.`
+          : `${task.key} is no longer on the board. Couldn't check the archive.`
         : found
           ? canRestore
             ? `${task.key} was archived. Restore it to bring it back to the board.`
             : `${task.key} was archived. Someone who can edit its project can restore it from Archived tasks.`
-          : `${task.key} is no longer here. It was deleted, or you can no longer open it.`
+          : task.opened?.archived === false
+            ? // Search found it active, and the workspace may not be current
+              // yet, as while a part of it is held back or failed: it can
+              // still arrive, and then fills the window
+              `${task.key} is not here yet. It may still be on its way, or you can no longer open it.`
+            : `${task.key} is no longer here. It was deleted, or you can no longer open it.`
   // the note says the reason went unused, and points a screen reader at it
   const reasonId = useIdID()
+  // the place of an archived task Search opened, read-only
+  const place = opened && row ? P.projectPlace(row.project) : null
   return (
     <div
       data-task-gone
       className="flex min-h-0 flex-wrap items-center gap-3 overflow-y-auto p-6 text-sm text-text-2"
     >
+      {opened && (
+        <div data-task-gone-task className="flex min-w-0 basis-full flex-col gap-1">
+          <div className="flex min-w-0 items-baseline gap-2">
+            <IssueKey id={task.key} />
+            <span className="min-w-0 truncate text-base font-medium text-text-1">{task.title}</span>
+          </div>
+          {row && (
+            <div className="flex flex-wrap gap-x-3 text-xs text-text-2">
+              {place && <span data-task-gone-place>{P.placeLabel(place)}</span>}
+              <HoverTooltip content={deletedAtFull(new Date(row.archivedAt))}>
+                <span data-task-gone-archived tabIndex={-1}>
+                  Archived {dayInSentence(new Date(row.archivedAt), new Date())}
+                </span>
+              </HoverTooltip>
+            </div>
+          )}
+        </div>
+      )}
       <span
         ref={noteRef}
         role="status"
@@ -1684,15 +1723,36 @@ function IssueDetail({
   }, [onClose, embedded])
 
   const it = issueId ? P.issueById[issueId] : null
-  // what the window last showed of this task, kept for once it is gone
+  // what Search noted of a task it opened that this handle names now
+  // (lib/openedTasks.ts), the handle derived as the router derives it
+  const opened =
+    !it && issueId
+      ? openedTask(issueId, (task) => P.handleNow(task.uuid, task.org, task.num))
+      : undefined
+  // what the window last showed of this task, kept for once it is gone, or
+  // what Search noted of it when the window has shown nothing of it
   const shownTask = useRefID<{ at: string; task: ShownTask } | null>(null)
   if (it && issueId) {
     const { uuid, key, title, project } = it
     shownTask.current = { at: issueId, task: { uuid, key, title, project } }
-  } else if (shownTask.current?.at !== issueId) shownTask.current = null
+  } else if (shownTask.current?.at !== issueId)
+    shownTask.current =
+      issueId && opened
+        ? {
+            at: issueId,
+            task: {
+              uuid: opened.uuid,
+              key: opened.key,
+              title: opened.title,
+              project: opened.project,
+              opened: { archived: opened.archived },
+            },
+          }
+        : null
   // a task opened by its address while tasks still load may be one still
-  // to arrive: the window opens and says so (App pendingTask)
-  const waiting = !it && !!issueId && P.stillLoading() !== null
+  // to arrive: the window opens and says so (App pendingTask). An archived
+  // task Search opened never arrives, so its window says so at once.
+  const waiting = !it && !!issueId && P.stillLoading() !== null && !opened?.archived
   // the task left the board while the window showed it, other than by this
   // window's own archive or delete while that is on its way: the window
   // says so (TaskGone), also once its own call was refused (stopLeaving)

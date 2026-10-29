@@ -310,6 +310,31 @@ const projects: DemoProject[] = [
   },
 ]
 
+/* A mention's destination before the seed knows the person's id, which
+ * differs between namespaces (marketingId): `person:<key>` in place of
+ * lib/md.ts MENTION_DEST's `user:<uuid>`. */
+const MENTION_PLACEHOLDER = /\]\(person:([a-z][a-z0-9-]*)\)/g
+
+/* A person key the placeholder can name, the whole of it. */
+const MENTION_KEY = /^[a-z][a-z0-9-]*$/
+
+/** A mention of person `key` in a task description, as the editor writes
+ * one, with the placeholder destination resolveMentions replaces. It
+ * refuses a key the placeholder cannot name, which would stay unresolved,
+ * and a key no person has. */
+export function mentionOf(key: string): string {
+  if (!MENTION_KEY.test(key))
+    throw new Error(`marketing demo: a mention cannot name the person key ${key}`)
+  const person = people.find((p) => p.key === key)
+  if (person === undefined) throw new Error(`marketing demo: no person ${key} to mention`)
+  return `@[${person.name}](person:${key})`
+}
+
+/** `description` with each mention (mentionOf) pointing at the id `idOf`
+ * gives its person's key, so it reads as a mention of that profile. */
+export const resolveMentions = (description: string, idOf: (key: string) => string): string =>
+  description.replace(MENTION_PLACEHOLDER, (_, key: string) => `](user:${idOf(key)})`)
+
 const issues: DemoIssue[] = [
   ...inProject('electronics', [
     {
@@ -508,8 +533,7 @@ const issues: DemoIssue[] = [
       remaining: 24,
       priority: 'high',
       labels: ['firmware', 'reliability'],
-      summary:
-        'Retain measurements during a short Wi-Fi outage and replay them without duplicating readings in the dashboard.',
+      summary: `Retain measurements during a short Wi-Fi outage and replay them without duplicating readings in the dashboard. ${mentionOf('leo')} checks the replay order on the bench rig before review.`,
       accept: [
         'Recover a 30-minute outage with ordered timestamps.',
         'Keep live sampling responsive while draining the buffer.',
@@ -544,7 +568,7 @@ const issues: DemoIssue[] = [
       priority: 'high',
       labels: ['firmware', 'security'],
       summary:
-        'Prepare a controlled update path for pilot devices so a failed installation does not require an office visit.',
+        'Prepare a controlled update path for pilot devices so a failed installation does not require an office visit. Sign each image as the [update signing runbook](https://docs.northstar.example/fw/ota-keys) describes.',
       accept: [
         'Reject an invalid signature before installation.',
         'Return to the last working image after a failed boot.',
