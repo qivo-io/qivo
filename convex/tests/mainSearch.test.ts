@@ -69,6 +69,13 @@ const search = (t: T, who: Doc<'profiles'>, a: Args): Promise<MainSearchPage> =>
 const ids = (page: MainSearchPage) => page.rows.map((row) => row.id)
 
 const COMPLETE = { complete: true }
+/** The coverage of a search that stopped, by default of one seat's one. */
+const stopped = (why: 'candidates' | 'reads' | 'organizations', searched = 1, of = 1) => ({
+  complete: false,
+  stopped: why,
+  searched,
+  of,
+})
 const EMPTY = { rows: [], next_cursor: null, coverage: COMPLETE }
 
 /** One call of the search as the seats `seats`, inside one transaction, with
@@ -369,7 +376,7 @@ describe('searching project by project', () => {
     // the organization's search reads the hidden tasks and stops at the cap
     const admin = await searchRun(t, [f.admin], { text: 'gearbox' })
     expect(admin.searches).toBe(2)
-    expect(admin.page.coverage).toEqual({ complete: false, stopped: 'candidates' })
+    expect(admin.page.coverage).toEqual(stopped('candidates'))
   })
 
   it('searches the organization for a person who sees more sub-projects', async () => {
@@ -518,6 +525,33 @@ describe("description rows' copies", () => {
     }
   })
 
+  it('never shows a task for the text of a second description row', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const shown = await task(t, f, f.sub, 'Planted', { description: 'plain notes' })
+    // repeated rollbacks can leave a second row with the copies and other text
+    await t.run((ctx) =>
+      ctx.db.insert('issue_descriptions', {
+        issue_id: shown.id,
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        description: 'flux capacitor',
+      }),
+    )
+    expect(await descriptionHits(t, f, 'capacitor')).toEqual([shown.id])
+    expect(ids(await search(t, f.user, { text: 'capacitor' }))).toEqual([])
+    expect(ids(await search(t, f.user, { text: 'plain' }))).toEqual([shown.id])
+  })
+
+  it('reads the task of a description match when Convex did not take every term', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const words = Array.from({ length: 16 }, (_, i) => `w${i}`)
+    // the title holds only the 17th term, which no search query takes
+    const found = await task(t, f, f.sub, 'Zeta', { description: words.join(' ') })
+    expect(ids(await search(t, f.user, { text: [...words, 'zeta'].join(' ') }))).toEqual([found.id])
+  })
+
   it('judges a row without copies from its task', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -552,23 +586,24 @@ describe('the coverage of main Search', () => {
     expect((await search(t, f.user, { text: 'gearbox' })).coverage).toEqual(COMPLETE)
     MAIN_SEARCH.candidates = 2
     const capped = await search(t, f.user, { text: 'gearbox' })
-    expect(capped.coverage).toEqual({ complete: false, stopped: 'candidates' })
+    expect(capped.coverage).toEqual(stopped('candidates', 2, 2))
     expect(capped.rows.length).toBeGreaterThan(0)
-    MAIN_SEARCH.candidates = DEFAULT_SEARCH.candidates
     MAIN_SEARCH.seats = 1
-    expect((await search(t, f.user, { text: 'gearbox' })).coverage).toEqual({
-      complete: false,
-      stopped: 'organizations',
-      searched: 1,
-      of: 2,
-    })
+    // a source's stop comes first, beside the seats left out
+    expect((await search(t, f.user, { text: 'gearbox' })).coverage).toEqual(
+      stopped('candidates', 1, 2),
+    )
+    MAIN_SEARCH.candidates = DEFAULT_SEARCH.candidates
+    expect((await search(t, f.user, { text: 'gearbox' })).coverage).toEqual(
+      stopped('organizations', 1, 2),
+    )
     MAIN_SEARCH.seats = DEFAULT_SEARCH.seats
     // a budget that holds no read: no rows, and never complete
     MAIN_SEARCH.bytes = 1
     expect(await search(t, f.user, { text: 'gearbox', scope: { org_id: f.org.id } })).toEqual({
       rows: [],
       next_cursor: null,
-      coverage: { complete: false, stopped: 'reads' },
+      coverage: stopped('reads'),
     })
   })
 
@@ -584,7 +619,7 @@ describe('the coverage of main Search', () => {
     expect(ids(await search(t, f.user, { text: 'flywheel' }))).toHaveLength(4)
     MAIN_SEARCH.parse = 60
     const page = await search(t, f.user, { text: 'flywheel' })
-    expect(page.coverage).toEqual({ complete: false, stopped: 'reads' })
+    expect(page.coverage).toEqual(stopped('reads'))
     expect(page.rows.length).toBeLessThan(4)
   })
 
@@ -599,7 +634,7 @@ describe('the coverage of main Search', () => {
     expect(byIndex.coverage).toEqual(COMPLETE)
     ARCHIVED_FILTER.byIndex = false
     const after = await search(t, f.admin, { text: 'gearbox' })
-    expect(after.coverage).toEqual({ complete: false, stopped: 'candidates' })
+    expect(after.coverage).toEqual(stopped('candidates'))
     for (const row of after.rows) expect(row.archived).toBe(false)
   })
 
@@ -652,10 +687,33 @@ describe('main Search at Convex’s limits', () => {
     for (const who of [f.admin, f.guest]) {
       const run = await searchRun(t, [who], { text: 'gearbox' })
       console.log('600 large matches', who.name, run.read, run.searches, run.page.rows.length)
-      expect(run.page.coverage).toEqual({ complete: false, stopped: 'reads' })
+      expect(run.page.coverage).toEqual(stopped('reads'))
       expect(run.page.rows).toHaveLength(MAIN_SEARCH.rows)
       expect(run.read.bytes).toBeLessThan(16 << 20)
     }
+  })
+
+  it('ends a page early, inside the limits, among rows near the document size limit', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // rows over the caps, as older data can hold, near Convex's 1 MiB
+    const huge = 'x'.repeat(900_000)
+    for (let i = 0; i < 24; i++)
+      await plantMany(
+        t,
+        1,
+        () => ({
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          num: 80_000 + i,
+          description: `zebra ${huge}`,
+        }),
+        1,
+      )
+    const run = await searchRun(t, [f.admin], { text: 'zebra' })
+    console.log('24 rows near 1 MiB', run.read, run.searches, run.page.rows.length)
+    expect(run.page.coverage).toEqual(stopped('reads'))
+    expect(run.read.bytes).toBeLessThan(16 << 20)
   })
 
   it('covers a Northstar-sized organization', async () => {

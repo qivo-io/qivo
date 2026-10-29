@@ -32,11 +32,12 @@
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { descriptionOf, holdsCopies } from '../model/descriptions'
+import { DOCUMENT_MAX_BYTES } from '../model/comments'
+import { descriptionOf } from '../model/descriptions'
 import { hasSubtasks } from '../model/issues'
-import { type Access, accessOf, receivesTeamAccess } from './access'
+import { type Access, accessOf, OWN_READS, receivesTeamAccess } from './access'
 import { openCursorText, sealCursorText } from './archiveCursorSeal'
-import { type CeilingGuard, ceilingGuard, type ReadCeiling, roomOf } from './archivedTasks'
+import { type ReadCeiling, roomOf } from './archivedTasks'
 import { byId } from './db'
 import type { IssueStatus } from './enums'
 import { badRequest } from './functions'
@@ -45,6 +46,7 @@ import { LIMITS } from './limits'
 import type { Liveness } from './liveTasks'
 import { readableText } from './md'
 import {
+  convexTakesAll,
   convexText,
   matchesTerms,
   type SearchFields,
@@ -80,12 +82,17 @@ export const MAIN_SEARCH = {
   parse: 1_000_000,
 }
 
-/** What a call keeps back from Convex's limits for the reads the ceiling
- * guard does not count one by one, which are the access rows of a project
- * asked about for the first time (grants, team shares, memberships), small
- * rows read after the guard's last look. The page's rows read under the guard up to
- * the rest, so a page of large tasks ends early instead. Tests lower it. */
-export const SEARCH_RESERVE: ReadCeiling = { ranges: 64, documents: 512, bytes: 512 << 10 }
+/** What a call keeps back from Convex's limits for the reads its budget
+ * does not count one by one: the caller's own access rows that one access
+ * check may read at once (lib/access.ts OWN_READS, at most its teams and a
+ * few ranges, its rows and the organization's teams), and the rows of one
+ * listing step (searchPlaces). The page's rows read up to the rest, so a
+ * page of large tasks ends early instead. Tests lower it. */
+export const SEARCH_RESERVE: ReadCeiling = {
+  ranges: OWN_READS.teams + 64,
+  documents: 2 * OWN_READS.rows + OWN_READS.orgTeamsMost,
+  bytes: OWN_READS.bytes + (2 << 20),
+}
 
 /** How the search sources filter archived tasks while the toggle is off.
  * `byIndex` filters them in the search query (archived_at absent, which the
@@ -114,13 +121,20 @@ export type TaskResult = {
   parent: { id: string; name: string } | null
 }
 
-/** Whether a search covered everything it was asked to (coverageOf). */
+/** Whether a search covered everything it was asked to (coverageOf), and
+ * if not, why, and how many of the seats asked about it searched. */
 export type Coverage =
   | { complete: true }
-  | { complete: false; stopped: 'candidates' | 'reads' }
-  | { complete: false; stopped: 'organizations'; searched: number; of: number }
+  | {
+      complete: false
+      stopped: 'candidates' | 'reads' | 'organizations'
+      searched: number
+      of: number
+    }
 
-/** One page of main Search. */
+/** One page of main Search. A page can hold fewer than MAIN_SEARCH.rows
+ * rows, even none, while `next_cursor` says that more follow: its reads
+ * ran out, or the live tasks of matches it looked at no longer show. */
 export type MainSearchPage = {
   rows: TaskResult[]
   next_cursor: string | null
@@ -220,25 +234,34 @@ type Stops = { candidates: boolean; reads: boolean; searched: number; of: number
 /**
  * The coverage a search reports for its stops, the one place that decides
  * it. Every stop is reported, without a count of the candidates it judged
- * or left out (owner decision, 2026-10-28). Seats left out come first, as
- * narrowing to an organization is what they offer, then the budget, then a
- * source's cap.
+ * or left out (owner decision, 2026-10-28). `stopped` names the budget
+ * (`reads`) before a source's cap (`candidates`), either of which means
+ * that matches in the seats searched may be missing, so the palette shows
+ * its note that some results might be missing; else it names the seats
+ * left out (`organizations`). `searched` of `of` seats says whether seats
+ * were left out, also beside a source's stop, as narrowing to an
+ * organization covers them.
  *
  * A stop can tell the caller this much. A source read over a whole
  * organization also reads tasks the caller cannot see, so its cap or the
- * budget can stop it because of them. A stop then tells the caller that the organization holds many
- * tasks whose title or description holds a word of the text, some of which
- * they may not see. It never tells which, or how many. A seat that sees at
- * most MAIN_SEARCH.projects sub-projects is searched project by project
- * (searchPlaces), which reads no task the caller cannot see, so for them
- * such a stop comes only from their own tasks.
+ * budget can stop it because of them. A stop then tells the caller that
+ * the organization holds many tasks whose title or description holds a
+ * word of the text, some of which they may not see. It never tells which,
+ * or how many. A seat that sees at most MAIN_SEARCH.projects sub-projects
+ * is searched project by project (searchPlaces), which reads no task the
+ * caller cannot see, unless the searches left in the call do not hold its
+ * projects' queries, or one of the reads that list them holds more than
+ * MAIN_SEARCH.listing rows; then it too searches its organization.
  */
 export function coverageOf(stops: Stops): Coverage {
-  if (stops.searched < stops.of)
-    return { complete: false, stopped: 'organizations', searched: stops.searched, of: stops.of }
-  if (stops.reads) return { complete: false, stopped: 'reads' }
-  if (stops.candidates) return { complete: false, stopped: 'candidates' }
-  return { complete: true }
+  const left = stops.searched < stops.of
+  if (!stops.reads && !stops.candidates && !left) return { complete: true }
+  return {
+    complete: false,
+    stopped: stops.reads ? 'reads' : stops.candidates ? 'candidates' : 'organizations',
+    searched: stops.searched,
+    of: stops.of,
+  }
 }
 
 /* ------------------------------------------------------------ the budget */
@@ -246,22 +269,38 @@ export function coverageOf(stops: Stops): Coverage {
 /* Thrown when a read does not fit, which ends the gathering or the page. */
 class OutOfRoom extends Error {}
 
-/* A read budget over `ceiling`: ceilingGuard's count of index ranges and of
- * documents at Convex's size limit. A read the guard does not count, such as
- * an access check, is followed by recount, so the next check looks at the
- * request's own metrics. */
+/* A read budget under `ceiling`, asked before each read whether it fits.
+ * It counts each index range as one and each document at Convex's size
+ * limit, so the reads it is asked about never pass the ceiling. It looks at
+ * the request's metrics only when the reads since its last look could have
+ * used what was left, and after recount, which follows reads it was not
+ * asked about, such as an access check. lib/archivedTasks.ts ceilingGuard
+ * is asked after each read instead, so it lets one document past its
+ * ceiling, which its callers' reserves hold; main Search reads up to three
+ * documents after one check, so it asks before. */
 function readBudget(ctx: QueryCtx, ceiling: ReadCeiling) {
-  let guard: CeilingGuard = ceilingGuard(ctx, ceiling)
+  // what was left at the last look, less what was asked for since
+  let ranges = 0
+  let documents = 0
   return {
-    ceiling,
-    /** Throws OutOfRoom unless `ranges` more index ranges and `documents`
-     * more documents of any size fit. */
-    async need(ranges: number, documents: number): Promise<void> {
-      for (let i = 0; i < ranges; i++) if (!(await guard.range())) throw new OutOfRoom()
-      for (let i = 0; i < documents; i++) if (!(await guard.document())) throw new OutOfRoom()
+    /** Throws OutOfRoom unless `r` more index ranges and `d` more documents
+     * of any size fit. */
+    async need(r: number, d: number): Promise<void> {
+      if (ranges < r || documents < d) {
+        const m = await ctx.meta.getTransactionMetrics()
+        ranges = ceiling.ranges - m.databaseQueries.used
+        documents = Math.min(
+          ceiling.documents - m.documentsRead.used,
+          Math.floor((ceiling.bytes - m.bytesRead.used) / DOCUMENT_MAX_BYTES),
+        )
+        if (ranges < r || documents < d) throw new OutOfRoom()
+      }
+      ranges -= r
+      documents -= d
     },
     recount() {
-      guard = ceilingGuard(ctx, ceiling)
+      ranges = 0
+      documents = 0
     },
   }
 }
@@ -276,17 +315,34 @@ type ReadBudget = ReturnType<typeof readBudget>
  * levelUnder). */
 const seesEveryProject = (me: Doc<'profiles'>): boolean => me.org_role === 'admin'
 
+/* Waits for room for one more step of the listing, a read of at most
+ * MAIN_SEARCH.listing + 1 small rows or one access check, which the budget
+ * counts once it has run (SEARCH_RESERVE holds the step). */
+async function step(budget: ReadBudget): Promise<void> {
+  budget.recount()
+  await budget.need(1, 1)
+}
+
 /* The rows of `query`, or null when it holds more than MAIN_SEARCH.listing. */
-async function listed<R>(query: { take(n: number): Promise<R[]> }): Promise<R[] | null> {
+async function listed<R>(
+  budget: ReadBudget,
+  query: { take(n: number): Promise<R[]> },
+): Promise<R[] | null> {
+  await step(budget)
   const rows = await query.take(MAIN_SEARCH.listing + 1)
   return rows.length > MAIN_SEARCH.listing ? null : rows
 }
 
 /* The ids of the live sub-projects among `ids` that `access` sees, in the
  * order given, or null once they are more than MAIN_SEARCH.projects. */
-async function seenAmong(access: Access, ids: Iterable<string>): Promise<string[] | null> {
+async function seenAmong(
+  budget: ReadBudget,
+  access: Access,
+  ids: Iterable<string>,
+): Promise<string[] | null> {
   const out: string[] = []
   for (const id of ids) {
+    await step(budget)
     const p = await access.project(id)
     if (p === null || p.parent_id === undefined || !(await access.live(id))) continue
     if (!(await access.visible(id))) continue
@@ -307,51 +363,65 @@ async function seenAmong(access: Access, ids: Iterable<string>): Promise<string[
  * (projects by_lead), their grants and the shares of their teams, a
  * top-level project adding its sub-projects (projects by_parent), and each
  * listed project is then checked with projectLevel's rule and its
- * liveness, so the list only narrows what access allows.
+ * liveness, so the list only narrows what access allows. The projects the
+ * rows name are at most MAIN_SEARCH.listing, and so are the sub-projects
+ * listed, so the listing reads a bounded number of rows, each step of it
+ * under `budget`, which throws OutOfRoom once the call's reads are spent.
  */
 export async function searchPlaces(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   access: Access,
   scope: Doc<'projects'> | null,
+  budget: ReadBudget,
 ): Promise<string[] | null> {
   if (scope !== null) {
     const kids = await listed(
+      budget,
       ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', scope.id)),
     )
     return kids === null
       ? null
       : await seenAmong(
+          budget,
           access,
           kids.map((kid) => kid.id),
         )
   }
   if (seesEveryProject(me)) return null
   const led = await listed(
+    budget,
     ctx.db.query('projects').withIndex('by_lead', (q) => q.eq('lead_id', me.id)),
   )
   const grants = await listed(
+    budget,
     ctx.db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', me.id)),
   )
   if (led === null || grants === null) return null
-  const named = [...led.map((p) => p.id), ...grants.map((g) => g.project_id)]
+  const named = new Set([...led.map((p) => p.id), ...grants.map((g) => g.project_id)])
   if (receivesTeamAccess(me)) {
     const memberships = await listed(
+      budget,
       ctx.db.query('team_members').withIndex('by_profile', (q) => q.eq('profile_id', me.id)),
     )
     if (memberships === null) return null
     for (const membership of memberships) {
+      if (named.size > MAIN_SEARCH.listing) return null
+      await step(budget)
       const team = await byId(ctx, 'teams', membership.team_id)
       if (team === null || team.org_id !== me.org_id) continue
       const shares = await listed(
+        budget,
         ctx.db.query('project_team_access').withIndex('by_team', (q) => q.eq('team_id', team.id)),
       )
       if (shares === null) return null
-      named.push(...shares.map((share) => share.project_id))
+      for (const share of shares) named.add(share.project_id)
     }
   }
+  if (named.size > MAIN_SEARCH.listing) return null
   const ids = new Set<string>()
-  for (const id of new Set(named)) {
+  for (const id of named) {
+    await step(budget)
     const p = await access.project(id)
     if (p === null || p.org_id !== me.org_id || p.archived_at !== undefined) continue
     if (p.parent_id !== undefined) {
@@ -359,13 +429,14 @@ export async function searchPlaces(
       continue
     }
     const kids = await listed(
+      budget,
       ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', p.id)),
     )
     if (kids === null) return null
     for (const kid of kids) ids.add(kid.id)
     if (ids.size > MAIN_SEARCH.listing) return null
   }
-  return await seenAmong(access, ids)
+  return await seenAmong(budget, access, ids)
 }
 
 /* ------------------------------------------------------------- the search */
@@ -388,12 +459,11 @@ type Seat = {
   shows(projectId: string, budget: ReadBudget): Promise<boolean>
 }
 
-/* A match, as the page needs it. A description-only match keeps the
- * description row it matched by, without its text, and no task. */
+/* A match, as the page needs it. A match only in a task's description
+ * holds no task, as the search judged it from the description row. */
 type Match = Position & {
   at: Seat
   task: TaskKeys | null
-  row: Doc<'issue_descriptions'> | null
 }
 
 /* The Seat of `me`, who sees through `access`, inside `scope`, a project
@@ -496,6 +566,10 @@ export async function mainSearchPage(
   const stops: Stops = { candidates: false, reads: false, searched: 0, of: seats.length }
   const matches = new Map<string, Match>()
   const text = convexText(terms)
+  // whether the search queries leave archived tasks out themselves
+  const activeByIndex = !include && ARCHIVED_FILTER.byIndex
+  // whether a text no search source returned holds none of the terms
+  const sourcesTakeAll = convexTakesAll(terms)
   let parsed = 0
 
   /* The readable text of description `raw` when a task with `fields` and
@@ -544,21 +618,20 @@ export async function mainSearchPage(
       id: task.id,
       at: seat,
       task: keysOf(task),
-      row: null,
     })
   }
 
   /* Judges description row `row`, which neither the number nor the title
    * source returned, for `seat`. While the title source read every
-   * candidate of the place (`titlesRead`), the task's title holds no term,
-   * so the row's copies and text decide; else, and for a row without
-   * copies, the task row does. */
+   * candidate of the place (`titlesRead`) and took every term, the task's
+   * title holds no term, so the row's copies and text decide, and the page
+   * judges the task again (rowOf). Else, and for a row without copies, the
+   * task row and the text readers show (descriptionOf) decide now. */
   const judgeRow = async (seat: Seat, row: Doc<'issue_descriptions'>, titlesRead: boolean) => {
-    if (row.project_id === undefined || !titlesRead) {
+    if (row.project_id === undefined || !titlesRead || !sourcesTakeAll) {
       await gather.need(1, 1)
       const task = await byId(ctx, 'issues', row.issue_id)
-      if (task === null) return
-      await judgeTask(seat, task, holdsCopies(row, task) ? row.description : undefined)
+      if (task !== null) await judgeTask(seat, task)
       return
     }
     if (row.org_id !== seat.me.org_id) return
@@ -574,7 +647,6 @@ export async function mainSearchPage(
       id: row.issue_id,
       at: seat,
       task: null,
-      row: { ...row, description: '' },
     })
   }
 
@@ -606,7 +678,8 @@ export async function mainSearchPage(
     let places: (string | undefined)[]
     if (scoped !== null && scoped.parent_id !== undefined) places = [scoped.id]
     else {
-      const listed = await searchPlaces(ctx, me, seat.access, scoped)
+      const listed = await searchPlaces(ctx, me, seat.access, scoped, gather)
+      // the last step's reads, which the budget did not count
       gather.recount()
       places =
         listed !== null && 2 * listed.length <= MAIN_SEARCH.searches - stats.searches
@@ -631,7 +704,7 @@ export async function mainSearchPage(
       const titles = ctx.db.query('issues').withSearchIndex('search_title', (q) => {
         let f = q.search('title', text).eq('org_id', me.org_id)
         if (place !== undefined) f = f.eq('project_id', place)
-        if (!include && ARCHIVED_FILTER.byIndex) f = f.eq('archived_at', undefined)
+        if (activeByIndex) f = f.eq('archived_at', undefined)
         return f
       })
       const titlesRead = await readSource(titles, async (task) => {
@@ -644,7 +717,7 @@ export async function mainSearchPage(
         .withSearchIndex('search_description', (q) => {
           let f = q.search('description', text).eq('org_id', me.org_id)
           if (place !== undefined) f = f.eq('project_id', place)
-          if (!include && ARCHIVED_FILTER.byIndex) f = f.eq('archived_at', undefined)
+          if (activeByIndex) f = f.eq('archived_at', undefined)
           return f
         })
       await readSource(descriptions, async (row) => {
@@ -680,7 +753,7 @@ export async function mainSearchPage(
   let ranOut = false
   for (; at < order.length && rows.length < MAIN_SEARCH.rows; at++) {
     try {
-      const row = await rowOf(ctx, order[at], terms, include, reads)
+      const row = await rowOf(ctx, order[at], include, reads, matchedText)
       if (row !== null) rows.push(row)
       last = order[at]
     } catch (e) {
@@ -701,17 +774,20 @@ export async function mainSearchPage(
 
 /**
  * The result row of match `m`, or null when its live task no longer
- * shows. A description-only match reads its task row now and is judged
- * again from it, its organization, archived state, project and access, and
- * its text when the row's copies are stale. Every read goes through
- * `reads`, which throws OutOfRoom when the row does not fit.
+ * shows. A match only in a description reads its task row now and is
+ * judged again from it and from the text readers show (descriptionOf), as
+ * a rollback can leave the copies of the row it matched by stale, and a
+ * second row can hold another text: its organization, archived state,
+ * project, access and terms (`matched`, the gathering's matchedText, which
+ * counts what it parses). Every read goes through `reads`, which throws
+ * OutOfRoom when the row does not fit.
  */
 async function rowOf(
   ctx: QueryCtx,
   m: Match,
-  terms: readonly SearchTerm[],
   include: boolean,
   reads: ReadBudget,
+  matched: (fields: SearchFields, raw: string) => string | null,
 ): Promise<TaskResult | null> {
   const { access } = m.at
   let task = m.task
@@ -721,11 +797,9 @@ async function rowOf(
     if (live === null || live.org_id !== m.at.me.org_id) return null
     if (!include && live.archived_at !== undefined) return null
     if (!(await m.at.shows(live.project_id, reads))) return null
-    if (m.row === null || !holdsCopies(m.row, live)) {
-      await reads.need(1, 2)
-      const text = readableText(await descriptionOf(ctx.db, live))
-      if (!matchesTerms(terms, { num: live.num, title: live.title, description: text })) return null
-    }
+    await reads.need(1, 2)
+    const raw = await descriptionOf(ctx.db, live)
+    if (matched({ num: live.num, title: live.title, description: '' }, raw) === null) return null
     task = keysOf(live)
   }
   // the project, the top-level project above it, and a first subtask
