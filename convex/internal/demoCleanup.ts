@@ -724,6 +724,9 @@ export const purge = internalMutation({
       // Counts an earlier release left when it deleted their labels and
       // teams past their phases, which the checks below refuse to leave.
       else if (phase === 'finish' && orgId && !(await strayCounts(ctx, orgId, budget))) done = false
+      // Export rows an earlier release left past the activity phase, which
+      // knew no export tables, as a cleanup that spans a rollback does.
+      else if (phase === 'finish' && orgId && !(await exportRows(ctx, orgId, budget))) done = false
       else if (phase === 'finish') {
         // No owner/work should reappear after the drained phases: all public
         // and background finalization paths fence against deleting receipts.

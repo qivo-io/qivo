@@ -1,7 +1,7 @@
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components } from '../_generated/api'
-import type { Doc, TableNames } from '../_generated/dataModel'
+import type { Doc, Id, TableNames } from '../_generated/dataModel'
 import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, marketingId } from '../internal/marketingDemoData'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
@@ -906,6 +906,77 @@ describe('public Northstar provisioning and bounded deletion', () => {
       expect(await t.run((ctx) => ctx.db.system.get(part.storage_id))).toBeNull()
     expect((await rows(t, b.org_id!)).tasks).toHaveLength(MARKETING_DEMO.issues.length)
   }, 60_000)
+
+  it('deletes the export rows an earlier release left after the activity phase', async () => {
+    const t = testBackend()
+    const a = await makeDemo(t)
+    const orgId = a.org_id as string
+    await t.run((ctx) => ctx.db.patch(a._id, { status: 'deleting' }))
+    let files: string[] = []
+    for (let n = 0; n < 80 && (await t.run((ctx) => ctx.db.get(a._id))) !== null; n++) {
+      await t.mutation(purge, { demo_id: a.id })
+      const progress = await t.run((ctx) => ctx.db.get(a._id))
+      const phase = progress?.cleanup_phase ?? 'sessions'
+      if (files.length === 0 && ['webhooks', 'account', 'uploads', 'auth'].includes(phase))
+        // an earlier release ran the activity phase without knowing exports
+        files = await t.run(async (ctx) => {
+          const id = uuid()
+          await ctx.db.insert('org_exports', {
+            id,
+            org_id: orgId,
+            state: 'ready',
+            requested_by: uuid(),
+            started_at: new Date(NOW).toISOString(),
+            progress_at: new Date(NOW).toISOString(),
+            progress: { section: '', records: 0, sections_done: 16, sections_total: 16 },
+            step: { n: 1, section: 16, cursor: null, part: 1, seq: 2, bytes: 0, counts: {} },
+            attempts: 0,
+            format_version: 3,
+          })
+          const stored: string[] = []
+          for (let seq = 0; seq < 3; seq++) {
+            const storage_id = await ctx.storage.store(new Blob(['part']) as never)
+            stored.push(storage_id)
+            await ctx.db.insert('org_export_parts', {
+              export_id: id,
+              org_id: orgId,
+              seq,
+              entry: `data/tasks/000${seq + 1}.json`,
+              kind: 'data',
+              storage_id,
+              raw_bytes: 4,
+              stored_bytes: 4,
+              crc32: 0,
+              records: 0,
+            })
+          }
+          await ctx.db.insert('org_export_requests', {
+            export_id: id,
+            org_id: orgId,
+            profile_id: uuid(),
+            requested_at: new Date(NOW).toISOString(),
+          })
+          return stored
+        })
+      if (phase === 'uploads')
+        vi.setSystemTime(
+          Math.max(
+            Date.now() + 5000,
+            progress?.cleanup_file_after ?? 0,
+            progress?.cleanup_file_wait_until ?? 0,
+          ),
+        )
+    }
+    expect(files).toHaveLength(3)
+    expect(await t.run((ctx) => ctx.db.get(a._id))).toBeNull()
+    for (const table of ['org_exports', 'org_export_parts', 'org_export_requests'] as const)
+      expect(
+        (await t.run((ctx) => ctx.db.query(table).collect())).filter((r) => r.org_id === orgId),
+        table,
+      ).toEqual([])
+    for (const file of files)
+      expect(await t.run((ctx) => ctx.db.system.get(file as Id<'_storage'>))).toBeNull()
+  })
 
   it("ends a demo export past the demo's archive cap, while the same data fits the cap elsewhere", async () => {
     const t = testBackend()

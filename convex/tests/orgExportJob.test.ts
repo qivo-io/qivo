@@ -28,6 +28,7 @@ import {
   ZIP_END_BYTES,
   zipEntryBytes,
 } from '../lib/orgExport'
+import { REMOVAL_BUDGET } from '../model/cascade'
 import { checkStoredFiles } from '../model/demoUploads'
 import { deleteOrgStep, wipeWorkStep } from '../model/orgDeletion'
 import { readBatch } from '../model/orgExportRead'
@@ -1222,6 +1223,44 @@ describe('organization export teardowns', () => {
     expect(await exportRowsLeft(t, f.org.id)).toBe(0)
     for (const file of files) expect(await exists(t, file)).toBe(false)
     await assertNoDanglingRefs(t, 'after an organization deletion with exports')
+  })
+
+  it('a deletion that an earlier release took past its activity phase deletes the export rows it left at finish', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const removal = await t.run((ctx) =>
+      ctx.db.insert('org_removals', {
+        org_id: f.org.id,
+        reason: 'requested',
+        ended_at: NOW,
+        delete_after: NOW,
+        phase: 'profiles',
+        created_at: NOW,
+      }),
+    )
+    const budget = { ...REMOVAL_BUDGET }
+    // small steps, so the deletion stops between its phases
+    REMOVAL_BUDGET.rows = 4
+    let planted: Awaited<ReturnType<typeof plantExport>> | undefined
+    try {
+      for (let i = 0; i < 400; i++) {
+        const row = await t.run((ctx) => ctx.db.get(removal))
+        if (row === null) break
+        // the earlier release's activity phase knew no export rows
+        if (planted === undefined && ['webhooks', 'billing', 'finish'].includes(row.phase ?? ''))
+          planted = await plantExport(t, f.org.id, f.admin.id)
+        await t.run(async (ctx) => {
+          const current = await ctx.db.get(removal)
+          if (current !== null) await deleteOrgStep(ctx, current)
+        })
+      }
+    } finally {
+      Object.assign(REMOVAL_BUDGET, budget)
+    }
+    expect(planted).toBeDefined()
+    expect(await t.run((ctx) => ctx.db.get(removal))).toBeNull()
+    expect(await exportRowsLeft(t, f.org.id)).toBe(0)
+    for (const file of planted?.files ?? []) expect(await exists(t, file)).toBe(false)
   })
 
   it('deleteOrgDeep deletes the guest organization fixture with its export rows and files', async () => {

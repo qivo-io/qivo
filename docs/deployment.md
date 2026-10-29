@@ -979,7 +979,9 @@ erase a ready archive's files within its four hours; only that temporary
 copy is lost. The scheduled steps, expiries and erase legs of jobs fail,
 because their functions are missing, and its organization deletion, demo
 cleanup and profile removal leave the export rows of an organization or
-profile they remove. After rolling forward, `organization export recovery`
+profile they remove. A deletion or demo cleanup that goes on after the roll
+forward deletes the export rows left behind in its last phase. After
+rolling forward, `organization export recovery`
 restarts a job that was collecting while its organization and an admin who
 asked for it are still there. It fails a job that must stop, because its
 organization's deletion has begun or no admin who asked for it is still
