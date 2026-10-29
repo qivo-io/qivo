@@ -561,25 +561,28 @@ export async function treeRows(
   return rows
 }
 
-/** The child rows under top-level project `rootId` whose `live` copy is
- * `live`, every grantee's, in one range, spent from `budget` as treeRows
- * spends. An archive of the project reads the live ones, which are those
- * of the sub-projects it archives, and a restore the archived ones, among
- * them those of the sub-projects it restores. */
+/** The child rows under top-level project `rootId`, every grantee's, in
+ * one range, spent from `budget` as treeRows spends: those whose `live`
+ * copy is `live`, or all of them when it is undefined. A restore of the
+ * project reads the archived ones, among them those of the sub-projects it
+ * restores and those of the sub-projects archived on their own, which one
+ * range cannot leave out. So an archive reads them all: it changes the
+ * live ones of the sub-projects it archives and counts the archived ones
+ * too, and the restore of a tree reads no more than its archive read
+ * (model/projects.ts archiveProjectCore). */
 export async function childRows(
   ctx: QueryCtx,
   orgId: string,
   rootId: string,
-  live: boolean,
+  live: boolean | undefined,
   budget: TreeBudget,
 ): Promise<Doc<'project_reach'>[]> {
   const got = await spent(
     budget,
-    ctx.db
-      .query('project_reach')
-      .withIndex('by_root_child', (q) =>
-        q.eq('root_id', rootId).eq('kind', 'child').eq('live', live),
-      ),
+    ctx.db.query('project_reach').withIndex('by_root_child', (q) => {
+      const children = q.eq('root_id', rootId).eq('kind', 'child')
+      return live === undefined ? children : children.eq('live', live)
+    }),
   )
   return got.filter((row) => row.org_id === orgId)
 }
@@ -589,9 +592,10 @@ const STAMP = new Date(0).toISOString()
 
 /* The size of sub-project `p` once archived, with a stamp and the longest
  * archive state, the most it holds in either state. An archive adds the
- * stamp to every sub-project it carries, so counting it here lets the
- * restore of a tree an archive took take it too, unless its rows grew in
- * between. */
+ * stamp to every sub-project it carries, so an archive and the restore
+ * after it count each sub-project alike. With the archived child rows the
+ * archive counts (childRows), a restore of an unchanged tree reads no more
+ * than its archive read, so a tree an archive took its restore takes. */
 const archivedSize = (p: Doc<'projects'>) =>
   getDocumentSize({ ...p, archived_at: p.archived_at ?? STAMP, archive_state: 'listed' })
 
