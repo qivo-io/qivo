@@ -24,7 +24,7 @@
 
 import { ALL_SCOPE, ISSUE_PREFIX, MINE_SCOPE, P } from '../store/planner'
 import type { IssueVM } from '../store/viewModels'
-import { openedTask } from './openedTasks'
+import { openedHandle, openedTask } from './openedTasks'
 
 export type Route = {
   scope?: string
@@ -91,18 +91,23 @@ const findProject = (s: string | undefined, org?: string) => {
   }
   return P.projects.find((p) => p.id === s.toLowerCase())
 }
+/* A task the store does not hold that Search opened, such as an archived
+   one, resolves to the handle Search opened it by (lib/openedTasks.ts), so
+   closing its window earns an entry and Back or Forward to its address
+   opens it again, as they do a loaded task. */
 const findIssueKey = (s: string | undefined, org?: string) => {
   if (!s) return undefined
   const m = new RegExp(`^(?:${ISSUE_PREFIX}-)?(\\d+)$`, 'i').exec(s)
   if (m) {
     const key = `${ISSUE_PREFIX}-${Number(m[1])}`
-    if (org) return P.issueRefIn(org, key) || undefined
+    if (org) return P.issueRefIn(org, key) || openedHandle({ org, key })
     // unpinned: the home organization's handle IS the key
-    return P.issueById[key] ? key : undefined
+    if (P.issueById[key]) return key
+    return P.homeOrg ? openedHandle({ org: P.homeOrg, key }) : undefined
   }
   const lc = s.toLowerCase()
   const it = P.issues.find((i) => i.uuid === lc)
-  return it ? it.id : undefined
+  return it ? it.id : openedHandle({ uuid: lc })
 }
 
 /** The org segment for content owned by `orgId` — its slug, or `~` when there

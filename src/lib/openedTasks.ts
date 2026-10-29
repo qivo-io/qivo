@@ -3,8 +3,10 @@
    workspace may not hold one: it was archived, deleted or moved out of
    sight after the search, or it is archived and Search was asked to include
    archived tasks. The task window (panels/IssueDetail.tsx) then shows what
-   Search noted, and looks the task up in the archive (TaskGone), and the
-   address names the task's organization and key (lib/router.ts taskNamed).
+   Search noted, and looks the task up in the archive (TaskGone), the
+   address names the task's organization and key (lib/router.ts taskNamed),
+   and that address resolves to the task again, so Back and Forward close
+   and reopen its window as they do a loaded task's (findIssueKey).
    It holds the last OPENED_MAX tasks opened and nothing else, and goes once
    the app opens an unloaded task by itself (t3/limits-direct-links). */
 
@@ -34,3 +36,18 @@ export function noteOpenedTask(handle: string, task: OpenedTask): void {
 /** What Search noted of the task it opened by `handle`, if it is among the
     newest OPENED_MAX. */
 export const openedTask = (handle: string): OpenedTask | undefined => opened.get(handle)
+
+/** The handle of the newest task Search opened that is `key` (QN-12) in
+    organization `org`, or that has `uuid`, if it is among the newest
+    OPENED_MAX. */
+export function openedHandle(
+  match: { org: string; key: string } | { uuid: string },
+): string | undefined {
+  let found: string | undefined
+  for (const [handle, task] of opened)
+    if (
+      'uuid' in match ? task.uuid === match.uuid : task.org === match.org && task.key === match.key
+    )
+      found = handle
+  return found
+}

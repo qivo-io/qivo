@@ -11,7 +11,9 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    store. A layer that closes with the move it started, as Create and a
    search result do, gives that move its entry, so Back returns to the page
    the layer opened on. A task that someone else removes keeps the address
-   its window shows. A refused Back returns to the entry it left. */
+   its window shows. A refused Back returns to the entry it left. An
+   archived task Search opened closes with an entry of its own, and Back and
+   Forward to its address open its window again. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => {
@@ -31,6 +33,9 @@ const AT = '2026-09-14T08:00:00.000Z'
 let container: HTMLDivElement
 let root: Root
 let removeHistory = () => {}
+// the archived tasks Search finds with Include archived tasks and the
+// archive answers (issues.archivedTask), which a test sets after boot
+let archive: (Snapshot['issues'][number] & { archived_at: string })[] = []
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -151,11 +156,18 @@ async function boot(address: string, phone: boolean, second = false) {
     return () => {}
   })
   // main Search (search:page) answers the tasks whose titles hold every
-  // word of the text, in the Work sub-project
+  // word of the text, in the Work sub-project, and with Include archived
+  // tasks the archived ones too
+  archive = []
   network.query.mockImplementation(async (ref, args) => {
-    if (getFunctionName(ref) !== 'search:page') return null
+    const name = getFunctionName(ref)
+    if (name === 'issues:archivedTask') {
+      const row = archive.find((task) => task.id === args.id)
+      return row ? { ...row, is_group: false } : null
+    }
+    if (name !== 'search:page') return null
     const words: string[] = args.text.toLowerCase().split(/\s+/).filter(Boolean)
-    const rows = snap.issues
+    const rows = [...snap.issues, ...(args.include_archived ? archive : [])]
       .filter((issue) => words.every((word) => issue.title.toLowerCase().includes(word)))
       .map((issue) => ({
         kind: 'task',
@@ -165,7 +177,7 @@ async function boot(address: string, phone: boolean, second = false) {
         title: issue.title,
         status: issue.status,
         is_group: false,
-        archived: false,
+        archived: 'archived_at' in issue,
         project: { id: 'work', name: 'Work' },
         parent: { id: base.id, name: base.name },
       }))
@@ -476,5 +488,110 @@ describe('a pick from the Back menu past a task with a comment not yet sent', {
     expect(question()).toBeNull()
     expect(document.querySelector('[data-modal-shell]')).not.toBeNull()
     expect(location.pathname).toBe(task)
+  })
+})
+
+describe('an archived task Search opened', { timeout: 30_000 }, () => {
+  /** Boots on the project's Board on a desktop, opens Search, and opens
+      the archived QN-7 from it. Answers the page's address and the task's. */
+  async function openArchived() {
+    await boot('/app/testbed/board/p/1', false)
+    network.query.mockClear()
+    const board = location.pathname
+    const now = structuredClone(
+      (await import('./store/planner')).P.issues.find((i) => i.title === 'Calibrate the sensor'),
+    )
+    if (!now) throw new Error('missing the task')
+    archive = [
+      {
+        id: crypto.randomUUID(),
+        org_id: (await import('./store/planner')).P.homeOrg,
+        project_id: 'work',
+        num: 7,
+        title: 'Recalibrate the old sensor',
+        description: '',
+        status: 'done',
+        priority: 'medium',
+        paused: false,
+        created_at: AT,
+        updated_at: AT,
+        archived_at: '2026-09-14T09:00:00.000Z',
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+      },
+    ]
+    const open = await waitFor(
+      () => document.querySelector<HTMLButtonElement>('button[data-sidebar-search]'),
+      'the sidebar search',
+    )
+    await settle()
+    await act(async () => open.click())
+    const search = await waitFor(
+      () => document.querySelector<HTMLInputElement>('[cmdk-root] input'),
+      'the search box',
+    )
+    await type(search, 'Recalibrate')
+    const toggle = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-palette-archived]'),
+      'the toggle',
+    )
+    await act(async () => toggle.click())
+    const result = await waitFor(
+      () =>
+        [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find((item) =>
+          item.querySelector('[data-result-archived]'),
+        ),
+      'the archived result',
+    )
+    await act(async () => result.click())
+    await archivedNote()
+    await settle()
+    return { board, task: location.pathname }
+  }
+  /* Waits for the window's note that the task was archived. */
+  const archivedNote = () =>
+    waitFor(
+      () =>
+        document
+          .querySelector('[data-task-gone] [role="status"]')
+          ?.textContent?.includes('was archived'),
+      'the archived note',
+    )
+  const asked = () =>
+    network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === 'issues:archivedTask')
+      .length
+
+  it('closes with an entry of its own, so Back opens it again', async () => {
+    const { board, task } = await openArchived()
+    expect(task).toBe('/app/testbed/board/tasks/qn-7')
+    const entries = history.length
+    const close = [...document.querySelectorAll<HTMLButtonElement>('[data-task-gone] button')].find(
+      (b) => b.textContent === 'Close',
+    )
+    await act(async () => close?.click())
+    await waitFor(() => !document.querySelector('[data-task-gone]'), 'the window to close')
+    await settle()
+    // the page below gets a new entry, as closing a loaded task does
+    expect(location.pathname).toBe(board)
+    expect(history.length).toBe(entries + 1)
+    await act(async () => history.back())
+    await settle()
+    expect(location.pathname).toBe(task)
+    await archivedNote()
+    // the window asks the archive again
+    expect(asked()).toBe(2)
+  })
+
+  it('opens again on Forward after Back closed it', async () => {
+    const { board, task } = await openArchived()
+    await act(async () => history.back())
+    await waitFor(() => !document.querySelector('[data-task-gone]'), 'the window to close')
+    await settle()
+    expect(location.pathname).toBe(board)
+    await act(async () => history.forward())
+    await settle()
+    expect(location.pathname).toBe(task)
+    await archivedNote()
+    expect(asked()).toBe(2)
   })
 })

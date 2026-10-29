@@ -389,6 +389,47 @@ describe('buildPath', () => {
     )
   })
 
+  it('reads the address of a task Search opened as that task, in its own organization only', () => {
+    noteOpenedTask('QN-41', {
+      uuid: 'uuid-home-41',
+      key: 'QN-41',
+      title: 'Archived home task',
+      project: 'p-home-1a',
+      org: HOME,
+      archived: true,
+    })
+    noteOpenedTask('uuid-acme-41', {
+      uuid: 'uuid-acme-41',
+      key: 'QN-41',
+      title: 'Archived Acme task',
+      project: 'p-acme-1',
+      org: ACME,
+      archived: true,
+    })
+    expect(parsePath('/app/home/board/all/tasks/qn-41')?.issue).toBe('QN-41')
+    expect(parsePath('/app/acme/board/all/tasks/qn-41')?.issue).toBe('uuid-acme-41')
+    // `~` reads a number in the home organization, and a uuid names its task
+    expect(parsePath('/app/~/board/tasks/41')?.issue).toBe('QN-41')
+    expect(parsePath('/app/~/inbox/tasks/uuid-acme-41')?.issue).toBe('uuid-acme-41')
+    // a number Search opened no task by stays unresolved
+    expect(parsePath('/app/acme/board/all/tasks/qn-42')?.issue).toBeUndefined()
+    // so the window's address is its state, and the page's is not
+    expect(
+      pathMatchesState('/app/acme/board/all/tasks/qn-41', {
+        scope: 'all',
+        view: 'kanban',
+        openIssue: 'uuid-acme-41',
+      }),
+    ).toBe(true)
+    expect(
+      pathMatchesState('/app/acme/board/all/tasks/qn-41', {
+        scope: 'all',
+        view: 'kanban',
+        openIssue: null,
+      }),
+    ).toBe(false)
+  })
+
   it("names a task by its uuid once its organization left too, never the home organization's task of that number", () => {
     const open = 'uuid-acme-5'
     const sync = { scope: 'all', step: 'team' }
