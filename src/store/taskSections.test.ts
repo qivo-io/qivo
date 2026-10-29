@@ -262,9 +262,9 @@ describe("the task window's sections in the store", () => {
       expect(sections()).toBeNull()
       // the thread keeps its subscription
       expect(one('snapshot:threadComments').closed).toBe(false)
-      // back again, the lists load afresh
+      // back again, the lists ask afresh, showing the workspace's meanwhile
       P.showSections(pane, true)
-      expect(sections()?.subtasks).toMatchObject({ state: 'loading', rows: [] })
+      expect(sections()?.subtasks).toMatchObject({ source: 'workspace', delivered: false })
       for (const name of SECTIONS) expect(named(name)).toHaveLength(2)
     })
 
@@ -276,14 +276,16 @@ describe("the task window's sections in the store", () => {
       for (const live of before) expect(live.closed).toBe(true)
       expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: 'task-b' })
       expect(one('taskWindow:links').args).toEqual({ org_id: org, issue_id: 'task-b' })
-      expect(sections()).toMatchObject({ task: 'task-b', subtasks: { state: 'loading' } })
+      // task-b's own lists, as the workspace holds them, until its answers
+      const own = {
+        task: 'task-b',
+        subtasks: { source: 'workspace', rows: [] },
+        links: { source: 'workspace', rows: [] },
+      }
+      expect(sections()).toMatchObject(own)
       before[0].deliver(taskAnswer([short(row('kid-1'))]))
       before[1].deliver(linksAnswer([], []))
-      expect(sections()).toMatchObject({
-        task: 'task-b',
-        subtasks: { state: 'loading', rows: [] },
-        links: { state: 'loading', rows: [] },
-      })
+      expect(sections()).toMatchObject(own)
     })
 
     it('gives a task whose create is on its way complete empty lists, and subscribes once a delivery holds it', async () => {
@@ -343,23 +345,41 @@ describe("the task window's sections in the store", () => {
   })
 
   describe('states', () => {
-    it('reads loading until an answer, then whole or incomplete as the answer says', () => {
+    it("lists a complete workspace's rows until an answer, then whole or incomplete as the answer says", () => {
       const { P } = store
       P.watchComments('task-a')
       P.showSections(pane, true)
+      // the workspace is complete, so it lists what it holds meanwhile
+      const fromWorkspace = {
+        state: 'ready',
+        complete: true,
+        delivered: false,
+        source: 'workspace',
+      }
       expect(sections()).toMatchObject({
         task: 'task-a',
-        subtasks: { state: 'loading', rows: [], complete: false, delivered: false },
-        links: { state: 'loading', rows: [] },
-        attachments: { state: 'loading', rows: [], count: 0 },
+        subtasks: { ...fromWorkspace, hidden: false },
+        links: fromWorkspace,
+        attachments: { ...fromWorkspace, count: 1 },
       })
+      expect(subtaskIds()).toEqual(['kid-1', 'kid-2'])
+      expect(linkIds()).toEqual(['task-c'])
+      expect(fileIds()).toEqual(['file-1'])
+      // an answer that agrees changes nothing but where the list comes from
+      const before = sections()?.subtasks.rows
+      one('taskWindow:task').deliver(taskAnswer([short(row('kid-1')), short(row('kid-2'))]))
+      expect(sections()?.subtasks).toMatchObject({
+        state: 'ready',
+        complete: true,
+        source: 'answer',
+      })
+      expect(sections()?.subtasks.rows).toEqual(before)
       one('taskWindow:task').deliver(taskAnswer([short(row('kid-1'))]))
-      expect(sections()?.subtasks).toMatchObject({ state: 'ready', complete: true })
       expect(subtaskIds()).toEqual(['kid-1'])
       one('taskWindow:links').deliver(linksAnswer([], [], false))
       expect(sections()?.links).toMatchObject({ state: 'ready', complete: false, rows: [] })
       // the other lists wait on their own
-      expect(sections()?.attachments.state).toBe('loading')
+      expect(sections()?.attachments.source).toBe('workspace')
     })
 
     it('reads unavailable, with no rows, for an unavailable or archived answer', () => {
@@ -391,12 +411,17 @@ describe("the task window's sections in the store", () => {
       expect(sections()?.links).toMatchObject({ state: 'ready', complete: true, rows: [] })
     })
 
-    it('fails before any answer with nothing delivered', () => {
+    it("fails before any answer beside a complete workspace's rows", () => {
       const { P } = store
       P.watchComments('task-a')
       P.showSections(pane, true)
       one('taskWindow:task').fail(new ConvexError({ code: 'forbidden', message: 'No seat' }))
-      expect(sections()?.subtasks).toMatchObject({ state: 'failed', delivered: false, rows: [] })
+      expect(sections()?.subtasks).toMatchObject({
+        state: 'failed',
+        delivered: false,
+        source: 'workspace',
+      })
+      expect(subtaskIds()).toEqual(['kid-1', 'kid-2'])
       // Retry does nothing for a list that did not fail
       P.retrySection('attachments')
       expect(named('taskWindow:attachments')).toHaveLength(1)

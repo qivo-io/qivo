@@ -326,21 +326,57 @@ const rollup = () => {
 }
 
 describe("the task window's sections", { timeout: 20_000 }, () => {
-  it('says each list is loading before its answer, never that it is empty', async () => {
+  /* What the window shows of each list: its heading, its rows and its line. */
+  const shown = () =>
+    ['subtasks', 'links', 'attachments'].map((name) => ({
+      head: headingOf(name),
+      rows: section(name).querySelector('.task-section-head')?.nextElementSibling?.outerHTML,
+    }))
+
+  it("lists a complete workspace's rows at once, and the answers take over unseen", async () => {
     await load()
     await openTask()
     for (const name of SECTIONS) expect(open(name)).toHaveLength(1)
-    expect(stateOf('subtasks')).toBe('loading')
-    expect(noteOf('subtasks')).toBe('Loading subtasks…')
-    expect(section('subtasks').textContent).not.toContain('No subtasks.')
-    expect(headingOf('subtasks')).toBe('Subtasks')
-    expect(noteOf('links')).toBe('Loading linked tasks…')
-    expect(section('links').textContent).not.toContain('No dependencies yet.')
-    expect(noteOf('attachments')).toBe('Loading attachments…')
-    // the workspace holds the subtasks, but the window waits for the list
-    expect(titlesOf('subtasks')).toEqual([])
-    expect(progress()).toEqual(['', 'Subtasks are still loading.'])
-    expect(rollup()).toEqual(['loading', 'Loading…'])
+    for (const name of ['subtasks', 'links', 'attachments']) {
+      expect(stateOf(name)).toBe('complete')
+      expect(section(name).dataset.sectionSource).toBe('workspace')
+    }
+    expect(headingOf('subtasks')).toBe('Subtasks (3)')
+    expect(titlesOf('subtasks')).toEqual(['Mount the board', 'Order parts', 'Read the manual'])
+    expect(headingOf('links')).toBe('Linked tasks (1)')
+    expect(headingOf('attachments')).toBe('Attachments (1)')
+    expect(document.body.textContent).not.toContain('Loading subtasks…')
+    // Progress and Remaining by the workspace's rules, as before the sections
+    expect(progress()).toEqual(['1 of 3 tasks done, 33%'])
+    expect(rollup()).toEqual(['complete', 'Σ 4.5h'])
+    const before = shown()
+    await answerAll()
+    for (const name of ['subtasks', 'links', 'attachments'])
+      expect(section(name).dataset.sectionSource).toBe('answer')
+    // the answers agree, so nothing on screen moved
+    expect(shown()).toEqual(before)
+    expect(progress()).toEqual(['1 of 3 tasks done, 33%'])
+    expect(rollup()).toEqual(['complete', 'Σ 4.5h'])
+  })
+
+  it("keeps a complete workspace's lists while no answer comes, as when offline", async () => {
+    await load()
+    await openTask()
+    // the connection is down: the subscriptions wait and nothing answers
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(titlesOf('subtasks')).toEqual(['Mount the board', 'Order parts', 'Read the manual'])
+    expect(titlesOf('links')).toEqual(['Ship firmware'])
+    expect(
+      [...section('attachments').querySelectorAll('[data-attachment-open]')].map(
+        (b) => (b as HTMLElement).dataset.attachmentOpen,
+      ),
+    ).toEqual(['file-1.pdf'])
+    for (const name of ['subtasks', 'links', 'attachments']) expect(noteOf(name)).toBeNull()
+    // a removal works from the workspace's rows, as before the sections
+    const remove = section('subtasks').querySelector<HTMLButtonElement>(
+      '[data-related-task="QN-28"] .task-related-remove',
+    )
+    expect(remove?.disabled).toBe(false)
   })
 
   it('shows each whole list with its count, and the totals from it', async () => {
@@ -424,17 +460,17 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await openTask()
     await fail('taskWindow:task')
+    // a complete workspace's rows stay, and the read that failed says so
     expect(stateOf('subtasks')).toBe('failed')
-    expect(noteOf('subtasks')).toBe("Couldn't load subtasks.Retry")
-    expect(progress()).toEqual(['Completion unknown.'])
-    expect(rollup()).toEqual(['unknown', 'Unknown'])
+    expect(titlesOf('subtasks')).toEqual(['Mount the board', 'Order parts', 'Read the manual'])
+    expect(noteOf('subtasks')).toBe("Couldn't load the latest subtasks.Retry")
+    expect(progress()).toEqual(['1 of 3 tasks done, 33%'])
     // the thread's failure rows are its own
     expect(document.querySelectorAll('[data-thread-failure]')).toHaveLength(0)
     const retry = section('subtasks').querySelector<HTMLElement>('[data-section-failure] button')
     await act(async () => retry?.click())
     expect(stateOf('subtasks')).toBe('retrying')
-    expect(noteOf('subtasks')).toBe('Loading subtasks…')
-    expect(progress()).toEqual(['', 'Subtasks are still loading.'])
+    expect(noteOf('subtasks')).toBe('Loading the latest subtasks…')
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
     await answer('taskWindow:task', taskAnswer([short(row('kid-1'))]))
     expect(titlesOf('subtasks')).toEqual(['Mount the board'])
@@ -444,10 +480,11 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(headingOf('subtasks')).toBe('Subtasks')
     expect(noteOf('subtasks')).toBe("Couldn't load the latest subtasks.Retry")
     expect(progress()).toEqual(['Completion unknown.', 'Not every subtask could be loaded.'])
+    // the workspace's lists stay beside the other failures
     await fail('taskWindow:links')
-    expect(noteOf('links')).toBe("Couldn't load linked tasks.Retry")
+    expect(noteOf('links')).toBe("Couldn't load the latest linked tasks.Retry")
     await fail('taskWindow:attachments')
-    expect(noteOf('attachments')).toBe("Couldn't load attachments.Retry")
+    expect(noteOf('attachments')).toBe("Couldn't load the latest attachments.Retry")
   })
 
   it('reads a short row from the answer for a task the workspace does not hold', async () => {
@@ -793,6 +830,25 @@ describe('while a large workspace still loads', { timeout: 20_000 }, () => {
     expect(P.stillLoading()).not.toBeNull()
     await openTask('01000000-fam')
     const kids = next.issues.filter((t) => t.parent_id === '01000000-fam')
+    // the workspace still loads, so the lists wait for their answers
+    for (const name of ['subtasks', 'links', 'attachments']) {
+      expect(stateOf(name)).toBe('loading')
+      expect(section(name).dataset.sectionSource).toBe('answer')
+    }
+    expect(noteOf('subtasks')).toBe('Loading subtasks…')
+    expect(noteOf('links')).toBe('Loading linked tasks…')
+    expect(noteOf('attachments')).toBe('Loading attachments…')
+    expect(progress()).toEqual(['', 'Subtasks are still loading.'])
+    expect(rollup()).toEqual(['loading', 'Loading…'])
+    // a read that fails before its answer has no rows to keep
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await fail('taskWindow:links')
+    expect(noteOf('links')).toBe("Couldn't load linked tasks.Retry")
+    await act(async () =>
+      section('links').querySelector<HTMLElement>('[data-section-failure] button')?.click(),
+    )
+    expect(noteOf('links')).toBe('Loading linked tasks…')
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
     // the server's lists, before the workspace holds any subtask
     await act(async () => {
       one('taskWindow:task').deliver({

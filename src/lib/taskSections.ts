@@ -173,3 +173,23 @@ export function groupTotals(list: {
     remaining: { state: 'complete', hours },
   }
 }
+
+/** A group's Progress and Remaining by the workspace's own rules, for a
+    subtask list a complete workspace holds before its answer arrives
+    (store/planner.ts P.sectionsFor): `progress` over every visible leaf at
+    any depth (lib/issueGroups.ts groupProgress), unknown beside subtasks
+    the person cannot see, and `hours`, the open hours of that subtree
+    (store/planner.ts remainingOf). So the window says what it said before
+    the sections had their own reads. */
+export function workspaceTotals(
+  progress: { done: number; total: number; pct: number; unknown: boolean },
+  hours: number | undefined,
+): { progress: Progress; remaining: Remaining } {
+  const { done, total, pct } = progress
+  return {
+    progress: progress.unknown
+      ? { state: 'visible', done, total }
+      : { state: 'complete', done, total, pct },
+    remaining: { state: 'complete', hours },
+  }
+}

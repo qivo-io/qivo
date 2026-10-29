@@ -20,8 +20,8 @@ Until it is gone, the Board and the task list show the tasks that have
 arrived, without counts, and search notes that more results may come. The
 Overview, the Roadmap and Team sync open once every task has loaded, and so
 do moving, archiving and deleting a task. An open task's subtasks, linked
-tasks and attachments load on their own and are complete before every task
-has arrived, but removing one that has not arrived yet waits for it.
+tasks and attachments load on their own, and removing one that has not
+arrived yet waits for it.
 Settings opens at once, but its
 Teams, Projects and Labels pages wait for every task. A
 link to one task opens once every task has loaded. If loading stops, the

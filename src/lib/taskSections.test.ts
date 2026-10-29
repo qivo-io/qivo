@@ -10,6 +10,7 @@ import {
   shownIds,
   shows,
   type TotalsRow,
+  workspaceTotals,
 } from './taskSections'
 
 const AT = '2026-09-14T08:00:00.000Z'
@@ -176,6 +177,20 @@ describe("a group's Progress and Remaining", () => {
     expect(groupTotals(list('ready', [leaf(true), group, leaf(false, 1)]))).toEqual({
       progress: { state: 'visible', done: 1, total: 2 },
       remaining: { state: 'unknown' },
+    })
+  })
+})
+
+describe("a group's totals by the workspace's rules", () => {
+  it('counts every visible leaf, and says completion is unknown beside hidden subtasks', () => {
+    expect(workspaceTotals({ done: 1, total: 3, pct: 33, unknown: false }, 4.5)).toEqual({
+      progress: { state: 'complete', done: 1, total: 3, pct: 33 },
+      remaining: { state: 'complete', hours: 4.5 },
+    })
+    expect(workspaceTotals({ done: 2, total: 5, pct: 40, unknown: true }, undefined)).toEqual({
+      progress: { state: 'visible', done: 2, total: 5 },
+      // the subtree's own total, never unknown, as before the sections
+      remaining: { state: 'complete', hours: undefined },
     })
   })
 })

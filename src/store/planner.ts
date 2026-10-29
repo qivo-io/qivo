@@ -549,13 +549,18 @@ export type LinkedTaskVM = RelatedTaskVM & { type: string; linkHeld: boolean }
 
 /** One of the watched task's sections: where its list stands
     (lib/taskSections.ts SectionState), its rows (none while loading or
-    unavailable; those delivered before a failure), whether its answer said
-    the list is whole, and whether an answer arrived for the task. */
+    unavailable; those delivered before a failure), whether the list is
+    whole, whether an answer arrived for the task, and where the list
+    comes from. Until its answer arrives, a section of a complete workspace
+    (P.stillLoading() null) lists what the workspace holds, as the window
+    did before the sections had their own reads (`source` 'workspace'), so
+    a task opened offline or before its answers still shows its lists. */
 export type SectionVM<R> = {
   state: SectionState
   rows: R[]
   complete: boolean
   delivered: boolean
+  source: 'answer' | 'workspace'
 }
 
 /** A file in Attachments, and whether the workspace holds its row, which
@@ -1075,7 +1080,15 @@ function subtaskSection(t: string, answer: SectionAnswers['task']) {
             hidden: answer.task.has_hidden_subtasks,
           }
         : null
-  if (!list) return { state, rows: [], complete: false, delivered: answer !== null, hidden: false }
+  if (!list)
+    return {
+      state,
+      rows: [],
+      complete: false,
+      delivered: answer !== null,
+      source: 'answer' as const,
+      hidden: false,
+    }
   const fromAnswer = new Map(list.rows.map((row) => [row.id, row]))
   const applied = base.map('issues')
   const ids = shownIds([...fromAnswer.keys(), ...(tasks.relationsOf(t).children ?? [])], (x) => ({
@@ -1091,7 +1104,14 @@ function subtaskSection(t: string, answer: SectionAnswers['task']) {
     }))
     .sort(byNumber)
     .flatMap(({ row }) => (row ? [row] : []))
-  return { state, rows: shown, complete: list.complete, delivered: true, hidden: list.hidden }
+  return {
+    state,
+    rows: shown,
+    complete: list.complete,
+    delivered: true,
+    source: 'answer' as const,
+    hidden: list.hidden,
+  }
 }
 
 /* The watched task `t`'s Linked tasks from the links answer and, where
@@ -1108,7 +1128,14 @@ function linkSection(t: string, answer: SectionAnswers['links']) {
       : answer?.state === 'ok'
         ? answer
         : null
-  if (!list) return { state, rows: [], complete: false, delivered: answer !== null }
+  if (!list)
+    return {
+      state,
+      rows: [],
+      complete: false,
+      delivered: answer !== null,
+      source: 'answer' as const,
+    }
   const fromAnswer = new Map(list.links.map((link) => [link.id, link]))
   const ends = new Map(list.tasks.map((row) => [row.id, row]))
   const applied = base.map('links')
@@ -1130,7 +1157,7 @@ function linkSection(t: string, answer: SectionAnswers['links']) {
       return row ? [{ ...row, type: view.type, linkHeld: touches(rows.links.get(view.link)) }] : []
     },
   )
-  return { state, rows: shown, complete: list.complete, delivered: true }
+  return { state, rows: shown, complete: list.complete, delivered: true, source: 'answer' as const }
 }
 
 /* The watched task `t`'s Attachments from the attachments answer and,
@@ -1140,7 +1167,15 @@ function attachmentSection(t: string, answer: SectionAnswers['attachments']) {
   const state = sectionState('attachments', answer)
   const list: Pick<AttachmentsOk, 'rows' | 'complete'> | null =
     answer === CREATING ? { rows: [], complete: true } : answer?.state === 'ok' ? answer : null
-  if (!list) return { state, rows: [], complete: false, delivered: answer !== null, count: 0 }
+  if (!list)
+    return {
+      state,
+      rows: [],
+      complete: false,
+      delivered: answer !== null,
+      source: 'answer' as const,
+      count: 0,
+    }
   const fromAnswer = new Map(list.rows.map((row) => [row.id, row]))
   const applied = base.map('attachments')
   const ids = shownIds(
@@ -1165,11 +1200,57 @@ function attachmentSection(t: string, answer: SectionAnswers['attachments']) {
       .map((row) => ({ ...shapeAttachment(row), held: rows.attachments.has(row.id) })),
     complete: list.complete,
     delivered: true,
+    source: 'answer' as const,
     count: all.filter((row) => row.dropped_at === undefined).length,
   }
 }
 
-/* The watched task's sections now, or null while no window shows them. */
+/* Task `it`'s sections as the workspace holds them, for a complete
+   workspace (P.stillLoading() null) before their answers arrive: its
+   painted subtasks, links and files, as whole lists, with the states
+   `states` gives each (a failed read stays failed beside the rows). An
+   answer that agrees shows the same rows, so it takes over unseen. */
+function workspaceSections(
+  it: IssueVM,
+  states: Record<SectionSide, SectionState> = {
+    task: 'ready',
+    links: 'ready',
+    attachments: 'ready',
+  },
+): TaskSectionsVM {
+  const whole = { complete: true, delivered: false, source: 'workspace' as const }
+  const related = (handle: string) => {
+    const uuid = PLANNER.issueById[handle]?.uuid
+    return uuid ? relatedTask(uuid, undefined) : null
+  }
+  return {
+    task: it.uuid,
+    subtasks: {
+      ...whole,
+      state: states.task,
+      rows: it.children.flatMap((handle) => related(handle) ?? []),
+      hidden: it.hasHiddenSubtasks,
+    },
+    links: {
+      ...whole,
+      state: states.links,
+      rows: it.links.flatMap((view) => {
+        const row = related(view.id)
+        return row ? [{ ...row, type: view.type, linkHeld: true }] : []
+      }),
+    },
+    attachments: {
+      ...whole,
+      state: states.attachments,
+      rows: it.attachments.map((att) => ({ ...att, held: true })),
+      count: it.attachmentCount,
+    },
+  }
+}
+
+/* The watched task's sections now, or null while no window shows them.
+   A section without an answer yet lists what a complete workspace holds
+   (workspaceSections), and says it loads while the workspace does. */
 function sectionsNow(): TaskSectionsVM | null {
   const t = watchedComments
   if (!t || sectionOwners.size === 0) return null
@@ -1177,11 +1258,26 @@ function sectionsNow(): TaskSectionsVM | null {
     sectionAnswers.issue === t
       ? sectionAnswers
       : { issue: t, task: null, links: null, attachments: null }
+  // the workspace's lists, built only while one section has no answer
+  const waits = answers.task === null || answers.links === null || answers.attachments === null
+  const handle = waits && stillLoading === null ? uuidToKey.get(t) : undefined
+  const held = handle === undefined ? undefined : PLANNER.issueById[handle]
+  const fallback =
+    held &&
+    workspaceSections(held, {
+      task: sectionFailure.task === 'none' ? 'ready' : sectionFailure.task,
+      links: sectionFailure.links === 'none' ? 'ready' : sectionFailure.links,
+      attachments: sectionFailure.attachments === 'none' ? 'ready' : sectionFailure.attachments,
+    })
   return {
     task: t,
-    subtasks: subtaskSection(t, answers.task),
-    links: linkSection(t, answers.links),
-    attachments: attachmentSection(t, answers.attachments),
+    subtasks:
+      fallback && answers.task === null ? fallback.subtasks : subtaskSection(t, answers.task),
+    links: fallback && answers.links === null ? fallback.links : linkSection(t, answers.links),
+    attachments:
+      fallback && answers.attachments === null
+        ? fallback.attachments
+        : attachmentSection(t, answers.attachments),
   }
 }
 
@@ -6441,6 +6537,18 @@ export const PLANNER = {
       (RelatedTaskVM), from the workspace's view of it, or null when the
       workspace does not hold it. */
   relatedTask: (uuid: string): RelatedTaskVM | null => relatedTask(uuid, undefined),
+  /** The sections a window on task `uuid` shows: P.sections when they are
+      that task's, else, in a complete workspace, the workspace's own lists
+      of it (workspaceSections), so a window that has just switched to a
+      task, before the store follows it, lists that task's rows rather than
+      another's or none. Null while a large workspace still loads, when the
+      window says its lists load. */
+  sectionsFor: (uuid: string): TaskSectionsVM | null => {
+    if (PLANNER.sections?.task === uuid) return PLANNER.sections
+    const handle = stillLoading === null ? uuidToKey.get(uuid) : undefined
+    const it = handle === undefined ? undefined : PLANNER.issueById[handle]
+    return it ? workspaceSections(it) : null
+  },
   /** Whether the parent of `x` is a task still to arrive while a large
       workspace loads (hiddenParentsNow). */
   parentLoading: (x: IssueVM | string): boolean => {

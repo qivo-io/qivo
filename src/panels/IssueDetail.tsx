@@ -73,7 +73,7 @@ import { matchesAllWords, moreMatches } from '../lib/search'
 import { mergeSpine, spineWindow, type UnreadStart, unreadMark, unreadStart } from '../lib/spine'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import { markTaskFocus, restoreTaskFocus } from '../lib/taskFocus'
-import { groupTotals } from '../lib/taskSections'
+import { groupTotals, workspaceTotals } from '../lib/taskSections'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useBottomSnap } from '../lib/useBottomSnap'
 import { useConfirmArm } from '../lib/useConfirmArm'
@@ -338,14 +338,15 @@ const relMapID = {
   relates: { label: 'Relates to', glyph: 'arrowLeftRight' },
 }
 
-/* A section of a task the store does not show yet: its window's task has
-   no sections in the store before its effects point the store at it
-   (P.sections), so it reads as loading, never as another task's lists. */
+/* A section of a task whose lists are not known yet: while a large
+   workspace still loads, before the section's answer (P.sectionsFor), it
+   reads as loading, never as another task's lists or as empty. */
 const LOADING_SECTION: SectionVM<never> = {
   state: 'loading',
   rows: [],
   complete: false,
   delivered: false,
+  source: 'answer',
 }
 
 /* What each section's lines call its rows, and the section. */
@@ -517,6 +518,7 @@ function AttachmentsSection({
       className="task-section"
       data-section="attachments"
       data-section-state={sectionMark(section)}
+      data-section-source={section.source}
     >
       <SectionHead icon="paperclip" label={`Attachments${countOf(section)}`} />
       {list.length > 0 || uploading.length > 0 ? (
@@ -2019,17 +2021,25 @@ function IssueDetail({
     typeof window.matchMedia === 'function' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const proj = it ? P.project(it.project) : null
-  // This task's own Subtasks, Linked tasks and Attachments (P.sections). The
-  // store follows the task a window shows from that window's effects, after
-  // the render that first shows it, so a task opened in place first finds
-  // another task's sections there, and reads as loading until its own come.
-  const sections = it && P.sections?.task === it.uuid ? P.sections : null
+  // This task's own Subtasks, Linked tasks and Attachments (P.sectionsFor).
+  // The store follows the task a window shows from that window's effects,
+  // after the render that first shows it, so a task opened in place first
+  // finds another task's sections in the store; it shows its own lists from
+  // a complete workspace, and loading lines while the workspace loads.
+  const sections = it ? P.sectionsFor(it.uuid) : null
   const subtasks = sections?.subtasks ?? { ...LOADING_SECTION, hidden: false }
   const linked = sections?.links ?? LOADING_SECTION
   const files = sections?.attachments ?? { ...LOADING_SECTION, count: 0 }
   // whether the task is a group stays the workspace's; its Progress and
-  // Remaining come from the subtask list, and say unknown without all of it
-  const totals = it && P.isGroup(it) ? groupTotals(subtasks) : null
+  // Remaining come from the subtask list, and say unknown without all of
+  // it, or, for the list a complete workspace holds before the answer, by
+  // the workspace's own rules
+  const totals =
+    it && P.isGroup(it)
+      ? subtasks.source === 'workspace'
+        ? workspaceTotals(P.progressOf(it), P.remainingOf(it))
+        : groupTotals(subtasks)
+      : null
   const prog = totals?.progress
   // the Parent row stays the workspace's
   const parentUuid = it?.parent ? P.issueById[it.parent]?.uuid : undefined
@@ -3729,6 +3739,7 @@ function IssueDetail({
                         className="task-section"
                         data-section="subtasks"
                         data-section-state={sectionMark(subtasks)}
+                        data-section-source={subtasks.source}
                       >
                         <SectionHead
                           icon="child"
@@ -3777,6 +3788,7 @@ function IssueDetail({
                         className="task-section"
                         data-section="links"
                         data-section-state={sectionMark(linked)}
+                        data-section-source={linked.source}
                       >
                         <SectionHead
                           icon="link"

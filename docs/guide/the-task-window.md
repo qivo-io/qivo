@@ -149,10 +149,11 @@ task is Done, the dependency labels become **Previously blocked** or
 groups omit status, and unowned tasks omit the portrait.
 
 **Subtasks**, **Linked tasks** and **Attachments** load their own lists when
-the window shows them, so each lists every item you can see even while a
-very large workspace is still loading its tasks. Until a list arrives, its
-section says so, such as **Loading subtasks…**. A list that could not load
-says **Couldn't load subtasks.** with **Retry**. When Qivo no longer lets you
+the window shows them. Until a list arrives, its section shows the items
+Qivo already has, also while you are offline, or, while a very large
+workspace is still loading its tasks, says the list is loading, such as
+**Loading subtasks…**. A list that could not load says **Couldn't load
+subtasks.** with **Retry**. When Qivo no longer lets you
 see the task, a section says **Subtasks are not available.** A list too large
 to load at once shows the rows that loaded with **Some subtasks could not be
 loaded.** under them. **No subtasks.**, **No dependencies yet.** and
