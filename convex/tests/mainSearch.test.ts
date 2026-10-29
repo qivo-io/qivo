@@ -415,6 +415,24 @@ describe('seats', () => {
     expect(run.page.coverage).toEqual(stopped('projects', 8, 8))
   })
 
+  it('counts only the seats whose reads began when task numbers spend the budget', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await secondSeat(t, f)
+    // home tasks large enough to spend the budget in the home seat's
+    // number lookups
+    const nums = Array.from({ length: 10 }, (_, i) => 900 + i)
+    for (const num of nums)
+      await task(t, f, f.sub, `Gearbox ${num}`, { num, description: 'x'.repeat(900_000) })
+    // every term must match, so no task does, and the guest seat, whose
+    // reads never began, is not counted as searched
+    expect(await search(t, f.user, { text: nums.join(' ') })).toEqual({
+      rows: [],
+      next_cursor: null,
+      coverage: stopped('reads', 1, 2),
+    })
+  })
+
   it("reads every seat's task numbers before any source", async () => {
     const t = newT()
     const f = await withOrg(t)

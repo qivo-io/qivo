@@ -720,6 +720,8 @@ export async function mainSearchPage(
 
   const matches = new Map<string, Match>()
   const text = convexText(terms)
+  // the task numbers the text names, which every seat reads first
+  const numbers = terms.flatMap((term) => (term.num == null ? [] : [term.num]))
   // whether the search queries leave archived tasks out themselves
   const activeByIndex = !include && ARCHIVED_FILTER.byIndex
   // whether a text no search source returned holds none of the terms
@@ -869,8 +871,8 @@ export async function mainSearchPage(
           await judgeRow(seat, row, titlesRead)
         })
       }
-      // a seat with nothing left to read searched all it had
-      begin(seat)
+      // a seat with nothing to read at all searched all it had
+      if (seat.places.length === 0 && numbers.length === 0) begin(seat)
     } catch (e) {
       if (!(e instanceof OutOfRoom)) throw e
       stops.reads = true
@@ -903,7 +905,6 @@ export async function mainSearchPage(
   }
 
   // every seat's task numbers first, one read each, the surest matches
-  const numbers = terms.flatMap((term) => (term.num == null ? [] : [term.num]))
   try {
     for (const seat of planned)
       for (const num of numbers) {
