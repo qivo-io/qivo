@@ -8,6 +8,7 @@ import {
   planInbox,
   planRelations,
   planSeed,
+  relationFamily,
   relationId,
   runBoardScaleSeed,
   seededTask,
@@ -854,7 +855,10 @@ describe('board-scale-seed --relations', () => {
 
   it('plans a Firmware task at both caps, with every status, owner and relation kind', () => {
     const all = plan()
-    const family = relationId('family')
+    const family = relationFamily()
+    // a staged load holds it in its first stage
+    expect(family).toMatch(/^0[0-9a-f]{7}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(relationId('family').slice(1)).toBe(family.slice(1))
     expect(all.projects.map((p) => [p.key, p.type, p.lead_id, p.org_id])).toEqual([
       ['PART', 'meta', 'person-nora', 'org'],
       ['PFLD', 'project', 'person-nora', 'org'],
