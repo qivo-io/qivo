@@ -537,9 +537,17 @@ async function scrollBoard({ page, timed }, metrics, name) {
   metrics[`${name}LongestFrameMs`].push(longest)
 }
 
+/** How many rows Search shows for "signed firm", which every visible task
+    of the stand-in holds: a build that searches on the server shows the
+    stand-in's first page of 25 (scripts/perf/server.mjs searchPage), and a
+    build from before it, which kept a browser index (src/lib/paletteSearch.ts),
+    its first nine tasks. */
+const searchRowsOf = (target, tasks) => Math.min(target.browserSearch ? 9 : 25, tasks)
+
 /** Runs one sample of every scenario on the page at `origin` with `tasks`
-    tasks, adding its numbers to `metrics`. */
-async function runSample(origin, tasks, metrics, query = '') {
+    tasks, adding its numbers to `metrics`. `searchRows` is how many rows
+    the build's Search shows for "signed firm" (searchRowsOf). */
+async function runSample(origin, tasks, metrics, query = '', searchRows = Math.min(25, tasks)) {
   const opened = await openPage(origin, tasks, metrics, query)
   const { context, page, cdp, errors, settle, appRenders, timed } = opened
   await page.locator('[data-view-switch]').waitFor()
@@ -557,14 +565,17 @@ async function runSample(origin, tasks, metrics, query = '') {
   const search = await handle(
     page.getByRole('dialog').getByRole('combobox', { name: 'Search tasks and projects' }),
   )
+  // A build whose Search asks the server (search:page) waits 250 ms after
+  // the last key and one round trip to the stand-in, so the phase includes
+  // both; an older build filtered the loaded tasks in the browser at once.
   phase('search')
   metrics.search.push(
     await timed(async () => {
       await search.fill('signed firm')
-      await shows(page, '[cmdk-item]', 8)
+      await shows(page, '[cmdk-item]')
     }),
   )
-  assert.equal(await page.locator('[cmdk-item]').count(), 9)
+  assert.equal(await page.locator('[cmdk-item]').count(), searchRows)
   await page.keyboard.press('Escape')
   const roadmap = await viewButton(page, 'Roadmap')
   phase('navigation')
@@ -1066,6 +1077,7 @@ try {
     // an app from before it derived the load of the tasks it shows from
     // their rows gets those load rows too, as its own server sent them
     target.query = existsSync(join(target.source, 'convex/lib/loadRows.ts')) ? '' : '&shownload=1'
+    target.browserSearch = existsSync(join(target.source, 'src/lib/paletteSearch.ts'))
   }
   if (process.argv.includes('--serve')) {
     for (const target of targets)
@@ -1087,7 +1099,13 @@ try {
         // the targets take turns, so both run under the same load
         for (const target of targets) {
           running = { label: target.label, tasks, sample: sample + 1, phase: 'startup' }
-          await runSample(target.origin, tasks, target.metrics, target.query)
+          await runSample(
+            target.origin,
+            tasks,
+            target.metrics,
+            target.query,
+            searchRowsOf(target, tasks),
+          )
           if (varied) await runVariedSample(target.origin, tasks, target.metrics, target.query)
           // the machine's load, which moves single numbers a lot
           const load = loadavg()[0]
