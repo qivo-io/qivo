@@ -53,6 +53,7 @@ vi.mock('../store/planner', () => ({
   P: new Proxy({}, { get: (_t, k) => store[k as keyof typeof store] }),
 }))
 
+import { noteOpenedTask } from './openedTasks'
 import {
   addressesTask,
   buildPath,
@@ -354,6 +355,38 @@ describe('buildPath', () => {
     ).toBe(true)
     // a handle the address never named still names no organization
     expect(buildPath({ inboxOpen: true, openIssue: 'QN-404' })).toBe('/app/~/inbox/tasks/qn-404')
+  })
+
+  it('names a task Search opened that the store does not hold by its organization and key', () => {
+    // as Search opens an archived home task by its key, and a guest seat's by its uuid
+    noteOpenedTask('QN-40', {
+      uuid: 'uuid-home-40',
+      key: 'QN-40',
+      title: 'Archived home task',
+      project: 'p-home-1a',
+      org: HOME,
+      archived: true,
+    })
+    noteOpenedTask('uuid-acme-8', {
+      uuid: 'uuid-acme-8',
+      key: 'QN-8',
+      title: 'Archived Acme task',
+      project: 'p-acme-1',
+      org: ACME,
+      archived: true,
+    })
+    expect(buildPath({ view: 'kanban', openIssue: 'QN-40' })).toBe('/app/home/board/tasks/qn-40')
+    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-acme-8' })).toBe(
+      '/app/acme/board/all/tasks/qn-8',
+    )
+    // never under ~, where QN-8 would read as the home organization's task
+    expect(buildPath({ inboxOpen: true, openIssue: 'uuid-acme-8' })).toBe(
+      '/app/acme/inbox/tasks/qn-8',
+    )
+    // a handle Search did not note still names no organization
+    expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-acme-9' })).toBe(
+      '/app/~/board/all/tasks/uuid-acme-9',
+    )
   })
 
   it("names a task by its uuid once its organization left too, never the home organization's task of that number", () => {

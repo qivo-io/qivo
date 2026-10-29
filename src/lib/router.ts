@@ -21,8 +21,10 @@
    Tasks resolve their own project scope except under all/mine or inbox.
    Legacy #/ links share parseSegments and are replaced by path routes;
    unrelated hashes, including auth fragments, are ignored. */
+
 import { ALL_SCOPE, ISSUE_PREFIX, MINE_SCOPE, P } from '../store/planner'
 import type { IssueVM } from '../store/viewModels'
+import { openedTask } from './openedTasks'
 
 export type Route = {
   scope?: string
@@ -333,11 +335,23 @@ const refOf = (open: string) => heldRef(open) ?? open
 const named = new Map<string, Pick<IssueVM, 'org' | 'key' | 'uuid'> & { seg: string }>()
 const NAMED_MAX = 64
 
+/* Names, as `named` does, a task Search opened that the store does not
+   hold, such as an archived one (lib/openedTasks.ts), so the address names
+   its organization and key from the start. */
+function namedOpened(open: string) {
+  const task = openedTask(open)
+  if (!task) return undefined
+  const was = { org: task.org, key: task.key, uuid: task.uuid, seg: orgSegment(task.org) }
+  named.set(open, was)
+  if (named.size > NAMED_MAX) named.delete(named.keys().next().value ?? open)
+  return was
+}
+
 /** The task handle `open` names: the live task, or the one it last was. */
 function taskNamed(open: string) {
   const it = P.issueById[open]
   if (!it) {
-    const was = named.get(open)
+    const was = named.get(open) ?? namedOpened(open)
     if (!was) return was
     const seg = orgSegment(was.org)
     if (seg === ORG_NONE) return { ...was, key: was.uuid }
