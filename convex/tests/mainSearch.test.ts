@@ -16,8 +16,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { canSeeProject } from '../lib/access'
+import { canAccessProject, canSeeProject } from '../lib/access'
 import { newWindowKey } from '../lib/db'
+import { GRANT_LEVELS } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
 import {
   ARCHIVED_FILTER,
@@ -1654,6 +1655,8 @@ describe('the project results of main Search', () => {
       ],
     ]
     const seen = new Set<number>()
+    // the shapes whose subject misses a project past PROJECT_SIGHT's bounds
+    const missing = new Set<string>()
     for (const [name, plant] of [...SHAPES, ...extra]) {
       const t = newT()
       const f = await withOrg(t)
@@ -1677,11 +1680,65 @@ describe('the project results of main Search', () => {
         const [listed, whole] = await bothPaths(t, [me], { text: 'zephyr' })
         expect([...listed].sort(), `${name} as ${org_role}, project by project`).toEqual(expected)
         expect([...whole].sort(), `${name} as ${org_role}, whole`).toEqual(expected)
+        // Past either bound each project is checked by itself, and only the
+        // seat's own child rows show a top-level project for navigation, so
+        // a top-level project seen only through a team's source on one of
+        // its sub-projects is missed, and nothing else.
+        const missed = await t.run(async (ctx) => {
+          const out: string[] = []
+          for (const id of expected) {
+            const p = (await ctx.db
+              .query('projects')
+              .withIndex('by_uuid', (q) => q.eq('id', id))
+              .unique()) as Doc<'projects'>
+            if (p.parent_id !== undefined || (await canAccessProject(ctx, me, p))) continue
+            const kids = await ctx.db
+              .query('projects')
+              .withIndex('by_parent', (q) => q.eq('parent_id', p.id))
+              .collect()
+            let own = false
+            for (const kid of kids) {
+              const granted = await ctx.db
+                .query('project_access')
+                .withIndex('by_project_profile', (q) =>
+                  q.eq('project_id', kid.id).eq('profile_id', me.id),
+                )
+                .first()
+              if (
+                (kid.lead_id === me.id || granted !== null) &&
+                (await canSeeProject(ctx, me, kid))
+              )
+                own = true
+            }
+            if (!own) out.push(id)
+          }
+          return out
+        })
+        if (missed.length > 0) missing.add(`${name} as ${org_role}`)
+        MAIN_SEARCH.projects = 0
+        for (const bound of ['roots', 'teams'] as const) {
+          PROJECT_SIGHT[bound] = 0
+          const { page } = await searchRun(t, [me], { text: 'zephyr' })
+          expect(projectIds(page).sort(), `${name} as ${org_role}, whole past ${bound}`).toEqual(
+            expected.filter((id) => !missed.includes(id)),
+          )
+          PROJECT_SIGHT[bound] = DEFAULT_SIGHT[bound]
+        }
+        MAIN_SEARCH.projects = DEFAULT_SEARCH.projects
       }
     }
     // the shapes show no project, a parent for navigation alone, and more
     expect([...seen].sort()).toEqual([0, 1, 2, 3])
-  }, 180_000)
+    // the miss is a parent seen only through a team's share on a sub-project
+    expect([...missing].sort()).toEqual(
+      [
+        ...GRANT_LEVELS.map((level) => `${level} team share on a sub-project`),
+        'user team share on an archived sub-project',
+      ]
+        .flatMap((shape) => [`${shape} as user`, `${shape} as viewer`])
+        .sort(),
+    )
+  }, 300_000)
 
   it('narrows project results as it narrows tasks', async () => {
     const t = newT()
