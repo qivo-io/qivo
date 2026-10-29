@@ -103,14 +103,7 @@ export type BillingSummary = {
  * there is no live paid period. Month dates are UTC days; the end is the
  * month's last day. `period_key` is the bucket's stored key
  * (model/billingUsage.ts usagePeriod), which View credentials hands to API
- * access. Allowances are null when no plan exists.
- *
- * `users[].keys` lists each account's credentials with their calls. The app
- * shows each account's total only, with View credentials, and no longer
- * reads them; they stay for one release so a tab or desktop window loaded
- * before it, which reads `keys.length`, still opens Billing. Remove them,
- * with their reads in model/billing.ts billingUsageHead, in the release
- * after the one that stopped reading them. */
+ * access. Allowances are null when no plan exists. */
 export type BillingUsage = {
   period_kind: 'paid' | 'pending' | 'month'
   period_key: string
@@ -124,11 +117,6 @@ export type BillingUsage = {
   storage_overage_cents: number
   waived: boolean
   delivery_unconfirmed: boolean
-  users: {
-    profile_id: string
-    name: string
-    calls: number
-    keys: { id: string; name: string; calls: number }[]
-  }[]
+  users: { profile_id: string; name: string; calls: number }[]
   projects: { project_id: string; name: string; storage_bytes: number }[]
 }
