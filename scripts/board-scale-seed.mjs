@@ -292,12 +292,7 @@ export async function seedCredentials(client, { key, org, actor, count, apiUrl, 
         done: known.done || (used.get(`${table}:${row.id}`) ?? 0) >= plannedCalls(number),
       })
     }
-  const as = (profile) =>
-    client.setAdminAuth(key, {
-      subject: profile.auth_user_id,
-      issuer: 'board-scale-seed',
-      tokenIdentifier: `board-scale-seed|${profile.auth_user_id}`,
-    })
+  const as = (profile) => client.setAdminAuth(key, identityOf(profile.auth_user_id))
   let added = 0
   for (let n = 1; n <= count; n++) {
     const known = seeded.get(n) ?? { tries: 0, done: false }
