@@ -12,7 +12,8 @@
 // (convex/lib/workspaceJoin.ts splitWorkspace). After a write it sends every
 // part whose JSON changed, and only those, in one transition, as Convex does.
 // It also answers snapshot:forMe, the one query apps before the parts read,
-// for a baseline build.
+// for a baseline build, and the task window's own queries (taskWindow:task,
+// links and attachments) from the workspace it holds.
 //
 // Like Convex, a write's results reach the page before its answer does. A
 // subscription result that waits for its turn takes the writes made
@@ -555,8 +556,70 @@ function readPart(name, args) {
   const at = windowsOf[kind].findIndex((w) => w.from === args.from)
   return { state: 'ok', ...chunkLists(part[kind][at]) }
 }
+/* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
+const order = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+/** What the task window's query `name` answers for `args`, in the shapes
+    of convex/lib/taskWindow.ts: the open task with its parent and its
+    subtasks as short rows, its links with their other ends, or its
+    attachment rows. The signed-in person is shown every task the
+    workspace holds, so every list is complete, and a task it does not hold
+    answers unavailable. */
+function readTaskWindow(name, args) {
+  const byId = new Map(snapshot.issues.map((row) => [row.id, row]))
+  const task = byId.get(name === 'taskWindow:task' ? args.ref : args.issue_id)
+  if (!task) return { state: 'unavailable' }
+  // the person's grant on the visible program
+  const level = access[0].level
+  const short = (row) => {
+    const {
+      description: _text,
+      parent_id: _parent,
+      has_hidden_parent: _hiddenParent,
+      has_hidden_subtasks: _hidden,
+      ...rest
+    } = row
+    return { ...rest, has_subtasks: parents.has(row.id), level }
+  }
+  const byCreation = (a, b) => order(a.created_at, b.created_at) || order(a.id, b.id)
+  if (name === 'taskWindow:task') {
+    const kids = snapshot.issues
+      .filter((row) => row.parent_id === task.id)
+      .sort((a, b) => a.num - b.num || order(a.id, b.id))
+    const parent = task.parent_id ? byId.get(task.parent_id) : undefined
+    return {
+      state: 'ok',
+      task: { ...task, has_subtasks: parents.has(task.id) },
+      level,
+      labels: snapshot.issueLabels.filter((row) => row.issue_id === task.id),
+      follow:
+        snapshot.issueSubs.find((row) => row.issue_id === task.id && row.profile_id === me.id) ??
+        null,
+      parent: parent ? short(parent) : null,
+      subtasks: { rows: kids.map(short), complete: true },
+    }
+  }
+  if (name === 'taskWindow:links') {
+    const other = (link) => (link.source_id === task.id ? link.target_id : link.source_id)
+    const links = snapshot.links
+      .filter(
+        (link) =>
+          (link.source_id === task.id || link.target_id === task.id) && byId.has(other(link)),
+      )
+      .sort(byCreation)
+    const ends = [...new Set(links.map(other))]
+    return { state: 'ok', links, tasks: ends.map((id) => short(byId.get(id))), complete: true }
+  }
+  const rows = snapshot.attachments.filter((row) => row.issue_id === task.id).sort(byCreation)
+  return {
+    state: 'ok',
+    rows,
+    count: rows.filter((row) => row.dropped_at === undefined).length,
+    complete: true,
+  }
+}
 const read = (name, args = {}) => {
   if (name.startsWith('workspace:')) return readPart(name, args)
+  if (name.startsWith('taskWindow:')) return readTaskWindow(name, args)
   switch (name) {
     case 'snapshot:forMe':
       snapshot.delivered_at = new Date().toISOString()

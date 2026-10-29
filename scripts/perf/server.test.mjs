@@ -4,8 +4,10 @@ import { idWindows, startWindows } from '../../convex/lib/idWindows'
 /* The browser benchmark's stand-in server (scripts/perf/server.mjs), loaded
    as its worker would be, with the page's parameters as the worker's name. */
 
-/* The id of the stand-in workspace's first task (server.mjs id). */
+/* The id of the stand-in workspace's first task, and its id maker
+   (server.mjs id). */
 let TASK_1 = ''
+let id = (_kind, _n) => ''
 
 /** Loads the server for page parameters `params` and answers what it posts
     and a way to send it a message. */
@@ -13,7 +15,7 @@ async function server(params) {
   vi.resetModules()
   const posted = []
   vi.stubGlobal('self', { name: params, postMessage: (message) => posted.push(message) })
-  const { id } = await import('./server.mjs')
+  ;({ id } = await import('./server.mjs'))
   TASK_1 = id('4', 1)
   const send = (data) => self.onmessage({ data })
   return { posted, send }
@@ -115,6 +117,47 @@ describe('the benchmark server', () => {
     const answer = (id) => JSON.parse(posted.find((m) => m.to === id).text)
     expect(Object.keys(answer('comments')).sort()).toEqual(['comments', 'earlier'])
     expect(answer('history')).toEqual({ events: [], earlier: false, next: null })
+  })
+
+  it("answers the task window's own lists from the workspace, each whole", async () => {
+    const { posted, send } = await server(
+      'tasks=40&latency=0&mbps=100000&links=1&attachments=1&subtasks=0.2',
+    )
+    // task 6 of each block of ten is a parent; task 6 links to task 9
+    const parent = id('4', 5)
+    await send({ type: 'query', id: 'task', name: 'taskWindow:task', args: { ref: parent } })
+    await send({ type: 'query', id: 'links', name: 'taskWindow:links', args: { issue_id: parent } })
+    await send({
+      type: 'query',
+      id: 'files',
+      name: 'taskWindow:attachments',
+      args: { issue_id: parent },
+    })
+    await send({ type: 'query', id: 'none', name: 'taskWindow:task', args: { ref: 'unknown' } })
+    const answer = (to) => JSON.parse(posted.find((m) => m.to === to).text)
+    const task = answer('task')
+    expect(task).toMatchObject({ state: 'ok', level: 'user', subtasks: { complete: true } })
+    expect(task.task).toMatchObject({ id: parent, has_subtasks: true })
+    expect(task.subtasks.rows.map((row) => row.num)).toEqual([7, 8])
+    for (const row of task.subtasks.rows) {
+      expect(row).toMatchObject({ has_subtasks: false, level: 'user' })
+      expect(row).not.toHaveProperty('parent_id')
+      expect(row).not.toHaveProperty('description')
+    }
+    const links = answer('links')
+    expect(links).toMatchObject({ state: 'ok', complete: true })
+    expect(links.links.length).toBeGreaterThan(0)
+    expect(links.tasks.map((row) => row.id).sort()).toEqual(
+      [
+        ...new Set(
+          links.links.map((link) => (link.source_id === parent ? link.target_id : link.source_id)),
+        ),
+      ].sort(),
+    )
+    const files = answer('files')
+    expect(files).toMatchObject({ state: 'ok', complete: true, count: files.rows.length })
+    expect(files.rows.every((row) => row.issue_id === parent)).toBe(true)
+    expect(answer('none')).toEqual({ state: 'unavailable' })
   })
 
   it('answers the appearance mode the page asks for, dark unless it asks for light', async () => {
