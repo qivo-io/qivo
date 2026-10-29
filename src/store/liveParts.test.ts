@@ -127,6 +127,9 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 // the task window's side queries
 const THREAD = makeFunctionReference<'query'>('snapshot:threadComments')
 const HISTORY = makeFunctionReference<'query'>('snapshot:threadHistory')
+const TASK = makeFunctionReference<'query'>('taskWindow:task')
+const LINKS = makeFunctionReference<'query'>('taskWindow:links')
+const ATTACHMENTS = makeFunctionReference<'query'>('taskWindow:attachments')
 
 async function started() {
   const s = scripted()
@@ -383,6 +386,43 @@ describe('the live parts registry', () => {
     parts.watchSide('history', HISTORY, { issue_id: 'u' })
     parts.stop()
     expect([...s.watched.keys()].filter((key) => key.startsWith('snapshot:'))).toEqual([])
+  })
+
+  it('reports all five side queries on their own, and stops one or all of them', async () => {
+    const { s, parts, reports, last } = await started()
+    const sides = [
+      ['thread', THREAD, 'snapshot:threadComments', { issue_id: 't' }],
+      ['history', HISTORY, 'snapshot:threadHistory', { issue_id: 't' }],
+      ['task', TASK, 'taskWindow:task', { ref: 't' }],
+      ['links', LINKS, 'taskWindow:links', { issue_id: 't' }],
+      ['attachments', ATTACHMENTS, 'taskWindow:attachments', { issue_id: 't' }],
+    ] as const
+    for (const [side, ref, , args] of sides) parts.watchSide(side, ref, args)
+    const key = (at: number) => s.keyOf(sides[at][2], sides[at][3])
+    // each answers alone
+    for (const [at, [side, , name, args]] of sides.entries()) {
+      s.set(name, args, { value: { side } })
+      s.send([key(at)])
+      expect(reports.at(-1)?.sides).toEqual({ [side]: { value: { side } } })
+    }
+    // one failing holds neither the workspace nor another side, in one report
+    const count = reports.length
+    s.set('taskWindow:links', { issue_id: 't' }, { error: new Error('links failed') })
+    s.set('taskWindow:task', { ref: 't' }, { value: { side: 'task', again: true } })
+    s.set('workspace:tasks', { org_id: ORG, ...LEFT }, { value: tasksPart(['a']) })
+    s.send([key(3), key(2), s.keyOf('workspace:tasks', { org_id: ORG, ...LEFT })])
+    expect(reports).toHaveLength(count + 1)
+    expect(reports.at(-1)?.sides).toEqual({
+      links: { error: expect.any(Error) },
+      task: { value: { side: 'task', again: true } },
+    })
+    expect(last()).toMatchObject({ state: 'complete', changed: true })
+    // stopping one keeps the other four
+    parts.stopSide('attachments')
+    expect(s.watched.has(key(4))).toBe(false)
+    for (const at of [0, 1, 2, 3]) expect(s.watched.has(key(at))).toBe(true)
+    parts.stop()
+    for (const at of [0, 1, 2, 3]) expect(s.watched.has(key(at))).toBe(false)
   })
 
   it('fails a workspace that stays incomplete with no part answering while online, and waits while offline', async () => {

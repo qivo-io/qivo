@@ -57,7 +57,7 @@ import {
   projectRightAfterUpdate,
 } from '../../convex/lib/projectCreators'
 import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
-import { resolveReviewHours, reviewStamp } from '../../convex/lib/review'
+import { resolveReviewHours, reviewStamp, taskOwnerId } from '../../convex/lib/review'
 import { firstSittingDay, nextSyncStamp, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { NO_QUERY, SignOutFailed } from '../lib/authSession'
@@ -121,6 +121,7 @@ import { reloadPage } from '../lib/pageHistory'
 import { matchesAllWords, taskSearchText } from '../lib/search'
 import { type OfflineWindow, type SavePause, syncStatus } from '../lib/syncStatus'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
+import { byCreation, byNumber, linkViews, type SectionState, shownIds } from '../lib/taskSections'
 import type { ToastTone } from '../lib/toasts'
 import { type UnconfirmedChange, unconfirmedNote, unconfirmedText } from '../lib/unconfirmedNote'
 import { beginUpdateBlock } from '../lib/updateSafety'
@@ -133,15 +134,7 @@ import {
   refusalWriter,
   type Writer,
 } from './fieldNotice'
-import {
-  createLayers,
-  type Layer,
-  type Over,
-  type Paint,
-  type Part,
-  paints,
-  type View,
-} from './layers'
+import { createLayers, type Layer, type Over, type Paint, paints, type View } from './layers'
 import {
   createLiveParts,
   type LiveParts,
@@ -176,6 +169,7 @@ import {
   type ArchivedIssueVM,
   type ArchivedListRowVM,
   type ArchivedProjectVM,
+  type AttachmentVM,
   byOrder,
   type CommentVM,
   duplicateNameTags,
@@ -193,6 +187,7 @@ import {
   shapeArchivedIssue,
   shapeArchivedListRow,
   shapeArchivedProject,
+  shapeAttachment,
   shapeComment,
   shapeLabel,
   shapeMessage,
@@ -464,6 +459,118 @@ const acceptedCommentChanges = new Map<string, Partial<Row<'comments'>> | null>(
    earlier, and how the last load of an earlier page went. */
 let threadStart = false
 let earlierLoad: 'idle' | 'loading' | 'failed' = 'idle'
+/* The windows that show the watched task's Subtasks, Linked tasks and
+   Attachments (P.showSections): a floating window or pop-out, and on a
+   phone its Details tab. Each list has a side query of the live parts
+   (convex/taskWindow.ts task, links and attachments, the SectionSide
+   names), which runs only while one of them does, so the desktop Inbox
+   pane, which shows no details, reads none of them. */
+const sectionOwners = new Set<object>()
+/* The task and organization the sections' side queries watch, or null. */
+let sectionsWatched: { task: string; org: string } | null = null
+/* What the sections' side queries last delivered for task `issue`, the
+   anchors their lists are built from (rebuildSections) as the base is for
+   the workspace rows: null before a side's first delivery, CREATING for a
+   task whose create is on its way, which has none of them yet. At most one
+   task's three answers, so at most TASK_WINDOW.rows short rows a list and
+   TASK_WINDOW.attachments attachment rows (convex/lib/taskWindow.ts). They
+   go when the last window that shows them leaves and when another task
+   opens (resetSections). A re-init of the parts (stopParts) keeps them
+   until the new subscriptions deliver, so no section flashes back to
+   loading. */
+let sectionAnswers: SectionAnswers = { issue: null, task: null, links: null, attachments: null }
+/* Whether each side query of the sections failed, as historyFailure says
+   for the history: 'failed' until a later delivery or Retry
+   (P.retrySection), 'retrying' from Retry until the server answers. A
+   failure keeps the answer delivered before it. */
+const sectionFailure: Record<SectionSide, CommentsFailure> = {
+  task: 'none',
+  links: 'none',
+  attachments: 'none',
+}
+
+/* The sections' side queries (store/liveParts.ts SIDE_NAMES). */
+const SECTION_SIDES = ['task', 'links', 'attachments'] as const satisfies readonly SideName[]
+type SectionSide = (typeof SECTION_SIDES)[number]
+/* What a section's side query answers. */
+type TaskAnswer = FunctionReturnType<typeof api.taskWindow.task>
+type LinksAnswer = FunctionReturnType<typeof api.taskWindow.links>
+type AttachmentsAnswer = FunctionReturnType<typeof api.taskWindow.attachments>
+type LinksOk = Extract<LinksAnswer, { state: 'ok' }>
+type AttachmentsOk = Extract<AttachmentsAnswer, { state: 'ok' }>
+/* A task in a section's answer (convex/lib/taskWindow.ts ShortRow). */
+type ShortRow = Extract<TaskAnswer, { state: 'ok' }>['subtasks']['rows'][number]
+/* What a section holds of a task whose create is on its way: a complete,
+   empty list, as watchComments gives such a task an empty thread. */
+const CREATING = 'creating'
+type SectionAnswers = {
+  issue: string | null
+  task: TaskAnswer | typeof CREATING | null
+  links: LinksAnswer | typeof CREATING | null
+  attachments: AttachmentsAnswer | typeof CREATING | null
+}
+
+/** The task window's sections, by the names the window gives them. */
+export type SectionName = 'subtasks' | 'links' | 'attachments'
+/* The side query behind each section. */
+const SECTION_SIDE: Record<SectionName, SectionSide> = {
+  subtasks: 'task',
+  links: 'links',
+  attachments: 'attachments',
+}
+
+/** A task in Subtasks or Linked tasks: the workspace's view of it while
+    the workspace holds it, painted, so the person's own edits to it show at
+    once, else the section answer's short row. */
+export type RelatedTaskVM = {
+  uuid: string
+  /** what opening it passes on: its handle in the workspace, or for a task
+      the workspace does not hold, the handle it will get (taskIndex.ts
+      setHandle's rule) */
+  handle: string
+  title: string
+  project: string
+  status: string
+  owner: string | undefined
+  /** whether it has active subtasks; a short row's own leaves are not in
+      the answer */
+  isGroup: boolean
+  done: boolean
+  /** whether the workspace holds it, which removing it needs */
+  held: boolean
+  remaining: number | undefined
+}
+/** A row of Linked tasks: the other task, and the relation as seen from
+    the open task (blocks, blocked_by or relates). */
+export type LinkedTaskVM = RelatedTaskVM & { type: string }
+
+/** One of the watched task's sections: where its list stands
+    (lib/taskSections.ts SectionState), its rows (none while loading or
+    unavailable; those delivered before a failure), whether its answer said
+    the list is whole, and whether an answer arrived for the task. */
+export type SectionVM<R> = {
+  state: SectionState
+  rows: R[]
+  complete: boolean
+  delivered: boolean
+}
+
+/** A file in Attachments, and whether the workspace holds its row, which
+    removing it needs. */
+export type SectionAttachmentVM = AttachmentVM & { held: boolean }
+
+/** The watched task's Subtasks, Linked tasks and Attachments (P.sections),
+    for the task `task`, whose windows alone show them. `hidden` says the
+    task has subtasks the person cannot see. An attachment row of a
+    description image (`inline`) is no row of the section, and `count`
+    counts what the per-task cap counts: every attachment row but those a
+    description save took out, images included. */
+export type TaskSectionsVM = {
+  task: string
+  subtasks: SectionVM<RelatedTaskVM> & { hidden: boolean }
+  links: SectionVM<LinkedTaskVM>
+  attachments: SectionVM<SectionAttachmentVM> & { count: number }
+}
 
 /** What the task window shows above the oldest loaded comment
     (P.commentsEarlier). */
@@ -676,8 +783,9 @@ function subscribeWaitingThread() {
 }
 
 /* Subscribes to the watched thread `issueUuid` in organization `orgId`, as
-   the thread side query of the live parts, replacing any earlier one, and
-   to its history too while a window shows All (startHistory). Its answers
+   the thread side query of the live parts, replacing any earlier one, to
+   its history too while a window shows All (startHistory), and to its
+   sections while a window shows them (startSections). Its answers
    come with the transitions that bring them (threadNews), so one that also
    changes the workspace repaints once. A delivery is the thread's new
    anchor, and the comment writes still waiting paint over it again (owe),
@@ -689,6 +797,7 @@ function subscribeThread(issueUuid: string, orgId: string) {
   threadWatched = { task: issueUuid, org: orgId }
   parts.watchSide('thread', api.snapshot.threadComments, { org_id: orgId, issue_id: issueUuid })
   if (historyOwners.size > 0) startHistory()
+  if (sectionOwners.size > 0) startSections()
 }
 
 /* Stops the thread's side query. */
@@ -807,10 +916,312 @@ function historyNews(news: SideNews) {
   owe('thread')
 }
 
+/* Asks for the watched task's sections, for a window that shows them, as
+   startHistory asks for the history: their side queries subscribe beside
+   the thread's (subscribeSections), unless they already run. A task the
+   server does not hold, such as one whose create is on its way, gets
+   complete, empty lists, and its sections subscribe once its thread does.
+   Answers whether the lists changed. */
+function startSections(): boolean {
+  if (!watchedComments) return false
+  if (threadWatched) {
+    if (sectionsWatched?.task !== threadWatched.task || sectionsWatched.org !== threadWatched.org)
+      subscribeSections(threadWatched.task, threadWatched.org)
+    return false
+  }
+  if (sectionAnswers.issue === watchedComments || serverTask(watchedComments)) return false
+  sectionAnswers = {
+    issue: watchedComments,
+    task: CREATING,
+    links: CREATING,
+    attachments: CREATING,
+  }
+  return true
+}
+
+/* Subscribes to the sections of task `issueUuid` in organization `orgId`,
+   each as its side query of the live parts, replacing any earlier ones.
+   Their answers come with the transitions that bring them (sectionNews).
+   Answers kept for this task stay until the new subscriptions deliver. */
+function subscribeSections(issueUuid: string, orgId: string) {
+  if (!parts) return
+  if (sectionAnswers.issue !== issueUuid) resetSections(issueUuid)
+  sectionsWatched = { task: issueUuid, org: orgId }
+  for (const side of SECTION_SIDES) watchSection(side)
+}
+
+/* Subscribes section side `side` of the watched sections afresh, so its
+   answer is never one held from an earlier subscription. */
+function watchSection(side: SectionSide) {
+  const watched = sectionsWatched
+  if (!parts || !watched) return
+  const { task, org } = watched
+  if (side === 'task') parts.watchSide(side, api.taskWindow.task, { org_id: org, ref: task })
+  else parts.watchSide(side, api.taskWindow[side], { org_id: org, issue_id: task })
+}
+
+/* Stops the sections' side queries. */
+function stopSections() {
+  for (const side of SECTION_SIDES) parts?.stopSide(side)
+  sectionsWatched = null
+}
+
+/* Drops every section answer and failure, so the sections of task `issue`,
+   or of none, load afresh. The caller stops the subscriptions when no
+   window shows the sections or another task opens, and repaints. */
+function resetSections(issue: string | null = null) {
+  sectionAnswers = { issue, task: null, links: null, attachments: null }
+  for (const side of SECTION_SIDES) sectionFailure[side] = 'none'
+}
+
+/* The news of section side `side` in one transition, as the history's
+   (historyNews): a failed query keeps the answer delivered before it and
+   shows as the section's 'failed' state until the next delivery. The
+   taskWindow queries answer a task the caller may not list with a state
+   (unavailable, archived) rather than an error, so every error is a
+   failure, also orgQuery's refusal of a caller without a seat, which the
+   snapshot notice explains. A delivery is the section's new anchor. It
+   paints with the rest of its transition and, while a painted write
+   waits, when that write answers (owe), as the thread's does. */
+function sectionNews(side: SectionSide) {
+  return (news: SideNews) => {
+    const watched = sectionsWatched
+    if (!watched || watchedComments !== watched.task || sectionAnswers.issue !== watched.task)
+      return
+    if ('error' in news) {
+      console.error(`[qivo] ${side} subscription of the task window failed:`, news.error)
+      sectionFailure[side] = 'failed'
+    } else {
+      sectionFailure[side] = 'none'
+      sectionAnswers = { ...sectionAnswers, [side]: anchor(news.value) }
+    }
+    owe('sections')
+  }
+}
+
 /* What each side query's news goes to. */
 const SIDE_NEWS: Record<SideName, (news: SideNews) => void> = {
   thread: threadNews,
   history: historyNews,
+  task: sectionNews('task'),
+  links: sectionNews('links'),
+  attachments: sectionNews('attachments'),
+}
+
+/* The state of section side `side`, whose answer is `answer`. */
+function sectionState(
+  side: SectionSide,
+  answer: { state: string } | typeof CREATING | null,
+): SectionState {
+  const failure = sectionFailure[side]
+  if (failure !== 'none') return failure
+  if (answer === null) return 'loading'
+  return answer === CREATING || answer.state === 'ok' ? 'ready' : 'unavailable'
+}
+
+/* Task `uuid` as a row of a section, from the workspace's view of it when
+   the workspace holds it, else from `short`, the answer's row, or null
+   with neither. */
+function relatedTask(uuid: string, short: ShortRow | undefined): RelatedTaskVM | null {
+  const handle = uuidToKey.get(uuid)
+  const it = handle === undefined ? undefined : PLANNER.issueById[handle]
+  if (it)
+    return {
+      uuid,
+      handle: it.id,
+      title: it.title,
+      project: it.project,
+      status: it.status,
+      owner: it.owner,
+      isGroup: PLANNER.isGroup(it),
+      done: PLANNER.isDone(it),
+      held: true,
+      remaining: it.remaining,
+    }
+  if (!short) return null
+  return {
+    uuid,
+    // the handle it gets once the workspace holds it (taskIndex.ts setHandle)
+    handle: short.org_id === HOME_ORG ? `${ISSUE_PREFIX}-${short.num}` : uuid,
+    title: short.title,
+    project: short.project_id,
+    status: short.status,
+    owner: taskOwnerId(short, short.has_subtasks),
+    isGroup: short.has_subtasks,
+    // a short group's leaves are not in the answer
+    done: !short.has_subtasks && short.status === 'done',
+    held: false,
+    remaining: short.remaining_hours != null ? Number(short.remaining_hours) : undefined,
+  }
+}
+
+/* The watched task `t`'s Subtasks from the task answer and, where they
+   differ from the applied rows, the painted ones (lib/taskSections.ts
+   shows): the answer's subtasks and the painted subtasks of `t` are the
+   candidates, each asked whether its applied and its painted row name `t`
+   as parent. */
+function subtaskSection(t: string, answer: SectionAnswers['task']) {
+  const state = sectionState('task', answer)
+  const list: { rows: readonly ShortRow[]; complete: boolean; hidden: boolean } | null =
+    answer === CREATING
+      ? { rows: [], complete: true, hidden: false }
+      : answer?.state === 'ok'
+        ? {
+            rows: answer.subtasks.rows,
+            complete: answer.subtasks.complete,
+            hidden: answer.task.has_hidden_subtasks,
+          }
+        : null
+  if (!list) return { state, rows: [], complete: false, delivered: answer !== null, hidden: false }
+  const fromAnswer = new Map(list.rows.map((row) => [row.id, row]))
+  const applied = base.map('issues')
+  const ids = shownIds([...fromAnswer.keys(), ...(tasks.relationsOf(t).children ?? [])], (x) => ({
+    base: applied.get(x)?.parent_id === t,
+    painted: rows.issues.get(x)?.parent_id === t,
+    answer: fromAnswer.has(x),
+  }))
+  const shown = ids
+    .map((x) => ({
+      id: x,
+      num: rows.issues.get(x)?.num ?? fromAnswer.get(x)?.num ?? 0,
+      row: relatedTask(x, fromAnswer.get(x)),
+    }))
+    .sort(byNumber)
+    .flatMap(({ row }) => (row ? [row] : []))
+  return { state, rows: shown, complete: list.complete, delivered: true, hidden: list.hidden }
+}
+
+/* The watched task `t`'s Linked tasks from the links answer and, where
+   they differ from the applied rows, the painted ones, link by link as
+   subtaskSection does, then one row for each other task by the
+   workspace's rule (lib/taskSections.ts linkViews). A link a write adds
+   joins two tasks the workspace holds (P.addLink), so every painted link
+   has a row for its other task. */
+function linkSection(t: string, answer: SectionAnswers['links']) {
+  const state = sectionState('links', answer)
+  const list: Pick<LinksOk, 'links' | 'tasks' | 'complete'> | null =
+    answer === CREATING
+      ? { links: [], tasks: [], complete: true }
+      : answer?.state === 'ok'
+        ? answer
+        : null
+  if (!list) return { state, rows: [], complete: false, delivered: answer !== null }
+  const fromAnswer = new Map(list.links.map((link) => [link.id, link]))
+  const ends = new Map(list.tasks.map((row) => [row.id, row]))
+  const applied = base.map('links')
+  const touches = (link: { source_id: string; target_id: string } | undefined) =>
+    !!link && (link.source_id === t || link.target_id === t)
+  const ids = shownIds([...fromAnswer.keys(), ...(tasks.relationsOf(t).links ?? [])], (id) => ({
+    base: touches(applied.get(id)),
+    painted: touches(rows.links.get(id)),
+    answer: fromAnswer.has(id),
+  }))
+  const links = ids.flatMap((id) => {
+    const painted = rows.links.get(id)
+    const link = touches(painted) ? painted : fromAnswer.get(id)
+    return link ? [link] : []
+  })
+  const shown = linkViews(t, links, (other) => uuidToKey.has(other) || ends.has(other)).flatMap(
+    (view) => {
+      const row = relatedTask(view.other, ends.get(view.other))
+      return row ? [{ ...row, type: view.type }] : []
+    },
+  )
+  return { state, rows: shown, complete: list.complete, delivered: true }
+}
+
+/* The watched task `t`'s Attachments from the attachments answer and,
+   where they differ from the applied rows, the painted ones, row by row as
+   subtaskSection does, oldest first. */
+function attachmentSection(t: string, answer: SectionAnswers['attachments']) {
+  const state = sectionState('attachments', answer)
+  const list: Pick<AttachmentsOk, 'rows' | 'complete'> | null =
+    answer === CREATING ? { rows: [], complete: true } : answer?.state === 'ok' ? answer : null
+  if (!list) return { state, rows: [], complete: false, delivered: answer !== null, count: 0 }
+  const fromAnswer = new Map(list.rows.map((row) => [row.id, row]))
+  const applied = base.map('attachments')
+  const ids = shownIds(
+    [...fromAnswer.keys(), ...(tasks.relationsOf(t).attachments ?? [])],
+    (id) => ({
+      base: applied.get(id)?.issue_id === t,
+      painted: rows.attachments.get(id)?.issue_id === t,
+      answer: fromAnswer.has(id),
+    }),
+  )
+  const all = ids
+    .flatMap((id) => {
+      const painted = rows.attachments.get(id)
+      const row = painted?.issue_id === t ? painted : fromAnswer.get(id)
+      return row ? [row] : []
+    })
+    .sort(byCreation)
+  return {
+    state,
+    rows: all
+      .filter((row) => !row.inline)
+      .map((row) => ({ ...shapeAttachment(row), held: rows.attachments.has(row.id) })),
+    complete: list.complete,
+    delivered: true,
+    count: all.filter((row) => row.dropped_at === undefined).length,
+  }
+}
+
+/* The watched task's sections now, or null while no window shows them. */
+function sectionsNow(): TaskSectionsVM | null {
+  const t = watchedComments
+  if (!t || sectionOwners.size === 0) return null
+  const answers =
+    sectionAnswers.issue === t
+      ? sectionAnswers
+      : { issue: t, task: null, links: null, attachments: null }
+  return {
+    task: t,
+    subtasks: subtaskSection(t, answers.task),
+    links: linkSection(t, answers.links),
+    attachments: attachmentSection(t, answers.attachments),
+  }
+}
+
+/* Builds P.sections again from the section answers and the rows on
+   screen, keeping the old object while it holds the same data. Answers
+   whether it changed. */
+function rebuildSections(): boolean {
+  const before = PLANNER.sections
+  PLANNER.sections = keep(before, sectionsNow())
+  return PLANNER.sections !== before
+}
+
+/* Task `it`'s subtasks, links and attachment count as the cap checks
+   before a write count them (lib/relationCandidates.ts subtaskBlock,
+   lib/taskCaps.ts linkBlock and attachmentBlock): the workspace's, or the
+   task's complete section lists while a window shows them and they hold
+   more. So a workspace that holds only part of a list, as during a staged
+   load, disables more and never allows more. The server checks again. */
+function capInputs(it: IssueVM) {
+  const sections = PLANNER.sections?.task === it.uuid ? PLANNER.sections : null
+  const whole = <R>(section: SectionVM<R> | undefined) => (section?.complete ? section.rows : [])
+  const children = whole(sections?.subtasks).map((row) => row.handle)
+  const links = whole(sections?.links)
+  const attachments = sections?.attachments.complete ? sections.attachments.count : 0
+  return {
+    children: children.length > it.children.length ? children : it.children,
+    links: links.length > it.links.length ? links : it.links,
+    attachments: Math.max(attachments, it.attachmentCount),
+  }
+}
+
+/* The attachment row `attId` that only the watched task's attachments
+   answer holds, with the organization the sections watch, for minting a
+   file the workspace does not hold (P.attachmentUrl, primeMint), or null.
+   The lookup ends with the answers, when the sections stop or another task
+   opens. */
+function sectionAttachment(attId: string): { row: Row<'issue_attachments'>; org: string } | null {
+  const answer = sectionAnswers.attachments
+  const watched = sectionsWatched
+  if (!watched || sectionAnswers.issue !== watched.task || answer === null) return null
+  if (answer === CREATING || answer.state !== 'ok') return null
+  const row = answer.rows.find((r) => r.id === attId)
+  return row ? { row, org: watched.org } : null
 }
 
 /* Desktop notifications (0074): fired once per inbox row id. An id set, not
@@ -1197,6 +1608,7 @@ function shownWorkspace() {
       P.threadEvents,
       P.commentsEarlier,
       P.historyEarlier,
+      P.sections,
       P.messages,
       P.messageGroups,
       P.unreadMessages,
@@ -1340,8 +1752,11 @@ let threadDeliveries = 0
    task, as snapshotCurrent is for the snapshot. */
 let threadCurrent = false
 /* The parts whose anchor changed while a painted write waited, and the
-   timer that paints them at the latest (owe). */
-const owed = { workspace: false, thread: false }
+   timer that paints them at the latest (owe). No layer paints the task
+   window's sections, which merge the rows on screen with their answers
+   (rebuildSections), but their answers wait with the rest, so one
+   transition still renders once. */
+const owed = { workspace: false, thread: false, sections: false }
 let payTimer: ReturnType<typeof setTimeout> | null = null
 let storeEpoch = 0
 let demoDisposed = false
@@ -1357,17 +1772,20 @@ const anchor = <T>(value: T): T => (STRICT_LAYERS ? deepFreeze(structuredClone(v
 /** Rebuilds the rows of `parts` from their anchors and every live layer
     (paintRows), and shows them. A workspace repaint also tells new tasks'
     callers their final handle and ends trouble a recovering delivery held. */
-function repaint(parts: { workspace?: boolean; thread?: boolean }) {
+function repaint(parts: { workspace?: boolean; thread?: boolean; sections?: boolean }) {
   if (heldRepaint) {
     heldRepaint.workspace ||= !!parts.workspace
     heldRepaint.thread ||= !!parts.thread
+    heldRepaint.sections ||= !!parts.sections
     return
   }
   const workspace = !!parts.workspace
   const thread = !!parts.thread
+  const sections = !!parts.sections
   if (workspace) owed.workspace = false
   if (thread) owed.thread = false
-  if (!owed.workspace && !owed.thread && payTimer) {
+  if (sections) owed.sections = false
+  if (!owed.workspace && !owed.thread && !owed.sections && payTimer) {
     clearTimeout(payTimer)
     payTimer = null
   }
@@ -1380,35 +1798,48 @@ function repaint(parts: { workspace?: boolean; thread?: boolean }) {
     rebuild()
     moveHandles(lastMoves)
     // a delivery that brings nothing new to the screen, such as a batch's
-    // echo of rows a bulk inbox action painted already, renders nothing
+    // echo of rows a bulk inbox action painted already, renders nothing;
+    // rebuild built the sections again too, which the comparison covers
     if (!lastShown || !sameShown(lastShown)) emit()
     else if (thread) emit('comments')
     // after the emit: it may send (reapPausedUploads)
     endHeldRecovery()
-  } else if (thread) {
-    rebuildComments()
-    emit('comments')
+  } else if (thread || sections) {
+    if (thread) rebuildComments()
+    // an answer that changes no section, such as the task answer's rerun
+    // after a description save, renders nothing
+    const shown = sections && rebuildSections()
+    if (thread || shown) emit('comments')
   }
 }
 
 /* The parts asked to repaint while together() runs its step, and whether
    something outside the rows changed that a workspace emit shows (emit). */
-let heldRepaint: { workspace: boolean; thread: boolean; emit: boolean } | null = null
+let heldRepaint: {
+  workspace: boolean
+  thread: boolean
+  sections: boolean
+  emit: boolean
+} | null = null
 
 /** Runs `step`, which settles several layers, and repaints what they asked
     for once at its end. React renders after each emit, so one repaint per
     layer would render the screen once for each. */
 function together(step: () => void) {
   if (heldRepaint) return step()
-  heldRepaint = { workspace: false, thread: false, emit: false }
+  heldRepaint = { workspace: false, thread: false, sections: false, emit: false }
   try {
     step()
   } finally {
     const parts = heldRepaint
     heldRepaint = null
     // a repaint shows the emit's change too, as one render
-    if (parts.workspace || parts.thread)
-      repaint({ workspace: parts.workspace || parts.emit, thread: parts.thread })
+    if (parts.workspace || parts.thread || parts.sections)
+      repaint({
+        workspace: parts.workspace || parts.emit,
+        thread: parts.thread,
+        sections: parts.sections,
+      })
     else if (parts.emit) emit()
   }
 }
@@ -1457,7 +1888,7 @@ function guarded(step: () => void) {
 
 /** Records that the anchor of `part` changed. It paints now when no painted
     write waits, else when the last one answers or a 0 ms timer fires. */
-function owe(part: Part) {
+function owe(part: keyof typeof owed) {
   owed[part] = true
   if (!layers.paintedPending()) pay()
   else payTimer ??= setTimeout(pay, 0)
@@ -1467,7 +1898,7 @@ function owe(part: Part) {
 function pay() {
   if (payTimer) clearTimeout(payTimer)
   payTimer = null
-  if (owed.workspace || owed.thread) repaint({ ...owed })
+  if (owed.workspace || owed.thread || owed.sections) repaint({ ...owed })
 }
 
 /** Paints `view` over the rows on screen, the moment its write is sent, and
@@ -3055,10 +3486,12 @@ async function primeMint(items: MintItem[]): Promise<boolean> {
     let org: string
     if (it.kind === 'attachment') {
       const rec = rows.attachments.get(it.id)
-      const issue = rec ? rows.issues.get(rec.issue_id) : undefined
-      if (!rec || !issue) continue
+      // a file only the watched task's attachments answer holds mints
+      // through the organization the sections watch
+      const from = rec ? rows.issues.get(rec.issue_id)?.org_id : sectionAttachment(it.id)?.org
+      if (!from) continue
       key = `att:${it.id}`
-      org = issue.org_id
+      org = from
     } else {
       const prof = rows.profiles.get(it.id)
       if (!prof?.avatar_storage_id) continue
@@ -3583,6 +4016,9 @@ function rebuild(now = new Date(), full = false) {
   // discussion spine reverses for newest-first display). Ties on the insert
   // timestamp order by id so two optimistic rows can't swap on redelivery.
   rebuildComments()
+  // the watched task's sections, which merge the rows on screen with their
+  // answers, after the tasks they read
+  rebuildSections()
 
   // inbox messages (0074) — own rows only, newest first (shapeMessage)
   P.messages = keepItems(
@@ -4928,6 +5364,10 @@ export const PLANNER = {
   // whether the watched task's history stopped loading, as commentsFailure
   // says for its comments (P.retryHistory)
   historyFailure: 'none' as CommentsFailure,
+  // the watched task's Subtasks, Linked tasks and Attachments while a window
+  // shows them (showSections), else null; a window shows only those of its
+  // own task (TaskSectionsVM.task)
+  sections: null as TaskSectionsVM | null,
   // Team sync (watchTeamSync): issue UUID → ms of its latest comment, or
   // null when it has none, for the open, visible tasks the last answer
   // covered; a task with no entry is not known yet
@@ -5990,6 +6430,11 @@ export const PLANNER = {
       arrived, from 0 to 1; null once every task did. Counts, totals and
       verdicts over many tasks wait for null (store/liveParts.ts). */
   stillLoading: (): number | null => stillLoading,
+  capInputs,
+  /** Task `uuid` as a row of Parent, Subtasks or Linked tasks
+      (RelatedTaskVM), from the workspace's view of it, or null when the
+      workspace does not hold it. */
+  relatedTask: (uuid: string): RelatedTaskVM | null => relatedTask(uuid, undefined),
   /** Whether the parent of `x` is a task still to arrive while a large
       workspace loads (hiddenParentsNow). */
   parentLoading: (x: IssueVM | string): boolean => {
@@ -6456,7 +6901,7 @@ export const PLANNER = {
     const it = PLANNER.issueById[id]
     const orgRow = it ? rows.orgs.get(it.org) : undefined
     if (!it || !orgRow || refuseOver(LIMITS.title, title) || refusePausedEdit()) return
-    const full = linkBlock(it.links ?? [])
+    const full = linkBlock(capInputs(it).links)
     if (full) {
       toast(full)
       return
@@ -6826,9 +7271,11 @@ export const PLANNER = {
     const src = rows.issues.get(a)
     if (!src) return
     // the per-task cap on links, as this view counts them (the server checks too)
+    const from = PLANNER.issueById[srcId]
+    const to = PLANNER.issueById[dstId]
     const full =
-      linkBlock(PLANNER.issueById[srcId]?.links ?? []) ||
-      linkBlock(PLANNER.issueById[dstId]?.links ?? [], PLANNER.issueById[dstId]?.key)
+      linkBlock(from ? capInputs(from).links : []) ||
+      linkBlock(to ? capInputs(to).links : [], to?.key)
     if (full) {
       toast(full)
       return
@@ -6960,10 +7407,14 @@ export const PLANNER = {
       if (!row) return null
       // the per-task cap, before any bytes are sent (the server checks too);
       // an image a description save took out no longer counts
+      const held = PLANNER.issueById[uuidToKey.get(uuid) ?? '']
       const full = attachmentBlock(
-        [...rows.attachments.values()].filter(
-          (a) => a.issue_id === uuid && a.dropped_at === undefined,
-        ).length,
+        Math.max(
+          [...rows.attachments.values()].filter(
+            (a) => a.issue_id === uuid && a.dropped_at === undefined,
+          ).length,
+          held ? capInputs(held).attachments : 0,
+        ),
       )
       if (full) {
         toast(`Couldn't upload "${file.name}". ${full}`)
@@ -7067,10 +7518,12 @@ export const PLANNER = {
       the original file name); the token covers the uuid, not the query flags,
       so a download can reuse a cached token. Resolves null on refusal or a
       missing row — deliberately silent: this sits on render paths (markdown,
-      descEditor, imgActions) whose consumers draw "Image unavailable". */
+      descEditor, imgActions) whose consumers draw "Image unavailable". A
+      file the workspace does not hold resolves while the watched task's
+      attachments answer holds it (sectionAttachment), and null once the
+      sections stop. */
   attachmentUrl: async (attId: string, download = false): Promise<string | null> => {
-    const rec = rows.attachments.get(attId)
-    if (!rec) return null
+    if (!rows.attachments.has(attId) && !sectionAttachment(attId)) return null
     const key = `att:${attId}`
     let url = mintedUrl(key)
     if (!url) {
@@ -7092,6 +7545,8 @@ export const PLANNER = {
     stopThread()
     stopHistory()
     resetHistory()
+    stopSections()
+    resetSections()
     commentsSnap = null
     olderComments = []
     acceptedCommentChanges.clear()
@@ -7111,8 +7566,9 @@ export const PLANNER = {
       PLANNER.commentsLoaded = true
       threadStart = true
       if (historyOwners.size > 0) startHistory()
+      if (sectionOwners.size > 0) startSections()
     }
-    repaint({ thread: true })
+    repaint({ thread: true, sections: true })
     if (issueUuid && row) subscribeThread(issueUuid, row.org_id)
   },
 
@@ -7135,6 +7591,37 @@ export const PLANNER = {
     stopHistory()
     resetHistory()
     repaint({ thread: true })
+  },
+
+  /** Registers whether the window `owner` shows the watched task's
+      Subtasks, Linked tasks and Attachments (P.sections), as showHistory
+      does for the history. Their side queries subscribe while at least one
+      window does (startSections), with the task's organization, and stop as
+      soon as none does, which drops their answers. A second window on the
+      same task, such as an Inbox pane at phone width and its pop-out,
+      subscribes nothing more. Each window passes one object of its own. */
+  showSections: (owner: object, on: boolean) => {
+    const before = sectionOwners.size
+    if (on) sectionOwners.add(owner)
+    else sectionOwners.delete(owner)
+    if (before > 0 === sectionOwners.size > 0) return
+    if (on) startSections()
+    else {
+      stopSections()
+      resetSections()
+    }
+    repaint({ sections: true })
+  },
+
+  /** Retry for one section, as retryHistory is for the history: a fresh
+      subscription of its side query, with 'retrying' until the server
+      answers it. Does nothing unless that section failed. */
+  retrySection: (name: SectionName) => {
+    const side = SECTION_SIDE[name]
+    if (!sectionsWatched || sectionFailure[side] !== 'failed') return
+    sectionFailure[side] = 'retrying'
+    repaint({ sections: true })
+    watchSection(side)
   },
 
   /** Retry for the history, as retryComments is for the comments: a fresh
@@ -9688,16 +10175,17 @@ function retrySnapshot() {
   parts = startParts(() => epoch === storeEpoch && !demoDisposed)
 }
 
-/** Stops the live parts and the thread and history riding along. No
-    thread delivery holds a write accepted after this, so none counts as
-    current until the next subscription answers. What the thread and its
-    history delivered stays until the next parts deliver again
-    (subscribeWaitingThread). */
+/** Stops the live parts and the thread, history and sections riding along.
+    No thread delivery holds a write accepted after this, so none counts as
+    current until the next subscription answers. What the thread, its
+    history and the sections delivered stays until the next parts deliver
+    again (subscribeWaitingThread). */
 function stopParts() {
   parts?.stop()
   parts = null
   threadWatched = null
   historyWatched = null
+  sectionsWatched = null
   threadCurrent = false
   bootSideNews.clear()
 }
@@ -9727,6 +10215,9 @@ export function disposeDemoStore() {
   olderComments = []
   historyOwners.clear()
   resetHistory()
+  sectionOwners.clear()
+  resetSections()
+  PLANNER.sections = null
   acceptedCommentChanges.clear()
   threadStart = false
   earlierLoad = 'idle'
@@ -9744,6 +10235,7 @@ export function disposeDemoStore() {
   layers.clear()
   owed.workspace = false
   owed.thread = false
+  owed.sections = false
   if (payTimer) clearTimeout(payTimer)
   payTimer = null
   snapshotDeliveries = 0

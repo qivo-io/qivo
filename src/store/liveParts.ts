@@ -62,10 +62,12 @@
      together in one transition, so a large organization on a busy backend
      can take many seconds before anything arrives.
 
-   Named side queries ride along, the open task's comment thread and, while
-   a window shows All, its history (SideName), so a transition that brings
-   the workspace and a side repaints once. Each side is its own: its failure
-   never holds the workspace or another side. */
+   Named side queries ride along (SideName): the open task's comment thread
+   and, while a window shows All, its history, and while a window shows the
+   task's details, its subtasks, links and attachments
+   (convex/taskWindow.ts). A transition that brings the workspace and the
+   sides repaints once. Each side is its own: its failure never holds the
+   workspace or another side. */
 
 import type { FunctionReference } from 'convex/server'
 import { ConvexError, type Value } from 'convex/values'
@@ -105,8 +107,11 @@ export const STALL = { ms: 60_000 }
 export const STAGES = { most: 32, first: 16, batch: Number.POSITIVE_INFINITY }
 
 /** The side queries that ride along with the workspace: the open task's
-    comment thread and, while a window shows All, its history. */
-export const SIDE_NAMES = ['thread', 'history'] as const
+    comment thread and, while a window shows All, its history, and while a
+    window shows the task's details, the task with its subtasks, its links
+    and its attachments (convex/taskWindow.ts task, links and
+    attachments). */
+export const SIDE_NAMES = ['thread', 'history', 'task', 'links', 'attachments'] as const
 export type SideName = (typeof SIDE_NAMES)[number]
 
 /** What one transition brought a side query: its answer or its failure. */

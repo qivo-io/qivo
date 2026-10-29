@@ -2,10 +2,11 @@ import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
-/* The workspace parts and the open task's thread and history come in
-   Convex transitions (store/liveParts.ts). One transition that changes a
-   task, the thread and the history repaints once and tells the views once,
-   and one that changes nothing on screen tells them nothing. */
+/* The workspace parts and the open task's thread, history and sections
+   come in Convex transitions (store/liveParts.ts). One transition that
+   changes a task, the thread, the history and a section repaints once and
+   tells the views once, and one that changes nothing on screen tells them
+   nothing. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -30,6 +31,7 @@ describe('one transition', () => {
   let deliver: (snap: Snapshot) => void
   let deliverThread: (page: unknown) => void
   let deliverHistory: (page: unknown) => void
+  let deliverSection: Record<string, (answer: unknown) => void>
   let emits: number
 
   beforeEach(async () => {
@@ -54,6 +56,7 @@ describe('one transition', () => {
     })
     network.query.mockResolvedValue(null)
     network.mutation.mockResolvedValue(null)
+    deliverSection = {}
     network.onUpdate.mockImplementation((ref, _args, receive) => {
       const name = getFunctionName(ref)
       if (name === 'workspace:whole') {
@@ -61,6 +64,7 @@ describe('one transition', () => {
         receive(structuredClone(snapshot))
       } else if (name === 'snapshot:threadComments') deliverThread = receive
       else if (name === 'snapshot:threadHistory') deliverHistory = receive
+      else if (name.startsWith('taskWindow:')) deliverSection[name] = receive
       return () => {}
     })
     store = await import('./planner')
@@ -118,6 +122,56 @@ describe('one transition', () => {
     })
     expect(store.P.issues.find((i) => i.uuid === 'task-a')?.title).toBe('Renamed elsewhere')
     expect(store.P.threadEvents.map((e) => e.id)).toEqual(['event-1'])
+    expect(emits).toBe(1)
+  })
+
+  it('repaints a task change, a new comment and a section answer of one transition once', async () => {
+    store.P.showSections({}, true)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const short = (row: Snapshot['issues'][number]) => {
+      const { description: _text, has_hidden_subtasks: _h, has_hidden_parent: _p, ...rest } = row
+      return { ...rest, has_subtasks: false, level: 'lead' }
+    }
+    const task = (title: string) => ({
+      state: 'ok',
+      task: { ...snapshot.issues[0], title, has_subtasks: false },
+      level: 'lead',
+      labels: [],
+      follow: null,
+      parent: null,
+      subtasks: { rows: [], complete: true },
+    })
+    deliverSection['taskWindow:task'](task('Task A'))
+    emits = 0
+    // a subtask elsewhere, which only the section answer holds
+    const kid = { ...snapshot.issues[0], id: 'kid-elsewhere', num: 2, title: 'Elsewhere' }
+    const comment = {
+      id: 'comment-1',
+      issue_id: 'task-a',
+      author: snapshot.profiles[0].id,
+      body: 'Looks good',
+      created_at: AT,
+    }
+    double.live?.batch(() => {
+      snapshot.issues[0].title = 'Renamed elsewhere'
+      deliver(structuredClone(snapshot))
+      deliverThread({ comments: [comment], earlier: false })
+      deliverSection['taskWindow:task']({
+        ...task('Renamed elsewhere'),
+        subtasks: { rows: [short(kid)], complete: true },
+      })
+    })
+    expect(store.P.issues.find((i) => i.uuid === 'task-a')?.title).toBe('Renamed elsewhere')
+    expect(store.P.comments.map((c) => c.body)).toEqual(['Looks good'])
+    expect(store.P.sections?.subtasks.rows.map((r) => r.title)).toEqual(['Elsewhere'])
+    expect(emits).toBe(1)
+    // an answer that changes no section, as after a description save, tells
+    // no view
+    deliverSection['taskWindow:task']({
+      ...task('Renamed elsewhere'),
+      task: { ...snapshot.issues[0], description: 'Saved text', has_subtasks: true },
+      subtasks: { rows: [short(kid)], complete: true },
+    })
     expect(emits).toBe(1)
   })
 
