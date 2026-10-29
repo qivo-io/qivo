@@ -688,7 +688,8 @@ describe('main Search across seats', () => {
         }),
       )
     }
-    const nums = Array.from({ length: 12 }, (_, i) => 901 + i)
+    // six lookups fit each of eight seats' allowance with room left
+    const nums = Array.from({ length: 6 }, (_, i) => 901 + i)
     const text = nums.map((num) => `QN-${num}`).join(' ')
     const answer = async () => {
       const { page } = await searchRun(t, seats, { text })
@@ -703,7 +704,7 @@ describe('main Search across seats', () => {
     await plantIssue(t, {
       org_id: first,
       project_id: hidden.id,
-      num: nums[11],
+      num: nums[5],
       description: '中'.repeat(LIMITS.description.max),
     })
     expect(await answer()).toEqual(absent)
@@ -731,6 +732,9 @@ describe('main Search across seats', () => {
     // of them sees, which spend the real limit while each lookup counts as
     // LOOKUP, so no later seat's first lookup fits. The task rows hold the
     // text, as every deployment's do until the description backfill's clear.
+    // Ranges for the ten or so lookups that spend the real limit, more than
+    // the default budget gives each of eight seats.
+    MAIN_SEARCH.ranges = 2_000
     const nums = Array.from({ length: 16 }, (_, i) => 901 + i)
     const [first, ...later] = [...orgs].sort()
     const root = await plantProject(t, { org_id: first })
