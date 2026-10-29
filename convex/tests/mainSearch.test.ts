@@ -206,6 +206,29 @@ async function secondSeat(t: T, f: OrgFixture) {
 }
 
 describe('what main Search matches', () => {
+  it('finds a task reference by its number and by a whole word of its digits', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const twelve = await task(t, f, f.sub, 'Calibrate the rig', { num: 12 })
+    const titled = await task(t, f, f.sub2, 'Rev 12 board')
+    const described = await task(t, f, f.sub, 'Planted', { description: 'see step 12 first' })
+    // 120 starts with the digits but is another word
+    await task(t, f, f.sub, 'Rev 120 board')
+    await task(t, f, f.sub, 'Planted', { description: 'see step 120 first' })
+    const found = [twelve.id, titled.id, described.id]
+    const bare = await search(t, f.user, { text: '12' })
+    expect(ids(bare)[0]).toBe(twelve.id)
+    expect(ids(bare).sort()).toEqual([...found].sort())
+    expect(bare.coverage).toEqual(COMPLETE)
+    expect(ids(await search(t, f.user, { text: 'QN-12' })).sort()).toEqual([...found].sort())
+    // a number no task can have still finds a word of its digits
+    const zero = await task(t, f, f.sub, 'Version 0 notes')
+    expect(await search(t, f.user, { text: '0' })).toMatchObject({
+      rows: [{ id: zero.id }],
+      coverage: COMPLETE,
+    })
+  })
+
   it('finds a task by its number, a title word, a description word and both', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -609,11 +632,9 @@ describe('the order of main Search', () => {
       split.id,
       description.id,
     ])
-    // a text of task numbers alone reads the numbers and no other source
-    await task(t, f, f.sub, `${equal.num}`)
-    const reference = await searchRun(t, [f.user], { text: `QN-${equal.num}` })
-    expect(ids(reference.page)).toEqual([equal.id])
-    expect(reference.searches).toBe(0)
+    // the task with the number first, then a title that is the number
+    const named = await task(t, f, f.sub, `${equal.num}`)
+    expect(ids(await search(t, f.user, { text: `QN-${equal.num}` }))).toEqual([equal.id, named.id])
   })
 
   it('orders equal scores by seat, then newest number, then id', async () => {

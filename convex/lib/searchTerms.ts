@@ -109,19 +109,31 @@ export function searchTerms(text: string): SearchTerm[] {
 export const convexTakesAll = (terms: readonly SearchTerm[]): boolean =>
   terms.length <= CONVEX_TERMS
 
+/* The word convexText sends last when every term is a task reference, so
+ * that Convex, which takes its last term as a prefix, takes every
+ * reference as a whole word, as the server's check does (matchesTerms), and
+ * "12" draws no task that only holds 120. It is a word Convex indexes that
+ * no text is expected to hold; a text that holds it is one more candidate
+ * the check leaves out. */
+const NO_PREFIX = 'zqxjvkwzqxjvkw'
+
 /** The text a Convex search query takes for `terms`: the reference terms
  * first, then the others in order, the first CONVEX_TERMS of them, so
  * Convex takes the last word term as its prefix and never a reference,
- * which matches whole digits only. Each term goes as the text wrote it,
- * which Convex cuts and lowercases as it cut and lowercased the stored
- * text. Its lowercase could cut differently: the capital dotted I
- * lowercases to i and a combining dot, at which Convex would cut the word
- * in two. */
-export const convexText = (terms: readonly SearchTerm[]): string =>
-  [...terms.filter((term) => term.num !== undefined), ...terms.filter((t) => t.num === undefined)]
+ * which matches whole digits only. When every term is a reference, a word
+ * no text holds goes last instead (NO_PREFIX), while Convex takes one more
+ * term. Each term goes as the text wrote it, which Convex cuts and
+ * lowercases as it cut and lowercased the stored text. Its lowercase could
+ * cut differently: the capital dotted I lowercases to i and a combining
+ * dot, at which Convex would cut the word in two. */
+export function convexText(terms: readonly SearchTerm[]): string {
+  const words = terms.filter((term) => term.num === undefined)
+  const sent = [...terms.filter((term) => term.num !== undefined), ...words]
     .slice(0, CONVEX_TERMS)
     .map((term) => term.text)
-    .join(' ')
+  if (words.length === 0 && sent.length < CONVEX_TERMS) sent.push(NO_PREFIX)
+  return sent.join(' ')
+}
 
 /** What search reads of one task, or of a project by its name as `title`:
  * its number, its title and its readable description (lib/md.ts

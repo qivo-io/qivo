@@ -9,7 +9,8 @@
  * whole organization. The task numbers the text names come first, one
  * read each in every seat (issues by_org_num), then for each place task
  * titles (issues search_title) and descriptions (issue_descriptions
- * search_description), which a text of task numbers alone does not search.
+ * search_description), where a task number matches a whole word of its
+ * digits.
  * Convex's search matches any term of the text, in its own relevance
  * order, so each source is read in that order up to
  * MAIN_SEARCH.candidates, and every candidate is judged here. It counts only when the caller may see it (ordinary project
@@ -858,19 +859,16 @@ export async function mainSearchPage(
     }
   }
 
-  // the places of each seat, keeping two searches for each seat after it;
-  // a text of task numbers alone searches no place
-  const words = terms.some((term) => term.num === undefined)
+  // the places of each seat, keeping two searches for each seat after it
   const considered = seats.slice(0, MAIN_SEARCH.seats)
   const planned: Seat[] = []
   let searches = 0
   try {
     for (const [i, me] of considered.entries()) {
       const free = MAIN_SEARCH.searches - searches - 2 * (considered.length - i - 1)
-      if (words && free < 2) break
+      if (free < 2) break
       let seat: Seat
-      if (!words) seat = seatOf(me, accessOf(ctx, me), scoped, [], false)
-      else if (scoped !== null && scoped.parent_id !== undefined)
+      if (scoped !== null && scoped.parent_id !== undefined)
         seat = seatOf(me, accessOf(ctx, me, [scoped]), scoped, [scoped.id], false)
       else {
         const most = Math.min(MAIN_SEARCH.projects, Math.floor(free / 2))

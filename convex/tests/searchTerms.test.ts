@@ -101,6 +101,10 @@ describe('searchTerms', () => {
     expect(convexText(searchTerms('QN-12 torque sen'))).toBe('12 torque sen')
     // references go first, so Convex's prefix term is a word, never digits
     expect(convexText(searchTerms('torque QN-12'))).toBe('12 torque')
+    // with references only, a word no text holds goes last as the prefix
+    const [twelve, last, ...more] = convexText(searchTerms('QN-12')).split(' ')
+    expect([twelve, more]).toEqual(['12', []])
+    expect(searchTerms(last)).toEqual([{ word: last, text: last, prefix: true }])
     expect(convexTakesAll(searchTerms(many))).toBe(false)
     expect(convexTakesAll(searchTerms('torque sen'))).toBe(true)
   })
