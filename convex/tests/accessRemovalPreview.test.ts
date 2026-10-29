@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import * as access from '../lib/access'
-import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
+import { ACCESS_NEEDS_A_PERSON, NO_USER_MANAGEMENT } from '../lib/access'
 import { byId } from '../lib/db'
 import type { GrantLevel } from '../lib/enums'
 import type { Refusal } from '../lib/functions'
@@ -29,7 +29,6 @@ import {
   type HeldTasks,
   type Holding,
   LEAD_ACCESS_RULE,
-  NO_USER_MANAGEMENT,
   REASSIGN_ROOM,
   REMOVAL_FULL,
   reassignTooLarge,

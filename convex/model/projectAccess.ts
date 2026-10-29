@@ -33,6 +33,7 @@ import {
   canChangeAccess,
   canManageProjectTeams,
   canManageProjectUsers,
+  NO_USER_MANAGEMENT,
   type OrgProjectLevels,
   projectLevelsForPeople,
   type RemovedAccess,
@@ -112,9 +113,6 @@ export type AccessRemoval = {
 }
 
 export const LEAD_ACCESS_RULE = 'that user leads this project; hand the lead to someone else first'
-
-/** The refusal of a caller who may not manage a project's users or teams. */
-export const NO_USER_MANAGEMENT = 'no permission to manage users on this project'
 
 /** The refusal of 'keep_as_viewer' when the person's removed grant was
  * already Viewer. */

@@ -13,7 +13,7 @@
  * canChangeAccess). */
 
 import { makeFunctionReference } from 'convex/server'
-import { v } from 'convex/values'
+import { type ConvexError, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
@@ -23,12 +23,13 @@ import {
   canManageProjectUsers,
   canSeeProject,
   hasProjectLevel,
+  NO_USER_MANAGEMENT,
   rootMetaOf,
 } from '../lib/access'
 import { assertNewRowId, byId, insertUnique, newWindowKey } from '../lib/db'
 import type { GrantLevel, ProjectType } from '../lib/enums'
 import { descriptionForm, trimmedForm } from '../lib/fieldPrints'
-import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
+import { badRequest, forbidden, notFound, type Refusal, require, rule } from '../lib/functions'
 import { limitedNumber, limitedText } from '../lib/limitRules'
 import { grouped, LIMITS } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
@@ -183,11 +184,15 @@ async function allocateKey(
 
 /* --------------------------------------------------------------- guards */
 
+/** The refusal of a settings edit, an archive or a new sub-project by a
+ * caller without Lead access to the project (assertLead). */
+export const LEAD_ACCESS_NEEDED = 'requires lead access to this project'
+
 /* projects_update is lead level (0106 left it as the rule — no RPC), so the
  * plain surfaces refuse as the silent 0-row did. */
 async function assertLead(ctx: QueryCtx, me: Doc<'profiles'>, projectId: string): Promise<void> {
   if (!(await hasProjectLevel(ctx, me, projectId, 'lead'))) {
-    throw forbidden('requires lead access to this project')
+    throw forbidden(LEAD_ACCESS_NEEDED)
   }
 }
 
@@ -267,6 +272,47 @@ async function grantRows(ctx: QueryCtx, projectId: string) {
 
 /* --------------------------------------------------------------- create */
 
+/** The refusal of a new sub-project whose parent the caller cannot see, in
+ * this organization or another, which reads like a missing one. */
+export const PARENT_NOT_FOUND = 'parent project not found'
+
+/** The refusal of a new sub-project under a sub-project. */
+export const PARENT_NOT_TOP_LEVEL =
+  'sub-projects live directly under a project, never under another sub-project'
+
+/** The refusal of a new sub-project under an archived project. */
+export const PARENT_ARCHIVED = 'the project is archived, so restore it first'
+
+/** What subProjectParent answers: the parent, a parent that reads as
+ * missing (PARENT_NOT_FOUND), or the refusal the create throws. */
+export type ParentCheck =
+  | { state: 'ok'; parent: Doc<'projects'> }
+  | { state: 'missing' }
+  | { state: 'refused'; refusal: ConvexError<Refusal> }
+
+/**
+ * The checks createProjectCore makes of the row a new sub-project names as
+ * its parent, in its order: one `me` cannot see reads as missing, then a
+ * parent that is not a meta, an archived parent and a parent `me` holds no
+ * Lead access to are refused with the create's own sentences
+ * (projects_hierarchy_guard 0078:341-349, archive-parent guard 0106:68). The
+ * lead picker of a new sub-project (model/projectSettings.ts
+ * leadCandidatesOf) asks the same, so both say the same. Like canSeeProject,
+ * it throws not_found for a parent whose own chain of parents is broken.
+ */
+export async function subProjectParent(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  parent: Doc<'projects'> | null,
+): Promise<ParentCheck> {
+  if (parent === null || !(await canSeeProject(ctx, me, parent))) return { state: 'missing' }
+  if (parent.type !== 'meta') return { state: 'refused', refusal: rule(PARENT_NOT_TOP_LEVEL) }
+  if (parent.archived_at !== undefined) return { state: 'refused', refusal: rule(PARENT_ARCHIVED) }
+  if (!(await hasProjectLevel(ctx, me, parent.id, 'lead')))
+    return { state: 'refused', refusal: forbidden(LEAD_ACCESS_NEEDED) }
+  return { state: 'ok', parent }
+}
+
 /** A new project as a caller asks for it. The core checks the parent, the
  * lead and every grant itself. */
 export type NewProject = {
@@ -337,22 +383,9 @@ export async function createProjectCore(
     if (p.parent_id === undefined) {
       throw badRequest('a sub-project needs a parent')
     }
-    // projects_hierarchy_guard (0078:341-349) + archive-parent guard
-    // (0106:68). A parent the caller cannot see, in this organization or
-    // another, reads like a missing one.
-    const parent = await byId(ctx, 'projects', p.parent_id)
-    if (parent === null || !(await canSeeProject(ctx, me, parent))) {
-      throw rule('parent project not found')
-    }
-    if (parent.type !== 'meta') {
-      throw rule('sub-projects live directly under a project, never under another sub-project')
-    }
-    if (parent.archived_at !== undefined) {
-      throw rule('the project is archived, so restore it first')
-    }
-    if (!(await hasProjectLevel(ctx, me, parent.id, 'lead'))) {
-      throw forbidden('requires lead access to this project')
-    }
+    const parent = await subProjectParent(ctx, me, await byId(ctx, 'projects', p.parent_id))
+    if (parent.state === 'missing') throw rule(PARENT_NOT_FOUND)
+    if (parent.state === 'refused') throw parent.refusal
   }
   const shares =
     grantEntries(p.access).some(([uid]) => uid !== me.id) ||
@@ -561,7 +594,7 @@ export async function updateProjectCore(
   // first and use that standing for the rest of this same mutation.
   if (editsSettings || !managesUsers) await assertLead(ctx, me, id)
   if (managesUsers && !(await canManageProjectUsers(ctx, me, project))) {
-    throw forbidden('no permission to manage users on this project')
+    throw forbidden(NO_USER_MANAGEMENT)
   }
   const controlsOwnAccess = await canManageOwnProjectAccess(ctx, me, project)
   await assertExpected({

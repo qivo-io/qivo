@@ -81,7 +81,7 @@ import {
   usagePeriod,
   usageRanked,
 } from './model/billingUsage'
-import { nameKeysReady } from './model/nameKeys'
+import { nameKeysReady, profileIndex } from './model/nameKeys'
 
 const CREDENTIAL_TABLES = ['agent_keys', 'mcp_tokens', 'oauth_connections'] as const
 export type CredentialTable = (typeof CREDENTIAL_TABLES)[number]
@@ -1256,31 +1256,6 @@ const START_ZERO: PagePlace = { part: 'zero', at: null }
 
 /* The list a people cursor names (lib/namedPages.ts namedCursor). */
 const PEOPLE_LIST = 'apiAccess.people'
-
-/** The people and agents of organization `orgId` in name order
- * (profiles.by_org_name): name key, then id. */
-function profileIndex(
-  ctx: QueryCtx,
-  orgId: string,
-): NamedIndex<Doc<'profiles'>, readonly [string]> {
-  const profiles = () => ctx.db.query('profiles')
-  return {
-    all: () => profiles().withIndex('by_org_name', (q) => q.eq('org_id', orgId)),
-    after: ({ key, tie: [id] }) => [
-      () =>
-        profiles().withIndex('by_org_name', (q) =>
-          q.eq('org_id', orgId).eq('name_key', key).gt('id', id),
-        ),
-      () => profiles().withIndex('by_org_name', (q) => q.eq('org_id', orgId).gt('name_key', key)),
-    ],
-    at: (profile) => {
-      // people refuses until every profile is keyed (nameKeysReady)
-      if (profile.name_key === undefined)
-        throw new Error('an unkeyed profile passed the readiness check')
-      return { key: profile.name_key, tie: [profile.id] }
-    },
-  }
-}
 
 /* P.apiAccessPeople. Admin only. One batch of at most API_ACCESS_PAGE of
  * the organization's people and agents for the person filter, in name order,

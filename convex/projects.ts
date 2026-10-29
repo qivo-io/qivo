@@ -39,7 +39,12 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
-import { canManageOwnProjectAccess, canManageProjectUsers, hasProjectLevel } from './lib/access'
+import {
+  canManageOwnProjectAccess,
+  canManageProjectUsers,
+  hasProjectLevel,
+  NO_USER_MANAGEMENT,
+} from './lib/access'
 import { markBillingMembershipChanged } from './lib/billableUsers'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
@@ -366,7 +371,7 @@ export const inviteGuest = orgMutation({
     const now = new Date().toISOString()
     const project = await myProject(ctx, project_id)
     if (!(await canManageProjectUsers(ctx, ctx.me, project))) {
-      throw rule('no permission to manage users on this project')
+      throw rule(NO_USER_MANAGEMENT)
     }
     if (level !== 'user' && level !== 'viewer') {
       throw rule('a project role is lead, member or viewer')
