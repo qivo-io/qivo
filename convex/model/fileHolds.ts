@@ -82,8 +82,8 @@ export const ERASE_EVERY_MS = 30 * 60 * 1000
  * after the restore. */
 export const HOLD_MS = 7 * 24 * 60 * 60 * 1000 - 2 * ERASE_EVERY_MS
 
-/** The most holds one eraser leg handles. Each costs the seven index ranges
- * of storageIdReferenced and a file lookup, so a leg reads about 2,050 of
+/** The most holds one eraser leg handles. Each costs the eight index ranges
+ * of storageIdReferenced and a file lookup, so a leg reads about 2,310 of
  * Convex's 4,096 with the page and the first leg's restore check, and writes
  * at most two deletes per hold. Tests lower it. */
 export const ERASE_PAGE = { holds: 256 }
@@ -116,7 +116,8 @@ export const holdOf = (ctx: QueryCtx, storageId: Id<'_storage'>) =>
 
 /** Whether any row names file `storageId`: an attachment, live or in
  * Deleted items, a profile picture, a panorama image or a custom background,
- * or the preview of either. A hold is not a row; storageIdInUse adds it. The
+ * or the preview of either, or a part of an organization export's archive
+ * (org_export_parts). A hold is not a row; storageIdInUse adds it. The
  * live attachments are read first, so a file a live attachment names costs
  * one read. */
 export async function storageIdReferenced(
@@ -158,9 +159,16 @@ export async function storageIdReferenced(
       .first()
   )
     return true
+  if (
+    await ctx.db
+      .query('custom_backgrounds')
+      .withIndex('by_storage', (q) => q.eq('storage_id', storageId))
+      .first()
+  )
+    return true
   return (
     (await ctx.db
-      .query('custom_backgrounds')
+      .query('org_export_parts')
       .withIndex('by_storage', (q) => q.eq('storage_id', storageId))
       .first()) !== null
   )

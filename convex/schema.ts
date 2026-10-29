@@ -48,6 +48,8 @@ import {
   vLinkType,
   vMessageKind,
   vNameSource,
+  vOrgExportPartKind,
+  vOrgExportState,
   vOrgRemovalPhase,
   vOrgRemovalReason,
   vOrgRole,
@@ -61,6 +63,7 @@ import {
   vTrashPhase,
   vUsedIdTable,
 } from './lib/enums'
+import { vExportProgress, vExportStep } from './lib/orgExport'
 import { vPanoramaStatus } from './lib/panorama'
 import { vEventFilters, vEventName, vEventOwner } from './lib/taskEvents'
 import { vUsageCounts, vUsageMetric } from './lib/usage'
@@ -1125,6 +1128,95 @@ export default defineSchema({
     name_keys_at: v.optional(v.string()),
     nav_at: v.optional(v.string()),
   }).index('by_org', ['org_id']),
+
+  // An organization export job (orgExport.ts, model/orgExports.ts): the
+  // server collects the organization's data into an archive of stored parts
+  // in bounded steps, keeps a ready archive four hours, then erases it. At
+  // most one job per organization is collecting at a time (by_org_state);
+  // every admin who asks while it collects joins it (org_export_requests).
+  // An ended job and its request rows stay 30 days as export history.
+  // organizations.last_export_at stays the lasting record of exports.
+  org_exports: defineTable({
+    id: v.string(), // a server uuid
+    org_id: v.string(),
+    state: vOrgExportState,
+    // the profile that started the job, history only: org_export_requests
+    // names everyone who asked, and the job checks their authority there
+    requested_by: v.string(),
+    started_at: v.string(), // collection began
+    progress_at: v.string(), // the last committed step; recovery finds a stalled job by it
+    completed_at: v.optional(v.string()), // the archive was ready
+    expires_at: v.optional(v.string()), // completed_at plus four hours
+    ended_at: v.optional(v.string()), // failed, cancelled or expired
+    // why a failed job failed: a code and a sentence for the admin
+    error: v.optional(v.object({ code: v.string(), message: v.string() })),
+    cancelled_by: v.optional(v.string()), // the admin profile that cancelled it
+    progress: vExportProgress,
+    // where collection stands (lib/orgExport.ts vExportStep), never sent to
+    // a client; one page of parent ids at most, so a few kilobytes
+    step: vExportStep,
+    attempts: v.number(), // restarts since the last committed step
+    // the next step, erase leg or expiry
+    scheduled_id: v.optional(v.id('_scheduled_functions')),
+    // the archive's bytes (stored parts and ZIP headers) and its part count
+    archive: v.optional(v.object({ bytes: v.number(), parts: v.number() })),
+    // tasks left out because a deleted item was in flight when the export
+    // read them (model/orgExportRead.ts)
+    skipped: v.optional(v.number()),
+    // while an ended job's parts are being erased, when the job ended or
+    // the last erase leg found more; absent once none is left
+    erasing_at: v.optional(v.string()),
+    format_version: v.number(), // the archive format (lib/orgExport.ts ORG_EXPORT_FORMAT)
+  })
+    .index('by_uuid', ['id'])
+    // the organization's collecting job, at most one, and its ready ones
+    .index('by_org_state', ['org_id', 'state'])
+    // status and history, newest last, and the organization's teardowns
+    .index('by_org_started', ['org_id', 'started_at'])
+    // recovery of collecting jobs whose step stopped
+    .index('by_state_progress', ['state', 'progress_at'])
+    // ready archives whose four hours are over
+    .index('by_state_expiry', ['state', 'expires_at'])
+    // ended jobs past their 30 days of history
+    .index('by_state_ended', ['state', 'ended_at'])
+    // erase legs that stopped
+    .index('by_erasing', ['erasing_at']),
+
+  // One stored part of an export archive, a ZIP entry of its own: a JSON
+  // array of one table's rows (data/<table>/0001.json and on), the README or
+  // the manifest, each one complete raw DEFLATE stream. The row names its
+  // file, so the orphan sweeps and attach fences treat it as in use
+  // (model/fileHolds.ts storageIdReferenced). A part is a temporary copy,
+  // not an upload, so it counts in no upload budget, and every teardown
+  // erases its file at once (model/fileHolds.ts eraseFile).
+  org_export_parts: defineTable({
+    export_id: v.string(),
+    org_id: v.string(),
+    seq: v.number(), // order in the archive: the README 0, the manifest 1, data from 2
+    entry: v.string(), // the ZIP path
+    kind: vOrgExportPartKind,
+    storage_id: v.id('_storage'),
+    raw_bytes: v.number(), // the JSON or text before compression
+    stored_bytes: v.number(), // the compressed file
+    crc32: v.number(), // of the raw bytes, as ZIP stores it
+    records: v.number(), // rows in a data part, 0 in the README and manifest
+  })
+    .index('by_export_seq', ['export_id', 'seq'])
+    .index('by_storage', ['storage_id']),
+
+  // An admin who explicitly asked for an export job, one row per admin and
+  // job (orgExport.ts request). The job goes on while one of them is still
+  // an active admin. Profile removal deletes the profile's rows
+  // (model/cascade.ts ACCESS_RANGES), so a later profile with a reused id
+  // never inherits one.
+  org_export_requests: defineTable({
+    export_id: v.string(),
+    org_id: v.string(),
+    profile_id: v.string(),
+    requested_at: v.string(),
+  })
+    .index('by_export_profile', ['export_id', 'profile_id'])
+    .index('by_profile', ['profile_id']),
 
   // Team sync stamps (model/syncStamps.ts, lib/teamSync.ts), one row per
   // stamped person: the latest change made on them through the sync page

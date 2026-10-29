@@ -129,6 +129,20 @@ export const ORG_REMOVAL_PHASES = [
 export const vOrgRemovalPhase = literals(...ORG_REMOVAL_PHASES)
 export type OrgRemovalPhase = (typeof ORG_REMOVAL_PHASES)[number]
 
+/* Where an organization export job stands (schema.ts org_exports): its
+ * steps are collecting the archive, the archive is ready to download, or
+ * the job ended without one (failed, cancelled) or its archive's four hours
+ * are over (expired). */
+export const ORG_EXPORT_STATES = ['collecting', 'ready', 'failed', 'cancelled', 'expired'] as const
+export const vOrgExportState = literals(...ORG_EXPORT_STATES)
+export type OrgExportState = (typeof ORG_EXPORT_STATES)[number]
+
+/* What one stored part of an export archive holds (schema.ts
+ * org_export_parts): rows of one table, the README or the manifest. */
+export const ORG_EXPORT_PART_KINDS = ['data', 'readme', 'manifest'] as const
+export const vOrgExportPartKind = literals(...ORG_EXPORT_PART_KINDS)
+export type OrgExportPartKind = (typeof ORG_EXPORT_PART_KINDS)[number]
+
 /* The tables whose name key other rows copy (name_copies). Memberships and
  * grants copy a profile's key, project shares a team's. Stored on
  * name_copies only, never on the wire. */

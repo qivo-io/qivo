@@ -1,5 +1,8 @@
 import { strToU8, Zip, ZipPassThrough } from 'fflate'
 import {
+  archiveRow,
+  COMMON_EXCLUSIONS,
+  exportName,
   ORG_EXPORT_SECTIONS,
   type OrgExportPage,
   type OrgExportRow,
@@ -44,15 +47,10 @@ type PendingFile = {
   size_bytes?: number
 }
 
+// Format 2's own list. The server job's format 3 (convex/lib/orgExport.ts
+// JOB_EXCLUSIONS) leaves uploaded files out and says so instead.
 const EXCLUSIONS = [
-  'Private inbox messages (messages)',
-  'Personal task subscriptions (task_subscriptions)',
-  'Personal preferences (user_prefs)',
-  'Personal appearance and backgrounds (account_appearance, custom_backgrounds, background_uploads)',
-  'Personal MCP tokens (mcp_tokens)',
-  'Authentication accounts, sessions, login identifiers, and credentials',
-  'Agent key secrets and hashes (agent key metadata is included)',
-  'Platform administration, audit logs, demo receipts, and shared panorama library data',
+  ...COMMON_EXCLUSIONS,
   'External images linked in descriptions (uploaded files are included)',
 ]
 
@@ -95,25 +93,6 @@ retry when changes have settled. The finished archive is held in browser memory.
 This archive is intended for data portability and inspection. Qivo does not
 currently provide an import or restore operation for this format.
 `
-
-// The archive is a public data interface; keep storage names behind this boundary.
-const EXPORT_NAMES: Partial<Record<OrgExportSection, string>> = {
-  issues: 'tasks',
-  issue_links: 'task_links',
-  issue_labels: 'task_labels',
-  issue_attachments: 'task_attachments',
-}
-
-function archiveRow(row: OrgExportRow): OrgExportRow {
-  return Object.fromEntries(
-    Object.entries(row).map(([field, value]) => {
-      if (field === 'issue_id') return ['task_id', value]
-      if (field === 'next_issue_num') return ['next_task_num', value]
-      if (field === 'target_type' && value === 'issue') return [field, 'task']
-      return [field, value]
-    }),
-  )
-}
 
 function checkAbort(signal?: AbortSignal) {
   if (signal?.aborted) throw new DOMException('Export cancelled', 'AbortError')
@@ -226,7 +205,7 @@ export async function exportOrganization(
   try {
     for (const section of Object.keys(ORG_EXPORT_SECTIONS) as OrgExportSection[]) {
       check()
-      const name = EXPORT_NAMES[section] ?? section
+      const name = exportName(section)
       const path = `data/${name}.json`
       const entry = addEntry(path)
       entry.push(strToU8('[\n'))

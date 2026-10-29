@@ -163,9 +163,10 @@ const lastSweep = (t: T) =>
   })
 
 describe('the one erase path', () => {
-  it('only model/fileHolds.ts and machine/records.ts delete stored bytes', () => {
+  it('only model/fileHolds.ts and the actions that store bytes delete stored bytes', () => {
     // records.ts deletes, in an action, bytes it stored and could not
-    // attach, which no committed row ever named
+    // attach, and an export step the part its commit refused (orgExport.ts
+    // step), which no committed row ever named
     const sources = import.meta.glob(
       ['../**/*.ts', '!../_generated/**', '!../betterAuth/**', '!../tests/**'],
       { eager: true, query: '?raw', import: 'default' },
@@ -174,7 +175,7 @@ describe('the one erase path', () => {
       .filter(([, src]) => /\bstorage\.delete\(/.test(src))
       .map(([path]) => path.replace(/^\.\.\//, ''))
       .sort()
-    expect(deleting).toEqual(['machine/records.ts', 'model/fileHolds.ts'])
+    expect(deleting).toEqual(['machine/records.ts', 'model/fileHolds.ts', 'orgExport.ts'])
   })
 })
 
