@@ -46,7 +46,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { descriptionOf } from '../model/descriptions'
-import { type Access, accessOf, isAccessUnchecked } from './access'
+import { type Access, accessOf, isAccessUnchecked, OWN_READS } from './access'
 import { archivedRowOf } from './archivedTasks'
 import { byId } from './db'
 import type { AccessLevel } from './enums'
@@ -129,21 +129,23 @@ type Reads = { bytes: number; documents: number; ranges: number }
 const BODY: Reads = { bytes: DOCUMENT_MAX_BYTES, documents: 1, ranges: 1 }
 
 /** The team shares PROJECT holds on a project and on its top-level
- * project each, as lib/archivedTasks.ts ARCHIVE_RESERVE holds a project
- * shared with about ten teams. */
-const SHARES = 10
+ * project each: as many as lib/access.ts projectLevelsOf reads of one
+ * project's shares before it turns to the caller's own rows,
+ * OWN_READS.projectShares and the one more that tells it to. */
+const SHARES = OWN_READS.projectShares + 1
 
-/** What the caller's access reads for a project it has not read yet
- * (lib/access.ts projectLevelsOf), on the project and on its top-level
- * project: the row, at most lib/limits.ts PROJECT_ROW_MAX_BYTES, the
- * caller's grant and the range of its team shares, and for each of SHARES
- * shares the share, the caller's membership and the team, each at most
- * TEAM_ROW_MAX_BYTES and read once a query. A project shared with more
- * teams reads up to three more such rows and two more ranges a share, as
- * nothing bounds the shares on one project. The next look at the budget
- * counts them, before the read asks about another project (inOrder), as it
- * counts the sub-projects navigation reads under a top-level project the
- * caller holds no level on. */
+/** What the caller's access reads for a project it has not read yet, one
+ * question at its worst (lib/access.ts projectLevelsOf), on the project and
+ * on its top-level project: the row, at most lib/limits.ts
+ * PROJECT_ROW_MAX_BYTES, the caller's grant and the range of its team
+ * shares, and for each of SHARES shares the share, the caller's membership
+ * and the team, each at most TEAM_ROW_MAX_BYTES and read once a query. Past
+ * SHARES the access reads the caller's own rows, once a query, which
+ * budgetIn leaves out as shared, or asks the caller's teams one by one,
+ * within OWN_READS.shareLookups for the query. The next look at the budget
+ * counts those, before the read asks about another project (inOrder), as
+ * it counts navigation under a top-level project the caller holds no level
+ * on. */
 const PROJECT: Reads = {
   bytes: 2 * (PROJECT_ROW_MAX_BYTES + (1 + 3 * SHARES) * TEAM_ROW_MAX_BYTES),
   documents: 2 * (2 + 3 * SHARES),
