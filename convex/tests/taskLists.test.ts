@@ -785,9 +785,10 @@ describe('archived task lists page one project with a cursor', () => {
       await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub2.id, archived_at: day(d) })
     }
     // no share for opening projects one by one, so TBED's pages read the
-    // organization's archive and look at two tasks each
+    // organization's archive, and a budget of one document ends each page
+    // after its first task, here a hidden one
     ARCHIVE_PAGE.opening = 0
-    ARCHIVE_PAGE.tasks = 2
+    ARCHIVE_PAGE.documents = 1
     const leaks = (cursor: string | null) =>
       hidden.flatMap((task) =>
         [task._id, String(Math.trunc(task._creationTime)), task.archived_at ?? ''].filter((part) =>
@@ -1068,7 +1069,9 @@ describe('archived task lists page one project with a cursor', () => {
   })
 
   it('reads only the named project’s archive', async () => {
-    const fx = await setup(newT({ transactionLimits: { documentsRead: 150 } }))
+    // room for FW's 20 tasks beside ARCHIVE_RESERVE's 128 documents, and too
+    // little for a read of the organization's archive, which passes PCB's 200
+    const fx = await setup(newT({ transactionLimits: { documentsRead: 250 } }))
     await plantMany(fx, 200, { project_id: fx.sub2.id, archived_at: day(1) })
     const own = await plantMany(fx, 20, { project_id: fx.sub.id, archived_at: day(2) })
     const page = await restArchivedPage(fx.t, {
