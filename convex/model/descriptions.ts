@@ -94,8 +94,7 @@ async function shownRow(db: Reader, task: Owner): Promise<Doc<'issue_description
 const shownOf = (
   rows: readonly Doc<'issue_descriptions'>[],
   task: Owner,
-): Doc<'issue_descriptions'> | null =>
-  rows.find((row) => holdsCopies(row, task)) ?? rows[0] ?? null
+): Doc<'issue_descriptions'> | null => rows.find((row) => holdsCopies(row, task)) ?? rows[0] ?? null
 
 /** The first two description rows of task `issueId` in creation order, as
  * shownRow and patchTask read them, in one by_issue range of two documents
