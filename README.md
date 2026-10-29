@@ -114,7 +114,8 @@ Then `scripts/check-task-reads.mjs` fails on a read of
 descriptions backfill: a property or element read, or a destructuring that
 binds the field, of a value whose type may be a task row. Readers take a
 task's text from its description row through that file, which falls back to
-`issues.description` only for a task without a row.
+`issues.description` only for a task without a row. Writers no longer set
+`issues.description`, so a direct read would find nothing.
 It needs no deployment credentials and does not reset any hosted data.
 `npm run verify:static` runs every check of this gate except the tests.
 When `npm run check:dependencies` fails, as after a pull or a branch switch

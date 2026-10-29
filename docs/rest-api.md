@@ -1124,7 +1124,7 @@ the descriptions of those their labels do not match either. It stops once
 it has found the tasks up to the end of the page you asked for, whichever
 field matched them. A search that matches few tasks, such as one by task ID, reads every
 active task's description. With descriptions of a few hundred characters
-that fits an organization of about 9,000 active tasks in one request. A
+that fits an organization of about 13,000 active tasks in one request. A
 larger one is a `400` with `this search reads too many task descriptions
 to answer in one request; name a project or add a filter`. A search that
 finds its page early, such as a word many tasks hold, keeps the list's
@@ -1181,8 +1181,8 @@ again from the first page. A page can hold fewer than `limit` tasks, or none,
 while `next_cursor` is set, because each page reads a bounded amount however
 large the archive is. Tasks archived after you start paging appear at the
 start of the list, so start again to see them. If an archived group has more
-tasks under it than one request can read, such as thousands of subtasks or
-hundreds with very long descriptions, its row has `start_week` and `end_week`
+tasks under it than one request can read, such as thousands of subtasks, its
+row has `start_week` and `end_week`
 set to `null` and a `progress` of `0` of `0` with `partial: true`, so paging
 still moves past it.
 
@@ -1198,8 +1198,8 @@ A page reads only the projects it lists, side by side, and never tasks of
 projects you cannot read. Unless you are an organization admin, a project
 with more than 200 projects to list, itself and its sub-projects you can
 read, is refused, and so is one whose sub-projects' newest archived tasks
-are too large to read side by side, such as about 130 or more with very long
-descriptions. Name its sub-projects one at a time instead. An organization
+are too large to read side by side. Name its sub-projects one at a time
+instead. An organization
 admin's request can read the organization's whole archive for such a
 project.
 
@@ -1361,10 +1361,10 @@ cannot move to another top-level project (otherwise `400`, `this task has
 more than 200 subtasks, archived ones included, and a move to another
 project carries them all. Restore some archived subtasks and remove them
 from this task first, or move it within its project.`). A move whose task and subtasks are
-too large for one request, such as about 50 or more active subtasks whose
-descriptions hold 20,000 characters of a script that takes three bytes a
-character, such as Japanese, is a `400` with `this task and its subtasks
-are too large to move to another project in one request; remove some
+too large for one request, such as about 125 or more subtasks, archived ones
+included, whose descriptions hold 20,000 characters of a script that takes
+three bytes a character, such as Japanese, is a `400` with `this task and
+its subtasks are too large to move to another project in one request; remove some
 subtasks from this task first, restoring archived ones to do so, or move
 it within its project`. Any other change whose task and subtasks are too
 large for one request, such as an archive, a new parent or a restore, is a
@@ -1641,8 +1641,8 @@ the caller, such as a subtask it cannot read, so the true completion is
 unknown. The app then says "Completion unknown".
 
 An archived group can have more tasks under it than one request can read,
-such as thousands of subtasks or hundreds with very long descriptions. Its
-single-task shape then still lists its direct `subtasks`, but `start_week`
+such as thousands of subtasks. Its single-task shape then still lists its
+direct `subtasks`, but `start_week`
 and `end_week` are `null`, `progress` is `0` of `0` with `partial: true`
 and `group_remaining_hours` is `null`. When even its direct subtasks do not
 all fit, `subtasks` lists those of the first ones that do which the caller
