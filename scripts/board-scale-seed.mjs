@@ -71,8 +71,9 @@
  * five subtasks each. Every third subtask from the first has 1 to 7 hours
  * left, and a subtask created In Review without hours gets the project's
  * review time, 2 h by default; planRelations answers the Progress and Σ
- * the window should show. The task and its subtasks have 20,000-character
- * descriptions in a three-byte script. Two tasks share at most one link,
+ * the window should show. The subtasks have 20,000-character descriptions
+ * in a three-byte script, and the task one 500 characters shorter, which
+ * leaves room to paste images into it. Two tasks share at most one link,
  * so each link goes to a task the seed makes for it, in turn Blocks,
  * Blocked by and Relates to, every status in turn: 70 in Luma Sensor's
  * sub-projects, 15 in Luma Cloud's and Pilot & Launch's, and 15 in
@@ -261,6 +262,8 @@ const RELATION_PLACES = {
 /* The project time a task created In Review without hours gets, as
    convex/model/projects.ts reviewHoursFor reads Northstar's projects. */
 const REVIEW_HOURS = 2
+/* How far under the description cap the --relations task's text stays. */
+const FAMILY_ROOM = 500
 /* A paragraph in a script whose letters take three UTF-8 bytes each. */
 const THREE_BYTE = 'センサーの校正手順を確認し、測定値を記録して、試験結果を共有する。'
 
@@ -322,7 +325,8 @@ export function planRelations({ org, projects, people, present }) {
     id: family,
     project_id: placed.get('FW'),
     title: 'Coordinate the pilot firmware release',
-    description: threeByteText(LIMITS.description.max),
+    // room under the cap for images pasted into it
+    description: threeByteText(LIMITS.description.max - FAMILY_ROOM),
     status: 'progress',
     priority: 'high',
     assignee_id: person('aisha'),

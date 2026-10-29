@@ -327,8 +327,9 @@ window's **Subtasks**, **Linked tasks** and **Attachments** at scale (with
 it makes a new top-level task in Firmware, **Coordinate the pilot firmware
 release**, with 100 active subtasks and 100 links. The subtasks take every
 status and five owners in turn, every third has remaining hours, and they
-and the task have 20,000-character descriptions in a three-byte script, so
-the task's window shows 20 of 100 tasks done and Σ 133h. Each link goes to a
+have 20,000-character descriptions in a three-byte script, so the task's
+window shows 20 of 100 tasks done and Σ 133h. The task's own description is
+500 characters shorter, which leaves room to paste images into it. Each link goes to a
 task made for it: 70 in Luma Sensor's sub-projects, 15 in Luma Cloud's and
 Pilot & Launch's, and 15 in **Partner pilot**, a project the seed makes that
 only Nora sees, so anyone else who is no organization admin finds those

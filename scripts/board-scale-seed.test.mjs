@@ -882,11 +882,13 @@ describe('board-scale-seed --relations', () => {
       if (kid.status === 'review') expect(kid.reviewer_id).not.toBe(kid.assignee_id)
       else expect(kid.reviewer_id).toBeNull()
     expect(kids.filter((t) => t.remaining_hours !== null)).toHaveLength(34)
-    // each subtask's text is at the cap, three bytes a letter
-    for (const t of [all.tasks[0], ...kids]) {
+    // each subtask's text is at the cap, three bytes a letter, and the
+    // task's leaves room for pasted images
+    for (const t of kids) {
       expect(t.description).toHaveLength(LIMITS.description.max)
       expect(Buffer.byteLength(t.description)).toBe(3 * LIMITS.description.max)
     }
+    expect(all.tasks[0].description).toHaveLength(LIMITS.description.max - 500)
     // one link to each task made for it, in turn Blocks, Blocked by and Relates to
     expect(all.links).toHaveLength(LIMITS.links.max)
     const ends = all.links.map((l) => (l.source_id === family ? l.target_id : l.source_id))
