@@ -750,12 +750,13 @@ async function wideProjects(t: T, f: OrgFixture, n: number): Promise<Doc<'projec
 }
 
 /** `n` teams of the fixture's organization named at the cap, each sharing
- * every one of `projects` with its name key copied, as model/projectNav.ts
- * insertShare writes a share, the viewer a member of each. */
-async function wideShares(t: T, f: OrgFixture, n: number, projects: readonly Doc<'projects'>[]) {
-  for (let from = 0; from < n; from += 25)
+ * `project` alone with its name key copied, the viewer, named at the cap, a
+ * member of the first with the key of its name copied. */
+async function distinctShares(t: T, f: OrgFixture, project: Doc<'projects'>, n: number) {
+  for (let from = 0; from < n; from += 250)
     await t.run(async (ctx) => {
-      for (let i = from; i < Math.min(n, from + 25); i++) {
+      await ctx.db.patch(f.viewer._id, { name: WIDE_NAME, name_key: nameKey(WIDE_NAME) })
+      for (let i = from; i < Math.min(n, from + 250); i++) {
         const id = uuid()
         await ctx.db.insert('teams', {
           id,
@@ -765,19 +766,19 @@ async function wideShares(t: T, f: OrgFixture, n: number, projects: readonly Doc
           track_delay_default: false,
           created_at: NOW,
         })
-        await ctx.db.insert('team_members', {
-          team_id: id,
-          profile_id: f.viewer.id,
-          is_leader: false,
-          name_key: nameKey(f.viewer.name),
-        })
-        for (const p of projects)
-          await ctx.db.insert('project_team_access', {
-            project_id: p.id,
+        if (i === 0)
+          await ctx.db.insert('team_members', {
             team_id: id,
-            level: 'viewer',
+            profile_id: f.viewer.id,
+            is_leader: false,
             name_key: nameKey(WIDE_NAME),
           })
+        await ctx.db.insert('project_team_access', {
+          project_id: project.id,
+          team_id: id,
+          level: 'viewer',
+          name_key: nameKey(WIDE_NAME),
+        })
       }
     })
 }
@@ -919,42 +920,38 @@ describe('real limits', () => {
     expect(reads.read).toBeLessThan(TASK_WINDOW.bytes / MIB)
   }, 300_000)
 
-  it('reads link ends in sub-projects shared with 100 teams each within the limits', async () => {
+  it('stops a link read inside the limits at link ends in sub-projects shared with 600 teams of their own each', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // the viewer receives team access, so its access reads every share on
-    // a project it asks about, 100 here at the name cap on each of 20, and
-    // its membership and the team of each the first time
-    const projects = await wideProjects(t, f, 20)
-    await wideShares(t, f, 100, projects)
-    const [task] = await plantMany(t, f, 1, () => ({ description: LARGEST }), {
-      each: 1,
-      rows: true,
-    })
-    const ends = await plantMany(
-      t,
-      f,
-      100,
-      (i) => ({ description: LARGEST, project_id: projects[i % 20].id }),
-      { each: 25, rows: true },
-    )
-    await plantMany(t, f, 100, (i) => ({ description: LARGEST, parent_id: ends[i].id }), {
-      each: 25,
+    // twelve sub-projects, each shared with 600 teams of its own at the
+    // name cap, about 1.7 MB of shares, which the viewer's access reads
+    // whole on each project it asks about. One step takes the twelve ends,
+    // one in each of them, and asked about them together they would read
+    // past Convex's 16 MiB.
+    const projects = await wideProjects(t, f, 12)
+    for (const p of projects) await distinctShares(t, f, p, 600)
+    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
+    const ends = await plantMany(t, f, 12, (i) => ({ project_id: projects[i].id }), {
+      each: 12,
       rows: true,
     })
     await linkAll(t, f, task, ends)
     const { answer, ...reads } = await linksRead(t, f, task.id, f.viewer)
     if (answer.state !== 'ok') throw new Error(answer.state)
-    console.log('100 linked groups in 20 sub-projects of 100 shares:', {
+    console.log('12 link ends in 12 sub-projects of 600 shares of their own:', {
       ...reads,
-      tasks: answer.tasks.length,
+      links: answer.links.length,
       complete: answer.complete,
     })
-    // more than linkBytes holds, so it stops with the rows it read
+    // It asks about the projects one at a time and stops once PROJECT no
+    // longer fits, so it passes the cap by the shares of the project it
+    // asked about last, about 1.7 MB, and then has no bytes left for the
+    // group checks, so the ends it read stay out of a list that says it is
+    // incomplete.
     expect(answer.complete).toBe(false)
-    expect(answer.tasks.length).toBeGreaterThan(10)
     expect(answer.tasks.map((row) => row.id)).toEqual(answer.links.map((link) => link.target_id))
-    expect(reads.read).toBeLessThanOrEqual(TASK_WINDOW.linkBytes / MIB + 1)
+    expect(reads.documents).toBeGreaterThan(6 * 600)
+    expect(reads.read).toBeLessThan(TASK_WINDOW.linkBytes / MIB + 1.75)
   }, 300_000)
 
   it('stops at older subtasks near 900 KB with complete false, the rows read, and no error', async () => {

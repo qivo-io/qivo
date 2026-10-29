@@ -63,20 +63,23 @@ import { relationRow, type TaskRow, taskFields } from './workspaceParts'
  * (lib/access.ts projectLevelsOf shared), which every read of theirs
  * repeats. A read looks at its budget before each step (budgetIn): a step
  * takes only the task bodies that fit whole, each up to Convex's 1 MiB,
- * and asks the caller's access about a project it has not read yet only
- * while PROJECT fits. Only a group check may take one body more while some
- * of every count is left. So a read passes a cap by one task body at most,
- * besides the reads PROJECT leaves out. Its worst case is the cap, 1 MiB
- * past it and the shared reads (the person's own rows, and up to about 1.2
- * MiB of the organization's teams at OWN_READS's 512 KiB, which counts
- * JSON): about 10 MiB for a task and 15 MiB for its links, under Convex's
- * 16 MiB, and the shared reads' few hundred ranges and documents past
- * `ranges` and `documents`, under 4,096 and 32,000. A step asks about at
- * most one new project for each body it counts at 1 MiB, so a project
- * shared with more teams than PROJECT holds passes a cap only once its
- * reads and its task's body pass 1 MiB: past about 110 shares on it and
- * its top-level project at the name caps, about 9 KB a share with the
- * caller's membership and the team. At
+ * and asks the caller's access about the projects it has not read yet one
+ * at a time, each only while PROJECT fits (inOrder). Only a group check may
+ * take one body more while some of every count is left. So a read passes
+ * a cap by one task body at most, or by what the project it asked about
+ * last reads past PROJECT: nothing bounds the team shares on one project,
+ * and each share past PROJECT's costs about 9 KB at the name caps with the
+ * caller's membership and the team. Besides that, its worst case is the
+ * cap, 1 MiB past it and the shared reads: up to about 1.2 MiB of the
+ * organization's teams at OWN_READS's 512 KiB, which counts JSON, and the
+ * person's own rows. With few of those rows a task reads at most about 10
+ * MiB and its links about 15 MiB, under Convex's 16 MiB. Nothing bounds
+ * them yet: once 32 projects were asked they can be 33 grants, 33
+ * memberships and 1,001 team shares, about 2.85 MiB at the name caps, and
+ * more at OWN_READS's later steps and for navigation, so a person with many
+ * of them near the name caps can make a read of links pass Convex's 16
+ * MiB. The shared reads' ranges and documents count past `ranges` and
+ * `documents` too, under 4,096 and 32,000 while those rows are few. At
  * the 20,000-character description cap in a three-byte script, 100
  * subtasks read about 6.1 MB, and fit in `bytes` with the task, its text
  * and its parent. A linked group also reads its first counting subtask
@@ -132,9 +135,10 @@ const SHARES = 10
  * shares the share, the caller's membership and the team, each at most
  * TEAM_ROW_MAX_BYTES and read once a query. A project shared with more
  * teams reads up to three more such rows and two more ranges a share, as
- * nothing bounds the shares on one project, which counts at the next look
- * at the budget, as do the sub-projects navigation reads under a top-level
- * project the caller holds no level on. */
+ * nothing bounds the shares on one project. The next look at the budget
+ * counts them, before the read asks about another project (inOrder), as it
+ * counts the sub-projects navigation reads under a top-level project the
+ * caller holds no level on. */
 const PROJECT: Reads = {
   bytes: 2 * (PROJECT_ROW_MAX_BYTES + (1 + 3 * SHARES) * TEAM_ROW_MAX_BYTES),
   documents: 2 * (2 + 3 * SHARES),
@@ -185,10 +189,14 @@ function budgetIn(ctx: QueryCtx, cap: Reads, shared: Reads) {
     asked(projectId: string) {
       asked.add(projectId)
     },
-    /** `check` of each of `items` in order, a few at a time, while the
+    /** `check` of each of `items` in order, a round at a time, while the
      * budget holds PROJECT for each project of theirs (`projectOf`,
      * undefined for none) the caller's access has not read yet, keeping
-     * back CHECK for each of `checks` group checks to come. Answers the
+     * back CHECK for each of `checks` group checks to come. A round asks
+     * about at most one such project, after a look at the budget, because
+     * nothing bounds the team shares the access reads on one project: a
+     * project shared with more teams than PROJECT holds passes the budget
+     * by its own reads, and no other project's join them. Answers the
      * results of a prefix of `items`, all of them unless the budget ran
      * out. */
     async inOrder<T, R>(
@@ -199,19 +207,18 @@ function budgetIn(ctx: QueryCtx, cap: Reads, shared: Reads) {
     ): Promise<R[]> {
       const out: R[] = []
       while (out.length < items.length) {
-        // the projects this step asks about first, as many as PROJECT fits
-        const fresh = new Set<string>()
-        let room: number | undefined
+        // the items up to the second project not read yet, and the first
+        // while PROJECT fits
+        let fresh: string | undefined
         let end = out.length
         for (; end < items.length; end++) {
           const id = projectOf(items[end])
-          if (id === undefined || asked.has(id) || fresh.has(id)) continue
-          room ??= await fits(PROJECT, undefined, checks)
-          if (fresh.size === room) break
-          fresh.add(id)
+          if (id === undefined || asked.has(id) || id === fresh) continue
+          if (fresh !== undefined || (await fits(PROJECT, undefined, checks)) === 0) break
+          fresh = id
         }
         if (end === out.length) break
-        for (const id of fresh) asked.add(id)
+        if (fresh !== undefined) asked.add(fresh)
         out.push(...(await Promise.all(items.slice(out.length, end).map(check))))
       }
       return out
