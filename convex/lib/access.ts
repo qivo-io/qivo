@@ -6,7 +6,7 @@
 import type { GenericDocument } from 'convex/server'
 import type { ConvexError } from 'convex/values'
 import { components } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId } from './db'
 import { type AccessLevel, type CredentialAccess, LEVEL_RANK, type OrgRole } from './enums'
@@ -816,6 +816,17 @@ export async function accessRowsOf(
  * it. */
 export const LEVELS_READ = { max: 4000 }
 
+/** The rows an access removal takes away, which projectLevelsForPeople
+ * leaves out to answer sight as it will be once they are gone, without the
+ * write (model/projectAccess.ts findLost): one person's grant, one team
+ * share, one membership, or a whole team with its shares and memberships. */
+export type RemovedAccess = {
+  grant?: Id<'project_access'>
+  share?: Id<'project_team_access'>
+  membership?: { team_id: string; profile_id: string }
+  team?: string
+}
+
 /** projectLevelsForOrg for each of `people`, by profile id, over `projects`,
  * every project of one organization. Each person costs one index range for
  * their own grants. Their teams come from every membership of the
@@ -826,20 +837,26 @@ export const LEVELS_READ = { max: 4000 }
  * before the change and four after, and passed Convex's 4,096. `guard`, when
  * given, runs before each read and after every GUARD_ROWS rows of it, so a
  * caller can stop before the reads fill the transaction
- * (model/projectAccess.ts removeAndSettle). */
+ * (model/projectAccess.ts removeAndSettle). `without` names rows to leave
+ * out as if they were deleted, and changes nothing for a person of another
+ * organization, who sees none of `projects` anyway. */
 export async function projectLevelsForPeople(
   ctx: QueryCtx,
   people: readonly Doc<'profiles'>[],
   projects: readonly Doc<'projects'>[],
   guard: () => Promise<void> = async () => {},
+  without: RemovedAccess = {},
 ): Promise<Map<string, OrgProjectLevels>> {
   const out = new Map<string, OrgProjectLevels>()
   if (people.length === 0 || projects.length === 0) return out
   const orgId = projects[0].org_id
-  const teams = await ctx.db
-    .query('teams')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
+  // a deleted team's shares and memberships go with it
+  const teams = (
+    await ctx.db
+      .query('teams')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .collect()
+  ).filter((t) => t.id !== without.team)
   const orgTeams = new Set(teams.map((t) => t.id))
   const teamsOf =
     people.length > teams.length ? await teamsOfPeople(ctx, people, teams, guard) : null
@@ -850,10 +867,14 @@ export async function projectLevelsForPeople(
       out.set(person.id, await projectLevelsForOrg(ctx, person, projects))
       continue
     }
-    const grants = await guardedRows(
-      ctx.db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', person.id)),
-      guard,
-    )
+    const grants = (
+      await guardedRows(
+        ctx.db
+          .query('project_access')
+          .withIndex('by_profile', (q) => q.eq('profile_id', person.id)),
+        guard,
+      )
+    ).filter((g) => g._id !== without.grant)
     const shares: Doc<'project_team_access'>[] = []
     if (receivesTeamAccess(person)) {
       const mine = teamsOf
@@ -866,16 +887,20 @@ export async function projectLevelsForPeople(
               guard,
             )
           ).map((m) => m.team_id)
+      const left = without.membership
       for (const teamId of mine) {
         if (!orgTeams.has(teamId)) continue
+        if (left?.profile_id === person.id && left.team_id === teamId) continue
         let teamShares = sharesOfTeam.get(teamId)
         if (teamShares === undefined) {
-          teamShares = await guardedRows(
-            ctx.db
-              .query('project_team_access')
-              .withIndex('by_team', (q) => q.eq('team_id', teamId)),
-            guard,
-          )
+          teamShares = (
+            await guardedRows(
+              ctx.db
+                .query('project_team_access')
+                .withIndex('by_team', (q) => q.eq('team_id', teamId)),
+              guard,
+            )
+          ).filter((s) => s._id !== without.share)
           sharesOfTeam.set(teamId, teamShares)
         }
         shares.push(...teamShares)

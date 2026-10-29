@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as accessRemovals from "../accessRemovals.js";
 import type * as admin from "../admin.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminBilling from "../adminBilling.js";
@@ -202,6 +203,7 @@ import type * as model_people from "../model/people.js";
 import type * as model_projectAccess from "../model/projectAccess.js";
 import type * as model_projectNav from "../model/projectNav.js";
 import type * as model_projects from "../model/projects.js";
+import type * as model_removalPreview from "../model/removalPreview.js";
 import type * as model_storageTotals from "../model/storageTotals.js";
 import type * as model_syncStamps from "../model/syncStamps.js";
 import type * as model_taskEvents from "../model/taskEvents.js";
@@ -247,6 +249,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accessRemovals: typeof accessRemovals;
   admin: typeof admin;
   adminAuth: typeof adminAuth;
   adminBilling: typeof adminBilling;
@@ -441,6 +444,7 @@ declare const fullApi: ApiFromModules<{
   "model/projectAccess": typeof model_projectAccess;
   "model/projectNav": typeof model_projectNav;
   "model/projects": typeof model_projects;
+  "model/removalPreview": typeof model_removalPreview;
   "model/storageTotals": typeof model_storageTotals;
   "model/syncStamps": typeof model_syncStamps;
   "model/taskEvents": typeof model_taskEvents;
