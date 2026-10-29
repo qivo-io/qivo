@@ -307,11 +307,6 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
           focusInPage(kept ?? null)
         }
       }
-      // a restore that landed during this move owes the new page a read
-      if (to !== 'again' && owedRef.current === gen) {
-        owedRef.current = null
-        afterCommit.current = () => go('again')
-      }
       setList((c) =>
         c.gen !== gen
           ? c
@@ -328,6 +323,17 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
       )
     })
   }
+
+  /* A restore that landed while a move ran owes the page a read, which goes
+     once a listing of its generation commits ready with no move running,
+     whichever of the two landed first. It runs during the commit, after
+     listRef holds the listing. */
+  useLayoutEffect(() => {
+    if (owedRef.current === list.gen && list.phase === 'ready' && list.moving === null) {
+      owedRef.current = null
+      afterCommit.current = () => go('again')
+    }
+  })
 
   /* Restores `row`'s task. Once it succeeds the row leaves, focus moves to
      the next row still listed when it was on this one, and the page asks

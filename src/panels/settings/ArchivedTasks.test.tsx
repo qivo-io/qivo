@@ -40,6 +40,8 @@ type Row = Record<string, unknown> & { id: string }
 type Call = {
   args: Args
   answer: (rows: Row[], next?: string | null, scanned?: number) => Promise<void>
+  /** answers at once, outside act, from wherever the test is */
+  answerNow: (rows: Row[], next?: string | null) => void
   /** answers that the scope is too wide to list side by side */
   tooWide: () => Promise<void>
   fail: () => Promise<void>
@@ -176,6 +178,8 @@ async function open({ phone = false, initial = 'meta' as 'meta' | 'none', partne
           await act(async () => resolve({ rows, next_cursor: next, scanned }))
           await settle()
         },
+        answerNow: (rows, next = null) =>
+          resolve({ rows, next_cursor: next, scanned: rows.length }),
         tooWide: async () => {
           await act(async () =>
             resolve({ rows: [], next_cursor: null, scanned: 0, too_wide: true }),
@@ -731,6 +735,27 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     expect(last().args).toEqual({ scope: project(META), cursor: '3~p2', limit: 25 })
     await last().answer(many(26, 25, 30), '3~p3')
     expect(text('[data-archive-count]')).toBe('Archived tasks 26 to 50')
+  })
+
+  it('reads the new page again when Next and a restore both land before one commit', async () => {
+    await open()
+    await last().answer(many(1, 25), '3~p2')
+    await click(button('Next'))
+    const next = last()
+    await click(find('[data-archive-row="archived-3"] [data-restore]'))
+    const asked = calls.length
+    // Next's answer lands first and the restore right after it, while the
+    // page still shows Next running, and React commits both together
+    await act(async () => {
+      next.answerNow(many(26, 25, 30), '3~p3')
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+      restores[0].answerNow()
+      for (let i = 0; i < 20; i++) await Promise.resolve()
+    })
+    await settle()
+    // the page Next brought is asked for again from where it starts
+    expect(calls.length).toBe(asked + 1)
+    expect(last().args).toEqual({ scope: project(META), cursor: '3~p2', limit: 25 })
   })
 
   it('asks for a narrower scope when the chosen one is too wide to list together', async () => {
