@@ -374,6 +374,12 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
 
   // the rows on screen answer an older text, scope or toggle
   const stale = typed !== (shown?.ask.key ?? null)
+  // a request runs, or the pause before one: what is typed waits to be
+  // asked and is not the search on screen. A failed or refused search, a
+  // text without terms and one past the limit wait for nothing.
+  const busy =
+    running !== null ||
+    (typed !== wanted && typed !== null && typed !== TOO_LONG && typed !== shown?.ask.key)
   const rows = tooLong || typed === null ? [] : (shown?.rows ?? [])
   const moving = running && running.move !== 'first' ? running.move : null
 
@@ -559,7 +565,7 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
       </div>
       <CommandList
         ref={listRef}
-        aria-busy={running !== null || stale || undefined}
+        aria-busy={busy || undefined}
         className="max-h-[388px] min-h-0 p-2"
       >
         {rows.map((row) =>

@@ -395,6 +395,37 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     expect(find('[cmdk-list]').getAttribute('aria-busy')).toBeNull()
   })
 
+  it('marks the list busy only while a request runs or typing rests before one', async () => {
+    await open()
+    const busy = () => find('[cmdk-list]').getAttribute('aria-busy')
+    await key('firm')
+    expect(busy()).toBe('true')
+    await wait(300)
+    expect(busy()).toBe('true')
+    await last().answer([task(14)])
+    expect(busy()).toBeNull()
+    // the same terms ask nothing, so nothing is on its way
+    await key('firm ')
+    expect(busy()).toBeNull()
+    await wait(300)
+    // a failed first page, a refused text and a text past the limit wait for nothing
+    await type('firmware')
+    expect(busy()).toBe('true')
+    await last().fail()
+    expect(busy()).toBeNull()
+    expect(status()).toBe("Couldn't search. Try again.")
+    await key('rollback')
+    expect(busy()).toBe('true')
+    await wait(300)
+    await last().refuse('rule', 'a search must be at most 200 characters')
+    expect(busy()).toBeNull()
+    await type('firmware '.repeat(25))
+    expect(busy()).toBeNull()
+    // typing back to the failed text asks it again
+    await key('firmware')
+    expect(busy()).toBe('true')
+  })
+
   it('pages with Previous and Next, dropping the oldest start past the bound', async () => {
     await open()
     pageStarts.PAGE_STARTS.most = 3

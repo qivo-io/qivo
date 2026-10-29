@@ -3462,12 +3462,11 @@ async function paletteSearchCheck(target) {
     await input.waitFor()
     await input.fill(target.title)
     const row = palette.locator(`[cmdk-item][data-value="issue-${target.key}"]`)
-    // the search for the text has answered: nothing is on its way
+    // the search for the text has answered: the list is busy only while a
+    // request runs or typing rests before one (src/panels/Palette.tsx), so
+    // a failed or refused search answers too, and the Retry check sees it
     const answered = async () =>
-      (await palette.locator('[cmdk-list]').getAttribute('aria-busy')) === null &&
-      !/Searching|Updating/.test(
-        (await palette.locator('[data-palette-status]').textContent()) ?? '',
-      )
+      (await palette.locator('[cmdk-list]').getAttribute('aria-busy')) === null
     expect(await until(answered), 'Search did not answer with the toggle off')
     eq(await row.count(), 0, 'the archived task with Include archived tasks off')
     const failed = await palette.locator('[data-palette-retry]').count()
