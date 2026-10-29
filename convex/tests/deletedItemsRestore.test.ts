@@ -1434,6 +1434,35 @@ describe('copies stored before window keys', () => {
   })
 })
 
+describe('project copies', () => {
+  it('brings a project item back with every field each project had', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const projects = [f.meta, f.sub, f.sub2]
+    // the name keys and archive states a reveal writes, so every other
+    // field comes back as it was
+    for (const p of projects)
+      await patch(t, 'projects', p.id, { name_key: nameKey(p.name), archive_state: 'live' })
+    const before = await Promise.all(projects.map((p) => liveProject(t, p.id)))
+    await deleteProject(t, f, f.meta.id)
+    await runSteps(t)
+    const item = await itemFor(t, f.meta.id)
+    const stored = (await storedRows(t, item.id)).flatMap((row) =>
+      row.row.table === 'projects' ? [row.row.doc] : [],
+    )
+    expect(stored).toHaveLength(3)
+
+    await restore(t, f.user, [item.id])
+    await runSteps(t)
+    for (const [i, p] of projects.entries()) {
+      const back = await liveProject(t, p.id)
+      const { _id: _oldId, _creationTime: _oldTime, ...was } = before[i] ?? p
+      const { _id: _newId, _creationTime: _newTime, ...now } = back ?? p
+      expect(now).toStrictEqual(was)
+    }
+  })
+})
+
 describe('notices, activity and events', () => {
   async function subscribe(t: T, f: OrgFixture) {
     const owner = await t.run(async (ctx): Promise<EventOwner> => {
