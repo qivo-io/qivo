@@ -89,6 +89,11 @@ async function boot(recipe: Recipe) {
   sync = await import('../../lib/syncStatus')
   const d = server()
   d.reset()
+  // a bulk inbox press plans from bulkReach (store/planner.ts askReach):
+  // every seat has one batch to do, from a cutoff
+  d.answer('messages:bulkReach', () => ({
+    seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'one', before: 1 })),
+  }))
   d.publish('workspace:whole', snap, false)
   d.publish('snapshot:threadComments', page, false)
   // a new listener gets the held snapshot on a 0 ms timer, as from Convex

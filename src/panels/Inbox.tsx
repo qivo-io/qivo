@@ -8,6 +8,16 @@
    actions; notification content remains server-owned. */
 import { CheckCheck, ListX, Minus, Plus } from 'lucide-react'
 import React, { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DropdownChevron } from '@/components/ui/select'
@@ -28,7 +38,7 @@ import {
   Seg,
 } from '../components/qivo'
 import { fmtDateTime } from '../lib/dates'
-import { closeOrAsk } from '../lib/discardQuestion'
+import { closeOrAsk, typesText } from '../lib/discardQuestion'
 import { restoreFocus } from '../lib/focusVisibility'
 import { UnsentScopeContext, useUnsentScope } from '../lib/leaveGuard'
 import { noProjectsHint, seesNoProject } from '../lib/noProjects'
@@ -38,7 +48,15 @@ import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '
 import { type UnreadStart, unreadStart } from '../lib/spine'
 import { useMobile } from '../lib/useMobile'
 import { OUT_OF_USE } from '../lib/viewHidden'
+import {
+  type BulkAction,
+  bulkBusy,
+  bulkName,
+  bulkNoticeText,
+  bulkProgressText,
+} from '../store/inboxBulk'
 import { type MessageGroupVM, type MessageVM, P } from '../store/planner'
+import { usePlannerVersion } from '../store/usePlannerVersion'
 import { IssueDetail } from './IssueDetail'
 
 /* Spec'd age form: hours up to 24 h, then days (minutes only under an hour —
@@ -381,27 +399,27 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // that row leaves (focusRowAfter)
   const paneRows = useRef<ListedRows | null>(null)
   const menuRows = useRef<ListedRows | null>(null)
-  const [bulkAction, setBulkAction] = useState<'read' | 'remove' | null>(null)
-  // the toolbar button the running bulk action was pressed on
-  const bulkFrom = useRef<'read' | 'remove' | null>(null)
+  // the bulk action, which the store runs and keeps (store/inboxBulk.ts),
+  // so an Inbox shown again shows it as it goes on
+  usePlannerVersion('inbox')
+  const bulk = P.inboxBulk
+  const bulkRuns = bulkBusy(bulk)
+  // where the bulk action was pressed: a toolbar button, or the row menu
+  const bulkFrom = useRef<BulkAction | 'menu' | null>(null)
   // also true while the server's bounded read left rows unexamined, which
   // these actions still reach (P.canMarkAllRead, P.canRemoveRead)
   const hasReadMessages = P.canRemoveRead
   const hasUnreadMessages = P.canMarkAllRead
-  const runBulkAction = async (action: 'read' | 'remove') => {
-    if (bulkAction || (action === 'read' ? !hasUnreadMessages : !hasReadMessages)) return
-    // from the row menu, focus goes to the first row still listed; from the
-    // toolbar, back to its button once the action ends
+  const runBulkAction = (action: BulkAction) => {
+    if (bulkRuns || (action === 'read' ? !hasUnreadMessages : !hasReadMessages)) return
+    // from the row menu, focus goes to the first row still listed, at once
+    // and again once the paint shows; from the toolbar, back to its button
+    // once the action ends
     if (menu) menuRows.current = { id: null, ids: [] }
-    else bulkFrom.current = action
+    bulkFrom.current = menu ? 'menu' : action
     setMenu(null)
-    setBulkAction(action)
-    try {
-      if (action === 'read') await P.markAllMessagesRead()
-      else await P.deleteReadMessages()
-    } finally {
-      setBulkAction(null)
-    }
+    // a long action asks first (the keep-open notice below)
+    void (action === 'read' ? P.markAllMessagesRead(true) : P.deleteReadMessages(true))
   }
   const bulkActionButtons = (
     <TooltipProvider>
@@ -417,9 +435,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                 size="icon"
                 data-inbox-mark-all-read
                 aria-label="Mark all as read"
-                aria-busy={bulkAction === 'read'}
-                disabled={!!bulkAction || !hasUnreadMessages}
-                onClick={() => void runBulkAction('read')}
+                aria-busy={bulkRuns && bulk?.action === 'read'}
+                disabled={bulkRuns || !hasUnreadMessages}
+                onClick={() => runBulkAction('read')}
               >
                 <CheckCheck size={16} strokeWidth={1.75} aria-hidden="true" />
               </Button>
@@ -435,9 +453,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
                 size="icon"
                 data-inbox-remove-read
                 aria-label="Remove all read notifications"
-                aria-busy={bulkAction === 'remove'}
-                disabled={!!bulkAction || !hasReadMessages}
-                onClick={() => void runBulkAction('remove')}
+                aria-busy={bulkRuns && bulk?.action === 'remove'}
+                disabled={bulkRuns || !hasReadMessages}
+                onClick={() => runBulkAction('remove')}
               >
                 <ListX size={16} strokeWidth={1.75} aria-hidden="true" />
               </Button>
@@ -447,6 +465,18 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
         </Tooltip>
       </fieldset>
     </TooltipProvider>
+  )
+  // A long action's progress. The live region stays in the page, empty and
+  // without height while nothing runs, so a screen reader hears each step.
+  const bulkProgress = (
+    <p
+      data-inbox-progress
+      role="status"
+      aria-live="polite"
+      className="inbox-bulk-progress m-0 mb-2 min-w-0 text-right text-sm text-text-2 empty:mb-0"
+    >
+      {bulk?.long && bulk.state === 'running' ? bulkProgressText(bulk) : ''}
+    </p>
   )
 
   /* What the pane shows is the task the ADDRESS names — `openIssue`, which
@@ -679,21 +709,53 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     menuRows.current = null
     focusRowAfter(rows)
   }, [menu])
+  /** Gives focus back after a bulk action pressed on `from`: to the
+      toolbar button when it is enabled again, else to the first row. */
+  const focusAfterBulk = (from: BulkAction | 'menu') => {
+    const button =
+      from === 'menu'
+        ? null
+        : listScrollRef.current
+            ?.closest('[data-inbox]')
+            ?.querySelector<HTMLElement>(
+              from === 'read' ? '[data-inbox-mark-all-read]' : '[data-inbox-remove-read]',
+            )
+    if (button && !button.matches(':disabled') && focusFree()) restoreFocus(button)
+    else focusRowAfter({ id: null, ids: [] })
+  }
   // A toolbar button disables itself while its action runs, and a browser
   // takes focus from a disabled button. Once the action ends, focus goes
   // back to the button when it is enabled again, else to the first row.
+  // From the row menu, focus goes to the first row still listed once the
+  // action's paint shows. The notice's close gives focus back itself.
+  const bulkState = bulk?.state
+  const bulkWas = useRef(bulkState)
   useEffect(() => {
+    const was = bulkWas.current
+    bulkWas.current = bulkState
     const from = bulkFrom.current
-    if (bulkAction || !from) return
+    if (!from || was === 'notice') return
+    if (bulkState === 'running' && from === 'menu') focusRowAfter({ id: null, ids: [] })
+    if (bulkRuns) return
     bulkFrom.current = null
-    const button = listScrollRef.current
-      ?.closest('[data-inbox]')
-      ?.querySelector<HTMLElement>(
-        from === 'read' ? '[data-inbox-mark-all-read]' : '[data-inbox-remove-read]',
-      )
-    if (button && !button.matches(':disabled') && focusFree()) restoreFocus(button)
-    else focusRowAfter({ id: null, ids: [] })
-  }, [bulkAction])
+    focusAfterBulk(from)
+  }, [bulkState])
+  // The notice opens only in a shown Inbox (P.hostInboxNotice). A kept
+  // Inbox that hides, or one let go, ends a notice that waits or would
+  // open, and sends nothing. Before it opens, the row menu closes, and a
+  // notice that would open over a field the person types in does not: the
+  // action ends as Cancel ends it.
+  useEffect(
+    () =>
+      P.hostInboxNotice({
+        prepare: () => {
+          if (typesText(document.activeElement)) return false
+          setMenu(null)
+          return true
+        },
+      }),
+    [],
+  )
   // what a kept Inbox held before it hid (components/KeptView) moves no
   // focus once it shows again
   useEffect(
@@ -885,6 +947,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             {!mobile && bulkActionButtons}
           </div>
           {mobile && bulkActionButtons}
+          {bulkProgress}
           {!mobile && (
             <div
               data-filter-search
@@ -1074,16 +1137,16 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             )}
             <MenuItem
               data-msg-menu-mark-all-read
-              disabled={!!bulkAction || !hasUnreadMessages}
-              onClick={() => void runBulkAction('read')}
+              disabled={bulkRuns || !hasUnreadMessages}
+              onClick={() => runBulkAction('read')}
             >
               <CheckCheck size={16} strokeWidth={1.75} aria-hidden="true" />
               Mark all as read
             </MenuItem>
             <MenuItem
               data-msg-menu-remove-read
-              disabled={!!bulkAction || !hasReadMessages}
-              onClick={() => void runBulkAction('remove')}
+              disabled={bulkRuns || !hasReadMessages}
+              onClick={() => runBulkAction('remove')}
             >
               <ListX size={16} strokeWidth={1.75} aria-hidden="true" />
               Remove all read notifications
@@ -1132,6 +1195,49 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           </div>
         </AnchoredPop>
       )}
+
+      {/* The keep-open notice of a bulk action that takes more than one
+          round (P.answerInboxNotice). Cancel sends nothing. It renders
+          only while it asks, so it closes at once, without a fade: a
+          fading notice would still hold focus as the action goes on, and
+          lose the words of what it asked. */}
+      <AlertDialog
+        open={bulk?.state === 'notice'}
+        onOpenChange={(open) => {
+          if (!open) P.answerInboxNotice(false)
+        }}
+      >
+        {bulk?.state === 'notice' && (
+          <AlertDialogContent
+            data-inbox-notice
+            onCloseAutoFocus={(event) => {
+              // back to what opened it after Cancel, or once the action
+              // ended; while it runs, the toolbar's button stays disabled
+              event.preventDefault()
+              const from = bulkFrom.current
+              if (!from) return
+              if (!bulkBusy(P.inboxBulk)) {
+                bulkFrom.current = null
+                focusAfterBulk(from)
+              } else if (from === 'menu') focusRowAfter({ id: null, ids: [] })
+            }}
+          >
+            <AlertDialogHeader>
+              <AlertDialogTitle>Keep Qivo open</AlertDialogTitle>
+              <AlertDialogDescription>{bulkNoticeText(bulk)}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel data-inbox-notice-cancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                data-inbox-notice-confirm
+                onClick={() => P.answerInboxNotice(true)}
+              >
+                {bulkName(bulk.action)}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        )}
+      </AlertDialog>
 
       {/* The popped-out window: the same component, floating, on the same task
           the pane holds — so `holdThread` keeps it off the store's one comment

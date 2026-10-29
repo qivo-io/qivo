@@ -27,7 +27,7 @@ let returnTo: HTMLElement | null = null
 let lastField: HTMLElement | null = null
 
 /** Whether `el` takes typed text. */
-const typesText = (el: unknown): el is HTMLElement =>
+export const typesText = (el: unknown): el is HTMLElement =>
   el instanceof HTMLElement &&
   (el.isContentEditable ||
     el.matches(

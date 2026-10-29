@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { act, useState } from 'react'
+import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
@@ -32,12 +32,26 @@ let container: HTMLDivElement
 let root: Root
 let snap: Snapshot
 let onClose: ReturnType<typeof vi.fn<() => void>>
+/* What messages.bulkReach answers the seat: `one` batch when it holds a
+   row the action walks, unless a test sets `reach`. It waits for
+   `reachGate` when a test sets one. */
+let reach: 'one' | 'many' | null
+let reachGate: Promise<void> | null
+/* Shows or hides the Inbox's kept view, for an Inbox opened `kept`. */
+let showKept: (shown: boolean) => void
+/* The Inbox's onExit, which Escape calls once nothing else takes it. */
+let onExit: ReturnType<typeof vi.fn<() => void>>
 
 /* Renders the Inbox as App holds it with `count` tasks, one item each,
    listed task-0 first (the newest), and the pane on task `shown`, if any.
    The items of the tasks `read` are read. Answers the task uuids in list
    order. */
-async function openInbox(count: number, shown: number | null = null, read: number[] = []) {
+async function openInbox(
+  count: number,
+  shown: number | null = null,
+  read: number[] = [],
+  { kept = false } = {},
+) {
   vi.resetModules()
   snap = plannerFixture()
   const uuids: string[] = []
@@ -78,7 +92,18 @@ async function openInbox(count: number, shown: number | null = null, read: numbe
     return () => {}
   })
   network.query.mockReset()
-  network.query.mockResolvedValue(null)
+  network.query.mockImplementation(async (ref, args) => {
+    if (getFunctionName(ref) !== 'messages:bulkReach') return null
+    if (reachGate) await reachGate
+    const walked = snap.messages.some((m) => !!m.read_at === (args.action === 'remove'))
+    return {
+      seats: snap.orgs.map((org) => ({
+        org_id: org.id,
+        reach: reach ?? (walked ? 'one' : 'none'),
+        before: 1,
+      })),
+    }
+  })
   network.mutation.mockReset()
   network.mutation.mockResolvedValue(null)
   const store = await import('../store/planner')
@@ -86,7 +111,9 @@ async function openInbox(count: number, shown: number | null = null, read: numbe
   const handle = (n: number) => store.P.issues.find((it) => it.uuid === uuids[n])?.id ?? null
   const { Inbox } = await import('./Inbox')
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
+  const { KeptView } = await import('../components/KeptView')
   onClose = vi.fn<() => void>()
+  onExit = vi.fn<() => void>()
   /** The Inbox as App holds it, its pane on the task the address names. */
   function InboxHost() {
     usePlannerVersion()
@@ -94,7 +121,7 @@ async function openInbox(count: number, shown: number | null = null, read: numbe
     return (
       <Inbox
         showOnBoard={vi.fn()}
-        onExit={vi.fn()}
+        onExit={onExit}
         openTask={(next: string | null) => {
           if (next === null) onClose()
           setOpenIssue(next)
@@ -104,12 +131,20 @@ async function openInbox(count: number, shown: number | null = null, read: numbe
       />
     )
   }
-  await act(async () =>
-    root.render(
-      <TooltipProvider>
+  /** The Inbox in a kept view, as App keeps it beside the other pages. */
+  function KeptHost() {
+    const [shown, setShown] = useState(true)
+    useEffect(() => {
+      showKept = setShown
+    }, [])
+    return (
+      <KeptView view="inbox" shown={shown} className="view">
         <InboxHost />
-      </TooltipProvider>,
-    ),
+      </KeptView>
+    )
+  }
+  await act(async () =>
+    root.render(<TooltipProvider>{kept ? <KeptHost /> : <InboxHost />}</TooltipProvider>),
   )
   return uuids
 }
@@ -218,6 +253,8 @@ beforeEach(() => {
     },
   )
   window.showToast = vi.fn()
+  reach = null
+  reachGate = null
   container = document.createElement('div')
   document.body.append(container)
   root = createRoot(container)
@@ -354,5 +391,271 @@ describe('Inbox focus when a row leaves', { timeout: 20_000 }, () => {
     await settle()
     expect(rowOpen(uuids[2])).toBeNull()
     expect(focused()).toBe(`row ${uuids[1]}`)
+  })
+})
+
+/** The writes of Mark all as read the test holds, in the order sent. */
+function holdMarkAllRead() {
+  const held: Held[] = []
+  network.mutation.mockImplementation((ref) =>
+    getFunctionName(ref) === 'messages:markAllRead'
+      ? new Promise((answer, refuse) => held.push({ answer, refuse }))
+      : Promise.resolve(null),
+  )
+  return held
+}
+
+const markAllButton = () => document.querySelector<HTMLButtonElement>('[data-inbox-mark-all-read]')
+const notice = () => document.querySelector<HTMLElement>('[data-inbox-notice]')
+const progress = () => document.querySelector<HTMLElement>('[data-inbox-progress]')
+const sentMarks = () =>
+  network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'messages:markAllRead')
+
+describe('Inbox bulk actions that take more than one round', { timeout: 20_000 }, () => {
+  it('asks first, sends nothing on Cancel and gives focus back to the button', async () => {
+    await openInbox(3)
+    reach = 'many'
+    holdMarkAllRead()
+    await press(markAllButton())
+    await settle()
+    expect(notice()?.textContent).toContain('Keep Qivo open')
+    expect(notice()?.textContent).toContain(
+      'Mark all as read covers many messages and runs in steps. Keep Qivo open until it finishes. Closing or reloading Qivo stops it, and the steps already done stay done.',
+    )
+    // the buttons wait for the answer, and nothing is sent or painted
+    expect(markAllButton()?.disabled).toBe(true)
+    expect(sentMarks()).toEqual([])
+    expect(document.querySelectorAll('[data-message][data-unread]').length).toBe(
+      document.querySelectorAll('[data-message]').length,
+    )
+    await press(document.querySelector<HTMLElement>('[data-inbox-notice-cancel]'))
+    await settle()
+    expect(notice()).toBeNull()
+    expect(sentMarks()).toEqual([])
+    expect(markAllButton()?.disabled).toBe(false)
+    expect(document.activeElement).toBe(markAllButton())
+  })
+
+  it('gives focus to the first row after Cancel when the row menu opened the notice', async () => {
+    const uuids = await openInbox(3)
+    reach = 'many'
+    await openRowMenu(uuids[2])
+    await press(document.querySelector<HTMLElement>('[data-msg-menu-mark-all-read]'))
+    await settle()
+    expect(notice()).not.toBeNull()
+    await press(document.querySelector<HTMLElement>('[data-inbox-notice-cancel]'))
+    await settle()
+    expect(sentMarks()).toEqual([])
+    expect(focused()).toBe(`row ${uuids[0]}`)
+  })
+
+  it('shows its progress with every action disabled once confirmed, also in an Inbox mounted again', async () => {
+    const uuids = await openInbox(3)
+    reach = 'many'
+    const held = holdMarkAllRead()
+    await press(markAllButton())
+    await settle()
+    expect(progress()?.textContent).toBe('')
+    await press(document.querySelector<HTMLElement>('[data-inbox-notice-confirm]'))
+    await settle()
+    expect(notice()).toBeNull()
+    expect(sentMarks()).toHaveLength(1)
+    expect(progress()?.getAttribute('aria-live')).toBe('polite')
+    expect(progress()?.textContent).toBe('Marking messages read, 0 done')
+    await act(async () =>
+      held[0].answer({ marked: 2, ids: ['message-0', 'message-1'], hasMore: true, before: 1 }),
+    )
+    await settle()
+    expect(progress()?.textContent).toBe('Marking messages read, 2 done')
+    expect(markAllButton()?.disabled).toBe(true)
+    expect(document.querySelector<HTMLButtonElement>('[data-inbox-remove-read]')?.disabled).toBe(
+      true,
+    )
+    await openRowMenu(uuids[2])
+    for (const item of ['[data-msg-menu-mark-all-read]', '[data-msg-menu-remove-read]'])
+      expect(document.querySelector<HTMLButtonElement>(item)?.disabled).toBe(true)
+    // leaving the Inbox and coming back keeps the action and its progress
+    const { Inbox } = await import('./Inbox')
+    await act(async () => root.render(<TooltipProvider>{null}</TooltipProvider>))
+    expect(progress()).toBeNull()
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <Inbox
+            showOnBoard={vi.fn()}
+            onExit={vi.fn()}
+            openTask={vi.fn()}
+            openIssue={null}
+            onPlanOnRoadmap={vi.fn()}
+          />
+        </TooltipProvider>,
+      ),
+    )
+    expect(progress()?.textContent).toBe('Marking messages read, 2 done')
+    await vi.waitFor(() => expect(held).toHaveLength(2))
+    await act(async () =>
+      held[1].answer({ marked: 1, ids: ['message-2'], hasMore: false, before: 1 }),
+    )
+    await settle()
+    expect(progress()?.textContent).toBe('')
+    expect(window.showToast).toHaveBeenCalledWith('Marked 3 messages as read.', 'success')
+  })
+
+  it('closes the notice on Escape, sends nothing, keeps the Inbox and gives focus back', async () => {
+    await openInbox(3)
+    reach = 'many'
+    await press(markAllButton())
+    await settle()
+    expect(notice()).not.toBeNull()
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      )
+    })
+    await settle()
+    expect(notice()).toBeNull()
+    expect(sentMarks()).toEqual([])
+    expect(onExit).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(markAllButton())
+  })
+
+  it('runs from the row menu after Confirm and gives focus to the first row still listed', async () => {
+    const uuids = await openInbox(3)
+    reach = 'many'
+    const held = holdMarkAllRead()
+    await openRowMenu(uuids[2])
+    await press(document.querySelector<HTMLElement>('[data-msg-menu-mark-all-read]'))
+    await settle()
+    expect(notice()).not.toBeNull()
+    // the menu that opened it is gone
+    expect(document.querySelector('[data-msg-menu]')).toBeNull()
+    await press(document.querySelector<HTMLElement>('[data-inbox-notice-confirm]'))
+    await settle()
+    expect(notice()).toBeNull()
+    expect(sentMarks()).toHaveLength(1)
+    expect(focused()).toBe(`row ${uuids[0]}`)
+    await act(async () =>
+      held[0].answer({ marked: 3, ids: ['message-0', 'message-1', 'message-2'], hasMore: false }),
+    )
+    await settle()
+    expect(progress()?.textContent).toBe('')
+    expect(focused()).toBe(`row ${uuids[0]}`)
+  })
+
+  it('gives focus back once an action answered before the notice finished closing', async () => {
+    const uuids = await openInbox(3)
+    reach = 'many'
+    // every batch answers at once, so the action ends as the notice closes
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'messages:markAllRead'
+        ? { marked: 3, ids: ['message-0', 'message-1', 'message-2'], hasMore: false, before: 1 }
+        : null,
+    )
+    await press(markAllButton())
+    await settle()
+    await press(document.querySelector<HTMLElement>('[data-inbox-notice-confirm]'))
+    await settle()
+    expect(notice()).toBeNull()
+    expect(window.showToast).toHaveBeenCalledWith('Marked 3 messages as read.', 'success')
+    // the button stays disabled with nothing unread, so the first row has it
+    expect(markAllButton()?.disabled).toBe(true)
+    expect(focused()).toBe(`row ${uuids[0]}`)
+  })
+
+  it('gives focus to the first row at once after a row menu press, before bulkReach answers', async () => {
+    const uuids = await openInbox(3)
+    let open: () => void = () => {}
+    reachGate = new Promise((resolve) => {
+      open = resolve
+    })
+    await openRowMenu(uuids[2])
+    await press(document.querySelector<HTMLElement>('[data-msg-menu-mark-all-read]'))
+    await settle()
+    expect(focused()).toBe(`row ${uuids[0]}`)
+    await act(async () => open())
+    await settle()
+  })
+
+  it('does not open the notice over a field the person types in, and ends the action', async () => {
+    await openInbox(3)
+    reach = 'many'
+    let open: () => void = () => {}
+    reachGate = new Promise((resolve) => {
+      open = resolve
+    })
+    await press(markAllButton())
+    const search = document.querySelector<HTMLInputElement>('[data-inbox-search]')
+    await act(async () => search?.focus())
+    await act(async () => open())
+    await settle()
+    expect(notice()).toBeNull()
+    expect(sentMarks()).toEqual([])
+    expect(markAllButton()?.disabled).toBe(false)
+    expect(document.activeElement).toBe(search)
+  })
+
+  it('closes a row menu opened while the press waited, before the notice opens', async () => {
+    const uuids = await openInbox(3)
+    reach = 'many'
+    let open: () => void = () => {}
+    reachGate = new Promise((resolve) => {
+      open = resolve
+    })
+    await press(markAllButton())
+    await openRowMenu(uuids[1])
+    await act(async () => open())
+    await settle()
+    expect(document.querySelector('[data-msg-menu]')).toBeNull()
+    expect(notice()).not.toBeNull()
+    await press(document.querySelector<HTMLElement>('[data-inbox-notice-cancel]'))
+  })
+
+  it.each(['notice', 'asking'] as const)(
+    'sends nothing and shows no notice later when the kept Inbox hides while it is %s',
+    async (state) => {
+      await openInbox(3, null, [], { kept: true })
+      reach = 'many'
+      let open: () => void = () => {}
+      if (state === 'asking')
+        reachGate = new Promise((resolve) => {
+          open = resolve
+        })
+      await press(markAllButton())
+      await settle()
+      const { P } = await import('../store/planner')
+      expect(P.inboxBulk?.state).toBe(state)
+      await act(async () => showKept(false))
+      await settle()
+      await act(async () => open())
+      await settle()
+      expect(P.inboxBulk).toBeNull()
+      // shown again, nothing waits to ask and nothing was sent
+      await act(async () => showKept(true))
+      await settle()
+      expect(notice()).toBeNull()
+      expect(sentMarks()).toEqual([])
+      expect(markAllButton()?.disabled).toBe(false)
+    },
+  )
+
+  it('opens no notice for a press made before the kept Inbox hid and showed again', async () => {
+    await openInbox(3, null, [], { kept: true })
+    reach = 'many'
+    let open: () => void = () => {}
+    reachGate = new Promise((resolve) => {
+      open = resolve
+    })
+    await press(markAllButton())
+    await settle()
+    await act(async () => showKept(false))
+    await settle()
+    // shown again while the old press still waits for bulkReach
+    await act(async () => showKept(true))
+    await settle()
+    await act(async () => open())
+    await settle()
+    expect(notice()).toBeNull()
+    expect(sentMarks()).toEqual([])
+    expect(markAllButton()?.disabled).toBe(false)
   })
 })

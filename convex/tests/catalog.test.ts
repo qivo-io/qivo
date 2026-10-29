@@ -9,6 +9,7 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { PROJECT_CREATORS } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
+import { INBOX_BATCH } from '../model/messages'
 import {
   activityFor,
   as,
@@ -505,10 +506,10 @@ describe('messages — markRead / markUnread / remove', () => {
     const foreign = await plantMessage(t, { ...base, recipient_id: f.user.id })
     const caller = as(t, f.admin)
     const first = await caller.mutation(api.messages.markAllRead, { org_id: f.org.id })
-    expect(first).toMatchObject({ marked: 256, hasMore: true })
-    expect(new Set(first.ids).size).toBe(256)
+    expect(first).toMatchObject({ marked: INBOX_BATCH, hasMore: true })
+    expect(new Set(first.ids).size).toBe(INBOX_BATCH)
     expect((await messagesFor(t, f.admin.id, issue_id)).filter((row) => !row.read_at)).toHaveLength(
-      344,
+      600 - INBOX_BATCH,
     )
 
     await tick()
@@ -516,20 +517,21 @@ describe('messages — markRead / markUnread / remove', () => {
     // caught by later batches. The boundary is storage creation time.
     const arrival = await plantMessage(t, { ...base, created_at: '2025-01-01T00:00:00.000Z' })
     expect(arrival._creationTime).toBeGreaterThan(first.before)
-    expect(
-      await caller.mutation(api.messages.markAllRead, { org_id: f.org.id, before: first.before }),
-    ).toMatchObject({
-      marked: 256,
-      hasMore: true,
-      before: first.before,
-    })
-    expect(
-      await caller.mutation(api.messages.markAllRead, { org_id: f.org.id, before: first.before }),
-    ).toMatchObject({
-      marked: 88,
-      hasMore: false,
-      before: first.before,
-    })
+    // the later batches keep the first cutoff until the 600 are read
+    let marked = 0
+    for (let more = true; more; ) {
+      const next = await caller.mutation(api.messages.markAllRead, {
+        org_id: f.org.id,
+        before: first.before,
+      })
+      expect(next).toMatchObject({
+        marked: Math.min(INBOX_BATCH, 600 - INBOX_BATCH - marked),
+        before: first.before,
+      })
+      marked += next.marked
+      more = next.hasMore
+    }
+    expect(marked).toBe(600 - INBOX_BATCH)
     const remaining = await messagesFor(t, f.admin.id, issue_id)
     expect(remaining.map((row) => row.id).sort()).toEqual([ids[599], arrival.id].sort())
     expect(remaining.find((row) => row.id === ids[599])?.read_at).toEqual(expect.any(String))
@@ -574,7 +576,7 @@ describe('messages — markRead / markUnread / remove', () => {
       return retained
     })
     const first = await as(t, f.admin).mutation(api.messages.markAllRead, { org_id: f.org.id })
-    expect(first).toMatchObject({ marked: 256, hasMore: true })
+    expect(first).toMatchObject({ marked: INBOX_BATCH, hasMore: true })
     for (const [index, issue_id] of tasks.entries()) {
       const state = await t.run(async (ctx) => ({
         read: await ctx.db
@@ -590,7 +592,7 @@ describe('messages — markRead / markUnread / remove', () => {
           )
           .take(750),
       }))
-      expect(state.unread).toHaveLength(686)
+      expect(state.unread).toHaveLength(750 - INBOX_BATCH / 4)
       expect(state.read).toHaveLength(1)
       expect(state.read[0]).toMatchObject({ id: retained[index], read_at: NOW })
     }
@@ -723,18 +725,15 @@ describe('messages — markRead / markUnread / remove', () => {
     })
 
     const caller = as(t, f.admin)
-    expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toMatchObject({
-      removed: 256,
-      hasMore: true,
-    })
-    expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toMatchObject({
-      removed: 256,
-      hasMore: true,
-    })
-    expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toMatchObject({
-      removed: 88,
-      hasMore: false,
-    })
+    let removed = 0
+    let calls = 0
+    for (let more = true; more; calls++) {
+      const next = await caller.mutation(api.messages.removeRead, { org_id: f.org.id })
+      expect(next.removed).toBe(Math.min(INBOX_BATCH, 600 - removed))
+      removed += next.removed
+      more = next.hasMore
+    }
+    expect([removed, calls]).toEqual([600, Math.ceil(600 / INBOX_BATCH)])
     expect(await caller.mutation(api.messages.removeRead, { org_id: f.org.id })).toMatchObject({
       removed: 0,
       hasMore: false,

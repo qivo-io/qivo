@@ -136,7 +136,19 @@ html[data-appearance] .inbox-detail-frame [data-issue-layout="embedded"] {
   }
   .inbox-list-controls > .inbox-bulk-actions {
     grid-column: 1 / -1;
+    grid-row: 2;
     justify-self: end;
+  }
+  /* A bulk action's progress shares the buttons' row, left of them, so the
+     empty line adds no row while nothing runs. */
+  .inbox-list-controls > .inbox-bulk-progress {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: start;
+    align-self: center;
+    max-width: calc(100% - 104px);
+    margin: 0;
+    text-align: left;
   }
   .inbox-bulk-actions button {
     width: 44px;

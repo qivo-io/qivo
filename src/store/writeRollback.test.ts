@@ -134,7 +134,13 @@ describe('rollback during snapshot trouble', () => {
     })
     subscriptions = []
     sent = []
-    network.query.mockResolvedValue(null)
+    // bulkReach says each seat has one batch to do, so a bulk action
+    // starts without the keep-open notice
+    network.query.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'messages:bulkReach'
+        ? { seats: snapshot.orgs.map((org) => ({ org_id: org.id, reach: 'one', before: 1 })) }
+        : null,
+    )
     network.onUpdate.mockImplementation((ref, _args, deliver, fail) => {
       if (getFunctionName(ref) === 'workspace:whole') {
         subscriptions.push({ deliver, fail })
@@ -182,6 +188,7 @@ describe('rollback during snapshot trouble', () => {
       name: 'mark all as read',
       act: async () => {
         const done = P().markAllMessagesRead()
+        await settle()
         await accept({ marked: 1, ids: ['message-a'], hasMore: false, before: 1 })
         await done
       },
@@ -230,6 +237,7 @@ describe('rollback during snapshot trouble', () => {
       name: 'remove all read',
       act: async () => {
         const done = P().deleteReadMessages()
+        await settle()
         await accept({ removed: 1, ids: ['message-b'], hasMore: false })
         await done
       },
@@ -390,6 +398,7 @@ describe('rollback during snapshot trouble', () => {
   it('lets a later batch of mark all as read skip a row snoozed between batches', async () => {
     live().fail(new Error(QUERY_FAILURE))
     const done = P().markAllMessagesRead()
+    await settle()
     P().snoozeMessages(['message-a'], UNTIL)
     const [first, snooze] = sent.splice(0)
     expect([first.name, snooze.name]).toEqual(['messages:markAllRead', 'messages:snooze'])
@@ -431,9 +440,11 @@ describe('rollback during snapshot trouble', () => {
     })
     live().fail(new Error(QUERY_FAILURE))
     const read = P().markAllMessagesRead()
+    await settle()
     await accept({ marked: 1, ids: ['message-a'], hasMore: false, before: 1 })
     await read
     const removed = P().deleteReadMessages()
+    await settle()
     await accept({ removed: 2, ids: ['message-a', 'message-b'], hasMore: false })
     await removed
     await refuseFollow()
@@ -444,6 +455,7 @@ describe('rollback during snapshot trouble', () => {
   it('keeps each batch of mark all as read in the order the server took it', async () => {
     live().fail(new Error(QUERY_FAILURE))
     const done = P().markAllMessagesRead()
+    await settle()
     sent.pop()!.resolve({ marked: 1, ids: ['message-a'], hasMore: true, before: 1 })
     await settle()
     // a read message reopened between batches, which the next batch marks again
@@ -462,6 +474,7 @@ describe('rollback during snapshot trouble', () => {
   it('keeps the batches the server saved when a later batch is refused', async () => {
     live().fail(new Error(QUERY_FAILURE))
     const done = P().markAllMessagesRead()
+    await settle()
     sent.pop()!.resolve({ marked: 1, ids: ['message-a'], hasMore: true, before: 1 })
     await settle()
     sent.pop()!.reject(new ConvexError({ code: 'forbidden', message: 'not signed in' }))
@@ -474,6 +487,7 @@ describe('rollback during snapshot trouble', () => {
     deliverTruth(() => {})
     expect(P().snapshotTrouble()).toBeNull()
     const done = P().deleteReadMessages()
+    await settle()
     expect(message('message-b')).toBeUndefined()
     // another device reopened the message, so the server kept it
     deliverTruth((snap) => {
@@ -509,6 +523,7 @@ describe('rollback during snapshot trouble', () => {
 
   it('leaves a message reopened before Remove all read ran on screen', async () => {
     const done = P().deleteReadMessages()
+    await settle()
     // the server kept the reopened message, then the query failed
     deliverTruth((snap) => {
       snap.messages[1].read_at = undefined

@@ -529,6 +529,7 @@ machine/testing:mintCredential mutation internal {"type":"object","value":{"prof
 machine/uploads:abandon mutation internal {"type":"object","value":{"ticket":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false},"attempt":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":true}}}
 machine/uploads:begin mutation internal {"type":"object","value":{"ticket":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false},"attempt":{"fieldType":{"type":"string"},"optional":false}}}
 machine/uploads:finish mutation internal {"type":"object","value":{"ticket":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false},"attempt":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
+messages:bulkReach query public {"type":"object","value":{"action":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"remove"}]},"optional":false}}}
 messages:markAllRead mutation public {"type":"object","value":{"before":{"fieldType":{"type":"number"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:markRead mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 messages:markUnread mutation public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -957,6 +958,8 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   },
   // removeRead clears current read rows in bounded batches beyond the Inbox display limit.
   // markAllRead reaches all own unread rows beyond the display cap and preserves later arrivals.
+  // bulkReach, a read across the caller's seats, says how much those two have to do in
+  // each seat before they start, from the caller's own rows only.
   // snooze hides an own item until a server-scheduled wake (messages:wake, internal).
   // Archiving schedules messages:readArchivedTasks and readArchivedProject (internal), and
   // a task archive also archiveMarks:markTasks; a restore archiveMarks:clearTasks (internal).
@@ -967,6 +970,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // The item actions act on the caller's own item about one task, up to the
   // newest message the caller saw (readItem, removeItem).
   messages: {
+    bulkReach: 'authedQuery',
     markAllRead: 'orgMutation',
     markRead: 'orgMutation',
     markUnread: 'orgMutation',
@@ -1107,7 +1111,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 193
+const PUBLIC_COUNT = 194
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

@@ -39,7 +39,7 @@ import {
   profileCanSeeProject,
   projectSightForProfiles,
 } from '../lib/access'
-import { byId } from '../lib/db'
+import { byId, usedMoreThan } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { MessageKind } from '../lib/enums'
 import { badRequest, forbidden, rule } from '../lib/functions'
@@ -1059,8 +1059,112 @@ export async function removeMessages(
 }
 
 /* How many rows one bulk inbox write changes at most. The caller repeats
- * while hasMore is true. */
-const INBOX_BATCH = 256
+ * while hasMore is true. Measured in convex/tests/inboxBulk.test.ts, with
+ * every message as long as a change notice can be (the longest title and
+ * names in a three-byte script, about 3.9 KB), so that one batch stays
+ * below a quarter of each of Convex's transaction limits. The worst case is
+ * Mark all as read on one older unread message in each of INBOX_BATCH
+ * items that also hold a newer unread message outside the batch and a
+ * newest read one: the batch reads each marked message four times (the
+ * range, its patch, the prune's read and its delete), the newer unread
+ * message the prune seeks and the read one, about 23.6 KB a marked message,
+ * so 177 is the most that fits. One run at 160 measured, in bytes read,
+ * documents read, index ranges, documents written and bytes written:
+ *   - that worst case: 3.77 MB, 1,284, 484, 480 and 0.68 MB, 90% of a
+ *     quarter of the 16 MiB read limit;
+ *   - one unread message in each item, its newest read: 3.17 MB, 1,123,
+ *     484, 480 and 0.68 MB;
+ *   - items of 51 messages: 2.43 MB, 655, 16, 324 and 0.61 MB;
+ *   - Remove all read of each item's newest message: 1.96 MB, 802, 483,
+ *     320 and 0.08 MB.
+ * These are convex-test's counts, which count the document a patch or a
+ * delete reads; a hosted deployment was not measured. */
+export const INBOX_BATCH = 160
+
+/** The two bulk inbox actions: Mark all as read (`read`) and Remove all
+ * read (`remove`). */
+export type BulkAction = 'read' | 'remove'
+
+/**
+ * The rows bulk action `action` walks in the inbox of profile
+ * `recipientId`, in the order its batches take them: the unsnoozed unread
+ * rows for Mark all as read, those created no later than `cutoff` when it
+ * is given, and the unsnoozed read rows for Remove all read. A snoozed row
+ * is hidden, so neither action reaches it, and the index range leaves it
+ * out, so it costs a batch nothing. markAllMessagesRead,
+ * removeReadMessages, readBulkReach and the summary's seat flags
+ * (model/inboxReads.ts) read these ranges.
+ */
+export function bulkRows(ctx: QueryCtx, recipientId: string, action: BulkAction, cutoff?: number) {
+  return ctx.db.query('messages').withIndex('by_recipient_snoozed_read', (q) => {
+    const seat = q.eq('recipient_id', recipientId).eq('snoozed_until', undefined)
+    if (action === 'remove') return seat.gt('read_at', undefined)
+    const unread = seat.eq('read_at', undefined)
+    return cutoff === undefined ? unread : unread.lte('_creationTime', cutoff)
+  })
+}
+
+/**
+ * The cutoff a first Mark all as read batch chooses for profile
+ * `recipientId`: the _creationTime of its newest stored unread row, a
+ * snoozed one included, or 0 when nothing is unread. It is the server's
+ * time, not a client clock, and later batches pass it on, so messages that
+ * arrive after it stay unread. readBulkReach answers it when the person
+ * presses the action, so a seat whose first batch waits for another seat's
+ * still stops at what had arrived by then.
+ */
+export async function markCutoff(ctx: QueryCtx, recipientId: string): Promise<number> {
+  const latest = await ctx.db
+    .query('messages')
+    .withIndex('by_recipient_read', (q) =>
+      q.eq('recipient_id', recipientId).eq('read_at', undefined),
+    )
+    .order('desc')
+    .first()
+  return latest?._creationTime ?? 0
+}
+
+/** The budget of readBulkReach: it reads a seat's range only while the
+ * transaction has used no more than `room` of any of Convex's limits
+ * (lib/db.ts usedMoreThan). Tests lower it. */
+export const BULK_REACH = { room: 0.5 }
+
+/** How much one bulk action has to do in one seat: nothing, one batch or
+ * more than one. For Mark all as read, `before` is the cutoff a first batch
+ * would choose now (markCutoff). */
+export type SeatReach = { org_id: string; reach: 'none' | 'one' | 'many'; before?: number }
+
+/**
+ * How much bulk action `action` has to do in each of the seats `seats`, the
+ * caller's active profiles, in organization id order. For Mark all as read
+ * it reads each seat's newest unread row first and answers its time as
+ * `before`, the cutoff a first batch would choose now, for every seat, so
+ * no seat's first batch chooses a later one. It then reads INBOX_BATCH + 1
+ * rows of the range the batches walk (bulkRows), up to that cutoff. A seat
+ * whose range it cannot read within BULK_REACH answers `many`, so a budget
+ * makes the app warn rather than stay silent. A seat costs one row for the
+ * cutoff and INBOX_BATCH + 1 rows of the range, each a message of at most a
+ * few KB (see INBOX_BATCH), so seats past the budget are rare.
+ */
+export async function readBulkReach(
+  ctx: QueryCtx,
+  seats: readonly Doc<'profiles'>[],
+  action: BulkAction,
+): Promise<SeatReach[]> {
+  const out: SeatReach[] = []
+  for (const seat of [...seats].sort((a, b) => (a.org_id < b.org_id ? -1 : 1))) {
+    const before = action === 'read' ? await markCutoff(ctx, seat.id) : undefined
+    const answer = (reach: SeatReach['reach']): SeatReach =>
+      before === undefined ? { org_id: seat.org_id, reach } : { org_id: seat.org_id, reach, before }
+    if (await usedMoreThan(ctx, BULK_REACH.room)) {
+      out.push(answer('many'))
+      continue
+    }
+    const rows = await bulkRows(ctx, seat.id, action, before).take(INBOX_BATCH + 1)
+    out.push(answer(rows.length === 0 ? 'none' : rows.length > INBOX_BATCH ? 'many' : 'one'))
+  }
+  return out
+}
 
 /* Keeps 0109's invariant on one item after a bulk write stamped at most
  * `stamped` of its rows read. The invariant held before that write, so the
@@ -1102,13 +1206,14 @@ async function pruneStampedItem(
 
 /**
  * Marks up to INBOX_BATCH of `me`'s unread rows read, the ones created no
- * later than `before`. The first call passes no `before`: the cutoff is then
- * the newest stored unread row, not a client clock, and the caller passes
- * the returned `before` to later batches so later arrivals stay unread.
- * Snoozed rows are hidden, so a bulk act never reaches them; the index
- * range leaves them out, so they cost a batch nothing. The prune reads at most the newly stamped rows plus one retained
- * read row per affected task and seeks each task's newest unread directly
- * in the index. Returns the rows it marked, as they were before.
+ * later than `before` (bulkRows). Without `before` the cutoff is the
+ * newest stored unread row (markCutoff), not a client clock. The app's
+ * first call passes the one messages.bulkReach answered at the press, and
+ * every caller passes the returned `before` to later batches, so later
+ * arrivals stay unread. The prune reads at most the newly stamped rows plus
+ * one retained read row per affected task and seeks each task's newest
+ * unread directly in the index. Returns the rows it marked, as they were
+ * before.
  */
 export async function markAllMessagesRead(
   ctx: MutationCtx,
@@ -1116,27 +1221,8 @@ export async function markAllMessagesRead(
   before: number | undefined,
   now: string,
 ): Promise<{ marked: Doc<'messages'>[]; hasMore: boolean; before: number }> {
-  const latest =
-    before === undefined
-      ? await ctx.db
-          .query('messages')
-          .withIndex('by_recipient_read', (q) =>
-            q.eq('recipient_id', me.id).eq('read_at', undefined),
-          )
-          .order('desc')
-          .first()
-      : null
-  const cutoff = before ?? latest?._creationTime ?? 0
-  const rows = await ctx.db
-    .query('messages')
-    .withIndex('by_recipient_snoozed_read', (q) =>
-      q
-        .eq('recipient_id', me.id)
-        .eq('snoozed_until', undefined)
-        .eq('read_at', undefined)
-        .lte('_creationTime', cutoff),
-    )
-    .take(INBOX_BATCH + 1)
+  const cutoff = before ?? (await markCutoff(ctx, me.id))
+  const rows = await bulkRows(ctx, me.id, 'read', cutoff).take(INBOX_BATCH + 1)
   const batch = rows.slice(0, INBOX_BATCH)
   const edits = itemEdits(ctx)
   for (const row of batch) await edits.patch(row, { read_at: now })
@@ -1149,22 +1235,16 @@ export async function markAllMessagesRead(
 }
 
 /**
- * Deletes up to INBOX_BATCH of `me`'s read rows. A snoozed row that was read
- * meanwhile is a pending reminder, not clutter, and stays. The index range
- * leaves snoozed rows out, so they cost a batch nothing. Each batch
- * selects the current read rows, so a row reopened elsewhere survives.
- * Returns the rows it deleted.
+ * Deletes up to INBOX_BATCH of `me`'s read rows (bulkRows). A snoozed row
+ * that was read meanwhile is a pending reminder, not clutter, and stays.
+ * Each batch selects the current read rows, so a row reopened elsewhere
+ * survives. Returns the rows it deleted.
  */
 export async function removeReadMessages(
   ctx: MutationCtx,
   me: Doc<'profiles'>,
 ): Promise<{ removed: Doc<'messages'>[]; hasMore: boolean }> {
-  const rows = await ctx.db
-    .query('messages')
-    .withIndex('by_recipient_snoozed_read', (q) =>
-      q.eq('recipient_id', me.id).eq('snoozed_until', undefined).gt('read_at', undefined),
-    )
-    .take(INBOX_BATCH + 1)
+  const rows = await bulkRows(ctx, me.id, 'remove').take(INBOX_BATCH + 1)
   const batch = rows.slice(0, INBOX_BATCH)
   const edits = itemEdits(ctx)
   for (const row of batch) await edits.delete(row)

@@ -7,6 +7,21 @@ type Snapshot = Workspace
 type Planner = typeof import('./planner')['P']
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+/* A paint fault on demand: the next read-mark paint throws once. */
+const paintFault = vi.hoisted(() => ({ next: false }))
+vi.mock('./viewModels', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./viewModels')>()
+  return {
+    ...real,
+    isNewer: (...args: Parameters<typeof real.isNewer>) => {
+      if (paintFault.next) {
+        paintFault.next = false
+        throw new Error('a paint fault')
+      }
+      return real.isNewer(...args)
+    },
+  }
+})
 vi.mock('../lib/convex', async () => ({
   convex: network,
   live: (await import('./guard/liveDouble.setup')).liveOver(network),
@@ -98,22 +113,72 @@ type Pending = {
   reject: (error: unknown) => void
 }
 
+/** One seat of messages.bulkReach's answer (convex/messages.ts). */
+type SeatReach = { org_id: string; reach: 'none' | 'one' | 'many'; before?: number }
+
+/** What messages.bulkReach answers for `action` over `snap`: per seat `one`
+    when the seat holds an unsnoozed row the action walks, else `none`, and
+    for Mark all as read a cutoff, as the server reads its own rows. A test
+    that needs other answers sets them. */
+function reachOf(snap: Snapshot, action: 'read' | 'remove'): { seats: SeatReach[] } {
+  return {
+    seats: snap.orgs.map((org) => {
+      const walked = snap.messages.some(
+        (m) => m.org_id === org.id && !m.snoozed_until && !!m.read_at === (action === 'remove'),
+      )
+      return {
+        org_id: org.id,
+        reach: walked ? 'one' : 'none',
+        ...(action === 'read' ? { before: 1 } : {}),
+      }
+    }),
+  }
+}
+
+/** How often the store asked messages.bulkReach. */
+const reachAsked = () =>
+  network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === 'messages:bulkReach').length
+
+/** Lets the store's press go on past its bulkReach question. */
+const asked = () => new Promise((resolve) => setTimeout(resolve, 0))
+
 describe('bulk notification actions through the client store', () => {
   let P: Planner
   let snap: Snapshot
   let publish: (value: Snapshot) => void
   let requests: Pending[]
   let showToast: ReturnType<typeof vi.fn>
+  let dismissToast: ReturnType<typeof vi.fn>
+  // what bulkReach answers, 'fail' for a refused question or 'never' for
+  // one that never answers; null answers from the snapshot (reachOf)
+  let reach: { seats: SeatReach[] } | 'fail' | 'never' | null
+  // the Inbox that shows the notice (P.hostInboxNotice), and whether it
+  // lets the notice open now
+  let unhost: () => void
+  let hostReady: boolean
+  // holds bulkReach's answer until the test opens it
+  let reachGate: Promise<void> | null
 
   beforeEach(async () => {
     vi.resetModules()
     vi.clearAllMocks()
     showToast = vi.fn()
-    vi.stubGlobal('window', { showToast })
+    dismissToast = vi.fn()
+    vi.stubGlobal('window', { showToast, dismissToast, setTimeout, clearTimeout })
     vi.spyOn(console, 'error').mockImplementation(() => {})
     snap = fixture()
     requests = []
-    network.query.mockResolvedValue(null)
+    reach = null
+    hostReady = true
+    reachGate = null
+    paintFault.next = false
+    network.query.mockImplementation(async (ref, args) => {
+      if (getFunctionName(ref) !== 'messages:bulkReach') return null
+      if (reachGate) await reachGate
+      if (reach === 'fail') throw new Error('offline')
+      if (reach === 'never') return await new Promise(() => {})
+      return structuredClone(reach ?? reachOf(snap, args.action))
+    })
     network.onUpdate.mockImplementation((_ref, _args, next) => {
       publish = next
       next(structuredClone(snap))
@@ -134,35 +199,75 @@ describe('bulk notification actions through the client store', () => {
     const store = await import('./planner')
     P = store.P
     await store.initStore()
+    unhost = P.hostInboxNotice({ prepare: () => hostReady })
   })
 
   /* A bulk batch's answer names the rows it changed (convex/messages.ts):
      the seat's unread rows for Mark all as read, its read rows for Remove
      all read, as the server holds them when it answers, snoozed rows left
-     out. Answers that name them already stay as they are. */
+     out. Answers that name them already stay as they are, and an answer
+     without its count counts the rows it names. */
   function naming(name: string, args: Pending['args'], value: unknown) {
-    if (!value || typeof value !== 'object' || 'ids' in value) return value
+    if (!value || typeof value !== 'object') return value
     const read = name === 'messages:removeRead'
     if (!read && name !== 'messages:markAllRead') return value
-    const ids = snap.messages
-      .filter((m) => m.org_id === args.org_id && !m.snoozed_until && !!m.read_at === read)
-      .map((m) => m.id)
-    return { ...value, ids }
+    const ids =
+      'ids' in value
+        ? (value.ids as string[])
+        : snap.messages
+            .filter((m) => m.org_id === args.org_id && !m.snoozed_until && !!m.read_at === read)
+            .map((m) => m.id)
+    const counted = read ? 'removed' : 'marked'
+    return { [counted]: ids.length, ...value, ids }
   }
 
   afterEach(() => {
+    // also after a test on fake timers that failed before it put them back
+    vi.useRealTimers()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
     vi.unstubAllEnvs()
   })
 
   const ids = () => P.messages.map((message) => message.id).sort()
+  const orgName = (id: string) => snap.orgs.find((org) => org.id === id)?.name
+
+  /** Adds a third seat of the login, in a third organization, with one
+      unread and one read message. */
+  function thirdSeat() {
+    const org = { ...snap.orgs[0], id: crypto.randomUUID(), name: 'Northstar', slug: 'northstar' }
+    const profile = { ...snap.profiles[0], id: crypto.randomUUID(), org_id: org.id }
+    snap.orgs = [...snap.orgs, org]
+    snap.profiles = [...snap.profiles, profile]
+    snap.myProfileIds = [...snap.myProfileIds, profile.id]
+    for (const read of [false, true])
+      snap.messages = [
+        ...snap.messages,
+        {
+          ...snap.messages[0],
+          id: crypto.randomUUID(),
+          org_id: org.id,
+          recipient_id: profile.id,
+          issue_id: crypto.randomUUID(),
+          read_at: read ? NOW : undefined,
+        },
+      ]
+    snap.readMessageCount += 1
+    publish(structuredClone(snap))
+    return org.id
+  }
 
   it('marks all notifications read across seats, prunes groups, and waits for every write', async () => {
     let completed = false
     const marking = P.markAllMessagesRead().then(() => {
       completed = true
     })
+    // nothing changes before bulkReach answers
+    expect(P.unreadMessages).toBe(2)
+    expect(P.inboxBulk).toMatchObject({ action: 'read', state: 'asking' })
+    await asked()
+    expect(reachAsked()).toBe(1)
+    expect(network.query).toHaveBeenCalledWith(expect.anything(), { action: 'read' })
     expect(P.unreadMessages).toBe(0)
     expect(P.messageGroups).toHaveLength(4)
     expect(P.messages).toHaveLength(4)
@@ -171,24 +276,28 @@ describe('bulk notification actions through the client store', () => {
     for (const org of snap.orgs) {
       expect(requests.find((request) => request.args.org_id === org.id)).toMatchObject({
         name: 'messages:markAllRead',
-        args: { org_id: org.id },
+        // the cutoff bulkReach answered at the press
+        args: { org_id: org.id, before: 1 },
       })
     }
     requests[0].resolve({ marked: 1, hasMore: false, before: 20 })
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(completed).toBe(false)
+    expect(P.inboxBulk).toMatchObject({ state: 'running', done: 1, seats: 2, seatsDone: 1 })
     // Convex delivers the last seat's reads before it answers. Its paint and
     // the flags then end in one repaint, so the screen renders once for them
     const org = requests[1].args.org_id
     for (const message of snap.messages) if (message.org_id === org) message.read_at ??= NOW
     publish(structuredClone(snap))
     let emits = 0
-    const stop = P.subscribe(() => emits++)
+    const stop = P.updates.workspace.subscribe(() => emits++)
     requests[1].resolve({ marked: 1, hasMore: false, before: 25 })
     await marking
     stop()
     expect(emits).toBe(1)
     expect(completed).toBe(true)
+    expect(P.inboxBulk).toMatchObject({ state: 'finished', long: false, done: 2, seatsDone: 2 })
+    // a short action says nothing: its rows show it
     expect(showToast).not.toHaveBeenCalled()
   })
 
@@ -201,14 +310,24 @@ describe('bulk notification actions through the client store', () => {
     }))
     snap.readMessageCount = 0
     publish(structuredClone(snap))
+    const firstOrg = snap.orgs[0].id
+    // the other seat's rows are past the snapshot's cap
+    reach = {
+      seats: [
+        { org_id: firstOrg, reach: 'many', before: 1234.5 },
+        { org_id: snap.orgs[1].id, reach: 'one', before: 99 },
+      ],
+    }
     let completed = false
     const marking = P.markAllMessagesRead().then(() => {
       completed = true
     })
+    await asked()
     expect(P.unreadMessages).toBe(0)
-    const firstOrg = snap.orgs[0].id
     const first = requests.find((request) => request.args.org_id === firstOrg)!
     const other = requests.find((request) => request.args.org_id !== firstOrg)!
+    expect(first.args.before).toBe(1234.5)
+    expect(other.args.before).toBe(99)
     // the batches name the rows before the seat's cutoff, never a later arrival
     const loaded = snap.messages.map((message) => message.id)
     first.resolve({ marked: 256, ids: loaded.slice(0, 256), hasMore: true, before: 1234.5 })
@@ -217,7 +336,7 @@ describe('bulk notification actions through the client store', () => {
       name: 'messages:markAllRead',
       args: { org_id: firstOrg, before: 1234.5 },
     })
-    other.resolve({ marked: 0, hasMore: false, before: 0 })
+    other.resolve({ marked: 0, hasMore: false, before: 99 })
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(completed).toBe(false)
     const arrival = { ...unread, id: crypto.randomUUID(), issue_id: crypto.randomUUID() }
@@ -231,12 +350,15 @@ describe('bulk notification actions through the client store', () => {
     requests[2].resolve({ marked: 244, ids: loaded.slice(256), hasMore: true, before: 1234.5 })
     await vi.waitFor(() => expect(requests).toHaveLength(4))
     expect(requests[3].args).toEqual({ org_id: firstOrg, before: 1234.5 })
+    expect(P.inboxBulk).toMatchObject({ state: 'running', long: true, done: 500, seatsDone: 1 })
     requests[3].resolve({ marked: 88, ids: [], hasMore: false, before: 1234.5 })
     await marking
     expect(P.unreadMessages).toBe(1)
     expect(P.messages.find((message) => message.id === arrival.id)?.read).toBe(false)
     expect(P.readMessageCount).toBe(600)
-    expect(showToast).not.toHaveBeenCalled()
+    // a long action ends with what it did, wherever the person is
+    expect(showToast).toHaveBeenCalledOnce()
+    expect(showToast).toHaveBeenCalledWith('Marked 588 messages as read.', 'success')
   })
 
   it.each(['empty', 'read only'])('does not mark notifications for an %s inbox', async (state) => {
@@ -245,6 +367,7 @@ describe('bulk notification actions through the client store', () => {
     expect(P.canMarkAllRead).toBe(false)
     await expect(P.markAllMessagesRead()).resolves.toBeUndefined()
     expect(requests).toEqual([])
+    expect(reachAsked()).toBe(0)
   })
 
   it('keeps Mark all as read available while the server left unread rows unexamined', async () => {
@@ -254,19 +377,30 @@ describe('bulk notification actions through the client store', () => {
     publish(structuredClone(snap))
     expect(P.unreadMessages).toBe(0)
     expect(P.canMarkAllRead).toBe(true)
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'one', before: 7 })) }
 
     const marking = P.markAllMessagesRead()
+    await asked()
     expect(P.canMarkAllRead).toBe(false)
     expect(requests.map((request) => request.name)).toEqual([
       'messages:markAllRead',
       'messages:markAllRead',
     ])
     // a refused seat restores the server's view, flag included
+    const refused = requests[0].args.org_id
     requests[0].reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
-    await vi.waitFor(() => expect(showToast).toHaveBeenCalledOnce())
-    expect(P.canMarkAllRead).toBe(true)
+    await vi.waitFor(() => expect(P.canMarkAllRead).toBe(true))
+    expect(P.inboxBulk).toMatchObject({ state: 'running', stops: [{ org: refused, done: 0 }] })
+    // the stop says so once the action ends
+    expect(showToast).not.toHaveBeenCalled()
     requests[1].resolve({ marked: 3, hasMore: false, before: 20 })
     await marking
+    expect(P.inboxBulk?.state).toBe('stopped')
+    expect(showToast).toHaveBeenCalledWith(
+      `Mark all as read stopped in ${orgName(refused)} before it marked any message. They stay unread. You don't have permission for that.`,
+      'error',
+      expect.objectContaining({ sticky: true, key: `inbox-bulk:read:${refused}` }),
+    )
 
     // once the walk reaches every row, the action has nothing left to do
     snap.unreadTruncated = false
@@ -277,6 +411,7 @@ describe('bulk notification actions through the client store', () => {
   it('shows a new arrival within a task while mark all as read still runs', async () => {
     const unread = snap.messages.filter((message) => !message.read_at)
     const marking = P.markAllMessagesRead()
+    await asked()
     expect(P.unreadMessages).toBe(0)
     const arrival = { ...snap.messages[1], id: crypto.randomUUID(), issue_id: crypto.randomUUID() }
     snap.messages = [...snap.messages, arrival]
@@ -303,14 +438,14 @@ describe('bulk notification actions through the client store', () => {
     const marking = P.markAllMessagesRead().then(() => {
       completed = true
     })
+    await asked()
     expect(P.unreadMessages).toBe(0)
     const refused = requests.find((request) => request.args.org_id === firstOrg)!
     const successful = requests.find((request) => request.args.org_id === secondOrg)!
     refused.reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
-    await vi.waitFor(() => expect(showToast).toHaveBeenCalledOnce())
-    expect(completed).toBe(false)
     // only the refused seat's reads go back; the other seat's still wait
-    expect(P.unreadMessages).toBe(1)
+    await vi.waitFor(() => expect(P.unreadMessages).toBe(1))
+    expect(completed).toBe(false)
     snap.messages = snap.messages.map((message) =>
       message.org_id === secondOrg ? { ...message, read_at: NOW } : message,
     )
@@ -321,40 +456,195 @@ describe('bulk notification actions through the client store', () => {
     expect(completed).toBe(true)
     expect(P.unreadMessages).toBe(1)
     expect(P.messages.filter((message) => message.read)).toHaveLength(4)
+    expect(showToast).toHaveBeenCalledOnce()
     expect(showToast).toHaveBeenCalledWith(
-      "You don't have permission for that. Change reverted.",
+      "Mark all as read stopped in Testbed Labs before it marked any message. They stay unread. You don't have permission for that.",
       'error',
+      expect.objectContaining({ sticky: true, key: `inbox-bulk:read:${firstOrg}` }),
     )
   })
 
-  it('says when older messages exist than the snapshot delivered', () => {
-    expect(P.inboxCut).toBe(false)
-    publish({ ...structuredClone(snap), readMessageCount: snap.readMessageCount + 5 })
-    expect(P.inboxCut).toBe(true)
-    expect(P.inboxCutReach).toEqual({ markAllRead: false, removeRead: true })
-    publish({ ...structuredClone(snap), unreadTruncated: true })
-    expect(P.inboxCut).toBe(true)
-    // snoozed messages left out, which neither bulk action reaches
-    publish({ ...structuredClone(snap), messagesCut: true })
-    expect([P.inboxCut, P.inboxCutReach.markAllRead, P.inboxCutReach.removeRead]).toEqual([
-      true,
-      false,
-      false,
-    ])
+  it('stops a seat after the batches it confirmed, takes back the rest and lets the others finish', async () => {
+    const firstOrg = snap.orgs[0].id
+    const secondOrg = snap.orgs[1].id
+    const unread = snap.messages.find((m) => !m.read_at && m.org_id === firstOrg)!
+    const more = Array.from({ length: 3 }, () => ({
+      ...unread,
+      id: crypto.randomUUID(),
+      issue_id: crypto.randomUUID(),
+    }))
+    snap.messages = [...snap.messages, ...more]
     publish(structuredClone(snap))
-    expect(P.inboxCut).toBe(false)
+    const confirmed = [unread.id, more[0].id]
+    reach = {
+      seats: [
+        { org_id: firstOrg, reach: 'many', before: 5 },
+        { org_id: secondOrg, reach: 'one', before: 6 },
+      ],
+    }
+    const marking = P.markAllMessagesRead()
+    await asked()
+    expect(P.unreadMessages).toBe(0)
+    const first = () => requests.filter((request) => request.args.org_id === firstOrg)
+    first()[0].resolve({ marked: 2, ids: confirmed, hasMore: true, before: 5 })
+    await vi.waitFor(() => expect(first()).toHaveLength(2))
+    expect(P.inboxBulk).toMatchObject({ done: 2, seatsDone: 0, long: true })
+    first()[1].reject(new ConvexError({ code: 'rule', message: 'the organization is read-only' }))
+    await vi.waitFor(() => expect(P.inboxBulk?.stops).toHaveLength(1))
+    // the rows no batch confirmed are unread again; the confirmed ones stay read
+    const seatRows = new Set(snap.messages.filter((m) => m.org_id === firstOrg).map((m) => m.id))
+    expect(
+      P.messages
+        .filter((m) => seatRows.has(m.id) && !m.read)
+        .map((m) => m.id)
+        .sort(),
+    ).toEqual(
+      more
+        .slice(1)
+        .map((m) => m.id)
+        .sort(),
+    )
+    // the other seat still runs, and the action has not ended
+    expect(P.inboxBulk?.state).toBe('running')
+    expect(showToast).not.toHaveBeenCalled()
+    requests
+      .find((request) => request.args.org_id === secondOrg)
+      ?.resolve({
+        marked: 1,
+        hasMore: false,
+        before: 6,
+      })
+    await marking
+    expect(P.inboxBulk).toMatchObject({
+      state: 'stopped',
+      done: 3,
+      seats: 2,
+      seatsDone: 1,
+      stops: [{ org: firstOrg, done: 2 }],
+    })
+    // a stop reports what was done and what was not, and no success
+    expect(showToast).toHaveBeenCalledOnce()
+    expect(showToast).toHaveBeenCalledWith(
+      'Mark all as read stopped after 2 messages in Testbed Labs. The rest stay unread. The organization is read-only.',
+      'error',
+      expect.objectContaining({ sticky: true, key: `inbox-bulk:read:${firstOrg}` }),
+    )
   })
 
-  it("counts an item's dropped updates on its unread rows, and reading the item ends the count", () => {
-    const task = snap.messages[0].issue_id
-    // a read row's count belongs to an unread run that already ended
-    snap.messages[0] = { ...snap.messages[0], dropped: 5 }
-    snap.messages[1] = { ...snap.messages[1], dropped: 7 }
+  it('sends at most two seats at once, the third with the cutoff the press answered', async () => {
+    const third = thirdSeat()
+    reach = {
+      seats: [
+        { org_id: snap.orgs[0].id, reach: 'one', before: 10 },
+        { org_id: snap.orgs[1].id, reach: 'one', before: 11 },
+        { org_id: third, reach: 'one', before: 12 },
+      ],
+    }
+    const marking = P.markAllMessagesRead()
+    await asked()
+    const inFlight = () =>
+      requests.filter((r) => r.name === 'messages:markAllRead' && !answered.has(r))
+    const answered = new Set<Pending>()
+    expect(inFlight()).toHaveLength(2)
+    expect(P.inboxBulk).toMatchObject({ state: 'running', long: true, seats: 3 })
+    // the third seat goes once a slot is free, with the press's cutoff
+    answered.add(requests[0])
+    requests[0].resolve({ marked: 1, hasMore: false, before: 999 })
+    await vi.waitFor(() => expect(requests).toHaveLength(3))
+    expect(inFlight()).toHaveLength(2)
+    expect(requests[2].args).toEqual({ org_id: third, before: 12 })
+    expect(P.inboxBulk).toMatchObject({ done: 1, seatsDone: 1 })
+    for (const request of requests.slice(1)) {
+      answered.add(request)
+      request.resolve({ marked: 1, hasMore: false, before: 999 })
+    }
+    await marking
+    expect(P.inboxBulk).toMatchObject({ state: 'finished', done: 3, seats: 3, seatsDone: 3 })
+    expect(showToast).toHaveBeenCalledWith('Marked 3 messages as read.', 'success')
+  })
+
+  it('skips the seats with nothing to do', async () => {
+    const [first, second] = snap.orgs.map((org) => org.id)
+    // nothing loaded there is unread either
+    snap.messages = snap.messages.filter((m) => m.org_id === first || m.read_at)
     publish(structuredClone(snap))
-    const group = () => P.messageGroups.find((g) => g.id === task)
-    expect(group()?.dropped).toBe(7)
-    P.markMessagesRead(group()?.ids ?? [])
-    expect(group()?.dropped).toBe(0)
+    reach = {
+      seats: [
+        { org_id: first, reach: 'one', before: 3 },
+        { org_id: second, reach: 'none', before: 0 },
+      ],
+    }
+    const marking = P.markAllMessagesRead()
+    await asked()
+    expect(requests.map((request) => request.args.org_id)).toEqual([first])
+    requests[0].resolve({ marked: 1, hasMore: false, before: 3 })
+    await marking
+    expect(P.inboxBulk).toMatchObject({ state: 'finished', seats: 1, seatsDone: 1 })
+
+    // nothing anywhere ends the press without a write
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'none', before: 0 })) }
+    requests = []
+    snap.messages = snap.messages.map((m) => ({ ...m, read_at: m.read_at ?? NOW }))
+    snap.unreadTruncated = true
+    publish(structuredClone(snap))
+    await P.markAllMessagesRead()
+    expect(requests).toEqual([])
+    expect(P.inboxBulk).toBeNull()
+  })
+
+  it.each([
+    ['a seat with more than one batch', [['one'], ['many']], true],
+    ['more seats with work than run at once', [['one'], ['one'], ['one']], true],
+    ['two seats of one batch', [['one'], ['one']], false],
+  ] as const)('shows the keep-open notice for %s: %s', async (_case, answer, notice) => {
+    if (answer.length === 3) thirdSeat()
+    reach = { seats: answer.map(([r], i) => ({ org_id: snap.orgs[i].id, reach: r, before: 4 })) }
+    const marking = P.markAllMessagesRead(true)
+    await asked()
+    if (!notice) {
+      expect(P.inboxBulk?.state).toBe('running')
+      for (const request of requests) request.resolve({ marked: 1, hasMore: false, before: 4 })
+      return await marking
+    }
+    // nothing is sent before the person answers
+    expect(P.inboxBulk).toMatchObject({ state: 'notice', long: true })
+    expect(requests).toEqual([])
+    expect(P.unreadMessages).toBeGreaterThan(0)
+    P.answerInboxNotice(true)
+    await asked()
+    expect(P.inboxBulk?.state).toBe('running')
+    expect(requests.map((request) => request.args.before)).toEqual([4, 4])
+    // every seat's batch, the third once a slot is free
+    const answered = new Set<Pending>()
+    await vi.waitFor(() => {
+      for (const request of requests.filter((r) => !answered.has(r))) {
+        answered.add(request)
+        request.resolve({ marked: 1, hasMore: false, before: 4 })
+      }
+      expect(P.inboxBulk?.state).toBe('finished')
+    })
+    await marking
+  })
+
+  it('sends nothing when the person cancels the notice, and a new press asks again', async () => {
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many', before: 8 })) }
+    const removal = P.deleteReadMessages(true)
+    await asked()
+    expect(P.inboxBulk).toMatchObject({ action: 'remove', state: 'notice' })
+    const before = structuredClone(P.messages)
+    P.answerInboxNotice(false)
+    // the buttons are back at once
+    expect(P.inboxBulk).toBeNull()
+    await removal
+    expect(requests).toEqual([])
+    expect(P.messages).toEqual(before)
+    expect(showToast).not.toHaveBeenCalled()
+    // the next press asks bulkReach again, never resuming the old plan
+    const again = P.deleteReadMessages(true)
+    await asked()
+    expect(reachAsked()).toBe(2)
+    P.answerInboxNotice(false)
+    await again
   })
 
   it('does not continue a batch or restore notifications after the demo store is disposed', async () => {
@@ -366,14 +656,57 @@ describe('bulk notification actions through the client store', () => {
     P = store.P
     await store.initStore()
     const marking = P.markAllMessagesRead()
+    await asked()
     expect(requests).toHaveLength(2)
     store.disposeDemoStore()
+    expect(P.inboxBulk).toBeNull()
     for (const request of requests) request.resolve({ marked: 256, hasMore: true, before: 200 })
     await marking
     expect(requests).toHaveLength(2)
     expect(P.messages).toEqual([])
     expect(P.unreadMessages).toBe(0)
     expect(showToast).not.toHaveBeenCalled()
+  })
+
+  it('ends a notice that waits when the demo store is disposed', async () => {
+    vi.resetModules()
+    vi.stubEnv('VITE_APP_MODE', 'demo')
+    vi.stubGlobal('window', { showToast, clearTimeout })
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many', before: 5 })) }
+    const store = await import('./planner')
+    P = store.P
+    await store.initStore()
+    P.hostInboxNotice({ prepare: () => true })
+    const marking = P.markAllMessagesRead(true)
+    await asked()
+    expect(P.inboxBulk?.state).toBe('notice')
+    store.disposeDemoStore()
+    await marking
+    expect(P.inboxBulk).toBeNull()
+    expect(requests).toEqual([])
+  })
+
+  it('lets a press in the next demo ask at once though a write of the ended demo never answered', async () => {
+    vi.resetModules()
+    vi.stubEnv('VITE_APP_MODE', 'demo')
+    vi.stubGlobal('window', { showToast, clearTimeout })
+    requests = []
+    const store = await import('./planner')
+    P = store.P
+    await store.initStore()
+    const unread = snap.messages.find((m) => !m.read_at)!
+    P.markMessagesRead([unread.id])
+    await asked()
+    // the read mark goes out and is never answered
+    expect(requests.map((r) => r.name)).toEqual(['messages:markRead'])
+    store.disposeDemoStore()
+    await store.initStore()
+    const asks = reachAsked()
+    const removal = P.deleteReadMessages()
+    await asked()
+    expect(reachAsked()).toBe(asks + 1)
+    await answerAll(() => ({ removed: 1, hasMore: false }))
+    await removal
   })
 
   it('removes read messages from mixed groups across seats and waits for every write', async () => {
@@ -383,6 +716,7 @@ describe('bulk notification actions through the client store', () => {
     const removal = P.deleteReadMessages().then(() => {
       completed = true
     })
+    await asked()
 
     expect(ids()).toEqual(unread.map((message) => message.id).sort())
     expect(P.unreadMessages).toBe(2)
@@ -416,12 +750,14 @@ describe('bulk notification actions through the client store', () => {
     expect(completed).toBe(true)
     expect(ids()).toEqual(snap.messages.map((message) => message.id).sort())
     expect(P.unreadMessages).toBe(2)
+    expect(P.inboxBulk).toMatchObject({ action: 'remove', state: 'finished', done: 3 })
     expect(showToast).not.toHaveBeenCalled()
   })
 
   it('shows a message reopened elsewhere while Remove all read waits', async () => {
     const reopened = snap.messages.find((message) => message.read_at)!
     const removal = P.deleteReadMessages()
+    await asked()
     expect(ids()).not.toContain(reopened.id)
     // another device marks it unread before the server's batch reaches it
     snap.messages = snap.messages.map((m) =>
@@ -447,11 +783,13 @@ describe('bulk notification actions through the client store', () => {
     publish(structuredClone(snap))
     expect(P.messages.every((message) => !message.read)).toBe(true)
     expect(P.readMessageCount).toBe(600)
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many' })) }
     const before = structuredClone(P.messages)
     let completed = false
     const removal = P.deleteReadMessages().then(() => {
       completed = true
     })
+    await asked()
     expect(P.readMessageCount).toBe(0)
     expect(P.messages).toEqual(before)
     expect(requests).toHaveLength(2)
@@ -467,6 +805,7 @@ describe('bulk notification actions through the client store', () => {
     other.resolve({ removed: 88, hasMore: false })
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(completed).toBe(false)
+    expect(P.inboxBulk).toMatchObject({ state: 'running', done: 344, seatsDone: 1 })
     snap.readMessageCount = 0
     publish(structuredClone(snap))
     next.resolve({ removed: 256, hasMore: false })
@@ -476,7 +815,7 @@ describe('bulk notification actions through the client store', () => {
     expect(requests).toHaveLength(3)
     expect(P.readMessageCount).toBe(0)
     expect(P.messages).toEqual(before)
-    expect(showToast).not.toHaveBeenCalled()
+    expect(showToast).toHaveBeenCalledWith('Removed 600 read notifications.', 'success')
   })
 
   it.each(['empty', 'unread only'])('does not write for an %s inbox', async (state) => {
@@ -500,8 +839,10 @@ describe('bulk notification actions through the client store', () => {
     publish(structuredClone(snap))
     expect(P.readMessageCount).toBe(0)
     expect(P.canRemoveRead).toBe(true)
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'one' })) }
 
     const removal = P.deleteReadMessages()
+    await asked()
     expect(P.canRemoveRead).toBe(false)
     expect(requests.map((request) => request.name)).toEqual([
       'messages:removeRead',
@@ -521,6 +862,7 @@ describe('bulk notification actions through the client store', () => {
     publish(structuredClone(snap))
     const before = structuredClone(P.messages)
     const removal = P.deleteReadMessages()
+    await asked()
     expect(P.messages).toHaveLength(1)
     expect(requests).toHaveLength(1)
 
@@ -531,8 +873,9 @@ describe('bulk notification actions through the client store', () => {
     expect(P.readMessageCount).toBe(2)
     expect(P.unreadMessages).toBe(1)
     expect(showToast).toHaveBeenCalledWith(
-      "You don't have permission for that. Change reverted.",
+      "Remove all read notifications stopped in Testbed Labs before it removed any notification. They stay in the Inbox. You don't have permission for that.",
       'error',
+      expect.objectContaining({ sticky: true, key: `inbox-bulk:remove:${snap.orgs[0].id}` }),
     )
   })
 
@@ -541,8 +884,10 @@ describe('bulk notification actions through the client store', () => {
     snap.messages = Array.from({ length: 500 }, () => ({ ...unread, id: crypto.randomUUID() }))
     snap.readMessageCount = 600
     publish(structuredClone(snap))
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many' })) }
     const before = structuredClone(P.messages)
     const removal = P.deleteReadMessages()
+    await asked()
     expect(P.readMessageCount).toBe(0)
     expect(requests).toHaveLength(2)
 
@@ -552,9 +897,14 @@ describe('bulk notification actions through the client store', () => {
 
     expect(P.messages).toEqual(before)
     expect(P.readMessageCount).toBe(600)
+    expect(showToast).toHaveBeenCalledOnce()
     expect(showToast).toHaveBeenCalledWith(
-      "You don't have permission for that. Change reverted.",
+      `Remove all read notifications stopped in ${orgName(requests[0].args.org_id)} before it removed any notification. They stay in the Inbox. You don't have permission for that.`,
       'error',
+      expect.objectContaining({
+        sticky: true,
+        key: `inbox-bulk:remove:${requests[0].args.org_id}`,
+      }),
     )
   })
 
@@ -565,11 +915,12 @@ describe('bulk notification actions through the client store', () => {
     const removal = P.deleteReadMessages().then(() => {
       completed = true
     })
+    await asked()
     const refused = requests.find((operation) => operation.args.org_id === firstOrg)!
     const successful = requests.find((operation) => operation.args.org_id === secondOrg)!
 
     refused.reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
-    await vi.waitFor(() => expect(showToast).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(P.inboxBulk?.stops).toHaveLength(1))
     expect(completed).toBe(false)
 
     // The successful seat's server deletion must survive the other seat's rollback.
@@ -586,6 +937,388 @@ describe('bulk notification actions through the client store', () => {
     expect(P.messages.filter((message) => message.read)).toHaveLength(2)
     expect(P.readMessageCount).toBe(2)
     expect(P.unreadMessages).toBe(2)
+    expect(showToast).toHaveBeenCalledOnce()
+  })
+
+  it('refuses a press while an action runs, and keeps its state for an Inbox mounted later', async () => {
+    const marking = P.markAllMessagesRead()
+    await asked()
+    // the store holds the state, not a component: any later reader sees it
+    expect(P.inboxBulk).toMatchObject({ action: 'read', state: 'running', seats: 2 })
+    snap.readTruncated = true
+    publish(structuredClone(snap))
+    await P.deleteReadMessages()
+    expect(requests.map((request) => request.name)).toEqual([
+      'messages:markAllRead',
+      'messages:markAllRead',
+    ])
+    for (const request of requests) request.resolve({ marked: 1, hasMore: false, before: 1 })
+    await marking
+  })
+
+  /** Answers every Mark all as read or Remove all read request not answered
+      yet with `answer`, until none is left, and answers how many it did. */
+  async function answerAll(answer: (request: Pending) => unknown) {
+    const answered = new Set<Pending>()
+    for (let rounds = 0; rounds < 20; rounds++) {
+      const open = requests.filter((r) => /markAllRead|removeRead/.test(r.name) && !answered.has(r))
+      if (!open.length) break
+      for (const request of open) {
+        answered.add(request)
+        request.resolve(answer(request))
+      }
+      await asked()
+    }
+    return answered.size
+  }
+
+  it.each(['fail', 'never'] as const)(
+    'writes nothing and toasts once when bulkReach answers %s',
+    async (answer) => {
+      thirdSeat()
+      await asked()
+      vi.useFakeTimers()
+      try {
+        reach = answer
+        const unread = P.unreadMessages
+        expect(unread).toBe(3)
+        const marking = P.markAllMessagesRead(true)
+        await vi.advanceTimersByTimeAsync(answer === 'fail' ? 1 : 9_999)
+        if (answer === 'never') {
+          expect(P.inboxBulk?.state).toBe('asking')
+          await vi.advanceTimersByTimeAsync(1)
+        }
+        await marking
+        expect(P.inboxBulk).toBeNull()
+        expect(requests).toEqual([])
+        expect(P.unreadMessages).toBe(unread)
+        expect(showToast).toHaveBeenCalledOnce()
+        expect(showToast).toHaveBeenCalledWith(
+          "Couldn't check how many messages Mark all as read covers, so nothing changed. Try again.",
+          'error',
+        )
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
+
+  it('keeps three seats to two batches in flight, each with its cutoff from the press', async () => {
+    const third = thirdSeat()
+    reach = {
+      seats: snap.orgs.map((org, i) => ({ org_id: org.id, reach: 'many', before: 40 + i })),
+    }
+    const marking = P.markAllMessagesRead()
+    await asked()
+    const answered = new Set<Pending>()
+    let most = 0
+    for (let rounds = 0; rounds < 20 && answered.size < requests.length; rounds++) {
+      const open = requests.filter((r) => !answered.has(r))
+      most = Math.max(most, open.length)
+      // each seat answers twice with more to do, then no more
+      const request = open[0]
+      answered.add(request)
+      const seen = requests.filter((r) => r.args.org_id === request.args.org_id).length
+      request.resolve({ marked: 1, hasMore: seen < 3, before: request.args.before })
+      await asked()
+    }
+    await marking
+    expect(most).toBe(2)
+    expect(requests).toHaveLength(9)
+    // every batch carries its seat's cutoff from the press
+    for (const request of requests)
+      expect(request.args.before).toBe(
+        40 + snap.orgs.findIndex((org) => org.id === request.args.org_id),
+      )
+    expect(requests.map((r) => r.args.org_id)).toContain(third)
+    expect(P.inboxBulk).toMatchObject({ state: 'finished', done: 9, seatsDone: 3 })
+  })
+
+  it('gives a seat past the server budget the cutoff of the press, also when it is queued', async () => {
+    const third = thirdSeat()
+    // bulkReach answers a cutoff for a seat it did not read
+    reach = {
+      seats: [
+        { org_id: snap.orgs[0].id, reach: 'one', before: 21 },
+        { org_id: snap.orgs[1].id, reach: 'one', before: 22 },
+        { org_id: third, reach: 'many', before: 23 },
+      ],
+    }
+    const marking = P.markAllMessagesRead()
+    await asked()
+    expect(requests.map((r) => r.args.before)).toEqual([21, 22])
+    requests[0].resolve({ marked: 1, hasMore: false, before: 21 })
+    await vi.waitFor(() => expect(requests).toHaveLength(3))
+    expect(requests[2].args).toEqual({ org_id: third, before: 23 })
+    await answerAll((r) => ({ marked: 1, hasMore: false, before: r.args.before }))
+    await marking
+  })
+
+  it('paints read only the rows loaded at the press, not those that arrive while the notice is open', async () => {
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many', before: 5 })) }
+    const marking = P.markAllMessagesRead(true)
+    await asked()
+    expect(P.inboxBulk?.state).toBe('notice')
+    const arrival = { ...snap.messages[1], id: crypto.randomUUID(), issue_id: crypto.randomUUID() }
+    snap.messages = [...snap.messages, arrival]
+    publish(structuredClone(snap))
+    P.answerInboxNotice(true)
+    await asked()
+    expect(P.inboxBulk?.state).toBe('running')
+    // the press's cutoff leaves the arrival out, and so does the paint
+    expect(P.messages.find((m) => m.id === arrival.id)?.read).toBe(false)
+    expect(P.unreadMessages).toBe(1)
+    await answerAll((r) => ({ marked: 1, ids: [], hasMore: false, before: r.args.before }))
+    await marking
+  })
+
+  it('waits for a pending read mark before it asks, so Remove all read removes that message', async () => {
+    const seat = snap.orgs[1].id
+    // the seat's only read message goes, so the server holds none read there
+    snap.messages = snap.messages.filter((m) => m.org_id !== seat || !m.read_at)
+    snap.readMessageCount = 2
+    publish(structuredClone(snap))
+    const unread = snap.messages.find((m) => m.org_id === seat && !m.read_at)!
+    P.markMessagesRead([unread.id])
+    const removal = P.deleteReadMessages()
+    await asked()
+    // bulkReach waits for the read mark, which the server has not taken yet
+    expect(reachAsked()).toBe(0)
+    expect(requests.map((r) => r.name)).toEqual(['messages:markRead'])
+    snap.messages = snap.messages.map((m) => (m.id === unread.id ? { ...m, read_at: NOW } : m))
+    requests[0].resolve(null)
+    await asked()
+    expect(reachAsked()).toBe(1)
+    expect(requests.slice(1).map((r) => [r.name, r.args.org_id])).toEqual([
+      ['messages:removeRead', snap.orgs[0].id],
+      ['messages:removeRead', seat],
+    ])
+    await answerAll(() => ({ removed: 1, hasMore: false }))
+    await removal
+  })
+
+  it('waits for a pending unread mark before it asks, so Mark all as read marks that message read', async () => {
+    const seat = snap.orgs[0].id
+    // an older unread message, and a newer read one the person reopens
+    const older = snap.messages.find((m) => m.org_id === seat && !m.read_at)!
+    const newer = {
+      ...older,
+      id: crypto.randomUUID(),
+      issue_id: crypto.randomUUID(),
+      created_at: '2026-09-14T09:00:00.000Z',
+      read_at: NOW,
+    }
+    snap.messages = [...snap.messages, newer]
+    publish(structuredClone(snap))
+    // bulkReach answers the newest unread message's time as the cutoff
+    reach = null
+    network.query.mockImplementation((ref) =>
+      getFunctionName(ref) === 'messages:bulkReach'
+        ? Promise.resolve({
+            seats: snap.orgs.map((org) => {
+              const times = snap.messages
+                .filter((m) => m.org_id === org.id && !m.read_at)
+                .map((m) => Date.parse(m.created_at))
+              return {
+                org_id: org.id,
+                reach: times.length ? 'one' : 'none',
+                before: Math.max(0, ...times),
+              }
+            }),
+          })
+        : Promise.resolve(null),
+    )
+    P.markMessagesUnread([newer.id])
+    const marking = P.markAllMessagesRead()
+    await asked()
+    expect(reachAsked()).toBe(0)
+    snap.messages = snap.messages.map((m) => (m.id === newer.id ? { ...m, read_at: undefined } : m))
+    requests[0].resolve(null)
+    await asked()
+    // the seat's cutoff includes the reopened message, which the paint marks
+    const mark = requests.find((r) => r.name === 'messages:markAllRead' && r.args.org_id === seat)
+    expect(mark?.args.before).toBe(Date.parse(newer.created_at))
+    expect(P.messages.find((m) => m.id === newer.id)?.read).toBe(true)
+    await answerAll((r) => ({ marked: 1, hasMore: false, before: r.args.before }))
+    await marking
+  })
+
+  it('stops every seat at a pause with one toast, the queued one before it sends anything', async () => {
+    const third = thirdSeat()
+    reach = {
+      seats: snap.orgs.map((org, i) => ({ org_id: org.id, reach: 'one', before: 30 + i })),
+    }
+    const marking = P.markAllMessagesRead()
+    await asked()
+    expect(requests).toHaveLength(2)
+    const [first, second] = requests
+    first.resolve({ marked: 4, hasMore: true, before: 30 })
+    await vi.waitFor(() => expect(requests).toHaveLength(3))
+    // the pause refuses the first seat's next batch
+    requests[2].reject(
+      new ConvexError({
+        code: 'paused',
+        message: 'Qivo is offline. Changes wait until it is back.',
+      }),
+    )
+    await asked()
+    // the second seat's answer comes, and it sends nothing more
+    second.resolve({ marked: 2, hasMore: true, before: 31 })
+    await marking
+    expect(requests).toHaveLength(3)
+    expect(requests.map((r) => r.args.org_id)).not.toContain(third)
+    expect(P.inboxBulk).toMatchObject({ state: 'stopped', done: 6 })
+    expect(P.inboxBulk?.stops.map((stop) => [stop.org, stop.done, stop.paused]).sort()).toEqual(
+      [
+        [snap.orgs[0].id, 4, true],
+        [snap.orgs[1].id, 2, true],
+        [third, 0, true],
+      ].sort(),
+    )
+    expect(showToast).toHaveBeenCalledOnce()
+    expect(showToast).toHaveBeenCalledWith(
+      'Mark all as read stopped after 4 messages in Testbed Labs and 2 messages in Guest workspace. The rest stay unread. Qivo is offline. Changes wait until it is back.',
+      'error',
+      expect.objectContaining({ sticky: true, key: 'inbox-bulk:read:pause' }),
+    )
+  })
+
+  it('ends the action, its paints and its notice when a paint throws after the notice', async () => {
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many', before: 5 })) }
+    const marking = P.markAllMessagesRead(true)
+    await asked()
+    expect(P.inboxBulk?.state).toBe('notice')
+    paintFault.next = true
+    P.answerInboxNotice(true)
+    await marking
+    expect(paintFault.next).toBe(false)
+    // nothing was sent, nothing stays painted, and both buttons are back
+    expect(requests).toEqual([])
+    expect(P.inboxBulk).toBeNull()
+    expect(P.unreadMessages).toBe(2)
+    expect(P.canMarkAllRead).toBe(true)
+    expect(showToast).toHaveBeenCalledWith(
+      'Mark all as read stopped after a fault in Qivo. What it already did stays done.',
+      'error',
+    )
+    // a later press works again
+    reach = null
+    const again = P.markAllMessagesRead()
+    await asked()
+    expect(requests).toHaveLength(2)
+    await answerAll((r) => ({ marked: 1, hasMore: false, before: r.args.before }))
+    await again
+  })
+
+  it('closes a notice that nothing waits on any more', () => {
+    // as after a fault: the notice shows but its press no longer waits
+    P.answerInboxNotice(false)
+    expect(P.inboxBulk).toBeNull()
+  })
+
+  it('keys stop toasts by action and takes them away once a later run finishes there', async () => {
+    const [first, second] = snap.orgs.map((org) => org.id)
+    const marking = P.markAllMessagesRead()
+    await asked()
+    requests
+      .find((r) => r.args.org_id === first)
+      ?.reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
+    requests
+      .find((r) => r.args.org_id === second)
+      ?.resolve({ marked: 1, hasMore: false, before: 1 })
+    await marking
+    expect(showToast).toHaveBeenCalledWith(
+      expect.stringContaining('Mark all as read stopped in Testbed Labs'),
+      'error',
+      expect.objectContaining({ key: `inbox-bulk:read:${first}` }),
+    )
+    // Remove all read in the same seat neither shares nor takes its key
+    requests = []
+    const removal = P.deleteReadMessages()
+    await asked()
+    await answerAll(() => ({ removed: 1, hasMore: false }))
+    await removal
+    expect(dismissToast).not.toHaveBeenCalled()
+    // a later Mark all as read that finishes there takes the stop away
+    requests = []
+    snap.unreadTruncated = true
+    publish(structuredClone(snap))
+    reach = { seats: [{ org_id: first, reach: 'one', before: 2 }] }
+    const again = P.markAllMessagesRead()
+    await asked()
+    await answerAll(() => ({ marked: 1, hasMore: false, before: 2 }))
+    await again
+    expect(dismissToast).toHaveBeenCalledOnce()
+    expect(dismissToast).toHaveBeenCalledWith(`inbox-bulk:read:${first}`)
+  })
+
+  it('ends a press whose Inbox left while it asked, also when the Inbox shows again before the answer', async () => {
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many', before: 5 })) }
+    let open: () => void = () => {}
+    reachGate = new Promise((resolve) => {
+      open = resolve
+    })
+    const old = P.markAllMessagesRead(true)
+    await asked()
+    expect(P.inboxBulk?.state).toBe('asking')
+    // the Inbox hides, then shows again, before bulkReach answers
+    unhost()
+    expect(P.inboxBulk).toBeNull()
+    unhost = P.hostInboxNotice({ prepare: () => true })
+    open()
+    await old
+    // the old press opens no notice with its old plan, and sends nothing
+    expect(P.inboxBulk).toBeNull()
+    expect(requests).toEqual([])
+    // a new press asks again and opens its own notice
+    reachGate = null
+    const fresh = P.markAllMessagesRead(true)
+    await asked()
+    expect(reachAsked()).toBe(2)
+    expect(P.inboxBulk?.state).toBe('notice')
+    P.answerInboxNotice(false)
+    await fresh
+  })
+
+  it('opens the notice only while a shown Inbox lets it', async () => {
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many', before: 5 })) }
+    // the person types in a field when the notice would open
+    hostReady = false
+    await P.markAllMessagesRead(true)
+    expect(P.inboxBulk).toBeNull()
+    expect(requests).toEqual([])
+    // the Inbox hides while the press waits for bulkReach
+    hostReady = true
+    reach = 'never'
+    vi.useFakeTimers()
+    try {
+      const asking = P.markAllMessagesRead(true)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(P.inboxBulk?.state).toBe('asking')
+      unhost()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await asking
+      expect(P.inboxBulk).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+    // the Inbox hides while the notice waits
+    unhost = P.hostInboxNotice({ prepare: () => true })
+    reach = { seats: snap.orgs.map((org) => ({ org_id: org.id, reach: 'many', before: 5 })) }
+    const waiting = P.markAllMessagesRead(true)
+    await asked()
+    expect(P.inboxBulk?.state).toBe('notice')
+    unhost()
+    await waiting
+    expect(P.inboxBulk).toBeNull()
+    expect(requests).toEqual([])
+    // a short action needs no Inbox to ask
+    reach = null
+    const short = P.markAllMessagesRead(true)
+    await asked()
+    expect(requests).toHaveLength(2)
+    await answerAll((r) => ({ marked: 1, hasMore: false, before: r.args.before }))
+    await short
   })
 })
 
@@ -605,7 +1338,9 @@ describe('snooze through the client store', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     snap = fixture()
     requests = []
-    network.query.mockResolvedValue(null)
+    network.query.mockImplementation(async (ref, args) =>
+      getFunctionName(ref) === 'messages:bulkReach' ? reachOf(snap, args.action) : null,
+    )
     network.onUpdate.mockImplementation((_ref, _args, next) => {
       publish = next
       next(structuredClone(snap))
@@ -737,6 +1472,7 @@ describe('snooze through the client store', () => {
     requests.length = 0
 
     const marking = P.markAllMessagesRead()
+    await asked()
     expect(group('Notification task 1').items.every((m) => !m.read)).toBe(true)
     expect(group('Notification task 4').read).toBe(true)
     expect(requests.map((r) => r.name)).toEqual(['messages:markAllRead', 'messages:markAllRead'])
@@ -757,6 +1493,7 @@ describe('snooze through the client store', () => {
     requests.length = 0
 
     const removing = P.deleteReadMessages()
+    await asked()
     expect(group('Notification task 3')).toBeDefined()
     expect(group('Notification task 1')).toBeDefined()
     expect(group('Notification task 2')).toBeUndefined()

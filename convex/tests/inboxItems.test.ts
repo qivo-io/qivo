@@ -15,6 +15,7 @@ import type { MessageKind } from '../lib/enums'
 import { deleteOrgDeep } from '../model/cascade'
 import { itemEdits, REKEY } from '../model/inboxItems'
 import {
+  INBOX_BATCH,
   INLINE_TRIMS,
   ITEM_UNREAD_CAP,
   markAllMessagesRead,
@@ -356,7 +357,8 @@ describe('every message write keeps the items exact', () => {
     const t = newT()
     const f = await withOrg(t)
     const all = await tasks(t, f, 6)
-    // 300 unread rows, more than one batch (INBOX_BATCH is 256)
+    // 300 unread rows, two batches
+    expect(INBOX_BATCH < 300 && 300 <= 2 * INBOX_BATCH).toBe(true)
     for (let i = 0; i < 300; i++) await post(t, f, { to: f.user, task: all[i % 6], minute: i })
     const user = as(t, f.user)
     const first = await user.mutation(api.messages.markAllRead, { org_id: f.org.id })

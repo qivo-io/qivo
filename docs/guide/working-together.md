@@ -279,6 +279,18 @@ you lost access to.
 These actions leave tasks, comments and open drafts intact. The list's
 context menu offers them even when a filter shows no messages.
 
+Both actions work in steps of up to 160 messages. Before it starts, Qivo
+checks how many messages each organization has for the action; if it cannot
+check, for example while the connection is slow, it changes nothing and asks
+you to try again. When an action needs more than one round, Qivo says so
+before it starts, and the toolbar shows how many messages it has handled. Keep Qivo open until it finishes. You can switch to
+another view meanwhile, and Qivo tells you when it is done. Closing or
+reloading Qivo stops it. The steps already done stay done, and if you start
+the action again, it works on the messages as they are then, with a new
+cutoff for updates that arrive later. If Qivo cannot finish in an
+organization, it keeps what it already did and tells you how many messages
+it handled there.
+
 **Snoozing.** In a row's menu, set the number beside **Hours**, **Days** or
 **Weeks**, then press that row's **Snooze** button. A snooze reaches at most
 366 days ahead ([Limits](./limits.md)). Hover the button to see the return time.

@@ -292,6 +292,16 @@ names the task's number. Run it again to add only the tasks still missing;
 it also finishes a parent and subtasks it stopped in the middle of, under
 the parent it already made. It writes to that local backend alone.
 
+`--inbox <n>`, up to the `--tasks` count, also gives Nora `n` inbox items,
+for checking the Inbox and its bulk actions at scale. On each of the first
+`n` seeded tasks that are not archived it posts one comment that mentions
+her, through `comments:create`, as one of the sub-project's task owners who
+has a login and is not Nora, because a mention of herself writes no
+message and an agent has no login. Each comment's id comes from its task's
+id, so a rerun posts only where no comment is yet, and a larger `--inbox`
+adds items on the next tasks. For example, `--tasks 1300 --inbox 600` and
+then `--tasks 1300 --inbox 1200` give Nora 600 more unread items.
+
 ## Production release
 
 `.github/workflows/release.yml` calls the shared deployment workflow, whose
