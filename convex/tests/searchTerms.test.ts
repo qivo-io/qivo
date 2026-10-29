@@ -33,12 +33,12 @@ const score = (text: string, fields: Partial<SearchFields>) =>
 describe('searchTerms', () => {
   it('splits a text into words at every character that is no letter or digit', () => {
     expect(searchTerms("Torque-sensor calibration's v2_fix")).toEqual([
-      { word: 'torque', prefix: false },
-      { word: 'sensor', prefix: false },
-      { word: 'calibration', prefix: false },
-      { word: 's', prefix: false },
-      { word: 'v2', prefix: false },
-      { word: 'fix', prefix: true },
+      { word: 'torque', text: 'Torque', prefix: false },
+      { word: 'sensor', text: 'sensor', prefix: false },
+      { word: 'calibration', text: 'calibration', prefix: false },
+      { word: 's', text: 's', prefix: false },
+      { word: 'v2', text: 'v2', prefix: false },
+      { word: 'fix', text: 'fix', prefix: true },
     ])
   })
 
@@ -52,18 +52,29 @@ describe('searchTerms', () => {
 
   it('reads a whitespace piece that is a task reference as one reference term', () => {
     expect(searchTerms('QN-482 sensor')).toEqual([
-      { word: '482', num: 482, prefix: false },
-      { word: 'sensor', prefix: true },
+      { word: '482', text: '482', num: 482, prefix: false },
+      { word: 'sensor', text: 'sensor', prefix: true },
     ])
-    expect(searchTerms('qn-12')).toEqual([{ word: '12', num: 12, prefix: true }])
-    expect(searchTerms('12')).toEqual([{ word: '12', num: 12, prefix: true }])
+    expect(searchTerms('qn-12')).toEqual([{ word: '12', text: '12', num: 12, prefix: true }])
+    expect(searchTerms('12')).toEqual([{ word: '12', text: '12', num: 12, prefix: true }])
     // a number no task has still finds a word equal to its digits
-    expect(searchTerms('QN-0')).toEqual([{ word: '0', num: null, prefix: true }])
+    expect(searchTerms('QN-0')).toEqual([{ word: '0', text: '0', num: null, prefix: true }])
     expect(searchTerms('99999999999')[0].num).toBeNull()
     // not references: a piece with more than the reference
-    expect(searchTerms('#12')).toEqual([{ word: '12', prefix: true }])
+    expect(searchTerms('#12')).toEqual([{ word: '12', text: '12', prefix: true }])
     expect(searchTerms('QN-12a').map((t) => t.word)).toEqual(['qn', '12a'])
     expect(searchTerms('QN12').map((t) => t.word)).toEqual(['qn12'])
+  })
+
+  it('sends Convex each term as the text wrote it, which Convex cuts as it cut the task', () => {
+    // the capital dotted I lowercases to i and a combining dot, at which
+    // Convex would cut a lowercased term in two
+    expect(searchTerms('İstanbul')).toEqual([
+      { word: 'i\u0307stanbul', text: 'İstanbul', prefix: true },
+    ])
+    expect(convexText(searchTerms('İstanbul ΟΔΟΣ'))).toBe('İstanbul ΟΔΟΣ')
+    // each word is cut first and lowercased then, so a final sigma stays final
+    expect(searchTerms("ΟΔΟΣ'Α").map((t) => t.word)).toEqual(['οδος', 'α'])
   })
 
   it('has no terms for a blank text or one of punctuation only', () => {
@@ -74,7 +85,9 @@ describe('searchTerms', () => {
 
   it('leaves out words Convex does not index, of 32 bytes or more', () => {
     const long = 'supercalifragilisticexpialidocious' // 34 bytes
-    expect(searchTerms(`${long} report`)).toEqual([{ word: 'report', prefix: true }])
+    expect(searchTerms(`${long} report`)).toEqual([
+      { word: 'report', text: 'report', prefix: true },
+    ])
     expect(searchTerms('x'.repeat(31)).map((t) => t.word)).toEqual(['x'.repeat(31)])
     // 16 two-byte letters are 32 bytes
     expect(searchTerms('ä'.repeat(16))).toEqual([])
@@ -86,6 +99,8 @@ describe('searchTerms', () => {
     expect(searchTerms(many)).toHaveLength(20)
     expect(convexText(searchTerms(many)).split(' ')).toHaveLength(CONVEX_TERMS)
     expect(convexText(searchTerms('QN-12 torque sen'))).toBe('12 torque sen')
+    // references go first, so Convex's prefix term is a word, never digits
+    expect(convexText(searchTerms('torque QN-12'))).toBe('12 torque')
     expect(convexTakesAll(searchTerms(many))).toBe(false)
     expect(convexTakesAll(searchTerms('torque sen'))).toBe(true)
   })
@@ -122,6 +137,20 @@ describe('matchesTerms', () => {
     expect(finds('alibrate', task)).toBe(false)
     expect(finds('cal', { description: 'recalibrate' })).toBe(false)
     expect(finds('torq', { description: 'the torque-sensor' })).toBe(true)
+  })
+
+  it('keeps the words of the stored text when it compares lowercase', () => {
+    // İstanbul is one word, so none of its parts is a word of its own
+    for (const where of ['title', 'description'] as const) {
+      expect(finds('stanbul', { [where]: 'trip to İstanbul' })).toBe(false)
+      expect(finds('İstanbul', { [where]: 'trip to İstanbul' })).toBe(true)
+      expect(finds('istanbul', { [where]: 'trip to İstanbul' })).toBe(false)
+      // a capital sigma before an apostrophe and a letter ends its word
+      expect(finds('οδος', { [where]: "ΟΔΟΣ'Α plan" })).toBe(true)
+      expect(finds('οδοσ', { [where]: "ΟΔΟΣ'Α plan" })).toBe(false)
+    }
+    // a text without those capitals is lowercased whole
+    expect(finds('οδος', { description: 'η οδος.' })).toBe(true)
   })
 
   it('matches no word Convex does not index, not even by its start', () => {

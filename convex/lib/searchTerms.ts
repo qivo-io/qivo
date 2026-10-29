@@ -5,6 +5,8 @@
  * scale. It has no server-only imports, so the app can import it to read a
  * search text the same way. */
 
+import { INT4_MAX, ISSUE_PREFIX } from './taskRefs'
+
 /* A word as Convex's search index cuts it from a text: a run of letters
  * (Unicode Alphabetic, which takes in the vowel signs and other marks that
  * are part of a letter) and digits (Unicode Number). Every other character,
@@ -16,12 +18,9 @@
 const WORD = /[\p{Alphabetic}\p{N}]+/gu
 
 /** A task reference as the search box takes it, QN-482 or a bare 482, when
- * it is one whitespace-separated piece of the text. */
-const TASK_REF = /^(?:QN-)?(\d+)$/i
-
-/* The highest task number, as task references elsewhere read them
- * (lib/core.ts parseIssueRef). */
-const NUM_MAX = 2_147_483_647
+ * it is one whitespace-separated piece of the text. It reads numbers as
+ * lib/taskRefs.ts parseIssueRef does, without its uuids. */
+const TASK_REF = new RegExp(`^(?:${ISSUE_PREFIX}-)?(\\d+)$`, 'i')
 
 /** How many terms Convex's search takes in one query. A text with more
  * passes the first ones to Convex, and the server's own check still
@@ -48,12 +47,13 @@ function utf8Bytes(word: string): number {
 const indexed = (word: string): boolean => utf8Bytes(word) < CONVEX_WORD_BYTES
 
 /** One term of a search text. `word` is the term as a word of a text
- * matches it (wordOf). A reference term (`num` present) is the digits of a
- * task reference and matches the task with that number, null for a number
- * no task can have, or a word equal to its digits. Every other term matches
- * a word equal to it, or one that starts with it when it is the text's last
- * term (`prefix`). */
-export type SearchTerm = { word: string; prefix: boolean; num?: number | null }
+ * matches it (wordOf), and `text` the term as the text wrote it, which
+ * Convex's search takes (convexText). A reference term (`num` present) is
+ * the digits of a task reference and matches the task with that number,
+ * null for a number no task can have, or a word equal to its digits. Every
+ * other term matches a word equal to it, or one that starts with it when it
+ * is the text's last term (`prefix`). */
+export type SearchTerm = { word: string; text: string; prefix: boolean; num?: number | null }
 
 /** `word` as search compares it: lowercase, as Convex compares words.
  * Convex does not fold accents ("cafe" does not find "café", checked on a
@@ -61,10 +61,16 @@ export type SearchTerm = { word: string; prefix: boolean; num?: number | null }
  * Convex never returns. */
 export const wordOf = (word: string): string => word.toLowerCase()
 
+/* The words of `text` as it writes them, in order, without the words
+ * Convex leaves out of its index (CONVEX_WORD_BYTES). */
+const writtenWords = (text: string): string[] =>
+  Array.from(text.matchAll(WORD), (m) => m[0]).filter((word) => indexed(wordOf(word)))
+
 /** The words of `text` as search compares them (wordOf), in order,
- * without the words Convex leaves out of its index (CONVEX_WORD_BYTES). */
-export const wordsOf = (text: string): string[] =>
-  Array.from(text.matchAll(WORD), (m) => wordOf(m[0])).filter(indexed)
+ * without the words Convex leaves out of its index (CONVEX_WORD_BYTES).
+ * Each word is cut from the text first and lowercased then, as Convex
+ * lowercases each word it cuts. */
+export const wordsOf = (text: string): string[] => writtenWords(text).map(wordOf)
 
 /**
  * The terms of search text `text`, distinct, in the order they first
@@ -88,10 +94,10 @@ export function searchTerms(text: string): SearchTerm[] {
     const ref = TASK_REF.exec(piece)
     if (ref !== null) {
       const num = Number(ref[1])
-      add({ word: ref[1], num: num >= 1 && num <= NUM_MAX ? num : null })
+      add({ word: ref[1], text: ref[1], num: num >= 1 && num <= INT4_MAX ? num : null })
       continue
     }
-    for (const word of wordsOf(piece)) add({ word })
+    for (const written of writtenWords(piece)) add({ word: wordOf(written), text: written })
   }
   if (out.length > 0) out[out.length - 1].prefix = true
   return out
@@ -103,13 +109,18 @@ export function searchTerms(text: string): SearchTerm[] {
 export const convexTakesAll = (terms: readonly SearchTerm[]): boolean =>
   terms.length <= CONVEX_TERMS
 
-/** The text a Convex search query takes for `terms`: the first
- * CONVEX_TERMS of them, each as its word, so a reference term finds a word
- * equal to its digits, and the last as Convex's prefix term. */
+/** The text a Convex search query takes for `terms`: the reference terms
+ * first, then the others in order, the first CONVEX_TERMS of them, so
+ * Convex takes the last word term as its prefix and never a reference,
+ * which matches whole digits only. Each term goes as the text wrote it,
+ * which Convex cuts and lowercases as it cut and lowercased the stored
+ * text. Its lowercase could cut differently: the capital dotted I
+ * lowercases to i and a combining dot, at which Convex would cut the word
+ * in two. */
 export const convexText = (terms: readonly SearchTerm[]): string =>
-  terms
+  [...terms.filter((term) => term.num !== undefined), ...terms.filter((t) => t.num === undefined)]
     .slice(0, CONVEX_TERMS)
-    .map((term) => term.word)
+    .map((term) => term.text)
     .join(' ')
 
 /** What search reads of one task, or of a project by its name as `title`:
@@ -151,13 +162,27 @@ function inWords(term: SearchTerm, words: readonly string[]): { whole: boolean }
   return started ? { whole: false } : null
 }
 
-/* inWords over `text`, lowercased, without splitting it into words, which
- * costs a description of 20,000 characters about 20 times as much. A
- * character whose lowercase adds a mark that is no letter, such as the
- * dotted capital I, can end a word here inside a word Convex keeps whole.
- * A term is shorter than CONVEX_WORD_BYTES, so a word equal to it is one
- * Convex indexes; a word it starts counts only while it is too. */
+/* Whether `word` holds letters and digits only. A term's lowercase can hold
+ * a combining dot from a capital dotted I, which no lowercased text without
+ * that capital holds inside a word. */
+const plain = (word: string): boolean => /^[\p{Alphabetic}\p{N}]+$/u.test(word)
+
+/* The characters whose lowercase in a whole text can differ from the
+ * lowercase of the word they stand in: the capital dotted I, whose lowercase
+ * adds a combining dot that is no letter, and the capital sigma, which
+ * lowercases to a final sigma at the end of a word but not before an
+ * apostrophe or a full stop and a letter. A check of every code point in
+ * Node (2026-10-29) found no other. */
+const RECASED = /[\u0130\u03a3]/
+
+/* inWords over `text`, a text without RECASED characters, lowercased
+ * whole, without splitting it into words, which costs a description of
+ * 20,000 characters about 20 times as much. Lowercasing such a text whole
+ * keeps its words where they were. A term is shorter than
+ * CONVEX_WORD_BYTES, so a word equal to it is one Convex indexes; a word it
+ * starts counts only while it is too. */
 function inText(term: SearchTerm, text: string): { whole: boolean } | null {
+  if (!plain(term.word)) return null
   const { whole, start } = patternsOf(term.word)
   if (whole.test(text)) return { whole: true }
   if (!term.prefix || term.num !== undefined) return null
@@ -165,14 +190,16 @@ function inText(term: SearchTerm, text: string): { whole: boolean } | null {
   return null
 }
 
-/* The words of a task's title and its lowercased description, which every
- * term reads. */
-type Prepared = { num?: number; title: string[]; description: string }
+/* The words of a task's title, and its description lowercased whole or,
+ * when it holds a RECASED character, as words, which every term reads. */
+type Prepared = { num?: number; title: string[]; description: string | string[] }
 
 const prepare = (fields: SearchFields): Prepared => ({
   num: fields.num,
   title: wordsOf(fields.title),
-  description: fields.description.toLowerCase(),
+  description: RECASED.test(fields.description)
+    ? wordsOf(fields.description)
+    : fields.description.toLowerCase(),
 })
 
 /* Where `term` matches `fields`, the best place first, or null. */
@@ -180,7 +207,10 @@ function placeOf(term: SearchTerm, fields: Prepared): Place | null {
   if (term.num != null && term.num === fields.num) return { where: 'title', whole: true }
   const title = inWords(term, fields.title)
   if (title?.whole) return { where: 'title', whole: true }
-  const description = inText(term, fields.description)
+  const description =
+    typeof fields.description === 'string'
+      ? inText(term, fields.description)
+      : inWords(term, fields.description)
   if (description?.whole && title === null) return { where: 'description', whole: true }
   if (title !== null) return { where: 'title', whole: false }
   return description === null ? null : { where: 'description', whole: description.whole }
