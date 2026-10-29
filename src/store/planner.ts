@@ -540,9 +540,12 @@ export type RelatedTaskVM = {
   held: boolean
   remaining: number | undefined
 }
-/** A row of Linked tasks: the other task, and the relation as seen from
-    the open task (blocks, blocked_by or relates). */
-export type LinkedTaskVM = RelatedTaskVM & { type: string }
+/** A row of Linked tasks: the other task, the relation as seen from the
+    open task (blocks, blocked_by or relates), and whether the workspace
+    holds the link row itself (`linkHeld`). Removing a link edits that row
+    and sends the kind it shows as the one expected, so a link the answer
+    alone holds, as during a held transition, cannot be removed yet. */
+export type LinkedTaskVM = RelatedTaskVM & { type: string; linkHeld: boolean }
 
 /** One of the watched task's sections: where its list stands
     (lib/taskSections.ts SectionState), its rows (none while loading or
@@ -1124,7 +1127,7 @@ function linkSection(t: string, answer: SectionAnswers['links']) {
   const shown = linkViews(t, links, (other) => uuidToKey.has(other) || ends.has(other)).flatMap(
     (view) => {
       const row = relatedTask(view.other, ends.get(view.other))
-      return row ? [{ ...row, type: view.type }] : []
+      return row ? [{ ...row, type: view.type, linkHeld: touches(rows.links.get(view.link)) }] : []
     },
   )
   return { state, rows: shown, complete: list.complete, delivered: true }

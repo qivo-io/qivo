@@ -508,6 +508,26 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(titlesOf('subtasks')).toEqual(['Mount the new board', 'Order parts', 'Read the manual'])
   })
 
+  it('keeps the removal of a link the workspace does not hold yet waiting, between held tasks', async () => {
+    await load()
+    await openTask()
+    // a link to a held task that no workspace delivery holds yet
+    await answer(
+      'taskWindow:links',
+      linksAnswer(
+        [link('link-1', 'fam', 'other'), { ...link('link-9', 'fam', 'manual'), created_at: AT }],
+        [short(row('other')), short(row('manual'))],
+      ),
+    )
+    const removeOf = (handle: string) =>
+      section('links').querySelector<HTMLButtonElement>(
+        `[data-related-task="${handle}"] .task-related-remove`,
+      )
+    expect(removeOf('QN-32')?.disabled).toBe(true)
+    expect(await hintOf(removeOf('QN-32'))).toBe('Available once every task has loaded')
+    expect(removeOf('QN-31')?.disabled).toBe(false)
+  })
+
   it('keeps Read-only project access on a held row the person cannot edit', async () => {
     await load()
     await openTask()

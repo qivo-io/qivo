@@ -3807,8 +3807,10 @@ function IssueDetail({
                                 remove={{
                                   label: 'Remove link (both directions)',
                                   onClick: () => P.removeLink(it.id, row.handle),
-                                  disabled: !row.held || !canLink(row.handle),
-                                  hint: row.held ? undefined : WAITS_FOR_TASKS,
+                                  // the removal edits the workspace's link row
+                                  // and the other task's
+                                  disabled: !row.held || !row.linkHeld || !canLink(row.handle),
+                                  hint: row.held && row.linkHeld ? undefined : WAITS_FOR_TASKS,
                                 }}
                               />
                             ))}

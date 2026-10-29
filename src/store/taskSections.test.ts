@@ -590,6 +590,22 @@ describe("the task window's sections in the store", () => {
       expect(subtaskIds()).toEqual(['kid-2'])
     })
 
+    it('marks a link the answer alone holds, between two held tasks, as not held', () => {
+      opened()
+      // the server has a link to task-b that no workspace delivery holds yet
+      one('taskWindow:links').deliver(
+        linksAnswer(
+          [link('link-ac', 'task-a', 'task-c'), link('link-ab', 'task-b', 'task-a')],
+          [short(row('task-c')), short(row('task-b'))],
+        ),
+      )
+      expect(sections()?.links.rows.map((r) => [r.uuid, r.type, r.held, r.linkHeld])).toEqual([
+        // the same creation time, so by id
+        ['task-b', 'blocked_by', true, false],
+        ['task-c', 'blocks', true, true],
+      ])
+    })
+
     it("shows another person's change when its answer arrives, also while the workspace is held", () => {
       opened()
       // a subtask the workspace does not hold, from its short row
