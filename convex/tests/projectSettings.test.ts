@@ -521,7 +521,11 @@ describe('projectSettings.get', () => {
 
 /** The rights every write's own rule gives `me` on `p`, read with the
  * predicates the writes call (model/projects.ts, model/projectAccess.ts,
- * projects.ts): the reference get's rights must equal. */
+ * projects.ts): the reference get's rights must equal. can_create_sub_project
+ * is the create's rule, which checks only that the parent is a meta, where
+ * get also asks for a top-level one; the two differ only for a legacy meta
+ * row with a parent, which SHAPES does not plant (tested on its own
+ * below). */
 async function writeRules(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -790,6 +794,40 @@ describe('rights', () => {
       expect(await lookup(me)).toEqual({ state: 'refused', message: DEMO_FEATURE_REFUSAL })
     vi.stubEnv('APP_MODE', '')
     expect(await lookup(f.guest)).toEqual({ state: 'refused', message: NO_USER_MANAGEMENT })
+  })
+
+  it('offers no sub-project under a legacy meta row that has a parent, where the create would take one', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a meta-typed row under TBED, which create and the header of
+    // projects.ts rule out for new rows; TBED's lead and the admin lead it
+    const legacy = await plantProject(t, { org_id: f.org.id, type: 'meta', parent_id: f.meta.id })
+    await keyOrg(t, f.org.id)
+    for (const me of [f.admin, f.user]) {
+      expect(await read.get(t, me, legacy.id), me.name).toMatchObject({
+        state: 'ok',
+        level: 'lead',
+        can_edit: true,
+        can_create_sub_project: false,
+      })
+      // the lead picker of a new sub-project follows the create's own checks
+      // (model/projects.ts subProjectParent), which take the row
+      expect((await read.leadCandidates(t, me, { parent_id: legacy.id })).state, me.name).toBe(
+        'ready',
+      )
+    }
+    // and the create takes it: the flag is stricter, as a sub-project there
+    // would sit outside every meta tree, where nobody could reach it
+    const created = await as(t, f.admin).mutation(api.projects.create, {
+      org_id: f.org.id,
+      id: uuid(),
+      type: 'project',
+      parent_id: legacy.id,
+      key: 'LOST',
+      name: 'Out of reach',
+      sort_order: 9,
+    })
+    expect(await read.get(t, f.admin, created.id)).toEqual({ state: 'unavailable' })
   })
 
   it('leaves the rights that change access to people: an agent that leads a project may edit but not change access', async () => {
