@@ -176,6 +176,7 @@ import type * as model_activity from "../model/activity.js";
 import type * as model_admin from "../model/admin.js";
 import type * as model_appearance from "../model/appearance.js";
 import type * as model_archiveMarks from "../model/archiveMarks.js";
+import type * as model_archiveRechecks from "../model/archiveRechecks.js";
 import type * as model_attachments from "../model/attachments.js";
 import type * as model_billing from "../model/billing.js";
 import type * as model_billingUsage from "../model/billingUsage.js";
@@ -425,6 +426,7 @@ declare const fullApi: ApiFromModules<{
   "model/admin": typeof model_admin;
   "model/appearance": typeof model_appearance;
   "model/archiveMarks": typeof model_archiveMarks;
+  "model/archiveRechecks": typeof model_archiveRechecks;
   "model/attachments": typeof model_attachments;
   "model/billing": typeof model_billing;
   "model/billingUsage": typeof model_billingUsage;
