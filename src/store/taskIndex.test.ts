@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { linkViews } from '../lib/taskSections'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 import { createWorkspaceRows } from './rowMap'
 import { createTaskIndex, type TaskSources } from './taskIndex'
@@ -69,6 +70,43 @@ describe('the task index', () => {
     paused: false,
     has_hidden_subtasks: false,
     has_hidden_parent: false,
+  })
+
+  it("lists a task's links by the task window's rule, and hands the window its relation ids", () => {
+    const snap = plannerFixture()
+    snap.issues = [task(snap, 'a', 1), task(snap, 'b', 2), task(snap, 'c', 3), task(snap, 'd', 4)]
+    snap.issues[3].parent_id = 'a'
+    const link = (id: string, source: string, target: string, type: 'blocks' | 'relates') => ({
+      id,
+      source_id: source,
+      target_id: target,
+      type,
+      pair_key: [source, target].sort().join(':'),
+      created_at: AT,
+    })
+    snap.links = [
+      link('l3', 'c', 'a', 'relates'),
+      link('l1', 'b', 'a', 'blocks'),
+      link('l2', 'a', 'c', 'blocks'),
+      // a link to a task this view does not hold
+      link('l0', 'a', 'z', 'blocks'),
+    ]
+    const { sources } = workspace(snap)
+    const index = createTaskIndex()
+    index.full(sources())
+    const views = linkViews('a', snap.links, (id) => index.uuidToKey.has(id)).map((view) => ({
+      type: view.type,
+      id: index.uuidToKey.get(view.other),
+    }))
+    expect(index.issueById()['QN-1'].links).toEqual(views)
+    expect(views).toEqual([
+      { type: 'blocked_by', id: 'QN-2' },
+      { type: 'blocks', id: 'QN-3' },
+    ])
+    const ids = index.relationsOf('a')
+    expect([...(ids.children ?? [])]).toEqual(['d'])
+    expect([...(ids.links ?? [])].sort()).toEqual(['l0', 'l1', 'l2', 'l3'])
+    expect(ids.attachments).toBeUndefined()
   })
 
   it('moves a task whose number changed to its place by number', () => {

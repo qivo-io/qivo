@@ -206,7 +206,10 @@ describe('the task window under Comments and All', { timeout: 20_000 }, () => {
     await openTask()
     await comments({ comments: range(1, 4), earlier: false })
     expect(thread()).toEqual(['Check 1', 'Check 2', 'Check 3'])
-    expect(subs.map((s) => s.name)).toEqual(['snapshot:threadComments'])
+    // the thread's subscriptions; the details column's lists have their own
+    expect(subs.map((s) => s.name).filter((name) => name.startsWith('snapshot:'))).toEqual([
+      'snapshot:threadComments',
+    ])
     await pick('All')
     // the comments are not shown as the whole record while the history loads
     expect(thread()).toEqual(['Loading activity…'])

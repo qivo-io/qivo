@@ -27,6 +27,7 @@ import { canonicalLoad } from '../../convex/lib/workload'
 import { isoToWeek, TODAY_ISO, TODAY_WEEK, tsToWeek } from '../lib/dates'
 import type { DelayInfo } from '../lib/delay'
 import { groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
+import { linkViews } from '../lib/taskSections'
 import type { LoadSpan } from '../lib/workload'
 import type { RowMap } from './rowMap'
 import type { Row } from './rows'
@@ -88,12 +89,6 @@ export type TaskChanges = {
 
 /* Issue keys are "QN-<num>" (planner.ts ISSUE_PREFIX). */
 const ISSUE_PREFIX = 'QN'
-
-const REVERSE: Record<string, string> = {
-  blocks: 'blocked_by',
-  blocked_by: 'blocks',
-  relates: 'relates',
-}
 
 /** -1, 0 or 1 as `a` sorts before, with or after `b`: by `a` and `b`, then
     by their ids. */
@@ -205,27 +200,22 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     return rows.map((row) => uuidToKey.get(row.id) as string)
   }
 
-  /** Task `uuid`'s links, each other task once, by creation time, then id.
-      A link whose other task is not shown is left out. */
+  /** Task `uuid`'s links, each other task once, by creation time, then id,
+      by the task window's rule (lib/taskSections.ts linkViews), which the
+      window's Linked tasks apply to its own answer too. A link whose other
+      task is not shown is left out. */
   function linkViewsOf(uuid: string): { type: string; id: string }[] | undefined {
     const ids = linksOf.get(uuid)
-    if (!ids) return undefined
+    if (!ids || !uuidToKey.has(uuid)) return undefined
     const links: Row<'issue_links'>[] = []
     for (const id of ids) {
       const link = sources().links.peek(id)
       if (link) links.push(link)
     }
-    links.sort((a, b) => byThenId(a.created_at, a.id, b.created_at, b.id))
-    const out: { type: string; id: string }[] = []
-    for (const link of links) {
-      const source = uuidToKey.get(link.source_id)
-      const target = uuidToKey.get(link.target_id)
-      if (!source || !target) continue
-      const outgoing = link.source_id === uuid
-      const other = outgoing ? target : source
-      if (out.some((view) => view.id === other)) continue
-      out.push({ type: outgoing ? link.type : REVERSE[link.type] || 'relates', id: other })
-    }
+    const out = linkViews(uuid, links, (other) => uuidToKey.has(other)).map((view) => ({
+      type: view.type,
+      id: uuidToKey.get(view.other) as string,
+    }))
     return out.length ? out : undefined
   }
 
@@ -473,6 +463,14 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     issues: () => issues,
     /** The task view models by handle. */
     issueById: () => issueById,
+    /** The ids of task `uuid`'s subtasks, links and attachments in the rows
+        on screen, for the task window's sections (store/planner.ts
+        P.sections), which read each by id rather than walk every row. */
+    relationsOf: (uuid: string) => ({
+      children: children.get(uuid) as ReadonlySet<string> | undefined,
+      links: linksOf.get(uuid) as ReadonlySet<string> | undefined,
+      attachments: attachmentsOf.get(uuid) as ReadonlySet<string> | undefined,
+    }),
     /** Every task's delay, by uuid. */
     delays: delay as ReadonlyMap<string, DelayInfo>,
     /** Each owner's organization-wide load spans. */

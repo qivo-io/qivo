@@ -53,7 +53,11 @@ Tasks have these fields:
   project progress ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). Empty means unestimated and displays “—”; **0**
   means no work remains. Gaining a first subtask clears the parent's own
   estimate. The parent then shows the total of its unfinished subtasks at any
-  depth, marked **Σ**. Done subtasks and linked tasks do not count. After the last active subtask leaves, the field
+  depth, marked **Σ**. Done subtasks and linked tasks do not count. The task
+  window totals the subtasks you can see when some are hidden from you, and
+  says **Unknown** when it cannot total every subtask, for example a subtask
+  stored with subtasks of its own before a task could have only one level of
+  subtasks. After the last active subtask leaves, the field
   becomes editable and starts empty. Entering **In Review** replaces
   Remaining with the project's review time, 2 h by default. A REST or MCP
   update that supplies remaining hours with that status change keeps the

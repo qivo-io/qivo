@@ -148,6 +148,25 @@ task is Done, the dependency labels become **Previously blocked** or
 **Was blocked by**. Cards show the task's title, project, status and owner;
 groups omit status, and unowned tasks omit the portrait.
 
+**Subtasks**, **Linked tasks** and **Attachments** load their own lists when
+the window shows them. Until a list arrives, its section shows the items
+Qivo already has, also while you are offline, or, while a very large
+workspace is still loading its tasks, says the list is loading, such as
+**Loading subtasks…**. A list that could not load says **Couldn't load
+subtasks.** with **Retry**. When Qivo no longer lets you
+see the task, a section says **Subtasks are not available.** A list too large
+to load at once shows the rows that loaded with **Some subtasks could not be
+loaded.** under them. **No subtasks.**, **No dependencies yet.** and
+**No attachments.** appear only once the whole list has loaded and is empty,
+and the count beside a heading appears only for a whole list. Until every
+subtask has loaded, Progress says **Subtasks are still loading.** or
+**Completion unknown.**, and Remaining says **Loading…** or **Unknown**. The
+Inbox's task pane has no details column, so it loads none of these lists
+until you open the task in its own window. On a phone they load when you
+choose **Details**. A card or file that has not loaded into the workspace yet
+keeps its **×** disabled with **Available once every task has loaded**,
+because removing it waits for every task.
+
 The **×** button removes a relationship without deleting the task.
 **Remove subtask** clears the child's parent and keeps the task.
 

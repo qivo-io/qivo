@@ -4,7 +4,8 @@
  *   QIVO_FIXTURE_LOCAL=true QIVO_LOCAL_ADMIN_KEY=… \
  *     node scripts/board-scale-seed.mjs --local --deployment local-<name>-<port> \
  *       --url http://127.0.0.1:<port> [--site-url http://localhost:5199] [--tasks 10000] \
- *       [--archived 160] [--inbox 600] [--credentials 45 --api-url http://127.0.0.1:<site port>]
+ *       [--archived 160] [--inbox 600] [--credentials 45 --api-url http://127.0.0.1:<site port>] \
+ *       [--relations]
  *
  * It takes the same loopback-only target as `marketing-demo.mjs --local`, and
  * the same refusals: no deploy key, no staging, production or demo
@@ -58,7 +59,30 @@
  * gone, so the number gets a new credential under a name no run used before
  * ("(scale N, try 2)", then 3), with all its calls. The seed deletes and
  * changes no credential, so the short one, and any credential a person
- * named the same way, stay as they are. */
+ * named the same way, stay as they are.
+ *
+ * `--relations` adds one task at both per-task caps, for checking the task
+ * window's Subtasks, Linked tasks and Attachments at scale (planRelations):
+ * a new top-level task in Firmware, "Coordinate the pilot firmware
+ * release", In Progress and owned by Aisha, with LIMITS.subtasks.max active
+ * subtasks and LIMITS.links.max links, as Nora through issues:create with
+ * parent_id and issues:addLink. Its subtasks take every status in turn, so
+ * a fifth are Done, and owners Aisha, Leo, Emil, Sofia and Nora in turn,
+ * five subtasks each. Every third subtask from the first has 1 to 7 hours
+ * left, and a subtask created In Review without hours gets the project's
+ * review time, 2 h by default; planRelations answers the Progress and Σ
+ * the window should show. The subtasks have 20,000-character descriptions
+ * in a three-byte script, and the task one 500 characters shorter, which
+ * leaves room to paste images into it. Two tasks share at most one link,
+ * so each link goes to a task the seed makes for it, in turn Blocks,
+ * Blocked by and Relates to, every status in turn: 70 in Luma Sensor's
+ * sub-projects, 15 in Luma Cloud's and Pilot & Launch's, and 15 in
+ * Partner pilot, a top-level project the seed makes for Nora alone, so
+ * someone who is not an organization admin sees their links left out.
+ * Five of the linked tasks are groups with one subtask each. Every id comes
+ * from what it is for, so a rerun adds only what is missing. It leaves
+ * archived ones as they are, restoring and recreating none, and says how
+ * many of the task's subtasks and linked tasks that leaves out. */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -163,7 +187,14 @@ const ref = (name) => makeFunctionReference(name)
 
 /** The options, or a DemoCliError naming what is wrong. */
 export function parseSeedArgs(args) {
-  const options = { target: null, tasks: 10_000, archived: 0, inbox: 0, credentials: 0 }
+  const options = {
+    target: null,
+    tasks: 10_000,
+    archived: 0,
+    inbox: 0,
+    credentials: 0,
+    relations: false,
+  }
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     const value = () => {
@@ -181,6 +212,7 @@ export function parseSeedArgs(args) {
     else if (arg === '--inbox') options.inbox = Number(value())
     else if (arg === '--credentials') options.credentials = Number(value())
     else if (arg === '--api-url') options.apiUrl = value()
+    else if (arg === '--relations') options.relations = true
     else throw new DemoCliError(`Unknown option ${arg}.`)
   }
   if (options.target !== 'local')
@@ -200,12 +232,184 @@ export function parseSeedArgs(args) {
   return options
 }
 
-/** The id of the --inbox comment on task `taskId`: the same for every run,
-    so a second create of it is refused as taken. A lowercase UUID, as the
+/** A lowercase UUID made from `text`, the same for every run, as the
     server requires of a new row's id. */
-export function inboxCommentId(taskId) {
-  const hex = createHash('sha256').update(`board-scale-seed inbox ${taskId}`).digest('hex')
+const uuidOf = (text) => {
+  const hex = createHash('sha256').update(text).digest('hex')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
+
+/** The id of the --inbox comment on task `taskId`: the same for every run,
+    so a second create of it is refused as taken. */
+export const inboxCommentId = (taskId) => uuidOf(`board-scale-seed inbox ${taskId}`)
+
+/** The id of --relations row `what`, such as "project" or "link 40". */
+export const relationId = (what) => uuidOf(`board-scale-seed relations ${what}`)
+
+/* The --relations owners, by Northstar person key: of the subtasks, and
+   of the linked tasks in Luma Sensor's sub-projects, in Luma Cloud's and
+   Pilot & Launch's, and in the seed's Partner pilot, which only Nora sees.
+   Each sees and edits the projects their tasks are in. */
+const RELATION_OWNERS = {
+  subtasks: ['aisha', 'leo', 'emil', 'sofia', 'nora'],
+  sensor: ['leo', 'aisha', 'emil', 'sofia'],
+  cloud: ['daniel', 'ben', 'sofia'],
+  partner: ['nora'],
+}
+/* Where the --relations linked tasks go, by sub-project key, in turn. */
+const RELATION_PLACES = {
+  sensor: ['ELEC', 'FW', 'MECH', 'TEST', 'MFG'],
+  cloud: ['UX', 'WEB', 'API', 'REL', 'CUST', 'BRAND', 'CS'],
+}
+/* The project time a task created In Review without hours gets, as
+   convex/model/projects.ts reviewHoursFor reads Northstar's projects. */
+const REVIEW_HOURS = 2
+/* How far under the description cap the --relations task's text stays. */
+const FAMILY_ROOM = 500
+/* A paragraph in a script whose letters take three UTF-8 bytes each. */
+const THREE_BYTE = 'センサーの校正手順を確認し、測定値を記録して、試験結果を共有する。'
+
+/** `length` characters of THREE_BYTE, repeated. */
+export function threeByteText(length) {
+  return THREE_BYTE.repeat(Math.ceil(length / THREE_BYTE.length)).slice(0, length)
+}
+
+/**
+ * The --relations work still to do (see the file comment) in organization
+ * `org`, given `projects` (sub-project id by key), `people` (profile id by
+ * Northstar person key) and the ids the workspace holds already
+ * (`present.projects`, `present.tasks`, `present.links`):
+ *
+ * - `projects`, the projects:create calls of Partner pilot and its
+ *   sub-project Field partners;
+ * - `tasks`, the issues:create calls, the family first, then its subtasks,
+ *   then each linked task, a group's one subtask after it;
+ * - `links`, the issues:addLink calls, each as the server stores it;
+ * - `expected`, what the family's window shows once all of it is there:
+ *   its subtask and link counts, Progress (`done` of `total`) and the Σ of
+ *   the unfinished subtasks' hours (`remaining`), which counts the review
+ *   time of a subtask created In Review without hours.
+ */
+export function planRelations({ org, projects, people, present }) {
+  const family = relationId('family')
+  const partnerRoot = relationId('project')
+  const partner = relationId('sub-project')
+  const placed = new Map(projects)
+  placed.set('PFLD', partner)
+  const person = (key) => people.get(key) ?? null
+  const plan = { projects: [], tasks: [], links: [] }
+  if (!present.projects.has(partnerRoot))
+    plan.projects.push({
+      id: partnerRoot,
+      org_id: org,
+      type: 'meta',
+      key: 'PART',
+      name: 'Partner pilot',
+      lead_id: person('nora'),
+      sort_order: 100,
+    })
+  if (!present.projects.has(partner))
+    plan.projects.push({
+      id: partner,
+      org_id: org,
+      type: 'project',
+      parent_id: partnerRoot,
+      key: 'PFLD',
+      name: 'Field partners',
+      lead_id: person('nora'),
+      sort_order: 0,
+    })
+  const task = (fields) => {
+    if (!present.tasks.has(fields.id))
+      plan.tasks.push({ org_id: org, priority: 'medium', ...fields })
+  }
+  task({
+    id: family,
+    project_id: placed.get('FW'),
+    title: 'Coordinate the pilot firmware release',
+    // room under the cap for images pasted into it
+    description: threeByteText(LIMITS.description.max - FAMILY_ROOM),
+    status: 'progress',
+    priority: 'high',
+    assignee_id: person('aisha'),
+  })
+  let done = 0
+  let remaining = 0
+  for (let n = 0; n < LIMITS.subtasks.max; n++) {
+    const status = STATUSES[n % STATUSES.length]
+    const owners = RELATION_OWNERS.subtasks
+    const owner = owners[Math.floor(n / STATUSES.length) % owners.length]
+    const hours = n % 3 === 0 ? (n % 7) + 1 : null
+    if (status === 'done') done++
+    else remaining += hours ?? (status === 'review' ? REVIEW_HOURS : 0)
+    task({
+      id: relationId(`subtask ${n}`),
+      project_id: placed.get('FW'),
+      parent_id: family,
+      title: seededTitle(n + 2000),
+      description: threeByteText(LIMITS.description.max),
+      status,
+      priority: PRIORITIES[n % PRIORITIES.length],
+      assignee_id: person(owner),
+      // a reviewer owns a task In Review: the next owner in turn
+      reviewer_id: status === 'review' ? person(owners[(owners.indexOf(owner) + 1) % 5]) : null,
+      remaining_hours: hours,
+    })
+  }
+  for (let e = 0; e < LIMITS.links.max; e++) {
+    const area = e < 70 ? 'sensor' : e < 85 ? 'cloud' : 'partner'
+    const key =
+      area === 'partner' ? 'PFLD' : RELATION_PLACES[area][e % RELATION_PLACES[area].length]
+    const owners = RELATION_OWNERS[area]
+    const end = relationId(`linked ${e}`)
+    task({
+      id: end,
+      project_id: placed.get(key),
+      title:
+        area === 'partner'
+          ? `Confirm the Fjordline partner visit ${e - 84}`
+          : seededTitle(e + 3000),
+      description: `Linked to the pilot firmware release by board-scale-seed, link ${e + 1}.`,
+      status: STATUSES[(e + 2) % STATUSES.length],
+      assignee_id: person(owners[e % owners.length]),
+    })
+    // a few linked tasks are groups, each with one subtask
+    if (e % 20 === 7)
+      task({
+        id: relationId(`linked ${e} subtask`),
+        project_id: placed.get(key),
+        parent_id: end,
+        title:
+          area === 'partner' ? `Book the Fjordline partner room ${e - 84}` : seededTitle(e + 4000),
+        status: 'todo',
+        assignee_id: person(owners[e % owners.length]),
+      })
+    const id = relationId(`link ${e}`)
+    if (present.links.has(id)) continue
+    // Blocks, Blocked by and Relates to in turn, stored as the server
+    // stores them: blocks from its source, relates from the smaller id
+    const kind = e % 3
+    const [source_id, target_id] =
+      kind === 0 ? [family, end] : kind === 1 ? [end, family] : [family, end].sort()
+    plan.links.push({
+      id,
+      org_id: org,
+      source_id,
+      target_id,
+      type: kind === 2 ? 'relates' : 'blocks',
+    })
+  }
+  return {
+    ...plan,
+    expected: {
+      family,
+      subtasks: LIMITS.subtasks.max,
+      links: LIMITS.links.max,
+      done,
+      total: LIMITS.subtasks.max,
+      remaining: Math.round(remaining * 10) / 10,
+    },
+  }
 }
 
 /** The --inbox comments for `count` of the seeded tasks `present`
@@ -500,8 +704,10 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   })
   const actor = people.page.find((profile) => profile.email === ACTOR && profile.auth_user_id)
   if (!actor) throw new DemoCliError('Seed Northstar first: marketing-demo.mjs seed --local.')
-  // the workspace leaves archived tasks out, so the admin reads them here
+  // the workspace leaves archived tasks out, and the links to them, so the
+  // admin reads them here
   const archived = await archivedTasksOf(client, actor.org_id)
+  const storedLinks = options.relations ? await linkIdsOf(client, actor.org_id) : new Set()
   client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
   const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
@@ -598,12 +804,146 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
     }
   }
   log(`Done: ${made} seeded tasks added in Northstar on ${target.url}.`)
+  if (options.relations)
+    await seedRelations({
+      client,
+      org,
+      snapshot,
+      joined,
+      archived,
+      storedLinks,
+      people: people.page,
+      actor,
+      target,
+      log,
+    })
   if (options.archived > 0) {
     const parents = new Set([...issues, ...archived].map((task) => task.parent_id).filter(Boolean))
     await seedArchive(planArchive(options.archived, seeded, parents), { client, org, target, log })
   }
   if (options.inbox > 0)
     await seedInbox(options.inbox, { client, target, people: people.page, actor, org, log })
+}
+
+/** The ids of every link row of organization `org`, as the local admin
+    reads the table: the workspace leaves out a link to an archived task,
+    whose id stays taken. */
+async function linkIdsOf(client, org) {
+  return new Set(
+    (await tableRows(client, 'issue_links')).filter((l) => l.org_id === org).map((l) => l.id),
+  )
+}
+
+/* Adds the --relations rows still missing (planRelations) through
+   `client`, which acts as Nora, reading what is there from the workspace
+   `snapshot` Nora sees, the `archived` tasks and `storedLinks` link ids the
+   admin read, and the Northstar people by their demo addresses. Archived
+   work stays as it is: the seed restores and recreates none of it, and
+   says what that leaves out of the task's lists. */
+async function seedRelations({
+  client,
+  org,
+  snapshot,
+  joined,
+  archived,
+  storedLinks,
+  people,
+  actor,
+  target,
+  log,
+}) {
+  const archivedIds = new Set(archived.map((task) => task.id))
+  if (archivedIds.has(relationId('family'))) {
+    log('The --relations task is archived; the seed leaves it and its rows as they are.')
+    return
+  }
+  const projects = joined('projects')
+  const byKey = new Map(
+    projects
+      .filter((project) => project.type === 'project')
+      .map((project) => [project.key, project.id]),
+  )
+  const keys = new Map(
+    people
+      .filter((profile) => profile.org_id === org && profile.email?.endsWith('@demo.qivo.io'))
+      .map((profile) => [profile.email.split('@')[0], profile.id]),
+  )
+  keys.set('nora', actor.id)
+  const plan = planRelations({
+    org,
+    projects: byKey,
+    people: keys,
+    present: {
+      projects: new Set(projects.map((project) => project.id)),
+      tasks: new Set([...joined('issues').map((task) => task.id), ...archivedIds]),
+      // a link row in the workspace carries no organization; Nora sees only
+      // her own links
+      links: new Set([
+        ...[...snapshot.links, ...(snapshot.more?.links ?? []).flat()].map((l) => l.id),
+        ...storedLinks,
+      ]),
+    },
+  })
+  // what archiving took out of the task's lists, which stays out
+  const whole = planRelations({
+    org,
+    projects: byKey,
+    people: keys,
+    present: { projects: new Set(), tasks: new Set(), links: new Set() },
+  })
+  const family = whole.expected.family
+  const gone = {
+    subtasks: whole.tasks.filter((t) => t.parent_id === family && archivedIds.has(t.id)).length,
+    links: whole.links.filter((l) =>
+      archivedIds.has(l.source_id === family ? l.target_id : l.source_id),
+    ).length,
+  }
+  if (gone.subtasks || gone.links)
+    log(
+      `${gone.subtasks} of its subtasks and ${gone.links} of its linked tasks are archived, and the seed leaves them so.`,
+    )
+  log(
+    `${plan.projects.length} projects, ${plan.tasks.length} tasks and ${plan.links.length} links to add for --relations.`,
+  )
+  const calls = [
+    ...plan.projects.map((fields) => ['projects:create', fields]),
+    ...plan.tasks.map((fields) => ['issues:create', fields]),
+    ...plan.links.map((fields) => ['issues:addLink', fields]),
+  ]
+  for (const [name, fields] of calls) {
+    try {
+      await client.mutation(ref(name), fields)
+    } catch (error) {
+      throw new DemoCliError(
+        `${name} refused "${fields.title ?? fields.name ?? fields.id}": ${error.data?.message ?? error.message}`,
+      )
+    }
+  }
+  const { expected } = plan
+  const shown = {
+    subtasks: expected.subtasks - gone.subtasks,
+    links: expected.links - gone.links,
+  }
+  log(
+    gone.subtasks || gone.links
+      ? `Done: the task ${expected.family} has ${shown.subtasks} active subtasks and ${shown.links} links to active tasks on ${target.url}.`
+      : `Done: the task ${expected.family} has ${expected.subtasks} subtasks and ${expected.links} links on ${target.url}; its window shows ${expected.done} of ${expected.total} tasks done and Σ ${expected.remaining}h.`,
+  )
+  // The app's task windows range over window keys, which the server sets
+  // at random (convex/lib/db.ts newWindowKey), so the task's key, not its
+  // id, says which stage of a staged load brings it.
+  client.setAdminAuth(target.key)
+  const row = (await tableRows(client, 'issues')).find((task) => task.id === expected.family)
+  client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
+  if (row?.window_key) log(windowKeyNote(row.window_key))
+}
+
+/** What the seed says of the --relations task's window key `key`: how far
+    into the key space it is. A workspace that loads in stages watches its
+    task windows from the lowest keys up (src/store/liveParts.ts STAGES). */
+export function windowKeyNote(key) {
+  const share = Math.round((Number.parseInt(key, 16) / 2 ** 32) * 100)
+  return `Its window key is ${key}, ${share}% into the key space. A workspace that loads in stages watches its task windows from the lowest keys up, so a lower key arrives in an earlier stage.`
 }
 
 /* Archives the tasks `ids` (planArchive) through `client`, which acts as

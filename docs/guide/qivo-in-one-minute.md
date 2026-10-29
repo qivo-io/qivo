@@ -19,7 +19,10 @@ the bottom of the page says **Loading tasks…** with how far it has got.
 Until it is gone, the Board and the task list show the tasks that have
 arrived, without counts, and search notes that more results may come. The
 Overview, the Roadmap and Team sync open once every task has loaded, and so
-do moving, archiving and deleting a task. Settings opens at once, but its
+do moving, archiving and deleting a task. An open task's subtasks, linked
+tasks and attachments load on their own, and removing one that has not
+arrived yet waits for it.
+Settings opens at once, but its
 Teams, Projects and Labels pages wait for every task. A
 link to one task opens once every task has loaded. If loading stops, the
 note says how far it got, and a notice explains what went wrong.

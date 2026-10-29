@@ -321,10 +321,29 @@ stopped run saved without all its calls stays as it is, and its number gets
 a new credential named with the next try, such as `(scale 7, try 2)`, with
 all its calls. The seed deletes and changes no credential.
 
+`--relations` adds one task at both per-task caps, for checking the task
+window's **Subtasks**, **Linked tasks** and **Attachments** at scale (with
+`--tasks 0` for no other tasks). As Nora, through the app's own mutations,
+it makes a new top-level task in Firmware, **Coordinate the pilot firmware
+release**, with 100 active subtasks and 100 links. The subtasks take every
+status and five owners in turn, every third has remaining hours, and they
+have 20,000-character descriptions in a three-byte script, so the task's
+window shows 20 of 100 tasks done and Σ 133h. The task's own description is
+500 characters shorter, which leaves room to paste images into it. Each link goes to a
+task made for it: 70 in Luma Sensor's sub-projects, 15 in Luma Cloud's and
+Pilot & Launch's, and 15 in **Partner pilot**, a project the seed makes that
+only Nora sees, so anyone else who is no organization admin finds those
+links left out. Five of the linked tasks have one subtask each. The run
+ends by naming the task's window key, which the backend chose: a workspace
+that loads in stages (`--tasks 6000` or more) watches its task windows from
+the lowest keys up, so the key says which stage brings the task. A second
+run adds only what is missing. It leaves archived subtasks and linked tasks
+archived and says how many of them the task's window no longer lists.
+
 One run makes the credentials first, each as the login that makes it in
-the app, then the tasks and the archiving as Nora, and posts the inbox
-comments last, each as its poster, so they land on tasks that stay active
-and arrive unread.
+the app, then the tasks and the relations and the archiving as Nora, and
+posts the inbox comments last, each as its poster, so they land on tasks
+that stay active and arrive unread.
 
 ## Production release
 
