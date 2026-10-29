@@ -296,7 +296,54 @@ export const isAccessUnchecked = (e: unknown): e is ConvexError<Refusal> =>
  * SEARCH_RESERVE's extra 2 MiB, the shared reads in lib/taskWindow.ts
  * TASK_WINDOW and internal/adminAccessReport.ts ROOM. Past any other bound
  * the question refuses.
- */
+ *
+ * What one instance reads, at these values, in index ranges and documents
+ * as Convex counts them. Rows of the person's own (grants, memberships,
+ * shares, reach rows) hold ids, a level and a name key, a few hundred bytes
+ * at ordinary name lengths and up to about 3 KB at the 80-character name
+ * caps, so their bytes follow their documents.
+ *
+ * - One question, a project not asked before: its project and its parent,
+ *   the person's grant on each and the team shares on each, at most 6
+ *   ranges and 134 documents (2 + 2 + 2 × 65), none of the grants and
+ *   shares once those are known at once. A top-level project that shows
+ *   only for navigation adds, from reach rows, at most 5 ranges of child
+ *   rows (9 documents) and 4 sub-projects' checks of at most 3 ranges and
+ *   67 documents each, so 17 ranges and 277 documents; on the legacy path,
+ *   1 range and up to 4,001 sub-projects or 4 MiB.
+ * - Once an instance, beside its questions: membership asked team by team,
+ *   at most 65 ranges, each team of theirs a share names checked once, one
+ *   range a team, and the teams asked one by one past projectShares, at
+ *   most 128 ranges and 256 documents.
+ * - Once an instance, in `shared`: the steps' grants and memberships (6
+ *   ranges, 1,350 documents), their teams' shares (one range a team, 1,001
+ *   documents, read once for the steps, sharesOn and the legacy path), the
+ *   readiness row (1, 1) and the legacy path's grants (1, 1,001). The reach
+ *   path adds all their memberships, at most 65 (1 range) and the root
+ *   rows (65 ranges, 1,001): at most 139 ranges and 5,443 documents, the
+ *   organization's teams for a parent it hands to the legacy path
+ *   included. Past navTeams the legacy path adds the memberships, at most
+ *   257, and the organization's teams (1 range, 4,001 rows, 512 KiB): at
+ *   most 266 ranges and 7,611 documents, or 522 ranges where the
+ *   organization's teams are past their bounds and each team is read by
+ *   itself. Past `teams` teams it refuses after the memberships (4,001), at
+ *   most 9 ranges and 6,353 documents. So one instance reads at most 266
+ *   ranges and 7,611 documents in `shared`, 522 ranges in that one case.
+ *
+ * A caller keeps room for those past its last look at its reads. A
+ * workspace part's batch of 64 questions (lib/workspaceParts.ts PAGE.batch)
+ * takes at most 384 ranges and 8,576 documents of questions, and with every
+ * shared and instance read in the same batch 843 ranges and 16,508
+ * documents, past the 896 and 16,000 Convex leaves past PAGE.hard by 508
+ * documents. That needs a person in 65 to 256 teams with hundreds of
+ * grants, whose first navigation question comes after PAGE.hard's last
+ * look in a window of projects each shared with 64 teams; the person of the
+ * review's finding (20 teams of 1,600 shares) reads 25 ranges and 1,342
+ * documents in `shared`. A batch of navigation questions whose reach rows
+ * fail (stale rows, a viewer's leads) can take 17 ranges a question more,
+ * and on the legacy path a parent's sub-projects, as at the release before
+ * these bounds. lib/mainSearch.ts searchReads lowers them for main Search,
+ * whose one check and its shared reads stay inside SEARCH_RESERVE. */
 export const OWN_READS = {
   steps: [32, 128, 512],
   lookups: 64,
