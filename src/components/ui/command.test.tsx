@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useLayoutEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Command, CommandInput, CommandItem, CommandList } from './command'
+import { Command, CommandDialog, CommandInput, CommandItem, CommandList } from './command'
 
 /* The keys of a command list, which the palette, the assignee picker and the
    admin Backgrounds picker use. The arrows move the selection and Enter
@@ -86,5 +86,59 @@ describe('command list keys', () => {
       expect(selected(), `Ctrl+${key.toUpperCase()}`).toBe('Bo')
     }
     expect(chosen).toEqual([])
+  })
+})
+
+describe('a command dialog that controls its selection', () => {
+  it('selects the value it is given, and reports the arrows', async () => {
+    let show: (names: string[], first: string) => void = () => {}
+    const reported: string[] = []
+    /** A dialog whose owner sets the rows and selects their first, as the
+        Search palette does with each page that arrives. */
+    function Owner() {
+      const [names, setNames] = useState(['Ada', 'Bo'])
+      const [value, setValue] = useState('Bo')
+      useLayoutEffect(() => {
+        show = (next, first) => {
+          setNames(next)
+          setValue(first)
+        }
+      })
+      return (
+        <CommandDialog
+          open
+          shouldFilter={false}
+          value={value}
+          onValueChange={(next) => {
+            reported.push(next)
+            setValue(next)
+          }}
+        >
+          <CommandInput aria-label="Find a person" />
+          <CommandList>
+            {names.map((name) => (
+              <CommandItem key={name} value={name}>
+                {name}
+              </CommandItem>
+            ))}
+          </CommandList>
+        </CommandDialog>
+      )
+    }
+    await act(async () => root.render(<Owner />))
+    const inDialog = () => document.querySelector('[cmdk-item][data-selected="true"]')?.textContent
+    expect(inDialog()).toBe('Bo')
+    // a newer page that still holds the selected row selects its first one
+    await act(async () => show(['Cy', 'Bo', 'Di'], 'Cy'))
+    expect(inDialog()).toBe('Cy')
+    const field = document.querySelector<HTMLInputElement>('[aria-label="Find a person"]')
+    if (!field) throw new Error('missing the search field')
+    await act(async () =>
+      field.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }),
+      ),
+    )
+    expect(inDialog()).toBe('Bo')
+    expect(reported.at(-1)).toBe('Bo')
   })
 })

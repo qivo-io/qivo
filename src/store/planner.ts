@@ -5212,6 +5212,31 @@ export type ProjectPlace = { project: ProjectVM; owner: ProjectVM | null }
     of organization `org`, a top-level project standing for its
     sub-projects, or, chosen on purpose, every project of `org`. */
 export type ArchivedScope = { org: string; projectIds: string[] } | { org: string; all: true }
+type SearchPageData = FunctionReturnType<typeof api.search.page>
+/** A narrower scope for main Search (P.fetchSearchPage) than every
+    organization: one organization, and in it one project. */
+export type SearchScope = NonNullable<FunctionArgs<typeof api.search.page>['scope']>
+/** A task result of main Search, with its display key ("QN-12") and the
+    handle the app opens it by (handleFor). */
+export type SearchTaskRow = Extract<SearchPageData['rows'][number], { kind: 'task' }> & {
+  key: string
+  handle: string
+}
+/** A project result of main Search, as the server sends it. */
+export type SearchProjectRow = Extract<SearchPageData['rows'][number], { kind: 'project' }>
+export type SearchRow = SearchTaskRow | SearchProjectRow
+/** What P.fetchSearchPage answers: a page; a refusal with its code and
+    sentence, `bad_request` for a cursor of another search and `rule` for a
+    text past LIMITS.search; or a failed read. */
+export type SearchPageAnswer =
+  | {
+      state: 'ok'
+      rows: SearchRow[]
+      nextCursor: string | null
+      coverage: SearchPageData['coverage']
+    }
+  | { state: 'refused'; code: 'bad_request' | 'rule'; message: string }
+  | { state: 'failed' }
 export type ProjectPatch = Partial<{
   name: string
   lead: string | null
@@ -7371,6 +7396,45 @@ export const PLANNER = {
     if (data === null) return { row: null }
     const key = `${ISSUE_PREFIX}-${data.num}`
     return { row: shapeArchivedIssue(data, handleFor(data.id, data.org_id, key), key) }
+  },
+  /** One page of main Search for `text` (search:page): task and project
+      results ranked together across every organization of this login, or
+      the narrower `scope`, with archived tasks when `includeArchived`, from
+      `cursor`, the next_cursor of the page before (none for the first). A
+      task row gains its display key and the handle the app opens it by,
+      the key for a home organization's task and the uuid for another's. A
+      refusal answers its code and sentence, and any other failure
+      `failed`. One-shot, never part of the snapshot, so a hidden tab reads
+      nothing. */
+  fetchSearchPage: async (
+    text: string,
+    o: { includeArchived: boolean; scope?: SearchScope | null; cursor?: string | null },
+  ): Promise<SearchPageAnswer> => {
+    try {
+      const data = await convex.query(api.search.page, {
+        text,
+        include_archived: o.includeArchived,
+        ...(o.scope ? { scope: o.scope } : {}),
+        ...(o.cursor ? { cursor: o.cursor } : {}),
+      })
+      // shaped inside the try, so an answer of another shape is a failure
+      return {
+        state: 'ok',
+        rows: data.rows.map((row) => {
+          if (row.kind !== 'task') return row
+          const key = `${ISSUE_PREFIX}-${row.num}`
+          return { ...row, key, handle: handleFor(row.id, row.org_id, key) }
+        }),
+        nextCursor: data.next_cursor,
+        coverage: data.coverage,
+      }
+    } catch (e) {
+      const { code, message } = errData(e)
+      if (code === 'bad_request' || code === 'rule')
+        return { state: 'refused', code, message: asSentence(message || 'Search refused this.') }
+      console.error('[qivo] search failed:', e)
+      return { state: 'failed' }
+    }
   },
   /** Whether the snapshot holds task `uuid` as an active task, such as an
       archived one that someone restored. A task it holds is active even

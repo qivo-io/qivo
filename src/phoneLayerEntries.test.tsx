@@ -150,7 +150,27 @@ async function boot(address: string, phone: boolean, second = false) {
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     return () => {}
   })
-  network.query.mockResolvedValue(null)
+  // main Search (search:page) answers the tasks whose titles hold every
+  // word of the text, in the Work sub-project
+  network.query.mockImplementation(async (ref, args) => {
+    if (getFunctionName(ref) !== 'search:page') return null
+    const words: string[] = args.text.toLowerCase().split(/\s+/).filter(Boolean)
+    const rows = snap.issues
+      .filter((issue) => words.every((word) => issue.title.toLowerCase().includes(word)))
+      .map((issue) => ({
+        kind: 'task',
+        org_id: issue.org_id,
+        id: issue.id,
+        num: issue.num,
+        title: issue.title,
+        status: issue.status,
+        is_group: false,
+        archived: false,
+        project: { id: 'work', name: 'Work' },
+        parent: { id: base.id, name: base.name },
+      }))
+    return { rows, next_cursor: null, coverage: { complete: true } }
+  })
   network.mutation.mockImplementation((ref) =>
     getFunctionName(ref).startsWith('comments:') ? new Promise(() => {}) : Promise.resolve(null),
   )

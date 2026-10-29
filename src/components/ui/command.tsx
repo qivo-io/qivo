@@ -28,6 +28,9 @@ function Command({ className, ...props }: React.ComponentProps<typeof CommandPri
   )
 }
 
+/* A command list in a dialog. `value` and `onValueChange` control which
+   item is selected, as on Command, for a list that chooses its selection
+   itself, such as the first row of each page that arrives. */
 function CommandDialog({
   title = 'Command Palette',
   description = 'Search for a command to run...',
@@ -35,6 +38,8 @@ function CommandDialog({
   className,
   showCloseButton = true,
   shouldFilter,
+  value,
+  onValueChange,
   onOpenAutoFocus,
   onCloseAutoFocus,
   ...props
@@ -44,6 +49,8 @@ function CommandDialog({
   className?: string
   showCloseButton?: boolean
   shouldFilter?: React.ComponentProps<typeof CommandPrimitive>['shouldFilter']
+  value?: React.ComponentProps<typeof CommandPrimitive>['value']
+  onValueChange?: React.ComponentProps<typeof CommandPrimitive>['onValueChange']
   onOpenAutoFocus?: React.ComponentProps<typeof DialogContent>['onOpenAutoFocus']
   onCloseAutoFocus?: React.ComponentProps<typeof DialogContent>['onCloseAutoFocus']
 }) {
@@ -63,7 +70,12 @@ function CommandDialog({
           event.stopPropagation()
         }}
       >
-        <Command shouldFilter={shouldFilter} className="bg-inherit">
+        <Command
+          shouldFilter={shouldFilter}
+          value={value}
+          onValueChange={onValueChange}
+          className="bg-inherit"
+        >
           {children}
         </Command>
       </DialogContent>
