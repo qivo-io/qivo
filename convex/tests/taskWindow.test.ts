@@ -238,6 +238,7 @@ async function plantWorld(t: T, f: OrgFixture) {
   const archived = await task(f.sub, { title: 'Archived', archived_at: NOW })
   // restored before its archive marks were cleared
   const marked = await task(f.sub, { title: 'Marked', relations_marked: true })
+  const markedToo = await task(f.sub, { title: 'Also marked', relations_marked: true })
   const gone = uuid()
   const links = await t.run(async (ctx) => {
     const rows = {
@@ -249,6 +250,11 @@ async function plantWorld(t: T, f: OrgFixture) {
       toGone: linkRow(f, parent, gone),
       fromHidden: linkRow(f, hiddenParent, parent.id),
       fromMarked: linkRow(f, marked, parent.id, { task_archived: true }),
+      // marked links into the restored task: the tasks part sends the one
+      // from an unflagged source with the flagged task, and the one between
+      // two flagged tasks with its source
+      intoMarked: linkRow(f, kids.shown, marked.id, { task_archived: true }),
+      markedToMarked: linkRow(f, marked, markedToo.id, { task_archived: true }),
       toMeta: linkRow(f, parent, onMeta.id, { created_at: '2025-12-31T00:00:00.000Z' }),
     }
     for (const row of Object.values(rows)) await ctx.db.insert('issue_links', row)
@@ -313,6 +319,7 @@ async function plantWorld(t: T, f: OrgFixture) {
     onMeta,
     archived,
     marked,
+    markedToo,
     gone,
     links,
   }
@@ -322,9 +329,14 @@ describe('parity with the tasks part', () => {
   it('answers what the tasks part says of every task, for guest, viewer, member and admin seats', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await plantWorld(t, f)
+    const w = await plantWorld(t, f)
     for (const person of [f.guest, f.viewer, f.user, f.admin])
       expect(await expectParity(t, f.org.id, person), person.name).toBeGreaterThan(5)
+    // the part sends each marked link once: into the restored task from an
+    // unflagged source with that task, and between flagged tasks with its source
+    const part = await tasksPart(as(t, f.guest), f.org.id)
+    for (const link of [w.links.intoMarked, w.links.markedToMarked, w.links.fromMarked])
+      expect(part.links.filter((row) => row.id === link.id)).toHaveLength(1)
   }, 120_000)
 
   it('answers what the tasks part says of every Northstar task, for every person', async () => {
