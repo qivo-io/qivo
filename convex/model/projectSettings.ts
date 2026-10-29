@@ -3,8 +3,12 @@
  * lists, the Add team or user picker, the lead pickers and the invite form's
  * lookup of one address. The grant readers (userGrantBatch, teamShareBatch)
  * check no access, so REST and MCP project details can page grants with
- * them behind their own gate. Nothing here reads a task, a comment, a file,
- * a milestone or a project's list of sub-projects.
+ * them behind their own gate. Nothing here reads a task, a comment, a file
+ * or a milestone. The gate reads a top-level project's sub-projects, in one
+ * range, only to decide whether the project shows to a caller without a
+ * level of their own for navigation, with the caller's own grants,
+ * memberships and team shares (lib/access.ts accessOf); it reads nothing
+ * else about them.
  *
  * One gate (settingsGate) decides who reads a project: whoever sees it
  * (lib/access.ts projectLevel, navigation included, the rule behind
