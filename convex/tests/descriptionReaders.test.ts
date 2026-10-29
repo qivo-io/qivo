@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { MARKETING_DEMO } from '../internal/marketingDemoData'
+import { MARKETING_DEMO, resolveMentions } from '../internal/marketingDemoData'
 import {
   accessFlags,
   asMachineCaller,
@@ -55,7 +55,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
-import { plantNorthstar } from './northstar.setup'
+import { northstarId, plantNorthstar } from './northstar.setup'
 
 const whole: IdWindow = { from: '', to: null }
 const DEFAULT_TEXT_READS = TEXT_TASK_READS.reads
@@ -701,11 +701,27 @@ describe('Northstar', () => {
       }),
     )
     // the seed writes each text to its row alone, the one the seed data
-    // holds for the task of that number
+    // holds for the task of that number, with each mention naming its
+    // person's profile
+    const personIds = new Map(
+      await Promise.all(
+        MARKETING_DEMO.people.map(
+          async (p) => [p.key, await northstarId(`person:${p.key}`)] as const,
+        ),
+      ),
+    )
     expect(texts.size).toBe(MARKETING_DEMO.issues.length)
     for (const { row, task, num } of texts.values()) {
       expect(task).toBeNull()
-      expect(row).toBe(cleanDescription(MARKETING_DEMO.issues[num - 1].description))
+      expect(row).toBe(
+        cleanDescription(
+          resolveMentions(MARKETING_DEMO.issues[num - 1].description, (key) => {
+            const id = personIds.get(key)
+            if (id === undefined) throw new Error(`no person ${key}`)
+            return id
+          }),
+        ),
+      )
     }
     expect([...texts.values()].filter(({ row }) => row !== '').length).toBeGreaterThan(50)
     const admin = profiles.find((p) => p.org_role === 'admin' && p.kind === 'person')
