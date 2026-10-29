@@ -339,7 +339,7 @@ const BATCH_GUARD_ROWS = 100
  * projects in one transaction, with their reach rows written together once
  * they are all in: a removal that keeps many people as Viewers
  * (model/projectAccess.ts removeAndSettle), and the access maps of a new
- * project or a project update (model/projects.ts). insertGrant's recompute
+ * project and a lead handover (model/projects.ts). insertGrant's recompute
  * reads several index ranges a grant, which hundreds of grants in one
  * transaction cannot afford. `finish` reads the rows of each kind of
  * grantee on each project, and on its top-level project, once, keeps them

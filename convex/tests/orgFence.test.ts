@@ -452,16 +452,33 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
         }),
       answer: { code: 'not_found', message: 'project not found' },
     },
+    // a person in a foreign org == a person that does not exist
+    {
+      name: 'projects.setAccess (foreign user)',
+      ref: () => f.otherAdmin.id,
+      call: (ref) =>
+        as(t, f.admin).mutation(api.projects.setAccess, {
+          org_id: f.org.id,
+          id: f.meta.id,
+          user_id: ref,
+          level: 'user',
+        }),
+      answer: { code: 'not_found', message: 'user not found' },
+    },
     // pa_insert's WITH CHECK (0081:275-283): grantee in a foreign org ==
     // grantee that does not exist
     {
-      name: 'projects.update (foreign grantee in the access map)',
+      name: 'projects.create (foreign grantee in the access map)',
       ref: () => f.otherAdmin.id,
       call: (ref) =>
-        as(t, f.admin).mutation(api.projects.update, {
+        as(t, f.admin).mutation(api.projects.create, {
           org_id: f.org.id,
-          id: f.meta.id,
-          patch: { access: { [ref]: 'user' } },
+          id: uuid(),
+          type: 'meta',
+          key: 'PRB',
+          name: 'Probe',
+          sort_order: 50,
+          access: { [ref]: 'user' },
         }),
       answer: {
         code: 'forbidden',

@@ -32,7 +32,8 @@
  *
  * The old client's accessGate ordering (a lead handover's demotion row had to
  * land before the lead_id update or RLS refused the grant writes) is NOT
- * ported — field patch and access diff commit in one mutation. */
+ * ported — the field patch and the handover's grants commit in one
+ * mutation. */
 
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
@@ -97,13 +98,12 @@ async function myProject(ctx: MeCtx, id: string): Promise<Doc<'projects'>> {
   return project
 }
 
-/* The access-map values a client may send: stored grants are vGrantLevel
- * only (project_access_level_ck, 0013→0098); 'lead' entries are legal on the
- * wire and DROPPED — the lead is carried by lead_id, never a grant row. On
- * create, null names no grant, which for the creator also declines the User
- * grant a creator who names someone else as lead gets by default
+/* The access-map values create accepts: stored grants are vGrantLevel only
+ * (project_access_level_ck, 0013→0098); 'lead' entries are legal on the
+ * wire and DROPPED — the lead is carried by lead_id, never a grant row. Null
+ * names no grant, which for the creator also declines the User grant a
+ * creator who names someone else as lead gets by default
  * (lib/projectGrants.ts creatorGrant). */
-const vAccessMap = v.record(v.string(), v.union(vGrantLevel, v.literal('lead')))
 const vCreateAccessMap = v.record(v.string(), v.union(vGrantLevel, v.literal('lead'), v.null()))
 const vTeamAccessMap = v.record(v.string(), vGrantLevel)
 
@@ -155,10 +155,9 @@ export const create = orgMutation({
 /* ----------------------------------------------------------------- update
  * P.updateProject through model/projects.ts updateProjectCore: field patch
  * in ONE mutation, one narration. KEY CHANGE IS ALLOWED — issue refs are
- * QN-num since 0050 — with shape and uniqueness revalidated. The access and
- * team_access maps are kept for one release for clients from before
- * setAccess. They may give or change grants but never remove one
- * (ACCESS_MAP_REMOVES). */
+ * QN-num since 0050 — with shape and uniqueness revalidated. A lead
+ * handover moves the outgoing and incoming leads' own grants; setAccess and
+ * removeAccess change every other grant and share. */
 export const update = orgMutation({
   args: {
     id: v.string(),
@@ -169,8 +168,6 @@ export const update = orgMutation({
       key: v.optional(v.string()),
       track_delay: v.optional(v.boolean()),
       review_hours: v.optional(v.union(v.number(), v.null())),
-      access: v.optional(vAccessMap),
-      team_access: v.optional(vTeamAccessMap),
     }),
     expected: v.optional(vProjectExpected),
   },
@@ -192,9 +189,8 @@ export const update = orgMutation({
  * team `level` on the project, or changes the level they have
  * (model/projectAccess.ts setProjectGrantCore, which REST and MCP use too).
  * Naming the one grant it changes, it cannot drop a grant someone else
- * added meanwhile, as a whole access map from a stale page could. A person
- * or team outside the organization reads as not found. Returns whether
- * anything changed. */
+ * added meanwhile. A person or team outside the organization reads as not
+ * found. Returns whether anything changed. */
 export const setAccess = orgMutation({
   args: {
     id: v.string(),

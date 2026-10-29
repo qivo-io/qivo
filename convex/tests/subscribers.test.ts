@@ -140,10 +140,11 @@ describe('task subscriber popover', () => {
       profile_id: teammate.id,
       is_leader: true,
     })
-    await as(t, f.admin).mutation(api.projects.update, {
+    await as(t, f.admin).mutation(api.projects.setAccess, {
       org_id: f.org.id,
       id: f.meta.id,
-      patch: { team_access: { [sharedTeamId]: 'viewer' } },
+      team_id: sharedTeamId,
+      level: 'viewer',
     })
     expect((await roster(f.user)).candidates).toContain(teammate.id)
     // Leadership of a shared team grants visibility, not managing authority.

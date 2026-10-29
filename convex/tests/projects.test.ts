@@ -407,182 +407,78 @@ describe('projects.update', () => {
     )
   })
 
-  it('access diff upserts in one mutation and outranks the rename event, but never removes', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const grantsOnMeta = () =>
-      t.run(async (ctx) =>
-        (
-          await ctx.db
-            .query('project_access')
-            .withIndex('by_project', (q) => q.eq('project_id', f.meta.id))
-            .collect()
-        ).map((g) => [g.profile_id, g.level]),
-      )
-    const before = await grantsOnMeta()
-    // a map from before someone else gave the viewer access would drop it
-    await expectRefusal(
-      as(t, f.admin).mutation(api.projects.update, {
+  it.each(['admin', 'user'] as const)(
+    'a top-level lead handover by the %s moves only the two leads’ own grants',
+    async (who) => {
+      const t = newT()
+      const f = await withOrg(t)
+      // TBED holds the guest's and the viewer's grants; the team gets a share
+      await as(t, f.admin).mutation(api.projects.setAccess, {
         org_id: f.org.id,
         id: f.meta.id,
-        patch: { name: 'Dropped', access: { [f.guest.id]: 'viewer' } },
-      }),
-      'rule',
-      /^an access map cannot remove access; remove it one person or team at a time$/,
-    )
-    expect(await grantsOnMeta()).toEqual(before)
-    await as(t, f.admin).mutation(api.projects.update, {
-      org_id: f.org.id,
-      id: f.meta.id,
-      patch: {
-        name: 'Renamed too',
-        access: { [f.guest.id]: 'viewer', [f.viewer.id]: 'user', [f.agent.id]: 'user' },
-      },
-    })
-    // guest's updated, the agent's added, the viewer's kept
-    expect((await grantsOnMeta()).sort()).toEqual(
-      [
-        [f.guest.id, 'viewer'],
-        [f.viewer.id, 'user'],
-        [f.agent.id, 'user'],
-      ].sort(),
-    )
-    const e = await lastEvent(t, f.org.id)
-    expect(e).toMatchObject({ verb: 'changed access on', label: 'Renamed too' })
-    const row = await t.run(async (ctx) =>
-      ctx.db
-        .query('projects')
-        .withIndex('by_uuid', (q) => q.eq('id', f.meta.id))
-        .unique(),
-    )
-    expect(row?.name).toBe('Renamed too')
-  })
-
-  it('a team_access map changes shares but never leaves one out', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const crew = uuid()
-    await t.run(async (ctx) => {
-      await ctx.db.insert('teams', {
-        id: crew,
-        org_id: f.org.id,
-        name: 'Crew',
-        track_delay_default: false,
-        created_at: f.org.created_at,
+        team_id: f.team.id,
+        level: 'viewer',
       })
-      for (const team_id of [f.team.id, crew])
-        await ctx.db.insert('project_team_access', {
-          project_id: f.meta.id,
-          team_id,
-          level: 'user',
-        })
-    })
-    const sharesOnMeta = () =>
-      t.run(async (ctx) =>
-        (
-          await ctx.db
-            .query('project_team_access')
-            .withIndex('by_project', (q) => q.eq('project_id', f.meta.id))
-            .collect()
-        )
-          .map((s) => [s.team_id, s.level])
-          .sort(),
-      )
-    const before = await sharesOnMeta()
-    // a map from before someone else shared the project with Crew
-    await expectRefusal(
-      as(t, f.admin).mutation(api.projects.update, {
+      const access = () =>
+        t.run(async (ctx) => ({
+          grants: (
+            await ctx.db
+              .query('project_access')
+              .withIndex('by_project', (q) => q.eq('project_id', f.meta.id))
+              .collect()
+          )
+            .map((g) => [g.profile_id, g.level])
+            .sort(),
+          shares: (
+            await ctx.db
+              .query('project_team_access')
+              .withIndex('by_project', (q) => q.eq('project_id', f.meta.id))
+              .collect()
+          ).map((s) => [s.team_id, s.level]),
+        }))
+      await as(t, f[who]).mutation(api.projects.update, {
         org_id: f.org.id,
         id: f.meta.id,
-        patch: { team_access: { [f.team.id]: 'viewer' } },
-      }),
-      'rule',
-      /^an access map cannot remove access; remove it one person or team at a time$/,
-    )
-    expect(await sharesOnMeta()).toEqual(before)
-    await as(t, f.admin).mutation(api.projects.update, {
-      org_id: f.org.id,
-      id: f.meta.id,
-      patch: { team_access: { [f.team.id]: 'viewer', [crew]: 'user' } },
-    })
-    expect(await sharesOnMeta()).toEqual(
-      [
-        [f.team.id, 'viewer'],
-        [crew, 'user'],
-      ].sort(),
-    )
-  })
+        patch: { lead_id: f.guest.id },
+      })
+      // the outgoing lead keeps User, the incoming lead's own grant goes,
+      // and the viewer's grant and the team's share stay as they were
+      expect(await access()).toEqual({
+        grants: [
+          [f.user.id, 'user'],
+          [f.viewer.id, 'user'],
+        ].sort(),
+        shares: [[f.team.id, 'viewer']],
+      })
+      expect(await lastEvent(t, f.org.id)).toMatchObject({ verb: 'changed the lead of' })
+    },
+  )
 
-  it('grants on a sub-project are scoped there; viewer grantees stay capped', async () => {
+  it('refuses an access or team_access map at the validator and writes nothing', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await as(t, f.admin).mutation(api.projects.update, {
-      org_id: f.org.id,
-      id: f.sub.id,
-      patch: { access: { [f.guest.id]: 'user' } },
-    })
-    const grant = await t.run((ctx) =>
-      ctx.db
-        .query('project_access')
-        .withIndex('by_project_profile', (q) =>
-          q.eq('project_id', f.sub.id).eq('profile_id', f.guest.id),
-        )
-        .unique(),
-    )
-    expect(grant?.level).toBe('user')
-    await expectRefusal(
-      as(t, f.admin).mutation(api.projects.update, {
-        org_id: f.org.id,
-        id: f.sub.id,
-        patch: { access: { [f.viewer.id]: 'user' } },
-      }),
-      'forbidden',
-      /^a viewer can only receive a viewer grant$/,
-    )
-    await expectRefusal(
-      as(t, f.guest).mutation(api.projects.update, {
-        org_id: f.org.id,
-        id: f.hidden.id,
-        patch: { access: { [f.viewer.id]: 'user' } },
-      }),
-      'forbidden',
-    )
-  })
-
-  it('who may grant: organization admins and project leads; the grantee must hold a seat in the org', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    // a 'user' grant on the meta is visibility, not lead standing
-    await expectRefusal(
-      as(t, f.guest).mutation(api.projects.update, {
-        org_id: f.org.id,
-        id: f.meta.id,
-        patch: { access: { [f.guest.id]: 'viewer' } },
-      }),
-      'forbidden',
-    )
-    // the project lead qualifies — and an access patch ALWAYS narrates, even
-    // when the diff is empty (lead handovers ride this branch, as before)
-    await as(t, f.user).mutation(api.projects.update, {
-      org_id: f.org.id,
-      id: f.meta.id,
-      patch: { access: { [f.guest.id]: 'user', [f.viewer.id]: 'user' } },
-    })
-    const e = await lastEvent(t, f.org.id)
-    expect(e).toMatchObject({
-      verb: 'changed access on',
-      actor_id: f.user.id,
-      target_id: f.meta.id,
-    })
-    // someone from a third org does not qualify as a grantee
-    await expectRefusal(
-      as(t, f.admin).mutation(api.projects.update, {
-        org_id: f.org.id,
-        id: f.meta.id,
-        patch: { access: { [f.otherAdmin.id]: 'user' } },
-      }),
-      'forbidden',
-    )
+    const state = () =>
+      t.run(async (ctx) => ({
+        project: await ctx.db.get(f.meta._id),
+        grants: await ctx.db.query('project_access').collect(),
+        shares: await ctx.db.query('project_team_access').collect(),
+        activity: await ctx.db.query('activity_events').collect(),
+      }))
+    const before = await state()
+    for (const patch of [
+      { access: { [f.agent.id]: 'user' } },
+      { access: { [f.guest.id]: 'viewer', [f.viewer.id]: 'user' } },
+      { team_access: { [f.team.id]: 'viewer' } },
+      { name: 'Renamed', access: {}, team_access: {} },
+    ])
+      await expect(
+        as(t, f.admin).mutation(api.projects.update, {
+          org_id: f.org.id,
+          id: f.meta.id,
+          patch: patch as never,
+        }),
+      ).rejects.toThrowError(/Validator error/)
+    expect(await state()).toEqual(before)
   })
 
   it("the access map speaks vGrantLevel (plus the dropped 'lead') only — anything else dies in the validator", async () => {
@@ -591,11 +487,12 @@ describe('projects.update', () => {
     // forged wire values a typed client could never send
     const admin = 'admin' as unknown as 'user'
     const member = 'member' as unknown as 'user' // the pre-0098 word is DEAD
+    // update takes no access map at all
     await expect(
       as(t, f.admin).mutation(api.projects.update, {
         org_id: f.org.id,
         id: f.meta.id,
-        patch: { access: { [f.guest.id]: admin } },
+        patch: { access: { [f.guest.id]: admin } } as never,
       }),
     ).rejects.toThrowError(/Validator error/)
     await expect(
@@ -716,42 +613,51 @@ describe('projects.setAccess', () => {
     expect(await grants(t, f.meta.id)).toEqual(before)
   })
 
-  it("keeps a grant given after a page loaded, which that page's access map would drop", async () => {
+  it('grants on a sub-project are scoped there; viewer grantees stay capped', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // the page loaded with the guest's and the viewer's grants; then the
-    // agent was given access
-    const stale = { [f.guest.id]: 'user' as const, [f.viewer.id]: 'user' as const }
-    await as(t, f.admin).mutation(api.projects.setAccess, {
-      org_id: f.org.id,
-      id: f.meta.id,
-      user_id: f.agent.id,
-      level: 'user',
-    })
-    const before = await grants(t, f.meta.id)
+    const set = (who: Doc<'profiles'>, id: string, user_id: string) =>
+      as(t, who).mutation(api.projects.setAccess, { org_id: f.org.id, id, user_id, level: 'user' })
+    await set(f.admin, f.sub.id, f.guest.id)
+    const grant = await t.run((ctx) =>
+      ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', f.sub.id).eq('profile_id', f.guest.id),
+        )
+        .unique(),
+    )
+    expect(grant?.level).toBe('user')
     await expectRefusal(
-      as(t, f.user).mutation(api.projects.update, {
+      set(f.admin, f.sub.id, f.viewer.id),
+      'forbidden',
+      /^a viewer can only receive a viewer grant$/,
+    )
+    await expectRefusal(set(f.guest, f.hidden.id, f.viewer.id), 'forbidden')
+  })
+
+  it('who may grant: organization admins and project leads; the grantee must hold a seat in the org', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const set = (who: Doc<'profiles'>, user_id: string, level: 'user' | 'viewer') =>
+      as(t, who).mutation(api.projects.setAccess, {
         org_id: f.org.id,
         id: f.meta.id,
-        patch: { access: { ...stale, [f.guest.id]: 'viewer' } },
-      }),
-      'rule',
-      /^an access map cannot remove access/,
-    )
-    expect(await grants(t, f.meta.id)).toEqual(before)
-    // a lead handed over in the same map still gives up their own grant
-    await as(t, f.user).mutation(api.projects.update, {
-      org_id: f.org.id,
-      id: f.meta.id,
-      patch: { lead_id: f.agent.id, access: { ...stale, [f.user.id]: 'user' } },
+        user_id,
+        level,
+      })
+    // a 'user' grant on the meta is visibility, not lead standing
+    await expectRefusal(set(f.guest, f.guest.id, 'viewer'), 'forbidden')
+    // the project lead qualifies
+    expect(await set(f.user, f.agent.id, 'user')).toEqual({ changed: true })
+    expect(await grants(t, f.meta.id)).toContainEqual([f.agent.id, 'user'])
+    expect(await lastEvent(t, f.org.id)).toMatchObject({
+      verb: 'changed access on',
+      actor_id: f.user.id,
+      target_id: f.meta.id,
     })
-    expect(await grants(t, f.meta.id)).toEqual(
-      [
-        [f.guest.id, 'user'],
-        [f.viewer.id, 'user'],
-        [f.user.id, 'user'],
-      ].sort(),
-    )
+    // someone from a third org does not qualify as a grantee
+    await expectRefusal(set(f.admin, f.otherAdmin.id, 'user'), 'not_found', /^user not found$/)
   })
 })
 
@@ -894,7 +800,7 @@ describe('project description limits', () => {
   )
 
   it.each(['meta', 'project'] as const)(
-    'refuses an oversized %s description atomically with other settings and grants',
+    'refuses an oversized %s description atomically with other settings and a lead handover',
     async (type) => {
       const t = newT()
       const f = await withOrg(t)
@@ -908,15 +814,10 @@ describe('project description limits', () => {
             patch: {
               name: 'Renamed',
               key: 'EDIT',
-              lead_id: f.user.id,
+              // a handover that would move grants on TBED
+              lead_id: f.guest.id,
               track_delay: true,
               review_hours: 4,
-              ...(type === 'meta'
-                ? {
-                    access: { [f.guest.id]: 'viewer' as const },
-                    team_access: { [f.team.id]: 'viewer' as const },
-                  }
-                : {}),
               description,
             },
           }),
