@@ -3041,8 +3041,11 @@ async function revealProjects(run: Run): Promise<void> {
   // lead the reveal wrote, which a role change since restore_access can
   // have dropped or brought back (cleanProject). They read the projects
   // from what the reveal wrote and the outside parent it read, so a
-  // sub-project costs no read of its top-level project, which a legacy icon
-  // can make near 1 MiB; the reveal runs whole in one transaction.
+  // sub-project costs no read of its top-level project; the reveal runs
+  // whole in one transaction. The projects it wrote hold no legacy icon
+  // (cleanProject). Only the outside parent can still hold one, near 1 MiB,
+  // until internal/legacyIconsBackfill clears it, and the reveal reads it
+  // once.
   const read =
     (ctx: QueryCtx): ProjectRead =>
     async (id) =>
