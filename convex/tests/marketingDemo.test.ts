@@ -1271,6 +1271,9 @@ describe('marketing demo rebuild ownership', () => {
     // lets go and the reseed takes again
     const ids = await usedIds(t, result.org_id)
     expect(ids).toHaveLength(MARKETING_DEMO.issues.length + MARKETING_DEMO.projects.length)
+    // the seed's anchor lies weeks back, so it asked the nightly archive to
+    // check the projects of its Done tasks, which the wipe takes too
+    expect(await t.run(async (ctx) => ctx.db.query('archive_rechecks').collect())).not.toEqual([])
     expect(await wipe(t)).toMatchObject({
       state: 'empty',
       wipe_done: true,
@@ -1285,6 +1288,7 @@ describe('marketing demo rebuild ownership', () => {
         'project_access',
         'messages',
         'issue_subscriptions',
+        'archive_rechecks',
       ] as const)
         expect(await ctx.db.query(table).collect(), table).toEqual([])
     })
