@@ -42,7 +42,7 @@ import {
 } from '../model/orgs'
 import { shownAvatarColor } from '../model/people'
 import { stampOfRow } from '../model/syncStamps'
-import { type Access, accessOf, isOrgStaff } from './access'
+import { type Access, accessOf, isAccessUnchecked, isOrgStaff } from './access'
 import { roomOf } from './archivedTasks'
 import { chunkLists } from './arrayLimit'
 import { orgCreateFor, seatlessState } from './billingAccess'
@@ -216,6 +216,20 @@ const overflow = (w: IdWindow, last?: string) =>
 async function softSplit(ctx: QueryCtx, w: IdWindow, over: boolean, shared: Shared = NONE) {
   if (halve(w) === null) return {}
   return over || (await readPast(ctx, PAGE.soft, shared)) ? { split: true as const } : {}
+}
+
+/** `part`'s answer, or `refused` with the sentence of a check of the
+ * caller's access that a bound stopped (lib/access.ts accessUnchecked),
+ * which the app shows as it shows TOO_MUCH. Cutting the window would not
+ * help, as those reads are the caller's own, alike in every part
+ * (softSplit). */
+async function unlessUnchecked<T>(part: Promise<T>) {
+  try {
+    return await part
+  } catch (e) {
+    if (!isAccessUnchecked(e)) throw e
+    return { state: 'refused' as const, message: e.data.message }
+  }
 }
 
 /* Index range bounds of a window on an index whose next field is `field`. */
@@ -427,8 +441,13 @@ export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow
  * ones included for navigation, oldest first, with every grant on them,
  * their team grants, and the milestones of the active ones. It reads the
  * window's projects in one range, the caller's levels on each and on its
- * parent, and up to three ranges per shown project. */
-export async function readProjects(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
+ * parent, and up to three ranges per shown project. A check of the caller's
+ * access that a bound stopped answers `refused` (unlessUnchecked). */
+export const readProjects = (ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) =>
+  unlessUnchecked(projectsOf(ctx, me, w))
+
+/* readProjects' answer while every check of the caller's access finishes. */
+async function projectsOf(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
   const read = await pageOf(
     ctx.db
       .query('projects')
@@ -596,8 +615,13 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
  * tasks are in is read once, with the caller's levels on it (lib/access.ts
  * accessOf). Each shown task's text is one more read, of its description
  * row, read last and by bytes, and a window whose texts do not fit answers
- * overflow. */
-export async function readTasks(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
+ * overflow. A check of the caller's access that a bound stopped answers
+ * `refused` (unlessUnchecked). */
+export const readTasks = (ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) =>
+  unlessUnchecked(tasksOf(ctx, me, w))
+
+/* readTasks' answer while every check of the caller's access finishes. */
+async function tasksOf(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
   const read = await windowTasks(ctx, me, w, PAGE.tasks.most)
   if (!read.complete) return overflow(w, read.rows.at(-1)?.window_key)
   const access = accessOf(ctx, me)
@@ -861,7 +885,9 @@ async function hiddenLoadOf(
  * more than 16 MiB of the largest ones. So once the reads pass PAGE.hard,
  * checked every PAGE.inboxCheck new tasks, a message about a task not read
  * yet counts as not shown, and the answer says it was cut (truncated, and
- * both bulk actions stay available). */
+ * both bulk actions stay available). A message whose task's access check a
+ * bound stopped (lib/access.ts accessUnchecked) counts as not shown the same
+ * way, and cuts the answer too. */
 export async function readInbox(ctx: QueryCtx, me: Doc<'profiles'>) {
   const byIdShown = shownById(ctx, me, accessOf(ctx, me))
   const asked = new Set<string>()
@@ -875,7 +901,13 @@ export async function readInbox(ctx: QueryCtx, me: Doc<'profiles'>) {
       }
       asked.add(id)
     }
-    return await byIdShown(id)
+    try {
+      return await byIdShown(id)
+    } catch (e) {
+      if (!isAccessUnchecked(e)) throw e
+      cut = true
+      return false
+    }
   }
   const inbox = await loadInbox(ctx, me.id, shown, INBOX_LIMIT, INBOX_LIMIT)
   return {

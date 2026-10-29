@@ -13,6 +13,7 @@ import type { FunctionArgs, FunctionReturnType } from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { ACCESS_UNCHECKED, OWN_READS } from '../lib/access'
 import {
   ARCHIVE_LABELS,
   ARCHIVE_PAGE,
@@ -1876,4 +1877,110 @@ describe('issues.archivedTask', () => {
     expect(await taskOf(t, f.admin, deleted.id)).toBeNull()
     expect(await taskOf(t, f.admin, uuid())).toBeNull()
   })
+})
+
+describe('a check of the caller access that a bound stops', () => {
+  const DEFAULT_OWN_READS = structuredClone(OWN_READS)
+  afterEach(() => {
+    Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+  })
+
+  it('refuses the page with its reason, and one bound up answers as with the default bounds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a member of a team sharing FW, with an archived task there
+    const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW })
+    const page = () => pageOf(t, me, scopeOf(f.org.id, f.sub.id))
+    const usual = await page()
+    expect(usual.rows.map((row) => row.id)).toEqual([task.id])
+    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, shareLookups: 0 })
+    const refused = await expectRefusal(page(), 'rule')
+    expect(refused.data.reason).toBe(ACCESS_UNCHECKED)
+    Object.assign(OWN_READS, { lookups: 1, shareLookups: 1 })
+    expect(await page()).toEqual(usual)
+  })
+
+  it("refuses a scope of 200 sub-projects each shared with more teams than it reads, inside Convex's limits", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
+    const meta = await plantProject(t, { org_id: f.org.id, name: 'Wide family' })
+    const subs: Doc<'projects'>[] = []
+    for (let n = 0; n < ARCHIVED_SCOPE.subProjects; n++)
+      subs.push(await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: meta.id }))
+    const others = await t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i < OWN_READS.projectShares; i++) {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: f.org.id,
+          name: `Other ${i}`,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+    // the member's team shares every sub-project, with 64 other teams, and
+    // more than OWN_READS.rows projects elsewhere
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      for (let i = 0; i <= OWN_READS.rows; i++)
+        await ctx.db.insert('project_team_access', {
+          project_id: uuid(),
+          team_id: f.team.id,
+          level: 'viewer',
+        })
+    })
+    for (let at = 0; at < subs.length; at += 20)
+      await t.run(async (ctx) => {
+        for (const sub of subs.slice(at, at + 20))
+          for (const team_id of [f.team.id, ...others])
+            await ctx.db.insert('project_team_access', {
+              project_id: sub.id,
+              team_id,
+              level: 'user',
+            })
+      })
+    await plantIssue(t, { org_id: f.org.id, project_id: subs[0].id, archived_at: NOW })
+    // the team's reach rows, as planReach writes them, and the stamps
+    await t.run(async (ctx) => {
+      const row = (p: Doc<'projects'>, kind: 'root' | 'child') => ({
+        org_id: f.org.id,
+        grantee_kind: 'team' as const,
+        grantee_id: f.team.id,
+        kind,
+        project_id: p.id,
+        root_id: meta.id,
+        name_key: p.name.toLowerCase(),
+        key: p.key,
+        live: true,
+        on_root: false,
+      })
+      await ctx.db.insert('project_reach', row(meta, 'root'))
+      for (const sub of subs) await ctx.db.insert('project_reach', row(sub, 'child'))
+      await ctx.db.insert('org_ready', { org_id: f.org.id, nav_at: NOW, name_keys_at: NOW })
+    })
+    const refused = await expectRefusal(pageOf(t, me, scopeOf(f.org.id, meta.id)), 'rule')
+    expect(refused.data.reason).toBe(ACCESS_UNCHECKED)
+  }, 240_000)
 })

@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { projectLevel } from '../lib/access'
+import { OWN_READS, projectLevel } from '../lib/access'
 import { archivedTaskCore } from '../lib/archivedTasks'
 import { newWindowKey } from '../lib/db'
 import { LIMITS, MIB, NAME_MAX } from '../lib/limits'
@@ -22,6 +22,7 @@ import {
   type OrgFixture,
   plantHiddenSibling,
   plantIssue,
+  plantLogin,
   plantProject,
   plantSeat,
   type T,
@@ -31,8 +32,10 @@ import {
 import { plantNorthstar } from './northstar.setup'
 
 const DEFAULT_TASK_WINDOW = structuredClone(TASK_WINDOW)
+const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 afterEach(() => {
   Object.assign(TASK_WINDOW, structuredClone(DEFAULT_TASK_WINDOW))
+  Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
 })
 
 const whole = { from: '', to: null }
@@ -1175,5 +1178,76 @@ describe('real limits', () => {
     expect(answer.subtasks.rows.length).toBeGreaterThan(10)
     expect(answer.subtasks.rows.length).toBeLessThan(100)
     expect(documents).toBeLessThanOrEqual(TASK_WINDOW.documents + 10)
+  })
+})
+
+describe('a check of the caller access that a bound stops', () => {
+  /* OWN_READS under which the check of a project shared with one of the
+   * caller's teams stops at a bound (lib/access.ts accessUnchecked), and
+   * one bound up, where that one team is asked team by team. */
+  const UNCHECKED = { projectShares: 0, rows: 0, lookups: 0, shareLookups: 0 }
+  const ONE_UP = { projectShares: 0, rows: 0, lookups: 1, shareLookups: 1 }
+
+  it('answers unavailable for the task or its parent, ends a subtask or link list there as incomplete, and one bound up answers as with the default bounds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a user grant on FW, which no team shares, and a team that shares PCB
+    const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: me.id,
+        level: 'user',
+      })
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub2.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    const opened = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const mine = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: opened.id,
+    })
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, parent_id: opened.id })
+    const onPcb = await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id })
+    const child = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      parent_id: onPcb.id,
+    })
+    await t.run((ctx) => ctx.db.insert('issue_links', linkRow(f, opened, onPcb.id)))
+    const caller = as(t, me)
+    const read = async () => ({
+      opened: await caller.query(api.taskWindow.task, { org_id: f.org.id, ref: opened.id }),
+      links: await caller.query(api.taskWindow.links, { org_id: f.org.id, issue_id: opened.id }),
+      onPcb: await caller.query(api.taskWindow.task, { org_id: f.org.id, ref: onPcb.id }),
+      child: await caller.query(api.taskWindow.task, { org_id: f.org.id, ref: child.id }),
+    })
+    const usual = await read()
+    expect(usual.opened.state === 'ok' && usual.opened.subtasks.complete).toBe(true)
+    expect(usual.child.state === 'ok' && usual.child.parent?.id).toBe(onPcb.id)
+    Object.assign(OWN_READS, UNCHECKED)
+    const stopped = await read()
+    // the subtask in PCB ends the list after the one in FW, and the link to
+    // the task in PCB ends the links
+    expect(stopped.opened.state === 'ok' && stopped.opened.subtasks).toEqual({
+      rows: [expect.objectContaining({ id: mine.id })],
+      complete: false,
+    })
+    expect(stopped.opened.state === 'ok' && stopped.opened.task.has_hidden_subtasks).toBe(true)
+    expect(stopped.links).toMatchObject({ state: 'ok', links: [], tasks: [], complete: false })
+    // a task in PCB, and one whose parent is there, answer as hidden ones do
+    expect(stopped.onPcb).toEqual({ state: 'unavailable' })
+    expect(stopped.child).toEqual({ state: 'unavailable' })
+    Object.assign(OWN_READS, ONE_UP)
+    expect(await read()).toEqual(usual)
   })
 })

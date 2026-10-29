@@ -27,7 +27,9 @@
  *   only once the organization's org_ready row holds nav_at, else it
  *   leaves them out and reports its search incomplete. Its reads stay
  *   within a budget, and `coverage` says when they stopped before covering
- *   everything; `next_cursor` says that more results follow.
+ *   everything, as an access check a bound of the caller's own reads
+ *   stopped also does (lib/access.ts accessUnchecked); `next_cursor` says
+ *   that more results follow.
  *
  * The app calls it once per page, never as a subscription, so a hidden tab
  * reads nothing. */

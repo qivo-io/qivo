@@ -12,10 +12,15 @@
  * and from a fresh app session. The caller's access reads the caller's own
  * grants, memberships and team shares, and the projects, grants and shares
  * of the projects asked about. Where a top-level project shows the caller
- * only for navigation, it also reads that project's sub-projects and, for a
- * caller in many teams, the organization's teams (lib/access.ts
- * projectLevelsOf), so an edit of those reruns a read, as it reruns the
- * workspace parts. No other edit elsewhere in the organization does.
+ * only for navigation, it also reads the caller's reach rows under it and
+ * the sub-projects they name, once the organization's are complete, or
+ * else that project's sub-projects and, for a caller in many teams, the
+ * organization's teams (lib/access.ts projectLevelsOf), so an edit of those
+ * reruns a read, as it reruns the workspace parts. No other edit elsewhere
+ * in the organization does. A check of the caller's access that a bound of
+ * those reads stopped (accessUnchecked) answers the opened task
+ * `unavailable` where it is the task's or its parent's, and ends a list as
+ * incomplete where it is a subtask's or a link end's.
  *
  * They say of a task what the tasks part says of it
  * (lib/workspaceParts.ts readTasks), under the same rules
@@ -41,7 +46,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { descriptionOf } from '../model/descriptions'
-import { type Access, accessOf } from './access'
+import { type Access, accessOf, isAccessUnchecked } from './access'
 import { archivedRowOf } from './archivedTasks'
 import { byId } from './db'
 import type { AccessLevel } from './enums'
@@ -198,7 +203,9 @@ function budgetIn(ctx: QueryCtx, cap: Reads, shared: Reads) {
      * project shared with more teams than PROJECT holds passes the budget
      * by its own reads, and no other project's join them. Answers the
      * results of a prefix of `items`, all of them unless the budget ran
-     * out. */
+     * out or a check of the caller's access that a bound stopped
+     * (lib/access.ts accessUnchecked) ended it before that item, as a list
+     * the budget stops says it is incomplete. */
     async inOrder<T, R>(
       items: readonly T[],
       projectOf: (item: T) => string | undefined,
@@ -219,7 +226,21 @@ function budgetIn(ctx: QueryCtx, cap: Reads, shared: Reads) {
         }
         if (end === out.length) break
         if (fresh !== undefined) asked.add(fresh)
-        out.push(...(await Promise.all(items.slice(out.length, end).map(check))))
+        const got = await Promise.all(
+          items.slice(out.length, end).map((item) =>
+            check(item).then(
+              (result) => ({ result }),
+              (e) => {
+                if (!isAccessUnchecked(e)) throw e
+                return null
+              },
+            ),
+          ),
+        )
+        const stop = got.indexOf(null)
+        for (const one of stop === -1 ? got : got.slice(0, stop))
+          if (one !== null) out.push(one.result)
+        if (stop !== -1) break
       }
       return out
     },
@@ -273,12 +294,25 @@ async function taskByRef(ctx: QueryCtx, orgId: string, ref: string) {
 }
 
 /** The task with id `issueId` and the caller's access, when the task is in
- * the caller's working set (lib/workingSet.ts, Access.holds), else null. */
+ * the caller's working set (lib/workingSet.ts, Access.holds), else null,
+ * also where a bound stopped that check (lib/access.ts accessUnchecked),
+ * which the reads then answer `unavailable` as for every other reason. */
 async function openedTask(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
   const task = await byId(ctx, 'issues', issueId)
   if (task === null || task.org_id !== me.org_id) return null
   const access = accessOf(ctx, me)
-  return (await access.holds(task)) ? { task, access } : null
+  return (await unlessUnchecked(access.holds(task), false)) ? { task, access } : null
+}
+
+/* `check`, or `refused` where a check of the caller's access that a bound
+ * stopped (lib/access.ts accessUnchecked) ended it. */
+async function unlessUnchecked<T, R>(check: Promise<T>, refused: R): Promise<T | R> {
+  try {
+    return await check
+  } catch (e) {
+    if (!isAccessUnchecked(e)) throw e
+    return refused
+  }
 }
 
 /** Whether a subtask follows those a read took (subtasksOf): 'none' when
@@ -519,12 +553,17 @@ async function shownParent(
  *   asks with the caller's seat in this organization only, never another
  *   seat of the login (lib/functions.ts loadMember), so another
  *   organization's archived task answers unavailable.
- * - `{ state: 'unavailable' }` for everything else, alike.
+ * - `{ state: 'unavailable' }` for everything else, alike, also where a
+ *   bound stopped the check of the caller's access on the task, its project
+ *   or its parent (lib/access.ts accessUnchecked), so the answer does not
+ *   tell a refused check from a hidden task, and never leaves out a parent
+ *   it could not check as hidden.
  *
  * The subtasks load with the task because the window needs the group facts
  * at once: the status control, the owner rule and the remaining total
- * depend on whether the task is a group. Past TASK_WINDOW the subtasks
- * answer `complete: false` with the rows read; has_subtasks then says
+ * depend on whether the task is a group. Past TASK_WINDOW, or at a subtask
+ * whose access check a bound stopped, the subtasks answer `complete: false`
+ * with the rows read before it; has_subtasks then says
  * whether one read counts, and has_hidden_subtasks is true, so the window
  * can say its completion is unknown. A subtask whose own has_subtasks is
  * true is a group stored before the rule of one level, and the answer holds
@@ -536,7 +575,13 @@ async function shownParent(
  * LIMITS.labels.max (model/labels.ts setTaskLabel), so only rows stored
  * against that rule could pass the stop, and those past it are left out.
  */
-export async function readWindowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
+export const readWindowTask = (ctx: QueryCtx, me: Doc<'profiles'>, ref: string) =>
+  unlessUnchecked(windowTask(ctx, me, ref), UNAVAILABLE)
+
+/* readWindowTask's answer while the checks of the caller's access on the
+ * task, its project and its parent finish; a subtask's that a bound stops
+ * ends the subtask list instead (budgetIn inOrder). */
+async function windowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
   const task = await taskByRef(ctx, me.org_id, ref)
   if (task === null) return UNAVAILABLE
   const access = accessOf(ctx, me)
@@ -602,8 +647,9 @@ export async function readWindowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: st
  *   the other end's is in the answer. A link grants no access.
  * - `{ state: 'unavailable' }` otherwise, alike for every reason.
  *
- * Past TASK_WINDOW.rows links or TASK_WINDOW.linkBytes it answers
- * `complete: false` with the links whose other end it read.
+ * Past TASK_WINDOW.rows links or TASK_WINDOW.linkBytes, or at an other end
+ * whose access check a bound stopped (lib/access.ts accessUnchecked), it
+ * answers `complete: false` with the links whose other end it read before.
  */
 export async function readWindowLinks(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
   const opened = await openedTask(ctx, me, issueId)

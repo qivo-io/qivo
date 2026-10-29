@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { OWN_READS, projectLevel } from '../lib/access'
+import { accessUnchecked, OWN_READS, projectLevel, projectLevelsOf } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import {
   cut,
@@ -20,7 +20,7 @@ import {
   startWindows,
   windowCount,
 } from '../lib/idWindows'
-import { PAGE, readProjects, readTasks } from '../lib/workspaceParts'
+import { PAGE, readInbox, readProjects, readTasks } from '../lib/workspaceParts'
 import {
   as,
   expectRefusal,
@@ -29,6 +29,7 @@ import {
   type OrgFixture,
   patchCounters,
   plantIssue,
+  plantLogin,
   plantMessage,
   plantProject,
   plantSeat,
@@ -37,6 +38,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { withReach } from './projectReach.setup'
 
 const DEFAULT_PAGE = structuredClone(PAGE)
 const DEFAULT_OWN_READS = structuredClone(OWN_READS)
@@ -1444,4 +1446,155 @@ describe('the people part', () => {
     if (answer.state !== 'ok') throw new Error(answer.state)
     expect(answer.teamMembers.some((m) => m.team_id === 'gone-team')).toBe(true)
   })
+})
+
+/* A member of the fixture's team with a login, the team sharing FW. */
+async function plantTeamMember(t: T, f: OrgFixture) {
+  const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
+  await t.run(async (ctx) => {
+    await ctx.db.insert('team_members', { team_id: f.team.id, profile_id: me.id, is_leader: false })
+    const shared = await ctx.db
+      .query('project_team_access')
+      .withIndex('by_project_team', (q) => q.eq('project_id', f.sub.id).eq('team_id', f.team.id))
+      .first()
+    if (shared === null)
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+  })
+  return me
+}
+
+/* OWN_READS under which the check of a project shared with one of the
+ * caller's teams stops at a bound (lib/access.ts accessUnchecked): no share
+ * read project by project, none of their teams' at once, by a step or by
+ * navigation's legacy path, and none asked team by team; and one bound up,
+ * where one team is asked team by team and navigation reads their shares. */
+const UNCHECKED = { projectShares: 0, rows: 0, navRows: 0, lookups: 0, shareLookups: 0 }
+const ONE_UP = { projectShares: 0, rows: 0, lookups: 1, shareLookups: 1 }
+
+describe('a check of the caller access that a bound stops', () => {
+  it('refuses the projects and tasks parts with its sentence and cuts the inbox, and one bound up each answers as with the default bounds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantTeamMember(t, f)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await plantMessage(t, { org_id: f.org.id, recipient_id: me.id, issue_id: task.id })
+    // each part in a transaction of its own, as each is a query
+    const parts = async () => ({
+      projects: await t.run((ctx) => readProjects(ctx, me, { from: '', to: null })),
+      tasks: await t.run((ctx) => readTasks(ctx, me, { from: '', to: null })),
+      inbox: await t.run((ctx) => readInbox(ctx, me)),
+    })
+    const usual = await parts()
+    expect(
+      usual.projects.state === 'ok' && usual.projects.projects.map((p) => p.key).sort(),
+    ).toEqual(['FW', 'TBED'])
+    expect(usual.inbox.unread).toHaveLength(1)
+    Object.assign(OWN_READS, UNCHECKED)
+    const refused = await parts()
+    for (const part of [refused.projects, refused.tasks])
+      expect(part).toEqual({ state: 'refused', message: accessUnchecked().data.message })
+    expect(refused.inbox).toMatchObject({ state: 'ok', unread: [], truncated: true })
+    Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS), ONE_UP)
+    expect(await parts()).toEqual(usual)
+  })
+
+  it('shows a parent of 3,000 sub-projects for navigation from reach rows, reading a few documents', async () => {
+    const t = newT(REAL_LIMITS)
+    const f = await withOrg(t)
+    const parent = uuid()
+    const subs = await t.run(async (ctx) => {
+      const row = (n: number, parent_id?: string) => ({
+        id: n === 0 ? parent : uuid(),
+        window_key: newWindowKey(),
+        org_id: f.org.id,
+        type: parent_id === undefined ? ('meta' as const) : ('project' as const),
+        parent_id,
+        key: `M${n}`,
+        name: `Many ${n}`,
+        description: '',
+        sort_order: 1000 + n,
+        num: 1000 + n,
+        track_delay: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('projects', row(0))
+      const ids: string[] = []
+      for (let n = 1; n <= 3000; n++)
+        ids.push((await ctx.db.get(await ctx.db.insert('projects', row(n, parent))))!.id)
+      await ctx.db.insert('project_access', {
+        project_id: ids[2999],
+        profile_id: f.viewer.id,
+        level: 'viewer',
+      })
+      await patchCounters(ctx, f.org.id, { next_project_num: 4001 })
+      return ids
+    })
+    await withReach(t)
+    const snap = await workspaceOf(as(t, f.viewer))
+    const shown = new Set(snap?.projects.map((p) => p.id))
+    expect(shown.has(parent)).toBe(true)
+    expect(subs.filter((id) => shown.has(id))).toEqual([subs[2999]])
+    // the readiness row, the viewer's root row, the child row and its project
+    const read = await t.run(async (ctx) => {
+      const levels = projectLevelsOf(ctx, f.viewer)
+      expect(await levels.level(parent)).toBe('viewer')
+      return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+    })
+    expect(read).toBeLessThan(15)
+  }, 240_000)
+
+  it("refuses the projects part of a person in more teams than the legacy path reads, or whose teams' shares it cannot read, where a parent shows only for navigation", async () => {
+    const t = newT(REAL_LIMITS)
+    const f = await withOrg(t)
+    // a person per case, each with a team that shares FW, so TBED shows
+    // them only for navigation, and more teams beside it
+    const person = async (teams: number, sharesEach: number) => {
+      const me = await plantTeamMember(t, f)
+      for (let at = 1; at < teams; at += 100)
+        await t.run(async (ctx) => {
+          for (let i = at; i < Math.min(teams, at + 100); i++) {
+            const team_id = uuid()
+            await ctx.db.insert('teams', {
+              id: team_id,
+              org_id: f.org.id,
+              name: `Team ${i}`,
+              track_delay_default: false,
+              created_at: NOW,
+            })
+            await ctx.db.insert('team_members', { team_id, profile_id: me.id, is_leader: false })
+            for (let s = 0; s < sharesEach; s++)
+              await ctx.db.insert('project_team_access', {
+                project_id: uuid(),
+                team_id,
+                level: 'viewer',
+              })
+          }
+        })
+      return me
+    }
+    const cases = [
+      // past OWN_READS.navTeams, the legacy path reads their team shares
+      { teams: OWN_READS.navTeams + 1, sharesEach: 1, state: 'ok' },
+      // and past OWN_READS.rows of them it cannot
+      { teams: OWN_READS.navTeams + 1, sharesEach: 16, state: 'refused' },
+      // as many teams as the legacy path reads, and one more
+      { teams: OWN_READS.teams, sharesEach: 0, state: 'ok' },
+      { teams: OWN_READS.teams + 1, sharesEach: 0, state: 'refused' },
+    ]
+    const people: Doc<'profiles'>[] = []
+    for (const c of cases) people.push(await person(c.teams, c.sharesEach))
+    await t.run((ctx) =>
+      ctx.db.insert('org_ready', { org_id: f.org.id, nav_at: NOW, name_keys_at: NOW }),
+    )
+    for (const [i, c] of cases.entries()) {
+      const part = await t.run((ctx) => readProjects(ctx, people[i], { from: '', to: null }))
+      expect(part.state, JSON.stringify(c)).toBe(c.state)
+      if (part.state === 'ok')
+        expect(part.projects.map((p) => p.key).sort(), JSON.stringify(c)).toEqual(['FW', 'TBED'])
+    }
+  }, 240_000)
 })

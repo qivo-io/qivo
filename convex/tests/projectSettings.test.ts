@@ -21,6 +21,7 @@ import {
   canSeeProject,
   hasProjectLevel,
   NO_USER_MANAGEMENT,
+  OWN_READS,
   projectLevel,
 } from '../lib/access'
 import { newWindowKey } from '../lib/db'
@@ -55,6 +56,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  plantLogin,
   plantProject,
   plantSeat,
   type T,
@@ -70,7 +72,9 @@ g.process.env.BETTER_AUTH_SECRET ??= 'project-settings-test-secret-not-a-deploym
 
 const DEFAULT_READ = { ...NAMED_READ }
 const DEFAULT_UNKEYED = { ...UNKEYED_MOST }
+const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 afterEach(() => {
+  Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
   Object.assign(NAMED_READ, DEFAULT_READ)
   Object.assign(UNKEYED_MOST, DEFAULT_UNKEYED)
   vi.unstubAllEnvs()
@@ -1763,4 +1767,40 @@ describe('real limits', () => {
       message: LEAD_ACCESS_NEEDED,
     })
   }, 120_000)
+})
+
+describe('a check of the caller access that a bound stops', () => {
+  it('answers unavailable for the settings and the lead picker of a parent that shows for navigation, and one bound up answers as with the default bounds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a member of a team sharing FW, so TBED shows them only for navigation
+    const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    const answers = async () => ({
+      get: await read.get(t, me, f.meta.id),
+      leads: await read.leadCandidates(t, me, { parent_id: f.meta.id }),
+    })
+    const usual = await answers()
+    expect(usual.get.state === 'ok' && usual.get.level).toBe('viewer')
+    expect(usual.leads.state).toBe('refused')
+    // TBED's two sub-projects are past what the legacy path reads
+    Object.assign(OWN_READS, { subProjects: 1 })
+    expect(await answers()).toEqual({
+      get: { state: 'unavailable' },
+      leads: { state: 'unavailable' },
+    })
+    Object.assign(OWN_READS, { subProjects: 2 })
+    expect(await answers()).toEqual(usual)
+  })
 })

@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
-import { canAccessProject, canSeeProject } from '../lib/access'
+import { canAccessProject, canSeeProject, OWN_READS } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import { GRANT_LEVELS } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
@@ -67,7 +67,9 @@ const DEFAULT_RESERVE = { ...SEARCH_RESERVE }
 const DEFAULT_FILTER = { ...ARCHIVED_FILTER }
 const DEFAULT_SHARE = { ...SEAT_SHARE }
 const DEFAULT_SIGHT = { ...PROJECT_SIGHT }
+const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 afterEach(() => {
+  Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
   Object.assign(PROJECT_SIGHT, DEFAULT_SIGHT)
   Object.assign(SEAT_SHARE, DEFAULT_SHARE)
   Object.assign(MAIN_SEARCH, DEFAULT_SEARCH)
@@ -2424,5 +2426,48 @@ describe('the search_name index', () => {
     expect(await found()).toEqual([live, listed, unstated].sort())
     expect(await found('live')).toEqual([live])
     expect(await found('listed')).toEqual([listed])
+  })
+})
+
+describe('a check of the caller access that a bound stops', () => {
+  it('reports coverage reads where a project-by-project seat was exact, keeps a whole seat incomplete, and one bound up answers as with the default bounds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a member of a team sharing FW, with a task there
+    const member = await plantMember(t, f)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: member.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Zephyr fix',
+    })
+    await withReach(t)
+    for (const projects of [DEFAULT_SEARCH.projects, 0]) {
+      MAIN_SEARCH.projects = projects
+      const page = async () => (await searchRun(t, [member], { text: 'zephyr' })).page
+      const usual = await page()
+      expect(taskIds(usual), `projects ${projects}`).toEqual([task.id])
+      // the check of FW, shared with the member's team, stops at a bound
+      Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, shareLookups: 0 })
+      const stopped = await page()
+      expect(stopped.coverage.complete, `projects ${projects}`).toBe(false)
+      if (usual.coverage.complete)
+        expect(stopped.coverage, `projects ${projects}`).toMatchObject({ stopped: 'reads' })
+      expect(taskIds(stopped)).toEqual([])
+      Object.assign(OWN_READS, { lookups: 1, shareLookups: 1 })
+      expect(await page(), `projects ${projects}`).toEqual(usual)
+      Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+    }
   })
 })

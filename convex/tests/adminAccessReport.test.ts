@@ -27,6 +27,7 @@ import {
   canLeadProjects,
   cappedLevel,
   isOrgStaff,
+  OWN_READS,
   projectLevel,
   projectLevelsOf,
   receivesTeamAccess,
@@ -1777,4 +1778,41 @@ describe('within Convex limits', () => {
       ),
     )
   }, 120_000)
+})
+
+describe('a check lib/access.ts stops at a bound', () => {
+  it('records the project unchecked, and one bound up answers as with the default bounds', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const admin = await plantAdmin(t, f, { name: 'Two teams' })
+    // two teams of the admin share FW, and no more memberships than two
+    // are read at once
+    await t.run(async (ctx) => {
+      const second = await newTeam(ctx, f.org.id)
+      for (const team_id of [f.team.id, second]) {
+        await ctx.db.insert('team_members', { team_id, profile_id: admin.id, is_leader: false })
+        await ctx.db.insert('project_team_access', { project_id: f.sub.id, team_id, level: 'user' })
+      }
+    })
+    const fw = async () =>
+      (await findingsOf(t, 'projects')).filter(
+        (found) =>
+          found.profile_id === admin.id && 'project_id' in found && found.project_id === f.sub.id,
+      )
+    const usual = await fw()
+    expect(usual).toEqual([])
+    const before = { members: OWN_READS.members, lookups: OWN_READS.lookups, rows: OWN.rows }
+    try {
+      // the admin's memberships are asked one by one for the first team,
+      // then read at once, at most OWN.rows of them, here none
+      Object.assign(OWN_READS, { members: 0, lookups: 0 })
+      OWN.rows = 0
+      expect((await fw()).map((found) => found.kind)).toEqual(['unchecked'])
+      OWN.rows = 4
+      expect(await fw()).toEqual(usual)
+    } finally {
+      Object.assign(OWN_READS, { members: before.members, lookups: before.lookups })
+      OWN.rows = before.rows
+    }
+  })
 })

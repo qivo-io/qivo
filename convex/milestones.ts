@@ -13,7 +13,10 @@
  * list. Arguments out of shape are refused with `bad_request`, a search
  * past LIMITS.search with that limit's sentence, and a read whose projects
  * need more reads than one request allows with MILESTONE_READ_TOO_LARGE,
- * which asks for fewer projects. */
+ * which asks for fewer projects. A check of the caller's access that a
+ * bound of their own reads stopped is refused beside it, with its own
+ * reason, `access_unchecked` (lib/access.ts accessUnchecked), as these reads
+ * refuse instead of answering for part of their projects. */
 
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'

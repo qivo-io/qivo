@@ -49,7 +49,14 @@ import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { descriptionOf } from '../model/descriptions'
 import { hasSubtasks } from '../model/issues'
 import { projectSight, reachReady } from '../model/projectNav'
-import { type Access, accessOf, OWN_READS, receivesTeamAccess } from './access'
+import {
+  type Access,
+  accessOf,
+  isAccessUnchecked,
+  OWN_READS,
+  type OwnReads,
+  receivesTeamAccess,
+} from './access'
 import { openCursorText, sealCursorText } from './archiveCursorSeal'
 import { type ReadCeiling, roomOf } from './archivedTasks'
 import { byId } from './db'
@@ -199,6 +206,24 @@ export const SEARCH_RESERVE: ReadCeiling = {
   documents: 2 * OWN_READS.rows + OWN_READS.orgTeamsMost,
   bytes: OWN_READS.bytes + (2 << 20),
 }
+
+/** The bounds of each seat's access reads (lib/access.ts OWN_READS), below
+ * the workspace parts' where theirs would not fit SEARCH_RESERVE: one check
+ * and every read of the person's own rows it may start, past the budget's
+ * last look, stay inside it (OWN_READS states the figures). A person past
+ * them is not checked in full here, which stops the search's reads
+ * (endsReads), never shows less as complete. Computed from OWN_READS when
+ * a seat is read, so tests that lower it lower these too. */
+export const searchReads = (): OwnReads => ({
+  ...OWN_READS,
+  teams: Math.min(OWN_READS.teams, 64),
+  lookups: Math.min(OWN_READS.lookups, 16),
+  members: Math.min(OWN_READS.members, 64),
+  roots: Math.min(OWN_READS.roots, 512),
+  subProjects: Math.min(OWN_READS.subProjects, 512),
+  subBytes: Math.min(OWN_READS.subBytes, 512 << 10),
+  shareLookups: Math.min(OWN_READS.shareLookups, 32),
+})
 
 /** How the search sources filter archived tasks while the toggle is off.
  * `byIndex` filters them in the search query (archived_at absent, which the
@@ -469,6 +494,12 @@ export function coverageOf(stops: Stops): Coverage {
 
 /* Thrown when a read does not fit, which ends the gathering or the page. */
 class OutOfRoom extends Error {}
+
+/* Whether `e` ends the gathering or the page as a read that does not fit
+ * does: OutOfRoom, or an access check a bound stopped (lib/access.ts
+ * accessUnchecked), so a search that met one never reports complete
+ * coverage. */
+const endsReads = (e: unknown): boolean => e instanceof OutOfRoom || isAccessUnchecked(e)
 
 /* A read budget under `ceiling`, asked before each read whether it fits.
  * It counts each index range as one and each document at Convex's size
@@ -806,7 +837,7 @@ export async function searchPlaces(
     const own = await ownProjects(ctx, me, budget, read)
     if (own !== null) ({ ids: candidates, archived } = own)
   }
-  const access = accessOf(ctx, me, [...read.values()])
+  const access = accessOf(ctx, me, [...read.values()], searchReads())
   if (candidates === null || most <= 0) return { access, places: null, shown: [] }
   const places: string[] = []
   const shown = new Map<string, Doc<'projects'>>()
@@ -1020,7 +1051,7 @@ export async function mainSearchPage(
   let scoped: Doc<'projects'> | null = null
   if (args.scope?.project_id !== undefined) {
     const scopeId = args.scope.project_id
-    const access = accessOf(ctx, seats[0])
+    const access = accessOf(ctx, seats[0], [], searchReads())
     try {
       await step(gather)
       const p = await access.project(scopeId)
@@ -1033,7 +1064,7 @@ export async function mainSearchPage(
         scoped = p
       gather.recount()
     } catch (e) {
-      if (!(e instanceof OutOfRoom)) throw e
+      if (!endsReads(e)) throw e
       stops.reads = true
       return { rows: [], next_cursor: null, coverage: coverageOf(stops) }
     }
@@ -1255,7 +1286,7 @@ export async function mainSearchPage(
         { cap: MAIN_SEARCH.names, budget },
       )
     } catch (e) {
-      if (!(e instanceof OutOfRoom)) throw e
+      if (!endsReads(e)) throw e
       stops.reads = true
     } finally {
       // the seat's budget looks at what the names read before its next read
@@ -1327,7 +1358,7 @@ export async function mainSearchPage(
       // a seat with nothing to read at all searched all it had
       if (seat.places.length === 0 && numbers.length === 0) begin(seat)
     } catch (e) {
-      if (!(e instanceof OutOfRoom)) throw e
+      if (!endsReads(e)) throw e
       stops.reads = true
     }
   }
@@ -1342,7 +1373,14 @@ export async function mainSearchPage(
       if (free < 2) break
       let seat: Seat
       if (scoped !== null && scoped.parent_id !== undefined)
-        seat = seatOf(me, accessOf(ctx, me, [scoped]), scoped, [scoped.id], [scoped], false)
+        seat = seatOf(
+          me,
+          accessOf(ctx, me, [scoped], searchReads()),
+          scoped,
+          [scoped.id],
+          [scoped],
+          false,
+        )
       else {
         const most = Math.min(MAIN_SEARCH.projects, Math.floor(free / 2))
         const listing = await searchPlaces(ctx, me, scoped, gather, most, include)
@@ -1360,7 +1398,7 @@ export async function mainSearchPage(
       planned.push(seat)
     }
   } catch (e) {
-    if (!(e instanceof OutOfRoom)) throw e
+    if (!endsReads(e)) throw e
     stops.reads = true
   }
 
@@ -1414,7 +1452,7 @@ export async function mainSearchPage(
       if (row !== null) rows.push(row)
       last = m
     } catch (e) {
-      if (!(e instanceof OutOfRoom)) throw e
+      if (!endsReads(e)) throw e
       ranOut = true
       break
     }

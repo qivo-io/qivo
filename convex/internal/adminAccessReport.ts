@@ -145,7 +145,13 @@ import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize, type Value, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import { internalAction, internalQuery, type QueryCtx } from '../_generated/server'
-import { projectLevelsOf, tokenExpired } from '../lib/access'
+import {
+  isAccessUnchecked,
+  OWN_READS,
+  type OwnReads,
+  projectLevelsOf,
+  tokenExpired,
+} from '../lib/access'
 import { byId, usedMoreThan } from '../lib/db'
 import type { AccessLevel } from '../lib/enums'
 import { MIB } from '../lib/limits'
@@ -164,16 +170,19 @@ const PAGE = { projects: 4_000, work: 2_000, machine: 2_000 }
  * admin's first navigation answer of the page. That answer reads the
  * admin's own rows twice (OWN), the organization's teams once
  * (lib/access.ts OWN_READS, at most 4,000 rows and 512 KiB as JSON, about
- * 1.2 MiB at the name caps) and the parent's sub-projects twice (SUBS).
- * Tests lower it. */
+ * 1.2 MiB at the name caps) and the parent's sub-projects twice (SUBS), or,
+ * once the organization's reach rows are complete, the admin's reach rows
+ * instead of the second reads (OWN_READS navTeams, roots). Tests lower it. */
 export const ROOM = { share: 0.5 }
 
 /** The most sub-projects of one parent, and their bytes as Convex counts a
  * document's size, a page reads to tell whether an admin sees a top-level
  * project only for navigation. This report reads them first, then
- * lib/access.ts projectLevelsOf reads every one of them again for that,
- * once for each admin without a level of their own on it, so one answer
- * reads them twice beside the admin's own rows, in the half of the limits a
+ * lib/access.ts projectLevelsOf may read them again for that, within these
+ * bounds (reportReads), once for each admin without a level of their own
+ * on it, where the organization's reach rows are not complete or the
+ * admin is past their bounds, so one answer reads them at most twice beside
+ * the admin's own rows, in the half of the limits a
  * page leaves past its room (ROOM). Twice 2 MiB is half of that half's 8
  * MiB, and twice 1,000 documents an eighth of its 16,000. A sub-project
  * holds a name of at most 80 characters and a description of at most 500,
@@ -186,20 +195,22 @@ export const SUBS = { most: 1_000, bytes: 2 * MIB }
 /** The most of an admin's own rows, their grants, team memberships and the
  * shares of those teams, a page reads before it asks whether the admin sees
  * a top-level project for navigation, with their bytes and the most teams.
- * lib/access.ts projectLevelsOf reads all of those rows for that with no
- * bound, the first time each of the admin's levels asks, which the projects
- * phase makes once a part (PART), so this report counts them first with
- * bounded reads, once a page, and leaves the project `unchecked` past any
- * bound. In the half of the limits a page leaves past its room (ROOM),
+ * lib/access.ts projectLevelsOf may read those rows for that, within these
+ * bounds (reportReads), the first time each of the admin's levels asks,
+ * which the projects phase makes once a part (PART), so this report counts
+ * them first with bounded reads, once a page, and leaves the project
+ * `unchecked` past any bound, or where a bound of projectLevelsOf itself
+ * stops the check (accessUnchecked). In the half of the limits a page leaves past its room (ROOM),
  * the count and that read take twice 4,000 documents and twice 1 MiB, and
  * about three index ranges a team, so 1,500 for 500 teams, beside the
  * organization's teams (at most 4,000 rows) and SUBS. Tests lower them. */
 export const OWN = { rows: 4_000, bytes: MIB, teams: 500 }
 
 /** The most team shares of one project a page reads before it asks an
- * admin's level there. lib/access.ts projectLevelsOf reads every share of
- * the project and of its top-level project the first times it asks, before
- * it has read the admin's own rows, and then asks of each sharing team
+ * admin's level there. lib/access.ts projectLevelsOf reads up to this many
+ * shares of the project and of its top-level project (reportReads) the
+ * first times it asks, before it has read the admin's own rows, and then
+ * asks of each sharing team
  * whether the admin is a member and whether it is the organization's, about
  * two index ranges a team. 250 shares on each of the two cost at most about
  * 1,000 ranges and 500 documents, inside the half of the limits a page
@@ -428,6 +439,33 @@ export const ordinaryOf = (admin: Doc<'profiles'>): Doc<'profiles'> => ({
 /* An admin's ordinary levels (ordinaryOf), with the projects they read. */
 type Levels = ReturnType<typeof projectLevelsOf>
 
+/** The bounds of each admin's ordinary levels (lib/access.ts
+ * projectLevelsOf): OWN_READS, with the bounds this report counts first in
+ * place of the matching ones, so a level it asks once they fit reads what
+ * they counted and is not refused for them: the team shares of one project
+ * (SHARES), the admin's grants, memberships and team shares (OWN) and a
+ * parent's sub-projects (SUBS). */
+const reportReads = (): OwnReads => ({
+  ...OWN_READS,
+  projectShares: SHARES.most,
+  navRows: OWN.rows,
+  teams: OWN.teams,
+  members: Math.max(OWN_READS.members, OWN.rows),
+  subProjects: SUBS.most,
+  subBytes: SUBS.bytes,
+})
+
+/* `level`, or 'unchecked' where a bound of lib/access.ts stopped the check
+ * (accessUnchecked), as past this report's own SHARES, OWN and SUBS. */
+async function checked<T>(level: Promise<T>): Promise<T | 'unchecked'> {
+  try {
+    return await level
+  } catch (e) {
+    if (!isAccessUnchecked(e)) throw e
+    return 'unchecked'
+  }
+}
+
 /* Whether `project` belongs to the meta tree of `root`, which is the
  * project itself or the top-level project above it. This is lib/access.ts
  * inMetaTree, which that module does not export. A project outside a meta
@@ -533,7 +571,7 @@ function projectOf(page: Page, id: string): Promise<Doc<'projects'> | null> {
 function levelsOf(page: Page, admin: Doc<'profiles'>): Levels {
   let known = page.levels.get(admin.id)
   if (known === undefined) {
-    known = projectLevelsOf(page.ctx, ordinaryOf(admin))
+    known = projectLevelsOf(page.ctx, ordinaryOf(admin), [], reportReads())
     page.levels.set(admin.id, known)
   }
   return known
@@ -648,7 +686,8 @@ async function seesForNavigation(
   project: Doc<'projects'>,
 ): Promise<boolean | null> {
   if (!(await ownFits(page, admin)) || !(await subsFit(page, project))) return null
-  return (await levels.level(project.id)) !== null
+  const level = await checked(levels.level(project.id))
+  return level === 'unchecked' ? null : level !== null
 }
 
 /** `admin`'s ordinary level on `project`, under top-level project `root`,
@@ -664,7 +703,7 @@ async function sightOf(
   root: Doc<'projects'>,
 ): Promise<AccessLevel | null | 'unchecked'> {
   if (!(await sharesFit(page, project, root))) return 'unchecked'
-  const own = await levels.level(project.id, false)
+  const own = await checked(levels.level(project.id, false))
   if (own !== null || project.id !== root.id) return own
   const navigates = await seesForNavigation(page, admin, levels, project)
   return navigates === null ? 'unchecked' : navigates ? 'viewer' : null
@@ -763,7 +802,11 @@ async function judgeProject(
     page.findings.push(unchecked)
     return
   }
-  const own = await levels.level(project.id, false)
+  const own = await checked(levels.level(project.id, false))
+  if (own === 'unchecked') {
+    page.findings.push(unchecked)
+    return
+  }
   if (own === 'viewer') {
     page.findings.push({ kind: 'read_only', ...where })
     return
@@ -868,7 +911,9 @@ async function projectsPage(page: Page, at: Cursor): Promise<PageResult> {
       more = part.more
       // each admin's levels read neither these projects nor their parents
       const known = [...part.rows, ...part.parents]
-      const levels = admins.map((admin) => projectLevelsOf(ctx, ordinaryOf(admin), known))
+      const levels = admins.map((admin) =>
+        projectLevelsOf(ctx, ordinaryOf(admin), known, reportReads()),
+      )
       for (const project of part.rows) {
         if (await full(page)) return answer(page, placed({ phase: 'projects', org }, last))
         const root = await treeOf(levels[0], project, org, true)
