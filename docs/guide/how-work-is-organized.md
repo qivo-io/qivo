@@ -149,9 +149,13 @@ entries of the people and teams who reach them in one change. A project and
 its sub-projects with more than 2,000 of them together cannot be archived or
 restored at once ([Limits](./limits.md)). Archive some of its sub-projects
 on their own first, or remove some access. A project whose sub-projects
-have very long names and descriptions, or very many access entries, can
-also hold more data than one change can read. Qivo then says so; delete
-some of its sub-projects or remove some access first.
+have unusually large names or descriptions can also hold more data than one
+change can read: names in characters that Qivo expands to sort and search
+them, such as some Arabic ligatures and Japanese unit symbols, or
+descriptions an earlier version of Qivo stored. Restoring a sub-project of
+an archived top-level project reads all the top-level project's
+sub-projects. Qivo then says so; shorten the longest names or descriptions,
+or delete some of those sub-projects first.
 
 A task in another sub-project whose subtasks were all in the archived one
 becomes an ordinary task again, with its own status, dates and estimate.

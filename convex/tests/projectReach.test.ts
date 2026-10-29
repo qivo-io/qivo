@@ -833,6 +833,22 @@ describe('archiving and restoring a tree', () => {
     expect((await projectOf(t, f.meta.id))?.archived_at).toBeUndefined()
   })
 
+  it("refuses the restore of a sub-project whose archived top-level project's sub-projects pass the bytes", async () => {
+    const t = newT()
+    const f = await ready(t)
+    const lead = as(t, f.user)
+    await lead.mutation(api.projects.archive, { org_id: f.org.id, id: f.meta.id })
+    // the restore brings the top-level project back and reads its
+    // sub-projects, which the sentence names as the top-level project's
+    TREE_READ.bytes = 600
+    const e = await expectRefusal(
+      lead.mutation(api.projects.unarchive, { org_id: f.org.id, id: f.sub.id }),
+      'rule',
+    )
+    expect((e.data as Refusal).message).toBe(TREE_TOO_LARGE)
+    expect(await states(t, [f.meta.id, f.sub.id])).toEqual(['listed', 'under'])
+  })
+
   it('archives a project with more than 1,000 live sub-projects within the scheduler limit', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)

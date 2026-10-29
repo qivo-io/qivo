@@ -479,11 +479,15 @@ export const TREE_READ = { bytes: 7 * MIB }
 const TREE_QUERIES = 8
 
 /** The refusal of a tree change whose sub-projects and reach rows pass
- * TREE_READ.bytes. Archiving or restoring some sub-projects on their own
- * first does not help, as the change reads every sub-project all the same,
- * so it names what does. */
+ * TREE_READ.bytes: those of the project, or of the archived top-level
+ * project a restore of a sub-project brings back. Within the caps only
+ * names whose key NFKD expands (U+FDFA, U+3307) or descriptions stored
+ * before the caps make rows that large; access entries reach the count of
+ * LIMITS.projectTreeChange first. Archiving or restoring some sub-projects
+ * on their own first does not help, as the change reads every sub-project
+ * all the same, so it names what does. */
 export const TREE_TOO_LARGE =
-  "this project's sub-projects and access entries hold more data than one change can read, so it cannot be archived or restored at once. Delete some of its sub-projects or remove some access first."
+  'this project, or the top-level project above it, has sub-projects that hold more data than one change can read, so it cannot be archived or restored at once. Shorten the longest project names or descriptions there, or delete some of those sub-projects first.'
 
 /**
  * What the tree changes of one mutation may still spend: `entries`, the
