@@ -497,7 +497,7 @@ export const LIMITS = {
     max: 2_000,
     unit: 'sub-projects and access entries',
     refusal:
-      'archiving, restoring or renaming a project, or changing its key, can update at most 2,000 sub-projects and access entries at once. Each sub-project counts, and each person or team with access counts once for the project and once for each sub-project they have their own access to. Archive some of its sub-projects on their own first, or remove some access.',
+      'archiving, restoring or renaming a project, or changing its key, can update at most 2,000 sub-projects and access entries at once. Each sub-project counts, and each person or team with access counts once for the project and once for each sub-project they have their own access to. Archive all of its sub-projects on their own first, or remove some access.',
     on: ALL,
   },
   // A removal clears the person as the lead of each project in the

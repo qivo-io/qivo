@@ -147,15 +147,18 @@ in the archived list.
 Archiving or restoring a project updates its sub-projects and the access
 entries of the people and teams who reach them in one change. A project and
 its sub-projects with more than 2,000 of them together cannot be archived or
-restored at once ([Limits](./limits.md)). Archive some of its sub-projects
-on their own first, or remove some access. A project whose sub-projects
-have unusually large names or descriptions can also hold more data than one
-change can read: names in characters that Qivo expands to sort and search
-them, such as some Arabic ligatures and Japanese unit symbols, or
-descriptions an earlier version of Qivo stored. Restoring a sub-project of
-an archived top-level project reads all the top-level project's
-sub-projects. Qivo then says so; shorten the longest names or descriptions,
-or delete some of those sub-projects first.
+restored at once ([Limits](./limits.md)). While a project still has active
+sub-projects, archiving it also counts the access entries of the
+sub-projects archived on their own before, because restoring the project
+reads them all. Archive all of its sub-projects on their own first, so that
+archiving the project carries none of them, or remove some access. A
+project whose sub-projects have unusually large names or descriptions can
+also hold more data than one change can read: names in characters that
+Qivo expands to sort and search them, such as some Arabic ligatures and
+Japanese unit symbols, or descriptions an earlier version of Qivo stored.
+Restoring a sub-project of an archived top-level project reads all the
+top-level project's sub-projects. Qivo then says so; shorten the longest
+names or descriptions, or delete some of those sub-projects first.
 
 A task in another sub-project whose subtasks were all in the archived one
 becomes an ordinary task again, with its own status, dates and estimate.

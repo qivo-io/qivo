@@ -569,12 +569,14 @@ export async function treeRows(
 /** The child rows under top-level project `rootId`, every grantee's, in
  * one range, spent from `budget` as treeRows spends: those whose `live`
  * copy is `live`, or all of them when it is undefined. A restore of the
- * project reads the archived ones, among them those of the sub-projects it
- * restores and those of the sub-projects archived on their own, which one
- * range cannot leave out. So an archive reads them all: it changes the
- * live ones of the sub-projects it archives and counts the archived ones
- * too, and the restore of a tree reads no more than its archive read
- * (model/projects.ts archiveProjectCore). */
+ * project that brings sub-projects back reads the archived ones, among
+ * them those of the sub-projects it restores and those of the sub-projects
+ * archived on their own, which one range cannot leave out. So an archive
+ * that carries sub-projects reads them all: it changes the live ones of
+ * the sub-projects it carries and counts the archived ones too, and the
+ * restore of the tree reads no more than its archive read. An archive that
+ * carries none reads no child row, as its restore brings none back and
+ * reads none (model/projects.ts archiveProjectCore, unarchiveProjectCore). */
 export async function childRows(
   ctx: QueryCtx,
   orgId: string,

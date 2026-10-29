@@ -820,6 +820,78 @@ describe('archiving and restoring a tree', () => {
     expect((await reachRows(t)).length).toBe(before.length + 2)
   }, 120_000)
 
+  it('archives and restores a project whose sub-projects were all archived on their own, whatever their entries', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const earlier = new Date(Date.parse(NOW) - 3_600_000).toISOString()
+    const meta = await plantProject(t, { org_id, lead_id: f.user.id, archive_state: 'live' })
+    // 20 sub-projects archived on their own, each with the archived child
+    // rows of 100 people, 2,000 in all, and 101 people on the project
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 20; i++) {
+        const id = uuid()
+        await ctx.db.insert('projects', {
+          id,
+          org_id,
+          type: 'project',
+          parent_id: meta.id,
+          key: `E${i}`,
+          name: `Earlier ${i}`,
+          name_key: nameKey(`Earlier ${i}`),
+          description: '',
+          sort_order: i,
+          num: 20_000 + i,
+          track_delay: false,
+          created_at: NOW,
+          archived_at: earlier,
+          archive_state: 'listed',
+        })
+        for (let n = 0; n < 100; n++)
+          await ctx.db.insert('project_reach', {
+            org_id,
+            grantee_kind: 'profile',
+            grantee_id: uuid(),
+            kind: 'child',
+            project_id: id,
+            root_id: meta.id,
+            name_key: nameKey(`Earlier ${i}`),
+            key: `E${i}`,
+            live: false,
+            on_root: false,
+          })
+      }
+    })
+    await rootRows(t, f, meta, 101)
+    // The archive carries no sub-project, so its restore reads no child
+    // row and the archive counts none: 20 sub-projects and 101 rows.
+    const lead = as(t, f.user)
+    await lead.mutation(api.projects.archive, { org_id, id: meta.id })
+    const subs = () =>
+      t.run((ctx) =>
+        ctx.db
+          .query('projects')
+          .withIndex('by_parent', (q) => q.eq('parent_id', meta.id))
+          .collect(),
+      )
+    expect(await states(t, [meta.id])).toEqual(['listed'])
+    expect(
+      (await subs()).every((p) => p.archive_state === 'under' && p.archived_at === earlier),
+    ).toBe(true)
+    await lead.mutation(api.projects.unarchive, { org_id, id: meta.id })
+    expect(await states(t, [meta.id])).toEqual(['live'])
+    expect(
+      (await subs()).every((p) => p.archive_state === 'listed' && p.archived_at === earlier),
+    ).toBe(true)
+    const rows = await reachRows(t)
+    expect(
+      rows.filter((row) => row.root_id === meta.id && row.kind === 'root' && row.live),
+    ).toHaveLength(101)
+    expect(
+      rows.filter((row) => row.root_id === meta.id && row.kind === 'child' && row.live),
+    ).toHaveLength(0)
+  })
+
   it('refuses a tree whose sub-projects pass the bytes a change reads', async () => {
     const t = newT()
     const f = await ready(t)

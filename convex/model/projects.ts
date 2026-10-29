@@ -746,11 +746,12 @@ type TreeChange = {
  * Every sub-project then sits under an archived parent (archive_state
  * 'under'), and the reach rows of the projects it archives say they are no
  * longer live (model/projectNav.ts). A tree whose sub-projects and the
- * rows it reads, the archived child rows its restore reads included, pass
- * LIMITS.projectTreeChange.max or TREE_READ.bytes is refused before
- * anything is written. Existing tasks are untouched; the snapshot stops
- * shipping them because its section filters on project.archived_at. Their
- * inbox messages are marked read for every recipient in the background
+ * rows it reads pass LIMITS.projectTreeChange.max or TREE_READ.bytes is
+ * refused before anything is written; when it carries sub-projects, those
+ * rows include the archived child rows its restore will read. Existing
+ * tasks are untouched; the snapshot stops shipping them because its
+ * section filters on project.archived_at. Their inbox messages are marked
+ * read for every recipient in the background
  * (model/messages.ts scheduleArchivedReads). Already archived is a silent
  * no-op. Returns whether it archived anything.
  */
@@ -765,10 +766,12 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
   // the project's rows, and the live child rows of the sub-projects it
   // carries; a sub-project a restore from Deleted items has not revealed
   // yet holds live child rows under it too, which follow its stored copy
-  // and stay as they are. It reads the archived child rows too, which it
-  // leaves as they are, because the restore reads them (childRows).
+  // and stay as they are. With sub-projects to carry it reads the archived
+  // child rows too, which it leaves as they are, because the restore that
+  // brings those sub-projects back reads them (childRows). Without any, it
+  // reads no child row, as that restore reads none.
   const reach = await treeRows(ctx, project.org_id, [project.id], budget)
-  if (subs.length > 0) {
+  if (carried.length > 0) {
     const ids = new Set(carried.map((s) => s.id))
     for (const row of await childRows(ctx, project.org_id, project.id, undefined, budget))
       if (row.live && ids.has(row.project_id)) reach.push(row)
