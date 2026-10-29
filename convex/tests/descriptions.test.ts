@@ -1415,6 +1415,60 @@ describe("the copies at Convex's limits", () => {
     expect(await expectDescriptions(t, f.org.id)).toBe(120)
   }, 300_000)
 
+  it('the nightly archive takes cleared tasks whose rows are near 1 MiB in several legs, one with a second such row', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const done_at = new Date(Date.now() - 60 * 86_400_000).toISOString()
+    // descriptions from before the caps, in the rows alone, as the clear
+    // leaves them; each archived task reads its rows and writes one
+    const near = (c: string) => c.repeat(1_000_000)
+    const ids: string[] = []
+    for (const c of 'abcdefghij')
+      ids.push(
+        (
+          await plantIssue(t, {
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            status: 'done',
+            done_at,
+            description: near(c),
+          })
+        ).id,
+      )
+    // a rollback left the second task a second row with its copies
+    await t.run((ctx) =>
+      ctx.db.insert('issue_descriptions', {
+        issue_id: ids[1],
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        description: near('b'),
+      }),
+    )
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'info').mockImplementation(() => {})
+    await t.mutation(internal.jobs.archiveDoneIssues, {})
+    await runSteps(t)
+    expect(errors).not.toHaveBeenCalled()
+    const legs = (
+      await t.run((ctx) => ctx.db.system.query('_scheduled_functions').collect())
+    ).filter((job) => job.name.includes('archiveProject'))
+    expect(legs.length).toBeGreaterThan(2)
+    // every task is archived, and the row readers show for it with it
+    for (const id of ids) {
+      const archived = (await taskRow(t, id))?.archived_at
+      expect(archived, id).toBeDefined()
+      expect((await rowsOf(t, id))[0].archived_at, id).toBe(archived)
+    }
+    // the second row keeps its copies for the backfill's repair
+    expect(await backfill(t, { dry_run: true })).toMatchObject({
+      tasks: 10,
+      duplicates: 1,
+      differ: 0,
+      ids: { duplicates: [ids[1]] },
+    })
+    await expectNoCopy(t, ids)
+  }, 300_000)
+
   it('with both copies, a subtree archive or move of the largest descriptions finishes, or refuses and changes nothing', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
