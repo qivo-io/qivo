@@ -1,7 +1,9 @@
 /* Name-ordered lists read a batch at a time: Settings > Labels and the task
- * label picker (model/labels.ts labelBatch), and later the people, team and
- * picker lists of Settings and the REST and MCP lists. A list is one index,
- * or a merge of several (mergeNamed), in the order of a name key (a label's
+ * label picker (model/labels.ts labelBatch), API access's person filter
+ * (apiAccess.ts people), a project's access lists and its access and lead
+ * pickers (model/projectSettings.ts), and later the people and team lists
+ * of Settings and the REST and MCP lists. A list is one index, or a merge
+ * of several (mergeNamed), in the order of a name key (a label's
  * name_lower, a profile's or a team's name_key, lib/nameKey.ts) and then of
  * the fields the index orders equal keys by, the tie: the id or profile_id
  * for the name indexes that end in one, and _creationTime and _id, Convex's
