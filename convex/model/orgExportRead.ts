@@ -277,12 +277,6 @@ export function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection)
     delete row.task_archived
   }
   delete row.task_key
-  // A team's or project's legacy icon and its color: nothing writes or shows
-  // them now, and a value stored before they were dropped has no length limit.
-  if (section === 'teams' || section === 'projects') {
-    delete row.icon
-    delete row.icon_color
-  }
   // An agent key's organization and name key only serve API access's
   // name-ordered index reads.
   if (section === 'agent_keys') {

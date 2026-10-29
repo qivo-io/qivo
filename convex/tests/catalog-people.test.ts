@@ -1039,7 +1039,6 @@ describe('teams.create / teams.update', () => {
         as(t, f.admin).mutation(api.teams.update, { org_id: f.org.id, id: f.team.id, patch }),
       ).rejects.toThrow(/Unexpected field `(icon|stale_days|archive_days)/)
     }
-    expect((await teamById(t, f.team.id))?.icon).toBeUndefined()
     await expectRefusal(
       as(t, f.guest).mutation(api.teams.update, {
         org_id: f.org.id,

@@ -1143,16 +1143,11 @@ describe('a restore and the work around it', () => {
     await expectAll(t, f)
   })
 
-  it('reveals many sub-projects with leads under a parent with a large legacy icon', async () => {
+  it('reveals many sub-projects with leads and reads their top-level project once', async () => {
     const t = newT({ transactionLimits: true })
     const f = await ready(t)
     const org_id = f.org.id
-    // a legacy icon on the top-level project, under the size a stored row
-    // may hold, and 24 sub-projects with a lead of their own each
-    await t.run(async (ctx) => {
-      const row = await byId(ctx, 'projects', f.meta.id)
-      if (row !== null) await ctx.db.patch(row._id, { icon: 'i'.repeat(950_000) })
-    })
+    // 24 sub-projects with a lead of their own each
     for (let i = 0; i < 22; i++)
       await plantProject(t, {
         org_id,
@@ -1173,9 +1168,9 @@ describe('a restore and the work around it', () => {
       await step(t, item.id)
     }
     TRASH_BUDGET.rows = DEFAULT_ROWS
-    // The reveal writes the top-level project back without its icon, and
-    // the leads' rows read it from what the reveal wrote, not once more for
-    // each sub-project (model/deletedItems.ts revealProjects)
+    // The leads' rows read the top-level project from what the reveal
+    // wrote, not once more for each sub-project (model/deletedItems.ts
+    // revealProjects)
     let topReads = 0
     await t.run((ctx) =>
       runStep(
@@ -1196,7 +1191,6 @@ describe('a restore and the work around it', () => {
     // the reveal and every step after it finished
     expect(await jobFor(t, item.id)).toBeNull()
     expect(await t.run((ctx) => byId(ctx, 'deleted_items', item.id))).toBeNull()
-    expect(await projectOf(t, f.meta.id)).not.toHaveProperty('icon')
     await expectAll(t, f)
   }, 120_000)
 
@@ -1363,13 +1357,13 @@ describe('a restore and the work around it', () => {
 
   it("counts the bytes of the stored projects its lead's rows read", async () => {
     const t = newT()
-    // a legacy icon, stored with the project
-    const { f, item } = await ledAndRestoring(t, { icon: 'i'.repeat(900_000) })
-    // a call's quarter of a step holds less than the icon
+    // a description stored before the caps, stored with the project
+    const { f, item } = await ledAndRestoring(t, { description: 'd'.repeat(900_000) })
+    // a call's quarter of a step holds less than the description
     TRASH_BUDGET.bytes = 2 * 1024 * 1024
     await as(t, f.admin).mutation(api.deletedItems.restore, { org_id: f.org.id, ids: [item.id] })
-    // the lead's rows read the icon, so the call stops before the reveal,
-    // where a call that missed the icon's bytes would have revealed
+    // the lead's rows read the description, so the call stops before the
+    // reveal, where a call that missed its bytes would have revealed
     expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_reveal' })
     await runSteps(t)
     await expectAll(t, f)
@@ -1379,10 +1373,11 @@ describe('a restore and the work around it', () => {
     const t = newT()
     const f = await ready(t)
     const org_id = f.org.id
-    // past what a stored row may hold, so the move drops it and frees its id
+    // a description stored before the caps, past what a stored row may
+    // hold, so the move drops it and frees its id
     await t.run(async (ctx) => {
       const row = await byId(ctx, 'projects', f.sub.id)
-      if (row !== null) await ctx.db.patch(row._id, { icon: 'i'.repeat(1_000_100) })
+      if (row !== null) await ctx.db.patch(row._id, { description: 'd'.repeat(1_000_100) })
     })
     TRASH_BUDGET.rows = 1
     await as(t, f.user).mutation(api.projects.deleteDeep, { org_id, id: f.meta.id })
@@ -1442,10 +1437,11 @@ describe('a restore and the work around it', () => {
           .withIndex('by_project_profile', (q) => q.eq('project_id', id))
           .collect(),
       )
-    // past what a stored row may hold, so the move drops it
+    // a description stored before the caps, past what a stored row may
+    // hold, so the move drops it
     await t.run(async (ctx) => {
       const row = await byId(ctx, 'projects', id)
-      if (row !== null) await ctx.db.patch(row._id, { icon: 'i'.repeat(1_000_100) })
+      if (row !== null) await ctx.db.patch(row._id, { description: 'd'.repeat(1_000_100) })
     })
     TRASH_BUDGET.rows = 1
     await as(t, f.user).mutation(api.projects.deleteDeep, { org_id, id })
@@ -1994,13 +1990,18 @@ describe('the backfill', () => {
     await expect(backfill(t, false, first.cursor ?? undefined)).rejects.toThrow('other dry_run')
   })
 
-  it('walks projects with icons near 1 MiB inside the limits of a transaction', async () => {
+  it('walks projects stored before the caps near 1 MiB inside the limits of a transaction', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // legacy icons, each project a document near Convex's 1 MiB, without
-    // an archive state, so every row walked is patched and read again
+    // descriptions stored before the caps, each project a document near
+    // Convex's 1 MiB, without an archive state, so every row walked is
+    // patched and read again
     for (let i = 0; i < 12; i++)
-      await plantProject(t, { org_id: f.org.id, lead_id: f.user.id, icon: 'i'.repeat(1_020_000) })
+      await plantProject(t, {
+        org_id: f.org.id,
+        lead_id: f.user.id,
+        description: 'd'.repeat(1_020_000),
+      })
     let got = await backfill(t, false)
     for (let calls = 0; !got.done; calls++) {
       expect(got.error).toBeUndefined()

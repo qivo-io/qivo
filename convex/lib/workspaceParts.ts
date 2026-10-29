@@ -64,18 +64,6 @@ export function rowOf<D extends { _id: unknown; _creationTime: number }>(
   return row
 }
 
-/* A team or project as the app receives it, without the legacy icon and
- * its color. Nothing writes or shows them now, and a value stored before
- * they were dropped has no length limit. */
-type IconFree<T extends 'teams' | 'projects'> = Omit<AppRow<T>, 'icon' | 'icon_color'>
-
-function iconFree<
-  D extends { _id: unknown; _creationTime: number; icon?: string; icon_color?: string },
->(doc: D) {
-  const { icon: _icon, icon_color: _iconColor, ...row } = rowOf(doc)
-  return row
-}
-
 /* A row without its name key, which only serves name-ordered index reads
  * (schema.ts name_key). */
 type KeyFree<R> = Omit<R, 'name_key'>
@@ -373,7 +361,7 @@ export async function readCatalog(ctx: QueryCtx, me: Doc<'profiles'>) {
   return {
     state: 'ok' as const,
     ...chunkLists({
-      teams: teams.map((team): KeyFree<IconFree<'teams'>> => keyFree(iconFree(team))),
+      teams: teams.map((team): KeyFree<AppRow<'teams'>> => keyFree(rowOf(team))),
       labels: labels.map(
         (l): AppRow<'labels'> => ({ ...rowOf(l), color: shownLabelColor(l.color) }),
       ),
@@ -481,8 +469,8 @@ export async function readProjects(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWind
     state: 'ok' as const,
     ...chunkLists({
       projects: shown.map(
-        (p): Omit<IconFree<'projects'>, 'window_key' | 'name_key' | 'archive_state'> => {
-          const { window_key: _window, name_key: _key, archive_state: _state, ...row } = iconFree(p)
+        (p): Omit<AppRow<'projects'>, 'window_key' | 'name_key' | 'archive_state'> => {
+          const { window_key: _window, name_key: _key, archive_state: _state, ...row } = rowOf(p)
           return row
         },
       ),

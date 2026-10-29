@@ -1247,11 +1247,19 @@ describe('rows that share a _creationTime', () => {
   })
 
   it('ends projects pages at their room inside a tie of large projects', async () => {
-    // eight top-level projects with legacy icons of 900 KiB at times of
-    // their own, then twelve created at one time, 10.8 MB together
-    const icon = 'x'.repeat(900 * 1024)
+    // eight top-level projects with descriptions of 900 KiB, stored before
+    // the caps, at times of their own, then twelve created at one time,
+    // 10.8 MB together
+    const description = 'x'.repeat(900 * 1024)
     const top = (time: number, n: number) =>
-      at(time, { id: `big${n}`, org_id: 'org', type: 'meta', key: `B${n}`, name: `big${n}`, icon })
+      at(time, {
+        id: `big${n}`,
+        org_id: 'org',
+        type: 'meta',
+        key: `B${n}`,
+        name: `big${n}`,
+        description,
+      })
     const large = {
       ...rows,
       projects: [
@@ -1427,9 +1435,10 @@ describe('within Convex limits', () => {
   it('ends a projects page within the limits over small sub-projects of large parents', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // 20 top-level projects with legacy icons of 900 KiB, then a small
-    // sub-project of each, created after all of them, so a page that
-    // starts at the sub-projects reads their parents anew
+    // 20 top-level projects with descriptions of 900 KiB, stored before
+    // the caps, then a small sub-project of each, created after all of
+    // them, so a page that starts at the sub-projects reads their parents
+    // anew
     const parents: string[] = []
     for (let batch = 0; batch < 20; batch += 10)
       await t.run(async (ctx) => {
@@ -1442,8 +1451,7 @@ describe('within Convex limits', () => {
             type: 'meta',
             key: `L${n}`,
             name: `Large ${n}`,
-            description: '',
-            icon: 'x'.repeat(900 * 1024),
+            description: 'x'.repeat(900 * 1024),
             sort_order: 1_000 + n,
             num: 1_000 + n,
             track_delay: false,

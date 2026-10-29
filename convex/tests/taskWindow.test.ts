@@ -724,18 +724,6 @@ const linksRead = (t: T, f: OrgFixture, id: string) =>
     return { answer, read: mib(m), documents: m.documentsRead.used, ranges: m.databaseQueries.used }
   })
 
-/** `n` sub-projects of TBED, which the guest sees through its grant there,
- * each stored before icons were dropped with one near 900 KB. */
-async function iconProjects(t: T, f: OrgFixture, n: number): Promise<Doc<'projects'>[]> {
-  const icon = 'i'.repeat(900 * 1024)
-  const out: Doc<'projects'>[] = []
-  for (let i = 0; i < n; i++)
-    out.push(
-      await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id, icon }),
-    )
-  return out
-}
-
 describe('real limits', () => {
   it('reads 100 subtasks at the description cap in a three-byte script, complete and within TASK_WINDOW.bytes', async () => {
     const t = newT({ transactionLimits: true })
@@ -943,50 +931,6 @@ describe('real limits', () => {
     expect(
       await as(t, f.viewer).query(api.taskWindow.task, { org_id: f.org.id, ref: task.id }),
     ).toMatchObject({ state: 'archived', task: { id: task.id, is_group: false } })
-  }, 120_000)
-
-  it("stops a link read before the caller's access to older ends in projects with icons near 900 KB passes the budget", async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
-    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
-    const projects = await iconProjects(t, f, 10)
-    const legacy = 'o'.repeat(900 * 1024)
-    const ends = await plantMany(
-      t,
-      f,
-      10,
-      (i) => ({ description: legacy, project_id: projects[i].id }),
-      { each: 2, rows: false },
-    )
-    await linkAll(t, f, task, ends)
-    const { answer, read } = await linksRead(t, f, task.id)
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.complete).toBe(false)
-    expect(answer.links.length).toBeGreaterThan(0)
-    expect(answer.links.length).toBeLessThan(10)
-    expect(answer.tasks.map((row) => row.id)).toEqual(answer.links.map((link) => link.target_id))
-    expect(read).toBeLessThanOrEqual(TASK_WINDOW.linkBytes / MIB + 1)
-  }, 120_000)
-
-  it("stops a subtask read before the caller's access to older subtasks in projects with icons near 900 KB passes the budget", async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
-    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
-    const projects = await iconProjects(t, f, 10)
-    const legacy = 'o'.repeat(900 * 1024)
-    await plantMany(
-      t,
-      f,
-      10,
-      (i) => ({ description: legacy, parent_id: task.id, project_id: projects[i].id }),
-      { each: 2, rows: false },
-    )
-    const { answer, read } = await taskRead(t, f, task.id)
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.subtasks.complete).toBe(false)
-    expect(answer.subtasks.rows.length).toBeGreaterThan(0)
-    expect(answer.task.has_hidden_subtasks).toBe(true)
-    expect(read).toBeLessThanOrEqual(TASK_WINDOW.bytes / MIB + 1)
   }, 120_000)
 
   it('stops the group checks of an end whose subtasks are in thousands of archived projects before the index ranges run out', async () => {

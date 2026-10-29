@@ -71,8 +71,6 @@ describe('projects.create', () => {
     expect(row?.track_delay).toBe(true) // teamless projects use the neutral default
     expect(row?.description).toBe('')
     expect(row?.archived_at).toBeUndefined()
-    expect(row?.icon).toBeUndefined()
-    expect(row?.icon_color).toBeUndefined()
     const e = await lastEvent(t, f.org.id)
     expect(e).toMatchObject({
       verb: 'created',
@@ -85,7 +83,7 @@ describe('projects.create', () => {
   })
 
   /* The icon fields were a leftover no screen used, so the functions no
-     longer take them. Rows that hold one still validate. */
+     longer take them, and the schema no longer has them. */
   it('refuses icon fields without inserting the project or consuming a number', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -360,10 +358,9 @@ describe('projects.update', () => {
     expect((await activityFor(t, f.org.id)).length).toBe(before)
   })
 
-  it('update refuses icon fields and leaves a stored icon alone', async () => {
+  it('update refuses icon fields', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await t.run((ctx) => ctx.db.patch(f.meta._id, { icon: 'rocket', icon_color: '#0366D6' }))
     for (const patch of [{ icon: null }, { icon_color: 'red' }]) {
       await expect(
         // @ts-expect-error the patch no longer takes icon fields
@@ -376,7 +373,7 @@ describe('projects.update', () => {
       patch: { name: 'Platform 2' },
     })
     const row = await t.run((ctx) => ctx.db.get(f.meta._id))
-    expect(row).toMatchObject({ name: 'Platform 2', icon: 'rocket', icon_color: '#0366D6' })
+    expect(row).toMatchObject({ name: 'Platform 2' })
   })
 
   it('lead handovers narrate both sides and a project lead cannot be cleared', async () => {
