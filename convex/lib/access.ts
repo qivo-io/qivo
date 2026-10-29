@@ -263,24 +263,25 @@ export const isAccessUnchecked = (e: unknown): e is ConvexError<Refusal> =>
  * at most `projectShares`. Past that the question takes the person's own
  * rows at the largest step, and answers from their teams' shares when those
  * fit; else it asks each of the person's teams that may hold one
- * (project_team_access by_project_team): once the organization's reach rows
- * are complete, those of their teams that hold a root row on the project's
- * top-level project, else all their teams while they are at most
- * `lookups`. One instance asks at most `shareLookups` such teams in all;
+ * (project_team_access by_project_team). Once the organization's reach rows
+ * are complete, those are their teams that hold a root row on the
+ * project's top-level project, and else all their teams while they are at
+ * most `lookups`. One instance asks at most `shareLookups` such teams in all;
  * past that, or past `lookups` teams, the question refuses.
  *
  * Navigation from reach rows, once the organization's rows are complete
- * (org_ready nav_at): the person's memberships, at most `navTeams` teams,
- * and the root rows of their seat and those teams, at most `roots` in all,
- * each read once; then for a parent, the child rows of the grantees that
- * hold a root row on it, at most `children` rows checked in all and
- * `children` + 1 grantees read. Past `navTeams` or `roots` every navigation
+ * (org_ready nav_at), reads the person's memberships, at most `navTeams`
+ * teams, and the root rows of their seat and those teams, at most `roots`
+ * in all, each once. For a parent it then reads the child rows of the
+ * grantees that hold a root row on it, at most `children` rows checked in
+ * all and `children` + 1 grantees read. Past `navTeams` or `roots` every navigation
  * question takes the legacy path, and a parent whose rows past `children`
  * may still show it takes it for that parent.
  *
- * The legacy path: the person's grants and their teams' shares, at most
- * `navRows` rows each, at most `teams` teams, and the parent's sub-projects,
- * at most `subProjects` rows and `subBytes` bytes as Convex counts them.
+ * The legacy path reads the person's grants and their teams' shares, at
+ * most `navRows` rows each, at most `teams` teams, and the parent's
+ * sub-projects, at most `subProjects` rows and `subBytes` bytes as Convex
+ * counts them.
  * From `manyTeams` teams to ask about it reads the organization's teams in
  * one range instead, while they are at most `orgTeams` for each of those
  * teams, at most `orgTeamsMost` and at most `bytes` as JSON, as the part's
@@ -319,11 +320,11 @@ export const isAccessUnchecked = (e: unknown): e is ConvexError<Refusal> =>
  *   ranges, 1,350 documents), their teams' shares (one range a team, 1,001
  *   documents, read once for the steps, sharesOn and the legacy path), the
  *   readiness row (1, 1) and the legacy path's grants (1, 1,001). The reach
- *   path adds all their memberships, at most 129 (1 range) and the root
- *   rows (129 ranges, 1,001): at most 267 ranges and 6,532 documents, the
- *   organization's teams for a parent it hands to the legacy path
- *   included (2,049 rows). Past navTeams the legacy path adds the memberships, at most
- *   257, and the organization's teams (1 range, 4,001 rows, 512 KiB): at
+ *   path adds all their memberships, at most 129 (1 range), and the root
+ *   rows (129 ranges, 1,001), so at most 267 ranges and 6,532 documents
+ *   with the organization's teams for a parent it hands to the legacy path
+ *   (2,049 rows). Past navTeams the legacy path adds the memberships, at most
+ *   257, and the organization's teams (1 range, 4,001 rows, 512 KiB), so at
  *   most 266 ranges and 7,611 documents, or 522 ranges where the
  *   organization's teams are past their bounds and each team is read by
  *   itself. Past `teams` teams it refuses after the memberships (4,001), at

@@ -191,8 +191,8 @@ const SLACK: ReadCeiling = { ranges: 64, documents: 256, bytes: 512 << 10 }
 export const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 }
 
 /** What a call keeps back from Convex's limits for the reads its budget
- * does not count one by one: one access check past the budget's last look,
- * with every read of the caller's own rows it may start, at searchReads'
+ * does not count one by one, which are one access check past the budget's
+ * last look, with every read of the caller's own rows it may start, at searchReads'
  * bounds (lib/access.ts OWN_READS states the figures). That is one
  * question's project, parent, grants and team shares and its navigation
  * from reach rows, at most 23 ranges and 411 documents; the instance's
