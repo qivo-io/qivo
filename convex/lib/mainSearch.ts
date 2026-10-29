@@ -139,8 +139,9 @@ const LOOKUP: ReadCeiling = { ranges: 16, documents: 64, bytes: 64 << 10 }
  * is accessOf's own reads when it asks whether a top-level project shows
  * for navigation: all of the person's grants, memberships and team shares,
  * and the teams those name, which lib/access.ts reads whole, and a team row
- * can hold a legacy icon of any size. A separate repair of legacy icons is
- * planned. Tests lower it. */
+ * can hold a legacy icon of any size. internal/legacyIconsBackfill clears
+ * those icons, and once a later release drops the fields, each of these
+ * team reads costs at most one small team row. Tests lower it. */
 export const SEARCH_RESERVE: ReadCeiling = {
   ranges: OWN_READS.teams + 64,
   documents: 2 * OWN_READS.rows + OWN_READS.orgTeamsMost,
