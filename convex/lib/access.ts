@@ -240,10 +240,25 @@ export const accessUnchecked = (): ConvexError<Refusal> =>
       'Qivo could not finish checking which projects you can see in one request. Contact support@qivo.io so we can help.',
   })
 
-/** Whether `e` is accessUnchecked's refusal. A catch that takes it rethrows
- * everything else. */
+/** Whether `e` is accessUnchecked's refusal, roomSpent's included. A catch
+ * that takes it rethrows everything else. */
 export const isAccessUnchecked = (e: unknown): e is ConvexError<Refusal> =>
   e instanceof ConvexError && (e.data as Partial<Refusal> | null)?.reason === ACCESS_UNCHECKED
+
+/* accessUnchecked where what ran out is one instance's room for single-row
+ * reads (OWN_READS.teamReads), which a read asking about fewer projects
+ * does not use up. */
+class RoomSpent extends ConvexError<Refusal> {}
+
+/** accessUnchecked where the bound that stopped the check is
+ * OWN_READS.teamReads, which one instance spends on all the projects it is
+ * asked about. A client gets the same refusal. A caller that can ask about
+ * fewer projects at a time, as a workspace part can cut its window, tells
+ * it apart (isRoomSpent) and asks again in pieces. */
+export const roomSpent = (): ConvexError<Refusal> => new RoomSpent(accessUnchecked().data)
+
+/** Whether `e` is roomSpent's refusal. */
+export const isRoomSpent = (e: unknown): boolean => e instanceof RoomSpent
 
 /** The bounds of projectLevelsOf's reads, which tests lower and set back
  * with structuredClone.
@@ -362,7 +377,7 @@ export const OWN_READS = {
   subBytes: 4 * MIB,
   projectShares: 64,
   members: 4000,
-  shareLookups: 128,
+  teamReads: 128,
 }
 
 /** The bounds one projectLevelsOf reads within (OWN_READS). */
@@ -389,10 +404,17 @@ export type OwnReads = typeof OWN_READS
  * rest of the transaction, and every caller says what that means for its
  * answer. Below every bound the answers are projectLevel's. Whether a
  * question refuses depends on the person's own rows, except where it reads
- * other rows: a project shared with more than OWN_READS.projectShares teams
- * spends OWN_READS.shareLookups, which other such projects the instance
- * asked about may have spent, and on the legacy path a parent's
- * sub-projects count, which the person may not see. A missing project, a
+ * other rows: OWN_READS.teamReads, which a project shared with more than
+ * OWN_READS.projectShares teams, a parent's further reach rows and team
+ * rows spend, depends on the other projects the instance asked about, and
+ * its refusal (roomSpent) tells a caller that fewer projects may answer;
+ * and on the legacy path a parent's sub-projects count, which the person
+ * may not see. A missing reach row narrows an answer, never widens it: it
+ * hides a sub-project shown only through that row's source, and a team's
+ * share on a project shared with more than OWN_READS.projectShares teams,
+ * until internal/navBackfill writes it. visible and accessible
+ * (accessOf) settle a sub-project from its own or its inherited level,
+ * whichever is not null (sees). A missing project, a
  * dangling parent or a cycle answers null instead of throwing, as
  * projectLevelsForOrg hides them, and a team id that names two rows
  * throws, as projectLevel does. `read` holds projects the caller already
@@ -420,6 +442,15 @@ export function projectLevelsOf(
   const handled = <P extends Promise<unknown>>(promise: P) => {
     promise.catch(() => {})
     return promise
+  }
+  /* how many more single-row reads past the bounds the instance may make
+   * (OWN_READS.teamReads): a team's share on one project, a team's row, a
+   * grantee's child rows past a parent's first and a row check past its
+   * first. Spends `n` of them, or refuses with roomSpent. */
+  let teamReadsLeft = bounds.teamReads
+  const spend = (n: number) => {
+    if (n > teamReadsLeft) throw roomSpent()
+    teamReadsLeft -= n
   }
   /* the rows of `query`, or null when it holds more than `most` */
   const atMost = <R>(query: { take(n: number): Promise<R[]> }, most: number) =>
@@ -488,26 +519,51 @@ export function projectLevelsOf(
       )
     })
   /* the ids of the teams of the person's organization, read once where
-   * navigation asks about many teams, or null past bounds or where one id
-   * names two of its rows */
+   * many teams are asked about, or null past bounds or where one id names
+   * two of its rows */
   let orgTeams: Promise<Set<string> | null> | undefined
+  /* reads the organization's teams for `asking` teams not asked yet, from
+   * bounds.manyTeams of them, while they are at most bounds.orgTeams for
+   * each of those teams, at most bounds.orgTeamsMost and at most
+   * bounds.bytes as JSON */
+  const readOrgTeams = (asking: number) => {
+    if (asking >= bounds.manyTeams)
+      orgTeams ??= handled(
+        atMostBytes(
+          ctx.db.query('teams').withIndex('by_org', (q) => q.eq('org_id', me.org_id)),
+          Math.min(bounds.orgTeams * asking, bounds.orgTeamsMost),
+        ).then((rows) => {
+          const ids = new Set(rows?.map((team) => team.id))
+          // two rows with one id: the read by the team refuses them
+          return rows !== null && ids.size === rows.length ? ids : null
+        }),
+      )
+  }
   /* whether the team with this id is one of the person's organization,
-   * each asked once: from orgTeams once read, else by the team, a read
-   * counted in `shared` when navigation (`own`) makes it. The client chooses
-   * a team's id, and createTeamCore keeps it unique across organizations
-   * (lib/db.ts insertUnique on teams by_uuid), so orgTeams does not look for
-   * a second row with the same id in another organization, which the read
-   * by the team refuses. */
+   * each asked once and counted in `shared`: from orgTeams once read, which
+   * a person whose teams are known and many reads at the first such
+   * question, else by the team, a read spent from bounds.teamReads unless
+   * the legacy path (`own`) makes it for one of the person's teams, at most
+   * bounds.teams. The client chooses a team's id, and createTeamCore keeps it
+   * unique across organizations (lib/db.ts insertUnique on teams by_uuid),
+   * so orgTeams does not look for a second row with the same id in another
+   * organization, which the read by the team refuses. */
   const inOrg = new Map<string, Promise<boolean>>()
   const teamInOrg = (id: string, own = false) =>
     once(inOrg, id, async () => {
+      if (orgTeams === undefined && teams !== undefined) {
+        let asking = 0
+        for (const team of teams) if (!inOrg.has(team)) asking += 1
+        readOrgTeams(asking)
+      }
       const all = orgTeams === undefined ? null : await orgTeams
       if (all !== null) return all.has(id)
+      if (!own) spend(1)
       const team = await ctx.db
         .query('teams')
         .withIndex('by_uuid', (q) => q.eq('id', id))
         .unique()
-      if (own) counted(team === null ? [] : [team])
+      counted(team === null ? [] : [team])
       return team !== null && team.org_id === me.org_id
     })
   /* the shares of the person's teams by project, once read, or null when
@@ -564,25 +620,29 @@ export function projectLevelsOf(
     const known = ofTeams === undefined ? null : await ofTeams
     return known === null ? null : (known.get(p.id) ?? [])
   }
-  /* how many more teams sharesOn may ask about one by one */
-  let lookupsLeft = bounds.shareLookups
   /* the teams of the person that may hold a share on `p`, once the shares on
-   * it are too many to read: once the organization's reach rows are
-   * complete, those that hold a root row on its top-level project, as a
-   * share on the project or on any sub-project of it gives the team one
-   * (model/projectNav.ts planReach); else all their teams, while they are
-   * at most bounds.lookups. Refused where neither holds. */
+   * it are too many to read. Once the organization's reach rows are
+   * complete those are, for a top-level project, their teams whose root row
+   * on it records a source on the project itself (on_root), and for a
+   * sub-project, those that hold a root row on its top-level project, as a
+   * share on a sub-project gives the team one (model/projectNav.ts
+   * planReach). Else, and past bounds.roots, all their teams, refused only
+   * where their memberships are past bounds.members. */
   const mayShare = async (p: Pick<Doc<'projects'>, 'id' | 'parent_id'>) => {
-    const rows = await reachOf()
-    if (rows !== null) return rows.roots.get(p.parent_id ?? p.id)?.teams ?? []
-    if (teams === undefined || teams.size > bounds.lookups) throw accessUnchecked()
+    const reached = await reachOf()
+    if (reached?.roots) {
+      const held = reached.roots.get(p.parent_id ?? p.id)
+      return (p.parent_id === undefined ? held?.onRoot : held?.teams) ?? []
+    }
+    if (teams === undefined) await allMembers()
+    if (teams === undefined) throw accessUnchecked()
     return [...teams]
   }
   /* the team shares on project `p` that may reach the person: those of
    * their teams once read, else the project's, at most
    * bounds.projectShares; past that the person's own rows at the largest
    * step, and else the share of each team of theirs that may hold one
-   * (mayShare), from bounds.shareLookups */
+   * (mayShare), each a read spent from bounds.teamReads */
   const sharesOn = async (p: Doc<'projects'>) => {
     const known = await knownShares(p)
     if (known !== null) return known
@@ -595,8 +655,7 @@ export function projectLevelsOf(
     const theirs = await knownShares(p)
     if (theirs !== null) return theirs
     const ids = await mayShare(p)
-    if (ids.length > lookupsLeft) throw accessUnchecked()
-    lookupsLeft -= ids.length
+    spend(ids.length)
     const found = await Promise.all(
       ids.map((teamId) =>
         ctx.db
@@ -659,12 +718,14 @@ export function projectLevelsOf(
         return row?.nav_at !== undefined
       }),
     ))
-  /* The person's reach rows, read once: who holds a root row on each
-   * top-level project of their organization, their teams and whether their
-   * seat. Null while the organization's rows are not complete, or past
-   * bounds.navTeams teams or bounds.roots root rows, live and archived, as
-   * navigation counts archived sub-projects. */
-  let reach: Promise<{ roots: Map<string, { teams: string[]; seat: boolean }> } | null> | undefined
+  /* The person's reach rows, read once: their grantees, the teams first
+   * and the seat last, and who of them holds a root row on each top-level
+   * project of their organization, live or archived, as navigation counts
+   * archived sub-projects, with the teams whose row records a source on the
+   * project itself (on_root). Null while the organization's rows are not
+   * complete, or past bounds.navTeams teams; `roots` is null past
+   * bounds.roots root rows. */
+  let reach: Promise<{ grantees: Grantee[]; roots: Map<string, Held> | null } | null> | undefined
   const reachOf = () =>
     (reach ??= handled(
       (async () => {
@@ -672,8 +733,8 @@ export function projectLevelsOf(
         if (receivesTeamAccess(me) && teams === undefined) await allMembers()
         const mine = receivesTeamAccess(me) ? teams : new Set<string>()
         if (mine === undefined || mine.size > bounds.navTeams) return null
-        const grantees: Grantee[] = [seatOf(me), ...[...mine].map(teamOf)]
-        const roots = new Map<string, { teams: string[]; seat: boolean }>()
+        const grantees: Grantee[] = [...[...mine].map(teamOf), seatOf(me)]
+        const roots = new Map<string, Held>()
         let left = bounds.roots
         for (const g of grantees) {
           const rows = await atMost(
@@ -687,17 +748,19 @@ export function projectLevelsOf(
               ),
             left,
           )
-          if (rows === null) return null
+          if (rows === null) return { grantees, roots: null }
           left -= rows.length
           for (const row of rows) {
             if (row.org_id !== me.org_id) continue
-            const held = roots.get(row.project_id) ?? { teams: [], seat: false }
-            if (g.grantee_kind === 'team') held.teams.push(g.grantee_id)
-            else held.seat = true
+            const held = roots.get(row.project_id) ?? { teams: [], onRoot: [], seat: false }
+            if (g.grantee_kind === 'team') {
+              held.teams.push(g.grantee_id)
+              if (row.on_root) held.onRoot.push(g.grantee_id)
+            } else held.seat = true
             roots.set(row.project_id, held)
           }
         }
-        return { roots }
+        return { grantees, roots }
       })(),
     ))
   /* the projects the person has a level of their own on, for the legacy
@@ -733,17 +796,7 @@ export function projectLevelsOf(
         const asking = new Set(
           (read?.map((share) => share.team_id) ?? mine).filter((id) => !inOrg.has(id)),
         )
-        if (asking.size >= bounds.manyTeams)
-          orgTeams ??= handled(
-            atMostBytes(
-              ctx.db.query('teams').withIndex('by_org', (q) => q.eq('org_id', me.org_id)),
-              Math.min(bounds.orgTeams * asking.size, bounds.orgTeamsMost),
-            ).then((rows) => {
-              const ids = new Set(rows?.map((team) => team.id))
-              // two rows with one id: the read by the team refuses them
-              return rows !== null && ids.size === rows.length ? ids : null
-            }),
-          )
+        readOrgTeams(asking.size)
         if (read !== null) return read
         const ours = await Promise.all(mine.map((teamId) => teamInOrg(teamId, true)))
         const all = await sharesOfTeams(
@@ -801,6 +854,23 @@ export function projectLevelsOf(
     }
     return children
   }
+  /* Whether the source that grantee `g`'s reach row records on sub-project
+   * `sub` of top-level project `parent` gives the person a level there:
+   * for their seat, its lead (isProjectLead, which a viewer's lead fails) or
+   * its grant; for a team of theirs, the team's share on `sub` (one read,
+   * however many teams share it) through a team of their organization.
+   * While they hold no level on `parent` this is projectLevel's navigation
+   * test for that source, as no inherited level is left to add. */
+  const rowShows = async (g: Grantee, sub: Doc<'projects'>, parent: Doc<'projects'>) => {
+    if (g.grantee_kind === 'profile')
+      return isProjectLead(me, sub, parent) || (await grantLevel(sub.id)) !== null
+    if (!receivesTeamAccess(me)) return false
+    const share = await ctx.db
+      .query('project_team_access')
+      .withIndex('by_project_team', (q) => q.eq('project_id', sub.id).eq('team_id', g.grantee_id))
+      .first()
+    return share !== null && (await isMember(g.grantee_id)) && (await teamInOrg(g.grantee_id))
+  }
   /* Whether a sub-project of top-level project `parent` shows the person
    * a level of their own, which shows `parent` for navigation (levelUnder),
    * asked while they hold no level on `parent`. Once the organization's
@@ -808,37 +878,36 @@ export function projectLevelsOf(
    * row on `parent` can reach one of its sub-projects, because every source
    * on a sub-project writes its grantee a child row there and a root row
    * on its top-level project in the same transaction (model/projectNav.ts
-   * planReach). It reads their child rows under `parent` (project_reach
-   * by_grantee_root, live and archived, as navigation counts archived
-   * sub-projects), the teams' first and the seat's last, as a viewer's
-   * leads give the seat rows that show nothing, at most bounds.children rows
-   * in all and bounds.children + 1 grantees. A row records a source and
-   * grants nothing, so each row's project decides: one of the person's
-   * organization whose parent_id is `parent` (parent_id never changes, so a
-   * row naming another top-level project's sub-project says nothing of
-   * this one) shows `parent` when its own level without navigation is not
-   * null, which for a sub-project equals projectLevel's navigation test
-   * (isProjectLead, or a grant or a team share of theirs on it). A row that
-   * fails is stale, as one a Deleted items move or restore leaves on a
-   * project it no longer describes or one on a reused id, or a viewer's
-   * lead, so a few suffice. Past the rows read with none shown it takes the
-   * legacy path for `parent`, which is exact or refuses. A sub-project whose
-   * own check refuses makes the answer a refusal only if none shows. */
+   * planReach); past bounds.roots it asks every grantee. It reads their
+   * child rows under `parent` (project_reach by_grantee_root, live and
+   * archived, as navigation counts archived sub-projects), the teams' first
+   * and the seat's last, as a viewer's leads give the seat rows that show
+   * nothing, at most bounds.children rows in all. A row records a source and
+   * grants nothing, so each row's project and source decide (rowShows): a
+   * project of the person's organization whose parent_id is `parent`
+   * (parent_id never changes, so a row naming another top-level project's
+   * sub-project says nothing of this one) whose source still gives them a
+   * level. A row that fails is stale, as one a Deleted items move or
+   * restore leaves on a project it no longer describes or one on a reused
+   * id, or a viewer's lead, so a few suffice. Past those rows with none
+   * shown it takes the legacy path for `parent`, which is exact or refuses.
+   * The first grantee's read and the first row's check are the question's
+   * own; every further read spends bounds.teamReads. */
   const navigates = async (parent: Doc<'projects'>): Promise<boolean> => {
-    const rows = await reachOf()
-    if (rows === null) return await legacyNavigates(parent)
-    const held = rows.roots.get(parent.id)
-    if (held === undefined) return false
-    const who: Grantee[] = [...held.teams.map(teamOf), ...(held.seat ? [seatOf(me)] : [])]
+    const reached = await reachOf()
+    if (reached === null) return await legacyNavigates(parent)
+    let who = reached.grantees
+    if (reached.roots !== null) {
+      const held = reached.roots.get(parent.id)
+      if (held === undefined) return false
+      who = [...held.teams.map(teamOf), ...(held.seat ? [seatOf(me)] : [])]
+    }
     let left = bounds.children
-    let past = false
-    let refused = false
+    let checked = 0
     for (const [i, g] of who.entries()) {
-      if (left === 0 || i > bounds.children) {
-        past = true
-        break
-      }
-      const children = await ctx.db
+      if (left === 0) return await legacyNavigates(parent)
+      if (i > 0) spend(1)
+      const rows = await ctx.db
         .query('project_reach')
         .withIndex('by_grantee_root', (q) =>
           q
@@ -848,25 +917,16 @@ export function projectLevelsOf(
             .eq('kind', 'child'),
         )
         .take(left + 1)
-      for (const row of children) {
-        if (left === 0) {
-          past = true
-          break
-        }
+      for (const row of rows) {
+        if (left === 0) return await legacyNavigates(parent)
         left -= 1
+        if (checked > 0) spend(2)
+        checked += 1
         const sub = await project(row.project_id)
         if (sub === null || sub.org_id !== me.org_id || sub.parent_id !== parent.id) continue
-        try {
-          if ((await level(sub.id, false)) !== null) return true
-        } catch (e) {
-          if (!isAccessUnchecked(e)) throw e
-          refused = true
-        }
+        if (await rowShows(g, sub, parent)) return true
       }
-      if (past) break
     }
-    if (past) return await legacyNavigates(parent)
-    if (refused) throw accessUnchecked()
     return false
   }
   const levels = new Map<string, Promise<AccessLevel | null>>()
@@ -877,6 +937,32 @@ export function projectLevelsOf(
       const root = p === null ? null : await rootOf(p)
       if (p === null || root === null) return null
       return await levelUnder(me, p, root, includeNavigation, { direct: directOf, navigates })
+    })
+  const seen = new Map<string, Promise<boolean>>()
+  /* whether level() of the project with this id is not null, settled by
+   * whichever of a sub-project's own level and the level it inherits from
+   * its top-level project answers first: either not null shows it, so a
+   * bound that stops one of them refuses only where the other gives none.
+   * Any other error of either throws, as projectLevel does. A top-level
+   * project asks level() itself. */
+  const sees = (id: string, includeNavigation = true) =>
+    once(seen, `${includeNavigation}:${id}`, async () => {
+      const p = await project(id)
+      const root = p === null ? null : await rootOf(p)
+      if (p === null || root === null || p.id === root.id)
+        return (await level(id, includeNavigation)) !== null
+      // levelUnder's checks before the direct levels
+      if (p.org_id !== me.org_id || root.org_id !== me.org_id || !inMetaTree(p, root)) return false
+      if (me.org_role === 'admin' || isProjectLead(me, p, root)) return true
+      const both = await Promise.allSettled([
+        directOf(p),
+        isProjectLead(me, root, root) ? 'user' : directOf(root),
+      ])
+      for (const one of both)
+        if (one.status === 'rejected' && !isAccessUnchecked(one.reason)) throw one.reason
+      if (both.some((one) => one.status === 'fulfilled' && one.value !== null)) return true
+      for (const one of both) if (one.status === 'rejected') throw one.reason
+      return false
     })
   return {
     /** About what the reads of the person's own rows cost so far, which
@@ -899,6 +985,10 @@ export function projectLevelsOf(
     /** projectLevel on the project with this id, null when it is missing.
      * Rejects with accessUnchecked where a bound stopped the check. */
     level,
+    /** Whether level() of the project with this id is not null, settled by
+     * either a sub-project's own or its inherited level, so it rejects
+     * with accessUnchecked only where neither gives a level. */
+    sees,
   }
 }
 
@@ -910,6 +1000,11 @@ const seatOf = (me: Pick<Doc<'profiles'>, 'id'>): Grantee => ({
   grantee_id: me.id,
 })
 const teamOf = (id: string): Grantee => ({ grantee_kind: 'team', grantee_id: id })
+
+/* Who of a person's grantees holds a root row on one top-level project: their
+ * teams, those of the teams whose row records a source on the project itself
+ * (on_root), and whether their seat. */
+type Held = { teams: string[]; onRoot: string[]; seat: boolean }
 
 /** The caller's access as one read asks it, project by project, each
  * project and its levels read once (projectLevelsOf). A read asks only
@@ -938,7 +1033,7 @@ export function accessOf(
     const p = await levels.project(id)
     return p !== null && p.org_id === me.org_id ? p : undefined
   }
-  const visible = async (id: string) => (await levels.level(id)) !== null
+  const visible = (id: string) => levels.sees(id)
   return {
     /** What the caller's own grants and team shares cost to read so far,
      * alike in every part (lib/workspaceParts.ts softSplit). */
@@ -951,14 +1046,16 @@ export function accessOf(
      * here do not read it again (main Search's name candidates). */
     seen: levels.seen,
     /** Whether the caller can see the project with this id
-     * (canSeeProject). */
+     * (canSeeProject), which a sub-project's own or inherited level settles,
+     * whichever is not null, so it refuses only where neither does
+     * (projectLevelsOf sees). */
     visible,
     /** Whether the caller can see the project with this id for a reason
      * other than navigation to one of its sub-projects (canAccessProject):
      * as its lead, through a grant or a team share on it or above it, or as
-     * an organization admin. It never reads a top-level project's
-     * sub-projects. */
-    accessible: async (id: string) => (await levels.level(id, false)) !== null,
+     * an organization admin, settled as `visible` is. It never reads a
+     * top-level project's sub-projects. */
+    accessible: (id: string) => levels.sees(id, false),
     /** The caller's level on the project with this id (projectLevel), null
      * where they cannot see it. */
     level: (id: string) => levels.level(id),

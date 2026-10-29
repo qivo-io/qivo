@@ -927,10 +927,10 @@ describe('real limits', () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     // twelve sub-projects, each shared with 600 teams of its own at the
-    // name cap, about 1.7 MB of shares, which the viewer's access reads
-    // whole on each project it asks about. One step takes the twelve ends,
-    // one in each of them, and asked about them together they would read
-    // past Convex's 16 MiB.
+    // name cap, about 1.7 MB of shares, which the viewer's access read whole
+    // on each project it asked about before lib/access.ts OWN_READS bounded
+    // them. One step takes the twelve ends, one in each of them, and asked
+    // about them together they would read past Convex's 16 MiB.
     const projects = await wideProjects(t, f, 12)
     for (const p of projects) await distinctShares(t, f, p, 600)
     const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
@@ -946,15 +946,15 @@ describe('real limits', () => {
       links: answer.links.length,
       complete: answer.complete,
     })
-    // It asks about the projects one at a time and stops once PROJECT no
-    // longer fits, so it passes the cap by the shares of the project it
-    // asked about last, about 1.7 MB, and then has no bytes left for the
-    // group checks, so the ends it read stay out of a list that says it is
-    // incomplete.
-    expect(answer.complete).toBe(false)
+    // The access reads at most OWN_READS.projectShares and one more of each
+    // project's shares and then the viewer's own rows, which name no team,
+    // so it reads a small part of the 7,200 shares and every end is checked
+    // inside the limits; the viewer sees them through TBED.
+    expect(answer.complete).toBe(true)
+    expect(answer.links).toHaveLength(12)
     expect(answer.tasks.map((row) => row.id)).toEqual(answer.links.map((link) => link.target_id))
-    expect(reads.documents).toBeGreaterThan(6 * 600)
-    expect(reads.read).toBeLessThan(TASK_WINDOW.linkBytes / MIB + 1.75)
+    expect(reads.documents).toBeLessThan(12 * (OWN_READS.projectShares + 1) + 200)
+    expect(reads.read).toBeLessThan(TASK_WINDOW.linkBytes / MIB)
   }, 300_000)
 
   it('stops at older subtasks near 900 KB with complete false, the rows read, and no error', async () => {
@@ -1184,9 +1184,9 @@ describe('real limits', () => {
 describe('a check of the caller access that a bound stops', () => {
   /* OWN_READS under which the check of a project shared with one of the
    * caller's teams stops at a bound (lib/access.ts accessUnchecked), and
-   * one bound up, where that one team is asked team by team. */
-  const UNCHECKED = { projectShares: 0, rows: 0, lookups: 0, shareLookups: 0 }
-  const ONE_UP = { projectShares: 0, rows: 0, lookups: 1, shareLookups: 1 }
+   * one bound up, with room for that team asked by itself and its row. */
+  const UNCHECKED = { projectShares: 0, rows: 0, lookups: 0, teamReads: 0 }
+  const ONE_UP = { projectShares: 0, rows: 0, lookups: 1, teamReads: 2 }
 
   it('answers unavailable for the task or its parent, ends a subtask or link list there as incomplete, and one bound up answers as with the default bounds', async () => {
     const t = newT()

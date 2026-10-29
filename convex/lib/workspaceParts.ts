@@ -42,7 +42,7 @@ import {
 } from '../model/orgs'
 import { shownAvatarColor } from '../model/people'
 import { stampOfRow } from '../model/syncStamps'
-import { type Access, accessOf, isAccessUnchecked, isOrgStaff } from './access'
+import { type Access, accessOf, isAccessUnchecked, isOrgStaff, isRoomSpent } from './access'
 import { roomOf } from './archivedTasks'
 import { chunkLists } from './arrayLimit'
 import { orgCreateFor, seatlessState } from './billingAccess'
@@ -218,16 +218,22 @@ async function softSplit(ctx: QueryCtx, w: IdWindow, over: boolean, shared: Shar
   return over || (await readPast(ctx, PAGE.soft, shared)) ? { split: true as const } : {}
 }
 
-/** `part`'s answer, or `refused` with the sentence of a check of the
- * caller's access that a bound stopped (lib/access.ts accessUnchecked),
- * which the app shows as it shows TOO_MUCH. Cutting the window would not
- * help, as those reads are the caller's own, alike in every part
- * (softSplit). */
-async function unlessUnchecked<T>(part: Promise<T>) {
+/** `part`'s answer for window `w`, where a check of the caller's access
+ * stopped at a bound (lib/access.ts accessUnchecked). Where what ran out is
+ * the room one instance has for the projects it asks about
+ * (lib/access.ts roomSpent), a smaller window asks about fewer of them, so
+ * the part answers overflow while `w` can be cut, as for reads past
+ * PAGE.hard, and refuses only once it cannot. Every other such bound
+ * stops a check of the caller's own rows, alike in every part and every
+ * window, so cutting would not help (softSplit): the part answers
+ * `refused` with the check's sentence, which the app shows as it shows
+ * TOO_MUCH. */
+async function unlessUnchecked<T>(part: Promise<T>, w: IdWindow) {
   try {
     return await part
   } catch (e) {
     if (!isAccessUnchecked(e)) throw e
+    if (isRoomSpent(e) && halve(w) !== null) return { state: 'overflow' as const }
     return { state: 'refused' as const, message: e.data.message }
   }
 }
@@ -442,9 +448,10 @@ export async function readPeople(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow
  * their team grants, and the milestones of the active ones. It reads the
  * window's projects in one range, the caller's levels on each and on its
  * parent, and up to three ranges per shown project. A check of the caller's
- * access that a bound stopped answers `refused` (unlessUnchecked). */
+ * access that a bound stopped answers `overflow` or `refused`
+ * (unlessUnchecked). */
 export const readProjects = (ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) =>
-  unlessUnchecked(projectsOf(ctx, me, w))
+  unlessUnchecked(projectsOf(ctx, me, w), w)
 
 /* readProjects' answer while every check of the caller's access finishes. */
 async function projectsOf(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {
@@ -616,9 +623,9 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[
  * accessOf). Each shown task's text is one more read, of its description
  * row, read last and by bytes, and a window whose texts do not fit answers
  * overflow. A check of the caller's access that a bound stopped answers
- * `refused` (unlessUnchecked). */
+ * `overflow` or `refused` (unlessUnchecked). */
 export const readTasks = (ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) =>
-  unlessUnchecked(tasksOf(ctx, me, w))
+  unlessUnchecked(tasksOf(ctx, me, w), w)
 
 /* readTasks' answer while every check of the caller's access finishes. */
 async function tasksOf(ctx: QueryCtx, me: Doc<'profiles'>, w: IdWindow) {

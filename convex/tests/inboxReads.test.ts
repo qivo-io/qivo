@@ -1136,13 +1136,13 @@ describe('a check of the seat access that a bound stops', () => {
     expect(usual.item.state === 'ok' && usual.item.item).not.toBeNull()
     // the check of PCB, shared with the seat's team, stops: no share read
     // project by project, none of their teams' at once, none team by team
-    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, shareLookups: 0 })
+    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0 })
     const stopped = await read()
     expect(stopped.summary.complete).toBe(false)
     expect(stopped.summary.unread_count).toBeLessThan(3)
     expect(stopped.item).toEqual({ state: 'ok', item: null })
-    // one team asked team by team
-    Object.assign(OWN_READS, { lookups: 1, shareLookups: 1 })
+    // room for the team asked by itself and its own row
+    Object.assign(OWN_READS, { lookups: 1, teamReads: 2 })
     expect(await read()).toEqual(usual)
   })
 })

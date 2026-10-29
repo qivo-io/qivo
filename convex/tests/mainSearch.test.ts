@@ -2459,13 +2459,13 @@ describe('a check of the caller access that a bound stops', () => {
       const usual = await page()
       expect(taskIds(usual), `projects ${projects}`).toEqual([task.id])
       // the check of FW, shared with the member's team, stops at a bound
-      Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, shareLookups: 0 })
+      Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0 })
       const stopped = await page()
       expect(stopped.coverage.complete, `projects ${projects}`).toBe(false)
       if (usual.coverage.complete)
         expect(stopped.coverage, `projects ${projects}`).toMatchObject({ stopped: 'reads' })
       expect(taskIds(stopped)).toEqual([])
-      Object.assign(OWN_READS, { lookups: 1, shareLookups: 1 })
+      Object.assign(OWN_READS, { lookups: 1, teamReads: 2 })
       expect(await page(), `projects ${projects}`).toEqual(usual)
       Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
     }

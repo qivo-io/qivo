@@ -229,7 +229,7 @@ export const searchReads = (): OwnReads => ({
   roots: Math.min(OWN_READS.roots, 512),
   subProjects: Math.min(OWN_READS.subProjects, 512),
   subBytes: Math.min(OWN_READS.subBytes, 512 << 10),
-  shareLookups: Math.min(OWN_READS.shareLookups, 32),
+  teamReads: Math.min(OWN_READS.teamReads, 32),
 })
 
 /** How the search sources filter archived tasks while the toggle is off.

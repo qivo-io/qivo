@@ -24,6 +24,7 @@ import {
 import { byId, newWindowKey } from '../lib/db'
 import { ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { halve, type IdWindow, idWindows, inIdWindow } from '../lib/idWindows'
+import { NAME_MAX } from '../lib/limits'
 import { mainSearchPage } from '../lib/mainSearch'
 import { nameKey } from '../lib/nameKey'
 import { inWorkingSet } from '../lib/workingSet'
@@ -431,9 +432,9 @@ describe('projectLevelsOf own reads', () => {
           'viewer',
           'viewer',
         ])
-        // the readiness row, the one membership, and the root rows of the
-        // seat (none) and of the team (TBED and Second), once
-        expect([levels.shared.ranges, levels.shared.documents], `instance ${n}`).toEqual([4, 4])
+        // the readiness row, the one membership, the root rows of the team
+        // (TBED and Second) and of the seat (none), and the team's row, once
+        expect([levels.shared.ranges, levels.shared.documents], `instance ${n}`).toEqual([5, 5])
       }
     })
   })
@@ -471,10 +472,10 @@ describe('projectLevelsOf own reads', () => {
       const levels = projectLevelsOf(ctx, me)
       const answers = await Promise.all(subs.map((sub) => levels.level(sub.id, false)))
       expect(answers.every((level) => level === 'user')).toBe(true)
-      // grants and memberships at the largest step, the one team's shares,
-      // each once for the 64 questions
-      expect(levels.shared.ranges).toBe(3)
-      expect(levels.shared.documents).toBe(1 + 64)
+      // grants and memberships at the largest step, the one team's shares
+      // and its row, each once for the 64 questions
+      expect(levels.shared.ranges).toBe(4)
+      expect(levels.shared.documents).toBe(1 + 64 + 1)
     })
   })
 
@@ -510,9 +511,10 @@ describe('projectLevelsOf own reads', () => {
     expect(legacy.out).toEqual(['viewer', null])
     expect(reach.out).toEqual(legacy.out)
     // legacy: readiness, membership, grants, the team and its shares; reach:
-    // readiness, membership and the root rows of the seat and the team
+    // readiness, membership, the root rows of the team and the seat, and the
+    // team, which a sub-project's check reads
     expect(legacy.shared.ranges).toBe(5)
-    expect(reach.shared.ranges).toBe(4)
+    expect(reach.shared.ranges).toBe(5)
   })
 
   it('refuses as projectLevel does where a team id names two rows on the reach path, with no rejection left unhandled', async () => {
@@ -774,10 +776,10 @@ describe("the finding at Convex's real limits", () => {
     expect(got.hidden).toBe(false)
     console.info(`finding, reach path: ${JSON.stringify(got)}`)
     expect(got.reads.documents).toBeLessThan(2_000)
-    // the readiness row, 20 memberships and 320 root rows, once, and the
-    // 32nd question's step, which reads the first team's shares up to one
-    // past OWN_READS.rows and stops
-    expect(got.shared.documents).toBe(1 + 20 + 320 + OWN_READS.rows + 1)
+    // the readiness row, 20 memberships, 320 root rows and the
+    // organization's 21 teams, read once for the teams the sub-projects'
+    // checks ask about
+    expect(got.shared.documents).toBe(1 + 20 + 320 + 21)
   }, 600_000)
 
   it('refuses those questions inside the limits without nav_at, never with a Convex error', async () => {
@@ -899,7 +901,265 @@ describe("the finding at Convex's real limits", () => {
     console.info(
       `64 projects past projectShares: ${JSON.stringify({ refused: got.answers.filter((a) => a === 'refused').length, reads: got.reads })}`,
     )
-    // none is the person's, and none shows
-    expect(got.answers).not.toContain(true)
+    // each asks the 20 teams that hold a root row on the meta one by one,
+    // so OWN_READS.teamReads holds six of them; none shows, and the rest
+    // refuse as having run out of the instance's room
+    const answered = Math.floor(OWN_READS.teamReads / 20)
+    expect(got.answers.filter((answer) => answer === false)).toHaveLength(answered)
+    expect(got.answers.filter((answer) => answer === 'refused')).toHaveLength(64 - answered)
   }, 600_000)
 })
+
+/* The reach rows of team `teamId` for a share on sub-project `sub` of `top`:
+ * a child row on `sub` and a root row on `top`, as planReach writes them. */
+async function plantShareReach(
+  ctx: MutationCtx,
+  teamId: string,
+  top: Doc<'projects'>,
+  sub: Doc<'projects'>,
+) {
+  const row = (p: Doc<'projects'>, kind: 'root' | 'child') => ({
+    org_id: p.org_id,
+    grantee_kind: 'team' as const,
+    grantee_id: teamId,
+    kind,
+    project_id: p.id,
+    root_id: top.id,
+    name_key: nameKey(p.name),
+    key: p.key,
+    live: true,
+    on_root: false,
+  })
+  await ctx.db.insert('project_reach', row(top, 'root'))
+  await ctx.db.insert('project_reach', row(sub, 'child'))
+}
+
+/* `n` share rows of team `teamId` on projects that do not exist, which fill
+ * its shares past OWN_READS.rows without changing any level. */
+async function plantShares(ctx: MutationCtx, teamId: string, n: number) {
+  for (let i = 0; i < n; i++)
+    await ctx.db.insert('project_team_access', {
+      project_id: uuid(),
+      team_id: teamId,
+      level: 'viewer',
+    })
+}
+
+describe('projectLevelsOf past its bounds of own rows', () => {
+  it('shows a parent for navigation past OWN_READS.roots root rows, where the legacy path would refuse their shares', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+      await plantShareReach(ctx, f.team.id, f.meta, f.sub)
+      // the team's sources on as many other top-level projects as the reach
+      // path reads root rows, past OWN_READS.rows shares in all
+      for (let i = 0; i < OWN_READS.roots; i++) {
+        const project_id = uuid()
+        await ctx.db.insert('project_team_access', {
+          project_id,
+          team_id: f.team.id,
+          level: 'user',
+        })
+        await ctx.db.insert('project_reach', {
+          org_id: f.org.id,
+          grantee_kind: 'team',
+          grantee_id: f.team.id,
+          kind: 'root',
+          project_id,
+          root_id: project_id,
+          name_key: `elsewhere ${i}`,
+          key: `E${i}`,
+          live: true,
+          on_root: true,
+        })
+      }
+      await ctx.db.insert('org_ready', { org_id: f.org.id, nav_at: NOW, name_keys_at: NOW })
+    })
+    const got = await t.run(async (ctx) => {
+      const levels = projectLevelsOf(ctx, me)
+      const answers = [
+        await levelOrRefused(levels, f.meta.id),
+        await levelOrRefused(levels, f.hidden.id),
+        await levelOrRefused(levels, f.sub.id),
+      ]
+      return { answers, reads: await readsOf(ctx) }
+    })
+    expect(got.answers).toEqual(['viewer', null, 'user'])
+    console.info(`past roots: ${JSON.stringify(got.reads)}`)
+    expect((await t.run((ctx) => readProjects(ctx, me, { from: '', to: null }))).state).toBe('ok')
+  }, 240_000)
+
+  it('shows a parent from reach rows for a person in 100 teams whose teams hold more than OWN_READS.rows shares, which the legacy path refuses', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+      await plantShareReach(ctx, f.team.id, f.meta, f.sub)
+      for (let i = 1; i < 100; i++) {
+        const team_id = await newTeam(ctx, f.org.id)
+        await ctx.db.insert('team_members', { team_id, profile_id: me.id, is_leader: false })
+        await plantShares(ctx, team_id, 11)
+      }
+    })
+    expect(OWN_READS.navTeams).toBeGreaterThanOrEqual(100)
+    const ask = () =>
+      t.run(async (ctx) => {
+        const levels = projectLevelsOf(ctx, me)
+        return [await levelOrRefused(levels, f.meta.id), await levelOrRefused(levels, f.hidden.id)]
+      })
+    // without nav_at the legacy path reads their 1,090 shares and refuses
+    expect(await ask()).toEqual(['refused', 'refused'])
+    await stampNav(t, f.org.id)
+    expect(await ask()).toEqual(['viewer', null])
+  }, 240_000)
+
+  it('shows a sub-project from the level it inherits where its own check refuses, and level() refuses', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      for (let i = 0; i <= OWN_READS.projectShares; i++)
+        await ctx.db.insert('project_team_access', {
+          project_id: f.sub.id,
+          team_id: i === 0 ? f.team.id : uuid(),
+          level: 'user',
+        })
+      await plantShares(ctx, f.team.id, OWN_READS.rows)
+    })
+    // FW's team may not be asked by itself, so its own check refuses
+    Object.assign(OWN_READS, { teamReads: 0 })
+    const answers = (grant: boolean) =>
+      t.run(async (ctx) => {
+        const access = accessOf(ctx, me)
+        const settle = (p: Promise<unknown>) =>
+          p.catch((e: unknown) => (isAccessUnchecked(e) ? 'refused' : Promise.reject(e)))
+        return {
+          grant,
+          visible: await settle(access.visible(f.sub.id)),
+          accessible: await settle(access.accessible(f.sub.id)),
+          holds: await settle(access.holds(task)),
+          level: await settle(access.level(f.sub.id)),
+        }
+      })
+    expect(await answers(false)).toEqual({
+      grant: false,
+      visible: 'refused',
+      accessible: 'refused',
+      holds: 'refused',
+      level: 'refused',
+    })
+    // a viewer grant on TBED, which FW inherits
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.meta.id,
+        profile_id: me.id,
+        level: 'viewer',
+      }),
+    )
+    expect(await answers(true)).toEqual({
+      grant: true,
+      visible: true,
+      accessible: true,
+      holds: true,
+      level: 'refused',
+    })
+  })
+})
+
+describe('a workspace batch at the name caps', () => {
+  it("reads a batch of parents seen only through a team's sub-project, each shared with 64 teams named at the caps, inside Convex's limits", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const me = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    const wide = 'ﷺ'.repeat(NAME_MAX)
+    const families: { meta: Doc<'projects'>; subs: Doc<'projects'>[] }[] = []
+    for (let n = 0; n < 64; n++)
+      families.push(await t.run((ctx) => plantFamily(ctx, f.org.id, 'Capped', 1)))
+    const teams = await t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i < 64; i++) {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: f.org.id,
+          name: wide,
+          name_key: nameKey(wide),
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        ids.push(id)
+      }
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      return ids
+    })
+    for (const { meta, subs } of families)
+      await t.run(async (ctx) => {
+        for (const p of [meta, subs[0]])
+          for (const team_id of teams)
+            await ctx.db.insert('project_team_access', {
+              project_id: p.id,
+              team_id,
+              level: 'user',
+              name_key: nameKey(wide),
+            })
+        await ctx.db.insert('project_team_access', {
+          project_id: subs[0].id,
+          team_id: f.team.id,
+          level: 'user',
+        })
+        await plantShareReach(ctx, f.team.id, meta, subs[0])
+      })
+    await t.run((ctx) =>
+      ctx.db.insert('org_ready', { org_id: f.org.id, nav_at: NOW, name_keys_at: NOW }),
+    )
+    // the parents only, as one batch of the projects part asks them
+    const got = await t.run(async (ctx) => {
+      const access = accessOf(
+        ctx,
+        me,
+        families.map((family) => family.meta),
+      )
+      const shown = await Promise.all(families.map((family) => access.visible(family.meta.id)))
+      return { shown, reads: await readsOf(ctx) }
+    })
+    expect(got.shown).toEqual(families.map(() => true))
+    console.info(`batch of 64 parents at the name caps: ${JSON.stringify(got.reads)}`)
+    // the parents' own 4,096 team shares with their name keys take about
+    // 5.7 MB, as before these bounds; navigation adds one share read a
+    // parent, where checking each child's level read the child's 64 shares
+    // again and doubled it
+    expect(got.reads.bytes).toBeLessThan(7 * 1024 * 1024)
+  }, 600_000)
+})
+

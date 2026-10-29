@@ -443,14 +443,16 @@ type Levels = ReturnType<typeof projectLevelsOf>
  * projectLevelsOf): OWN_READS, with the bounds this report counts first in
  * place of the matching ones, so a level it asks once they fit reads what
  * they counted and is not refused for them: the team shares of one project
- * (SHARES), the admin's grants, memberships and team shares (OWN) and a
- * parent's sub-projects (SUBS). */
+ * (SHARES), the admin's grants, memberships and team shares (OWN), with
+ * room to read each of those teams by itself, and a parent's sub-projects
+ * (SUBS). */
 const reportReads = (): OwnReads => ({
   ...OWN_READS,
   projectShares: SHARES.most,
   navRows: OWN.rows,
   teams: OWN.teams,
   members: Math.max(OWN_READS.members, OWN.rows),
+  teamReads: Math.max(OWN_READS.teamReads, OWN.teams),
   subProjects: SUBS.most,
   subBytes: SUBS.bytes,
 })

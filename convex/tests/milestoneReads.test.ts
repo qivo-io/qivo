@@ -1608,7 +1608,7 @@ describe('a check of the caller access that a bound stops', () => {
     const usual = await read()
     expect(usual.section.rows.map((row) => row.id)).toEqual([m.id])
     expect(usual.get).toMatchObject({ can_write: false })
-    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, shareLookups: 0 })
+    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0 })
     for (const refused of [
       caller.query(api.milestones.section, {
         projects: [f.sub.id],
@@ -1619,7 +1619,7 @@ describe('a check of the caller access that a bound stops', () => {
       caller.query(api.milestones.get, { id: m.id }),
     ])
       expect((await expectRefusal(refused, 'rule')).data.reason).toBe(ACCESS_UNCHECKED)
-    Object.assign(OWN_READS, { lookups: 1, shareLookups: 1 })
+    Object.assign(OWN_READS, { lookups: 1, teamReads: 2 })
     expect(await read()).toEqual(usual)
   })
 })

@@ -12,6 +12,7 @@ import {
   cut,
   cutPieces,
   halve,
+  type IdWindow,
   idWindows,
   inIdWindow,
   isIdWindow,
@@ -1467,39 +1468,137 @@ async function plantTeamMember(t: T, f: OrgFixture) {
   return me
 }
 
-/* OWN_READS under which the check of a project shared with one of the
- * caller's teams stops at a bound (lib/access.ts accessUnchecked): no share
- * read project by project, none of their teams' at once, by a step or by
- * navigation's legacy path, and none asked team by team; and one bound up,
- * where one team is asked team by team and navigation reads their shares. */
-const UNCHECKED = { projectShares: 0, rows: 0, navRows: 0, lookups: 0, shareLookups: 0 }
-const ONE_UP = { projectShares: 0, rows: 0, lookups: 1, shareLookups: 1 }
+/* The reach rows of the fixture's team, as its share on FW wrote them (a
+ * child row on FW and a root row on TBED), with nav_at stamped, so
+ * navigation and the teams that may share a project are read from them. */
+async function stampTeamReach(t: T, f: OrgFixture) {
+  await t.run(async (ctx) => {
+    const row = {
+      org_id: f.org.id,
+      grantee_kind: 'team' as const,
+      grantee_id: f.team.id,
+      root_id: f.meta.id,
+      live: true,
+      on_root: false,
+    }
+    await ctx.db.insert('project_reach', {
+      ...row,
+      kind: 'root',
+      project_id: f.meta.id,
+      name_key: 'testbed platform',
+      key: f.meta.key,
+    })
+    await ctx.db.insert('project_reach', {
+      ...row,
+      kind: 'child',
+      project_id: f.sub.id,
+      name_key: 'firmware',
+      key: f.sub.key,
+    })
+    await ctx.db.insert('org_ready', { org_id: f.org.id, nav_at: NOW, name_keys_at: NOW })
+  })
+}
+
+/* The narrowest window of the grid that holds `key`. */
+function narrowest(key: string): IdWindow {
+  let w: IdWindow = { from: '', to: null }
+  for (let halves = halve(w); halves !== null; halves = halve(w))
+    w = halves.find((half) => inIdWindow(key, half))!
+  return w
+}
 
 describe('a check of the caller access that a bound stops', () => {
-  it('refuses the projects and tasks parts with its sentence and cuts the inbox, and one bound up each answers as with the default bounds', async () => {
+  it('cuts the projects and tasks parts where the room of their reads ran out and refuses them where their own rows stop it, cuts the inbox, and one bound up answers as with the default bounds', async () => {
     const t = newT()
     const f = await withOrg(t)
     const me = await plantTeamMember(t, f)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // a task an earlier version stored on TBED, which shows the member only
+    // for navigation
+    const onTop = await plantIssue(t, { org_id: f.org.id, project_id: f.meta.id })
     await plantMessage(t, { org_id: f.org.id, recipient_id: me.id, issue_id: task.id })
+    await stampTeamReach(t, f)
     // each part in a transaction of its own, as each is a query
-    const parts = async () => ({
-      projects: await t.run((ctx) => readProjects(ctx, me, { from: '', to: null })),
-      tasks: await t.run((ctx) => readTasks(ctx, me, { from: '', to: null })),
+    const parts = async (w: IdWindow = { from: '', to: null }) => ({
+      projects: await t.run((ctx) => readProjects(ctx, me, w)),
+      tasks: await t.run((ctx) => readTasks(ctx, me, w)),
       inbox: await t.run((ctx) => readInbox(ctx, me)),
     })
     const usual = await parts()
     expect(
       usual.projects.state === 'ok' && usual.projects.projects.map((p) => p.key).sort(),
     ).toEqual(['FW', 'TBED'])
+    expect(usual.tasks.state === 'ok' && usual.tasks.issues.map((row) => row.id).sort()).toEqual(
+      [task.id, onTop.id].sort(),
+    )
     expect(usual.inbox.unread).toHaveLength(1)
-    Object.assign(OWN_READS, UNCHECKED)
-    const refused = await parts()
-    for (const part of [refused.projects, refused.tasks])
-      expect(part).toEqual({ state: 'refused', message: accessUnchecked().data.message })
-    expect(refused.inbox).toMatchObject({ state: 'ok', unread: [], truncated: true })
-    Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS), ONE_UP)
+    const refused = { state: 'refused', message: accessUnchecked().data.message }
+    // FW's one share is past what the parts read project by project and by
+    // the member's teams at once, and its team may not be asked by itself:
+    // the window is cut, and the narrowest one that holds FW, or its task,
+    // refuses
+    Object.assign(OWN_READS, { projectShares: 0, rows: 0, teamReads: 0 })
+    const room = await parts()
+    expect([room.projects, room.tasks]).toEqual([{ state: 'overflow' }, { state: 'overflow' }])
+    expect(room.inbox).toMatchObject({ state: 'ok', unread: [], truncated: true })
+    expect((await parts(narrowest(f.sub.window_key!))).projects).toEqual(refused)
+    expect((await parts(narrowest(task.window_key!))).tasks).toEqual(refused)
+    // the member's memberships are past what the parts read, which TBED's
+    // navigation needs in any window
+    Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS), { members: 0 })
+    const own = await parts()
+    expect([own.projects, own.tasks]).toEqual([refused, refused])
+    expect((await parts(narrowest(f.meta.window_key!))).projects).toEqual(refused)
+    // room for the team's share on FW and the team's own row, each read
+    // by itself
+    Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS), {
+      projectShares: 0,
+      rows: 0,
+      teamReads: 2,
+    })
     expect(await parts()).toEqual(usual)
+  })
+
+  it('cuts a window whose projects shared with many teams use up its room, and loads every piece', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantTeamMember(t, f)
+    // eight more sub-projects of TBED, each shared with 65 teams that are
+    // not the member's, and more than OWN_READS.rows shares of the member's
+    // team elsewhere, so each sub-project's team is asked by itself
+    const wide: Doc<'projects'>[] = []
+    for (let n = 0; n < 8; n++)
+      wide.push(await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }))
+    await t.run(async (ctx) => {
+      for (let i = 0; i <= OWN_READS.projectShares; i++) {
+        const team_id = uuid()
+        for (const p of wide)
+          await ctx.db.insert('project_team_access', { project_id: p.id, team_id, level: 'user' })
+      }
+      for (let i = 0; i <= OWN_READS.rows; i++)
+        await ctx.db.insert('project_team_access', {
+          project_id: uuid(),
+          team_id: f.team.id,
+          level: 'viewer',
+        })
+    })
+    await stampTeamReach(t, f)
+    // two of them a part can ask about
+    Object.assign(OWN_READS, { teamReads: 2 })
+    const shown = new Set<string>()
+    const windows: IdWindow[] = [{ from: '', to: null }]
+    let cuts = 0
+    while (windows.length > 0) {
+      const w = windows.shift()!
+      const part = await t.run((ctx) => readProjects(ctx, me, w))
+      expect(part.state, JSON.stringify(w)).not.toBe('refused')
+      if (part.state === 'overflow') {
+        cuts += 1
+        windows.push(...halve(w)!)
+      } else if (part.state === 'ok') for (const p of part.projects) shown.add(p.id)
+    }
+    expect(cuts).toBeGreaterThan(0)
+    expect([...shown].sort()).toEqual([f.meta.id, f.sub.id].sort())
   })
 
   it('shows a parent of 3,000 sub-projects for navigation from reach rows, reading a few documents', async () => {

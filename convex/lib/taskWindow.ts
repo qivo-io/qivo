@@ -206,9 +206,10 @@ function budgetIn(ctx: QueryCtx, cap: Reads, shared: Reads) {
      * undefined for none) the caller's access has not read yet, keeping
      * back CHECK for each of `checks` group checks to come. A round asks
      * about at most one such project, after a look at the budget, because
-     * nothing bounds the team shares the access reads on one project: a
-     * project shared with more teams than PROJECT holds passes the budget
-     * by its own reads, and no other project's join them. Answers the
+     * PROJECT's bytes hold fewer team shares than the access may read on one
+     * project (lib/access.ts OWN_READS): a project shared with more teams
+     * passes the budget by its own reads, and no other project's join them.
+     * Answers the
      * results of a prefix of `items`, all of them unless the budget ran
      * out or a check of the caller's access that a bound stopped
      * (lib/access.ts accessUnchecked) ended it before that item, as a list
@@ -501,24 +502,32 @@ async function groupsOf(
 }
 
 /** `tasks`, each shown to the caller, as short rows in their order. A task
- * whose group fact `budget` left unread (groupsOf) is left out, and
- * `complete` says none was. The levels are those the caller's access read
- * when it found the tasks shown. */
+ * whose group fact `budget` left unread (groupsOf), or whose level a bound
+ * of the caller's access stopped (lib/access.ts accessUnchecked) after its
+ * level inherited from the top-level project showed it, is left out, and
+ * `complete` says none was. */
 async function shortRows(
   ctx: QueryCtx,
   access: Access,
   budget: Budget,
   tasks: readonly Doc<'issues'>[],
 ) {
-  const levels = await Promise.all(tasks.map((task) => access.level(task.project_id)))
+  const levels = await Promise.all(
+    tasks.map((task) => unlessUnchecked(access.level(task.project_id), undefined)),
+  )
   const groups = await groupsOf(ctx, access, budget, tasks)
   const rows: ShortRow[] = []
   for (const [i, task] of tasks.entries()) {
     const group = groups[i]
     const level = levels[i]
-    if (group !== undefined && level !== null) rows.push(shortRow(task, group, level))
+    if (group !== undefined && level !== null && level !== undefined)
+      rows.push(shortRow(task, group, level))
   }
-  return { rows, complete: groups.every((group) => group !== undefined) }
+  return {
+    rows,
+    complete:
+      groups.every((group) => group !== undefined) && levels.every((level) => level !== undefined),
+  }
 }
 
 /** The parent of `task` as a short row when the caller is shown it, else

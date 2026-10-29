@@ -50,10 +50,12 @@
  * for many such teams all of the organization's teams, so a team edit
  * anywhere in the organization reruns it (lib/access.ts projectLevelsOf,
  * OWN_READS). An edit of one of those reruns the parts that read it. Every
- * one of those reads is bounded; a check its bounds stop answers the
- * projects and tasks parts `{state: 'refused', message}` with
+ * one of those reads is bounded. A check its bounds stop answers the
+ * projects and tasks parts `overflow` where what ran out is the room for
+ * the projects the window asks about (lib/access.ts roomSpent) and the
+ * window can still be cut, and else `{state: 'refused', message}` with
  * lib/access.ts accessUnchecked's sentence, as a window too full to cut
- * does, and cuts the inbox part. Each windowed part stays inside Convex's limits at any size by
+ * does; it cuts the inbox part. Each windowed part stays inside Convex's limits at any size by
  * answering `split` or `overflow` (lib/workspaceParts.ts), and the app
  * chooses the windows from the organization's counts of the rows they read,
  * without asking (lib/idWindows.ts startWindows).

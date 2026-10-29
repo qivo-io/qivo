@@ -1906,10 +1906,10 @@ describe('a check of the caller access that a bound stops', () => {
     const page = () => pageOf(t, me, scopeOf(f.org.id, f.sub.id))
     const usual = await page()
     expect(usual.rows.map((row) => row.id)).toEqual([task.id])
-    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, shareLookups: 0 })
+    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0 })
     const refused = await expectRefusal(page(), 'rule')
     expect(refused.data.reason).toBe(ACCESS_UNCHECKED)
-    Object.assign(OWN_READS, { lookups: 1, shareLookups: 1 })
+    Object.assign(OWN_READS, { lookups: 1, teamReads: 2 })
     expect(await page()).toEqual(usual)
   })
 
