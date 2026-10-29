@@ -732,8 +732,8 @@ describe('main Search across seats', () => {
     // of them sees, which spend the real limit while each lookup counts as
     // LOOKUP, so no later seat's first lookup fits. The task rows hold the
     // text, as every deployment's do until the description backfill's clear.
-    // Ranges for all 16 lookups, which the default budget gives a seat only
-    // when it searches alone.
+    // Ranges for the ten or so lookups that spend the real limit, more than
+    // the default budget gives each of eight seats.
     MAIN_SEARCH.ranges = 2_000
     const nums = Array.from({ length: 16 }, (_, i) => 901 + i)
     const [first, ...later] = [...orgs].sort()
