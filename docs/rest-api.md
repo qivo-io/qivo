@@ -664,7 +664,12 @@ project`.
   needs Lead on the parent). Qivo archives or restores before it changes the
   other fields, so one request may restore and rename, or archive and hand
   over the lead. The archive or restore and a rename share one budget of
-  2,000 sub-projects and access entries (see [Limits](#limits)). A project takes no archive reason, as in the app, where only
+  2,000 sub-projects and access entries (see [Limits](#limits)) and of the
+  data one change can read. A project tree past that data is a `400`
+  (`this project, or the top-level project above it, has sub-projects that hold more data than one change can read, so it cannot be archived or restored at once. Shorten the longest project names or descriptions there, or delete some of those sub-projects first.`), and nothing changes. When a request that archives or
+  restores and renames is refused on that budget, send the archive or
+  restore and the rename as two requests, which each get the whole budget.
+  A project takes no archive reason, as in the app, where only
   archiving a task asks for one. A body with `archive_reason` is a `400`
   (`only tasks take an archive reason; archive a project with archived
   alone`), and nothing changes.
