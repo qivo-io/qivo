@@ -1099,53 +1099,6 @@ describe('API access across organizations', () => {
   })
 })
 
-describe('apiAccess.list, deprecated', () => {
-  /* Tabs and desktop windows loaded before the pages call it until they
-     reload, and render its whole list. */
-  const list = (t: T, f: Admin, period?: string) =>
-    as(t, f.admin).query(api.apiAccess.list, { org_id: f.org.id, period })
-
-  it('answers the whole list in its old shape and order for apps loaded before the pages', async () => {
-    const t = newT()
-    const f = await fixture(t)
-    const old = await list(t, f)
-    expect(old.period).toBe(PERIOD)
-    expect(old.periods.map((p) => p.key)).toEqual([PERIOD, PAST, MONTH, FREE])
-    expect(rows(old.credentials)).toEqual(WHOLE_LIST)
-    expect(old.summary).toEqual({
-      calls: 48,
-      included_calls: 175_000,
-      plan: {
-        currency: 'usd',
-        api_calls_per_seat: 25_000,
-        api_block_size: 25_000,
-        api_block_price_cents: 100,
-      },
-      waived: false,
-    })
-    // the rows the pages list, field for field
-    expect(old.credentials).toEqual(await everyRow(t, f))
-    // as before, an unknown key shows the current period
-    expect((await list(t, f, 'month:1999-01')).period).toBe(PERIOD)
-    expect(rows((await list(t, f, PAST)).credentials)[0]).toEqual(['Cursor', 'active', 30])
-  })
-
-  it('refuses members who are not admins and other organizations', async () => {
-    const t = newT()
-    const f = await fixture(t)
-    for (const member of [f.user, f.viewer, f.guest])
-      await expectRefusal(
-        as(t, member).query(api.apiAccess.list, { org_id: f.org.id }),
-        'forbidden',
-        /^admin only$/,
-      )
-    await expectRefusal(
-      as(t, f.otherAdmin).query(api.apiAccess.list, { org_id: f.org.id }),
-      'forbidden',
-    )
-  })
-})
-
 describe('apiAccess.page at scale', () => {
   /* 2,100 people with one personal token each: the old whole-list query
      read two index ranges a person, about 4,200, past Convex's 4,096. */
