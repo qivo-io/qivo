@@ -10,7 +10,5 @@ export const PAGE_STARTS = { most: 1000 }
 
 /** `starts` with `cursor`, the start of the next page, after them, less
     the oldest past PAGE_STARTS.most. */
-export const withStart = (
-  starts: readonly (string | null)[],
-  cursor: string,
-): (string | null)[] => [...starts, cursor].slice(-PAGE_STARTS.most)
+export const withStart = (starts: readonly (string | null)[], cursor: string): (string | null)[] =>
+  [...starts, cursor].slice(-PAGE_STARTS.most)
