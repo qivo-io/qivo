@@ -33,7 +33,6 @@ import { type Grantee, navReady } from '../model/projectNav'
 import { canSeeProject, levelRank, OWN_READS, projectLevelsOf, receivesTeamAccess } from './access'
 import { digestText, openCursorText, sealCursorText } from './archiveCursorSeal'
 import { byId } from './db'
-import type { ArchiveState } from './enums'
 import { taskOwnerId } from './review'
 import { allWordsMatcher, searchPieces, type TaskSearchFields, taskSearchText } from './search'
 import { issueKey, STATUS_NAMES } from './taskRefs'
@@ -969,31 +968,34 @@ const shownIn = (levels: ProjectLevels, orgId: string) =>
     return (await levels.level(id, false)) !== null
   })
 
-/* The live sub-projects of top-level project `top`, or null when they are
- * more than `most` or reading them passes `room`. Archived ones never count
- * toward `most`. A project stored before archive_state existed has none
- * until internal/navBackfill gives it one, so those are read too and kept
- * while live; every one read counts against `room`. */
+/* The live sub-projects of top-level project `top`, each added to `found`,
+ * the distinct projects a scope has found so far, or null when `found`
+ * passes `most` or reading them passes `room`. One already in `found` counts
+ * once, and archived ones never count. A project stored before
+ * archive_state existed has none until internal/navBackfill gives it one,
+ * so those are read too and kept while live; every one read counts against
+ * `room`. */
 async function liveSubProjects(
   ctx: QueryCtx,
   top: Pick<Doc<'projects'>, 'id' | 'org_id'>,
+  found: Set<string>,
   most: number,
   room: RowRoom,
 ): Promise<Doc<'projects'>[] | null> {
-  const range = (state: ArchiveState | undefined) =>
-    ctx.db
+  const out: Doc<'projects'>[] = []
+  for (const state of ['live', undefined] as const) {
+    const kids = ctx.db
       .query('projects')
       .withIndex('by_org_parent_state_name', (q) =>
         q.eq('org_id', top.org_id).eq('parent_id', top.id).eq('archive_state', state),
       )
-  const out = await range('live').take(Math.min(most, room.rows) + 1)
-  room.rows -= out.length
-  if (out.length > most || room.rows < 0) return null
-  for await (const kid of range(undefined)) {
-    if (!counted(room)) return null
-    if (kid.archived_at !== undefined) continue
-    out.push(kid)
-    if (out.length > most) return null
+    for await (const kid of kids) {
+      if (!counted(room)) return null
+      if (kid.archived_at !== undefined) continue
+      out.push(kid)
+      found.add(kid.id)
+      if (found.size > most) return null
+    }
   }
   return out
 }
@@ -1025,7 +1027,9 @@ async function granteesOf(ctx: QueryCtx, me: Doc<'profiles'>): Promise<Grantee[]
  * only, repeats and the sub-project rows included, pass `room`. A row finds
  * a candidate and grants nothing: the caller checks each (shownIn), and a
  * role that turns no source into access, such as a viewer's lead, drops out
- * there. `read` holds the projects read on the way. */
+ * there. A project several rows find, such as a sub-project of the caller's
+ * own beside its parent's team share, counts once toward `most`. `read`
+ * holds the projects read on the way. */
 async function reachedProjects(
   ctx: QueryCtx,
   orgId: string,
@@ -1051,16 +1055,16 @@ async function reachedProjects(
       // a root row for navigation only reaches the sub-projects of its child rows
       if (!row.on_root || row.org_id !== orgId || ids.has(row.project_id)) continue
       ids.add(row.project_id)
+      if (ids.size > most) return null
       const kids = await liveSubProjects(
         ctx,
         { id: row.project_id, org_id: orgId },
-        most - ids.size,
+        ids,
+        most,
         room,
       )
       if (kids === null) return null
-      for (const kid of kids) ids.add(kid.id)
       read.push(...kids)
-      if (ids.size > most) return null
     }
     for await (const row of reach(g, 'child')) {
       if (!counted(room)) return null
@@ -1072,19 +1076,21 @@ async function reachedProjects(
   return { ids: [...ids], read }
 }
 
-/* The live sub-projects under top-level project `rootId` on which one of
- * `grantees` holds a source of its own (project_reach child rows), which a
- * caller who sees `rootId` only to reach them may see, or null when they are
- * more than `most` or the rows read, repeats included, pass `room`. The
- * caller checks each (shownIn). */
+/* Adds to `found`, the distinct projects a scope has found so far, the live
+ * sub-projects under top-level project `rootId` on which one of `grantees`
+ * holds a source of its own (project_reach child rows), which a caller who
+ * sees `rootId` only to reach them may see. Answers whether it found any,
+ * or null when `found` passes `most` or the rows read, repeats included,
+ * pass `room`. The caller checks each (shownIn). */
 async function reachedUnder(
   ctx: QueryCtx,
   grantees: readonly Grantee[],
   rootId: string,
+  found: Set<string>,
   most: number,
   room: RowRoom,
-): Promise<string[] | null> {
-  const ids = new Set<string>()
+): Promise<boolean | null> {
+  let any = false
   for (const g of grantees) {
     const rows = ctx.db
       .query('project_reach')
@@ -1098,11 +1104,12 @@ async function reachedUnder(
       )
     for await (const row of rows) {
       if (!counted(room)) return null
-      ids.add(row.project_id)
-      if (ids.size > most) return null
+      any = true
+      found.add(row.project_id)
+      if (found.size > most) return null
     }
   }
-  return [...ids]
+  return any
 }
 
 /* The scope that merges `candidates`, the ones of them `shown` keeps, or
@@ -1195,8 +1202,8 @@ async function readScope(
   const topLevels = projectLevelsOf(ctx, me, named)
   const families = new Set<string>()
   const kids: Doc<'projects'>[] = []
-  const reached: string[] = []
-  const left = () => ARCHIVED_SCOPE.subProjects - kids.length - reached.length
+  // the distinct sub-projects the families kept stand for
+  const found = new Set<string>()
   let grantees: Grantee[] | null | undefined
   let wide = false
   for (const top of named.filter(isTop)) {
@@ -1205,18 +1212,19 @@ async function readScope(
     if ((await topLevels.level(top.id, false)) !== null) {
       families.add(top.id)
       if (wide) continue
-      const subs = await liveSubProjects(ctx, top, left(), room)
+      const subs = await liveSubProjects(ctx, top, found, ARCHIVED_SCOPE.subProjects, room)
       if (subs === null) wide = true
       else kids.push(...subs)
       continue
     }
     grantees ??= await granteesOf(ctx, me)
     if (grantees === null) continue
-    const found = await reachedUnder(ctx, grantees, top.id, wide ? 1 : left(), room)
-    if (found !== null && found.length === 0) continue
+    // once wide, `found` or `room` is past its bound, so this stops at its
+    // first row and tells only whether `me` reaches any of the family
+    const any = await reachedUnder(ctx, grantees, top.id, found, ARCHIVED_SCOPE.subProjects, room)
+    if (any === false) continue
     families.add(top.id)
-    if (found === null) wide = true
-    else if (!wide) reached.push(...found)
+    if (any === null) wide = true
   }
   const levels = projectLevelsOf(ctx, me, [...named, ...kids])
   if (wide && !admin) return { scope: TOO_WIDE, levels }
@@ -1236,7 +1244,7 @@ async function readScope(
       levels,
     }
   }
-  const candidates = [...own, ...kids.map((p) => p.id), ...reached]
+  const candidates = [...own, ...found]
   return { scope: await mergedScope(orgId, candidates, shown, admin), levels }
 }
 

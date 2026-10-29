@@ -1544,6 +1544,40 @@ describe('issues.archivedPage', () => {
     })
   })
 
+  it('counts a project once toward the bound when the seat and a team both reach it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a member with grants of their own on FW and PCB, in the Hardware team,
+    // which gets a share on TBED: the seat's child rows come before the
+    // team's root row, whose family holds FW and PCB again
+    const member = await plantPerson(t, f)
+    await t.run(async (ctx) => {
+      for (const project_id of [f.sub.id, f.sub2.id])
+        await ctx.db.insert('project_access', { project_id, profile_id: member.id, level: 'user' })
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: member.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    await withReach(t)
+    await plantMany(t, f, 4, (i) => ({
+      project_id: i % 2 ? f.sub.id : f.sub2.id,
+      archived_at: day(1 + i),
+    }))
+    const listed = (await archiveOrder(t, f.org.id, [f.sub.id, f.sub2.id])).map((row) => row.id)
+    // TBED, FW and PCB are three projects
+    ARCHIVED_SCOPE.subProjects = 3
+    expect((await everyPage(t, member, allOf(f.org.id))).ids).toEqual(listed)
+    ARCHIVED_SCOPE.subProjects = 2
+    expect(await pageOf(t, member, allOf(f.org.id))).toEqual(TOO_WIDE)
+  })
+
   it('refuses a scope whose projects’ newest tasks at the longest text do not fit one page side by side', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
