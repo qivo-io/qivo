@@ -1029,7 +1029,11 @@ function sectionState(
 
 /* Task `uuid` as a row of a section, from the workspace's view of it when
    the workspace holds it, else from `short`, the answer's row, or null
-   with neither. */
+   with neither. During a held transition a held task's row can be older
+   than its short row in a fresh answer, but so is every view of it, the
+   Board and the Roadmap included, until the waiting write answers, so the
+   window agrees with the rest of the screen, and that moment ends with the
+   answer. */
 function relatedTask(uuid: string, short: ShortRow | undefined): RelatedTaskVM | null {
   const handle = uuidToKey.get(uuid)
   const it = handle === undefined ? undefined : PLANNER.issueById[handle]
