@@ -733,7 +733,9 @@ export const expire = internalMutation({
     const job = await exportOf(ctx, export_id)
     if (job?.state !== 'ready' || job.expires_at === undefined) return null
     if (Date.parse(job.expires_at) > Date.now()) return null
-    await endJob(ctx, job, { state: 'expired' })
+    // The job's scheduled function is this expiry, running now. Convex
+    // defines no cancel of the function that runs it, so endJob gets none.
+    await endJob(ctx, { ...job, scheduled_id: undefined }, { state: 'expired' })
     return null
   },
 })

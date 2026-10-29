@@ -788,6 +788,22 @@ describe('organization export job', () => {
     expect(await requestsOf(t, exportId)).toEqual([])
   })
 
+  it('expires an archive without cancelling the expiry that runs it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const exportId = await exportAs(t, f.admin, f.org.id)
+    const timer = (await jobOf(t, exportId))?.scheduled_id
+    if (timer === undefined) throw new Error('the archive has no expiry')
+    // the job names its expiry, which is due; run it as its timer would,
+    // while the scheduler still lists it as not done
+    vi.setSystemTime(Date.now() + ARCHIVE_TTL_MS)
+    await t.mutation(internal.orgExport.expire, { export_id: exportId })
+    expect(await jobOf(t, exportId)).toMatchObject({ state: 'expired' })
+    expect((await t.run((ctx) => ctx.db.system.get(timer)))?.state.kind).not.toBe('canceled')
+    await settle(t)
+    expect(await partsOf(t, exportId)).toEqual([])
+  })
+
   it('expires a ready archive whose timer was lost and restarts an erase leg that stopped', async () => {
     const t = newT()
     const f = await withOrg(t)
