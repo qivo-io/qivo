@@ -1596,6 +1596,45 @@ describe("the copies at Convex's limits", () => {
     expect(await snapshot(t)).toEqual(before)
   }, 300_000)
 
+  it('pins the documented move figures: about 120 subtasks at the three-byte cap once cleared, about half with both copies', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const away = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    const base = { org_id: f.org.id, project_id: f.sub.id }
+    const move = (id: string, project_id: string) =>
+      as(t, f.admin).mutation(api.issues.move, { org_id: f.org.id, id, project_id })
+    const refused = async (id: string, project_id: string) =>
+      expect((await expectRefusal(move(id, project_id), 'rule')).data.message).toBe(MOVE_TOO_LARGE)
+    // docs/rest-api.md and docs/mcp.md: more than about 120 subtasks,
+    // archived ones included, are too large once the clear has run
+    const cleared = await plantIssue(t, base)
+    await plantLong(t, LIMITS.subtasks.max, { ...base, parent_id: cleared.id })
+    await plantLong(t, 20, { ...base, parent_id: cleared.id, archived_at: NOW })
+    await move(cleared.id, away.id)
+    await plantLong(t, 10, {
+      ...base,
+      project_id: away.id,
+      parent_id: cleared.id,
+      archived_at: NOW,
+    })
+    await refused(cleared.id, f.sub.id)
+    // and more than about 60 while the task rows hold the copy
+    const copied = await plantIssue(t, base)
+    await plantLong(t, 60, { ...base, parent_id: copied.id }, { copied: true })
+    await move(copied.id, away.id)
+    await plantLong(
+      t,
+      10,
+      { ...base, project_id: away.id, parent_id: copied.id, archived_at: NOW },
+      { copied: true },
+    )
+    await refused(copied.id, f.sub.id)
+  }, 300_000)
+
   it('a REST or MCP move folded with an archive archives the light subtasks after a heavy carry', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)

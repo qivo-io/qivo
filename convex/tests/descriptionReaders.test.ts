@@ -965,6 +965,48 @@ describe('real limits', () => {
     expect(PAGE_TOO_LARGE).toMatch(/smaller limit/)
   }, 300_000)
 
+  it('pins the documented search figures: a task ID over about 9,000 active tasks with both copies, about 13,000 once cleared', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // descriptions of about 390 characters, "a few hundred" in the docs
+    const text = (i: number) =>
+      `Notes ${i}: ${'Check the bracket fit and the cable route before the next build. '.repeat(6)}`
+    let planted = 0
+    /** Plants `count` more tasks with their rows, and with the copy too
+     * unless `cleared`, 500 a transaction. */
+    const plant = async (count: number, cleared: boolean) => {
+      for (const end = planted + count; planted < end; )
+        await t.run(async (ctx) => {
+          for (const stop = Math.min(end, planted + 500); planted < stop; planted++) {
+            const doc = taskDoc(f, 10_000 + planted, cleared ? undefined : text(planted))
+            await ctx.db.insert('issues', doc)
+            await ctx.db.insert('issue_descriptions', {
+              issue_id: doc.id,
+              org_id: f.org.id,
+              project_id: f.sub.id,
+              description: text(planted),
+            })
+          }
+        })
+    }
+    const key = { limit: 20, search: 'QN-10001' }
+    // docs/rest-api.md and docs/mcp.md: about 9,000 before the clear
+    await plant(9000, false)
+    const before = await restMetrics(t, f, key)
+    expect(before.refused).toBeNull()
+    await plant(1000, false)
+    expect((await restMetrics(t, f, key)).refused).toContain(DESCRIPTIONS_TOO_LARGE)
+    // and about 13,000 once it has run
+    await clearTaskText(t, f.org.id, 500)
+    await plant(3000, true)
+    const after = await restMetrics(t, f, key)
+    console.info('a task ID search over 9,000 tasks with both copies and 13,000 cleared', {
+      before,
+      after,
+    })
+    expect(after.refused).toBeNull()
+  }, 300_000)
+
   it('a REST search over 4,000 active tasks answers a key and a description word, reading only up to its page', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
