@@ -48,6 +48,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  plantCopiedIssue,
   plantIssue,
   plantMessage,
   plantProject,
@@ -558,7 +559,8 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
     const parents: Doc<'issues'>[] = []
     for (let n = 0; n < 20; n++) {
       const parent = await plantIssue(t, { ...done, done_at: ago(50) })
-      await plantIssue(t, {
+      // its text in the task row too, as until the description backfill's clear
+      await plantCopiedIssue(t, {
         org_id: f.org.id,
         project_id: f.sub.id,
         parent_id: parent.id,
@@ -1008,7 +1010,8 @@ describe('archiveDoneIssues bounds each dispatcher step', () => {
   it('stops a step once the due tasks it read pass ARCHIVE_LIMITS.bytes, and the next checks the rest of its page', async () => {
     ARCHIVE_LIMITS.bytes = 150_000
     // Each due task holds a description of 20,000 CJK characters, about
-    // 60 KB. The 12 together are about 720 KB, more than one step may read.
+    // 60 KB, in its task row too, as until the description backfill's
+    // clear. The 12 together are about 720 KB, more than one step may read.
     const t = limitedT({ bytesRead: 400_000 })
     const description = '漢'.repeat(20_000)
     for (let n = 0; n < 3; n++) {
@@ -1017,7 +1020,7 @@ describe('archiveDoneIssues bounds each dispatcher step', () => {
       for (let p = 0; p < 4; p++) {
         const project = p === 0 ? first : await plantProject(t, { org_id })
         const done = { status: 'done' as const, done_at: ago(40), description }
-        await plantIssue(t, { org_id, project_id: project.id, ...done })
+        await plantCopiedIssue(t, { org_id, project_id: project.id, ...done })
       }
     }
 
@@ -1051,7 +1054,8 @@ describe('archiveDoneIssues bounds each dispatcher step', () => {
 
   it('stops a flagged step once the tasks it read pass ARCHIVE_LIMITS.bytes', async () => {
     ARCHIVE_LIMITS.bytes = 150_000
-    // Ten flagged tasks of about 60 KB each, more than one step may read.
+    // Ten flagged tasks of about 60 KB each, their text in the task row too,
+    // more than one step may read.
     const t = limitedT({ bytesRead: 400_000 })
     const description = '漢'.repeat(20_000)
     const flagged: string[] = []
@@ -1059,7 +1063,7 @@ describe('archiveDoneIssues bounds each dispatcher step', () => {
       const org_id = uuid()
       const project = await plantOrg(t, org_id)
       const task = { org_id, project_id: project.id, relations_marked: true as const, description }
-      flagged.push((await plantIssue(t, task)).id)
+      flagged.push((await plantCopiedIssue(t, task)).id)
     }
 
     expect(await runArchive(t)).toBe(0)
@@ -2519,13 +2523,14 @@ describe('archiveDoneIssues within Convex limits', () => {
     const description = '漢'.repeat(20_000)
     const done_at = new Date(Date.parse(cutoffAt(night(0))) + DAY / 2).toISOString()
     const projects = await plantLiveProjects(t, 20, 10)
-    // a task row and its description row each hold the text, so 100 tasks
+    // a task row and its description row each hold the text, as every
+    // deployment's do until the description backfill's clear, so 100 tasks
     // a transaction stay inside its 16 MiB of writes
     for (let from = 0; from < 2000; from += 100)
       await t.run(async (ctx) => {
         for (let n = from; n < from + 100; n++) {
           const project = projects[n % projects.length]
-          await insertTask(
+          const _id = await insertTask(
             ctx.db,
             {
               id: uuid(),
@@ -2543,6 +2548,7 @@ describe('archiveDoneIssues within Convex limits', () => {
             },
             'restore',
           )
+          await ctx.db.patch(_id, { description })
         }
       })
 

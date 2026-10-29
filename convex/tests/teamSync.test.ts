@@ -22,6 +22,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  plantCopiedIssue,
   plantIssue,
   plantProject,
   type T,
@@ -465,10 +466,15 @@ describe('teamSync.lastComments', () => {
     expect(cut.rows).toHaveLength(3)
     expect(cut.rows.every((r) => r.at === NOW)).toBe(true)
 
-    // the tasks read spend the same budget, so long ones leave no comment
-    // read at all
+    // the tasks read spend the same budget, so long ones, whose task rows
+    // hold the text as until the description backfill's clear, leave no
+    // comment read at all
     for (let n = 0; n < 3; n++) {
-      await plantIssue(t, { ...base, assignee_id: f.admin.id, description: 'x'.repeat(20_000) })
+      await plantCopiedIssue(t, {
+        ...base,
+        assignee_id: f.admin.id,
+        description: 'x'.repeat(20_000),
+      })
     }
     const spent = await lastComments(t, f.admin, f.org.id, [f.admin.id])
     expect(spent).toEqual({ rows: [], complete: false })
@@ -517,9 +523,10 @@ describe('teamSync.lastComments', () => {
       parent_id: f.hidden.id,
     })
     const base = { org_id: f.org.id, project_id: f.sub.id, assignee_id: f.user.id }
-    // read first (index order), and not the viewer's to see
+    // read first (index order), and not the viewer's to see, their text in
+    // the task rows too, as until the description backfill's clear
     for (let n = 0; n < 3; n++) {
-      await plantIssue(t, {
+      await plantCopiedIssue(t, {
         ...base,
         project_id: hiddenSub.id,
         status: 'todo',

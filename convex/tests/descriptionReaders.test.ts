@@ -1,12 +1,14 @@
-/* Task descriptions in issue_descriptions, the second of three releases:
- * every reader takes a task's text from its first description row in
- * creation order that holds the task's copies, else from its first row,
+/* Task descriptions in issue_descriptions. Since the second of three
+ * releases every reader takes a task's text from its first description row
+ * in creation order that holds the task's copies, else from its first row,
  * and only a task without a row reads issues.description
- * (model/descriptions.ts). These cases clear issues.description the way the
- * third release will, plant rows that differ from it, leave a task without
- * a row and give one a second row, and check what each reader answers and
- * what each writer narrates, notifies and sends. The real-limit cases run
- * under Convex's transaction limits and check the reads they bound.
+ * (model/descriptions.ts). In the third, writers leave issues.description
+ * unset and internal/descriptionsBackfill's clear unsets the copies earlier
+ * releases wrote. These cases clear issues.description as the backfill
+ * does, plant copies that differ from the rows, leave a task without a row
+ * and give one a second row, and check what each reader answers and what
+ * each writer narrates, notifies and sends. The real-limit cases run under
+ * Convex's transaction limits and check the reads they bound.
  * scripts/check-task-reads.test.mjs covers the check that no other code
  * reads issues.description. */
 
@@ -15,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import { MARKETING_DEMO } from '../internal/marketingDemoData'
 import {
   accessFlags,
   asMachineCaller,
@@ -33,9 +36,11 @@ import { LIMITS, MIB } from '../lib/limits'
 import type { OrgExportPage, OrgExportRow, OrgExportSection } from '../lib/orgExport'
 import type { EventOwner } from '../lib/taskEvents'
 import { PAGE, readTasks } from '../lib/workspaceParts'
+import { cleanDescription } from '../model/issues'
 import {
   activityFor,
   as,
+  copyTaskTexts,
   expectRefusal,
   messagesFor,
   NOW,
@@ -188,6 +193,17 @@ async function readers(t: T, f: OrgFixture, pair: Pair, words: [string, string])
   }
   const exportedText = (task: Doc<'issues'>) =>
     (exported.find((row) => row.id === task.id)?.description as string | undefined) ?? null
+  const windowText = async (task: Doc<'issues'>) => {
+    const answer = await as(t, f.admin).query(api.taskWindow.task, {
+      org_id: f.org.id,
+      ref: task.id,
+    })
+    return answer.state === 'ok' ? answer.task.description : null
+  }
+  const mainSearch = async (text: string, archived: boolean) =>
+    (await as(t, f.admin).query(api.search.page, { text, include_archived: archived })).rows.map(
+      (row) => row.id,
+    )
 
   return {
     workspace: pick(window.issues as Row[], pair.active),
@@ -217,6 +233,10 @@ async function readers(t: T, f: OrgFixture, pair: Pair, words: [string, string])
     archivedPageFound: archivedPage.rows.some((row) => row.id === pair.archived.id),
     exportActive: exportedText(pair.active),
     exportArchived: exportedText(pair.archived),
+    taskWindow: await windowText(pair.active),
+    // its rows carry no text, so it tells only whether the search found it
+    mainSearchFound: (await mainSearch(words[0], false)).includes(pair.active.id),
+    mainArchivedSearchFound: (await mainSearch(words[1], true)).includes(pair.archived.id),
   }
 }
 
@@ -237,6 +257,9 @@ const everywhere = (active: string, archived: string) => ({
   archivedPageFound: true,
   exportActive: active,
   exportArchived: archived,
+  taskWindow: active,
+  mainSearchFound: true,
+  mainArchivedSearchFound: true,
 })
 
 /** The searches of `readers`, which find nothing for words the readers do
@@ -247,6 +270,8 @@ const searches = (found: Awaited<ReturnType<typeof readers>>) => ({
   mcpSearch: found.mcpSearch,
   mcpArchivedSearch: found.mcpArchivedSearch,
   archivedPageFound: found.archivedPageFound,
+  mainSearchFound: found.mainSearchFound,
+  mainArchivedSearchFound: found.mainArchivedSearchFound,
 })
 
 const notFound = {
@@ -255,6 +280,8 @@ const notFound = {
   mcpSearch: null,
   mcpArchivedSearch: null,
   archivedPageFound: false,
+  mainSearchFound: false,
+  mainArchivedSearchFound: false,
 }
 
 /* A search reads the rows of the tasks it needs one by one, and past
@@ -272,12 +299,18 @@ for (const [way, reads] of [
       TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
     })
 
-    it('answers the row text once issues.description is cleared, as the third release leaves it', async () => {
+    it("answers the row text once the backfill's clear unsets the copies", async () => {
       const t = newT()
       const f = await machineOrg(t)
       const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
       const pair = await plantPair(t, f, texts)
-      await clearTaskText(t, f.org.id)
+      // the copies an earlier release wrote, which the clear unsets
+      await copyTaskTexts(t, f.org.id)
+      expect(
+        await t.action(internal.internal.descriptionsBackfill.run, { dry_run: false, clear: true }),
+      ).toMatchObject({ cleared: 2, held: 0 })
+      for (const task of [pair.active, pair.archived])
+        expect((await t.run((ctx) => ctx.db.get(task._id)))?.description).toBeUndefined()
       expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
     })
 
@@ -285,6 +318,8 @@ for (const [way, reads] of [
       const t = newT()
       const f = await machineOrg(t)
       const pair = await plantPair(t, f, ['Stale walrus text', 'Stale narwhal text'])
+      // the task rows hold the stale texts, as only a rollback leaves them
+      await copyTaskTexts(t, f.org.id)
       await setRowText(t, pair.active.id, 'Calibrate the zephyr sensor')
       await setRowText(t, pair.archived.id, 'Archive the quokka notes')
       expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(
@@ -299,9 +334,17 @@ for (const [way, reads] of [
       const f = await machineOrg(t)
       const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
       const pair = await plantPair(t, f, texts)
+      await copyTaskTexts(t, f.org.id)
       await dropRows(t, pair.active.id)
       await dropRows(t, pair.archived.id)
-      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
+      // main Search matches a description through its row, so it finds a
+      // task without one by its title or number only, until the backfill
+      // gives it its row
+      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual({
+        ...everywhere(...texts),
+        mainSearchFound: false,
+        mainArchivedSearchFound: false,
+      })
     })
 
     it('reads the first of two rows in creation order and never throws over the second', async () => {
@@ -346,7 +389,13 @@ for (const [way, reads] of [
           .first()
         if (row !== null) await ctx.db.patch(row._id, { archived_at: NOW })
       })
-      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual(everywhere(...texts))
+      // main Search narrows its description matches by the row's copies, so
+      // it misses this task by its description until the backfill's repair
+      // stamps the row, which is why the palette waits for zero `differ`
+      expect(await readers(t, f, pair, ['zephyr', 'quokka'])).toEqual({
+        ...everywhere(...texts),
+        mainSearchFound: false,
+      })
     })
   })
 
@@ -575,47 +624,60 @@ describe('the writers compare the text of the description row', () => {
   }
 
   for (const [surface, edit] of Object.entries(surfaces))
-    it(`${surface}: narrates, notifies, keeps a shown image, checks expected and names the field from the row`, async () => {
-      const { t, f } = await setup()
-      const lost = uuid()
-      const mention = `@[admin](user:${f.admin.id})`
-      const old = `Old wiring ${mention} ![photo](att:${lost})`
-      const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: old })
-      await clearTaskText(t, f.org.id)
+    for (const copied of [false, true])
+      it(`${surface}${copied ? ', on a task row that still holds a copy' : ''}: narrates, notifies, keeps a shown image, checks expected and names the field from the row`, async () => {
+        const { t, f } = await setup()
+        const lost = uuid()
+        const mention = `@[admin](user:${f.admin.id})`
+        const old = `Old wiring ${mention} ![photo](att:${lost})`
+        const task = await plantIssue(t, {
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          description: old,
+        })
+        // the copy an earlier release wrote, which a description save unsets
+        if (copied) await copyTaskTexts(t, f.org.id)
+        const copy = async () => (await t.run((ctx) => ctx.db.get(task._id)))?.description
 
-      // a stale expected is refused; the unchanged one passes
-      const refusal = await expectRefusal(
-        edit(t, f, task.id, { description: 'Lost edit' }, 'Something else'),
-        'conflict',
-      )
-      expect((refusal.data as { reason?: string }).reason).toBe('field_changed')
-      // the image the old text showed may stay though the task lacks it,
-      // and the mention it held is not news
-      const next = `New wiring ${mention} ![photo](att:${lost})`
-      let events = await eventCount(t)
-      await edit(t, f, task.id, { description: next }, old)
-      expect(await messagesFor(t, f.admin.id, task.id)).toEqual([])
-      const history = (await activityFor(t, f.org.id)).filter((row) => row.target_id === task.id)
-      expect(history.at(-1)).toMatchObject({
-        verb: surface === 'app' ? 'updated the description of' : 'changed',
-        detail: expect.stringContaining(`“Old wiring`),
+        // a stale expected is refused, and changes nothing; the unchanged
+        // one passes
+        const refusal = await expectRefusal(
+          edit(t, f, task.id, { description: 'Lost edit' }, 'Something else'),
+          'conflict',
+        )
+        expect((refusal.data as { reason?: string }).reason).toBe('field_changed')
+        expect(await copy()).toBe(copied ? old : undefined)
+        // the image the old text showed may stay though the task lacks it,
+        // and the mention it held is not news
+        const next = `New wiring ${mention} ![photo](att:${lost})`
+        let events = await eventCount(t)
+        await edit(t, f, task.id, { description: next }, old)
+        expect(await copy()).toBeUndefined()
+        expect(await messagesFor(t, f.admin.id, task.id)).toEqual([])
+        const history = (await activityFor(t, f.org.id)).filter((row) => row.target_id === task.id)
+        expect(history.at(-1)).toMatchObject({
+          verb: surface === 'app' ? 'updated the description of' : 'changed',
+          detail: expect.stringContaining(`“Old wiring`),
+        })
+        expect(await eventsAfter(t, events)).toEqual([['description']])
+
+        // a newly added mention notifies
+        const added = `${next} @[viewer](user:${f.viewer.id})`
+        await edit(t, f, task.id, { description: added })
+        expect((await messagesFor(t, f.viewer.id, task.id)).map((m) => m.kind)).toEqual(['mention'])
+
+        // a title edit names the title only, and keeps a copy the task row
+        // holds
+        if (copied) await copyTaskTexts(t, f.org.id)
+        events = await eventCount(t)
+        await edit(t, f, task.id, { title: 'Renamed' })
+        expect(await eventsAfter(t, events)).toEqual([['title']])
+        expect(await copy()).toBe(copied ? added : undefined)
       })
-      expect(await eventsAfter(t, events)).toEqual([['description']])
-
-      // a newly added mention notifies
-      const added = `${next} @[viewer](user:${f.viewer.id})`
-      await edit(t, f, task.id, { description: added })
-      expect((await messagesFor(t, f.viewer.id, task.id)).map((m) => m.kind)).toEqual(['mention'])
-
-      // a title edit names the title only
-      events = await eventCount(t)
-      await edit(t, f, task.id, { title: 'Renamed' })
-      expect(await eventsAfter(t, events)).toEqual([['title']])
-    })
 })
 
 describe('Northstar', () => {
-  it("the workspace part's rows and the REST and MCP task JSON answer each task's row text, which is its task row's", async () => {
+  it("the workspace part's rows and the REST and MCP task JSON answer each task's row text, which is the seed's", async () => {
     const t = newT()
     const { org, profiles } = await plantNorthstar(t)
     const texts = new Map(
@@ -624,20 +686,28 @@ describe('Northstar', () => {
           .query('issues')
           .withIndex('by_org', (q) => q.eq('org_id', org.id))
           .collect()
-        const out: [string, { row: string; task: string | null }][] = []
+        const out: [string, { row: string; task: string | null; num: number }][] = []
         for (const task of tasks) {
           const row = await ctx.db
             .query('issue_descriptions')
             .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
             .first()
-          out.push([task.id, { row: row?.description ?? '', task: task.description ?? null }])
+          out.push([
+            task.id,
+            { row: row?.description ?? '', task: task.description ?? null, num: task.num },
+          ])
         }
         return out
       }),
     )
-    // both copies are equal, so the answers before this release and after
-    // it are the same
-    for (const { row, task } of texts.values()) expect(task).toBe(row)
+    // the seed writes each text to its row alone, the one the seed data
+    // holds for the task of that number
+    expect(texts.size).toBe(MARKETING_DEMO.issues.length)
+    for (const { row, task, num } of texts.values()) {
+      expect(task).toBeNull()
+      expect(row).toBe(cleanDescription(MARKETING_DEMO.issues[num - 1].description))
+    }
+    expect([...texts.values()].filter(({ row }) => row !== '').length).toBeGreaterThan(50)
     const admin = profiles.find((p) => p.org_role === 'admin' && p.kind === 'person')
     if (admin?.auth_user_id === undefined) throw new Error('Northstar has no admin')
     const answer = await t
@@ -893,6 +963,48 @@ describe('real limits', () => {
     expect(all).toHaveLength(200)
     expect(all.map((row) => row.description)).toEqual(Array(200).fill(text))
     expect(PAGE_TOO_LARGE).toMatch(/smaller limit/)
+  }, 300_000)
+
+  it('pins the documented search figures: a task ID over about 9,000 active tasks with both copies, about 13,000 once cleared', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await machineOrg(t)
+    // descriptions of about 390 characters, "a few hundred" in the docs
+    const text = (i: number) =>
+      `Notes ${i}: ${'Check the bracket fit and the cable route before the next build. '.repeat(6)}`
+    let planted = 0
+    /** Plants `count` more tasks with their rows, and with the copy too
+     * unless `cleared`, 500 a transaction. */
+    const plant = async (count: number, cleared: boolean) => {
+      for (const end = planted + count; planted < end; )
+        await t.run(async (ctx) => {
+          for (const stop = Math.min(end, planted + 500); planted < stop; planted++) {
+            const doc = taskDoc(f, 10_000 + planted, cleared ? undefined : text(planted))
+            await ctx.db.insert('issues', doc)
+            await ctx.db.insert('issue_descriptions', {
+              issue_id: doc.id,
+              org_id: f.org.id,
+              project_id: f.sub.id,
+              description: text(planted),
+            })
+          }
+        })
+    }
+    const key = { limit: 20, search: 'QN-10001' }
+    // docs/rest-api.md and docs/mcp.md: about 9,000 before the clear
+    await plant(9000, false)
+    const before = await restMetrics(t, f, key)
+    expect(before.refused).toBeNull()
+    await plant(1000, false)
+    expect((await restMetrics(t, f, key)).refused).toContain(DESCRIPTIONS_TOO_LARGE)
+    // and about 13,000 once it has run
+    await clearTaskText(t, f.org.id, 500)
+    await plant(3000, true)
+    const after = await restMetrics(t, f, key)
+    console.info('a task ID search over 9,000 tasks with both copies and 13,000 cleared', {
+      before,
+      after,
+    })
+    expect(after.refused).toBeNull()
   }, 300_000)
 
   it('a REST search over 4,000 active tasks answers a key and a description word, reading only up to its page', async () => {

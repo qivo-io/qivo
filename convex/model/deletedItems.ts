@@ -848,10 +848,11 @@ async function dropTaskDescription(
 /** Deletes the description rows a task item's stored task `taskId` still
  * has (model/descriptions.ts), in the step's budget, which counts each
  * row's read and its delete's. The person's delete leaves them to the
- * steps, so that it reads none (moveTasksToTrash). A split or a purge can
- * stop after the stored task row is gone, which frees the id, so the rows
- * of a live task that took it since, and those of another organization,
- * stay (ownDescription). */
+ * steps, so that it reads only those it takes the stored text from once the
+ * task row holds no copy, two a task at most (moveTasksToTrash). A split or
+ * a purge can stop after the stored task row is gone, which frees the id,
+ * so the rows of a live task that took it since, and those of another
+ * organization, stay (ownDescription). */
 async function dropDescriptions(run: Run, taskId: string): Promise<boolean> {
   const live = await byId(run.ctx, 'issues', taskId)
   if (live !== null) {
@@ -1012,10 +1013,8 @@ async function clearTask(run: Run, task: Doc<'issues'>, mode: Mode): Promise<boo
   let row: Doc<'issue_descriptions'> | null | undefined
   if (mode === 'keep') {
     const described = await withDescription(run.ctx.db, task)
-    if (described.row !== null) {
-      row = described.row
-      chargeRead(run.budget, row)
-    }
+    if (described.row !== null) row = described.row
+    for (const read of described.read) chargeRead(run.budget, read)
     const stored = fitToStore(run.item, { ...described.task, parent_id })
     await storeTask(run.ctx, run.item, tallyOf(run), stored)
   } else {
@@ -4592,11 +4591,11 @@ export async function moveTasksToTrash(
   // the caller read them, and the steps' reads come on top
   for (const task of [...a.subtasks, a.root]) chargeRead(budget, task)
   // each task as it is stored (model/descriptions.ts withDescription),
-  // which reads no description row while the task row holds the text; the
-  // steps delete the rows (moveDrain)
+  // which reads its description row only once the task row holds no copy
+  // of the text; the steps delete the rows (moveDrain)
   const described = async (task: Doc<'issues'>) => {
-    const { task: doc, row } = await withDescription(counted.db, task)
-    if (row !== null) chargeRead(budget, row)
+    const { task: doc, read } = await withDescription(counted.db, task)
+    for (const row of read) chargeRead(budget, row)
     return doc
   }
   const root = await described(a.root)

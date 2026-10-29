@@ -5,8 +5,9 @@
  * into issue_descriptions (schema.ts), and every reader takes a task's text
  * from model/descriptions.ts (descriptionOf, withText, descriptionsOf,
  * textsOf), which falls back to issues.description only for a task without
- * a row. Once the third release clears issues.description, a direct read
- * would silently read nothing, so the check refuses one now.
+ * a row. Writers no longer set issues.description, and the backfill's clear
+ * unsets the copies earlier releases wrote, so a direct read would silently
+ * read nothing.
  *
  * It reads convex/'s own code with TypeScript's checker, outside the tests,
  * which plant and read rows directly, and fails on
@@ -22,7 +23,8 @@
  * id of issues (`Doc<'issues'>`, a type built on it, or a union with one).
  * A task with its text (model/descriptions.ts TaskWithText) is such a type
  * too, so code that compares a write's before and after texts calls
- * textsOf. Two functions read the stored text on purpose and pass (`kept`).
+ * textsOf. One function reads the stored text on purpose and passes
+ * (`kept`).
  *
  * It cannot see a task row whose fields go on whole: a spread into another
  * object, `Object.keys` or `JSON.stringify` of one, a key of a union type
@@ -56,12 +58,8 @@ const owner = 'model/descriptions.ts'
 const readers = new Set([owner, 'internal/descriptionsBackfill.ts'])
 /* Functions that read the text a task row stores on purpose: Deleted items
  * stores a task with its text (model/descriptions.ts withDescription) and
- * cuts a copy too large to store, and a subtree walk estimates a task
- * row's size from the text it holds. */
-const kept = new Map([
-  ['model/deletedItems.ts', new Set(['cutToCaps'])],
-  ['model/issues.ts', new Set(['subtaskBytes'])],
-])
+ * cuts a copy too large to store. */
+const kept = new Map([['model/deletedItems.ts', new Set(['cutToCaps'])]])
 const field = 'description'
 const skipped = /[/\\](?:node_modules|_generated|tests)[/\\]/
 

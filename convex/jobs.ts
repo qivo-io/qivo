@@ -397,9 +397,10 @@ async function archivesInto(ctx: MutationCtx, a: ArchiveLeg): Promise<boolean> {
  * stamps could change their answer. A child can be as large as its parent,
  * so when the children the guard read pass ARCHIVE_LIMITS.bytes, the leg
  * writes nothing and the next leg reads the same page at half the size.
- * Each archived task reads and writes its description row, up to the
- * task's own size, and sends a task.updated event, whose subscriber checks
- * cost reads. So before each task after its first, a leg stops once its
+ * Each archived task reads and writes its description row, which can come
+ * close to Convex's document size limit for a text stored before the caps,
+ * and sends a task.updated event, whose subscriber checks cost reads. So
+ * before each task after its first, a leg stops once its
  * archiving has used ARCHIVE_LIMITS.room of what was left of any
  * transaction limit, and the next leg reads the same page again, without
  * the tasks archived here, which have left its range, so a leg of tasks

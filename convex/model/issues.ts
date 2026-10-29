@@ -93,9 +93,11 @@ import { excerpt, issueChanges, logActivity, machineDetail, narratedChange } fro
 import { scheduleMarkClears } from './archiveMarks'
 import { recheckParent } from './archiveRechecks'
 import { startCount } from './commentLimits'
+import { DOCUMENT_MAX_BYTES } from './comments'
 import { IMAGE_NOT_ATTACHED, settleDescriptionImages } from './descriptionImages'
 import {
   descriptionOf,
+  firstRows,
   insertTask,
   patchTask,
   type TaskFields,
@@ -586,7 +588,7 @@ async function assertRoom(ctx: QueryCtx, refusal = SUBTREE_TOO_LARGE): Promise<v
 }
 
 /* A check to run before each query and after each row of a walk under
- * SUBTREE_ROOM, given the row's size (subtaskBytes). It asks the
+ * SUBTREE_ROOM, given the row's size (getDocumentSize). It asks the
  * transaction's use every `every` calls, or once the sizes since it last
  * asked reach `bytes` (assertRoom, with `refusal`). */
 function roomCheck(ctx: QueryCtx, refusal = SUBTREE_TOO_LARGE): (bytes?: number) => Promise<void> {
@@ -601,23 +603,26 @@ function roomCheck(ctx: QueryCtx, refusal = SUBTREE_TOO_LARGE): (bytes?: number)
   }
 }
 
-/* An upper estimate of a task row's size for roomCheck: its title and
- * description, up to 3 bytes a UTF-16 unit, and 1 KiB for the rest. */
-const subtaskBytes = (task: Doc<'issues'>): number =>
-  3 * (task.title.length + (task.description?.length ?? 0)) + 1024
-
 /* The bytes one step of a change reads and writes. */
 type StepCost = { reads: number; writes: number }
 
 /* What patching task `task` reads and writes (model/descriptions.ts
- * patchTask): the task row again and its description row twice, as it is
- * found and as its write reads it again, and both rows written. Neither
- * row is larger than the task row while issues.description holds the
- * text, so a task stored before the caps, which can come close to Convex's
- * document size limit, costs about three times that limit in reads. */
-const patchCost = (task: Doc<'issues'>): StepCost => {
-  const size = getDocumentSize(task)
-  return { reads: 3 * size, writes: 2 * size }
+ * patchTask), given `rows`, its first two description rows, which the
+ * change read already (rowsForPatch) and passes to the patch: the task row
+ * again, the first row again as its write reads it, and both rows written,
+ * the first with the text readers showed, from either row, and copies a
+ * few dozen bytes long. Each document is priced at its real size. A task
+ * row that still holds a copy of its text is about as large as its row,
+ * one without is about 2 KB, and a row stored before the caps can come
+ * close to Convex's document size limit. */
+const patchCost = (task: Doc<'issues'>, rows: readonly Doc<'issue_descriptions'>[]): StepCost => {
+  const own = getDocumentSize(task)
+  const [first] = rows
+  if (first === undefined) return { reads: own, writes: own }
+  return {
+    reads: own + getDocumentSize(first),
+    writes: own + Math.max(...rows.map((row) => getDocumentSize(row))),
+  }
 }
 
 /* Refuses with `refusal` unless the transaction can take one more step
@@ -643,6 +648,35 @@ async function assertStepRoom(
     return used + (more[key] ?? 0) > (used + remaining) * SUBTREE_ROOM.room
   })
   if (full) throw rule(refusal)
+}
+
+/* The first two description rows of task `task` (model/descriptions.ts
+ * firstRows), for a change that patches it in a subtree to price the patch
+ * (patchCost) and pass them on, so the patch reads none again. Either row
+ * can come close to Convex's document size limit, so the change is refused
+ * with `refusal` before the read unless two rows of that size, and
+ * `reserve` bytes of reads after the change, still fit inside Convex's own
+ * limits for one transaction. SUBTREE_ROOM's `room` is not asked here: the
+ * patch is priced against it at the rows' real size (assertStepRoom), so a
+ * change whose rows are small, such as the archive a REST or MCP update
+ * folds after a heavy move, is not refused for rows it does not have. */
+async function rowsForPatch(
+  ctx: QueryCtx,
+  task: Doc<'issues'>,
+  refusal: string,
+  reserve = 0,
+): Promise<Doc<'issue_descriptions'>[]> {
+  const metrics = await ctx.meta.getTransactionMetrics()
+  const more: Partial<Record<keyof TransactionMetrics, number>> = {
+    bytesRead: 2 * DOCUMENT_MAX_BYTES + reserve,
+    documentsRead: 2,
+    databaseQueries: 1,
+  }
+  const full = (Object.keys(metrics) as Array<keyof TransactionMetrics>).some(
+    (key) => (more[key] ?? 0) > metrics[key].remaining,
+  )
+  if (full) throw rule(refusal)
+  return await firstRows(ctx.db, task.id)
 }
 
 /* The active subtasks of the task `parentId`, one by_parent_archived range,
@@ -675,7 +709,7 @@ async function holdersUnder(
   await room()
   const kids = read.kids?.filter((c) => c.archived_at === undefined) ?? activeSubtasks(ctx, rootId)
   for await (const c of kids) {
-    await room(subtaskBytes(c))
+    await room(getDocumentSize(c))
     if (c.assignee_id !== undefined) holders.add(c.assignee_id)
     if (c.reviewer_id !== undefined) holders.add(c.reviewer_id)
   }
@@ -915,7 +949,7 @@ export async function subtaskCount(ctx: QueryCtx, parentId: string): Promise<num
   for await (const kid of activeSubtasks(ctx, parentId)) {
     count += 1
     if (count >= LIMITS.subtasks.max) break
-    await room(subtaskBytes(kid))
+    await room(getDocumentSize(kid))
   }
   return count
 }
@@ -1993,12 +2027,19 @@ export const MOVE_SUBTREE_HOLDER_RULE =
  * and carries the rest. LIMITS.subtasks.max bounds only the active ones, so
  * this bounds what the move reads and writes: LIMITS.subtasks.max active
  * subtasks and as many archived. Each carried subtask is read twice, once by
- * the move and once by its write, and so is its description row, found and
- * then read again by its own write (model/descriptions.ts patchTask). So
- * about 60 subtasks with descriptions at TEXT_MAX of three-byte characters
- * fit in one request while issues.description holds the text too, and
- * about 50 active ones in a REST move, whose answer reads them again.
- * A larger family is refused with MOVE_TOO_LARGE. */
+ * the move and once by its write, and so is its description row, read to
+ * price its patch (rowsForPatch) and again by its own write
+ * (model/descriptions.ts patchTask). Once internal/descriptionsBackfill's
+ * clear has taken the text off the task rows, about 120 subtasks with
+ * descriptions at TEXT_MAX of three-byte characters fit in one request, so
+ * LIMITS.subtasks.max active ones always do, in a REST move too, whose
+ * answer reads them again, and LIMITS.moveSubtree.max fit with ASCII text at
+ * TEXT_MAX. While the task rows still hold a copy of the text, before the
+ * clear or after a rollback to the second release of the description move,
+ * about 60 fit, and about 50 active ones in a REST move. Descriptions stored
+ * before the caps, near Convex's document size limit, fit 7 a family once
+ * cleared and 3 with the copy. A larger family is refused with
+ * MOVE_TOO_LARGE. */
 
 /* Per-call cache from a project id to its top-level project id, null for a
  * missing project. */
@@ -2210,9 +2251,10 @@ export async function moveIssueCore(
     }
   }
   // to another top-level project, the subtasks outside it come along. They
-  // are read once, for the carry and the holders below: a subtask can be
-  // about 60 KB within TEXT_MAX, so LIMITS.moveSubtree.max of them take most of
-  // what one transaction may read
+  // are read once, for the carry and the holders below: a subtask's row is
+  // about 2 KB without its text, but about 60 KB within TEXT_MAX while it
+  // still holds a copy of it, and then LIMITS.moveSubtree.max of them take
+  // most of what one transaction may read
   const below = crosses ? await subtasksOf(ctx, issue.id) : undefined
   const carried =
     below !== undefined ? await subtreeToCarry(ctx, { below, target, actor: me, topOf }) : []
@@ -2243,6 +2285,14 @@ export async function moveIssueCore(
           .filter((c) => c.archived_at === undefined)
           .reduce((sum, c) => sum + getDocumentSize(c), 0)
       : 0
+  // a move that read the subtree to carry it reads the description rows of
+  // the task and of each subtask it carries before the first patch, to
+  // price each patch (patchCost)
+  const rootRows =
+    below !== undefined ? await rowsForPatch(ctx, issue, MOVE_TOO_LARGE, answer) : undefined
+  const toCarry: { task: Doc<'issues'>; rows: Doc<'issue_descriptions'>[] }[] = []
+  for (const task of carried)
+    toCarry.push({ task, rows: await rowsForPatch(ctx, task, MOVE_TOO_LARGE, answer) })
   // a task that leaves its parent stops counting for it, which may have
   // waited for it alone (model/archiveRechecks.ts)
   if (detach) await recheckParent(ctx, issue)
@@ -2250,20 +2300,21 @@ export async function moveIssueCore(
   // the task and its description row (model/descriptions.ts); a move that
   // read the subtree to carry it asks the room first, and any other patches
   // one task, as a single task's update does
-  if (below !== undefined) await assertStepRoom(ctx, patchCost(issue), MOVE_TOO_LARGE, answer)
-  await patchTask(ctx.db, issue, w)
+  if (rootRows !== undefined)
+    await assertStepRoom(ctx, patchCost(issue, rootRows), MOVE_TOO_LARGE, answer)
+  await patchTask(ctx.db, issue, w, rootRows)
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   // the stored-byte totals follow the task and every subtask it carries, at
   // one totals row each, however many files they hold
   // (model/storageTotals.ts), before the room checks of the carry below
   await moveTaskFiles(ctx, [issue, ...carried], target)
-  for (const row of carried) {
-    await assertStepRoom(ctx, patchCost(row), MOVE_TOO_LARGE, answer)
+  for (const { task: row, rows } of toCarry) {
+    await assertStepRoom(ctx, patchCost(row, rows), MOVE_TOO_LARGE, answer)
     // a carried subtask's stamps change as the task's above; the row as it
     // lands is built from the patch rather than read again, which would
     // read every carried subtask a second time
     const moved = { project_id, updated_at: now, ...movedStamps(row, now) }
-    await patchTask(ctx.db, row, moved)
+    await patchTask(ctx.db, row, moved, rows)
     const landed: Doc<'issues'> = { ...row, ...moved }
     if (landed.status_at === undefined) delete landed.status_at
     await emitTaskEvent(ctx, { name: 'task.updated', issue: landed, before: row, actor: me, now })
@@ -2388,14 +2439,17 @@ async function archiveSubtree(
   // read in full before the first patch, which moves a row out of the range
   const kids = await activeSubtasks(ctx, rootId).take(LIMITS.subtasks.max)
   for (const c of kids) {
-    await room(subtaskBytes(c))
+    await room(getDocumentSize(c))
     const editable = await edits(c.project_id)
     if (editable === null) throw rule(SUBTASK_BEING_DELETED)
     if (!editable) throw rule(ARCHIVE_CASCADE_RULE)
   }
-  for (const c of kids) {
-    await assertStepRoom(ctx, patchCost(c), SUBTREE_TOO_LARGE)
-    await patchTask(ctx.db, c, { archived_at: now, updated_at: now })
+  // each subtask's description rows, to price its patch (patchCost)
+  const rows: Doc<'issue_descriptions'>[][] = []
+  for (const c of kids) rows.push(await rowsForPatch(ctx, c, SUBTREE_TOO_LARGE))
+  for (const [i, c] of kids.entries()) {
+    await assertStepRoom(ctx, patchCost(c, rows[i]), SUBTREE_TOO_LARGE)
+    await patchTask(ctx.db, c, { archived_at: now, updated_at: now }, rows[i])
     // built from the patch rather than read again, which would read every
     // subtask a second time
     const after: Doc<'issues'> = { ...c, archived_at: now, updated_at: now }

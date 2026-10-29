@@ -53,6 +53,7 @@ import {
   plantSubscription,
   reap,
   type T,
+  taskWithText,
   uuid,
   withOrg,
   workspaceOf,
@@ -94,8 +95,9 @@ declare class Blob {
 installTrashTimers()
 
 /** The uuids of `n` subtasks of `parent` in project `projectId`, each with
- * `description` and its description row, planted 100 to a transaction so a
- * large set stays within the write limits, in the order planted. */
+ * `description` in its description row and in its task row, planted 100 to
+ * a transaction so a large set stays within the write limits, in the order
+ * planted. */
 async function plantChildren(
   t: T,
   parent: Doc<'issues'>,
@@ -106,8 +108,8 @@ async function plantChildren(
   const ids = Array.from({ length: n }, () => uuid())
   for (let from = 0; from < n; from += 100)
     await t.run(async (ctx) => {
-      for (const [i, id] of ids.slice(from, from + 100).entries())
-        await insertTask(
+      for (const [i, id] of ids.slice(from, from + 100).entries()) {
+        const _id = await insertTask(
           ctx.db,
           {
             id,
@@ -125,6 +127,10 @@ async function plantChildren(
           },
           'restore',
         )
+        // the copy of the text an earlier release wrote, which every
+        // deployment's task rows hold until the description backfill's clear
+        await ctx.db.patch(_id, { description })
+      }
     })
   return ids
 }
@@ -225,10 +231,12 @@ describe('moving a task to Deleted items', () => {
     expect(item.purge_after).toBe(START + TRASH_DAYS * DAY)
     expect(await jobFor(t, item.id)).toBeNull()
 
-    // every original document, unchanged, travels with the task
+    // every original document, unchanged, travels with the task, which
+    // keeps its text, read from its description row
     const stored = await storedRows(t, item.id)
+    const withText: Doc<'issues'> = { ...task, description: '' }
     const expected = [
-      expectedRow({ table: 'issues', doc: task }, task.id),
+      expectedRow({ table: 'issues', doc: withText }, task.id),
       ...planted.rows.map((row) => expectedRow(row, task.id)),
     ]
     expect(stored).toHaveLength(expected.length)
@@ -419,7 +427,7 @@ describe('moving a task to Deleted items', () => {
 
     await as(t, f.user).mutation(api.deletedItems.restore, { org_id, ids: [item.id] })
     await runSteps(t)
-    expect(await liveTask(t, huge.id)).toMatchObject({
+    expect(await taskWithText(t, huge.id)).toMatchObject({
       title: '😀'.repeat(127),
       description: 'x'.repeat(TEXT_MAX - 1),
     })

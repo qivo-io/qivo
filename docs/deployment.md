@@ -398,7 +398,10 @@ releases added fields that earlier releases refuse, such as the live task
 and project counts, so a release of a commit before one of them fails to
 deploy (see Recovery and compatibility).
 Commits from before the website moved into this repository cannot be
-released again.
+released again. From the release that writes task descriptions only to
+`issue_descriptions`, never return the backend to a commit before v0.1.98
+(`221c21d`). Convex accepts v0.1.97, but it shows no description for a task
+that release wrote, edited or cleared (see Recovery and compatibility).
 
 Vercel Instant Rollback changes only the frontend, leaves the Convex functions
 in place and stops Vercel from moving the domain to later deployments until
@@ -642,25 +645,31 @@ organization holds them from its start, so the release that added them is
 a rollback floor for the backend as soon as it deploys (see Rollback and
 hotfixes). Roll forward instead.
 
-Task descriptions are moving from `issues.description` into the
+Task descriptions moved from `issues.description` into the
 `issue_descriptions` table, one row per live task, in three releases. In
-the first, every write of a task keeps both copies and every reader still
-reads `issues.description`. A task stored before that release has no row
-until the one-time `internal/descriptionsBackfill` gives it one. Run the
-backfill on every hosted deployment once it serves that release, as the
-module's header says. Read its dry run first, then run it, and call it
-again with the `cursor` it answers until it answers `done`. The second
-release reads the table: every reader takes a task's text from its first
-row, or from its first row that holds the task's project and archived
-state when a rollback left more than one, and only a task without a row
-reads `issues.description`. It ships to
-production only once a dry run on development, staging, production and the
-demo reports zero `missing`, `differ`, `duplicates`, `orphans` and
-`skipped`, because from then on a row that differs from its task is what
-people see. Its `waiting` rows belong to a Deleted items item or a teardown
-that is still running and deletes them. Writers in the second release still
-keep both copies, so it can be rolled back to the first release, which
-reads `issues.description`, without losing a description.
+the first, every write of a task kept both copies and every reader still
+read `issues.description`. A task stored before that release had no row
+until the one-time `internal/descriptionsBackfill` gave it one. The second
+release, v0.1.98, reads the table: every reader takes a task's text from
+its first row, or from its first row that holds the task's project and
+archived state when a rollback left more than one, and only a task without
+a row reads `issues.description`. The third release writes the text to the
+table alone. A new task's row in `issues` holds no copy of it, and every
+description write unsets the copy a task row still holds. Its
+`"clear": true` run of the backfill unsets the remaining copies, only
+where the task's one row holds the same text and the task's project and
+archived state, and it reports every other case. Run the backfill on every
+hosted deployment once it serves the third release, as the module's header
+says. Read a dry run, then run it with `"clear": true` and call it again
+with the `cursor` it answers until it answers `done`, then read a second
+dry run, which reports `held` 0. A deployment is clean when a dry run
+reports zero `missing`, `differ`, `duplicates` and `orphans`. Its
+`waiting` rows belong to a Deleted items item or a teardown that is still
+running and deletes them. `skipped` counts the tasks whose row in `issues`
+holds no copy, which is normal from the third release on and grows with
+every create and description edit, and `held` counts the copies a clear
+would unset. Clear only a clean deployment, and on production only after a
+verified backup.
 A rollback past the first release deploys, because Convex leaves a table
 the schema does not list alone, but the earlier code writes tasks without
 their rows and changes descriptions without them. After rolling forward
@@ -670,10 +679,28 @@ rows whose task is gone. Once the second release serves, it shows the row
 such earlier code left stale, so run the dry run and that repair before
 anyone relies on the text. Every call that is not a dry run adds an audit
 row with its counts and the `cursor` to go on from, also when it fails
-partway. The third release clears `issues.description`. A rollback from it
-to the second release still shows every description, because the second
-reads the rows, but no earlier release can show them, so the second
-release is the third's rollback floor.
+partway.
+The second release is the backend's rollback floor from the moment the
+third deploys, not from the clear, because the third's first create or
+description edit writes a task without a copy. The second release and the
+ones after it before the third, from v0.1.98 on, read the rows, so every
+description shows, and their writers write copies equal to the rows
+again, which the next clear unsets after rolling forward. Their dry run
+counts every task without a copy as `skipped`, which is no fault there,
+and does not count a second row of a task without a copy, so only the third
+release's dry run finds such duplicates. They also price each patch of a
+subtree move or archive at the size of the task row, which holds no text
+once the clear has run. Moving or archiving a family whose descriptions were
+stored before the caps, near Convex's document size limit, can then fail
+with Convex's read limit error instead of a refusal. Nothing of it is
+written, and rolling forward ends it. Convex accepts a rollback to
+v0.1.97 (`9243406`), or to a main commit between it and the second
+release, but that code reads only `issues.description`. Every task the
+third release created, edited, restored or cleared then shows no
+description in the app, REST, MCP, the export and the searches, and people
+and agents can save over text they cannot see, although the rows keep it.
+Never return the backend to a commit before v0.1.98 (`221c21d`); roll
+forward instead.
 
 Each description row also holds copies of its task's project and archived
 state (`project_id`, `archived_at`), and the table has the
@@ -693,8 +720,10 @@ titles through the `search_title` index of `issues` and project names
 through the `search_name` index of `projects`, which Convex builds at
 deploy without a backfill. The query ships before the app calls it. The
 release whose app calls it ships only once a dry run on development,
-staging, production and the demo reports zero `missing`, `differ`,
-`duplicates`, `orphans` and `skipped`.
+staging, production and the demo reports the deployment clean, zero
+`missing`, `differ`, `duplicates` and `orphans`. `skipped` no longer counts
+against it, because from the third release of the description move it
+counts every task whose row in `issues` holds no copy of its text.
 Data restored from a backup taken before the copies leaves rows without
 them, and a dry run lists them as `differ` until a repair mends them.
 Code that lists `issue_descriptions` without the copy fields does not

@@ -38,6 +38,7 @@ import { insertTask } from '../model/descriptions'
 import schema from '../schema'
 import { newTeam, SHAPES } from './accessShapes.setup'
 import {
+  copyTaskTexts,
   NOW,
   newT,
   type OrgFixture,
@@ -1666,6 +1667,9 @@ describe('within Convex limits', () => {
             'restore',
           )
       })
+    // with the copy of the text in each task row, as every deployment holds
+    // them until the description backfill's clear
+    await copyTaskTexts(t, f.org.id)
     const pages = await measuredPages(t, 'work', 2_000)
     expect(pages.length).toBeGreaterThan(1)
     for (const { page, metrics } of pages.slice(0, -1)) {

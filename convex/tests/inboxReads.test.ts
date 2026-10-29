@@ -20,6 +20,7 @@ import { readInboxItem, readInboxSummary, SUMMARY } from '../model/inboxReads'
 import { ITEM_UNREAD_CAP, itemMessages, markMessagesRead, postMessage } from '../model/messages'
 import {
   as,
+  copyTaskTexts,
   expectRefusal,
   NOW,
   newT,
@@ -483,9 +484,12 @@ describe('the unread summary', () => {
   it('reads less than half of Convex’s limits for 100 tasks with the largest descriptions', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // 20,000 characters of three bytes each, about 60 KB a task
+    // 20,000 characters of three bytes each, about 60 KB a task, in the
+    // task row too, as every deployment holds them until the description
+    // backfill's clear
     const description = '語'.repeat(20_000)
     await plantItems(t, f, f.guest, 100, f.sub.id, { description }, 10)
+    await copyTaskTexts(t, f.org.id)
     const read = await measured(t, f.guest)
     expect(read.answer).toMatchObject({ unread_count: 100, unread_more: true, complete: true })
     expect(read.bytes).toBeGreaterThan(100 * 60_000)

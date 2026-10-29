@@ -18,6 +18,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  plantCopiedIssue,
   plantIssue,
   type T,
   uuid,
@@ -217,11 +218,17 @@ describe('live counts', () => {
     const f = await withOrg(t)
     const org_id = f.org.id
     Object.assign(COUNT_PAGE, { bytes: 100_000 })
-    // descriptions over what the app takes now, as earlier releases stored
+    // descriptions over what the app takes now, in the task rows, as
+    // earlier releases stored them and every deployment holds them until
+    // the description backfill's clear
     const long = []
     for (let i = 0; i < 3; i++)
       long.push(
-        await plantIssue(t, { org_id, project_id: f.sub.id, description: 'x'.repeat(60_000) }),
+        await plantCopiedIssue(t, {
+          org_id,
+          project_id: f.sub.id,
+          description: 'x'.repeat(60_000),
+        }),
       )
     const step = () =>
       t.mutation(internal.internal.liveCountsBackfill.step, { org_id, recount: false })

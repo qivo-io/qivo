@@ -34,6 +34,7 @@ import { MOVE_TOO_LARGE, PARENT_DELETED_SINCE } from '../model/issues'
 import { INLINE_TRIMS, ITEM_UNREAD_CAP, notifyCommentInsert } from '../model/messages'
 import {
   as,
+  copyTaskTexts,
   expectRefusal,
   fileState,
   messagesFor,
@@ -46,6 +47,7 @@ import {
   plantProject,
   plantSubscription,
   type T,
+  taskWithText,
   uuid,
   withOrg,
 } from './helpers.setup'
@@ -522,7 +524,10 @@ describe('a move that carries archived subtasks', () => {
 
   /* Plants `active` and `archived` subtasks of `parent` with the longest
    * title and description, about 60 KB each and as much again in their
-   * description rows, at most fifty per write. */
+   * description rows, at most fifty per write. The task rows hold the copy
+   * of the text earlier releases wrote, as every deployment's do until the
+   * description backfill's clear; convex/tests/descriptions.test.ts
+   * measures the capacities once it has cleared them. */
   const plantLong = async (
     fx: Fx,
     parent: Doc<'issues'>,
@@ -536,6 +541,11 @@ describe('a move that carries archived subtasks', () => {
     ] as const)
       for (let left = n; left > 0; left -= 50)
         kids.push(...(await plantSubtasks(fx, parent, Math.min(50, left), { ...long, ...over })))
+    await copyTaskTexts(
+      fx.t,
+      fx.org.id,
+      kids.map((kid) => kid.id),
+    )
     return kids
   }
 
@@ -676,20 +686,19 @@ describe('deleting a task with archived subtasks', () => {
 
   it('resumes a step that failed halfway with a smaller page', async () => {
     Object.assign(ARCHIVED_DETACH, { page: 4, room: 0.99 })
-    // each subtask's description takes about 60 KB, so four detaches pass
-    // the write limit and the step fails after its third
+    // each subtask's description takes about 60 KB in its task row too, as
+    // until the description backfill's clear, so four detaches pass the
+    // write limit and the step fails after its third
     const fx = await setup(newT({ transactionLimits: { bytesWritten: 200_000 } }))
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const parent = await task(fx, { title: 'Long subtasks' })
     const kids: Doc<'issues'>[] = []
+    const description = 'あ'.repeat(TEXT_MAX)
     for (let i = 0; i < 5; i++) {
-      kids.push(
-        ...(await plantSubtasks(fx, parent, 1, {
-          archived_at: NOW,
-          description: 'あ'.repeat(TEXT_MAX),
-        })),
-      )
+      const [kid] = await plantSubtasks(fx, parent, 1, { archived_at: NOW, description })
+      await fx.t.run((ctx) => ctx.db.patch(kid._id, { description }))
+      kids.push(kid)
     }
     await deleteTask(fx.t, fx, parent.id)
     await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
@@ -1022,10 +1031,10 @@ describe('the attachment, link and label limits', () => {
     // an id in prose or in code shows no image, so it is no reference
     const quoted = `See att:${theirs}, \`![photo](att:${theirs})\` and\n\`\`\`\n![photo](att:${theirs})\n\`\`\``
     await saveDescription(fx, issue, quoted)
-    expect((await row(fx.t, issue.id)).description).toBe(quoted)
+    expect((await taskWithText(fx.t, issue.id))?.description).toBe(quoted)
     // a reference the saved text already has, such as one to an image
-    // deleted since, stays through a save of other text. Both copies hold
-    // the saved text, and the save reads it from the description row.
+    // deleted since, stays through a save of other text. The description
+    // row holds the saved text, and the save reads it from there.
     await fx.t.run(async (ctx) => {
       const row = await ctx.db
         .query('issues')
@@ -1034,7 +1043,7 @@ describe('the attachment, link and label limits', () => {
       if (row !== null) await patchTask(ctx.db, row, { description: text })
     })
     await saveDescription(fx, issue, `${text} and more`)
-    expect((await row(fx.t, issue.id)).description).toBe(`${text} and more`)
+    expect((await taskWithText(fx.t, issue.id))?.description).toBe(`${text} and more`)
   })
 
   it('deletes a dropped image with its bytes a day later, unless a save brought it back', async () => {
@@ -1123,7 +1132,7 @@ describe('the attachment, link and label limits', () => {
         ids: [(await itemFor(fx.t, issue.id)).id],
       })
       await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
-      expect((await row(fx.t, issue.id)).description).toBe('Without it')
+      expect((await taskWithText(fx.t, issue.id))?.description).toBe('Without it')
       expect(await attachment(fx, image)).toBeNull()
     } finally {
       vi.useRealTimers()
@@ -1651,7 +1660,7 @@ describe('mentions', () => {
     for (const write of Object.values(writes))
       await refused(write(), 'rule', LIMITS.mentions.refusal)
     // nothing saved and nobody heard
-    expect((await row(fx.t, described.id)).description).toBe(described.description)
+    expect((await taskWithText(fx.t, described.id))?.description).toBe('')
     expect(await mentioned(people[LIMITS.mentions.max])).toBe(0)
     expect(await mentioned(people[0], described)).toBe(0)
   })

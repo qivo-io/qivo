@@ -32,7 +32,7 @@ import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
 import { readWorkspace, type Workspace } from '../lib/workspaceJoin'
 import { type ActivityEntry, insertActivity } from '../model/activity'
-import { insertTask } from '../model/descriptions'
+import { insertTask, type TaskWithText, withText } from '../model/descriptions'
 import { ERASE_TIMERS, noteRestore } from '../model/fileHolds'
 import { activeTaskCount } from '../model/labelCounts'
 import { countersOf, countersRow, type OrgCounters } from '../model/orgs'
@@ -717,8 +717,10 @@ export async function plantProject(
 
 /* An issue row with its description row (model/descriptions.ts) and the
  * used_ids row of its id, as every task has once internal/descriptionsBackfill
- * and internal/usedIdsBackfill ran. It is unscheduled and backlog-shaped
- * unless overridden. */
+ * and internal/usedIdsBackfill ran. Its task row holds no copy of the text,
+ * as every task the third release of the description move writes;
+ * copyTaskTexts gives it the copy earlier releases wrote. It is unscheduled
+ * and backlog-shaped unless overridden. */
 export async function plantIssue(
   t: T,
   issue: { org_id: string; project_id: string } & Partial<WithoutSystemFields<Doc<'issues'>>>,
@@ -744,6 +746,21 @@ export async function plantIssue(
       'restore',
     )
     return (await ctx.db.get(_id)) as Doc<'issues'>
+  })
+}
+
+/* A task as plantIssue plants it, with the copy of its text in
+ * issues.description too, which earlier releases wrote on every task and
+ * every deployment's task rows hold until the description backfill's
+ * clear. Tests whose budgets must hold for such rows plant them so. */
+export async function plantCopiedIssue(
+  t: T,
+  issue: { org_id: string; project_id: string } & Partial<WithoutSystemFields<Doc<'issues'>>>,
+): Promise<Doc<'issues'>> {
+  const task = await plantIssue(t, issue)
+  return await t.run(async (ctx) => {
+    await ctx.db.patch(task._id, { description: issue.description ?? '' })
+    return (await ctx.db.get(task._id)) as Doc<'issues'>
   })
 }
 
@@ -878,11 +895,60 @@ export async function expectLiveCounts(t: T, orgId: string) {
   return rows
 }
 
+/** Live task `id` with the text readers show in `description`
+ * (model/descriptions.ts withText), or null. Tests read a task's text
+ * through it, because writers leave issues.description unset. */
+export const taskWithText = (t: T, id: string): Promise<TaskWithText | null> =>
+  t.run(async (ctx) => {
+    const task = await ctx.db
+      .query('issues')
+      .withIndex('by_uuid', (q) => q.eq('id', id))
+      .unique()
+    return task === null ? null : await withText(ctx.db, task)
+  })
+
+/** Gives each live task of organization `orgId`, or only those of `ids`
+ * among them, the copy of its text in issues.description that the releases
+ * before the third wrote, equal to its first description row's text,
+ * reading and patching ten tasks a transaction in creation order. That
+ * state lasts on every deployment until the backfill's clear, and a
+ * rollback to the second release brings it back, so a test that measures
+ * it or needs the copy plants it here. Answers how many tasks it gave a
+ * copy. */
+export async function copyTaskTexts(t: T, orgId: string, ids?: readonly string[]): Promise<number> {
+  let copied = 0
+  for (let after = 0; ; ) {
+    const from = after
+    const page = await t.run(async (ctx) => {
+      const tasks = await ctx.db
+        .query('issues')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId).gt('_creationTime', from))
+        .take(10)
+      let count = 0
+      for (const task of tasks) {
+        if (ids !== undefined && !ids.includes(task.id)) continue
+        const row = await ctx.db
+          .query('issue_descriptions')
+          .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+          .first()
+        if (row === null) continue
+        await ctx.db.patch(task._id, { description: row.description })
+        count += 1
+      }
+      return { last: tasks.at(-1)?._creationTime, count }
+    })
+    copied += page.count
+    if (page.last === undefined) return copied
+    after = page.last
+  }
+}
+
 /** Expects every live task of organization `orgId`, or of every
- * organization without one, to have exactly one description row with its
- * issues.description ('' for none) and the copies of its project and
- * archived state, and no description row without its live task (schema.ts
- * issue_descriptions). Answers how many tasks it checked. */
+ * organization without one, to have exactly one description row with the
+ * copies of its organization, project and archived state, its task row to
+ * hold no copy of the text or the row's text, and no description row
+ * without its live task (schema.ts issue_descriptions). Answers how many
+ * tasks it checked. */
 export async function expectDescriptions(t: T, orgId?: string): Promise<number> {
   const { tasks, rows } = await t.run(async (ctx) => ({
     tasks:
@@ -901,16 +967,16 @@ export async function expectDescriptions(t: T, orgId?: string): Promise<number> 
             .collect(),
   }))
   const held = (row: Doc<'issue_descriptions'>) =>
-    JSON.stringify([row.org_id, row.issue_id, row.project_id, row.archived_at, row.description])
+    JSON.stringify([row.org_id, row.issue_id, row.project_id, row.archived_at])
   const kept = (task: Doc<'issues'>) =>
-    JSON.stringify([
-      task.org_id,
-      task.id,
-      task.project_id,
-      task.archived_at,
-      task.description ?? '',
-    ])
+    JSON.stringify([task.org_id, task.id, task.project_id, task.archived_at])
   expect(rows.map(held).sort()).toEqual(tasks.map(kept).sort())
+  // so each task has one row, whose text a copy the task row holds equals
+  const texts = new Map(rows.map((row) => [row.issue_id, row.description]))
+  const copies = tasks.filter((task) => task.description !== undefined)
+  expect(copies.map((task) => [task.id, texts.get(task.id)])).toEqual(
+    copies.map((task) => [task.id, task.description]),
+  )
   return tasks.length
 }
 

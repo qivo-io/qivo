@@ -224,9 +224,10 @@ const issuesTable = defineTable({
   num: v.number(), // org-scoped, assigned by counter, immutable
   title: v.string(), // LIMITS.title (lib/limits.ts), trimmed
   // Markdown, LIMITS.description (lib/limits.ts), trimmed; '' for none.
-  // Moving to issue_descriptions (below): every writer still sets it until
-  // the third release of that move clears it, and readers read the
-  // description row, this only for a task without one
+  // Moved to issue_descriptions (below): no writer sets it, a description
+  // write unsets it, and internal/descriptionsBackfill's clear unsets the
+  // copies earlier releases wrote where the row holds the same text.
+  // Readers read the description row, this only for a task without one
   // (scripts/check-task-reads.mjs fails on any other read). Optional for
   // good, because deleted_rows checks its stored copies, which keep the
   // text, against this validator.
@@ -1514,21 +1515,20 @@ export default defineSchema({
    * items has no row once they have run, and a restore writes the row again
    * from the restored task (model/deletedItems.ts).
    *
-   * The move takes three releases. In the first, every writer keeps both
-   * copies and every reader reads issues.description, the source of truth;
-   * internal/descriptionsBackfill gives older tasks their rows. The second,
-   * this one, reads this table: every reader takes a task's text from its
-   * first row in creation order that holds the task's copies, which every
-   * writer keeps on the first row, else from its first row, and only a task
+   * The move takes three releases. In the first, every writer kept both
+   * copies and every reader read issues.description;
+   * internal/descriptionsBackfill gave older tasks their rows. The second
+   * reads this table: every reader takes a task's text from its first row
+   * in creation order that holds the task's copies, which every writer
+   * keeps on the first row, else from its first row, and only a task
    * without a row reads issues.description (model/descriptions.ts
-   * descriptionOf). Writers still
-   * keep both copies, so a rollback to the first release loses nothing. It
-   * ships only once a dry run of that backfill on every deployment reports
-   * zero missing, differing, duplicate, orphaned and skipped rows
-   * (docs/deployment.md). The third stops writing issues.description and
-   * clears it. A rollback from it to this release still shows every
-   * description, because this one reads the rows; one to the first release
-   * no longer does, so the second is the third's rollback floor.
+   * descriptionOf). The third, this one, writes the text here alone: a
+   * create leaves issues.description out, a description write unsets it,
+   * and the backfill's clear unsets the copies earlier releases wrote where
+   * the task's one row holds the same text. The second release is the
+   * third's rollback floor, because it reads the rows; a release before it
+   * reads only issues.description and shows no text for a task the third
+   * wrote, edited or cleared (docs/deployment.md).
    *
    * The project and archived copies came after the table, in the same
    * release or a later one. A row holds them once project_id is present
@@ -1538,7 +1538,7 @@ export default defineSchema({
    * tasks. The same backfill reports and mends both (`differ`). Main Search
    * (search.ts, lib/mainSearch.ts) reads search_description, and the app
    * calls it only after a dry run on every deployment reports zero
-   * (docs/deployment.md). */
+   * `missing`, `differ`, `duplicates` and `orphans` (docs/deployment.md). */
   issue_descriptions: defineTable({
     issue_id: v.string(),
     org_id: v.string(), // the task's, for the teardowns that delete an organization's rows

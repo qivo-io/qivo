@@ -23,6 +23,7 @@ import { wipeWorkStep } from '../model/orgDeletion'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import {
   as,
+  copyTaskTexts,
   expectListCounts,
   NOW,
   newT,
@@ -412,9 +413,12 @@ describe('label counts', () => {
     const org_id = f.org.id
     Object.assign(COUNT_PAGE, { bytes: 100_000 })
     const label = await plantLabel(t, org_id, 'Long')
-    // descriptions over what the app takes now, as earlier releases stored
+    // descriptions over what the app takes now, in the task rows, as
+    // earlier releases stored them and every deployment holds them until
+    // the description backfill's clear
     for (let n = 0; n < 3; n++)
       await plantLabelled(t, f, [label], { description: 'x'.repeat(60_000) })
+    await copyTaskTexts(t, org_id)
     const step = (cursor: string | null) =>
       t.mutation(internal.internal.labelCountsBackfill.step, { org_id, cursor })
     expect(await step(null)).toMatchObject({ done: false, labels: 1 })

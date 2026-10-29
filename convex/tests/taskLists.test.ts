@@ -39,6 +39,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  plantCopiedIssue,
   plantIssue,
   plantProject,
   plantSeat,
@@ -1037,11 +1038,12 @@ describe('archived task lists page one project with a cursor', () => {
       })
       subs.push(sub.id)
     }
-    // one 40 KB task per sub-project, 480 KB in all, a day apart
+    // one 40 KB task per sub-project, 480 KB in all, a day apart, its text
+    // in the task row too, as until the description backfill's clear
     const tasks = []
     for (const [i, project_id] of subs.entries()) {
       tasks.push(
-        await plantIssue(fx.t, {
+        await plantCopiedIssue(fx.t, {
           org_id: fx.org.id,
           project_id,
           archived_at: day(10 + i),

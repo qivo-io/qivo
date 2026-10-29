@@ -128,19 +128,24 @@ describe('the task read check', { timeout: 60_000 }, () => {
     for (const [i, line] of found.entries()) expect(line.startsWith(expected[i]), line).toBe(true)
   })
 
-  it('passes the backfill and the functions that read the stored text on purpose', () => {
+  it('passes the backfill and the function that reads the stored text on purpose', () => {
     const stored = `import type { Doc } from '../schema'\n`
     const { status, output } = check({
       'schema.ts': schema,
       'model/descriptions.ts': owner,
       'good.ts': good,
       'internal/descriptionsBackfill.ts': `${stored}export const differs = (task: Doc<'issues'>, row: Doc<'issue_descriptions'>) => row.description !== task.description\n`,
-      'model/deletedItems.ts': `${stored}function cutToCaps(task: Doc<'issues'>) { return { ...task, description: (task.description ?? '').slice(0, 10) } }\nexport const cut = cutToCaps\n`,
-      'model/issues.ts': `${stored}const subtaskBytes = (task: Doc<'issues'>) => 3 * (task.description?.length ?? 0)\nexport const bytes = subtaskBytes\nexport const other = (task: Doc<'issues'>) => task.description\n`,
+      'model/deletedItems.ts': `${stored}function cutToCaps(task: Doc<'issues'>) { return { ...task, description: (task.description ?? '').slice(0, 10) } }\nexport const cut = cutToCaps\nexport const other = (task: Doc<'issues'>) => task.description\n`,
+      // a subtree walk sizes a task row with getDocumentSize, so an
+      // estimate from the stored text is no longer kept
+      'model/issues.ts': `${stored}const subtaskBytes = (task: Doc<'issues'>) => 3 * (task.description?.length ?? 0)\nexport const bytes = subtaskBytes\n`,
     })
-    // only the read outside the two kept functions fails
+    // only the reads outside the kept function fail
     expect(output.split('\n').filter((line) => line.startsWith('convex/'))).toEqual([
-      expect.stringMatching(/^convex\/model\/issues\.ts:4:47 - this reads issues\.description/),
+      expect.stringMatching(
+        /^convex\/model\/deletedItems\.ts:4:47 - this reads issues\.description/,
+      ),
+      expect.stringMatching(/^convex\/model\/issues\.ts:2:52 - this reads issues\.description/),
     ])
     expect(status).toBe(1)
   })

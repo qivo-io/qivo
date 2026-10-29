@@ -14,6 +14,7 @@ import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { LIMITS, NAME_MAX, TEXT_MAX } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
+import { descriptionOf } from '../model/descriptions'
 import {
   activityFor,
   NOW,
@@ -212,8 +213,8 @@ describe('internal/overCapRows', () => {
       'projects.description reported',
     ])
     const after = await t.run(async (ctx) => ({
-      long: (await ctx.db.get(longTask._id))?.description,
-      padded: (await ctx.db.get(padded._id))?.description,
+      long: await descriptionOf(ctx.db, longTask),
+      padded: await descriptionOf(ctx.db, padded),
       comment: (await ctx.db.query('comments').first())?.body,
       project: (await ctx.db.get(project._id))?.description,
     }))

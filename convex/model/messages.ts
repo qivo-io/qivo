@@ -2248,8 +2248,8 @@ export async function notifyIssueInsert(
  * a write that changes nothing in it must not post. Callers hand the STORED
  * before/after rows, for the remaining-clear side-effect write too, except
  * that a write that changes the description hands both with their text
- * (model/descriptions.ts withText, textsOf), which the stored rows stop
- * holding in the third release of the description move. A
+ * (model/descriptions.ts withText, textsOf), which the stored rows no
+ * longer hold once the task row's copy is unset. A
  * group's calculated dates are never stored, so a subtask moving its span
  * sends the group's followers nothing.
  *
