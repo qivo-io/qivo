@@ -73,6 +73,7 @@ import { matchesAllWords, moreMatches } from '../lib/search'
 import { mergeSpine, spineWindow, type UnreadStart, unreadMark, unreadStart } from '../lib/spine'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import { markTaskFocus, restoreTaskFocus } from '../lib/taskFocus'
+import { groupTotals } from '../lib/taskSections'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useBottomSnap } from '../lib/useBottomSnap'
 import { useConfirmArm } from '../lib/useConfirmArm'
@@ -83,12 +84,16 @@ import '../styles/mobile-issue.css'
 import {
   type ActivityVM,
   type ArchivedIssueVM,
-  type AttachmentVM,
   type CommentsEarlier,
   type CommentsFailure,
   type CommentVM,
   type IssueVM,
   P,
+  type RelatedTaskVM,
+  type SectionAttachmentVM,
+  type SectionName,
+  type SectionVM,
+  type TaskSectionsVM,
 } from '../store/planner'
 import { ArchiveOrDeleteTaskModal, MoveIssueModal } from './Modals'
 
@@ -108,35 +113,41 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
 }
 const NO_PROFILE = '__none__'
 /* Why moving, archiving or deleting waits while tasks still load: each acts
-   on subtasks and blockers that may be still to arrive. */
+   on subtasks and blockers that may be still to arrive. Removing a related
+   task the workspace does not hold yet waits too, since the removal edits
+   its row there. */
 const WAITS_FOR_TASKS = 'Available once every task has loaded'
 
+/* One task in Parent, Subtasks or Linked tasks, from its row model
+   (RelatedTaskVM): the workspace's view of a task it holds, else the
+   section answer's short row, so a task still to arrive in a large
+   workspace is listed rather than left out. Opening it passes its handle
+   on, and the window waits for a task still to arrive (`waiting`). */
 function MiniIssueRow({
-  id,
+  task,
   onOpen,
   relation,
   remove,
 }: {
-  id: string
+  task: RelatedTaskVM
   onOpen: (id: string) => void
   relation?: { label: string; glyph: string; completedLabel?: string }
-  // disabled when the server would refuse the removal for read-only access
-  remove?: { label: string; onClick: () => void; disabled?: boolean }
+  // disabled when the server would refuse the removal for read-only access,
+  // with `hint` saying why when it is another reason
+  remove?: { label: string; onClick: () => void; disabled?: boolean; hint?: string }
 }) {
-  const it = P.issueById[id]
-  if (!it) return null
-  const proj = P.project(it.project)
-  const done = P.isDone(it)
+  const proj = P.project(task.project)
+  const done = task.done
   return (
     <div
-      data-related-task={id}
+      data-related-task={task.handle}
       data-control-fill
       className="flex w-full items-center rounded-md border border-border bg-surface-1 transition-colors hover:border-border-strong hover:bg-hover focus-within:border-border-strong"
     >
       <Button
         type="button"
         variant="unstyled"
-        onClick={() => onOpen(id)}
+        onClick={() => onOpen(task.handle)}
         className="flex min-w-0 flex-1 self-stretch items-center gap-2 rounded-md p-2 text-left text-text-1 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
       >
         <span className="[display:flex] [flex-direction:column] [gap:2px] [flex:1] [min-width:0]">
@@ -151,15 +162,15 @@ function MiniIssueRow({
             </span>
           )}
           <span className="line-clamp-2 [font-size:var(--fs-base)] [line-height:1.4] [overflow-wrap:anywhere]">
-            {it.title}
+            {task.title}
           </span>
           <span className="[font-size:var(--fs-xs)] [color:var(--text-3)] [max-width:100%] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
             <ProjectName project={proj} />
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-3">
-          {!P.isGroup(it) && <StatusDot status={it.status} size={14} />}
-          {it.owner && <Avatar id={it.owner} size={28} />}
+          {!task.isGroup && <StatusDot status={task.status} size={14} />}
+          {task.owner && <Avatar id={task.owner} size={28} />}
         </span>
       </Button>
       {remove && (
@@ -169,7 +180,7 @@ function MiniIssueRow({
           size="icon"
           className="task-related-remove mr-1 h-control-sm w-control-sm shrink-0"
           aria-label={remove.label}
-          title={remove.disabled ? 'Read-only project access' : remove.label}
+          title={remove.disabled ? (remove.hint ?? 'Read-only project access') : remove.label}
           disabled={remove.disabled}
           onClick={remove.onClick}
         >
@@ -327,7 +338,78 @@ const relMapID = {
   relates: { label: 'Relates to', glyph: 'arrowLeftRight' },
 }
 
-function AttachmentRow({ att, canEdit }: { att: AttachmentVM; canEdit: boolean }) {
+/* A section of a task the store does not show yet: its window's task has
+   no sections in the store before its effects point the store at it
+   (P.sections), so it reads as loading, never as another task's lists. */
+const LOADING_SECTION: SectionVM<never> = {
+  state: 'loading',
+  rows: [],
+  complete: false,
+  delivered: false,
+}
+
+/* What each section's lines call its rows, and the section. */
+const SECTION_WORDS: Record<SectionName, { what: string; name: string }> = {
+  subtasks: { what: 'subtasks', name: 'Subtasks' },
+  links: { what: 'linked tasks', name: 'Linked tasks' },
+  attachments: { what: 'attachments', name: 'Attachments' },
+}
+
+/* A section's state as its data-section-state says it, for drives and
+   tests: loading, failed, retrying, unavailable, incomplete or complete. */
+const sectionMark = (section: SectionVM<unknown>) =>
+  section.state === 'ready' ? (section.complete ? 'complete' : 'incomplete') : section.state
+
+/* A section heading's count, " (n)", only for a whole list with rows. */
+const countOf = (section: SectionVM<unknown>) =>
+  section.state === 'ready' && section.complete && section.rows.length > 0
+    ? ` (${section.rows.length})`
+    : ''
+
+/* The line section `name` shows beside its rows, or null: while its list
+   loads, after its read failed (LoadFailure, with Retry) and while Retry
+   runs, when the server no longer lets this window list the task, under a
+   list a read budget cut short, and `empty` for a whole list without rows.
+   So a list that is not whole never reads as empty. */
+function sectionNote(name: SectionName, section: SectionVM<unknown>, empty: string | null) {
+  const { what, name: title } = SECTION_WORDS[name]
+  const shown = section.rows.length > 0
+  if (section.state === 'failed' || section.state === 'retrying')
+    return (
+      <LoadFailure
+        state={section.state}
+        what={what}
+        shown={shown}
+        onRetry={() => P.retrySection(name)}
+        marks={{ 'data-section-failure': section.state, 'data-section-side': name }}
+      />
+    )
+  const text =
+    section.state === 'loading'
+      ? `Loading ${what}…`
+      : section.state === 'unavailable'
+        ? `${title} are not available.`
+        : !section.complete
+          ? `Some ${what} could not be loaded.`
+          : shown
+            ? null
+            : empty
+  if (!text) return null
+  return (
+    <div
+      data-section-note={name}
+      className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]"
+    >
+      {text}
+    </div>
+  )
+}
+
+/* One file in Attachments. Opening and downloading mint its URL on the
+   press (P.attachmentUrl), also for a file only the section's answer holds.
+   Removing it edits the workspace's rows, so a file the workspace does not
+   hold yet keeps its × disabled, with WAITS_FOR_TASKS as its hint. */
+function AttachmentRow({ att, canEdit }: { att: SectionAttachmentVM; canEdit: boolean }) {
   const removal = useConfirmArm<'remove'>()
   const arm = removal.armed !== null
   const openIt = async (download: boolean) => {
@@ -375,7 +457,8 @@ function AttachmentRow({ att, canEdit }: { att: AttachmentVM; canEdit: boolean }
           style={{ color: arm ? 'var(--danger)' : undefined }}
           className="w-control-sm h-control-sm [flex-shrink:0]"
           aria-label={arm ? 'Confirm removal' : 'Remove attachment'}
-          title={arm ? 'Confirm removal' : 'Remove attachment'}
+          title={att.held ? (arm ? 'Confirm removal' : 'Remove attachment') : WAITS_FOR_TASKS}
+          disabled={!att.held}
           onClick={() => removal.press('remove', () => P.removeAttachment(att.id))}
         >
           <Icon name={arm ? 'trash' : 'close'} size={16} />
@@ -385,15 +468,32 @@ function AttachmentRow({ att, canEdit }: { att: AttachmentVM; canEdit: boolean }
   )
 }
 
-function AttachmentsSection({ it, canEdit }: { it: IssueVM; canEdit: boolean }) {
+/* Attachments, from the task's own attachments answer merged with the
+   person's own writes on their way (P.sections). Its line says the list is
+   loading, could not load (with Retry), is not available, or was cut short
+   (sectionNote), so a list that is not whole never reads as empty. "No
+   attachments." shows only for a whole list without files, to a person
+   without edit access; an editor keeps the drop zone. The browse control
+   keeps the cap check before a write (attachmentBlock) on the larger of the
+   workspace's count and the whole list's (P.capInputs). */
+function AttachmentsSection({
+  it,
+  canEdit,
+  section,
+}: {
+  it: IssueVM
+  canEdit: boolean
+  section: TaskSectionsVM['attachments']
+}) {
   const [drag, setDrag] = useStateID(false)
   const [uploading, setUploading] = useStateID([] as string[])
   const inputRef = useRefID<HTMLInputElement>(null)
   useWindowDropGuard()
   const limitMb = Math.round(P.attachmentLimit(it.id) / MIB)
-  const list = it.attachments || []
+  const list = section.rows
   // the per-task cap, files and description images together
-  const full = attachmentBlock(it.attachmentCount)
+  const full = attachmentBlock(P.capInputs(it).attachments)
+  const note = sectionNote('attachments', section, canEdit ? null : 'No attachments.')
   // attach by uuid: on a just-created issue the derived key in the closure's
   // `it` can renumber while the INSERT is in flight, which would strand (or
   // mis-target) every file after the first
@@ -413,12 +513,13 @@ function AttachmentsSection({ it, canEdit }: { it: IssueVM; canEdit: boolean }) 
     }
   }
   return (
-    <section className="task-section">
-      <SectionHead
-        icon="paperclip"
-        label={`Attachments${list.length ? ` (${list.length})` : ''}`}
-      />
-      {(list.length > 0 || uploading.length > 0) && (
+    <section
+      className="task-section"
+      data-section="attachments"
+      data-section-state={sectionMark(section)}
+    >
+      <SectionHead icon="paperclip" label={`Attachments${countOf(section)}`} />
+      {list.length > 0 || uploading.length > 0 ? (
         <div
           style={{ marginBottom: canEdit ? 8 : 0 }}
           className="[display:flex] [flex-direction:column] [gap:6px]"
@@ -438,9 +539,12 @@ function AttachmentsSection({ it, canEdit }: { it: IssueVM; canEdit: boolean }) 
               </span>
             </div>
           ))}
+          {note}
         </div>
+      ) : (
+        note && <div style={{ marginBottom: canEdit ? 8 : 0 }}>{note}</div>
       )}
-      {canEdit ? (
+      {canEdit && (
         <div
           onDragOver={(e) => {
             e.preventDefault()
@@ -488,11 +592,7 @@ function AttachmentsSection({ it, canEdit }: { it: IssueVM; canEdit: boolean }) 
             }}
           />
         </div>
-      ) : list.length === 0 && uploading.length === 0 ? (
-        <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
-          No attachments.
-        </div>
-      ) : null}
+      )}
     </section>
   )
 }
@@ -985,10 +1085,8 @@ function EarlierComments({
 
 /* The last row of a thread whose comment subscription failed
    (P.commentsFailure), or under All whose history subscription failed
-   (P.historyFailure, `what` 'activity'). It says so with Retry, and shows
-   static text while the retry runs, in EarlierComments' style and height.
-   `shown` says whether rows loaded before the failure are still on screen
-   above it, which then reads as the newest ones failing to load. */
+   (P.historyFailure, `what` 'activity'), as LoadFailure says it, marked
+   for the thread's drives and tests. */
 function ThreadFailure({
   state,
   what = 'comments',
@@ -1000,23 +1098,44 @@ function ThreadFailure({
   shown: boolean
   onRetry: () => void
 }) {
+  return (
+    <LoadFailure
+      state={state}
+      what={what}
+      shown={shown}
+      onRetry={onRetry}
+      marks={{ 'data-thread-failure': state, 'data-thread-side': what }}
+    />
+  )
+}
+
+/* The row of a list whose subscription failed: it says so with Retry, and
+   shows static text while the retry runs, in EarlierComments' style and
+   height. `shown` says whether rows loaded before the failure are still on
+   screen beside it, which then reads as the newest ones failing to load.
+   `marks` are the data attributes its drives and tests find it by. */
+function LoadFailure({
+  state,
+  what,
+  shown,
+  onRetry,
+  marks,
+}: {
+  state: Exclude<CommentsFailure, 'none'>
+  what: string
+  shown: boolean
+  onRetry: () => void
+  marks: Record<`data-${string}`, string>
+}) {
   if (state === 'retrying') {
     return (
-      <div
-        data-thread-failure="retrying"
-        data-thread-side={what}
-        className="flex min-h-control-sm items-center text-sm italic text-text-3"
-      >
+      <div {...marks} className="flex min-h-control-sm items-center text-sm italic text-text-3">
         {shown ? `Loading the latest ${what}…` : `Loading ${what}…`}
       </div>
     )
   }
   return (
-    <div
-      data-thread-failure="failed"
-      data-thread-side={what}
-      className="flex min-h-control-sm items-center gap-2 text-sm text-text-2"
-    >
+    <div {...marks} className="flex min-h-control-sm items-center gap-2 text-sm text-text-2">
       {shown ? `Couldn't load the latest ${what}.` : `Couldn't load ${what}.`}
       <Button type="button" variant="ghost" size="sm" className="px-2" onClick={onRetry}>
         <Icon name="rotateCcw" size={16} />
@@ -1647,6 +1766,19 @@ function IssueDetail({
     P.showHistory(owner, true)
     return () => P.showHistory(owner, false)
   }, [showsAll, watchUuid])
+  // Subtasks, Linked tasks and Attachments load their own lists, which the
+  // store asks for only while some window shows them: a window with the
+  // details column, and on a phone only while its Details tab shows, since
+  // Activity hides the column there. The desktop Inbox pane has no details
+  // column and asks for none; its pop-out (holdThread) asks on its own.
+  const sectionsOwner = useRefID({})
+  const showsSections = watchUuid !== null && (mobile ? mobileTab === 'details' : !embedded)
+  useEffectID(() => {
+    if (!showsSections) return
+    const owner = sectionsOwner.current
+    P.showSections(owner, true)
+    return () => P.showSections(owner, false)
+  }, [showsSections, watchUuid])
 
   // Where this visit's unread part starts, frozen the moment the task opens.
   // Opening marks the task's messages read (below), so an unfrozen mark would
@@ -1887,7 +2019,21 @@ function IssueDetail({
     typeof window.matchMedia === 'function' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const proj = it ? P.project(it.project) : null
-  const prog = it && P.isGroup(it) ? P.progressOf(it) : null
+  // This task's own Subtasks, Linked tasks and Attachments (P.sections). The
+  // store follows the task a window shows from that window's effects, after
+  // the render that first shows it, so a task opened in place first finds
+  // another task's sections there, and reads as loading until its own come.
+  const sections = it && P.sections?.task === it.uuid ? P.sections : null
+  const subtasks = sections?.subtasks ?? { ...LOADING_SECTION, hidden: false }
+  const linked = sections?.links ?? LOADING_SECTION
+  const files = sections?.attachments ?? { ...LOADING_SECTION, count: 0 }
+  // whether the task is a group stays the workspace's; its Progress and
+  // Remaining come from the subtask list, and say unknown without all of it
+  const totals = it && P.isGroup(it) ? groupTotals(subtasks) : null
+  const prog = totals?.progress
+  // the Parent row stays the workspace's
+  const parentUuid = it?.parent ? P.issueById[it.parent]?.uuid : undefined
+  const parentRow = parentUuid ? P.relatedTask(parentUuid) : null
   const meta = it ? P.metaOf(it.project) : null
   // A task lives in its sub-project. The parent may be navigation-only for a
   // child grant, so all task edits must follow the task's own write level.
@@ -2041,7 +2187,10 @@ function IssueDetail({
   const parentCandidates = it && parentAnchor ? parentCandidatesFor(it, P.issues, relationView) : []
   // one level of subtasks, at most LIMITS.subtasks.max active ones: why this task can
   // take no subtask, or no parent, if it cannot
-  const noSubtask = it ? subtaskBlock(it) : undefined
+  // The caps count the larger of the workspace's list and the whole section
+  // list (P.capInputs), so a list the workspace holds only part of disables
+  // more and never allows more.
+  const noSubtask = it ? subtaskBlock({ ...it, children: P.capInputs(it).children }) : undefined
   const noParent = it ? parentBlock(it) : undefined
   // Adding or removing a link needs edit access to either task, so a
   // read-only task can still be linked to one the person can edit.
@@ -2051,7 +2200,7 @@ function IssueDetail({
   // the per-task cap on links: a full task takes no new link. Another full
   // task stays listed, so a search for its title finds it rather than
   // offering to create one, and picking it says why (P.addLink)
-  const noLink = it ? linkBlock(it.links || []) : undefined
+  const noLink = it ? linkBlock(P.capInputs(it).links) : undefined
   let linkCandidates = []
   if (it && linkAnchor) {
     // anything except the issue itself; already-linked issues show a check
@@ -3190,19 +3339,37 @@ function IssueDetail({
                         {/* the project / sub-project location leads this column, in
                     the same two-column rows; moving lives in the ... menu */}
                         <DetailField label="Remaining">
-                          {P.isGroup(it) ? (
+                          {totals ? (
                             (() => {
                               // an issue with sub-issues has no hours of its own (0066):
-                              // the value is the recursive sum over the subtree
-                              const rem = P.remainingOf(it)
+                              // the value is the sum over its whole subtask list, the
+                              // subtasks the person can see when some are hidden, and
+                              // unknown or still loading without the whole list
+                              const rem = totals.remaining
+                              const hours =
+                                rem.state === 'visible' || rem.state === 'complete'
+                                  ? rem.hours
+                                  : undefined
                               return (
-                                <HoverTooltip content="Sum of open subtask hours; parent tasks have no hours of their own">
+                                <HoverTooltip
+                                  content={
+                                    rem.state === 'visible'
+                                      ? 'Sum of open hours of the subtasks you can see; parent tasks have no hours of their own'
+                                      : 'Sum of open subtask hours; parent tasks have no hours of their own'
+                                  }
+                                >
                                   <span
-                                    data-remaining-rollup
-                                    style={{ color: rem != null ? undefined : 'var(--text-3)' }}
+                                    data-remaining-rollup={rem.state}
+                                    style={{ color: hours != null ? undefined : 'var(--text-3)' }}
                                     className="!font-mono [font-size:var(--fs-sm)]"
                                   >
-                                    {rem != null ? `Σ ${rem}h` : '—'}
+                                    {rem.state === 'loading'
+                                      ? 'Loading…'
+                                      : rem.state === 'unknown'
+                                        ? 'Unknown'
+                                        : hours != null
+                                          ? `Σ ${hours}h`
+                                          : '—'}
                                   </span>
                                 </HoverTooltip>
                               )
@@ -3453,37 +3620,38 @@ function IssueDetail({
                         )}
                       </section>
 
-                      <AttachmentsSection it={it} canEdit={canLabel} />
+                      <AttachmentsSection it={it} canEdit={canLabel} section={files} />
 
                       {prog && (
-                        <div className="task-section">
+                        <div className="task-section" data-progress={prog.state}>
                           <div className="task-section-head flex-wrap text-text-1">
                             <span className={labelClass}>Progress</span>
                             <span className="ml-auto text-xs">
-                              {prog.unknown
-                                ? `${prog.done} of ${prog.total} visible tasks done. Completion unknown.`
-                                : prog.total > 0
-                                  ? prog.done +
-                                    ' of ' +
-                                    prog.total +
-                                    ' tasks done, ' +
-                                    prog.pct +
-                                    '%'
-                                  : 'no subtasks yet'}
+                              {prog.state === 'loading'
+                                ? null
+                                : prog.state === 'unknown'
+                                  ? 'Completion unknown.'
+                                  : prog.state === 'visible'
+                                    ? `${prog.done} of ${prog.total} visible tasks done. Completion unknown.`
+                                    : prog.total > 0
+                                      ? `${prog.done} of ${prog.total} tasks done, ${prog.pct}%`
+                                      : 'no subtasks yet'}
                             </span>
                           </div>
-                          {prog.unknown ? (
-                            <span className="text-xs text-text-3">
-                              {P.stillLoading() === null
-                                ? 'Additional work is outside this view.'
-                                : 'Subtasks are still loading.'}
-                            </span>
-                          ) : (
+                          {prog.state === 'complete' ? (
                             <ProgressBar
                               value={prog.pct}
                               color={P.delayColor(it) || undefined}
                               height={7}
                             />
+                          ) : prog.state === 'unknown' && !prog.partial ? null : (
+                            <span className="text-xs text-text-3">
+                              {prog.state === 'loading'
+                                ? 'Subtasks are still loading.'
+                                : prog.state === 'unknown'
+                                  ? 'Not every subtask could be loaded.'
+                                  : 'Additional work is outside this view.'}
+                            </span>
                           )}
                         </div>
                       )}
@@ -3512,9 +3680,9 @@ function IssueDetail({
                             />
                           </Button>
                         </SectionHead>
-                        {it.parent ? (
+                        {parentRow ? (
                           <MiniIssueRow
-                            id={it.parent}
+                            task={parentRow}
                             onOpen={onOpen}
                             remove={{
                               label: 'Remove parent',
@@ -3551,16 +3719,16 @@ function IssueDetail({
                         )}
                       </section>
 
-                      <section ref={subSecRef} className="task-section">
+                      <section
+                        ref={subSecRef}
+                        className="task-section"
+                        data-section="subtasks"
+                        data-section-state={sectionMark(subtasks)}
+                      >
                         <SectionHead
                           icon="child"
                           inlineAction
-                          label={
-                            'Subtasks' +
-                            ((it.children || []).length && P.stillLoading() === null
-                              ? ` (${it.children.length})`
-                              : '')
-                          }
+                          label={`Subtasks${countOf(subtasks)}`}
                         >
                           <Button
                             type="button"
@@ -3575,39 +3743,40 @@ function IssueDetail({
                             <Icon name="plus" size={16} />
                           </Button>
                         </SectionHead>
-                        {(it.children || []).length > 0 ? (
+                        {subtasks.rows.length > 0 ? (
                           <div className="[display:flex] [flex-direction:column] [gap:6px]">
-                            {it.children.map((cid) => (
+                            {subtasks.rows.map((row) => (
                               <MiniIssueRow
-                                key={cid}
-                                id={cid}
+                                key={row.uuid}
+                                task={row}
                                 onOpen={onOpen}
                                 remove={{
                                   label: 'Remove subtask',
-                                  onClick: () => P.updateIssue(cid, { parent: null }),
-                                  // detaching edits the subtask, not this task
-                                  disabled: !P.canWrite(P.issueById[cid]?.project),
+                                  onClick: () => P.updateIssue(row.handle, { parent: null }),
+                                  // detaching edits the subtask, not this task, and its
+                                  // row in the workspace
+                                  disabled: !row.held || !P.canWrite(row.project),
+                                  hint: row.held ? undefined : WAITS_FOR_TASKS,
                                 }}
                               />
                             ))}
+                            {sectionNote('subtasks', subtasks, 'No subtasks.')}
                           </div>
                         ) : (
-                          <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
-                            {P.stillLoading() === null ? 'No subtasks.' : 'No subtasks yet.'}
-                          </div>
+                          sectionNote('subtasks', subtasks, 'No subtasks.')
                         )}
                       </section>
 
-                      <section ref={linkSecRef} className="task-section">
+                      <section
+                        ref={linkSecRef}
+                        className="task-section"
+                        data-section="links"
+                        data-section-state={sectionMark(linked)}
+                      >
                         <SectionHead
                           icon="link"
                           inlineAction
-                          label={
-                            'Linked tasks' +
-                            ((it.links || []).length && P.stillLoading() === null
-                              ? ` (${it.links.length})`
-                              : '')
-                          }
+                          label={`Linked tasks${countOf(linked)}`}
                         >
                           <Button
                             type="button"
@@ -3622,26 +3791,26 @@ function IssueDetail({
                             <Icon name="plus" size={16} />
                           </Button>
                         </SectionHead>
-                        {(it.links || []).length > 0 ? (
+                        {linked.rows.length > 0 ? (
                           <div className="[display:flex] [flex-direction:column] [gap:6px]">
-                            {it.links.map((l) => (
+                            {linked.rows.map((row) => (
                               <MiniIssueRow
-                                key={l.id}
-                                id={l.id}
+                                key={row.uuid}
+                                task={row}
                                 onOpen={onOpen}
-                                relation={relMapID[l.type]}
+                                relation={relMapID[row.type]}
                                 remove={{
                                   label: 'Remove link (both directions)',
-                                  onClick: () => P.removeLink(it.id, l.id),
-                                  disabled: !canLink(l.id),
+                                  onClick: () => P.removeLink(it.id, row.handle),
+                                  disabled: !row.held || !canLink(row.handle),
+                                  hint: row.held ? undefined : WAITS_FOR_TASKS,
                                 }}
                               />
                             ))}
+                            {sectionNote('links', linked, 'No dependencies yet.')}
                           </div>
                         ) : (
-                          <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
-                            No dependencies yet.
-                          </div>
+                          sectionNote('links', linked, 'No dependencies yet.')
                         )}
                       </section>
                     </div>
