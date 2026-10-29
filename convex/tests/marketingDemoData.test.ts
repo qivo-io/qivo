@@ -16,6 +16,7 @@ import {
   marketingId,
   marketingInstant,
   marketingWeek,
+  mentionOf,
   northstarTaskTimes,
   resolveMentions,
 } from '../internal/marketingDemoData'
@@ -768,6 +769,20 @@ describe('the link and the mention main Search reads past', () => {
       'See [the plan](https://example.com/person:leo).',
     )
     expect(() => written('@[Nobody](person:nobody)')).toThrow('no person nobody')
+  })
+
+  it('writes a mention of every person that resolves to that person, and refuses other keys', () => {
+    for (const person of people) {
+      const text = written(`Ask ${mentionOf(person.key)} first.`)
+      expect(text, person.key).toBe(
+        `Ask @[${person.name}](user:${PERSON_IDS.get(person.key)}) first.`,
+      )
+      expect(text, person.key).not.toContain('person:')
+    }
+    // a key the placeholder cannot name would stay unresolved, so it is refused
+    expect(() => mentionOf('Leo')).toThrow('cannot name the person key Leo')
+    expect(() => mentionOf('leo martins')).toThrow('cannot name the person key')
+    expect(() => mentionOf('nobody')).toThrow('no person nobody')
   })
 })
 

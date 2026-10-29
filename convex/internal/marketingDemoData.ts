@@ -313,11 +313,18 @@ const projects: DemoProject[] = [
 /* A mention's destination before the seed knows the person's id, which
  * differs between namespaces (marketingId): `person:<key>` in place of
  * lib/md.ts MENTION_DEST's `user:<uuid>`. */
-const MENTION_PLACEHOLDER = /\]\(person:([a-z]+)\)/g
+const MENTION_PLACEHOLDER = /\]\(person:([a-z][a-z0-9-]*)\)/g
 
-/* A mention of person `key` in a task description, as the editor writes
- * one, with the placeholder destination resolveMentions replaces. */
-function mentionOf(key: string): string {
+/* A person key the placeholder can name, the whole of it. */
+const MENTION_KEY = /^[a-z][a-z0-9-]*$/
+
+/** A mention of person `key` in a task description, as the editor writes
+ * one, with the placeholder destination resolveMentions replaces. It
+ * refuses a key the placeholder cannot name, which would stay unresolved,
+ * and a key no person has. */
+export function mentionOf(key: string): string {
+  if (!MENTION_KEY.test(key))
+    throw new Error(`marketing demo: a mention cannot name the person key ${key}`)
   const person = people.find((p) => p.key === key)
   if (person === undefined) throw new Error(`marketing demo: no person ${key} to mention`)
   return `@[${person.name}](person:${key})`
