@@ -333,10 +333,11 @@ window shows 20 of 100 tasks done and Σ 133h. The task's own description is
 task made for it: 70 in Luma Sensor's sub-projects, 15 in Luma Cloud's and
 Pilot & Launch's, and 15 in **Partner pilot**, a project the seed makes that
 only Nora sees, so anyone else who is no organization admin finds those
-links left out. Five of the linked tasks have one subtask each. The task's
-id starts with 0, so with `--tasks 6000` or more, a workspace that loads in
-stages holds the task in its first stage and its subtasks and linked tasks
-in every stage. A second run adds only what is missing.
+links left out. Five of the linked tasks have one subtask each. The run
+ends by naming the task's window key, which the backend chose: a workspace
+that loads in stages (`--tasks 6000` or more) watches its task windows from
+the lowest keys up, so the key says which stage brings the task. A second
+run adds only what is missing.
 
 One run makes the credentials first, each as the login that makes it in
 the app, then the tasks and the relations and the archiving as Nora, and

@@ -80,10 +80,7 @@
  * Partner pilot, a top-level project the seed makes for Nora alone, so
  * someone who is not an organization admin sees their links left out.
  * Five of the linked tasks are groups with one subtask each. Every id comes
- * from what it is for, so a rerun adds only what is missing. The task's id
- * starts with 0, so with --tasks 6000 or more, a workspace that loads in
- * stages holds it in its first stage and its subtasks and linked tasks in
- * every stage. */
+ * from what it is for, so a rerun adds only what is missing. */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -247,12 +244,6 @@ export const inboxCommentId = (taskId) => uuidOf(`board-scale-seed inbox ${taskI
 /** The id of --relations row `what`, such as "project" or "link 40". */
 export const relationId = (what) => uuidOf(`board-scale-seed relations ${what}`)
 
-/** The id of the --relations task. It starts with 0, so a workspace that
-    loads in stages, its task windows in id order (src/store/liveParts.ts
-    STAGES), holds it in its first stage, while its subtasks and linked
-    tasks, whose ids spread over every window, arrive in every stage. */
-export const relationFamily = () => `0${relationId('family').slice(1)}`
-
 /* The --relations owners, by Northstar person key: of the subtasks, and
    of the linked tasks in Luma Sensor's sub-projects, in Luma Cloud's and
    Pilot & Launch's, and in the seed's Partner pilot, which only Nora sees.
@@ -298,9 +289,7 @@ export function threeByteText(length) {
  *   time of a subtask created In Review without hours.
  */
 export function planRelations({ org, projects, people, present }) {
-  const family = relationFamily()
-  // the family's own rows take ids from it
-  const own = (what) => relationId(`${family} ${what}`)
+  const family = relationId('family')
   const partnerRoot = relationId('project')
   const partner = relationId('sub-project')
   const placed = new Map(projects)
@@ -352,7 +341,7 @@ export function planRelations({ org, projects, people, present }) {
     if (status === 'done') done++
     else remaining += hours ?? (status === 'review' ? REVIEW_HOURS : 0)
     task({
-      id: own(`subtask ${n}`),
+      id: relationId(`subtask ${n}`),
       project_id: placed.get('FW'),
       parent_id: family,
       title: seededTitle(n + 2000),
@@ -370,7 +359,7 @@ export function planRelations({ org, projects, people, present }) {
     const key =
       area === 'partner' ? 'PFLD' : RELATION_PLACES[area][e % RELATION_PLACES[area].length]
     const owners = RELATION_OWNERS[area]
-    const end = own(`linked ${e}`)
+    const end = relationId(`linked ${e}`)
     task({
       id: end,
       project_id: placed.get(key),
@@ -385,7 +374,7 @@ export function planRelations({ org, projects, people, present }) {
     // a few linked tasks are groups, each with one subtask
     if (e % 20 === 7)
       task({
-        id: own(`linked ${e} subtask`),
+        id: relationId(`linked ${e} subtask`),
         project_id: placed.get(key),
         parent_id: end,
         title:
@@ -393,7 +382,7 @@ export function planRelations({ org, projects, people, present }) {
         status: 'todo',
         assignee_id: person(owners[e % owners.length]),
       })
-    const id = own(`link ${e}`)
+    const id = relationId(`link ${e}`)
     if (present.links.has(id)) continue
     // Blocks, Blocked by and Relates to in turn, stored as the server
     // stores them: blocks from its source, relates from the smaller id
@@ -869,6 +858,21 @@ async function seedRelations({ client, org, snapshot, joined, people, actor, tar
   log(
     `Done: the task ${expected.family} has ${expected.subtasks} subtasks and ${expected.links} links on ${target.url}; its window shows ${expected.done} of ${expected.total} tasks done and Σ ${expected.remaining}h.`,
   )
+  // The app's task windows range over window keys, which the server sets
+  // at random (convex/lib/db.ts newWindowKey), so the task's key, not its
+  // id, says which stage of a staged load brings it.
+  client.setAdminAuth(target.key)
+  const row = (await tableRows(client, 'issues')).find((task) => task.id === expected.family)
+  client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
+  if (row?.window_key) log(windowKeyNote(row.window_key))
+}
+
+/** What the seed says of the --relations task's window key `key`: how far
+    into the key space it is. A workspace that loads in stages watches its
+    task windows from the lowest keys up (src/store/liveParts.ts STAGES). */
+export function windowKeyNote(key) {
+  const share = Math.round((Number.parseInt(key, 16) / 2 ** 32) * 100)
+  return `Its window key is ${key}, ${share}% into the key space. A workspace that loads in stages watches its task windows from the lowest keys up, so a lower key arrives in an earlier stage.`
 }
 
 /* Archives the tasks `ids` (planArchive) through `client`, which acts as

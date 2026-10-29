@@ -1,15 +1,18 @@
-/* Windows of row ids for the workspace parts (workspace.ts). A window
- * [from, to) holds the rows whose `id` sorts from `from` (inclusive) to
- * `to` (exclusive, null for no end). Ids are random UUIDs, so windows cut at
- * fixed hex points hold about as many rows each, and cutting one in two
- * needs no row: its halves meet at the middle point of its bounds. So no
- * window bound tells anything about the rows, and the app chooses its
- * windows without asking the server. Bounds are 8 hex digits, compared as
- * strings with the ids, so the windows of a kind cover every id once.
+/* Windows of row keys for the workspace parts (workspace.ts). A window
+ * [from, to) holds the rows whose key sorts from `from` (inclusive) to `to`
+ * (exclusive, null for no end): a task's or project's window_key, 8 random
+ * hex digits the server sets at every insert (lib/db.ts newWindowKey), a
+ * task's relation rows by the same key (their task_key), and a person by
+ * id. Keys and ids are random, so windows cut at fixed hex points hold
+ * about as many rows each, and cutting one in two needs no row: its halves
+ * meet at the middle point of its bounds. So no window bound tells
+ * anything about the rows, and the app chooses its windows without asking
+ * the server. Bounds are 8 hex digits, compared as strings with the keys,
+ * so the windows of a kind cover every key once.
  *
  * src/ and scripts/ import this module, so it imports nothing. */
 
-/** A window of ids: from `from`, '' for the first, to `to`, null for the
+/** A window of keys: from `from`, '' for the first, to `to`, null for the
  * last. */
 export type IdWindow = { from: string; to: string | null }
 
@@ -22,7 +25,7 @@ const pointOf = (bound: string | null) =>
 /** The most windows of one kind the app starts with. */
 export const MOST_WINDOWS = 1024
 
-/** `n` windows that cover every id, for n a power of two up to
+/** `n` windows that cover every key, for n a power of two up to
  * MOST_WINDOWS. */
 export function idWindows(n: number): IdWindow[] {
   const count = Math.max(1, Math.min(MOST_WINDOWS, n))
@@ -43,9 +46,9 @@ export function windowCount(rows: number, each: number): number {
 /** How many times a window of the whole space may be cut in two. A part
  * accepts only windows of this grid (isIdWindow), so a caller cannot narrow
  * a window around one row: the rows a part holds back, such as a hidden
- * task, tell at most which of 4,096 slices their id falls in, the first
- * three hex digits, and never the id. 4,096 windows of 300 tasks each hold
- * 1.2 million tasks. */
+ * task, tell at most which of 4,096 slices their key falls in, its first
+ * three hex digits, and never the whole key. 4,096 windows of 300 tasks
+ * each hold 1.2 million tasks. */
 export const MAX_DEPTH = 12
 
 /* The width of the narrowest window. */
@@ -121,10 +124,10 @@ export function isIdWindow(w: IdWindow): boolean {
   return width >= NARROWEST && Number.isInteger(Math.log2(width)) && a % width === 0
 }
 
-/** The share of every id that window `w` covers, from 0 to 1. */
+/** The share of every key that window `w` covers, from 0 to 1. */
 export const idShare = (w: IdWindow) => (pointOf(w.to) - pointOf(w.from)) / SPACE
 
-/** Whether id `id` falls in window `w`. */
+/** Whether the key or id `id` falls in window `w`. */
 export const inIdWindow = (id: string, w: IdWindow) => id >= w.from && (w.to === null || id < w.to)
 
 /** About how many rows the app's first windows of each kind hold, from the

@@ -8,12 +8,12 @@ import {
   planInbox,
   planRelations,
   planSeed,
-  relationFamily,
   relationId,
   runBoardScaleSeed,
   seededTask,
   seededTasks,
   threeByteText,
+  windowKeyNote,
 } from './board-scale-seed.mjs'
 
 /* A local backend the seed talks to: Nora and the people in `fake.people`,
@@ -855,10 +855,7 @@ describe('board-scale-seed --relations', () => {
 
   it('plans a Firmware task at both caps, with every status, owner and relation kind', () => {
     const all = plan()
-    const family = relationFamily()
-    // a staged load holds it in its first stage
-    expect(family).toMatch(/^0[0-9a-f]{7}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/)
-    expect(relationId('family').slice(1)).toBe(family.slice(1))
+    const family = relationId('family')
     expect(all.projects.map((p) => [p.key, p.type, p.lead_id, p.org_id])).toEqual([
       ['PART', 'meta', 'person-nora', 'org'],
       ['PFLD', 'project', 'person-nora', 'org'],
@@ -1011,5 +1008,35 @@ describe('board-scale-seed --relations', () => {
     expect(new Set(fake.calls.map(([, , as]) => as))).toEqual(new Set(['nora-login']))
     const subtask = fake.calls.find(([name, f]) => name === 'issues:create' && f.parent_id)
     expect(subtask[1]).toMatchObject({ assignee_id: 'person-aisha', project_id: 'project-FW' })
+  })
+
+  it("says where the task's window key puts it, never that its id does", async () => {
+    expect(windowKeyNote('00000000')).toContain('00000000, 0% into the key space')
+    expect(windowKeyNote('40000000')).toContain('40000000, 25% into the key space')
+    expect(windowKeyNote('ffffffff')).toContain('100% into the key space')
+    // the run reads the stored task's key, which the server chose
+    fake.projects = KEYS.map((key) => ({
+      id: `project-${key}`,
+      key,
+      org_id: 'org',
+      type: 'project',
+    }))
+    fake.issues = [
+      { id: relationId('family'), org_id: 'org', project_id: 'project-FW', window_key: 'c0000000' },
+    ]
+    fake.calls = []
+    const lines = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--relations'], {
+        env,
+        log: (line) => lines.push(line),
+      })
+    } finally {
+      fake.projects = null
+      fake.issues = []
+    }
+    expect(fake.calls.filter(([name]) => name === 'issues:create')).toHaveLength(205)
+    expect(lines.at(-1)).toBe(windowKeyNote('c0000000'))
+    expect(lines.join('\n')).not.toMatch(/first stage/)
   })
 })

@@ -2,8 +2,8 @@
    them: once per Convex transition, all together (lib/liveQueries.ts).
 
    The registry subscribes to the root part, and for each organization it
-   names to the catalog, the inbox, and windows of its task, people and
-   project ids (convex/lib/idWindows.ts), as many as its counts of active
+   names to the catalog, the inbox, and windows of its tasks, people and
+   projects (convex/lib/idWindows.ts), as many as its counts of active
    tasks and projects say it fills (startWindows), chosen once when it
    adds the organization. After each transition it
    tells the store (report) whether every part it needs holds a current
