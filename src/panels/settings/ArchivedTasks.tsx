@@ -69,6 +69,9 @@ type Listing = {
   answered: number
   /** the starts of the pages walked to, the page on screen last */
   starts: PageStart[]
+  /** whether the scope holds more of this person's projects than one page
+      lists side by side, which a narrower scope lists */
+  tooWide: boolean
   phase: 'first' | 'failedFirst' | 'ready'
   /** a move that runs, or that failed while the page stays on screen */
   moving: { to: Move; failed: boolean } | null
@@ -80,6 +83,7 @@ const START: Omit<Listing, 'gen' | 'scope' | 'query'> = {
   scanned: 0,
   answered: 0,
   starts: [{ cursor: null, scanned: 0, found: 0 }],
+  tooWide: false,
   phase: 'first',
   moving: null,
 }
@@ -206,6 +210,7 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
                 nextCursor: page.nextCursor,
                 scanned: page.scanned,
                 answered: page.rows.length,
+                tooWide: page.tooWide,
                 phase: 'ready',
               }
             : { ...current, phase: 'failedFirst' },
@@ -316,6 +321,7 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
               nextCursor: page.nextCursor,
               scanned: page.scanned,
               answered: page.rows.length,
+              tooWide: page.tooWide,
               starts,
               moving: null,
             },
@@ -396,6 +402,16 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
     )
   else if (list.phase === 'failedFirst')
     body = <Failed onRetry={() => setAttempt((n) => n + 1)}>Couldn't load the archive.</Failed>
+  else if (list.tooWide)
+    // a page reads only this person's own projects, and these are too many
+    // to read side by side, so a narrower scope lists them
+    body = (
+      <ListNote>
+        {'all' in list.scope
+          ? 'You see too many projects to list their archived tasks together. Choose a project.'
+          : 'This project has too many sub-projects to list their archived tasks together. Choose one of its sub-projects.'}
+      </ListNote>
+    )
   else if (rowsShown === 0 && ended) {
     let note: string
     if (start.found > 0) note = searching ? 'No older matches.' : 'No older archived tasks.'
@@ -465,7 +481,7 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
             : `Couldn't load the ${moving.to} page.`}
       </Failed>
     )
-  else if (list.scope && ready && (later || !ended)) {
+  else if (list.scope && ready && !list.tooWide && (later || !ended)) {
     let note = ''
     if (searching && !ended) {
       if (rowsShown > 0) note = `Searched the newest ${tasks(reach)}.`

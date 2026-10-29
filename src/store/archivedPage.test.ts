@@ -120,6 +120,18 @@ describe('P.fetchArchivedPage', () => {
     expect(asked()).toEqual([{ scope: { org_id: org(), project_ids: [project()] } }])
   })
 
+  it('says when the scope is too wide to list side by side', async () => {
+    network.query.mockResolvedValue({ rows: [], next_cursor: null, scanned: 0, too_wide: true })
+    expect(await store.P.fetchArchivedPage({ org: org(), all: true })).toEqual({
+      rows: [],
+      nextCursor: null,
+      scanned: 0,
+      tooWide: true,
+    })
+    network.query.mockResolvedValue({ rows: [], next_cursor: null, scanned: 0 })
+    expect((await store.P.fetchArchivedPage({ org: org(), all: true }))?.tooWide).toBe(false)
+  })
+
   it('answers null when the read fails', async () => {
     network.query.mockRejectedValue(new Error('Too many index ranges read'))
     expect(await store.P.fetchArchivedPage({ org: org(), all: true })).toBeNull()

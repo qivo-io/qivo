@@ -278,11 +278,13 @@ label, with words in any order. A search reads a large archive in steps,
 and each page shows the matches found in its step. When a step stops before
 the end, the page says how many archived tasks it has searched, and
 **Search older tasks** continues from there. Only a search that has read
-every archived task says that nothing matches. To find your tasks, a step
-may read the whole organization's archive, as for **All projects** when you
-can see very many projects, and for a project with very many sub-projects.
-Such a step can stop before it finds one of yours, and the page then shows
-no tasks and still offers **Next**.
+every archived task says that nothing matches. A page reads only the
+projects you can see. When you can see very many projects, **All projects**
+asks you to choose a project instead, and a project with very many
+sub-projects you can see asks you to choose one of them. An organization
+admin's page then reads the organization's whole archive, and a step can
+stop before it finds one of the tasks, so the page shows no tasks and still
+offers **Next**.
 
 **Restore** returns a task to its Board and restores archived parents when
 needed. The task leaves the list at once, and the page asks for its tasks

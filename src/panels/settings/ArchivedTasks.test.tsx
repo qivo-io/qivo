@@ -40,6 +40,8 @@ type Row = Record<string, unknown> & { id: string }
 type Call = {
   args: Args
   answer: (rows: Row[], next?: string | null, scanned?: number) => Promise<void>
+  /** answers that the scope is too wide to list side by side */
+  tooWide: () => Promise<void>
   fail: () => Promise<void>
 }
 type Restore = {
@@ -172,6 +174,12 @@ async function open({ phone = false, initial = 'meta' as 'meta' | 'none', partne
         args,
         answer: async (rows, next = null, scanned = rows.length) => {
           await act(async () => resolve({ rows, next_cursor: next, scanned }))
+          await settle()
+        },
+        tooWide: async () => {
+          await act(async () =>
+            resolve({ rows: [], next_cursor: null, scanned: 0, too_wide: true }),
+          )
           await settle()
         },
         fail: async () => {
@@ -723,6 +731,27 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     expect(last().args).toEqual({ scope: project(META), cursor: '3~p2', limit: 25 })
     await last().answer(many(26, 25, 30), '3~p3')
     expect(text('[data-archive-count]')).toBe('Archived tasks 26 to 50')
+  })
+
+  it('asks for a narrower scope when the chosen one is too wide to list together', async () => {
+    await open({ partner: true })
+    await last().tooWide()
+    expect(text('[data-archived-tasks]')).toContain(
+      'This project has too many sub-projects to list their archived tasks together. Choose one of its sub-projects.',
+    )
+    expect(has('[data-archive-count]')).toBe(false)
+    expect(has('[data-archive-fold]')).toBe(false)
+    await choose(`all:${ORG}`)
+    await last().tooWide()
+    expect(text('[data-archived-tasks]')).toContain(
+      'You see too many projects to list their archived tasks together. Choose a project.',
+    )
+    // the chooser still works, and a sub-project lists
+    await choose(FW)
+    expect(last().args).toEqual({ scope: project(FW), limit: 25 })
+    await last().answer([task(1)])
+    expect(rowIds()).toEqual(['archived-1'])
+    expect(text('[data-archived-tasks]')).not.toContain('too many')
   })
 
   it('moves focus to the next row still listed when the page read again drops the focused one', async () => {

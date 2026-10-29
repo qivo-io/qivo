@@ -6752,7 +6752,9 @@ export const PLANNER = {
       decides which (issues.archivedPage). With `search` the rows are the
       matches only, and a page may hold fewer rows than asked, even none,
       while `nextCursor` says more remain. `scanned` counts the archived
-      tasks of the scope the page looked at. */
+      tasks of the scope the page looked at. `tooWide` says the scope holds
+      more of this person's projects than one page lists side by side, so
+      the page holds no rows and a narrower scope lists them. */
   fetchArchivedPage: async (
     scope: ArchivedScope,
     o: { cursor?: string | null; search?: string; limit?: number } = {},
@@ -6760,6 +6762,7 @@ export const PLANNER = {
     rows: ArchivedListRowVM[]
     nextCursor: string | null
     scanned: number
+    tooWide: boolean
   } | null> => {
     let data: FunctionReturnType<typeof api.issues.archivedPage>
     try {
@@ -6786,6 +6789,7 @@ export const PLANNER = {
       ),
       nextCursor: data.next_cursor,
       scanned: data.scanned,
+      tooWide: data.too_wide === true,
     }
   },
   /** Task `uuid` in the archive, for the task window once the task has left
