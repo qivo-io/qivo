@@ -829,8 +829,13 @@ describe('organization export job', () => {
       project_id: f.sub.id,
       parent_id: stranded.id,
     })
+    // more tasks than one page of parents holds while an item is in
+    // flight (JOINED_PAGE_SIZE), so the comments go on across pages
+    const more: string[] = []
+    for (let i = 0; i < 12; i++)
+      more.push((await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id)
     await t.run(async (ctx) => {
-      for (const issue_id of [kept.id, stranded.id])
+      for (const issue_id of [kept.id, stranded.id, ...more])
         await ctx.db.insert('comments', { id: uuid(), issue_id, body: 'Notes', created_at: NOW })
     })
     await plantProjectItem(t, moving, 'moving')
@@ -838,9 +843,9 @@ describe('organization export job', () => {
     const exportId = await exportAs(t, f.admin, f.org.id)
     expect(await jobOf(t, exportId)).toMatchObject({ state: 'ready', skipped: 1 })
     const archive = await archiveOf(t, exportId)
-    expect(archive.tables.tasks.map((row) => row.id)).toEqual([kept.id, child.id])
+    expect(archive.tables.tasks.map((row) => row.id)).toEqual([kept.id, child.id, ...more])
     expect(archive.tables.tasks[1]).not.toHaveProperty('parent_id')
-    expect(archive.tables.comments.map((row) => row.task_id)).toEqual([kept.id])
+    expect(archive.tables.comments.map((row) => row.task_id)).toEqual([kept.id, ...more])
     expect(archive.manifest.skipped.tasks).toBe(1)
     // an empty table has one file holding []
     expect(archive.tables.milestones).toEqual([])
@@ -852,6 +857,68 @@ describe('organization export job', () => {
     for (const [name, rows] of Object.entries(expected))
       expect(archive.tables[name], name).toEqual(rows)
   })
+
+  it('goes on with child sections across pages of parents, as page reads them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the first page of 100 profiles holds no agent and is not the last:
+    // the fixture's agent becomes a person, and 101 people come before the
+    // one agent with a key
+    await t.run(async (ctx) => {
+      await ctx.db.patch(f.agent._id, { kind: 'person' })
+      for (let i = 0; i < 101; i++)
+        await ctx.db.insert('profiles', {
+          id: uuid(),
+          org_id: f.org.id,
+          name: `Person ${i}`,
+          initials: 'PE',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          plannable_hours: 40,
+          created_at: NOW,
+        })
+    })
+    const agent = await plantSeat(t, { org_id: f.org.id, name: 'Late agent', kind: 'agent' })
+    // more than one page of 100 tasks, each with a comment and a label
+    const tasks: string[] = []
+    for (let i = 0; i < 105; i++)
+      tasks.push((await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })).id)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('agent_keys', {
+        id: uuid(),
+        org_id: f.org.id,
+        profile_id: agent.id,
+        name: 'Late key',
+        key_prefix: 'qva_late...0000',
+        key_hash: 'c'.repeat(64),
+        created_at: NOW,
+      })
+      const labelId = uuid()
+      await ctx.db.insert('labels', {
+        id: labelId,
+        org_id: f.org.id,
+        name: 'Paged',
+        name_lower: 'paged',
+        color: '#fff',
+        created_at: NOW,
+      })
+      for (const issue_id of tasks) {
+        await ctx.db.insert('comments', { id: uuid(), issue_id, body: 'Paged', created_at: NOW })
+        await ctx.db.insert('issue_labels', { org_id: f.org.id, issue_id, label_id: labelId })
+      }
+    })
+    const exportId = await exportAs(t, f.admin, f.org.id)
+    expect(await jobOf(t, exportId)).toMatchObject({ state: 'ready' })
+    const archive = await archiveOf(t, exportId)
+    expect(archive.tables.comments.map((row) => row.task_id)).toEqual(tasks)
+    expect(archive.tables.task_labels).toHaveLength(105)
+    expect(archive.tables.agent_keys.map((row) => row.profile_id)).toEqual([agent.id])
+    const expected = await pagedRows(t, f.admin, f.org.id)
+    for (const [name, rows] of Object.entries(expected))
+      expect(archive.tables[name], name).toEqual(rows)
+  }, 120_000)
 
   it('refuses members who are not admins, other organizations and an organization being deleted', async () => {
     const t = newT()
