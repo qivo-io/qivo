@@ -1713,6 +1713,14 @@ describe('the project results of main Search', () => {
     expect(projectIds(run.page).sort()).toEqual(sorted(f.meta, f.sub, f.sub2))
     expect(run.page.coverage).toEqual(stopped('projects'))
     expect(run.searches).toBe(3)
+    // a seat that also sees a matching project outside the family, SKNK,
+    // finds it only outside the scope
+    const user = await searchRun(t, [f.user], { text: 'zephyr', scope })
+    expect(user.searches).toBe(3)
+    expect(projectIds(user.page).sort()).toEqual(sorted(f.meta, f.sub, f.sub2, sibling))
+    expect(projectIds((await searchRun(t, [f.user], { text: 'zephyr' })).page)).toContain(
+      f.hidden.id,
+    )
   })
 
   it('lets no hidden project name change a search of projects one by one', async () => {
