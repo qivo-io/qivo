@@ -11,6 +11,7 @@ import {
   marketingInstant,
   marketingWeek,
   northstarTaskTimes,
+  resolveMentions,
 } from '../internal/marketingDemoData'
 import { projectSightForProfiles } from '../lib/access'
 import { byId, insertUsed, newWindowKey } from '../lib/db'
@@ -485,7 +486,8 @@ async function writeStep(
       // These are explicitly imported fixtures. Atlas is the import actor;
       // reporter is separate attribution, never a forged creator history.
       const windowKey = newWindowKey()
-      const description = cleanDescription(i.description)
+      // a mention names its person by key in the data, by id once written
+      const description = cleanDescription(resolveMentions(i.description, (key) => personIds[key]))
       const issueDocId = await insertTask(
         ctx.db,
         {

@@ -51,7 +51,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
-import { plantNorthstar } from './northstar.setup'
+import { northstarId, plantNorthstar } from './northstar.setup'
 import { withReach } from './projectReach.setup'
 import { deleteProject, deleteTask, installTrashTimers } from './trash.setup'
 
@@ -1441,6 +1441,29 @@ describe('main Search at Convex’s limits', () => {
         expect(run.page.coverage).toEqual(COMPLETE)
         expect(projectNames(run.page)).toEqual(names)
       }
+  })
+
+  it("finds Northstar's link and mention by the words they show, not their hidden parts", async () => {
+    const t = newT()
+    const { profiles } = await plantNorthstar(t)
+    await withReach(t)
+    const nora = profiles.find((p) => p.auth_user_id === 'auth_nora')
+    if (nora === undefined) throw new Error('no Nora')
+    const runbook = await northstarId('issue:safe-updates')
+    const mention = await northstarId('issue:offline-buffer')
+    const found = async (text: string) => taskIds(await search(t, nora, { text }))
+    // the link's text and the mentioned name find their tasks
+    expect(await found('signing')).toContain(runbook)
+    expect(await found('update signing runbook')).toContain(runbook)
+    expect(await found('Martins')).toContain(mention)
+    // convex-test returns the task for its readable word, and the server's
+    // own check refuses the word only the link's address or the mention's
+    // destination holds; a single hidden word draws no candidate there, so
+    // the browser check covers it
+    expect(await found('signing https')).not.toContain(runbook)
+    expect(await found('signing ota')).not.toContain(runbook)
+    expect(await found('Martins user')).not.toContain(mention)
+    expect(await found('replay user')).not.toContain(mention)
   })
 })
 
