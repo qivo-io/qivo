@@ -101,8 +101,15 @@ import {
  * name source runs before the seat's task places and spends the same
  * allowance, so in a large organization whose project names match the
  * text, a seat searched whole has fewer reads left for its task sources
- * than before, and can stop with `reads` sooner. `names` bounds that. Tests
- * lower these. */
+ * than before, and can stop with `reads` sooner. `names` bounds that, and so
+ * does NAME_SHARE where several seats share the call. Measured in
+ * convex-test (2026-10-29) in an organization of 300 projects whose names
+ * all held the text, the 256 candidates cost an admin's seat and a member's
+ * seat searched whole each about 255 documents and 95 KB more than one
+ * candidate did, and on Convex, which counts each search result as a range,
+ * as many ranges: about an eighth of a lone seat's ranges. The member's
+ * check of hidden candidates read no more, as their reach rows left those
+ * out (model/projectNav.ts projectSight). Tests lower these. */
 export const MAIN_SEARCH = {
   rows: 25,
   candidates: 512,
@@ -117,6 +124,12 @@ export const MAIN_SEARCH = {
   parse: 1_000_000,
   pageParse: 500_000,
 }
+
+/* The part of a seat's allowance of ranges its project names may take at
+ * most, as candidates (MAIN_SEARCH.names): a quarter, as each candidate
+ * costs at least a range, so the seat's task sources keep the rest also when
+ * many seats share the call. */
+const NAME_SHARE = 4
 
 /** The least allowance a seat is searched with (allowancesOf). When what
  * the seats may read cannot give each this much, the later ones in seat
@@ -1018,6 +1031,8 @@ export async function mainSearchPage(
   const sourcesTakeAll = convexTakesAll(terms)
   // the parse allowance of the seat searched now
   let seatParse = parseAllowance(0)
+  // how many project names the seat searched now may read (MAIN_SEARCH)
+  let seatNames = 0
 
   /* The readable text of description `raw` when a task with `fields` and
    * that text matches every term, else null, its parse counted by `spend`.
@@ -1192,7 +1207,7 @@ export async function mainSearchPage(
       async (p) => {
         if (nameFits(p) && (await sees(p))) addName(seat, p)
       },
-      MAIN_SEARCH.names,
+      seatNames,
     )
   }
 
@@ -1309,6 +1324,7 @@ export async function mainSearchPage(
     const now = countsOf(await ctx.meta.getTransactionMetrics())
     gather = readBudget(ctx, allowances.limit, plus(now, allowances.seat))
     seatParse = parseAllowance(allowances.parse)
+    seatNames = Math.min(MAIN_SEARCH.names, Math.floor(allowances.seat.ranges / NAME_SHARE))
     await searchSeat(seat)
   }
 

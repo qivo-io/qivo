@@ -2003,6 +2003,17 @@ describe('the project results of main Search', () => {
     expect(capped.coverage).toEqual(stopped('candidates'))
     expect(projectIds(capped)).toHaveLength(2)
     MAIN_SEARCH.names = DEFAULT_SEARCH.names
+    // and a quarter of the seat's ranges, so its task sources keep the rest
+    await plantProjects(t, f.org.id, 30, (i) => ({
+      parent_id: f.meta.id,
+      name: `Zephyr more ${i}`,
+    }))
+    await withReach(t)
+    MAIN_SEARCH.ranges = 80
+    const shared = await search(t, f.admin, { text: 'zephyr' })
+    expect(shared.coverage).toEqual(stopped('candidates'))
+    expect(projectIds(shared)).toHaveLength(20)
+    MAIN_SEARCH.ranges = DEFAULT_SEARCH.ranges
     // a seat searched whole that does not see every project
     MAIN_SEARCH.projects = 0
     expect((await search(t, f.user, { text: 'zephyr' })).coverage).toEqual(stopped('projects'))
