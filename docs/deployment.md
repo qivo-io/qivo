@@ -958,7 +958,11 @@ nothing in the app starts yet; the browser export still reads
 who asked for it in `org_export_requests`, and its archive as compressed
 parts in storage, one `org_export_parts` row per part. A ready archive stays
 four hours, then its expiry, scheduled when it became ready, erases the
-parts; ended jobs and their request rows stay 30 days as history. Two crons
+parts; a newer archive of the same organization ends it as soon as the
+newer one is ready, so an organization holds at most one collecting job and
+one ready archive. An archive holds at most 95 MiB, and 2 MiB on the public
+demo, where every visitor is an admin; a larger one fails as too large.
+Ended jobs and their request rows stay 30 days as history. Two crons
 serve it: `organization export recovery` (every minute) restarts a
 collecting job whose step stopped and fails it after three restarts without
 progress, and `organization export sweep` (every 15 minutes) expires ready

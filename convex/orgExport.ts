@@ -11,10 +11,11 @@
  * request (org_export_requests); at most one job per organization collects
  * at a time, and two requests at once conflict on the range that holds it,
  * so the second joins. A ready archive does not stop a fresh request, and
- * every archive keeps its full four hours (model/orgExports.ts
- * ARCHIVE_TTL_MS). Because one job collects at a time, an organization can
- * make at most four hours divided by its collection time of archives within
- * any four hours, each under MAX_ARCHIVE_BYTES.
+ * stays four hours (model/orgExports.ts ARCHIVE_TTL_MS) unless the fresh
+ * job becomes ready first, which ends it (`commitFinish`). So an
+ * organization holds at most one collecting job and one ready archive,
+ * each under MAX_ARCHIVE_BYTES, or DEMO_ARCHIVE_BYTES on the public demo,
+ * where every visitor is an admin.
  *
  * Each `step` (an action in the default runtime) reads its section in
  * bounded queries (readBatch, model/orgExportRead.ts) until its part holds
@@ -29,7 +30,8 @@
  * checkStoredFiles on the demo, after 120 seconds). Each commit checks that
  * the organization's deletion, or a public demo's cleanup, has not begun
  * and that an admin who asked is still one (model/orgExports.ts
- * stopReason); otherwise the job fails, as it does past MAX_ARCHIVE_BYTES.
+ * stopReason); otherwise the job fails, as it does past its archive cap
+ * (archiveCap).
  * When every section is read, the step stores the README and manifest and
  * `commitFinish` checks every table's files and publishes the archive with
  * its four hours, scheduling `expire` at their end.
@@ -50,7 +52,8 @@
  *
  * On the public demo the job's rows spend nothing of the visitor's record
  * limit (lib/demo.ts uncountedWriter) and its parts nothing of the upload
- * budget; the demo's cleanup deletes them. */
+ * budget; DEMO_ARCHIVE_BYTES bounds them instead, and the demo's cleanup
+ * deletes them. */
 
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
@@ -98,6 +101,7 @@ import {
 } from './model/orgExportRead'
 import {
   ARCHIVE_TTL_MS,
+  archiveCap,
   collectingJob,
   EXPORT_LIMITS,
   endJob,
@@ -107,6 +111,7 @@ import {
   jobsOf,
   partsOf,
   RESTARTS,
+  readyJobs,
   requestsOf,
   STALLED_MS,
   stopReason,
@@ -553,7 +558,7 @@ export const step = internalAction({
  * Answers false, changing nothing, when the job is not collecting, another
  * commit took this step or the part's file is gone. Ends the job as failed
  * and answers false when it must stop (model/orgExports.ts stopReason) or
- * the part would take the archive past EXPORT_LIMITS.archive or
+ * the part would take the archive past its cap (archiveCap) or
  * EXPORT_LIMITS.parts. */
 export const commitPart = internalMutation({
   args: {
@@ -582,7 +587,7 @@ export const commitPart = internalMutation({
       const entry = partEntry(name, part)
       bytes += a.part.stored_bytes + zipEntryBytes(entry)
       // this part, then the README and the manifest
-      if (bytes + ZIP_END_BYTES > EXPORT_LIMITS.archive || seq + 1 > EXPORT_LIMITS.parts) {
+      if (bytes + ZIP_END_BYTES > archiveCap() || seq + 1 > EXPORT_LIMITS.parts) {
         await endJob(ctx, job, { state: 'failed', code: 'too_large' })
         return false
       }
@@ -624,11 +629,16 @@ export const commitPart = internalMutation({
   },
 })
 
+/* The earlier ready archives one finish ends. A release from before the
+ * rule can leave more than one; their own expiry ends the rest. */
+const READY_ENDS = 8
+
 /** Publishes the archive: checks the job as commitPart does, checks that
  * every table has its files in order with no gap and every part's file is
  * still stored (else the job fails as incomplete), stores the README and
  * manifest rows and makes the job ready for ARCHIVE_TTL_MS, scheduling its
- * expiry. Answers false when it published nothing. */
+ * expiry. It ends the organization's earlier ready archive and erases its
+ * parts. Answers false when it published nothing. */
 export const commitFinish = internalMutation({
   args: { export_id: v.string(), n: v.number(), readme: vStored, manifest: vStored },
   handler: async (ctx, a): Promise<boolean> => {
@@ -662,10 +672,13 @@ export const commitFinish = internalMutation({
       a.manifest.stored_bytes +
       zipEntryBytes('manifest.json') +
       ZIP_END_BYTES
-    if (bytes > EXPORT_LIMITS.archive) {
+    if (bytes > archiveCap()) {
       await endJob(ctx, job, { state: 'failed', code: 'too_large' })
       return false
     }
+    // One ready archive per organization: this one ends the one before it.
+    for (const earlier of await readyJobs(ctx, job.org_id).take(READY_ENDS))
+      await endJob(ctx, earlier, { state: 'expired' })
     const files = [
       { seq: 0, entry: 'README.txt', kind: 'readme', stored: a.readme },
       { seq: 1, entry: 'manifest.json', kind: 'manifest', stored: a.manifest },

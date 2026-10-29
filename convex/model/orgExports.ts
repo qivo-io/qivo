@@ -29,8 +29,18 @@ export const MAX_ARCHIVE_BYTES = 95 * 1024 * 1024
  * the 64 MiB a Convex action may use. */
 export const PART_RAW_BYTES = 4 * 1024 * 1024
 
+/** The most bytes one archive may hold on the public demo, where any
+ * visitor is an admin and up to 500 demos run at once. A seeded demo's
+ * archive measured 65,624 bytes (2026-10-29, convex/tests/demoCleanup.test.ts;
+ * 65,731 for the Northstar seed on a local backend), so this leaves a
+ * visitor about 30 times that for their own work. With one collecting job
+ * and one ready archive per organization, a demo holds at most twice this
+ * in export parts, which count against no upload budget. */
+export const DEMO_ARCHIVE_BYTES = 2 * 1024 * 1024
+
 /** The job's limits, a mutable object so tests can lower them: the
- * archive's bytes (MAX_ARCHIVE_BYTES), the JSON one part collects
+ * archive's bytes (MAX_ARCHIVE_BYTES, DEMO_ARCHIVE_BYTES on the public
+ * demo), the JSON one part collects
  * (PART_RAW_BYTES), the reads one step makes before it stores what it has
  * (each readBatch is a bounded query, so a step stays far under Convex's
  * action time limit), the parts one archive may have, so the finish reads
@@ -39,14 +49,22 @@ export const PART_RAW_BYTES = 4 * 1024 * 1024
  * delete and a file delete, both writes). */
 export const EXPORT_LIMITS = {
   archive: MAX_ARCHIVE_BYTES,
+  demoArchive: DEMO_ARCHIVE_BYTES,
   part: PART_RAW_BYTES,
   reads: 512,
   parts: 4096,
   erase: 128,
 }
 
+/** The most bytes an archive may hold on this deployment
+ * (EXPORT_LIMITS). */
+export const archiveCap = (): number =>
+  isDemoDeployment() ? EXPORT_LIMITS.demoArchive : EXPORT_LIMITS.archive
+
 /** How long a ready archive stays downloadable: four hours after it is
- * ready. Downloads and later requests never extend it. */
+ * ready, unless a newer archive of its organization ends it sooner
+ * (orgExport.ts commitFinish). Downloads and later requests never extend
+ * it. */
 export const ARCHIVE_TTL_MS = 4 * 60 * 60 * 1000
 
 /** How long an ended job and its request rows stay as export history. */
@@ -192,6 +210,13 @@ export const requestsOf = (ctx: QueryCtx, exportId: string) =>
 /** The parts of export `exportId` in archive order. */
 export const partsOf = (ctx: QueryCtx, exportId: string) =>
   ctx.db.query('org_export_parts').withIndex('by_export_seq', (q) => q.eq('export_id', exportId))
+
+/** The organization's ready archives, newest last; at most one unless an
+ * earlier release left more. */
+export const readyJobs = (ctx: QueryCtx, orgId: string) =>
+  ctx.db
+    .query('org_exports')
+    .withIndex('by_org_state', (q) => q.eq('org_id', orgId).eq('state', 'ready'))
 
 /** The organization's export jobs, for status and the teardowns. */
 export const jobsOf = (ctx: QueryCtx, orgId: string) =>

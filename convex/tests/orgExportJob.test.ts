@@ -520,7 +520,7 @@ describe('organization export job', () => {
     expect(JSON.stringify(status)).not.toMatch(/step|storage/)
   })
 
-  it('makes one job for repeated and simultaneous requests, joins a second admin and starts afresh after a ready archive', async () => {
+  it('makes one job for repeated and simultaneous requests, joins a second admin and starts afresh after a ready archive, which the fresh one ends', async () => {
     const t = newT()
     const f = await withOrg(t)
     await t.run((ctx) => ctx.db.patch(f.user._id, { org_role: 'admin' }))
@@ -550,7 +550,7 @@ describe('organization export job', () => {
     const readyParts = await partsOf(t, a.export_id)
 
     // a fresh request after the archive is ready starts another job and
-    // leaves the ready one downloadable
+    // leaves the ready one downloadable while it collects
     const fresh = await admin.mutation(api.orgExport.request, args)
     expect(fresh).toMatchObject({ joined: false })
     expect(fresh.export_id).not.toBe(a.export_id)
@@ -561,10 +561,23 @@ describe('organization export job', () => {
       requested: false,
     })
     expect(status.ready).toMatchObject({ id: a.export_id, state: 'ready', requested: true })
-    await settle(t)
+    for (let i = 0; i < 3; i++)
+      await t.action(internal.orgExport.step, { export_id: fresh.export_id })
     expect(await jobOf(t, a.export_id)).toMatchObject({ state: 'ready' })
     expect(await partsOf(t, a.export_id)).toEqual(readyParts)
+    // once the fresh one is ready it ends the earlier one, so the
+    // organization holds one ready archive
+    await settle(t)
     expect(await jobOf(t, fresh.export_id)).toMatchObject({ state: 'ready' })
+    expect(await jobOf(t, a.export_id)).toMatchObject({
+      state: 'expired',
+      ended_at: expect.any(String),
+    })
+    expect(await partsOf(t, a.export_id)).toEqual([])
+    for (const part of readyParts) expect(await exists(t, part.storage_id)).toBe(false)
+    const after = await second.query(api.orgExport.status, args)
+    expect(after.latest).toMatchObject({ id: fresh.export_id, state: 'ready' })
+    expect(after.ready).toBeNull()
   })
 
   it('adds one part when two runs commit the same step, and the loser deletes its file', async () => {

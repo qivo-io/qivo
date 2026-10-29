@@ -7,6 +7,7 @@ import { MARKETING_DEMO, marketingId } from '../internal/marketingDemoData'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
 import { demoMonday, PUBLIC_DEMO_STEPS, provisionPublicDemoStep } from '../model/demoSeed'
 import { lowerSweepDue } from '../model/messages'
+import { EXPORT_LIMITS } from '../model/orgExports'
 import { countersRow, tallyRow } from '../model/orgs'
 import { countFile } from '../model/storageTotals'
 import schema from '../schema'
@@ -889,11 +890,14 @@ describe('public Northstar provisioning and bounded deletion', () => {
         .withIndex('by_export_seq', (q) => q.eq('export_id', export_id))
         .collect(),
     )
-    expect((await visitor.query(api.orgExport.status, { org_id: orgId })).latest).toMatchObject({
-      id: export_id,
-      state: 'ready',
-    })
+    const ready = (await visitor.query(api.orgExport.status, { org_id: orgId })).latest
+    expect(ready).toMatchObject({ id: export_id, state: 'ready' })
     expect(parts.length).toBeGreaterThan(2)
+    // a seeded demo's archive leaves a visitor many times its size under the
+    // demo's cap (model/orgExports.ts DEMO_ARCHIVE_BYTES)
+    expect(ready?.archive_bytes ?? Number.POSITIVE_INFINITY).toBeLessThan(
+      EXPORT_LIMITS.demoArchive / 16,
+    )
 
     await deleteDemo(t, a)
     await t.finishAllScheduledFunctions(() => vi.runAllTimers())
@@ -902,6 +906,45 @@ describe('public Northstar provisioning and bounded deletion', () => {
       expect(await t.run((ctx) => ctx.db.system.get(part.storage_id))).toBeNull()
     expect((await rows(t, b.org_id!)).tasks).toHaveLength(MARKETING_DEMO.issues.length)
   }, 60_000)
+
+  it("ends a demo export past the demo's archive cap, while the same data fits the cap elsewhere", async () => {
+    const t = testBackend()
+    const a = await makeDemo(t)
+    const orgId = a.org_id as string
+    const visitor = t.withIdentity({ subject: a.auth_user_id })
+    const run = async () => {
+      const { export_id } = await visitor.mutation(api.orgExport.request, { org_id: orgId })
+      await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0), 1000)
+      return t.run(async (ctx) =>
+        ctx.db
+          .query('org_exports')
+          .withIndex('by_uuid', (q) => q.eq('id', export_id))
+          .unique(),
+      )
+    }
+    const defaults = { ...EXPORT_LIMITS }
+    try {
+      // the cap of every other deployment stays as it is
+      EXPORT_LIMITS.archive = 4096
+      const first = await run()
+      expect(first).toMatchObject({ state: 'ready' })
+      // a demo archive larger than the demo's cap ends too_large
+      EXPORT_LIMITS.demoArchive = (first?.archive?.bytes ?? 0) - 1
+      const second = await run()
+      expect(second).toMatchObject({ state: 'failed', error: { code: 'too_large' } })
+      await t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0), 1000)
+      expect(
+        await t.run((ctx) =>
+          ctx.db
+            .query('org_export_parts')
+            .withIndex('by_export_seq', (q) => q.eq('export_id', second?.id ?? ''))
+            .collect(),
+        ),
+      ).toEqual([])
+    } finally {
+      Object.assign(EXPORT_LIMITS, defaults)
+    }
+  })
 
   it("keeps a demo's stored-byte totals while its batches delete its files, then deletes them", async () => {
     const t = testBackend()
