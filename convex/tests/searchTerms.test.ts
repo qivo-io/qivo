@@ -11,6 +11,7 @@ import { astToMd } from '../../src/lib/mdSerialize'
 import { readableText } from '../lib/md'
 import {
   CONVEX_TERMS,
+  convexTakesAll,
   convexText,
   matchesTerms,
   type SearchFields,
@@ -71,11 +72,22 @@ describe('searchTerms', () => {
     expect(searchTerms('-- !! ...')).toEqual([])
   })
 
+  it('leaves out words Convex does not index, of 32 bytes or more', () => {
+    const long = 'supercalifragilisticexpialidocious' // 34 bytes
+    expect(searchTerms(`${long} report`)).toEqual([{ word: 'report', prefix: true }])
+    expect(searchTerms('x'.repeat(31)).map((t) => t.word)).toEqual(['x'.repeat(31)])
+    // 16 two-byte letters are 32 bytes
+    expect(searchTerms('ä'.repeat(16))).toEqual([])
+    expect(searchTerms('ä'.repeat(15))).toHaveLength(1)
+  })
+
   it('passes Convex at most CONVEX_TERMS terms', () => {
     const many = Array.from({ length: 20 }, (_, i) => `w${i}`).join(' ')
     expect(searchTerms(many)).toHaveLength(20)
     expect(convexText(searchTerms(many)).split(' ')).toHaveLength(CONVEX_TERMS)
     expect(convexText(searchTerms('QN-12 torque sen'))).toBe('12 torque sen')
+    expect(convexTakesAll(searchTerms(many))).toBe(false)
+    expect(convexTakesAll(searchTerms('torque sen'))).toBe(true)
   })
 })
 
@@ -110,6 +122,13 @@ describe('matchesTerms', () => {
     expect(finds('alibrate', task)).toBe(false)
     expect(finds('cal', { description: 'recalibrate' })).toBe(false)
     expect(finds('torq', { description: 'the torque-sensor' })).toBe(true)
+  })
+
+  it('matches no word Convex does not index, not even by its start', () => {
+    const long = 'Supercalifragilisticexpialidocious'
+    expect(finds('supercal', { title: long })).toBe(false)
+    expect(finds('supercal', { description: `the ${long} plan` })).toBe(false)
+    expect(finds('supercal', { description: `the ${long} plan and supercalm` })).toBe(true)
   })
 
   it('matches nothing without terms', () => {

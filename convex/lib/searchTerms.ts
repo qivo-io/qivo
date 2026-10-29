@@ -28,6 +28,25 @@ const NUM_MAX = 2_147_483_647
  * requires every term (matchesTerms). */
 export const CONVEX_TERMS = 16
 
+/** The UTF-8 length from which Convex leaves a word out of its search
+ * index and its queries, so no search finds it, not even by a prefix
+ * (checked on a local backend: 31 bytes were found, 32 were not). Search
+ * here leaves such words out too, so it agrees with what Convex returns. */
+export const CONVEX_WORD_BYTES = 32
+
+/* How many bytes `word` takes in UTF-8. */
+function utf8Bytes(word: string): number {
+  let bytes = 0
+  for (const ch of word) {
+    const cp = ch.codePointAt(0) ?? 0
+    bytes += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4
+  }
+  return bytes
+}
+
+/* Whether Convex's search indexes `word`. */
+const indexed = (word: string): boolean => utf8Bytes(word) < CONVEX_WORD_BYTES
+
 /** One term of a search text. `word` is the term as a word of a text
  * matches it (wordOf). A reference term (`num` present) is the digits of a
  * task reference and matches the task with that number, null for a number
@@ -42,23 +61,26 @@ export type SearchTerm = { word: string; prefix: boolean; num?: number | null }
  * Convex never returns. */
 export const wordOf = (word: string): string => word.toLowerCase()
 
-/** The words of `text` as search compares them (wordOf), in order. */
+/** The words of `text` as search compares them (wordOf), in order,
+ * without the words Convex leaves out of its index (CONVEX_WORD_BYTES). */
 export const wordsOf = (text: string): string[] =>
-  Array.from(text.matchAll(WORD), (m) => wordOf(m[0]))
+  Array.from(text.matchAll(WORD), (m) => wordOf(m[0])).filter(indexed)
 
 /**
  * The terms of search text `text`, distinct, in the order they first
  * appear. A whitespace-separated piece that is a task reference (QN-482 or
  * 482) is one reference term, and every other piece adds its words
- * (wordsOf). The last term is marked as a prefix. A text with no word, such
- * as one of punctuation only, has no terms.
+ * (wordsOf). A word Convex does not index (CONVEX_WORD_BYTES) is no term,
+ * as Convex leaves it out of a query too. The last term is marked as a
+ * prefix. A text with no word, such as one of punctuation only, has no
+ * terms.
  */
 export function searchTerms(text: string): SearchTerm[] {
   const out: SearchTerm[] = []
   const seen = new Set<string>()
   const add = (term: Omit<SearchTerm, 'prefix'>) => {
     const key = `${term.num === undefined ? 'w' : 'n'}:${term.word}`
-    if (seen.has(key)) return
+    if (seen.has(key) || !indexed(term.word)) return
     seen.add(key)
     out.push({ ...term, prefix: false })
   }
@@ -74,6 +96,12 @@ export function searchTerms(text: string): SearchTerm[] {
   if (out.length > 0) out[out.length - 1].prefix = true
   return out
 }
+
+/** Whether a Convex search query takes every one of `terms`, which it does
+ * for at most CONVEX_TERMS. Only then does a text that a search source did
+ * not return hold none of the terms (matchesTerms). */
+export const convexTakesAll = (terms: readonly SearchTerm[]): boolean =>
+  terms.length <= CONVEX_TERMS
 
 /** The text a Convex search query takes for `terms`: the first
  * CONVEX_TERMS of them, each as its word, so a reference term finds a word
@@ -93,7 +121,7 @@ export type SearchFields = { num?: number; title: string; description: string }
 const LETTER = '[\\p{Alphabetic}\\p{N}]'
 
 /* The patterns that find `word` in a lowercased text: as a whole word, and
- * as the start of one. A word holds letters and digits only, so it needs no
+ * every word it starts. A word holds letters and digits only, so it needs no
  * escaping. Kept per word, as one call tests many texts. */
 const patterns = new Map<string, { whole: RegExp; start: RegExp }>()
 function patternsOf(word: string): { whole: RegExp; start: RegExp } {
@@ -101,7 +129,7 @@ function patternsOf(word: string): { whole: RegExp; start: RegExp } {
   if (known === undefined) {
     known = {
       whole: new RegExp(`(?<!${LETTER})${word}(?!${LETTER})`, 'u'),
-      start: new RegExp(`(?<!${LETTER})${word}`, 'u'),
+      start: new RegExp(`(?<!${LETTER})${word}${LETTER}*`, 'gu'),
     }
     if (patterns.size > 256) patterns.clear()
     patterns.set(word, known)
@@ -126,11 +154,15 @@ function inWords(term: SearchTerm, words: readonly string[]): { whole: boolean }
 /* inWords over `text`, lowercased, without splitting it into words, which
  * costs a description of 20,000 characters about 20 times as much. A
  * character whose lowercase adds a mark that is no letter, such as the
- * dotted capital I, can end a word here inside a word Convex keeps whole. */
+ * dotted capital I, can end a word here inside a word Convex keeps whole.
+ * A term is shorter than CONVEX_WORD_BYTES, so a word equal to it is one
+ * Convex indexes; a word it starts counts only while it is too. */
 function inText(term: SearchTerm, text: string): { whole: boolean } | null {
   const { whole, start } = patternsOf(term.word)
   if (whole.test(text)) return { whole: true }
-  return term.prefix && term.num === undefined && start.test(text) ? { whole: false } : null
+  if (!term.prefix || term.num !== undefined) return null
+  for (const m of text.matchAll(start)) if (indexed(m[0])) return { whole: false }
+  return null
 }
 
 /* The words of a task's title and its lowercased description, which every
@@ -160,9 +192,9 @@ function placeOf(term: SearchTerm, fields: Prepared): Place | null {
  * it is the last term; a reference term matches the task's number or a
  * word equal to its digits. Convex's search matches any term, so the server
  * checks every candidate with this. It compares words as Convex does
- * (wordsOf), with one difference. Convex leaves every word of 32 bytes or
- * more (UTF-8) out of its index and its queries, so such a word never draws
- * a candidate, where this still finds it in a candidate another term drew.
+ * (wordsOf), so a text Convex returns for none of the terms holds none of
+ * them here either, and words Convex does not index (CONVEX_WORD_BYTES)
+ * match no term.
  */
 export function matchesTerms(terms: readonly SearchTerm[], fields: SearchFields): boolean {
   const prepared = prepare(fields)
