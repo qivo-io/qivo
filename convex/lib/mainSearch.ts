@@ -89,13 +89,14 @@ import {
  * (lib/md.ts hidesWords), split into equal allowances (allowancesOf). The
  * page parses up to `pageParse` more, a page of descriptions at
  * LIMITS.description, and always its first row. Every
- * search result costs an index range, so `ranges` binds first. On a local
- * backend (2026-10-29) 2,000 results took 0.25 to 0.45 s of the 1 s Convex
- * gives a query's own code, and parsing 1,000,000 characters of
- * descriptions full of links took 0.1 to 0.2 s. A seat that sees 32
- * projects runs 64 search queries; its pages there read 400 to 630
- * documents in about 0.1 s of that time, and its heaviest page stopped at
- * `ranges` after 0.24 s.
+ * search result costs an index range, so `ranges` binds first, and each
+ * result costs more as the search index grows. On a local backend
+ * (2026-10-29) in an organization of 50,000 active tasks, 2,000 results
+ * took up to 0.51 s of the 1 s Convex gives a query's own code and up to
+ * 2.8 s with Convex's own search time, so `ranges` is 1,000 (owner,
+ * 2026-10-29). Parsing 1,000,000 characters of descriptions full of links
+ * took 0.1 to 0.2 s. A seat that sees 32 projects runs 64 search queries;
+ * its pages there read 400 to 630 documents in about 0.1 s of that time.
  *
  * A seat searched whole also asks its organization's project names, at
  * most `names` candidates, in one more search query outside `searches`, so
@@ -127,7 +128,7 @@ export const MAIN_SEARCH = {
   listing: 64,
   seats: 8,
   searches: 96,
-  ranges: 2_000,
+  ranges: 1_000,
   documents: 16_000,
   bytes: 8 << 20,
   parse: 1_000_000,
