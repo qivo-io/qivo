@@ -1020,7 +1020,14 @@ which is safe, because the next run reads from the older threshold. After
 rolling forward from a release before the one that added them, delete the
 row so that the first run is full, because the earlier release's writers
 marked no project for a recheck. Deleting the row on production is a
-production action and needs the owner's approval.
+production action and needs the owner's approval. Both tables, their
+indexes and the `issues.by_archived_status_done` index ship first in that
+release, so no step an earlier release queued reads them. A rollback past it
+deploys, because Convex leaves a table the schema does not list alone and
+drops the index. The archive steps and legs that release queued then fail
+the earlier release's argument checks, so that night's run does not finish,
+and the earlier release's next run walks every live project, as it does
+every night.
 
 A frontend rollback changes the served application build. It does not roll
 back Convex code, schema changes, stored files or customer writes. A database

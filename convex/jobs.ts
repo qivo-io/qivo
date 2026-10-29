@@ -714,12 +714,16 @@ async function projectsStep(ctx: MutationCtx, a: RunStep): Promise<void> {
  * chain, deletes the others it reads with it, also across steps, and gathers
  * an organization's projects with their rows, also across steps, into one
  * chain, which it starts once it passes them or once they reach
- * ARCHIVE_LIMITS.projects. So a step writes at most one mark or delete a
- * row, reads archive_runs once, and schedules at most one chain a row. The
- * phase's last step writes the run's audit row and moves archive_runs to
- * the run's threshold, and to its start as the last full pass after a full
- * one. Only that step moves it, so a run whose dispatcher fails before it
- * leaves the window where it was, and the next run reads it again. */
+ * ARCHIVE_LIMITS.projects. A step that meets a duplicate of the row the
+ * step before kept reads that row again first, and deletes the duplicate
+ * only while the run still holds it; otherwise the duplicate takes its
+ * place. So a step writes at most one mark or delete a row, reads
+ * archive_runs and at most one kept row, and schedules at most one chain a
+ * row. The phase's last step writes the run's audit row and moves
+ * archive_runs to the run's threshold, and to its start as the last full
+ * pass after a full one. Only that step moves it, so a run whose dispatcher
+ * fails before it leaves the window where it was, and the next run reads it
+ * again. */
 async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
   let projects = a.projects ?? 0
   let due = a.due && {
@@ -750,6 +754,10 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     .query('archive_rechecks')
     .withIndex('by_org_project_run_due')
     .paginate({ cursor: a.cursor ?? null, numItems: ARCHIVE_LIMITS.projects })
+  // the row this run keeps for the last project gathered, as this step
+  // knows it; a row the step before kept is read again, because a newer
+  // run may have taken it over, and its chain deleted it, since
+  let kept: Doc<'archive_rechecks'> | null | undefined
   for (const row of page.page) {
     if (row.from_run !== undefined && row.from_run >= a.now) continue
     if (row.due_by !== undefined && row.due_by > cutoff) continue
@@ -761,8 +769,18 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     )
       continue
     if (row.handed_at !== undefined && row.handed_at >= a.now) continue
+    const claimed = { ...row, handed_at: a.now }
     if (due?.org_id === row.org_id && due.projects.at(-1) === row.project_id) {
-      await ctx.db.delete(row._id)
+      const last = due.rows.length - 1
+      kept ??= await ctx.db.get(due.rows[last])
+      // a duplicate of a row this run still holds goes; else it takes the
+      // place of the one this run no longer holds
+      if (kept?.handed_at === a.now) await ctx.db.delete(row._id)
+      else {
+        await ctx.db.patch(row._id, { handed_at: a.now })
+        due.rows[last] = row._id
+        kept = claimed
+      }
       continue
     }
     if (due?.org_id !== row.org_id || due.projects.length >= ARCHIVE_LIMITS.projects) {
@@ -773,6 +791,7 @@ async function handStep(ctx: MutationCtx, a: RunStep): Promise<void> {
     await ctx.db.patch(row._id, { handed_at: a.now })
     due.projects.push(row.project_id)
     due.rows.push(row._id)
+    kept = claimed
     projects += 1
   }
   const step = { now: a.now, repairs: a.repairs, tasks: a.tasks, full: a.full }

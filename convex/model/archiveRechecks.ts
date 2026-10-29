@@ -35,7 +35,17 @@
  * run holds, which that run's chain then no longer deletes, so a chain that
  * fails or runs a day late neither strands a project nor deletes a row a
  * newer run relies on. Two runs that overlap, after the scheduler fell a day
- * behind, need no time limit for that.
+ * behind, need no time limit for that. A hand step that meets a duplicate
+ * of the row its run kept in the step before reads that row again, and
+ * keeps the duplicate in its place when a newer run took the row over.
+ *
+ * Residuals, which the full pass covers: the rules are argued and tested
+ * for two runs that overlap, so a case that needs three or more runs to
+ * overlap may still leave a task due without a row; and an operator who
+ * deletes the archive_runs row while runs overlap drops `started`, so an
+ * older run may take a writer's row that a newer run needs. The full pass
+ * every few weeks archives such a task, and after the deletion the next run
+ * is a full pass.
  *
  * Rows are written without a read first, through the writer that leaves a
  * public demo's record limit alone (lib/demo.ts uncountedWriter), because a

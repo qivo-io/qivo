@@ -2192,6 +2192,60 @@ describe('archiveDoneIssues and two runs that overlap', () => {
     expect(await rechecks(t)).toEqual([])
   })
 
+  it('a run keeps a later duplicate when a newer run took over and deleted the row it kept in its step before', async () => {
+    const { t, subs, pastCutoff, done } = await overlapScene()
+    const [parentHome, childHome] = subs
+    // a Done parent that waits for its child, due at run A's threshold, and
+    // a task beside the parent due only from run B's on
+    const parent = await done(parentHome, night(-40))
+    await done(childHome, pastCutoff(0), parent.id)
+    await done(parentHome, pastCutoff(1))
+    const [a, b, c] = [night(1), night(2), night(3)]
+    const ran = new Set<string>()
+    const dispatcher = (name: string) => name === 'jobs:archiveDoneIssues'
+    vi.useFakeTimers()
+    try {
+      // A hands the child's project to its chain, which runs late
+      await start(t, a)
+      await runOf(t, a, ran, (name) => name === 'jobs:archiveProject')
+      // B keeps the parent's project's row on one page of its hand phase
+      await start(t, b)
+      await runOf(t, b, ran, (_, args) => args.phase === 'hand' && args.cursor !== undefined)
+      // C takes that row over, checks the project while the child is still
+      // open, and deletes the row
+      await start(t, c)
+      await runOf(t, c, ran, (name) => name === 'jobs:archiveProject')
+      await runOf(
+        t,
+        c,
+        ran,
+        (_, args) => args.project_id !== parentHome.id,
+        (name) => name === 'jobs:archiveProject',
+      )
+      expect((await issueRow(t, parent.id))?.archived_at).toBeUndefined()
+      // A's late leg archives the child and marks the parent's project
+      await runOf(t, a, ran)
+      expect((await rechecks(t)).filter((row) => row.project_id === parentHome.id)).toEqual([
+        expect.objectContaining({ from_run: a }),
+      ])
+      // B's hand phase goes on and finishes last, its chain fails, and C's
+      // other chain finishes
+      await runOf(t, b, ran, undefined, dispatcher)
+      await fail(t, b)
+      await runOf(t, c, ran)
+    } finally {
+      vi.useRealTimers()
+    }
+    // the parent lies behind the window of every later night
+    expect(await runState(t)).toMatchObject({ through: cutoffAt(b) })
+    expect((await rechecks(t)).map((row) => [row.project_id, row.handed_at])).toEqual([
+      [parentHome.id, b],
+    ])
+    await runArchive(t, night(4))
+    expect((await issueRow(t, parent.id))?.archived_at).toBe(night(4))
+    expect(await rechecks(t)).toEqual([])
+  })
+
   it("a newer run keeps the writer's row of a restore between its find and hand phases, while an older chain holds a leg's row", async () => {
     const t = newT()
     const f = await withOrg(t)
