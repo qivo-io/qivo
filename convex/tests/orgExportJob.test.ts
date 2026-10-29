@@ -31,7 +31,7 @@ import {
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { checkStoredFiles } from '../model/demoUploads'
 import { deleteOrgStep, wipeWorkStep } from '../model/orgDeletion'
-import { readBatch } from '../model/orgExportRead'
+import { PAGE_BYTES, readBatch } from '../model/orgExportRead'
 import {
   ARCHIVE_TTL_MS,
   EXPORT_LIMITS,
@@ -1134,6 +1134,47 @@ describe('organization export job', () => {
     // the busy task in pages of 100
     expect(reads).toEqual([30, 100, 100, 50])
   })
+})
+
+it('reads a whole parent only while its rows fit in PAGE_BYTES, else pages it', async () => {
+  const t = newT({ transactionLimits: true })
+  const f = await withOrg(t)
+  const quiet = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+  const busy = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+  // four comments of 300 KiB: three fit in PAGE_BYTES, the fourth does not
+  await t.run(async (ctx) => {
+    await ctx.db.insert('comments', {
+      id: uuid(),
+      issue_id: quiet.id,
+      body: 'One',
+      created_at: NOW,
+    })
+    for (let i = 0; i < 4; i++)
+      await ctx.db.insert('comments', {
+        id: uuid(),
+        issue_id: busy.id,
+        body: `${i}`.repeat(300 * 1024),
+        created_at: NOW,
+      })
+  })
+  let at: Parameters<typeof readBatch>[2] = {
+    section: ORG_EXPORT_ORDER.indexOf('comments'),
+    cursor: null,
+  }
+  const reads: number[] = []
+  for (let guard = 0; guard < 10; guard++) {
+    const batch = await t.run((ctx) => readBatch(ctx, f.org.id, at))
+    // the read that pages the parent with the first call takes no whole
+    // range past PAGE_BYTES
+    if (guard === 0) expect(JSON.stringify(batch.rows).length).toBeLessThan(PAGE_BYTES)
+    reads.push(batch.rows.length)
+    if (batch.done) break
+    at = batch.at
+  }
+  // the quiet task whole with the parent page, then the busy one paged,
+  // up to PAGE_BYTES and the row past it, and an empty end of its range
+  expect(reads.slice(0, 2)).toEqual([1, 4])
+  expect(reads.reduce((sum, rows) => sum + rows, 0)).toBe(5)
 })
 
 describe("an export reads only the organization's own rows", () => {

@@ -134,8 +134,9 @@ export const readPage = (
   })
 
 /** The rows of `section` in `scope` when there are at most `rows` of them
- * and they hold less than PAGE_BYTES, else null. It reads them one at a
- * time and stops at the first row past either bound. */
+ * and together they hold at most PAGE_BYTES, else null. It reads them one
+ * at a time and stops at the first row that does not fit, so it reads at
+ * most PAGE_BYTES and one document more, and answers at most PAGE_BYTES. */
 async function wholeRange(
   ctx: QueryCtx,
   section: PagedSection,
@@ -145,9 +146,10 @@ async function wholeRange(
   const docs: Doc<PagedSection>[] = []
   let bytes = 0
   for await (const doc of sectionRange(ctx, section, scope)) {
-    if (docs.length === rows || bytes >= PAGE_BYTES) return null
+    const size = getDocumentSize(doc)
+    if (docs.length === rows || bytes + size > PAGE_BYTES) return null
     docs.push(doc)
-    bytes += getDocumentSize(doc)
+    bytes += size
   }
   return docs
 }
@@ -448,18 +450,22 @@ async function parentPage(
  * (stillParent). Every child row that names an organization must name
  * this one (exportDocs).
  *
- * Each read it starts (a page, a parent page or one parent's whole range)
- * starts under PAGE_BYTES read and under half of Convex's other limits
- * (roomLeft), and reads at most PAGE_BYTES of section rows and the one row
- * past them, plus the reads of at most one page of rows (pageSizeOf): six
- * tasks' texts at two description rows each, ten second documents of a
- * joined section, four link targets and their projects, two tasks'
- * projects, parents and texts, or a parent page's ten projects, each up to
- * Convex's 1 MiB document limit. So a call reads at most about 1 + 2 + 12
- * MiB, under the 16 MiB a query may read. Its answer holds only rows it
- * read and their texts: at most an issues page's ISSUES_PAGE_SIZE texts and
- * the rows read before it, under PAGE_BYTES, about 7 MiB at most, and about
- * 3 MiB for any other section.
+ * A top-level section reads one page: at most PAGE_BYTES of rows and the
+ * one row past them, plus the reads its rows make (pageSizeOf): six tasks'
+ * texts at two description rows each, or two tasks' projects, parents and
+ * texts, about 2 + 12 MiB. A child section starts each read under
+ * PAGE_BYTES read and under half of Convex's other limits (roomLeft):
+ * either a parent page, at most PAGE_BYTES of parents and one more, with
+ * up to ten of their projects while a deleted item is in flight, or one
+ * parent's children. Those it reads after reading a kept parent again with,
+ * in flight, its project, as a page (PAGE_BYTES of rows and the one past
+ * them) or as a whole range (wholeRange, PAGE_BYTES and one document read),
+ * plus the reads their rows make: ten second documents of a joined
+ * section, or four link targets and their projects. Each document holds at
+ * most Convex's 1 MiB, so a call reads at most about 1 + 2 + 2 + 10 MiB,
+ * under the 16 MiB a query may read. Its answer holds only rows it read
+ * and their texts: an issues page's ISSUES_PAGE_SIZE texts with their
+ * rows, about 7 MiB at most, and about 3 MiB for any other section.
  */
 export async function readBatch(
   ctx: QueryCtx,
