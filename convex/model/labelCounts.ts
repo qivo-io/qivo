@@ -6,7 +6,9 @@
  *                     writing it back or emptying an organization's items
  *                     (tallyAssignment)
  *   a task            every insert, delete, archive and restore, through
- *                     model/orgs.ts tallyRows (tallyTaskLabels)
+ *                     model/orgs.ts tallyRows (tallyTaskLabels), except a
+ *                     create, whose new task carries no labels
+ *                     (model/orgs.ts numberNewTask)
  *   a label           creating one adds its row at zero (insertLabelCount),
  *                     deleting one deletes it (deleteLabelCount), so the
  *                     assignments a label removal leaves count nowhere

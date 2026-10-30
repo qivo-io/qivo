@@ -10,7 +10,8 @@
  *                    org_counters and org_ready rows and delete them
  *   live counts      the active tasks and live projects the app's windows
  *                    read (org_counters), kept by tallyRow, which also
- *                    moves the label usage counts (model/labelCounts.ts)
+ *                    moves the label usage counts (model/labelCounts.ts),
+ *                    and for a new task by numberNewTask
  *   column defaults  including the organization-wide upload cap
  *   last admin       an org may never lose its last admin
  *   last team        an org may never lose its last team
@@ -288,8 +289,27 @@ async function bump(
   return used
 }
 
-export const nextIssueNum = (ctx: MutationCtx, org: Doc<'organizations'>): Promise<number> =>
-  bump(ctx, org, 'next_issue_num')
+/** Numbers a new task of organization `orgId` and counts it as active,
+ * with one read and one patch of the organization's org_counters row, and
+ * answers its number. It is bump and tallyRow for the inserted task in one,
+ * because every create in the organization writes this row and conflicts
+ * with every other, so the less time a create takes the more creates an
+ * organization takes at once. A new task carries no labels, so the label
+ * counts tallyRow would move stay as they are; a create that gave its task
+ * labels would have to count them. */
+export async function numberNewTask(ctx: MutationCtx, orgId: string): Promise<number> {
+  const row = await ensureCounters(ctx, orgId)
+  const num = row.next_issue_num + 1
+  const active = row.active_tasks
+  // tallyRows' rule: no count before the organization has one, and none for
+  // a task numbered past where a running backfill has counted
+  const counts = active !== undefined && num <= (row.counted?.tasks ?? Number.POSITIVE_INFINITY)
+  await ctx.db.patch(
+    row._id,
+    counts ? { next_issue_num: num, active_tasks: active + 1 } : { next_issue_num: num },
+  )
+  return num
+}
 
 export const nextProjectNum = (ctx: MutationCtx, org: Doc<'organizations'>): Promise<number> =>
   bump(ctx, org, 'next_project_num')
@@ -339,15 +359,15 @@ export async function insertOrgRows(
  * tables. Every write that inserts or deletes a task or project, or sets or
  * clears a task's archived_at, calls tallyRow in its transaction, except
  * model/cascade.ts deleteOrgDeep, which deletes the counters with the rows
- * in one transaction. An organization created before them has none until
- * internal/liveCountsBackfill counts it, and the app sizes its windows by
- * its numbers until then (lib/idWindows.ts startWindows). The counts share
- * the row with the numbers, so archives, restores and deletes in one
- * organization conflict with each other and with its creates, as its
- * creates already did, and Convex runs the one that lost again. A write of
- * tasks also moves the label usage counts of their labels
- * (model/labelCounts.ts tallyTaskLabels), which count the same active
- * tasks. */
+ * in one transaction, and a task's create, which counts the task as it
+ * numbers it (numberNewTask). An organization created before them has none
+ * until internal/liveCountsBackfill counts it, and the app sizes its windows
+ * by its numbers until then (lib/idWindows.ts startWindows). The counts
+ * share the row with the numbers, so archives, restores and deletes in one
+ * organization conflict with each other and with its creates, as its creates
+ * already did, and Convex runs the one that lost again. A write of tasks
+ * also moves the label usage counts of their labels (model/labelCounts.ts
+ * tallyTaskLabels), which count the same active tasks. */
 
 export type LiveCounts = Pick<Doc<'org_counters'>, 'active_tasks' | 'live_projects'>
 

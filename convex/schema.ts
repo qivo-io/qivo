@@ -1111,11 +1111,12 @@ export default defineSchema({
     // organization's active tasks (in issues, no archived_at) and its
     // projects in the live tables, archived ones included. Every write that
     // adds, removes, archives or restores one keeps them (model/orgs.ts
-    // tallyRow), and the app sizes an organization's first windows by them
-    // (lib/idWindows.ts startWindows). Absent until
-    // internal/liveCountsBackfill counts the organization. While it counts,
-    // `counted` holds the task and project numbers it has counted through,
-    // and a write moves the counts only for a row at or below them.
+    // tallyRow, and numberNewTask for a new task), and the app sizes an
+    // organization's first windows by them (lib/idWindows.ts startWindows).
+    // Absent until internal/liveCountsBackfill counts the organization.
+    // While it counts, `counted` holds the task and project numbers it has
+    // counted through, and a write moves the counts only for a row at or
+    // below them.
     active_tasks: v.optional(v.number()),
     live_projects: v.optional(v.number()),
     counted: v.optional(v.object({ tasks: v.number(), projects: v.number() })),
@@ -1578,10 +1579,11 @@ export default defineSchema({
   // Deleted items hold no live task, and deleting a label deletes its row.
   // Every write of an assignment, and every write that adds, deletes,
   // archives or restores a task (model/orgs.ts tallyRows), moves the counts
-  // in its own transaction. A label has no row until
-  // internal/labelCountsBackfill counts its organization, and labels created
-  // since this release start with one. `revision` goes up with every write
-  // of the row, so a dry run sees a change that ends where it began.
+  // in its own transaction, except a create, whose task has no labels yet.
+  // A label has no row until internal/labelCountsBackfill counts its
+  // organization, and labels created since this release start with one.
+  // `revision` goes up with every write of the row, so a dry run sees a
+  // change that ends where it began.
   // labels.settingsPage answers the count for Settings > Labels only while
   // its organization has no label_count_runs row (model/labelCounts.ts
   // shownCount), and never a missing row as zero.

@@ -52,7 +52,8 @@
  * refuses an actor without Edit on the task's project. Each caller still
  * checks access itself, before the core, in its own order and with its own
  * sentence (the app's 'no write access to this project', REST's and MCP's
- * per-caller ones). The gate is defense in depth, so a new caller that
+ * per-caller ones), except the app's plain create, whose check would be the
+ * gate itself run twice. The gate is defense in depth, so a new caller that
  * forgets its check still fails closed.
  *
  * Refusal grammar: `rule` sentences are toasted verbatim by the client.
@@ -65,6 +66,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
   canSeeProject,
+  hasLevelOn,
   hasProjectLevel,
   profileCanBeAssigned,
   profileCanSeeProject,
@@ -80,7 +82,7 @@ import {
   vIssueStatus,
 } from '../lib/enums'
 import { descriptionForm, printOf, trimmedForm } from '../lib/fieldPrints'
-import { badRequest, forbidden, notFound, require, rule } from '../lib/functions'
+import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { shownImages } from '../lib/imageRefs'
 import { limitedMarkdown, limitedText } from '../lib/limitRules'
 import { grouped, LIMITS, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
@@ -131,7 +133,7 @@ import {
   orgProfile,
   scheduleArchivedReads,
 } from './messages'
-import { nextIssueNum, tallyRow, tallyRows } from './orgs'
+import { numberNewTask, tallyRow, tallyRows } from './orgs'
 import { reviewHoursFor } from './projects'
 import { moveTaskFiles } from './storageTotals'
 import { emitTaskEvent } from './taskEvents'
@@ -181,13 +183,17 @@ export const GROUP_DATES_MACHINE =
 export const NO_WRITE_ACCESS = 'no write access to this project'
 
 /** Refuses an actor without Edit (or Lead) on the project, the write gate
- * every task core runs first. A missing or foreign project refuses too. */
+ * every task core runs first, and answers the project it read. A missing or
+ * foreign project refuses too. */
 export async function assertCanEdit(
   ctx: QueryCtx,
   actor: Doc<'profiles'>,
   projectId: string,
-): Promise<void> {
-  if (!(await hasProjectLevel(ctx, actor, projectId, 'user'))) throw forbidden(NO_WRITE_ACCESS)
+): Promise<Doc<'projects'>> {
+  const project = await byId(ctx, 'projects', projectId)
+  if (project === null || !(await hasLevelOn(ctx, actor, project, 'user')))
+    throw forbidden(NO_WRITE_ACCESS)
+  return project
 }
 
 /* ------------------------------------------------------- shared guards
@@ -1469,21 +1475,19 @@ export async function createIssueCore(
 ): Promise<Doc<'issues'>> {
   const { me, args, now } = a
   assertNewRowId(args.id)
-  await assertCanEdit(ctx, me, args.project_id)
-  // resolve → meta guard → arrival guard (0050's issues_assign_num fires
-  // before 0106's archived guard: the meta sentence wins on an archived meta)
-  const project = await byId(ctx, 'projects', args.project_id)
-  if (project === null) throw notFound(`project ${args.project_id} not found`)
+  // the write gate reads the project, which a missing one fails
+  const project = await assertCanEdit(ctx, me, args.project_id)
+  // meta guard → arrival guard (0050's issues_assign_num fires before 0106's
+  // archived guard: the meta sentence wins on an archived meta)
   if (project.type !== 'project') {
     throw rule('tasks can only be created in sub-projects, not meta-projects')
   }
   assertProjectArrival(project)
   // org pinned from the project — any client-sent value is ignored (0050:72);
-  // MUST precede the parent same-org check (0057:27-30)
-  const org = await byId(ctx, 'organizations', project.org_id)
-  require(org !== null, notFound('organization not found'))
+  // MUST precede the parent same-org check (0057:27-30). logActivity below
+  // refuses an organization that is gone.
   const org_id = project.org_id
-  const num = await nextIssueNum(ctx, org)
+  const num = await numberNewTask(ctx, org_id)
   const title = cleanTitle(args.title)
   const description = cleanDescription(args.description)
   // a new task has no attachments, so its description can show no image of
@@ -1526,7 +1530,9 @@ export async function createIssueCore(
     throw badRequest('reporter_id must be a user uuid')
   }
   const reporter_id = args.reporter_id ?? me.id
-  await assertReporterRule(ctx, project, reporter_id)
+  // the actor passes the rule already: the Edit the gate checked is a level
+  // on the project, which projectLevel gives only in its organization
+  if (reporter_id !== me.id) await assertReporterRule(ctx, project, reporter_id)
   const start_week = args.start_week ?? undefined
   const end_week = args.end_week ?? undefined
   assertWeekPair(start_week, end_week)
@@ -1538,7 +1544,7 @@ export async function createIssueCore(
     (status === 'review' ? await reviewHoursFor(ctx, project) : undefined)
   const paused = args.paused ?? false
   if (paused && !isPausable(status)) throw rule(PAUSE_RULE)
-  await insertTask(
+  const _id = await insertTask(
     ctx.db,
     {
       id: args.id,
@@ -1570,8 +1576,7 @@ export async function createIssueCore(
     },
     badRequest(DUPLICATE_TASK_ID),
   )
-  const issue = (await byId(ctx, 'issues', args.id)) as Doc<'issues'>
-  await tallyRow(ctx, 'issues', null, issue)
+  const issue = (await ctx.db.get(_id)) as Doc<'issues'>
   await startCount(ctx, issue)
   // the attach clears the parent's hours; its dates are calculated, never
   // written. A new task is active in an active project (the arrival guard),
@@ -1649,7 +1654,7 @@ const sightKey = (profileId: string, projectId: string): string => `sight:${prof
 async function checkOnce(
   bulk: BulkUpdate | undefined,
   key: string,
-  check: () => Promise<void>,
+  check: () => Promise<unknown>,
 ): Promise<void> {
   if (bulk?.checked.has(key)) return
   await check()
