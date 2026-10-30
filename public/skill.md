@@ -165,9 +165,10 @@ report its actual ID or browser link. If a creation request loses its
 response, search for the task before retrying to avoid duplicates.
 
 A change that collided with other changes made at the same moment, such as
-several agents commenting on one task at once, answers `the request
-conflicted with other changes made at the same time and changed nothing;
-send it again`, as REST `503` with `Retry-After: 1` or as the MCP tool's
+several agents commenting at once on one task, or creating tasks at once in
+one organization, answers `the request conflicted with other changes made at
+the same time and changed nothing; send it again`, as REST `503` with
+`Retry-After: 1` or as the MCP tool's
 error. A change that kept running out of time answers `the request took too
 long and changed nothing; send it again, or change less at once if it keeps
 happening` the same way. Nothing was saved, so wait a second and send the
