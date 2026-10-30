@@ -1211,9 +1211,10 @@ with a cached tool catalogue must refresh discovery or reconnect.
 
 A refused tool call answers its refusal sentence as the tool's error result
 (`isError: true`). A call whose change keeps conflicting with changes other
-calls make to the same data at that moment, such as many comments posted to
-one task at once, answers `the request conflicted with other changes made at
-the same time and changed nothing; send it again` there. Qivo first retries
+calls make to the same data at that moment, such as many comments posted at
+once to one task, or many tasks created at once in one organization, answers
+`the request conflicted with other changes made at the same time and changed
+nothing; send it again` there. Qivo first retries
 the change itself, twice at most, and answers this only when none of it was
 saved, so wait a second and make the same call again. A change that keeps
 running out of time, which a busy server and such conflicts can cause, is

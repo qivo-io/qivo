@@ -113,8 +113,9 @@ comment on a task whose comments Qivo is still counting a `503`, each with
 `Retry-After` (see [Comments](#comments)).
 
 A request that keeps conflicting with changes other requests make to the
-same data at that moment, such as many comments posted to one task at once,
-is a `503` with `Retry-After: 1` and `{"error": "the request conflicted with
+same data at that moment, such as many comments posted at once to one task,
+or many tasks created at once in one organization, is a `503` with
+`Retry-After: 1` and `{"error": "the request conflicted with
 other changes made at the same time and changed nothing; send it again"}`.
 Qivo first retries such a conflict itself, twice at most. A change that
 keeps running out of time, which a busy server and such conflicts can cause,
