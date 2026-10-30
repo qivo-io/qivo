@@ -133,8 +133,7 @@ async function myIssue(ctx: MeCtx, id: string): Promise<Doc<'issues'>> {
 /* has_project_level(project, 'member') — false for a missing/foreign project
  * too, exactly the empty RLS join. The model cores' own write gate, run
  * here first with the same sentence. */
-const assertWritable = (ctx: MeCtx, projectId: string): Promise<void> =>
-  assertCanEdit(ctx, ctx.me, projectId)
+const assertWritable = (ctx: MeCtx, projectId: string) => assertCanEdit(ctx, ctx.me, projectId)
 
 /* --------------------------------------------------------------- archived
  * Issue reads that live OUTSIDE the snapshot: the Archived tasks page's
@@ -241,7 +240,9 @@ export const archivedTask = authedQuery({
 /* ----------------------------------------------------------------- create
  * P.addIssue. The client sends its generated uuid and reconciles its
  * optimistic key preview off the returned num (onKeyFixed). A task created
- * in Review without hours gets the project review time from the server. */
+ * in Review without hours gets the project review time from the server.
+ * createIssueCore's write gate is this check's own, with the same sentence,
+ * so the handler leaves it to the core. */
 export const create = orgMutation({
   args: {
     id: v.string(),
@@ -261,7 +262,6 @@ export const create = orgMutation({
   },
   handler: async (ctx, args) => {
     const now = new Date().toISOString()
-    await assertWritable(ctx, args.project_id)
     const issue = await createIssueCore(ctx, { me: ctx.me, args, now })
     return await pubFor(ctx, ctx.me, issue)
   },

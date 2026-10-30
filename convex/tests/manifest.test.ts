@@ -1190,7 +1190,7 @@ describe('the public surface', () => {
   })
 
   /* No counter surface: numbering is server-owned (organizations.next_*),
-   * mutated only inside create paths — a nextIssueNum-shaped public function
+   * mutated only inside create paths — a numberNewTask-shaped public function
    * must never appear. (orgFence.test.ts leaves the cross-reference here.) */
   it('exposes no counter-shaped function', () => {
     for (const r of publicRows) {

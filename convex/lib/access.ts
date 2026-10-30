@@ -1134,7 +1134,16 @@ export async function hasProjectLevel(
     .query('projects')
     .withIndex('by_uuid', (q) => q.eq('id', projectId))
     .unique()
-  if (project === null) return false
+  return project !== null && (await hasLevelOn(ctx, me, project, min))
+}
+
+/** hasProjectLevel for a project the caller has already read. */
+export async function hasLevelOn(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  project: Doc<'projects'>,
+  min: 'user' | 'lead' | 'admin',
+): Promise<boolean> {
   return levelRank(await projectLevel(ctx, me, project)) >= levelRank(min)
 }
 

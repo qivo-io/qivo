@@ -23,8 +23,8 @@ import {
   generateSlug,
   nameInitials,
   narrateSlugChange,
-  nextIssueNum,
   nextProjectNum,
+  numberNewTask,
   weekLabel,
 } from '../model/orgs'
 import {
@@ -213,16 +213,18 @@ describe('assertSlugAvailable — the setSlug refusal taxonomy', () => {
   })
 })
 
-describe('counters — nextIssueNum / nextProjectNum (0050/0100)', () => {
+describe('counters — numberNewTask / nextProjectNum (0050/0100)', () => {
   it('creates a zeroed org_counters row on first use, chaining inside one mutation', async () => {
     const org = await plantOrg(t, 'counting')
     const nums = await t.run(async (ctx) => [
-      await nextIssueNum(ctx, org),
-      await nextIssueNum(ctx, org), // the in-helper re-read chains past the stale doc in hand
+      await numberNewTask(ctx, org.id),
+      await numberNewTask(ctx, org.id), // each call reads the row again, so the two chain
       await nextProjectNum(ctx, org),
     ])
     expect(nums).toEqual([1, 2, 1])
     expect(await countersFor(t, org.id)).toEqual({ next_issue_num: 2, next_project_num: 1 })
+    // an organization without live counts gets none from a create
+    expect(await t.run((ctx) => countersRow(ctx, org.id))).not.toHaveProperty('active_tasks')
   })
 
   it('continues from the numbers in an existing org_counters row', async () => {
@@ -230,8 +232,34 @@ describe('counters — nextIssueNum / nextProjectNum (0050/0100)', () => {
     await t.run((ctx) =>
       ctx.db.insert('org_counters', { org_id: org.id, next_issue_num: 10, next_project_num: 0 }),
     )
-    expect(await t.run((ctx) => nextIssueNum(ctx, org))).toBe(11)
+    expect(await t.run((ctx) => numberNewTask(ctx, org.id))).toBe(11)
     expect(await t.run((ctx) => nextProjectNum(ctx, org))).toBe(1)
+  })
+
+  it('counts the task it numbers as active, except past where a running count has reached', async () => {
+    const org = await plantOrg(t, 'tally')
+    const counters = await t.run((ctx) =>
+      ctx.db.insert('org_counters', {
+        org_id: org.id,
+        next_issue_num: 4,
+        next_project_num: 0,
+        active_tasks: 3,
+        live_projects: 0,
+      }),
+    )
+    expect(await t.run((ctx) => numberNewTask(ctx, org.id))).toBe(5)
+    expect(await t.run((ctx) => countersRow(ctx, org.id))).toMatchObject({
+      next_issue_num: 5,
+      active_tasks: 4,
+    })
+    // a backfill counting through number 6 counts task 7 itself
+    await t.run((ctx) => ctx.db.patch(counters, { counted: { tasks: 6, projects: 0 } }))
+    expect(await t.run((ctx) => numberNewTask(ctx, org.id))).toBe(6)
+    expect(await t.run((ctx) => numberNewTask(ctx, org.id))).toBe(7)
+    expect(await t.run((ctx) => countersRow(ctx, org.id))).toMatchObject({
+      next_issue_num: 7,
+      active_tasks: 5,
+    })
   })
 })
 

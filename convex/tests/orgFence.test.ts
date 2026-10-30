@@ -17,7 +17,7 @@
  *
  * 0056 D — counters. The task and project counters (org_counters) have no
  * public surface to fence:
- * nextIssueNum/nextProjectNum live in model/orgs and no public function
+ * numberNewTask/nextProjectNum live in model/orgs and no public function
  * carries them or their arguments. That absence is
  * manifest.test.ts's row — the committed public-surface baseline is where a
  * counter-shaped door would show up, so it is deliberately NOT re-tested here.
