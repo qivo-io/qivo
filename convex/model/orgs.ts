@@ -295,7 +295,8 @@ async function bump(
  * because every create in the organization writes this row and conflicts
  * with every other, so the less time a create takes the more creates an
  * organization takes at once. A new task carries no labels, so the label
- * counts tallyRow would move stay as they are. */
+ * counts tallyRow would move stay as they are; a create that gave its task
+ * labels would have to count them. */
 export async function numberNewTask(ctx: MutationCtx, orgId: string): Promise<number> {
   const row = await ensureCounters(ctx, orgId)
   const num = row.next_issue_num + 1

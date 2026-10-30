@@ -3,7 +3,8 @@
  * delete writes, and the working-set rules that decide what a read may say
  * about other tasks (lib/workingSet.ts). The gate tests call the cores directly
  * with an actor the surfaces would have refused, because every surface
- * checks first; they fail if a core loses its gate. */
+ * checks first, except the app's plain create, whose only check is the
+ * core's gate; they fail if a core loses its gate. */
 
 import { describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'

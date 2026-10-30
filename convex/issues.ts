@@ -35,7 +35,8 @@
  *
  * Each write checks Edit here first with the app's own sentence; the model
  * cores repeat that check as defense in depth (model/issues.ts
- * assertCanEdit). */
+ * assertCanEdit). The plain create is the exception: its only check is
+ * createIssueCore's gate, which is the same check with the same sentence. */
 
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'

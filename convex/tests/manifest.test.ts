@@ -1190,8 +1190,8 @@ describe('the public surface', () => {
   })
 
   /* No counter surface: numbering is server-owned (organizations.next_*),
-   * mutated only inside create paths — a numberNewTask-shaped public function
-   * must never appear. (orgFence.test.ts leaves the cross-reference here.) */
+   * mutated only inside create paths — a counter-shaped public function, one
+   * whose name reads next…num, must never appear. (orgFence.test.ts leaves the cross-reference here.) */
   it('exposes no counter-shaped function', () => {
     for (const r of publicRows) {
       expect(/next.*num/i.test(r.name), `${r.module}:${r.name} looks counter-shaped`).toBe(false)
