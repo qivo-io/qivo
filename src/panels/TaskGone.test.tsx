@@ -192,7 +192,9 @@ async function open(
       () => store.P.watchHandles((moved) => setOpenIssue((cur) => (cur && moved.get(cur)) || cur)),
       [],
     )
-    paneHandle = openIssue
+    useEffect(() => {
+      paneHandle = openIssue
+    }, [openIssue])
     const openTask = (handle: string | null) => {
       if (handle === null) onClose()
       setOpenIssue(handle)

@@ -264,7 +264,9 @@ async function openWindow(first: string) {
       () => P.watchHandles((moved) => setIssueId((cur) => (cur && moved.get(cur)) || cur)),
       [],
     )
-    shownHandle = issueId
+    useEffect(() => {
+      shownHandle = issueId
+    }, [issueId])
     return (
       <IssueDetail
         issueId={issueId}
