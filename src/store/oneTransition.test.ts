@@ -4,8 +4,9 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* The workspace parts and the open task's thread, history and sections
    come in Convex transitions (store/liveParts.ts). One transition that
-   changes a task, the thread, the history and a section repaints once and
-   tells the views once, and one that changes nothing on screen tells them
+   changes a task, the thread, the history and a section, or the answer of
+   a task a window shows from its own read, repaints once and tells the
+   views once, and one that changes nothing on screen tells them
    nothing. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -172,6 +173,45 @@ describe('one transition', () => {
       task: { ...snapshot.issues[0], description: 'Saved text', has_subtasks: true },
       subtasks: { rows: [short(kid)], complete: true },
     })
+    expect(emits).toBe(1)
+  })
+
+  it('repaints a task change, a new comment and the answer of a task the workspace does not hold of one transition once', async () => {
+    // a task a window shows from its own read (P.taskDetail)
+    store.P.watchComments('far-1', snapshot.orgs[0].id)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const answer = (title: string) => ({
+      state: 'ok',
+      task: { ...snapshot.issues[0], id: 'far-1', num: 40, title, has_subtasks: false },
+      level: 'lead',
+      labels: [],
+      follow: null,
+      parent: null,
+      subtasks: { rows: [], complete: true },
+    })
+    deliverThread({ comments: [], earlier: false })
+    deliverSection['taskWindow:task'](answer('Far task'))
+    expect(store.P.taskDetail('far-1')?.view?.title).toBe('Far task')
+    emits = 0
+    const comment = {
+      id: 'comment-1',
+      issue_id: 'far-1',
+      author: snapshot.profiles[0].id,
+      body: 'Looks good',
+      created_at: AT,
+    }
+    double.live?.batch(() => {
+      snapshot.issues[0].title = 'Renamed elsewhere'
+      deliver(structuredClone(snapshot))
+      deliverThread({ comments: [comment], earlier: false })
+      deliverSection['taskWindow:task'](answer('Far task renamed'))
+    })
+    expect(store.P.issues.find((i) => i.uuid === 'task-a')?.title).toBe('Renamed elsewhere')
+    expect(store.P.comments.map((c) => c.body)).toEqual(['Looks good'])
+    expect(store.P.taskDetail('far-1')?.view?.title).toBe('Far task renamed')
+    expect(emits).toBe(1)
+    // an answer that changes nothing on screen tells no view
+    deliverSection['taskWindow:task'](answer('Far task renamed'))
     expect(emits).toBe(1)
   })
 

@@ -48,7 +48,7 @@ import {
 import { ViewBoundary } from '../components/ViewBoundary'
 import { fmtSize, useWindowDropGuard } from '../lib/attachments'
 import { copyText } from '../lib/clipboard'
-import { DELAY_MARK } from '../lib/delay'
+import { DELAY_MARK, DELAY_UNKNOWN } from '../lib/delay'
 import { dayInSentence, deletedAtFull } from '../lib/deletedTime'
 import { closeOrAsk, questionOpen } from '../lib/discardQuestion'
 import { limitSentence, overLimit } from '../lib/fieldLimits'
@@ -62,7 +62,7 @@ import {
   useUnsaved,
   useUnsentScope,
 } from '../lib/leaveGuard'
-import { openedTask } from '../lib/openedTasks'
+import { noteOpenedTask, openedTask } from '../lib/openedTasks'
 import {
   parentBlock,
   parentCandidatesFor,
@@ -85,7 +85,6 @@ import { loadDescEditor } from '../lib/workspaceChunks'
 import '../styles/mobile-issue.css'
 import {
   type ActivityVM,
-  type ArchivedIssueVM,
   type CommentsEarlier,
   type CommentsFailure,
   type CommentVM,
@@ -95,6 +94,7 @@ import {
   type SectionAttachmentVM,
   type SectionName,
   type SectionVM,
+  type TaskDetailVM,
   type TaskSectionsVM,
 } from '../store/planner'
 import { ArchiveOrDeleteTaskModal, MoveIssueModal } from './Modals'
@@ -116,15 +116,26 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
 const NO_PROFILE = '__none__'
 /* Why moving, archiving or deleting waits while tasks still load: each acts
    on subtasks and blockers that may be still to arrive. Removing a related
-   task the workspace does not hold yet waits too, since the removal edits
-   its row there. */
+   task or a file the workspace does not hold yet waits too, since the
+   removal edits its row there. */
 const WAITS_FOR_TASKS = 'Available once every task has loaded'
+/* Why every change but a comment waits on a task the window shows from its
+   own read (P.taskDetail), for someone who could make it: the window turns
+   editable in place once the workspace holds the task. */
+const WAITS_FOR_TASK = 'Available once this task has loaded'
+/* Why the fields of an archived task the window shows read-only are off,
+   for someone who could restore it. */
+const RESTORE_TO_CHANGE = 'Restore this task to change it'
+/* Why a control is off for someone who can only read the project. */
+const READ_ONLY = 'Read-only project access'
 
 /* One task in Parent, Subtasks or Linked tasks, from its row model
    (RelatedTaskVM): the workspace's view of a task it holds, else the
    section answer's short row, so a task still to arrive in a large
    workspace is listed rather than left out. Opening it passes its handle
-   on, and the window waits for a task still to arrive (`waiting`). */
+   on. A task the workspace does not hold is noted first in the opened-task
+   registry (lib/openedTasks.ts), so the window knows its organization and
+   shows it from its own read, and the address names it. */
 function MiniIssueRow({
   task,
   onOpen,
@@ -149,7 +160,18 @@ function MiniIssueRow({
       <Button
         type="button"
         variant="unstyled"
-        onClick={() => onOpen(task.handle)}
+        onClick={() => {
+          if (!task.held)
+            noteOpenedTask({
+              uuid: task.uuid,
+              num: task.num,
+              key: `${P.ISSUE_PREFIX}-${task.num}`,
+              title: task.title,
+              project: task.project,
+              org: task.org,
+            })
+          onOpen(task.handle)
+        }}
         className="flex min-w-0 flex-1 self-stretch items-center gap-2 rounded-md p-2 text-left text-text-1 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
       >
         <span className="[display:flex] [flex-direction:column] [gap:2px] [flex:1] [min-width:0]">
@@ -182,7 +204,7 @@ function MiniIssueRow({
           size="icon"
           className="task-related-remove mr-1 h-control-sm w-control-sm shrink-0"
           aria-label={remove.label}
-          title={remove.disabled ? (remove.hint ?? 'Read-only project access') : remove.label}
+          title={remove.disabled ? (remove.hint ?? READ_ONLY) : remove.label}
           disabled={remove.disabled}
           onClick={remove.onClick}
         >
@@ -349,6 +371,13 @@ const LOADING_SECTION: SectionVM<never> = {
   complete: false,
   delivered: false,
   source: 'answer',
+}
+
+/* An archived group's Progress and Remaining: its answer holds none of its
+   subtasks, so both are unknown (the limits plan's item 2). */
+const UNKNOWN_TOTALS: ReturnType<typeof groupTotals> = {
+  progress: { state: 'unknown', partial: false },
+  remaining: { state: 'unknown' },
 }
 
 /* What each section's lines call its rows, and the section. */
@@ -1149,36 +1178,62 @@ function LoadFailure({
   )
 }
 
-/** What the window keeps of the task it shows, for once the task is gone.
-    A task Search opened that the window has not shown (lib/openedTasks.ts)
-    has `opened`, with whether Search found it archived. */
-type ShownTask = Pick<IssueVM, 'uuid' | 'key' | 'title' | 'project'> & {
-  opened?: { archived: boolean }
+/** What the window keeps of the task it shows, for once the task is gone:
+    its uuid, organization, key, title and project. A task Search or a task
+    window opened that this window has not shown (lib/openedTasks.ts) is
+    `opened`. */
+type ShownTask = Pick<IssueVM, 'uuid' | 'org' | 'key' | 'title' | 'project'> & {
+  opened?: true
 }
 
-/* The window's content once its task left the board while the window was
-   open, because someone archived or deleted it, or it moved where this
-   person cannot open it. It looks the task up in the archive
-   (P.fetchArchivedTask), and then says it was archived, with Restore for
-   someone who can edit its project, or that it is no longer here, or that
-   the archive could not be checked, with Retry. A restored task comes back
-   into the window. A reason typed in the task's Archive or delete window
-   went unused, so the note says so and shows it to copy. Focus goes to the
-   note when it was in the task's content, which went with the task, and
-   never to a button, which the next key typed for that content would press.
-   On a phone the note takes the width of the screen and the buttons go
-   below it. A task Search opened that the window never showed, such as an
-   archived result, shows its key and title from the search, and once the
-   archive answers, its place and when it was archived; while the archive is
-   asked, the note says it is loading rather than that the task left. */
+/** What became of a task the window shows no active task for, from its own
+    read (P.taskDetail): archived, with its row; null when it is no longer
+    here; 'failed' when the read failed; undefined while it is asked. */
+type GoneAnswer =
+  | { project: string; title: string; org: string; archivedAt: number }
+  | null
+  | 'failed'
+  | undefined
+
+/* The window's note on a task it shows no active task for, because it
+   left the board while the window was open (someone archived or deleted
+   it, or it moved where this person cannot open it), or because Search or
+   a task window opened a task the workspace does not hold, from the
+   window's own read of the task (`found`). It says the task was archived,
+   with Restore for someone who can edit its project (`canRestore`), or
+   that it is no longer here, or that it could not be checked, with Retry,
+   or, while the read is asked, that the task left or is loading. A
+   restored task comes back into the window. A reason typed in the task's
+   Archive or delete window went unused, so the note says so and shows it
+   to copy. Focus goes to the note when it was in the task's content, which
+   went with the task, and never to a button, which the next key typed for
+   that content would press. On a phone the note takes the width of the
+   screen and the buttons go below it. A task opened that the window never
+   showed shows its key and title, and once the read answers, its place
+   and when it was archived. Above an archived task the window shows
+   read-only (`inWindow`), the window around it says those, and the note
+   says only what became of the task, and where it lives and when it was
+   archived when the window has no details column to say it (`showPlace`). */
 function TaskGone({
   task,
+  found,
+  canRestore,
+  onRetry,
+  inWindow = false,
+  showPlace = false,
   unusedReason,
   onCopied,
   onClose,
   mobile,
 }: {
   task: ShownTask
+  found: GoneAnswer
+  canRestore: boolean
+  onRetry: () => void
+  inWindow?: boolean
+  /** above an archived task in a window without its details column, as
+      the desktop Inbox pane: where it lives and when it was archived */
+  showPlace?: boolean
   /** the reason typed for the Archive or delete window, which nothing sent */
   unusedReason: string | null
   /** the reason is on the clipboard, so closing need not ask about it */
@@ -1186,22 +1241,8 @@ function TaskGone({
   onClose: () => void
   mobile: boolean
 }) {
-  // the archive's answer: the task's row there, or null when it is not
-  // there; 'failed' when the archive could not be read, undefined while asking
-  const [found, setFound] = useStateID<ArchivedIssueVM | null | 'failed' | undefined>(undefined)
-  const [attempt, setAttempt] = useStateID(0)
   const [restoring, setRestoring] = useStateID(false)
   const noteRef = useRefID<HTMLSpanElement>(null)
-  useEffectID(() => {
-    let live = true
-    setFound(undefined)
-    void P.fetchArchivedTask(task.uuid).then((answer) => {
-      if (live) setFound(answer === null ? 'failed' : answer.row)
-    })
-    return () => {
-      live = false
-    }
-  }, [task.uuid, attempt])
   useEffectID(() => {
     const active = document.activeElement
     if (!active || active === document.body) noteRef.current?.focus()
@@ -1221,13 +1262,12 @@ function TaskGone({
     })
   }
   const row = found === 'failed' ? undefined : found
-  // the project the task is archived in, which may not be the one the window
-  // last showed
-  const canRestore = !!row && ['lead', 'user'].includes(P.levelOn(row.project) || '')
   const restore = () => {
     if (!row) return
     setRestoring(true)
-    void P.unarchiveIssue(row.uuid, row.title, row.project, row.org).then((ok) => {
+    // the archived row's own project and organization, which may not be
+    // the ones the window last showed
+    void P.unarchiveIssue(task.uuid, row.title, row.project, row.org).then((ok) => {
       // a restored task comes back into this window, which leaves this note
       if (ok) window.showToast?.(`Restored ${task.key}`)
       else setRestoring(false) // unarchiveIssue toasted why
@@ -1236,7 +1276,7 @@ function TaskGone({
   // Retry leaves with the failed answer, so focus stays on the note
   const retry = () => {
     noteRef.current?.focus()
-    setAttempt((n) => n + 1)
+    onRetry()
   }
   const opened = !!task.opened
   const text =
@@ -1252,37 +1292,29 @@ function TaskGone({
           ? canRestore
             ? `${task.key} was archived. Restore it to bring it back to the board.`
             : `${task.key} was archived. Someone who can edit its project can restore it from Archived tasks.`
-          : task.opened?.archived === false
-            ? // Search found it active, and the workspace may not be current
-              // yet, as while a part of it is held back or failed: it can
-              // still arrive, and then fills the window
-              `${task.key} is not here yet. It may still be on its way, or you can no longer open it.`
-            : `${task.key} is no longer here. It was deleted, or you can no longer open it.`
+          : `${task.key} is no longer here. It was deleted, or you can no longer open it.`
   // the note says the reason went unused, and points a screen reader at it
   const reasonId = useIdID()
-  // the place of an archived task Search opened, read-only
-  const place = opened && row ? P.projectPlace(row.project) : null
   return (
     <div
       data-task-gone
-      className="flex min-h-0 flex-wrap items-center gap-3 overflow-y-auto p-6 text-sm text-text-2"
+      className={cn(
+        'flex min-h-0 flex-wrap items-center gap-3 text-sm text-text-2',
+        inWindow ? 'shrink-0 px-5 pt-1 pb-3' : 'overflow-y-auto p-6',
+      )}
     >
-      {opened && (
+      {inWindow && showPlace && row && (
+        <div className="basis-full">
+          <ArchivedPlace project={row.project} archivedAt={row.archivedAt} />
+        </div>
+      )}
+      {opened && !inWindow && (
         <div data-task-gone-task className="flex min-w-0 basis-full flex-col gap-1">
           <div className="flex min-w-0 items-baseline gap-2">
             <IssueKey id={task.key} />
             <span className="min-w-0 truncate text-base font-medium text-text-1">{task.title}</span>
           </div>
-          {row && (
-            <div className="flex flex-wrap gap-x-3 text-xs text-text-2">
-              {place && <span data-task-gone-place>{P.placeLabel(place)}</span>}
-              <HoverTooltip content={deletedAtFull(new Date(row.archivedAt))}>
-                <span data-task-gone-archived tabIndex={-1}>
-                  Archived {dayInSentence(new Date(row.archivedAt), new Date())}
-                </span>
-              </HoverTooltip>
-            </div>
-          )}
+          {row && <ArchivedPlace project={row.project} archivedAt={row.archivedAt} />}
         </div>
       )}
       <span
@@ -1301,7 +1333,7 @@ function TaskGone({
           Retry
         </Button>
       )}
-      {canRestore && (
+      {row && canRestore && (
         <Button type="button" variant="primary" disabled={restoring} onClick={restore}>
           {restoring ? 'Restoring…' : 'Restore'}
         </Button>
@@ -1329,6 +1361,93 @@ function TaskGone({
   )
 }
 
+/* The note above a task the window shows from its last answer while the
+   read after that answer failed, with Retry, or runs again from Retry. The
+   task stays as that answer had it, with a comment typed for it, since the
+   answer shows nothing the window did not show already and the server
+   checks every write. In LoadFailure's style, without its control height,
+   as it sits under the task's title. */
+function StaleTask({
+  taskKey,
+  retrying,
+  mobile,
+}: {
+  taskKey: string
+  retrying: boolean
+  mobile: boolean
+}) {
+  const noteRef = useRefID<HTMLSpanElement>(null)
+  // Retry leaves with the failure, so focus stays on the note, as in TaskGone
+  const retry = () => {
+    noteRef.current?.focus()
+    P.retryTask()
+  }
+  return (
+    <div
+      data-task-stale={retrying ? 'retrying' : 'failed'}
+      className="flex shrink-0 flex-wrap items-center gap-3 px-5 pt-1 pb-3 text-sm text-text-2"
+    >
+      <span
+        ref={noteRef}
+        role="status"
+        tabIndex={-1}
+        className={cn(mobile ? 'basis-full' : 'flex-1', retrying && 'italic text-text-3')}
+      >
+        {retrying
+          ? `Checking ${taskKey} for changes…`
+          : `Couldn't check ${taskKey} for changes, so it shows as it was last loaded.`}
+      </span>
+      {!retrying && (
+        <Button type="button" variant="ghost" onClick={retry}>
+          <Icon name="rotateCcw" size={16} />
+          Retry
+        </Button>
+      )}
+    </div>
+  )
+}
+
+/* Where an archived task lives and the day it was archived, read-only, as
+   the note on a task Search opened and the archived window's details say
+   them. */
+function ArchivedPlace({ project, archivedAt }: { project: string; archivedAt: number }) {
+  const place = P.projectPlace(project)
+  return (
+    <div className="flex flex-wrap gap-x-3 text-xs text-text-2">
+      {place && <span data-task-gone-place>{P.placeLabel(place)}</span>}
+      <HoverTooltip content={deletedAtFull(new Date(archivedAt))}>
+        <span data-task-gone-archived tabIndex={-1}>
+          Archived {dayInSentence(new Date(archivedAt), new Date())}
+        </span>
+      </HoverTooltip>
+    </div>
+  )
+}
+
+/** The task a window on handle `issueId` is about, by uuid and
+    organization: the workspace's task (`held`), else the task the window
+    showed last on this handle (`shown`), which holds what was noted of a
+    task it has not shown yet, else what Search or a task window noted of
+    the task the handle names (`noted`, lib/openedTasks.ts), or null. The
+    window watches it (P.watchComments) and shows it from its own read
+    while the workspace does not hold it (P.taskDetail).
+    t3/limits-direct-links resolves an address or a notification target
+    through the server here instead, with its organization pinned. */
+function windowTaskOf(
+  issueId: string | null,
+  held: IssueVM | undefined,
+  noted: ShownTask | undefined,
+  shown: { at: string; task: ShownTask } | null,
+): ShownTask | null {
+  if (!issueId) return null
+  if (held) {
+    const { uuid, org, key, title, project } = held
+    return { uuid, org, key, title, project }
+  }
+  if (shown?.at === issueId) return shown.task
+  return noted ?? null
+}
+
 /* The first row of the thread in `feed`, focusable until it loses focus, so
    it can take keyboard focus once without staying focusable to a click. */
 function firstRowForFocus(feed: Element): HTMLElement | null {
@@ -1354,6 +1473,7 @@ function CommentRow({
   c,
   it,
   canLead,
+  locked = false,
   editing,
   onEdit,
   onDoneEdit,
@@ -1361,6 +1481,8 @@ function CommentRow({
   c: CommentVM
   it: IssueVM
   canLead: boolean
+  /** an archived task's comments, which no one edits or deletes */
+  locked?: boolean
   editing: boolean
   onEdit: (id: string) => void
   onDoneEdit: () => void
@@ -1372,7 +1494,7 @@ function CommentRow({
   // foreign project is authored by my guest profile there, not CURRENT_USER
   const own = !!c.author && P.myProfileIds.includes(c.author)
   const u = c.author ? P.user(c.author) : null
-  const canEdit = own || canLead
+  const canEdit = !locked && (own || canLead)
   return (
     <div
       data-comment={c.id}
@@ -1722,56 +1844,143 @@ function IssueDetail({
     return () => window.removeEventListener('keydown', h)
   }, [onClose, embedded])
 
-  const it = issueId ? P.issueById[issueId] : null
-  // what Search noted of a task it opened that this handle names now
-  // (lib/openedTasks.ts), the handle derived as the router derives it
-  const opened =
-    !it && issueId
+  // the workspace's view of the task the handle names
+  const held = issueId ? P.issueById[issueId] : undefined
+  // what Search or a task window noted of a task it opened that this
+  // handle names now (lib/openedTasks.ts), the handle derived as the
+  // router derives it
+  const noted =
+    !held && issueId
       ? openedTask(issueId, (task) => P.handleNow(task.uuid, task.org, task.num))
       : undefined
   // what the window last showed of this task, kept for once it is gone, or
-  // what Search noted of it when the window has shown nothing of it
+  // what was noted of it when the window has shown nothing of it
   const shownTask = useRefID<{ at: string; task: ShownTask } | null>(null)
+  const identity = windowTaskOf(
+    issueId,
+    held,
+    noted && { ...noted, opened: true },
+    shownTask.current,
+  )
+  // the task as the window shows it from its own read while the workspace
+  // does not hold it (P.taskDetail)
+  const detail: TaskDetailVM | null = !held && identity ? P.taskDetail(identity.uuid) : null
+  // the view of the last answer that held the task, active or archived,
+  // also while a read after it failed or runs again (`stale`), so a
+  // comment typed for the task stays; but not while this window's own
+  // archive or delete is on its way: that closes the window, and the answer
+  // must not show the task under its dialog
+  const answerView =
+    leaving.current !== issueId &&
+    detail?.view &&
+    !detail.textless &&
+    (detail.answered === 'ok' || detail.answered === 'archived')
+      ? detail.view
+      : null
+  const it = held ?? answerView
+  // a task shown from its answer, read-only but for its comments, and of
+  // those an archived one, with its note above it and no comments either
+  const fromAnswer = !held && !!it
+  const archived = fromAnswer && detail?.answered === 'archived'
+  // the window shows the task as its last answer had it, because the read
+  // after it failed, or runs again from Retry (the note above the task)
+  const stale = fromAnswer && (detail?.state === 'failed' || detail?.state === 'retrying')
+  // the window shows an active task: the workspace's, or one from its answer
+  const active = !!held || (fromAnswer && !archived)
+  // a task the window shows that the workspace does not hold, from its
+  // answer or as what became of it, is noted (lib/openedTasks.ts), so
+  // another window on its handle finds it too, as the Inbox pane's pop-out
+  // or the window a crumb opens over the Board, and a change of the home
+  // organization moves its handle (P.watchHandles). Its number is its
+  // answer's, else that of its display key (QN-n).
+  const unheld = held ? null : (answerView ?? identity)
+  const unheldNum = unheld
+    ? (detail?.num ?? Number(unheld.key.slice(P.ISSUE_PREFIX.length + 1)))
+    : null
+  useEffectID(() => {
+    if (!unheld || unheldNum === null || !Number.isInteger(unheldNum)) return
+    const { uuid, key, title, project, org } = unheld
+    noteOpenedTask({ uuid, num: unheldNum, key, title, project, org })
+  }, [unheld?.uuid, unheldNum, unheld?.title, unheld?.project])
+  // the task the window showed follows its handle as it moves, as App's
+  // address does, so the window goes on showing the same task
+  useEffectID(
+    () =>
+      P.watchHandles((moved) => {
+        const shown = shownTask.current
+        const to = shown && moved.get(shown.at)
+        if (shown && to) shownTask.current = { ...shown, at: to }
+      }),
+    [],
+  )
   if (it && issueId) {
-    const { uuid, key, title, project } = it
-    shownTask.current = { at: issueId, task: { uuid, key, title, project } }
+    const { uuid, org, key, title, project } = it
+    shownTask.current = { at: issueId, task: { uuid, org, key, title, project } }
   } else if (shownTask.current?.at !== issueId)
-    shownTask.current =
-      issueId && opened
-        ? {
-            at: issueId,
-            task: {
-              uuid: opened.uuid,
-              key: opened.key,
-              title: opened.title,
-              project: opened.project,
-              opened: { archived: opened.archived },
-            },
-          }
-        : null
+    shownTask.current = issueId && noted ? { at: issueId, task: { ...noted, opened: true } } : null
+  // whether the window's read of the task has said nothing yet, or runs
+  // again after a failure
+  const unanswered = !detail || detail.state === 'loading' || detail.state === 'retrying'
   // a task opened by its address while tasks still load may be one still
-  // to arrive: the window opens and says so (App pendingTask). An archived
-  // task Search opened never arrives, so its window says so at once.
-  const waiting = !it && !!issueId && P.stillLoading() !== null && !opened?.archived
-  // the task left the board while the window showed it, other than by this
-  // window's own archive or delete while that is on its way: the window
-  // says so (TaskGone), also once its own call was refused (stopLeaving)
-  const gone =
-    !it && !waiting && issueId && leaving.current !== issueId ? shownTask.current?.task : null
+  // to arrive: the window opens and says so (App pendingTask), and so does
+  // a task it showed before whose read has not answered yet. A task Search
+  // or a task window noted shows its own loading line instead (TaskGone).
+  const waiting =
+    !it && !!issueId && P.stillLoading() !== null && (!identity || (!identity.opened && unanswered))
+  // the window shows no active task for the task it is about, other than by
+  // this window's own archive or delete while that is on its way: the
+  // window says what became of it (TaskGone), also once its own call was
+  // refused (stopLeaving), and above an archived task it shows read-only
+  const gone = !active && !waiting && issueId && leaving.current !== issueId ? identity : null
+  // what the window's read says became of it, for TaskGone: the archived
+  // window's own answer, also while a read after it failed, else what the
+  // read says now
+  const archivedRow =
+    detail?.view && detail.archivedAt !== null
+      ? {
+          project: detail.view.project,
+          title: detail.view.title,
+          org: detail.org,
+          archivedAt: detail.archivedAt,
+        }
+      : undefined
+  const goneAnswer: GoneAnswer =
+    archived && archivedRow
+      ? archivedRow
+      : detail?.state === 'failed'
+        ? 'failed'
+        : detail?.state === 'unavailable'
+          ? null
+          : detail?.state === 'archived'
+            ? archivedRow
+            : undefined
+  // the caller's level on a task shown from its answer, which decides the
+  // controls offered there, together with the workspace's (canComment);
+  // an archived answer of an older backend holds none, and the workspace's
+  // decides alone, as before
+  const answerLevel = detail?.level ?? null
+  const answerEditor = answerLevel === 'lead' || answerLevel === 'user'
+  const canRestore =
+    goneAnswer !== null &&
+    typeof goneAnswer === 'object' &&
+    (answerEditor || (answerLevel === null && !!detail?.textless)) &&
+    P.canWrite(goneAnswer.project)
   /** Says that text typed for the task went with it, as its editors do,
       unless the person chose Discard for it. */
   const sayDiscarded = (what: string) => {
     if (!windowScope?.chosen()) window.showToast?.(`Unsaved ${what} discarded`)
   }
-  useUpdateBlocker(editTitle && !!it && titleDraft !== it.title)
-  useUnsaved(editTitle && !!it && titleDraft !== it.title, 'title')
+  // a title is typed only for a task the workspace holds
+  useUpdateBlocker(editTitle && !!held && titleDraft !== held.title)
+  useUnsaved(editTitle && !!held && titleDraft !== held.title, 'title')
   const reasonUnsent = unusedReason !== null && unusedReason !== copiedReason && !fateOpen
   useUpdateBlocker(reasonUnsent)
   useUnsaved(reasonUnsent, 'reason')
-  // the task left the board: its window's own state goes too, the title
-  // typed for it is discarded, and a reason typed to archive or delete it
-  // stays in the note to copy: the open window's, or the one a restore
-  // kept for the next window, when the task leaves again before that opens
+  // the window shows no active task for it any more: its window's own
+  // state goes too, the title typed for it is discarded, and a reason typed
+  // to archive or delete it stays in the note to copy: the open window's,
+  // or the one a restore kept for the next window, when the task leaves
+  // again before that opens
   const goneUuid = gone ? gone.uuid : null
   useEffectID(() => {
     if (!gone) return
@@ -1783,9 +1992,27 @@ function IssueDetail({
     setUnusedReason(reason)
     setCopiedReason(copied)
   }, [goneUuid])
+  // a task that leaves the workspace while the window goes on showing it
+  // from its answer, as during a staged load, takes the title typed for it,
+  // as one that leaves the board does, and closes the pickers and Move
+  // window it had open, which a task shown from its answer does not offer
+  const heldNow = useRefID({ issueId, uuid: held?.uuid })
+  useEffectID(() => {
+    const was = heldNow.current
+    heldNow.current = { issueId, uuid: held?.uuid }
+    if (was.issueId !== issueId || !was.uuid || held || gone) return
+    setLabelAnchor(null)
+    setSubAnchor(null)
+    setParentAnchor(null)
+    setLinkAnchor(null)
+    setMoveOpen(false)
+    if (!editTitle) return
+    if (titleDraft !== titleSeen) sayDiscarded('title')
+    setEditTitle(false)
+  }, [held?.uuid])
   // a kept title draft: the rename that refused its save becomes the title
   // the next save sends as seen, once the screen shows it
-  const shownTitle = it?.title
+  const shownTitle = held?.title
   useEffectID(() => {
     if (!titleRebase.current || shownTitle === undefined || shownTitle === titleSeen) return
     titleRebase.current = false
@@ -1794,22 +2021,27 @@ function IssueDetail({
   // remaining hours typed and not yet saved (the field saves on blur)
   const remainingUnsaved = useFieldUnsaved(
     P.editsPaused,
-    `${it?.id}:${it?.remaining ?? ''}`,
+    `${held?.id}:${held?.remaining ?? ''}`,
     'remaining hours',
     () => {
-      // the hours go with a task that left the board, not with a save
-      if (gone) sayDiscarded('remaining hours')
+      // the hours go with a task that left the board or the workspace,
+      // not with a save
+      if (gone || !held) sayDiscarded('remaining hours')
     },
   )
-  // point the store's one-thread comment cache at this issue; release it when
-  // the modal closes (uuid null) or the component unmounts
-  const watchUuid = it ? it.uuid : null
+  // point the store's one-thread comment cache at this task, with its
+  // organization, which a task the workspace does not hold is read in; keep
+  // it while the window shows the task in any state, so the thread and the
+  // history go on for an archived one; release it when the modal closes
+  // (uuid null) or the component unmounts
+  const watchUuid = identity ? identity.uuid : null
+  const watchOrg = identity?.org
   // …unless another window on the SAME task already holds it (holdThread): a
   // pop-out over the inbox pane would otherwise release, on its way out, a
   // thread the pane behind it is still showing.
   useEffectID(() => {
-    if (!holdThread) P.watchComments(watchUuid)
-  }, [watchUuid, holdThread])
+    if (!holdThread) P.watchComments(watchUuid, watchOrg)
+  }, [watchUuid, watchOrg, holdThread])
   useEffectID(
     () => () => {
       if (!holdThread) P.watchComments(null)
@@ -1830,11 +2062,13 @@ function IssueDetail({
   }, [showsAll, watchUuid])
   // Subtasks, Linked tasks and Attachments load their own lists, which the
   // store asks for only while some window shows them: a window with the
-  // details column, and on a phone only while its Details tab shows, since
-  // Activity hides the column there. The desktop Inbox pane has no details
-  // column and asks for none; its pop-out (holdThread) asks on its own.
+  // details column on an active task, and on a phone only while its Details
+  // tab shows, since Activity hides the column there. The desktop Inbox
+  // pane has no details column and asks for none; its pop-out (holdThread)
+  // asks on its own. An archived task shows none of them.
   const sectionsOwner = useRefID({})
-  const showsSections = watchUuid !== null && (mobile ? mobileTab === 'details' : !embedded)
+  const showsSections =
+    active && watchUuid !== null && (mobile ? mobileTab === 'details' : !embedded)
   useEffectID(() => {
     if (!showsSections) return
     const owner = sectionsOwner.current
@@ -2090,29 +2324,52 @@ function IssueDetail({
   const subtasks = sections?.subtasks ?? { ...LOADING_SECTION, hidden: false }
   const linked = sections?.links ?? LOADING_SECTION
   const files = sections?.attachments ?? { ...LOADING_SECTION, count: 0 }
-  // whether the task is a group stays the workspace's; its Progress and
-  // Remaining come from the subtask list, and say unknown without all of
-  // it, or, for the list a complete workspace holds before the answer, by
-  // the workspace's own rules
+  // whether the task is a group stays the workspace's, or its answer's for
+  // a task shown from it; its Progress and Remaining come from the subtask
+  // list, and say unknown without all of it, or, for the list a complete
+  // workspace holds before the answer, by the workspace's own rules. An
+  // archived group's answer holds no subtasks, so they are unknown.
   const totals =
     it && P.isGroup(it)
-      ? subtasks.source === 'workspace'
-        ? workspaceTotals(P.progressOf(it), P.remainingOf(it))
-        : groupTotals(subtasks)
+      ? archived
+        ? UNKNOWN_TOTALS
+        : subtasks.source === 'workspace'
+          ? workspaceTotals(P.progressOf(it), P.remainingOf(it))
+          : groupTotals(subtasks)
       : null
   const prog = totals?.progress
-  // the Parent row stays the workspace's
-  const parentUuid = it?.parent ? P.issueById[it.parent]?.uuid : undefined
-  const parentRow = parentUuid ? P.relatedTask(parentUuid) : null
+  // the Parent row: the workspace's, or the answer's for a task shown from it
+  const parentUuid = held?.parent ? P.issueById[held.parent]?.uuid : undefined
+  const parentRow = held
+    ? parentUuid
+      ? P.relatedTask(parentUuid)
+      : null
+    : (detail?.parent ?? null)
   const meta = it ? P.metaOf(it.project) : null
   // A task lives in its sub-project. The parent may be navigation-only for a
   // child grant, so all task edits must follow the task's own write level.
-  const canLabel = !!it && P.canWrite(it.project)
+  // A task shown from its answer takes no edit but its comments.
+  const canLabel = !!held && P.canWrite(held.project)
+  // Comments on a task shown from its answer need edit access by both the
+  // answer and the workspace, so a stale one only takes controls away. An
+  // archived task takes none.
+  const canComment = held ? canLabel : !!it && !archived && answerEditor && P.canWrite(it.project)
+  const canLead = held
+    ? P.levelOn(held.project) === 'lead'
+    : !!it && !archived && answerLevel === 'lead' && P.levelOn(it.project) === 'lead'
   // one roster for both people pickers: the reviewer follows the assignee rule
   const assigneeChoices = it ? P.taskAssigneesFor(it) : []
   // one sentence for every control the read-only case switches off, so a
-  // viewer is told WHY rather than left prodding a dead field
-  const roTip = canLabel ? undefined : 'Read-only project access'
+  // viewer is told WHY rather than left prodding a dead field. A task shown
+  // from its answer says, to someone who could change it, that it waits
+  // for the task to load, or for a restore
+  const roTip = canLabel
+    ? undefined
+    : fromAnswer && answerEditor
+      ? archived
+        ? RESTORE_TO_CHANGE
+        : WAITS_FOR_TASK
+      : READ_ONLY
   // The phone's Activity view keeps the two frequent edits within reach.
   // Details uses the same controls, with the same choices and access checks.
   // Pause / Resume is the last row of the status menu: a pause is a state of
@@ -2213,14 +2470,21 @@ function IssueDetail({
   // sub-project exists (else the dialog could never enable its Move button)
   // …in the task's OWN organization: a move never crosses one (0081), so a
   // writable project elsewhere must not light the menu item up
+  // …and a task shown from its answer shows it to someone who could move
+  // it, waiting for every task
   const canMove =
-    canLabel &&
+    (canLabel || (fromAnswer && !archived && answerEditor && P.canWrite(it.project))) &&
     P.projects.some(
       (m) =>
         m.type === 'meta' &&
         m.org === it.org &&
         (m.children || []).some((cid: string) => cid !== it.project && P.canWrite(cid)),
     )
+  // Archive or delete, likewise
+  const canFate = canLabel || (fromAnswer && !archived && answerEditor && P.canWrite(it.project))
+  // Move and Archive or delete act on subtasks and blockers, so they wait
+  // while tasks still load, and for a task shown from its answer
+  const fateWaits = P.stillLoading() !== null || fromAnswer
 
   // issue numbers are org-scoped and immutable (0050), so this link is
   // permanent — it survives moves and project renames; lowercase in URLs.
@@ -2271,7 +2535,8 @@ function IssueDetail({
   // read-only task can still be linked to one the person can edit.
   const canLink = (otherId: string) => canLabel || P.canWrite(P.issueById[otherId]?.project)
   const linkable = (x: IssueVM) => sameOrg(x) && x.id !== it.id && canLink(x.id)
-  const canLinkAny = !!it && (canLabel || P.issues.some(linkable))
+  // a task shown from its answer links nothing yet
+  const canLinkAny = !!held && (canLabel || P.issues.some(linkable))
   // the per-task cap on links: a full task takes no new link. Another full
   // task stays listed, so a search for its title finds it rather than
   // offering to create one, and picking it says why (P.addLink)
@@ -2293,8 +2558,12 @@ function IssueDetail({
   // History that has not arrived, or failed before it did, is no whole
   // history, so All then shows nothing beside it.
   const comments = it ? P.comments.filter((c) => c.issue === it.uuid) : []
+  // a row names a task the workspace holds by its handle, and one it does
+  // not hold by its uuid (store/viewModels.ts shapeActivity)
   const history = it
-    ? P.threadEvents.filter((e) => e.targetType === 'issue' && e.targetId === it.id)
+    ? P.threadEvents.filter(
+        (e) => e.targetType === 'issue' && (e.targetId === it.id || e.targetId === it.uuid),
+      )
     : []
   const all = actFilter === 'all'
   // whether everything the filter shows has arrived, and whether the thread
@@ -2389,7 +2658,6 @@ function IssueDetail({
     it && actFilter === 'comments' && frozen.current.unread.change
       ? 'New activity on this task. Changes show only under All.'
       : 'New activity on this task.'
-  const canLead = !!it && P.levelOn(it.project) === 'lead'
   /* Resolves whether the server saved the comment; the composer keeps the
      draft until it did. */
   const postComment = (text: string): Promise<boolean> => {
@@ -2474,9 +2742,10 @@ function IssueDetail({
       </div>
     ) : it.description ? (
       // a viewer's copy has no field border to close, so the cap stays on the
-      // wrapper here; descWrapRef rides whichever of the two is mounted, which
-      // is what the per-issue scroll reset resets
-      <div ref={descWrapRef} style={box}>
+      // wrapper here, and the text scrolls inside it, as in the field, rather
+      // than over Activity; descWrapRef rides whichever of the two is
+      // mounted, which is what the per-issue scroll reset resets
+      <div ref={descWrapRef} style={box} className="overflow-y-auto overscroll-contain">
         <Markdown text={it.description} />
       </div>
     ) : (
@@ -2528,6 +2797,7 @@ function IssueDetail({
                   c={s.c}
                   it={it}
                   canLead={canLead}
+                  locked={archived}
                   editing={editingComment === s.id}
                   onEdit={setEditingComment}
                   onDoneEdit={() => setEditingComment(null)}
@@ -2580,7 +2850,7 @@ function IssueDetail({
           out of this window and 16px of space is the parting. The 26vh cap
           stays: the draft scrolls inside the field, between its formatting
           row and its buttons, rather than in this scroller. */}
-      {canLabel && (
+      {canComment && (
         <div data-composer className="[display:flex] [gap:10px] [margin-top:16px]">
           <span className="[margin-top:9px] [flex-shrink:0]">
             <Avatar id={P.CURRENT_USER} size={28} />
@@ -2651,8 +2921,9 @@ function IssueDetail({
      focus window just its own close) and `live`, which is the difference
      between a window the task LIVES in and a view of one of its halves: only
      the live one lets you rename by clicking the title and offers the
-     whole-task pop-out. Every header links its project and sub-project to
-     their boards, including a section's focus window.
+     whole-task pop-out. A task shown from its answer keeps its title as it
+     is (`held`). Every header links its project and sub-project to their
+     boards, including a section's focus window.
      Note both copies carry the SAME hooks. That is the honest encoding of "it
      is the same heading", and it is safe because the task window is rendered
      first: a document-level `querySelector('[data-issue-key]')` still finds
@@ -2760,7 +3031,7 @@ function IssueDetail({
             it, because it is
             about the TASK, not the window. */}
         <div className="[flex:1] [min-width:0] [display:flex] [align-items:center] [gap:6px]">
-          {live && editTitle ? (
+          {live && held && editTitle ? (
             <LimitedTextarea
               limit={LIMITS.title}
               autoFocus
@@ -2823,11 +3094,11 @@ function IssueDetail({
               className="min-h-0 [margin:0] [font-size:var(--fs-xl)] [font-weight:600] [line-height:1.3] [letter-spacing:-0.01em] [font-family:var(--sans)] [color:var(--text-1)] [background:var(--surface-1)] [border:1px_solid_var(--border-strong)] [border-radius:var(--r-sm)] [padding:3px_8px] [outline:none] [resize:none]"
             />
           ) : (
-            <HoverTooltip content={live ? 'Edit title' : undefined}>
+            <HoverTooltip content={live && held ? 'Edit title' : undefined}>
               <h1
                 data-task-title
                 onClick={
-                  live
+                  live && held
                     ? () => {
                         setTitleDraft(it.title)
                         setTitleSeen(it.title)
@@ -2837,7 +3108,7 @@ function IssueDetail({
                       }
                     : undefined
                 }
-                style={{ cursor: live ? 'text' : 'default' }}
+                style={{ cursor: live && held ? 'text' : 'default' }}
                 className="[min-width:0] [margin:0] [font-size:var(--fs-xl)] [font-weight:600] [line-height:1.3] [letter-spacing:-0.01em] [color:var(--text-1)] break-words"
               >
                 {it.title}
@@ -2991,6 +3262,10 @@ function IssueDetail({
           data-mobile-task={mobile ? '' : undefined}
           data-mobile-task-compact={mobile && mobileFrame.height < 600 ? '' : undefined}
           data-mobile-tab={mobile ? mobileTab : undefined}
+          // for the drives: whether the task shows from the workspace or
+          // from the window's own read, and whether it is archived
+          data-task-source={held ? 'workspace' : it ? 'answer' : undefined}
+          data-task-archived={archived ? '' : undefined}
           className={`flex flex-col overflow-hidden bg-background !outline-none ${
             embedded
               ? 'min-h-0 min-w-0 flex-1 rounded-none border-0 shadow-none'
@@ -3009,10 +3284,13 @@ function IssueDetail({
                 }
           }
         >
-          {gone && (
+          {gone && !it && (
             <TaskGone
               key={gone.uuid}
               task={gone}
+              found={goneAnswer}
+              canRestore={canRestore}
+              onRetry={P.retryTask}
               // the open Archive or delete window's reason, in the render
               // where the task goes, before the effect above keeps it
               unusedReason={fateOpen ? fateReason.current.trim() || null : unusedReason}
@@ -3052,7 +3330,15 @@ function IssueDetail({
                     data-task-chrome
                     className="[display:flex] [align-items:center] [gap:9px] [flex-shrink:0]"
                   >
-                    <IssueSubscribers key={it.uuid} issue={it} />
+                    {/* a task shown from its answer shows whether the person
+                        follows it; an archived one, no eye */}
+                    {!archived && (
+                      <IssueSubscribers
+                        key={it.uuid}
+                        issue={it}
+                        disabled={held ? undefined : WAITS_FOR_TASK}
+                      />
+                    )}
                     <span data-issue-key className="[display:inline-flex] [align-items:center]">
                       <IssueKey id={it.key} />
                     </span>
@@ -3078,7 +3364,7 @@ function IssueDetail({
                           {/* the inbox pane is the one host that isn't the board,
                             so only there does the menu offer the way over to it:
                             the same jump as the row's right-click entry */}
-                          {embedded && onShowOnBoard && (
+                          {embedded && onShowOnBoard && !archived && (
                             <MenuItem
                               data-task-open-board
                               onClick={() => {
@@ -3110,8 +3396,8 @@ function IssueDetail({
                           </MenuItem>
                           {canMove && (
                             <MenuItem
-                              disabled={P.stillLoading() !== null}
-                              title={P.stillLoading() !== null ? WAITS_FOR_TASKS : undefined}
+                              disabled={fateWaits}
+                              title={fateWaits ? WAITS_FOR_TASKS : undefined}
                               onClick={() => {
                                 close()
                                 setMoveOpen(true)
@@ -3123,11 +3409,11 @@ function IssueDetail({
                           )}
                           {/* one window for both ways a task leaves the board, for
                             every task, Done ones too; viewers see neither */}
-                          {canLabel && (
+                          {canFate && (
                             <MenuItem
                               data-task-fate
-                              disabled={P.stillLoading() !== null}
-                              title={P.stillLoading() !== null ? WAITS_FOR_TASKS : undefined}
+                              disabled={fateWaits}
+                              title={fateWaits ? WAITS_FOR_TASKS : undefined}
                               onClick={() => {
                                 close()
                                 // a reason kept from before a restore fills it
@@ -3157,6 +3443,35 @@ function IssueDetail({
                   </div>
                 ),
               })}
+
+              {/* the task as its last answer had it, while the read after
+                  that answer failed or runs again */}
+              {stale && (
+                <StaleTask
+                  taskKey={it.key}
+                  retrying={detail?.state === 'retrying'}
+                  mobile={mobile}
+                />
+              )}
+
+              {/* an archived task: what became of it, with Restore for
+                  someone who can edit its project, above the task shown
+                  read-only. Its own Close stays, as on every such note. */}
+              {gone && archived && (
+                <TaskGone
+                  key={gone.uuid}
+                  inWindow
+                  showPlace={embedded && !mobile}
+                  task={gone}
+                  found={goneAnswer}
+                  canRestore={canRestore}
+                  onRetry={P.retryTask}
+                  unusedReason={fateOpen ? fateReason.current.trim() || null : unusedReason}
+                  onCopied={setCopiedReason}
+                  onClose={onClose}
+                  mobile={mobile}
+                />
+              )}
 
               {mobile && (
                 <div className="task-mobile-controls">
@@ -3466,7 +3781,9 @@ function IssueDetail({
                                 min={LIMITS.remainingHours.min}
                                 max={LIMITS.remainingHours.max}
                                 placeholder="—"
-                                key={`${it.id}:${it.remaining != null ? it.remaining : ''}`}
+                                // and whether it is the workspace's task, so typed hours
+                                // never stay in a field of the task's answer
+                                key={`${it.id}:${held ? 'held' : 'answer'}:${it.remaining != null ? it.remaining : ''}`}
                                 defaultValue={remainingValue(it.remaining)}
                                 disabled={!canLabel}
                                 title={roTip}
@@ -3490,11 +3807,23 @@ function IssueDetail({
                           )}
                         </DetailField>
                         {(() => {
-                          const overdue = !!it.due && it.due < P.TODAY_ISO && !P.isDone(it)
+                          // an archived task shows no delay, as no view does
+                          const done = held ? P.isDone(held) : !!detail?.done
+                          const overdue = !archived && !!it.due && it.due < P.TODAY_ISO && !done
                           // with delay tracking (0064) the chip carries the projected
                           // status — "Delayed" covers overdue; without it, the plain
-                          // overdue chip stays as before
-                          const delay = P.tracksDelay(it) ? P.delayOf(it) : null
+                          // overdue chip stays as before. Where the window cannot
+                          // judge from the owners' loads, while tasks still load or
+                          // for a task shown from its answer, a verdict that needs
+                          // them is unknown (P.delayBeforeLoads)
+                          const verdict =
+                            archived || !P.tracksDelay(it)
+                              ? null
+                              : held && P.stillLoading() === null
+                                ? P.delayOf(it)
+                                : P.delayBeforeLoads(it)
+                          const unknown = verdict === DELAY_UNKNOWN
+                          const delay = unknown ? null : verdict
                           const late = delay ? delay.status === 'late' : overdue
                           const tip = delay
                             ? P.DELAY_LABELS[delay.status] +
@@ -3519,35 +3848,57 @@ function IssueDetail({
                                   here too; a slipping or lost deadline is a glyph in its
                                   pressure colour beside plain words, the projection in the
                                   tooltip. The colour never goes on text: a lost deadline
-                                  is the red border of the date box and the red glyph. */}
-                              {delay
-                                ? delay.status !== 'ok' && (
-                                    <HoverTooltip content={tip}>
-                                      <span
-                                        data-delay-chip={delay.status}
-                                        className="flex h-5 items-center gap-1.5 text-xs font-medium text-text-2"
-                                      >
-                                        <Icon
-                                          name={DELAY_MARK[delay.status].glyph}
-                                          size={14}
-                                          strokeWidth={2}
-                                          color={DELAY_MARK[delay.status].color}
-                                        />
-                                        {P.DELAY_LABELS[delay.status]}
-                                      </span>
-                                    </HoverTooltip>
-                                  )
-                                : overdue && (
-                                    <span className="flex h-5 items-center gap-1.5 text-xs font-medium text-text-2">
+                                  is the red border of the date box and the red glyph. An
+                                  unknown delay is muted, with a neutral glyph. */}
+                              {unknown ? (
+                                <HoverTooltip
+                                  content={
+                                    // a group's verdict reads its subtasks' dates,
+                                    // a task's its owner's other work
+                                    P.isGroup(it)
+                                      ? "Its subtasks' dates decide it, and they have not all loaded yet."
+                                      : "The projection needs the owner's other work, which has not loaded yet."
+                                  }
+                                >
+                                  <span
+                                    data-delay-chip="unknown"
+                                    tabIndex={-1}
+                                    className="flex h-5 items-center gap-1.5 text-xs font-medium text-text-3"
+                                  >
+                                    <Icon name="clock8" size={14} strokeWidth={2} />
+                                    Delay unknown
+                                  </span>
+                                </HoverTooltip>
+                              ) : delay ? (
+                                delay.status !== 'ok' && (
+                                  <HoverTooltip content={tip}>
+                                    <span
+                                      data-delay-chip={delay.status}
+                                      className="flex h-5 items-center gap-1.5 text-xs font-medium text-text-2"
+                                    >
                                       <Icon
-                                        name="warning"
+                                        name={DELAY_MARK[delay.status].glyph}
                                         size={14}
                                         strokeWidth={2}
-                                        color="var(--danger)"
+                                        color={DELAY_MARK[delay.status].color}
                                       />
-                                      Overdue
+                                      {P.DELAY_LABELS[delay.status]}
                                     </span>
-                                  )}
+                                  </HoverTooltip>
+                                )
+                              ) : (
+                                overdue && (
+                                  <span className="flex h-5 items-center gap-1.5 text-xs font-medium text-text-2">
+                                    <Icon
+                                      name="warning"
+                                      size={14}
+                                      strokeWidth={2}
+                                      color="var(--danger)"
+                                    />
+                                    Overdue
+                                  </span>
+                                )
+                              )}
                             </DetailField>
                           )
                         })()}
@@ -3592,43 +3943,71 @@ function IssueDetail({
                             }
                             upd({ end: w, start: it.start != null ? Math.min(w, it.start) : w })
                           }
+                          // a group shown from its answer whose subtasks the answer
+                          // does not all hold has dates no one can know here; an
+                          // archived one shows no subtasks at all
+                          const datesUnknown = fromAnswer && !!detail && !detail.datesKnown
                           return (
                             <DetailField label="Plan">
-                              <div className="task-plan-dates">
-                                <fieldset className="task-plan-date" aria-label="Plan start">
-                                  <span className="task-plan-caption">Start</span>
-                                  <DateSelect
-                                    value={it.start}
-                                    onChange={setStart}
-                                    clearable={!group}
-                                    disabled={!canLabel || group}
-                                    title={planTip}
-                                  />
-                                </fieldset>
-                                <span className="task-plan-arrow">
-                                  <Icon name="arrowRight" size={16} color="var(--text-3)" />
-                                </span>
-                                <fieldset className="task-plan-date" aria-label="Plan end">
-                                  <span className="task-plan-caption">End</span>
-                                  <DateSelect
-                                    value={it.end}
-                                    onChange={setEnd}
-                                    clearable={!group}
-                                    disabled={!canLabel || group}
-                                    title={planTip}
-                                  />
-                                </fieldset>
-                              </div>
+                              {datesUnknown ? (
+                                <HoverTooltip
+                                  content={
+                                    archived
+                                      ? 'Dates come from subtasks, which an archived task does not show'
+                                      : 'Dates come from subtasks, which have not all loaded'
+                                  }
+                                >
+                                  <span
+                                    data-plan-unknown
+                                    tabIndex={-1}
+                                    className="text-sm text-text-3"
+                                  >
+                                    Unknown
+                                  </span>
+                                </HoverTooltip>
+                              ) : (
+                                <div className="task-plan-dates">
+                                  <fieldset className="task-plan-date" aria-label="Plan start">
+                                    <span className="task-plan-caption">Start</span>
+                                    <DateSelect
+                                      value={it.start}
+                                      onChange={setStart}
+                                      clearable={!group}
+                                      disabled={!canLabel || group}
+                                      title={planTip}
+                                    />
+                                  </fieldset>
+                                  <span className="task-plan-arrow">
+                                    <Icon name="arrowRight" size={16} color="var(--text-3)" />
+                                  </span>
+                                  <fieldset className="task-plan-date" aria-label="Plan end">
+                                    <span className="task-plan-caption">End</span>
+                                    <DateSelect
+                                      value={it.end}
+                                      onChange={setEnd}
+                                      clearable={!group}
+                                      disabled={!canLabel || group}
+                                      title={planTip}
+                                    />
+                                  </fieldset>
+                                </div>
+                              )}
                               {/* plan in context: jumps to the roadmap with this issue
                           spotlit. An unscheduled issue gets a starter bar there
                           (capped at the due week) to drag into place. A group
                           is only shown there, read-only. */}
                               <div className="task-plan-actions">
+                                {/* the Roadmap opens only a task the workspace holds,
+                                    so a task shown from its answer waits for
+                                    it, whoever looks; an archived one says why
+                                    its fields are off */}
                                 <Button
                                   type="button"
                                   variant="ghost"
                                   data-plan-on-roadmap
                                   className="text-text-1 h-control-sm"
+                                  disabled={!held}
+                                  title={held ? undefined : archived ? roTip : WAITS_FOR_TASK}
                                   onClick={() => onPlanOnRoadmap?.(it.id)}
                                 >
                                   <Icon name="timeline" size={16} />
@@ -3695,7 +4074,18 @@ function IssueDetail({
                         )}
                       </section>
 
-                      <AttachmentsSection it={it} canEdit={canLabel} section={files} />
+                      {/* an archived task's answer holds no files, parent,
+                          subtasks or links, so its window lists none, and
+                          says where it lives and when it was archived */}
+                      {archived && detail?.archivedAt != null && (
+                        <section className="task-section" data-task-archived-place>
+                          <ArchivedPlace project={it.project} archivedAt={detail.archivedAt} />
+                        </section>
+                      )}
+
+                      {!archived && (
+                        <AttachmentsSection it={it} canEdit={canLabel} section={files} />
+                      )}
 
                       {prog && (
                         <div className="task-section" data-progress={prog.state}>
@@ -3731,167 +4121,188 @@ function IssueDetail({
                         </div>
                       )}
 
-                      <section ref={parentSecRef} className="task-section">
-                        <SectionHead icon="parent" label="Parent" inlineAction>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="task-heading-action"
-                            aria-label={
-                              it.parent || it.hasHiddenParent ? 'Change parent' : 'Set parent'
-                            }
-                            title={
-                              roTip ||
-                              (it.parent ? undefined : noParent) ||
-                              (it.parent || it.hasHiddenParent ? 'Change parent' : 'Set parent')
-                            }
-                            disabled={!canLabel || (!it.parent && !!noParent)}
-                            onClick={() => openPickerUnder(parentSecRef, setParentAnchor, 340)}
+                      {!archived && (
+                        <>
+                          <section ref={parentSecRef} className="task-section">
+                            <SectionHead icon="parent" label="Parent" inlineAction>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="task-heading-action"
+                                aria-label={
+                                  it.parent || it.hasHiddenParent ? 'Change parent' : 'Set parent'
+                                }
+                                title={
+                                  roTip ||
+                                  (it.parent ? undefined : noParent) ||
+                                  (it.parent || it.hasHiddenParent ? 'Change parent' : 'Set parent')
+                                }
+                                disabled={!canLabel || (!it.parent && !!noParent)}
+                                onClick={() => openPickerUnder(parentSecRef, setParentAnchor, 340)}
+                              >
+                                <Icon
+                                  name={it.parent || it.hasHiddenParent ? 'pen' : 'plus'}
+                                  size={16}
+                                />
+                              </Button>
+                            </SectionHead>
+                            {parentRow ? (
+                              <MiniIssueRow
+                                task={parentRow}
+                                onOpen={onOpen}
+                                remove={{
+                                  label: 'Remove parent',
+                                  onClick: () => upd({ parent: null }),
+                                  disabled: !canLabel,
+                                  hint: roTip,
+                                }}
+                              />
+                            ) : it.hasHiddenParent ? (
+                              // the parent cannot be shown, but it can be removed,
+                              // the one change left to a task with subtasks there
+                              <div className="flex items-center gap-2 text-sm text-text-2 italic">
+                                <span className="flex-1">
+                                  {P.parentLoading(it)
+                                    ? 'The parent task is still loading.'
+                                    : 'The parent task is outside this view.'}
+                                </span>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="task-related-remove h-control-sm w-control-sm shrink-0"
+                                  aria-label="Remove parent"
+                                  title={roTip || 'Remove parent'}
+                                  disabled={!canLabel}
+                                  onClick={() => upd({ parent: null })}
+                                >
+                                  <Icon name="close" size={16} />
+                                </Button>
+                              </div>
+                            ) : (
+                              <div className="text-sm text-text-2 italic">
+                                {/* the answer's word is exact while tasks load */}
+                                {P.stillLoading() === null || fromAnswer
+                                  ? 'No parent task.'
+                                  : 'No parent task yet.'}
+                              </div>
+                            )}
+                          </section>
+
+                          <section
+                            ref={subSecRef}
+                            className="task-section"
+                            data-section="subtasks"
+                            data-section-state={sectionMark(subtasks)}
+                            data-section-source={subtasks.source}
                           >
-                            <Icon
-                              name={it.parent || it.hasHiddenParent ? 'pen' : 'plus'}
-                              size={16}
-                            />
-                          </Button>
-                        </SectionHead>
-                        {parentRow ? (
-                          <MiniIssueRow
-                            task={parentRow}
-                            onOpen={onOpen}
-                            remove={{
-                              label: 'Remove parent',
-                              onClick: () => upd({ parent: null }),
-                              disabled: !canLabel,
-                            }}
-                          />
-                        ) : it.hasHiddenParent ? (
-                          // the parent cannot be shown, but it can be removed,
-                          // the one change left to a task with subtasks there
-                          <div className="flex items-center gap-2 text-sm text-text-2 italic">
-                            <span className="flex-1">
-                              {P.parentLoading(it)
-                                ? 'The parent task is still loading.'
-                                : 'The parent task is outside this view.'}
-                            </span>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="task-related-remove h-control-sm w-control-sm shrink-0"
-                              aria-label="Remove parent"
-                              title={roTip || 'Remove parent'}
-                              disabled={!canLabel}
-                              onClick={() => upd({ parent: null })}
+                            <SectionHead
+                              icon="child"
+                              inlineAction
+                              label={`Subtasks${countOf(subtasks)}`}
                             >
-                              <Icon name="close" size={16} />
-                            </Button>
-                          </div>
-                        ) : (
-                          <div className="text-sm text-text-2 italic">
-                            {P.stillLoading() === null ? 'No parent task.' : 'No parent task yet.'}
-                          </div>
-                        )}
-                      </section>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="task-heading-action"
+                                aria-label="Add subtask"
+                                title={roTip || noSubtask || 'Add subtask'}
+                                disabled={!canLabel || !!noSubtask}
+                                onClick={() => openPickerUnder(subSecRef, setSubAnchor, 340)}
+                              >
+                                <Icon name="plus" size={16} />
+                              </Button>
+                            </SectionHead>
+                            {subtasks.rows.length > 0 ? (
+                              <div className="[display:flex] [flex-direction:column] [gap:6px]">
+                                {subtasks.rows.map((row) => (
+                                  <MiniIssueRow
+                                    key={row.uuid}
+                                    task={row}
+                                    onOpen={onOpen}
+                                    remove={{
+                                      label: 'Remove subtask',
+                                      onClick: () => P.updateIssue(row.handle, { parent: null }),
+                                      // detaching edits the subtask, not this task, and its
+                                      // row in the workspace; a task shown from its answer
+                                      // takes no change but comments
+                                      disabled: fromAnswer || !row.held || !P.canWrite(row.project),
+                                      hint: fromAnswer
+                                        ? roTip
+                                        : row.held
+                                          ? undefined
+                                          : WAITS_FOR_TASKS,
+                                    }}
+                                  />
+                                ))}
+                                {sectionNote('subtasks', subtasks, 'No subtasks.')}
+                              </div>
+                            ) : (
+                              sectionNote('subtasks', subtasks, 'No subtasks.')
+                            )}
+                          </section>
 
-                      <section
-                        ref={subSecRef}
-                        className="task-section"
-                        data-section="subtasks"
-                        data-section-state={sectionMark(subtasks)}
-                        data-section-source={subtasks.source}
-                      >
-                        <SectionHead
-                          icon="child"
-                          inlineAction
-                          label={`Subtasks${countOf(subtasks)}`}
-                        >
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="task-heading-action"
-                            aria-label="Add subtask"
-                            title={roTip || noSubtask || 'Add subtask'}
-                            disabled={!canLabel || !!noSubtask}
-                            onClick={() => openPickerUnder(subSecRef, setSubAnchor, 340)}
+                          <section
+                            ref={linkSecRef}
+                            className="task-section"
+                            data-section="links"
+                            data-section-state={sectionMark(linked)}
+                            data-section-source={linked.source}
                           >
-                            <Icon name="plus" size={16} />
-                          </Button>
-                        </SectionHead>
-                        {subtasks.rows.length > 0 ? (
-                          <div className="[display:flex] [flex-direction:column] [gap:6px]">
-                            {subtasks.rows.map((row) => (
-                              <MiniIssueRow
-                                key={row.uuid}
-                                task={row}
-                                onOpen={onOpen}
-                                remove={{
-                                  label: 'Remove subtask',
-                                  onClick: () => P.updateIssue(row.handle, { parent: null }),
-                                  // detaching edits the subtask, not this task, and its
-                                  // row in the workspace
-                                  disabled: !row.held || !P.canWrite(row.project),
-                                  hint: row.held ? undefined : WAITS_FOR_TASKS,
-                                }}
-                              />
-                            ))}
-                            {sectionNote('subtasks', subtasks, 'No subtasks.')}
-                          </div>
-                        ) : (
-                          sectionNote('subtasks', subtasks, 'No subtasks.')
-                        )}
-                      </section>
-
-                      <section
-                        ref={linkSecRef}
-                        className="task-section"
-                        data-section="links"
-                        data-section-state={sectionMark(linked)}
-                        data-section-source={linked.source}
-                      >
-                        <SectionHead
-                          icon="link"
-                          inlineAction
-                          label={`Linked tasks${countOf(linked)}`}
-                        >
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="task-heading-action"
-                            aria-label="Link task"
-                            title={canLinkAny ? noLink || 'Link task' : roTip}
-                            disabled={!canLinkAny || !!noLink}
-                            onClick={() => openPickerUnder(linkSecRef, setLinkAnchor, 340)}
-                          >
-                            <Icon name="plus" size={16} />
-                          </Button>
-                        </SectionHead>
-                        {linked.rows.length > 0 ? (
-                          <div className="[display:flex] [flex-direction:column] [gap:6px]">
-                            {linked.rows.map((row) => (
-                              <MiniIssueRow
-                                key={row.uuid}
-                                task={row}
-                                onOpen={onOpen}
-                                relation={relMapID[row.type]}
-                                remove={{
-                                  label: 'Remove link (both directions)',
-                                  onClick: () => P.removeLink(it.id, row.handle),
-                                  // the removal edits the workspace's link row
-                                  // and the other task's
-                                  disabled: !row.held || !row.linkHeld || !canLink(row.handle),
-                                  hint: row.held && row.linkHeld ? undefined : WAITS_FOR_TASKS,
-                                }}
-                              />
-                            ))}
-                            {sectionNote('links', linked, 'No dependencies yet.')}
-                          </div>
-                        ) : (
-                          sectionNote('links', linked, 'No dependencies yet.')
-                        )}
-                      </section>
+                            <SectionHead
+                              icon="link"
+                              inlineAction
+                              label={`Linked tasks${countOf(linked)}`}
+                            >
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="task-heading-action"
+                                aria-label="Link task"
+                                title={canLinkAny ? noLink || 'Link task' : roTip}
+                                disabled={!canLinkAny || !!noLink}
+                                onClick={() => openPickerUnder(linkSecRef, setLinkAnchor, 340)}
+                              >
+                                <Icon name="plus" size={16} />
+                              </Button>
+                            </SectionHead>
+                            {linked.rows.length > 0 ? (
+                              <div className="[display:flex] [flex-direction:column] [gap:6px]">
+                                {linked.rows.map((row) => (
+                                  <MiniIssueRow
+                                    key={row.uuid}
+                                    task={row}
+                                    onOpen={onOpen}
+                                    relation={relMapID[row.type]}
+                                    remove={{
+                                      label: 'Remove link (both directions)',
+                                      onClick: () => P.removeLink(it.id, row.handle),
+                                      // the removal edits the workspace's link row
+                                      // and the other task's
+                                      disabled:
+                                        fromAnswer ||
+                                        !row.held ||
+                                        !row.linkHeld ||
+                                        !canLink(row.handle),
+                                      hint: fromAnswer
+                                        ? roTip
+                                        : row.held && row.linkHeld
+                                          ? undefined
+                                          : WAITS_FOR_TASKS,
+                                    }}
+                                  />
+                                ))}
+                                {sectionNote('links', linked, 'No dependencies yet.')}
+                              </div>
+                            ) : (
+                              sectionNote('links', linked, 'No dependencies yet.')
+                            )}
+                          </section>
+                        </>
+                      )}
                     </div>
                   </aside>
                 )}
@@ -3935,10 +4346,10 @@ function IssueDetail({
       {/* Rendered outside the dialog: the cards' scale transform and the
           backdrop's backdrop-filter would each make them the containing block
           for this fixed-position popup and shift it off. */}
-      {it && labelAnchor && (
+      {held && labelAnchor && (
         <LabelPickerPopup it={it} anchor={labelAnchor} onDone={() => setLabelAnchor(null)} />
       )}
-      {it && subAnchor && (
+      {held && subAnchor && (
         <IssuePickerPopup
           anchor={subAnchor}
           onDone={() => setSubAnchor(null)}
@@ -3956,7 +4367,7 @@ function IssueDetail({
           }
         />
       )}
-      {it && linkAnchor && (
+      {held && linkAnchor && (
         <IssuePickerPopup
           anchor={linkAnchor}
           onDone={() => setLinkAnchor(null)}
@@ -3985,7 +4396,7 @@ function IssueDetail({
           }
         />
       )}
-      {it && parentAnchor && (
+      {held && parentAnchor && (
         <IssuePickerPopup
           anchor={parentAnchor}
           onDone={() => setParentAnchor(null)}
@@ -4000,7 +4411,7 @@ function IssueDetail({
       )}
       {/* stacked ModalShell (like the sub-issue modal): nothing moves until
           its Move button is pressed */}
-      {it && moveOpen && (
+      {held && moveOpen && (
         <MoveIssueModal
           issueId={it.id}
           onClose={() => setMoveOpen(false)}
@@ -4032,7 +4443,7 @@ function IssueDetail({
           with the choices the person made. A refusal renders the window
           again (stopLeaving), which shows TaskGone if the task is still
           gone. */}
-      {issueId && fateOpen && (it || leaving.current === issueId) && (
+      {issueId && fateOpen && (held || leaving.current === issueId) && (
         <ArchiveOrDeleteTaskModal
           issueId={issueId}
           initialReason={unusedReason ?? ''}

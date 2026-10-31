@@ -17,7 +17,7 @@ import { commentAnchor, threadPage } from './model/comments'
 
 /* The task `issueId` when the caller can see it. Unknown, foreign and
  * invisible task IDs all refuse with the same not-found sentence. Comments
- * remain available on visible archived tasks. */
+ * and history (showsHistory) remain available on visible archived tasks. */
 async function threadTask(
   ctx: QueryCtx & { me: Doc<'profiles'> },
   issueId: string,
@@ -52,20 +52,30 @@ export const threadComments = orgQuery({
   },
 })
 
+/* Whether the task window shows the history of `issue` in `project`, which
+ * threadTask found the caller can see: a task in the working set
+ * (lib/workingSet.ts), or an archived task, which the window shows
+ * read-only. Each row then follows the rule REST and MCP apply to every
+ * task they read, archived ones included (lib/activityVisibility.ts
+ * taskHistoryPage). An active task in an archived project shows none, as
+ * the window shows no such task (taskWindow.task answers it unavailable). */
+const showsHistory = (issue: Doc<'issues'>, project: Doc<'projects'>) =>
+  issue.archived_at !== undefined || inWorkingSet(issue, project, true)
+
 /* The task window's live history page, which it subscribes to only while
  * it shows All. It holds the newest WINDOW_HISTORY_PAGE rows of the task's
  * history the caller receives (lib/activityVisibility.ts taskHistoryPage),
  * oldest first, whether the history holds rows before them, and `next`, the
  * row the window reads those before with historyBefore. It can hold no row
- * while `earlier` is set. The page is empty for an archived task or a task
- * in an archived project, which the app does not show. */
+ * while `earlier` is set. The page is empty for an active task in an
+ * archived project (showsHistory). An archived task's history is answered
+ * since the window shows such a task read-only; an older app never asks
+ * for it. */
 export const threadHistory = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => {
     const { issue, project } = await threadTask(ctx, issue_id)
-    // the app shows history only for a task in the working set (lib/workingSet.ts);
-    // threadTask already refused a project the caller cannot see
-    if (!inWorkingSet(issue, project, true)) return { events: [], earlier: false, next: null }
+    if (!showsHistory(issue, project)) return { events: [], earlier: false, next: null }
     const history = await taskHistoryPage(ctx, ctx.me, issue, undefined, WINDOW_HISTORY_PAGE)
     return {
       events: historyOut(history.rows),
@@ -83,13 +93,13 @@ export const threadHistory = orgQuery({
  * `earlier` is set. The app reads it once rather than subscribing. A
  * `before` that is not a row of this task's history refuses with
  * BEFORE_NOT_A_CHANGE as a bad_request, and a task the window shows no
- * history for answers an empty page. */
+ * history for (showsHistory) answers an empty page. */
 export const historyBefore = orgQuery({
   args: { issue_id: v.string(), before: v.string() },
   handler: async (ctx, { issue_id, before }) => {
     const { issue, project } = await threadTask(ctx, issue_id)
     const anchor = await historyAnchor(ctx, issue, before)
-    if (!inWorkingSet(issue, project, true)) return { events: [], earlier: false, next: null }
+    if (!showsHistory(issue, project)) return { events: [], earlier: false, next: null }
     const history = await taskHistoryPage(ctx, ctx.me, issue, anchor, WINDOW_HISTORY_PAGE)
     return {
       events: historyOut(history.rows),

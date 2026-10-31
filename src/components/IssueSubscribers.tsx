@@ -10,8 +10,11 @@ import { matchesAllWords } from '../lib/search'
 import { type IssueVM, P, type IssueSubscribers as SubscriberRoster } from '../store/planner'
 import { Avatar, Icon, MenuItem } from './qivo'
 
-/** The eye remains personal; opening its roster never changes a subscription. */
-export function IssueSubscribers({ issue }: { issue: IssueVM }) {
+/** The eye remains personal; opening its roster never changes a subscription.
+    With `disabled`, its hint, the eye only shows whether the person
+    follows the task, as for a task the window shows from its own read,
+    whose roster and changes need the workspace's row. */
+export function IssueSubscribers({ issue, disabled }: { issue: IssueVM; disabled?: string }) {
   const [open, setOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [search, setSearch] = useState('')
@@ -77,6 +80,22 @@ export function IssueSubscribers({ issue }: { issue: IssueVM }) {
         : undefined,
     )
   }
+
+  if (disabled)
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        data-task-subscribe={issue.subscribed ? 'on' : 'off'}
+        aria-label={`Task subscribers: ${issue.subscribed ? 'subscribed' : 'not subscribed'}`}
+        className="w-control-sm h-control-sm"
+        title={disabled}
+        disabled
+      >
+        <Icon name={issue.subscribed ? 'eye' : 'eyeOff'} size={16} />
+      </Button>
+    )
 
   return (
     <Popover modal open={open} onOpenChange={changeOpen}>

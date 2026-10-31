@@ -815,14 +815,13 @@ describe('the Search palette', { timeout: 20_000 }, () => {
       title: 'Old firmware notes',
       project: FW,
       org: ORG,
-      archived: true,
     })
     await click(rows()[2])
     expect(ctx.openIssue).toHaveBeenLastCalledWith('partner-task')
     expect(noted('partner-task')).toMatchObject({ key: 'QN-5', org: PARTNER })
     await click(rows()[0])
     expect(ctx.openIssue).toHaveBeenLastCalledWith('QN-14')
-    expect(noted('QN-14')).toMatchObject({ archived: false })
+    expect(noted('QN-14')).toMatchObject({ key: 'QN-14', org: ORG })
     await click(rows()[3])
     expect(ctx.setScope).toHaveBeenCalledWith(FW)
     // a project the workspace does not hold yet stays unopened

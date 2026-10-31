@@ -183,8 +183,9 @@ Results come in one list, best matches first, and each row says whether it
 is a **Task** or a **Project**. A row from another organization names that
 organization. Each page holds up to 25 results, with **Previous** and
 **Next**. **Include archived tasks** adds archived tasks, marked
-**Archived**. Opening one shows that it was archived, with **Restore** for
-someone who can edit its project ([Archiving](./the-task-window.md#archiving)).
+**Archived**. Opening one shows the task read-only, with its description and
+comments, and **Restore** for someone who can edit its project
+([Archiving](./the-task-window.md#archiving)).
 Search never finds archived projects or the tasks in them.
 
 When Search could not cover everything, it says that some results might be

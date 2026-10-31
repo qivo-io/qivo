@@ -1,23 +1,30 @@
-/* The tasks main Search opened (panels/Palette.tsx openTaskResult), by the
-   task's uuid. Search finds tasks on the server, and the workspace may not
-   hold one: it was archived, deleted or moved out of sight after the
-   search, or it is archived and Search was asked to include archived
-   tasks. The task window (panels/IssueDetail.tsx) then shows what Search
-   noted, and looks the task up in the archive (TaskGone), the address names
-   the task's organization and key (lib/router.ts taskNamed), and that
-   address resolves to the task again, so Back and Forward close and reopen
-   its window as they do a loaded task's (findIssueKey).
+/* The tasks the app opened that the workspace may not hold, by the task's
+   uuid: a task main Search opened (panels/Palette.tsx openTaskResult),
+   which Search finds on the server, and a task a task window opened from
+   its Parent, Subtasks or Linked tasks that the workspace does not hold
+   (panels/IssueDetail.tsx MiniIssueRow), as while a large workspace still
+   loads, and a task a window shows that the workspace does not hold, from
+   its own read or as what became of it, so another window on its handle
+   finds it too, as the Inbox pane's pop-out. A task Search found may also
+   be archived, deleted or moved out of sight since the search. The task window (panels/IssueDetail.tsx) knows
+   such a task's uuid and organization from here, and shows it from its own
+   read (store/planner.ts P.taskDetail), or what became of it (TaskGone);
+   the address names the task's organization and key (lib/router.ts
+   taskNamed), and that address resolves to the task again, so Back and
+   Forward close and reopen its window as they do a loaded task's
+   (findIssueKey).
    An entry keeps the task's identity, never a handle: which handle opens a
    task depends on the home organization, which can change while the entry
    is kept. Every reader derives the handle when it resolves an entry
    (`handleOf`, the store's P.handleNow), so after a change history opens
-   the task Search found, never another organization's task that now has
-   its old handle.
+   the task that was noted, never another organization's task that now has
+   its old handle, and the store moves the handle of an open window's task
+   with the change (openedTaskList, P.watchHandles).
    It holds the last OPENED_MAX tasks opened and nothing else, and goes once
    the app opens an unloaded task by itself (t3/limits-direct-links). */
 
-/** What Search noted of a task it opened: its uuid, number, display key,
-    title, project id and organization, and whether it was archived. */
+/** What the app noted of a task it opened: its uuid, number, display key,
+    title, project id and organization. */
 export type OpenedTask = {
   uuid: string
   num: number
@@ -25,7 +32,6 @@ export type OpenedTask = {
   title: string
   project: string
   org: string
-  archived: boolean
 }
 
 /** How many opened tasks the registry keeps, the newest. */
@@ -33,15 +39,19 @@ export const OPENED_MAX = 64
 
 const opened = new Map<string, OpenedTask>()
 
-/** Notes `task`, which Search opens, as the newest one. */
+/** Notes `task`, which Search or a task window opens, as the newest one. */
 export function noteOpenedTask(task: OpenedTask): void {
   opened.delete(task.uuid)
   opened.set(task.uuid, task)
   if (opened.size > OPENED_MAX) opened.delete(opened.keys().next().value ?? task.uuid)
 }
 
-/** The newest task Search opened whose handle, as `handleOf` derives it now,
-    is `handle`, if it is among the newest OPENED_MAX. */
+/** Every task noted, oldest first, as the store reads them to move their
+    handles when the home organization changes (store/planner.ts). */
+export const openedTaskList = (): readonly OpenedTask[] => [...opened.values()]
+
+/** The newest task noted whose handle, as `handleOf` derives it now, is
+    `handle`, if it is among the newest OPENED_MAX. */
 export function openedTask(
   handle: string,
   handleOf: (task: OpenedTask) => string,
@@ -51,8 +61,8 @@ export function openedTask(
   return found
 }
 
-/** The newest task Search opened that is `key` (QN-12) in organization
-    `org`, or that has `uuid`, if it is among the newest OPENED_MAX. */
+/** The newest task noted that is `key` (QN-12) in organization `org`, or
+    that has `uuid`, if it is among the newest OPENED_MAX. */
 export function openedTaskMatching(
   match: { org: string; key: string } | { uuid: string },
 ): OpenedTask | undefined {

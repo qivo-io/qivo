@@ -177,6 +177,9 @@ project, sends none.
 **Subscriptions.** Click the eye button in a task window to open
 **Subscribers**, then use the eye beside **Me** to subscribe or unsubscribe.
 Anyone with access to the task can see its subscriber list, including viewers.
+A task window on a task that has not loaded into the workspace yet shows
+whether you follow it, and opens **Subscribers** once the task has loaded.
+An archived task's window has no eye button.
 
 Organization admins and the named project lead can remove other subscribers
 with **×** or use **+ Add** to subscribe an active person or Standard user

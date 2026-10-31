@@ -65,8 +65,9 @@
    Named side queries ride along (SideName): the open task's comment thread
    and, while a window shows All, its history, and while a window shows the
    task's details, its subtasks, links and attachments
-   (convex/taskWindow.ts). A transition that brings the workspace and the
-   sides repaints once. Each side is its own: its failure never holds the
+   (convex/taskWindow.ts), the task with its subtasks also while a window
+   shows a task the workspace does not hold from it. A transition that
+   brings the workspace and the sides repaints once. Each side is its own: its failure never holds the
    workspace or another side. */
 
 import type { FunctionReference } from 'convex/server'
@@ -110,7 +111,9 @@ export const STAGES = { most: 32, first: 16, batch: Number.POSITIVE_INFINITY }
     comment thread and, while a window shows All, its history, and while a
     window shows the task's details, the task with its subtasks, its links
     and its attachments (convex/taskWindow.ts task, links and
-    attachments). */
+    attachments). The task side also runs while a window shows a task the
+    workspace does not hold, from that answer (store/planner.ts
+    P.taskDetail). */
 export const SIDE_NAMES = ['thread', 'history', 'task', 'links', 'attachments'] as const
 export type SideName = (typeof SIDE_NAMES)[number]
 

@@ -565,12 +565,18 @@ async function shownParent(
  *   caller is shown, as short rows by number and then id. A subtask in an
  *   archived project is neither a row nor hidden. A live one the caller is
  *   not shown sets has_hidden_subtasks and sends no row.
- * - `{ state: 'archived', task }` for an archived task of the organization
- *   that the Archived tasks page lists for the caller (lib/archivedTasks.ts
- *   archivedTaskCore's rule), with that page's row, which holds no text. It
- *   asks with the caller's seat in this organization only, never another
- *   seat of the login (lib/functions.ts loadMember), so another
- *   organization's archived task answers unavailable.
+ * - `{ state: 'archived', task, description, labels, level }` for an
+ *   archived task of the organization whose project the caller sees
+ *   (lib/archivedTasks.ts archivedTaskCore's rule, canSeeProject), so the
+ *   window shows it read-only. That includes a task in an archived
+ *   project, which the Archived tasks page leaves out until the project is
+ *   restored. `task` is the page's row (ArchivedPageRow), which names no
+ *   parent, `description` its text from its description row, `labels` its
+ *   label rows and `level` the caller's level on its project, by which the
+ *   app offers Restore. An answer from before this release
+ *   holds only `task`. It asks with the caller's seat in this organization
+ *   only, never another seat of the login (lib/functions.ts loadMember), so
+ *   another organization's archived task answers unavailable.
  * - `{ state: 'unavailable' }` for everything else, alike, also where a
  *   bound stopped the check of the caller's access on the task, its project
  *   or its parent (lib/access.ts accessUnchecked), so the answer does not
@@ -589,7 +595,9 @@ async function shownParent(
  * that needs its leaves as unknown (src/store/planner.ts remainingOf and
  * progressOf walk every descendant).
  *
- * The labels stop at TASK_WINDOW.rows. A task carries at most
+ * The labels, of an active or archived task, stop at TASK_WINDOW.rows. An
+ * archived answer reads one description and those label rows besides the
+ * page row, well inside TASK_WINDOW. A task carries at most
  * LIMITS.labels.max (model/labels.ts setTaskLabel), so only rows stored
  * against that rule could pass the stop, and those past it are left out.
  */
@@ -603,6 +611,11 @@ async function windowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
   const task = await taskByRef(ctx, me.org_id, ref)
   if (task === null) return UNAVAILABLE
   const access = accessOf(ctx, me)
+  const labelRows = () =>
+    ctx.db
+      .query('issue_labels')
+      .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+      .take(TASK_WINDOW.rows)
   const archived_at = task.archived_at
   if (archived_at !== undefined) {
     // archivedTaskCore's rule, the caller's seat in this organization sees
@@ -611,16 +624,27 @@ async function windowTask(ctx: QueryCtx, me: Doc<'profiles'>, ref: string) {
     // a broken tree (a missing parent, a cycle) makes it throw, where
     // Access.visible reads within bounds and answers false
     if (!(await access.visible(task.project_id))) return UNAVAILABLE
-    return { state: 'archived' as const, task: await archivedRowOf(ctx, { ...task, archived_at }) }
+    // what the window shows of it read-only: its text, labels and the
+    // caller's level, which says whether they may restore it
+    const [row, description, labels, level] = await Promise.all([
+      archivedRowOf(ctx, { ...task, archived_at }),
+      descriptionOf(ctx.db, task),
+      labelRows(),
+      access.level(task.project_id),
+    ])
+    return {
+      state: 'archived' as const,
+      task: row,
+      description,
+      labels: labels.map(relationRow),
+      level,
+    }
   }
   if (!(await access.holds(task))) return UNAVAILABLE
   // the reads every answer needs, before the subtasks spend the rest
   const [level, labels, follow, parent, description] = await Promise.all([
     access.level(task.project_id),
-    ctx.db
-      .query('issue_labels')
-      .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
-      .take(TASK_WINDOW.rows),
+    labelRows(),
     ctx.db
       .query('issue_subscriptions')
       .withIndex('by_issue_profile', (q) => q.eq('issue_id', task.id).eq('profile_id', me.id))

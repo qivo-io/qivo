@@ -3,8 +3,9 @@
  * issues.archivedPage (P.fetchArchivedPage) pages the archived tasks of a
  * scope, some projects of one organization or all of them, with a cursor
  * sealed to that scope, and searches them on the server
- * (lib/archivedTasks.ts). issues.archivedTask (P.fetchArchivedTask) finds
- * one archived task by id for the task window. Fence: can_see_project
+ * (lib/archivedTasks.ts). The deprecated issues.archivedTask finds one
+ * archived task by id, which the task window did before it read its task
+ * from taskWindow.task. Fence: can_see_project
  * through the caller's seat in the project's OWN org; an unknown or
  * invisible project answers nothing (no existence oracle). Only archived
  * rows come back. */

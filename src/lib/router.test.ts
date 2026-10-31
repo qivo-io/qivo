@@ -371,7 +371,6 @@ describe('buildPath', () => {
       title: 'Archived home task',
       project: 'p-home-1a',
       org: HOME,
-      archived: true,
     })
     noteOpenedTask({
       uuid: 'uuid-acme-8',
@@ -380,7 +379,6 @@ describe('buildPath', () => {
       title: 'Archived Acme task',
       project: 'p-acme-1',
       org: ACME,
-      archived: true,
     })
     expect(buildPath({ view: 'kanban', openIssue: 'QN-40' })).toBe('/app/home/board/tasks/qn-40')
     expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'uuid-acme-8' })).toBe(
@@ -404,7 +402,6 @@ describe('buildPath', () => {
       title: 'Archived home task',
       project: 'p-home-1a',
       org: HOME,
-      archived: true,
     })
     noteOpenedTask({
       uuid: 'uuid-acme-41',
@@ -413,7 +410,6 @@ describe('buildPath', () => {
       title: 'Archived Acme task',
       project: 'p-acme-1',
       org: ACME,
-      archived: true,
     })
     expect(parsePath('/app/home/board/all/tasks/qn-41')?.issue).toBe('QN-41')
     expect(parsePath('/app/acme/board/all/tasks/qn-41')?.issue).toBe('uuid-acme-41')
@@ -448,7 +444,6 @@ describe('buildPath', () => {
       title: 'Archived home task',
       project: 'p-home-1a',
       org: HOME,
-      archived: true,
     })
     expect(parsePath('/app/home/board/all/tasks/qn-43')?.issue).toBe('QN-43')
     // Home becomes a guest seat and Acme the home organization, where an
@@ -480,6 +475,60 @@ describe('buildPath', () => {
     expect(buildPath({ scope: 'all', view: 'kanban', openIssue: 'QN-43' })).toBe(
       '/app/acme/board/all/tasks/qn-43',
     )
+  })
+
+  it('names the task a handle opens now, not the one it named before the home organization changed', () => {
+    // Home's QN-19, which the registry knows nothing of, as no other test does
+    const home19 = { ...store.issueById['QN-5'], id: 'QN-19', key: 'QN-19', uuid: 'uuid-home-19' }
+    store.issues = [...store.issues, home19]
+    store.issueById['QN-19'] = home19
+    // the window on it names it by Home's address
+    expect(buildPath({ view: 'kanban', openIssue: 'QN-19' })).toBe('/app/home/board/tasks/qn-19')
+    expect(issueLink('QN-19')).toBe('/app/home/tasks/qn-19')
+    // Acme becomes the home organization: Home's QN-19 opens by its uuid,
+    // and QN-19 is the handle of Acme's QN-19, which has not loaded
+    store.homeOrg = ACME
+    store.issues = store.issues.map((i) => (i === home19 ? { ...i, id: 'uuid-home-19' } : i))
+    store.issueById = Object.fromEntries(store.issues.map((i) => [i.id, i] as const))
+    store.issueRefIn = (org: string, key: string) =>
+      store.issues.find((i) => i.org === org && i.key === key)?.id ?? null
+    // QN-19 reads in the home organization, never as Home's task
+    expect(issueLink('QN-19')).toBe('/app/~/tasks/qn-19')
+    expect(buildPath({ view: 'kanban', openIssue: 'QN-19' })).toBe('/app/~/board/tasks/qn-19')
+    // and once a window noted Acme's QN-19, by Acme's address
+    noteOpenedTask({
+      uuid: 'uuid-acme-19',
+      num: 19,
+      key: 'QN-19',
+      title: 'Acme task',
+      project: 'p-acme-1',
+      org: ACME,
+    })
+    expect(issueLink('QN-19')).toBe('/app/acme/tasks/qn-19')
+    expect(buildPath({ view: 'kanban', openIssue: 'QN-19' })).toBe('/app/acme/board/tasks/qn-19')
+    // Home's task keeps its own address by its new handle
+    expect(issueLink('uuid-home-19')).toBe('/app/home/tasks/qn-19')
+  })
+
+  it('names a task that left the store by its new handle after the home organization changed', () => {
+    // Home's QN-21 is open, then archived: it leaves the store, and the
+    // address goes on naming it
+    const home21 = { ...store.issueById['QN-5'], id: 'QN-21', key: 'QN-21', uuid: 'uuid-home-21' }
+    store.issues = [...store.issues, home21]
+    store.issueById['QN-21'] = home21
+    expect(buildPath({ view: 'kanban', openIssue: 'QN-21' })).toBe('/app/home/board/tasks/qn-21')
+    store.issues = store.issues.filter((i) => i !== home21)
+    delete store.issueById['QN-21']
+    expect(buildPath({ view: 'kanban', openIssue: 'QN-21' })).toBe('/app/home/board/tasks/qn-21')
+    // Acme becomes the home organization, and the window follows the task
+    // to the handle it opens by now, its uuid (P.watchHandles)
+    store.homeOrg = ACME
+    expect(buildPath({ view: 'kanban', openIssue: 'uuid-home-21' })).toBe(
+      '/app/home/board/tasks/qn-21',
+    )
+    expect(issueLink('uuid-home-21')).toBe('/app/home/tasks/qn-21')
+    // and its old handle names the home organization's QN-21, never Home's
+    expect(issueLink('QN-21')).toBe('/app/~/tasks/qn-21')
   })
 
   it("names a task by its uuid once its organization left too, never the home organization's task of that number", () => {
@@ -580,6 +629,43 @@ describe('issueLink — the shareable short form', () => {
   it('round-trips to the task it names, across the org collision', () => {
     expect(parsePath(issueLink('QN-5'))!.issue).toBe('QN-5')
     expect(parsePath(issueLink('uuid-acme-5'))!.issue).toBe('uuid-acme-5')
+  })
+
+  it('names a task the store does not hold by its organization and key, never under ~', () => {
+    // as a task window notes a subtask the workspace does not hold yet, in
+    // the home organization and in a guest seat's
+    noteOpenedTask({
+      uuid: 'uuid-home-60',
+      num: 60,
+      key: 'QN-60',
+      title: 'Subtask still to arrive',
+      project: 'p-home-1a',
+      org: HOME,
+    })
+    noteOpenedTask({
+      uuid: 'uuid-acme-61',
+      num: 61,
+      key: 'QN-61',
+      title: 'Guest subtask still to arrive',
+      project: 'p-acme-1',
+      org: ACME,
+    })
+    expect(issueLink('QN-60')).toBe('/app/home/tasks/qn-60')
+    expect(issueLink('uuid-acme-61')).toBe('/app/acme/tasks/qn-61')
+    expect(parsePath(issueLink('uuid-acme-61'))!.issue).toBe('uuid-acme-61')
+    // a handle nothing named still names no organization
+    expect(issueLink('uuid-acme-62')).toBe('/app/~/tasks/uuid-acme-62')
+  })
+
+  it('names a task that left the store while its window showed it', () => {
+    // the window's address named it while the store held it
+    buildPath({ view: 'kanban', openIssue: 'uuid-acme-5' })
+    store.issues = store.issues.filter((i) => i.id !== 'uuid-acme-5')
+    store.issueById = Object.fromEntries(store.issues.map((i) => [i.id, i] as const))
+    expect(issueLink('uuid-acme-5')).toBe('/app/acme/tasks/qn-5')
+    // once its organization left too, its uuid names it
+    store.orgs = store.orgs.filter((o) => o.id !== ACME)
+    expect(issueLink('uuid-acme-5')).toBe('/app/~/tasks/uuid-acme-5')
   })
 })
 

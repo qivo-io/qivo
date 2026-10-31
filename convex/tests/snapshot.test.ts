@@ -1710,47 +1710,134 @@ describe('threadHistory events', () => {
     }
   })
 
-  it('sends no history for an archived task or a task in an archived project, which REST and MCP still answer', async () => {
-    const archived = await plantIssue(t, {
+  it('answers the history of an archived task as REST and MCP do, row by row for each seat', async () => {
+    const writer = as(t, f.admin)
+    const create = async (project_id: string, title: string) => {
+      const id = uuid()
+      await writer.mutation(api.issues.create, { org_id: f.org.id, id, project_id, title })
+      return id
+    }
+    const task = await create(f.sub.id, 'Verify the protection parts')
+    const inSkunk = await create(hiddenSub.id, 'Skunk task')
+    await writer.mutation(api.issues.update, {
       org_id: f.org.id,
-      project_id: f.sub.id,
-      archived_at: NOW,
+      id: task,
+      patch: { status: 'progress', assignee_id: f.user.id },
     })
+    // a link to a task the guest cannot read, which the guest's rows leave out
+    await writer.mutation(api.issues.addLink, {
+      org_id: f.org.id,
+      id: uuid(),
+      source_id: task,
+      target_id: inSkunk,
+      type: 'blocks',
+    })
+    await writer.mutation(api.issues.archive, {
+      org_id: f.org.id,
+      id: task,
+      reason: 'Done elsewhere',
+    })
+    const all = await events(f.admin, task)
+    for (const seat of [f.admin, f.guest]) {
+      const got = await events(seat, task)
+      expect(got.length).toBeGreaterThan(1)
+      expect(await rest(seat, task)).toEqual(got)
+      expect(await mcp(seat, task)).toEqual(got)
+      if (seat === f.guest) expect(got.length).toBeLessThan(all.length)
+    }
+    // the comments come with it, the archive reason included
+    const comments = await as(t, f.guest).query(api.snapshot.threadComments, {
+      org_id: f.org.id,
+      issue_id: task,
+    })
+    expect(comments.comments.map((c) => c.body)).toEqual(['Done elsewhere'])
+    // a hidden archived task refuses as any hidden task does
+    await writer.mutation(api.issues.archive, { org_id: f.org.id, id: inSkunk })
+    await expect(thread(f.guest, inSkunk)).rejects.toThrow(/task not found/)
+  })
+
+  it('pages back through the history of an archived task with historyBefore', async () => {
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, archived_at: NOW })
+    const ids = await plantRows(
+      Array.from({ length: 60 }, () => ev({ target_id: task.id, project_id: task.project_id })),
+    )
+    for (const seat of [f.admin, f.guest]) {
+      const live = await thread(seat, task.id)
+      expect(live.events.map((e) => e.id)).toEqual(ids.slice(10))
+      expect(live).toMatchObject({ earlier: true, next: ids[10] })
+      const before = await as(t, seat).query(api.snapshot.historyBefore, {
+        org_id: f.org.id,
+        issue_id: task.id,
+        before: ids[10],
+      })
+      expect(before.events.map((e) => e.id)).toEqual(ids.slice(0, 10))
+      expect(before).toMatchObject({ earlier: false, next: null })
+      expect(await rest(seat, task.id)).toEqual(ids)
+    }
+  })
+
+  it('sends no history for an active task in an archived project, which REST and MCP still answer', async () => {
     const archivedProject = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
       parent_id: f.meta.id,
       archived_at: NOW,
     })
-    const inArchived = await plantIssue(t, { org_id: f.org.id, project_id: archivedProject.id })
-    for (const task of [archived, inArchived]) {
-      await plantRows([ev({ target_id: task.id, project_id: task.project_id })])
-      await t.run((ctx) =>
-        ctx.db.insert('comments', {
-          id: uuid(),
-          issue_id: task.id,
-          author: f.user.id,
-          body: 'still here',
-          created_at: NOW,
-        }),
-      )
-      for (const p of [f.admin, f.guest]) {
-        const comments = await as(t, p).query(api.snapshot.threadComments, {
-          org_id: f.org.id,
-          issue_id: task.id,
-        })
-        expect(comments.comments.map((c) => c.body)).toEqual(['still here'])
-        expect(await thread(p, task.id)).toEqual({ events: [], earlier: false, next: null })
-        const anchor = (await rest(f.admin, task.id))[0]
-        const before = await as(t, p).query(api.snapshot.historyBefore, {
-          org_id: f.org.id,
-          issue_id: task.id,
-          before: anchor,
-        })
-        expect(before).toEqual({ events: [], earlier: false, next: null })
-        expect(await rest(p, task.id)).toHaveLength(1)
-        expect(await mcp(p, task.id)).toHaveLength(1)
-      }
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: archivedProject.id })
+    await plantRows([ev({ target_id: task.id, project_id: task.project_id })])
+    await t.run((ctx) =>
+      ctx.db.insert('comments', {
+        id: uuid(),
+        issue_id: task.id,
+        author: f.user.id,
+        body: 'still here',
+        created_at: NOW,
+      }),
+    )
+    for (const p of [f.admin, f.guest]) {
+      const comments = await as(t, p).query(api.snapshot.threadComments, {
+        org_id: f.org.id,
+        issue_id: task.id,
+      })
+      expect(comments.comments.map((c) => c.body)).toEqual(['still here'])
+      expect(await thread(p, task.id)).toEqual({ events: [], earlier: false, next: null })
+      const anchor = (await rest(f.admin, task.id))[0]
+      const before = await as(t, p).query(api.snapshot.historyBefore, {
+        org_id: f.org.id,
+        issue_id: task.id,
+        before: anchor,
+      })
+      expect(before).toEqual({ events: [], earlier: false, next: null })
+      expect(await rest(p, task.id)).toHaveLength(1)
+      expect(await mcp(p, task.id)).toHaveLength(1)
+    }
+  })
+
+  it('answers the history of an archived task in an archived project as REST and MCP do', async () => {
+    const archivedProject = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      archived_at: NOW,
+    })
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: archivedProject.id,
+      archived_at: NOW,
+    })
+    const ids = await plantRows([
+      ev({ target_id: task.id, project_id: task.project_id, verb: 'created' }),
+      ev({ target_id: task.id, project_id: task.project_id, verb: 'archived' }),
+    ])
+    for (const p of [f.admin, f.guest]) {
+      // the window shows the task read-only, as it shows any archived task
+      // whose project the caller sees, and its history with it
+      const window = await as(t, p).query(api.taskWindow.task, { org_id: f.org.id, ref: task.id })
+      expect(window.state).toBe('archived')
+      const got = await events(p, task.id)
+      expect(got).toEqual(ids)
+      expect(await rest(p, task.id)).toEqual(got)
+      expect(await mcp(p, task.id)).toEqual(got)
     }
   })
 
