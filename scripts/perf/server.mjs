@@ -32,6 +32,13 @@
 //                        of tasks as the visible ones; they reach the
 //                        workspace only as anonymized load rows and the
 //                        has_hidden_subtasks and has_hidden_parent flags
+//   programs (1)         visible top-level projects, the visible tasks
+//                        spread over all their sub-projects, so the first,
+//                        which the app opens, holds 1/programs of them
+//   subprojects (10)     sub-projects of each visible top-level project
+//   board                a state tasks:board answers whatever the tasks say
+//                        (over_ceiling, over_budget, unavailable or
+//                        access_unchecked), for checks by hand
 //   shownload=1          also send the load rows of the tasks the person is
 //                        shown, as the server did before the app derived
 //                        them from the task rows (an older baseline)
@@ -45,11 +52,15 @@
 //
 // Main Search (search:page) is a stand-in too (searchPage): it matches the
 // visible tasks and projects with the server's word rules and ranks them
-// as the server does, but reads no access, budget or archive.
+// as the server does, but reads no access, budget or archive. So is the
+// Board's query (tasks:board), through the one stand-in the jsdom tests use
+// (src/store/boardStandIn.setup.ts): the Board's rules over the workspace
+// held here, with no access or read budget, and the ceiling of 1,000 tasks.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
+import { boardStandIn } from '../../src/store/boardStandIn.setup'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
 /* The most rows one bulk inbox batch changes, convex/model/messages.ts
@@ -71,6 +82,9 @@ const subtaskShare = option('subtasks', 0.2)
 const followShare = option('follows', 0.1)
 const peopleCount = Math.max(2, option('people', 50))
 const hiddenCount = option('hidden', 4)
+const programCount = Math.max(1, option('programs', 1))
+const subprojectCount = Math.max(1, option('subprojects', 10))
+const forcedBoard = parameters.get('board') ?? undefined
 const varied = parameters.get('shape') === 'varied'
 const shownLoad = parameters.get('shownload') === '1'
 const appearance = parameters.get('appearance') === 'light' ? 'light' : 'dark'
@@ -169,11 +183,23 @@ const program = (n, key, name, size, num) => {
   }))
   return { meta, children }
 }
-const visible = program(0, 'TEST', 'Testbed program', 10, 1)
-const hidden = program(1, 'HIDE', 'Hidden program', hiddenCount, 20)
-const projects = visible.children
-// a grant on the program reaches its sub-projects; the hidden one has none
-const access = [{ project_id: visible.meta.id, profile_id: me.id, level: 'user' }]
+/* The visible programs, the first of which the app opens, numbered one
+   after another, and the hidden one after them. */
+const programs = Array.from({ length: programCount }, (_, n) =>
+  program(
+    n,
+    n ? `TEST${n + 1}` : 'TEST',
+    n ? `Testbed program ${n + 1}` : 'Testbed program',
+    subprojectCount,
+    1 + n * (subprojectCount + 1),
+  ),
+)
+const visible = programs[0]
+const hiddenNum = Math.max(20, 1 + programCount * (subprojectCount + 1))
+const hidden = program(programCount, 'HIDE', 'Hidden program', hiddenCount, hiddenNum)
+const projects = programs.flatMap((p) => p.children)
+// a grant on each program reaches its sub-projects; the hidden one has none
+const access = programs.map((p) => ({ project_id: p.meta.id, profile_id: me.id, level: 'user' }))
 const labels = Array.from({ length: 12 }, (_, n) => ({
   id: id('8', n),
   org_id: org,
@@ -376,10 +402,10 @@ const snapshot = {
       slug: 'testbed',
       created_at: now,
       next_issue_num: count + hiddenTasks.length + 1,
-      next_project_num: 20 + hiddenCount + 1,
-      // every task is active, and both programs and their projects are live
+      next_project_num: hiddenNum + hiddenCount + 1,
+      // every task is active, and every program and its projects are live
       active_tasks: count + hiddenTasks.length,
-      live_projects: 12 + hiddenCount,
+      live_projects: programCount * (subprojectCount + 1) + 1 + hiddenCount,
       date_format: 'iso',
       week_start: 1,
       week_one_rule: 'first4day',
@@ -388,7 +414,7 @@ const snapshot = {
     },
   ],
   profiles,
-  projects: [visible.meta, ...projects],
+  projects: programs.flatMap((p) => [p.meta, ...p.children]),
   issues: [...wireRows.values()],
   teams,
   teamMembers,
@@ -408,8 +434,13 @@ const snapshot = {
   delivered_at: now,
 }
 /* How many cards the Board shows: every visible task but the parents,
-   whose subtasks are their cards. settleTasks keeps it. */
+   whose subtasks are their cards, and of those how many the first program
+   holds, the Board the app opens, and its tasks, the rows of the phone's
+   list. settleTasks keeps them. */
 let cards = 0
+let boardCards = 0
+let boardRows = 0
+const firstProgram = new Set(visible.children.map((p) => p.id))
 /* Rebuilds the derived lists after a write: the task rows in creation
    order and the load rows. A write replaces the row objects it changes, so
    the rows it did not touch keep their cached JSON. */
@@ -418,6 +449,9 @@ function settleTasks() {
   snapshot.issues = [...wireRows.values()]
   snapshot.orgLoad = [...loadRows.values()].filter((row) => row !== null)
   cards = tasks.filter((row) => !parents.has(row.id)).length
+  const selected = tasks.filter((row) => firstProgram.has(row.project_id))
+  boardRows = selected.length
+  boardCards = selected.filter((row) => !parents.has(row.id)).length
 }
 settleTasks()
 
@@ -512,7 +546,15 @@ function deliver(to, result) {
 }
 /** Posts `message` to the page with the counters it mirrors. */
 const post = (message) =>
-  self.postMessage({ ...message, writes, held: held.length, made: tasks.length, cards })
+  self.postMessage({
+    ...message,
+    writes,
+    held: held.length,
+    made: tasks.length,
+    cards,
+    boardCards,
+    boardRows,
+  })
 let writes = 0
 const listeners = new Map()
 const delay = () => new Promise((resolve) => setTimeout(resolve, latency))
@@ -644,7 +686,12 @@ function searchPage({ text, include_archived, scope, cursor }) {
     if (of !== key) throw new Error('cursor must be the next_cursor of an earlier page')
     from = at
   }
-  const parent = { id: visible.meta.id, name: visible.meta.name }
+  const metas = new Map(programs.map((p) => [p.meta.id, p.meta]))
+  /** The top-level project above `project`, as a result names it. */
+  const parentOf = (project) => {
+    const meta = metas.get(project.parent_id)
+    return meta ? { id: meta.id, name: meta.name } : null
+  }
   const inScope = (project) =>
     !scope?.project_id || project.id === scope.project_id || project.parent_id === scope.project_id
   const matches = []
@@ -669,11 +716,11 @@ function searchPage({ text, include_archived, scope, cursor }) {
           is_group: group,
           archived: false,
           project: { id: project.id, name: project.name },
-          parent,
+          parent: parentOf(project),
         },
       })
     }
-    for (const project of [visible.meta, ...projects]) {
+    for (const project of snapshot.projects) {
       const fields = { title: project.name, description: '' }
       if (!inScope(project) || !matchesTerms(terms, fields)) continue
       matches.push({
@@ -685,7 +732,7 @@ function searchPage({ text, include_archived, scope, cursor }) {
           org_id: org,
           id: project.id,
           name: project.name,
-          parent: project.parent_id ? parent : null,
+          parent: parentOf(project),
         },
       })
     }
@@ -732,6 +779,8 @@ const read = (name, args = {}) => {
       return false
     case 'search:page':
       return searchPage(args)
+    case 'tasks:board':
+      return boardStandIn(snapshot, args, { force: forcedBoard })
     case 'messages:bulkReach':
       // as convex/model/messages.ts readBulkReach does, per seat
       return {

@@ -43,6 +43,8 @@ server.onmessage = ({ data }) => {
   window.__perf.heldCount = data.held
   window.__perf.made = data.made
   window.__perf.cards = data.cards
+  window.__perf.boardCards = data.boardCards
+  window.__perf.boardRows = data.boardRows
   if (data.type === 'result' && data.error) {
     // a read the server could not answer, as Convex reports a failed query
     const failure = new Error(data.error)
@@ -115,6 +117,9 @@ export const live = {
     const name = getFunctionName(ref)
     const token = `${name}:${JSON.stringify(args)}`
     let entry = parts.get(token)
+    // a watch beside one whose result arrived reads it at once
+    // (lib/liveQueries.ts watch)
+    const joined = !!entry && (entry.value !== undefined || entry.error !== undefined)
     if (entry) entry.count++
     else {
       entry = { id: `p${next++}`, count: 1, value: undefined, error: undefined }
@@ -125,6 +130,7 @@ export const live = {
     let stopped = false
     return {
       token,
+      joined,
       stop() {
         if (stopped) return
         stopped = true
@@ -175,9 +181,12 @@ window.__perf = {
   decodeMs: 0,
   count: Number(parameters.get('tasks') || 100),
   // the visible tasks the server holds, and how many of them the Board
-  // shows as cards (all but the parents)
+  // shows as cards (all but the parents); and of the first program, the
+  // Board the app opens, its cards and its tasks, the phone list's rows
   made: 0,
   cards: 0,
+  boardCards: 0,
+  boardRows: 0,
   /* Holds every write from now until release(). */
   hold() {
     server.postMessage({ type: 'hold' })

@@ -145,6 +145,69 @@ describe('the benchmark server', () => {
     ).rejects.toThrow('cursor must be the next_cursor of an earlier page')
   })
 
+  it("answers the Board's query for the selection the app opens, under and over the ceiling", async () => {
+    /** What tasks:board answers for the first program, or `scope`, on a
+        workspace with page parameters `params`. */
+    const board = async (params, scope = null, filters = {}) => {
+      const { posted, send } = await server(`latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      const program = snap.projects.find((p) => p.type === 'meta')
+      const args = {
+        scope: scope ?? { kind: 'project', org_id: snap.orgs[0].id, project_id: program.id },
+        filters: {
+          mine: false,
+          owners: [],
+          priority: null,
+          stale_before: null,
+          focus: false,
+          search: '',
+          ...filters,
+        },
+      }
+      await send({ type: 'query', id: 'board', name: 'tasks:board', args })
+      const answer = posted.find((m) => m.to === 'board')
+      if (answer.error) throw new Error(answer.error)
+      return { answer: JSON.parse(answer.text), posted: answer, snap, program }
+    }
+    // 1,000 tasks, a parent in each block of ten: 900 cards
+    const ok = await board('tasks=1000')
+    expect(ok.answer.state).toBe('ok')
+    expect(ok.answer.rows.filter((row) => !row.has_subtasks)).toHaveLength(900)
+    expect(ok.posted.boardCards).toBe(900)
+    expect(ok.answer.projects).toHaveLength(10)
+    expect(ok.answer.rows.every((row) => row.description === undefined)).toBe(true)
+    // 10,000 tasks over one program pass the ceiling…
+    expect((await board('tasks=10000')).answer).toMatchObject({
+      state: 'over_ceiling',
+      ceiling: 1000,
+    })
+    // …and over ten programs the first holds a tenth of them
+    const spread = await board('tasks=10000&programs=10')
+    expect(spread.answer.state).toBe('ok')
+    expect(spread.answer.rows.filter((row) => !row.has_subtasks)).toHaveLength(900)
+    expect(spread.posted.boardCards).toBe(900)
+    expect(spread.posted.cards).toBe(9000)
+    expect(spread.snap.projects.filter((p) => p.type === 'meta')).toHaveLength(10)
+    // fewer sub-projects to a program
+    const three = await board('tasks=3000&programs=3&subprojects=3')
+    expect(three.answer.projects).toHaveLength(3)
+    // the first program takes three of the nine sub-projects' blocks of ten
+    expect(three.posted.boardCards).toBe(
+      three.answer.rows.filter((row) => !row.has_subtasks).length,
+    )
+    expect(three.posted.boardCards).toBe(918)
+    // a filter, the person's own tasks and a forced state
+    const urgent = await board('tasks=1000', null, { priority: 'urgent', search: '  signed ' })
+    expect(urgent.answer.rows.every((row) => row.priority === 'urgent')).toBe(true)
+    expect(urgent.answer.rows.length).toBeGreaterThan(0)
+    const mine = await board('tasks=1000', { kind: 'mine' })
+    expect(mine.answer.state).toBe('ok')
+    expect(mine.answer.rows.length).toBeGreaterThan(0)
+    expect(mine.answer).not.toHaveProperty('projects')
+    expect((await board('tasks=100&board=over_budget')).answer.state).toBe('over_budget')
+  }, 60_000)
+
   it("answers the task window's comment page and, apart, its history page", async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     const args = { issue_id: TASK_1 }

@@ -22,6 +22,15 @@
 // open (which stays loaded, hidden): the page's memory, and a remote change
 // and a local edit on each (overviewAfterBoard*, roadmapAfterBoard*).
 //
+// The Board answers one top-level project from the server (tasks:board),
+// at most 1,000 tasks. The workspace spreads its tasks over a top-level
+// project for each 1,000 of them (the stand-in's `programs`), so the one the
+// app opens holds about 1,000 tasks and 900 cards at every size, in a build
+// that filters in the browser as in one that asks the server. The Board's
+// phases wait for its answer where the build marks its state
+// (data-board-state), so they include the round trip and the answer's
+// bytes.
+//
 // --fixture varied also opens a second page per sample on the varied
 // workspace (scripts/perf/transport.mjs, shape=varied) and measures opening
 // its Board with the longest frame after the first card, scrolling and one
@@ -168,7 +177,13 @@ const COMPARED = [
     'remoteProjectRename',
     'inboxMessage',
     'remoteStamp',
+    'boardNavigation',
+    'boardComplete',
     'boardRemote',
+    'boardFilter',
+    'boardFilterClear',
+    'phoneBoard',
+    'overviewAfterBoardRemote',
   ].map((phase) => `${phase}WireBytes`),
   // opening the Board from the click until every card is in
   'boardOpenToCompleteMs',
@@ -302,20 +317,34 @@ async function openPage(origin, tasks, metrics, query = '') {
     metrics[`${running.phase}DecodeMs`].push((await decodeMs()) - decoding)
     return elapsed
   }
-  await page.goto(`${origin}/?tasks=${tasks}&latency=${latency}&mbps=${bandwidth}${query}`)
+  await page.goto(
+    `${origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&latency=${latency}&mbps=${bandwidth}${query}`,
+  )
   return { context, page, cdp, errors, settle, appRenders, timed }
 }
 
-/* The Board counts as complete when nothing on it waits to mount. A Board
-   that mounts in slices marks its pending part with this attribute; one
-   that mounts whole never sets it. Only the shown view counts: a Board kept
-   hidden while another view shows (KeptView) waits until it shows again. */
-const boardComplete = () =>
-  !document.querySelector('[data-workspace-view] [data-board-mount="pending"]')
+/* The Board counts as complete when nothing on it waits to mount and, in a
+   build whose Board asks the server, its answer arrived (data-board-state
+   ok). A Board that mounts in slices marks its pending part with
+   data-board-mount; one that mounts whole never sets it. Only the shown
+   view counts: a Board kept hidden while another view shows (KeptView)
+   waits until it shows again. */
+const boardComplete = () => {
+  const state = document.querySelector('[data-workspace-view] [data-board-root]')
+  return (
+    !document.querySelector('[data-workspace-view] [data-board-mount="pending"]') &&
+    (state === null || state.getAttribute('data-board-state') === 'ok')
+  )
+}
 
 /** How many cards the Board must show, as the stand-in server counts them:
-    every task but the parents, whose subtasks are their cards. */
-const boardCards = (page) => page.evaluate(() => window.__perf.cards)
+    every task of the top-level project it opens but the parents, whose
+    subtasks are their cards. */
+const boardCards = (page) => page.evaluate(() => window.__perf.boardCards)
+
+/** The top-level projects of a workspace of `tasks` tasks: one for each
+    1,000, so the Board the app opens holds about 1,000 tasks. */
+const programsFor = (tasks) => Math.max(1, Math.round(tasks / 1000))
 
 /** The heap in use after a collection, in MiB, and the page's elements. */
 async function pageSize(page, cdp) {
@@ -802,7 +831,7 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   assert.equal(
     await page.locator('[data-card]').count(),
     await boardCards(page),
-    'The Board must show every task',
+    'The Board must show every task of its project',
   )
   const boardSize = await pageSize(page, cdp)
   metrics.boardHeapMb.push(boardSize.heapMb)
@@ -849,7 +878,7 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   assert.equal(
     await page.locator('[data-card]').count(),
     await boardCards(page),
-    'Clearing must bring every task',
+    'Clearing must bring every task of the project back',
   )
   // A phone shows the task list in place of the Board.
   phase('phoneBoard')
@@ -866,8 +895,8 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   metrics.phoneBoardFirstCardMs.push(phoneFirstCard)
   assert.equal(
     await page.locator('.mobile-task-list [data-card]').count(),
-    await page.evaluate(() => window.__perf.made),
-    'The phone list must show every task',
+    await page.evaluate(() => window.__perf.boardRows),
+    'The phone list must show every task of the project',
   )
   await page.setViewportSize({ width: 1440, height: 1000 })
   await shows(page, '[data-workspace-view="kanban"] [data-card]')
