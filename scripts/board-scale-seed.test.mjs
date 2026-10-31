@@ -377,6 +377,49 @@ describe('archiving seeded tasks', () => {
     expect(planArchive(10, seeded, new Set())).toEqual(['t0', 't2', 't3', 't4', 't5'])
   })
 
+  it('takes one sub-project by key or name', () => {
+    expect(parseSeedArgs([...local, '--sub-project', 'FW']).subProject).toBe('FW')
+    expect(parseSeedArgs(local).subProject).toBeNull()
+    expect(() => parseSeedArgs([...local, '--sub-project'])).toThrow('--sub-project needs a value.')
+  })
+
+  it('puts the tasks it adds into the one sub-project named, and refuses one Northstar lacks', async () => {
+    fake.projects = [
+      { id: 'sub', org_id: 'org', type: 'project', key: 'FW', name: 'Firmware' },
+      { id: 'other', org_id: 'org', type: 'project', key: 'PCB', name: 'Boards' },
+      { id: 'gone', org_id: 'org', type: 'project', key: 'OLD', name: 'Old', archived_at: 'x' },
+    ]
+    fake.issues = []
+    fake.archived = []
+    try {
+      fake.calls = []
+      await runBoardScaleSeed([...local, '--tasks', '30', '--sub-project', 'Boards'], {
+        env,
+        log: () => {},
+      })
+      const creates = fake.calls.filter(([name]) => name === 'issues:create')
+      expect(creates.length).toBeGreaterThan(20)
+      expect(new Set(creates.map(([, fields]) => fields.project_id))).toEqual(new Set(['other']))
+      // without it, the same run spreads them over both live ones
+      fake.calls = []
+      await runBoardScaleSeed([...local, '--tasks', '30'], { env, log: () => {} })
+      const spread = fake.calls.filter(([name]) => name === 'issues:create')
+      expect(new Set(spread.map(([, fields]) => fields.project_id))).toEqual(
+        new Set(['sub', 'other']),
+      )
+      fake.calls = []
+      await expect(
+        runBoardScaleSeed([...local, '--tasks', '8', '--sub-project', 'OLD'], {
+          env,
+          log: () => {},
+        }),
+      ).rejects.toThrow(/names no live sub-project of Northstar; it has FW \(Firmware\), PCB/)
+      expect(fake.calls.filter(([name]) => name === 'issues:create')).toEqual([])
+    } finally {
+      fake.projects = null
+    }
+  })
+
   it('archives as it seeds, and a rerun archives and seeds nothing again', async () => {
     const seeded = (n, more = {}) => ({
       ...seededTask(n, 'org', 'sub', 'owner'),
