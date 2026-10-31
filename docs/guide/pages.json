@@ -45,7 +45,7 @@
       "slug": "the-board",
       "title": "The Board",
       "order": 6,
-      "description": "Board has five status columns with pinned headers and live counts. Each column's + creates a task in that status, except in All projects and My view. Tasks…"
+      "description": "Board has five status columns with pinned headers and live counts. Each column's + creates a task in that status, except in My view. Tasks sort by…"
     },
     {
       "file": "the-roadmap.md",

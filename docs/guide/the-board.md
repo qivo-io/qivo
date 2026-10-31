@@ -1,6 +1,8 @@
 Board has five status columns with pinned headers and live counts. Each
-column's **+** creates a task in that status, except in All projects and
-My view ([Creating a task](./how-work-is-organized.md#creating-a-task)). Tasks sort by priority within their card groups.
+column's **+** creates a task in that status, except in My view
+([Creating a task](./how-work-is-organized.md#creating-a-task)). Tasks sort by priority within their card groups.
+A Board shows one project, one sub-project or My view. In All projects it
+asks you to choose a project, and opens that project's Board.
 
 Drag a task to change its status. Read-only tasks cannot be dragged. Valid
 destinations highlight and dim their existing cards while you hover;
@@ -24,15 +26,15 @@ collapses or expands its rows.
 The layout switcher uses short labels, **Project**, **Assignee**, **Pooled**
 and **Separated**. Its menu offers:
 
-- **Swimlanes by project**. One lane per sub-project, or per project in All
-  projects and My view.
+- **Swimlanes by project**. One lane per sub-project, or per project in My
+  view.
 - **Swimlanes by assignee**. One lane per task owner, sorted alphabetically,
   with **Unassigned** last. The owner is the reviewer while a task waits
   In Review with one. This layout also works within a single sub-project.
 - **Pooled, one board**. All tasks share status columns. Cards show their
   project and sub-project as needed.
 - **Side-by-side boards**. One small Board per sub-project, or per project
-  in All projects and My view.
+  in My view.
 
 In project-based layouts, dragging changes status only. Swimlanes by project
 and Side-by-side boards accept drops only within the task's existing project
@@ -63,8 +65,8 @@ On very large boards, cards below the first screen appear in the first
 moments after the Board opens, in shaded space that keeps the Board's shape.
 Searching the page with Ctrl+F or ⌘F, or printing, loads them all first.
 Like every page, the Board stays loaded while you use the others, as long as
-the sidebar choice, such as a project or All projects, stays the same
-([Pages stay as you left them](./finding-your-way-around.md#pages-stay-as-you-left-them)).
+the sidebar choice stays the same, and checks its tasks again when you come
+back ([Pages stay as you left them](./finding-your-way-around.md#pages-stay-as-you-left-them)).
 
 Task rows show title, priority, remaining hours, due date and owner. Click
 the row or parent title to open the task. Drag individual task rows to change
@@ -82,14 +84,48 @@ Paused tasks show an amber mark. Delay banners identify slipping or delayed
 tasks. When the last active subtask leaves a parent, it returns to a normal
 card in its saved status column.
 
+## Which tasks a Board shows
+
+Qivo's server works out which tasks a Board shows, with its filters
+applied. Until it answers, as when the Board opens, after you change a
+filter or when you come back to the Board, the Board shows the tasks your
+browser already holds, before it has checked them: its counts show **…**
+until the answer arrives. Your own changes show at once. Other people's
+changes take a task off the Board at once, and add one once the server
+answers. While the browser tab or the desktop window is hidden, the Board
+stops updating, and it checks its tasks again when you return.
+
+A Board shows at most 1,000 tasks, subtasks included, across its project
+or sub-project with its filters, or across My view
+([Limits](./limits.md#tasks-and-organizations)). A selection with more
+shows a message in place of the columns: **This selection exceeds the
+Board's 1,000-task limit.** For a project, the message offers its
+sub-projects to choose from; otherwise, narrow your filters, such as
+**Focus**, **Priority**, **Stale** or the text filter. If Qivo could not
+read a selection within the Board's limits, as for a long text filter over
+a very large project, it says so without a count. For a sub-project it also
+offers **Search this sub-project**, which opens Search on it
+([Search palette](./finding-your-way-around.md#search-palette)). The filter
+row and the layout switcher stay usable beside every message. The phone's
+task list also shows parent tasks as rows, so it can list more than 1,000
+rows.
+
+If some tasks the server named have not reached your browser a minute after
+the rest, the Board says that some tasks could not be shown, with **Try
+again**, and keeps the counts at **…**. When a Board is not available, for
+example after your access to its project ended, it says so instead of
+showing an empty Board.
+
 ## Showing a task on the Board
 
 Some links open a task's window over the Board and show its card behind
 it: **Board** on a Team sync row, **Open task in board** in the Inbox, the
 breadcrumb in a task window and an active task picked in Search while the
-Board is open. The Board scrolls the card to the middle of the screen and rings it
-until a moment after you close the window, following the task to its new
-card if a change in the window moved it. A subtask under a parent heading
+Board is open. Each opens the Board of the task's sub-project, except a
+task picked in Search, which stays on the Board you are on. The Board
+scrolls the card to the middle of the screen once it has its tasks, and
+rings it until a moment after you close the window, following the task to
+its new card if a change in the window moved it. A subtask under a parent heading
 rings its own row, and a parent task rings the first card under its heading.
 On phones the task list does the same with the task's row, and the
 breadcrumb closes the window first, as it fills the screen. Nothing is

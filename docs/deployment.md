@@ -177,7 +177,9 @@ deployment's search index takes the filter for an absent `archived_at` and
 still returns active matches. The archived task must then open read-only in
 its task window, with its description and, under **All**, its history,
 which shows whether the deployment answers an archived task's text and
-history. Everything it creates
+history. It then opens the Board of the project it made, waits for the
+deployment's answer for it (`tasks.board`) and checks that the cards of its
+two fixture tasks show. Everything it creates
 carries a run tag such as `stgchk-1a2b3c`, and its tasks live in projects it
 creates. It deletes all of it at the end, also after a failure. Its deleted
 projects and tasks then wait in Deleted items for 30 days, where an admin can
@@ -300,6 +302,14 @@ Board's card height estimates meet realistic text, and each description
 names the task's number. Run it again to add only the tasks still missing;
 it also finishes a parent and subtasks it stopped in the middle of, under
 the parent it already made. It writes to that local backend alone.
+
+The Board shows at most 1,000 tasks, subtasks included. The default 10,000
+tasks spread over Northstar's 12 sub-projects put each top-level project
+over that limit and each sub-project under it, at about 840 tasks; from
+about 12,100 seeded tasks each sub-project passes it too. `--sub-project
+<key or name>` puts the tasks a run adds into that one sub-project, for
+checking a sub-project's Board at the limit: a family of a parent and three
+subtasks adds three tasks the limit counts, and a task on its own one.
 
 `--archived <n>`, up to the `--tasks` count, archives the first `n` seeded
 tasks that are not parents, spread over the sub-projects as the tasks are,
@@ -490,6 +500,16 @@ deploys, until it reloads. This moves the floor: never return the app or the
 demo to a deployment of a commit before the release that replaced
 `snapshot.forMe` with the parts (the release after v0.1.52). Roll forward
 instead.
+
+The app's Board, the phone's task list and My view's Board read which tasks
+they show from `tasks.board`, which v0.1.107 (`b7d2abac`) first shipped. An
+app from the release that switched them to it, against a backend before
+v0.1.107, says on every Board that it could not be loaded, also in a tab
+that was open when the backend went back, until the backend rolls forward.
+From that release on, never return the backend to a commit before v0.1.107
+(`b7d2abac`); roll forward instead. Returning the app alone to a release
+before that one is safe against a later backend, because that app filters
+the Board's tasks in the browser.
 
 ## Node.js version
 
