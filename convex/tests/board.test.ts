@@ -7,14 +7,16 @@
  * limits with the figures they read. src/store/boardParity.test.ts compares
  * its answers with the app's own rules. */
 
+import { getDocumentSize } from 'convex/values'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { OWN_READS } from '../lib/access'
 import { BOARD, type BoardAnswer, type BoardFilters, type BoardScope } from '../lib/board'
 import { TEXT_TASK_READS } from '../lib/core'
-import { BOARD_TASKS, LIMITS, MIB } from '../lib/limits'
-import type { ViewRow } from '../lib/viewReads'
+import { ISSUE_STATUSES } from '../lib/enums'
+import { BOARD_TASKS, LIMITS, MIB, PROJECT_ROW_MAX_BYTES } from '../lib/limits'
+import { ownTasks, type ViewRow, viewAccess, viewBudget } from '../lib/viewReads'
 import {
   boardFor,
   boardRead,
@@ -333,6 +335,58 @@ describe('filters', () => {
     for (const task of stamped) expect(answer.rows.some((row) => row.id === task.id)).toBe(true)
   })
 
+  it('leaves out under Focus a group stored in Backlog or Done, which a To do subtask shows as its parent, in a project and in My view', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const assignee_id = f.guest.id
+    const task = (title: string, fields: Partial<Doc<'issues'>> = {}) =>
+      plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title, assignee_id, ...fields })
+    const backlog = await task('Backlog group', { status: 'backlog' })
+    const shown = await task('To do subtask', { parent_id: backlog.id })
+    const done = await task('Done group', { status: 'done' })
+    const finished = await task('Done subtask', { parent_id: done.id, status: 'done' })
+    for (const [scope, filters] of [
+      [projectScope(f.guest, f.sub.id), {}],
+      [{ kind: 'mine' }, { mine: true }],
+    ] as [BoardScope, Partial<BoardFilters>][]) {
+      const focus = await boardFor(t, f.guest, scope, { ...filters, focus: true })
+      if (focus.state !== 'ok') throw new Error(focus.state)
+      expect(focus.rows.map((row) => row.id)).toEqual([shown.id])
+      expect(focus.parents.map((row) => row.id)).toEqual([backlog.id])
+      expect(focus.parents[0]).toMatchObject({ has_subtasks: true, group_done: false })
+      const all = await boardFor(t, f.guest, scope, filters)
+      expect(rowIds(all)).toEqual([backlog.id, shown.id, done.id, finished.id])
+    }
+  })
+
+  it('steps under Focus through each status and its rows that carry done_at against the rule, and answers each planted task once', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // done_at in the reverse of creation order, as only a step that goes on
+    // by done_at reads them all
+    const stamp = (i: number) => at(Date.parse(NOW) - i * DAY)
+    const planted = [
+      ...(await plantTasks(t, f.sub, 20, () => ({ status: 'progress' }))),
+      ...(await plantTasks(t, f.sub, 50, (i) => ({
+        status: 'review',
+        ...(i < 40 ? { done_at: stamp(i) } : {}),
+      }))),
+      ...(await plantTasks(t, f.sub, 20, (i) => ({
+        status: 'todo',
+        ...(i % 3 === 0 ? { done_at: stamp(i) } : {}),
+      }))),
+    ]
+    await plantTasks(t, f.sub, 10, (i) => ({ status: i % 2 === 0 ? 'backlog' : 'done' }))
+    // a room of a few rows a step, so steps end inside each status and each
+    // kind of row
+    BOARD.reads.bytes = 800 * 1024
+    const { answer } = await boardRead(t, [f.guest], projectScope(f.guest, f.sub.id), {
+      focus: true,
+    })
+    if (answer.state !== 'ok') throw new Error(answer.state)
+    expect(answer.rows.map((row) => row.id).sort()).toEqual(planted.map((task) => task.id).sort())
+  })
+
   it("applies My tasks through the person's own ranges and keeps only the selection's tasks", async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -620,6 +674,90 @@ describe('hidden data', () => {
   }, 300_000)
 })
 
+/** A meta of `n` sub-projects whose reader sees it only to navigate to the
+ * even ones, their grants, with a task in each of those; `wide` gives the
+ * odd ones, which the reader cannot see, descriptions at the cap. The
+ * sub-projects pass a step of their range, so a step goes on from a row the
+ * reader cannot see. */
+async function navigatedOrg(n: number, wide: boolean) {
+  const t = newT()
+  const f = await withOrg(t)
+  const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
+  const meta = await plantProject(t, { org_id: f.org.id })
+  const subs: Doc<'projects'>[] = []
+  for (let i = 0; i < n; i++)
+    subs.push(
+      await plantProject(t, {
+        org_id: f.org.id,
+        type: 'project',
+        parent_id: meta.id,
+        ...(wide && i % 2 === 1 ? { description: '一'.repeat(LIMITS.projectDescription.max) } : {}),
+      }),
+    )
+  await t.run(async (ctx) => {
+    for (const [i, sub] of subs.entries())
+      if (i % 2 === 0)
+        await ctx.db.insert('project_access', {
+          project_id: sub.id,
+          profile_id: me.id,
+          level: 'user',
+        })
+  })
+  for (const [i, sub] of subs.entries())
+    if (i % 2 === 0) await plantTasks(t, sub, 1, () => ({ title: `Task in ${i}` }))
+  await withReach(t)
+  return { t, me, meta }
+}
+
+describe('hidden data, past a step of sub-projects and own tasks', () => {
+  it("answers the same, and stops at the same budget, whatever the sizes of a navigated meta's hidden sub-projects", async () => {
+    const narrow = await navigatedOrg(70, false)
+    const wide = await navigatedOrg(70, true)
+    const read = (o: typeof narrow) => () => boardFor(o.t, o.me, projectScope(o.me, o.meta.id))
+    expect(shape(await read(wide)())).toEqual(shape(await read(narrow)()))
+    expect(stateOf(await read(narrow)())).toEqual({ state: 'ok', rows: 35 })
+    const least = await leastBytes(read(narrow))
+    expect(least).toBe(await leastBytes(read(wide)))
+    BOARD.reads.bytes = least - 1
+    expect((await read(wide)()).state).toBe('over_budget')
+  }, 300_000)
+
+  it("counts a person's own task they are shown at its real size each time a read returns it, in a later step too", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // assigned to and reviewed by the guest, read in the assignee's review
+    // range and again in the reviewer range, a step later
+    const task = await plantCopiedIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'review',
+      assignee_id: f.guest.id,
+      reviewer_id: f.guest.id,
+      description: TEXT,
+    })
+    const reads = { bytes: 300 * 1024, documents: 24_000, ranges: 3600 }
+    const { got, projects, bytes } = await t.run(async (ctx) => {
+      const guard = viewBudget(ctx, reads)
+      const seat = viewAccess(ctx, guard, f.guest)
+      const got: string[] = []
+      for await (const step of ownTasks(ctx, guard, seat, ISSUE_STATUSES))
+        got.push(...step.map((one) => one.id))
+      // the project rows the access read, each charged at its fixed size
+      const projects = await Promise.all(
+        [f.sub, f.meta].map(async (p) =>
+          getDocumentSize((await ctx.db.get(p._id)) as Doc<'projects'>),
+        ),
+      )
+      return { got, projects, bytes: guard.ceiling.bytes }
+    })
+    expect(got).toEqual([task.id])
+    // only the projects' fixed charges move the decisions' bytes
+    expect(bytes).toBe(
+      reads.bytes - projects.reduce((n, size) => n + PROJECT_ROW_MAX_BYTES - size, 0),
+    )
+  })
+})
+
 /* -------------------------------------------------------- a reached budget */
 
 describe('a reached budget', () => {
@@ -877,6 +1015,106 @@ describe('real limits', () => {
     })
     record('a search of 5,000 tasks', answer, read)
     expect(stateOf(answer)).toEqual({ state: 'ok', rows: 50 })
+  }, 600_000)
+
+  it('answers a filter that keeps one subtask under each of 400 parents of ten, in a project and in My view, without a check of each sibling', async () => {
+    /* 400 parents in FW with ten subtasks each, one of them the guest's
+     * and urgent, created at `created_at` */
+    const plant = async (created_at: string) => {
+      const t = newT({ transactionLimits: true })
+      const f = await withOrg(t)
+      const parents = await plantTasks(t, f.sub, 400, () => ({ title: TITLE, created_at }), 400)
+      await plantTasks(
+        t,
+        f.sub,
+        4000,
+        (i) => ({
+          title: TITLE,
+          created_at,
+          parent_id: parents[Math.floor(i / 10)].id,
+          ...(i % 10 === 0 ? { priority: 'urgent', assignee_id: f.guest.id } : {}),
+        }),
+        1000,
+      )
+      return { t, f }
+    }
+    const recent = await plant('2026-10-31T09:00:00.000Z')
+    const scope = projectScope(recent.f.guest, recent.f.sub.id)
+    const urgent = await boardRead(recent.t, [recent.f.guest], scope, { priority: 'urgent' })
+    record('one urgent subtask under each of 400 parents of ten', urgent.answer, urgent.read)
+    const mine = await boardRead(recent.t, [recent.f.guest], { kind: 'mine' }, { mine: true })
+    record('My view of one subtask under each of 400 parents of ten', mine.answer, mine.read)
+    for (const { answer } of [urgent, mine]) {
+      expect(stateOf(answer)).toEqual({ state: 'ok', rows: 400 })
+      if (answer.state === 'ok') expect(answer.parents).toHaveLength(400)
+    }
+    // data stored before the rule of one level checks every sibling, which
+    // a legacy nested group may be, and passes the budget
+    const legacy = await plant(NOW)
+    const old = await boardRead(
+      legacy.t,
+      [legacy.f.guest],
+      projectScope(legacy.f.guest, legacy.f.sub.id),
+      {
+        priority: 'urgent',
+      },
+    )
+    record('the same, stored before the rule of one level', old.answer, old.read)
+    expect(old.answer.state).toBe('over_budget')
+  }, 600_000)
+
+  it('searches a word a label holds over 4,000 tasks through the label, and reads labels only where one can finish the match', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const labelOf = async (name: string) => {
+      const id = uuid()
+      await t.run((ctx) =>
+        ctx.db.insert('labels', {
+          id,
+          org_id: f.org.id,
+          name,
+          name_lower: name.toLowerCase(),
+          color: '#336699',
+          created_at: NOW,
+        }),
+      )
+      return id
+    }
+    const bug = await labelOf('Bug')
+    await labelOf('Design')
+    // a tenth of every sixth task's titles say login
+    const tasks = await plantTasks(
+      t,
+      f.sub,
+      4000,
+      (i) => ({ title: i % 60 === 0 ? `Login form ${i}` : `Task ${i}`, text: 'plain words' }),
+      1000,
+    )
+    await t.run(async (ctx) => {
+      for (const [i, task] of tasks.entries())
+        if (i % 6 === 0)
+          await ctx.db.insert('issue_labels', {
+            org_id: f.org.id,
+            issue_id: task.id,
+            label_id: bug,
+          })
+    })
+    const scope = projectScope(f.guest, f.sub.id)
+    const labelled = await boardRead(t, [f.guest], scope, { search: 'bug' })
+    record('a label word over 4,000 tasks', labelled.answer, labelled.read)
+    expect(stateOf(labelled.answer)).toEqual({ state: 'ok', rows: 667 })
+    const both = await boardRead(t, [f.guest], scope, { search: 'login bug' })
+    record('a title word and a label word over 4,000 tasks', both.answer, both.read)
+    expect(stateOf(both.answer)).toEqual({ state: 'ok', rows: 67 })
+    // a label read for each of 4,000 candidates passes the budget, while a
+    // search reads labels only for the 67 tasks whose titles say login
+    BOARD.labelTasks = Number.POSITIVE_INFINITY
+    expect((await boardRead(t, [f.guest], scope, { search: 'bug' })).answer.state).toBe(
+      'over_budget',
+    )
+    const own = await boardRead(t, [f.guest], scope, { search: 'login bug' })
+    expect(stateOf(own.answer)).toEqual({ state: 'ok', rows: 67 })
+    expect(own.read.ranges).toBeLessThan(both.read.ranges + 100)
   }, 600_000)
 
   it("answers the envelope's largest Board: 200 sub-projects shared with each of a person's 25 teams, Focus alone, tasks under distinct parents", async () => {

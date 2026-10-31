@@ -113,16 +113,24 @@ function expectParity(
   if (answer.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(answer)}`)
   const mine = P.isMineScope(scopeId)
   // the filter row as App's effFilters hands it to the Board
+  // the app trims the search before it filters and before it sends it, as
+  // the Board client is to (lib/board.ts BoardFilters search)
+  const search = filters.search.trim()
   const desk = {
     mine: mine || filters.mine,
     assignees: mine ? [] : filters.owners,
     priority: filters.priority,
     stale: filters.stale_before !== null,
     focus: filters.focus,
-    search: filters.search,
+    search,
   }
+  // Under Focus no surface shows a group whose stored status is Backlog or
+  // Done: the phone hides those sections and the desktop draws a group only
+  // as a heading, among the parents (lib/board.ts)
+  const shows = (it: Issue) =>
+    !(filters.focus && P.isGroup(it) && (it.status === 'backlog' || it.status === 'done'))
   const scoped = P.scopedIssues(info)
-  const passing = scoped.filter((it) => P.passesFilters(it, desk))
+  const passing = scoped.filter((it) => P.passesFilters(it, desk) && shows(it))
   const byUuid = new Map(Object.values(P.issueById).map((it) => [it.uuid, it]))
   const rowIds = new Set(answer.rows.map((row) => row.id))
   const parentIds = new Set(answer.parents.map((row) => row.id))
@@ -133,10 +141,10 @@ function expectParity(
     sorted(answer.rows.filter((row) => !row.has_subtasks).map((row) => row.id)),
     `${label}: cards`,
   ).toEqual(sorted(passing.filter((it) => !P.isGroup(it)).map((it) => it.uuid)))
-  if (filters.search === '') {
+  if (search === '') {
     const phone = { ...desk, search: '' }
     expect(sorted(rowIds), `${label}: phone`).toEqual(
-      sorted(scoped.filter((it) => P.passesFilters(it, phone)).map((it) => it.uuid)),
+      sorted(scoped.filter((it) => P.passesFilters(it, phone) && shows(it)).map((it) => it.uuid)),
     )
   }
 
@@ -190,7 +198,7 @@ function expectParity(
     filters.owners.length > 0 ||
     filters.priority !== null ||
     filters.stale_before !== null ||
-    filters.search !== ''
+    search !== ''
   const scopedProjects = new Set(scoped.map((it) => it.project))
   const cards = passing.filter((it) => !P.isGroup(it))
   const held = info.groups
@@ -327,6 +335,7 @@ describe('Northstar', () => {
       ['Stale', { stale_before: staleBefore }],
       ['Stale under Focus', { stale_before: staleBefore, focus: true }],
       ['a title word', { search: 'pcb' }],
+      ['whitespace only', { search: '   ' }],
       [`QN-${num}`, { search: `QN-${num}` }],
       ['a word only a description holds', { search: textOnly }],
       ['a label name', { search: label }],
@@ -366,7 +375,13 @@ describe('Northstar', () => {
  * sub-project, a subtask whose parent is in that sibling, a task whose
  * only subtask is in an archived sub-project, an archived task, and a
  * task a legacy writer stored on the TBED meta itself, assigned to the
- * subject. The sibling is hidden from a subject who sees FW and PCB only. */
+ * subject. Beside those: a group stored In Backlog with a To do subtask and
+ * one stored Done with a Done subtask; a legacy nested group (a subtask with
+ * a shown leaf and a leaf in the sibling); a card whose parent is in FW and
+ * whose grandparent is in PCB; two tasks each the other's parent; and a
+ * group created under the rule of one level (lib/viewReads.ts
+ * ONE_LEVEL_SINCE) whose subtasks are the subject's, `user`'s and one in the
+ * sibling. The sibling is hidden from a subject who sees FW and PCB only. */
 async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
   const org_id = f.org.id
   const skunk = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
@@ -434,6 +449,57 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
   })
   await task(f.sub, { title: 'Archived task', assignee_id: subject.id, archived_at: NOW })
   await task(f.meta, { title: 'Stored on the meta', assignee_id: subject.id })
+  // groups whose stored status Focus hides, with and without a subtask it shows
+  const backlog = await task(f.sub, {
+    title: 'Group stored in Backlog',
+    status: 'backlog',
+    assignee_id: subject.id,
+  })
+  await task(f.sub, { title: 'Its To do subtask', parent_id: backlog.id, assignee_id: subject.id })
+  const done = await task(f.sub, {
+    title: 'Group stored Done',
+    status: 'done',
+    assignee_id: subject.id,
+  })
+  await task(f.sub, { title: 'Its Done subtask', parent_id: done.id, status: 'done' })
+  // a legacy nested group: a subtask with subtasks of its own
+  const outer = await task(f.sub, { title: 'Outer group', assignee_id: f.user.id })
+  const nested = await task(f.sub, {
+    title: 'Nested group',
+    parent_id: outer.id,
+    assignee_id: f.user.id,
+  })
+  await task(f.sub, { title: 'Nested leaf', parent_id: nested.id, assignee_id: subject.id })
+  await task(sibling, { title: 'Nested hidden leaf', parent_id: nested.id, status: 'done' })
+  // a card under a parent in FW under a grandparent in PCB
+  const grandparent = await task(f.sub2, { title: 'Grandparent in PCB', assignee_id: f.user.id })
+  const middle = await task(f.sub, {
+    title: 'Parent in FW',
+    parent_id: grandparent.id,
+    assignee_id: f.user.id,
+  })
+  await task(f.sub, { title: 'Card under two', parent_id: middle.id, assignee_id: subject.id })
+  // two tasks each the other's parent, as only a raw write leaves them
+  const one = await task(f.sub, { title: 'Cycle one', assignee_id: subject.id })
+  const two = await task(f.sub, { title: 'Cycle two', parent_id: one.id })
+  await t.run((ctx) => ctx.db.patch(one._id, { parent_id: two.id }))
+  // a group created under the rule of one level, whose subtasks need no check
+  const created_at = '2026-10-31T09:00:00.000Z'
+  const recent = await task(f.sub, { title: 'Recent group', assignee_id: f.user.id, created_at })
+  await task(f.sub, {
+    title: 'Recent mine',
+    parent_id: recent.id,
+    assignee_id: subject.id,
+    created_at,
+  })
+  await task(f.sub, {
+    title: 'Recent theirs',
+    parent_id: recent.id,
+    assignee_id: f.user.id,
+    created_at,
+    status: 'done',
+  })
+  await task(sibling, { title: 'Recent hidden', parent_id: recent.id, created_at })
   return { skunk, sibling, tasks }
 }
 
