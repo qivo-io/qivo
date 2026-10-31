@@ -125,13 +125,19 @@ import {
  * run out first at about 1,500 cards under as many parents; the ceiling
  * comes before.
  *
- * Bytes stop a selection whose tasks a filter must read whole. A search
- * that reads every candidate's text, of 390 characters in a three-byte
- * script, stops fitting at about 4,200 tasks with titles at the cap and
- * about 5,600 with realistic titles, and one whose candidates hold texts
- * near the cap fits far fewer. The people filter stops at about 9,600
- * tasks at the title cap. Each answers over_budget, and the owner chose on
- * 31 October 2026 that the Board then asks the person to narrow.
+ * Bytes stop a selection whose tasks a filter must read whole: the search,
+ * the people filter, Priority and Stale read every task of the selection's
+ * ranges before they drop any (`take`), where My tasks and Focus read only
+ * their own ranges. A search that reads every candidate's text, of 390
+ * characters in a three-byte script, stops fitting at about 4,200 tasks
+ * with titles at the cap and about 5,600 with realistic titles, and one
+ * whose candidates hold texts near the cap fits far fewer. The people
+ * filter, Priority and Stale stop at about 9,600 tasks at the title cap,
+ * the people filter measured. A filter that keeps subtasks under many
+ * parents stops sooner, as it reads each such parent's subtasks again: the
+ * 400 parents of ten above take 10.52 of the 12 MiB. Each answers
+ * over_budget, and the owner chose on 31 October 2026 that the Board then
+ * asks the person to narrow.
  *
  * `context` caps the groups among the rows and the shown parents together,
  * the rows a Board holds beside its BOARD_TASKS cards. They count in

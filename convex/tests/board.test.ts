@@ -1217,6 +1217,10 @@ describe('real limits', () => {
     }
     const bug = await labelOf('Bug')
     await labelOf('Design')
+    /* titles at the cap and 390-character texts keep this search within
+     * about 6 percent of the bytes at which a search stops fitting, on
+     * purpose: rows that grow make it answer over_budget, and BOARD's
+     * measured sizes then need measuring again */
     // a tenth of every sixth task's titles say login
     const tasks = await plantTasks(
       t,
