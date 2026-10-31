@@ -22,18 +22,33 @@
  * has_hidden_parent). The reads that can touch a task or project the reader
  * is not shown are a task's subtasks, a parent read by id, the projects of
  * those and of a person's own tasks, a top-level project's sub-projects,
- * and a person's own tasks in projects they cannot see. Their documents are
+ * and a person's own tasks in projects they cannot see. Each document such
+ * a read returns, a row read again where a step goes on included, is
  * charged at a fixed size in every budget decision (viewBudget charge), so a
- * hidden title's or description's length moves no answer. What still
- * follows hidden data is how many such documents and ranges a read takes:
- * how many subtasks a shown group has, hidden ones included, as the tasks
- * part's kidsOf (lib/workspaceParts.ts) reads them, and the grant and team
- * share rows the reader's access reads on a hidden project. Both can move a
- * view's answer at its budget's margin only. So can, in an organization
- * whose reach rows are not complete yet (org_ready nav_at), the sub-projects
- * the access reads of a top-level project the reader sees only to navigate
- * to them (lib/access.ts projectLevelsOf, the legacy path), which every
- * deployment left behind with internal/navBackfill. */
+ * hidden title's or description's length moves no answer.
+ *
+ * What still follows hidden data is how many documents and ranges those
+ * reads take, which can move a view's answer at its budget's margin only:
+ *
+ * - how many subtasks a shown group has, hidden ones included, as the tasks
+ *   part's kidsOf (lib/workspaceParts.ts) reads them;
+ * - how many of a person's own tasks are in projects they cannot see
+ *   (ownTasks);
+ * - how many of a selected top-level project's sub-projects the reader
+ *   cannot see (projectSelection reads every one);
+ * - the grant and team share rows the reader's access reads on a hidden
+ *   project;
+ * - where the reader sees a top-level project only to navigate to its
+ *   sub-projects, the ones their reach rows name, which the access reads by
+ *   id (lib/access.ts projectLevelsOf navigates): a selection's are read
+ *   and charged before (projectSelection), but those of a top-level project
+ *   a legacy writer stored a task on are not, and their real size counts;
+ * - in an organization whose reach rows are not complete yet (org_ready
+ *   nav_at), the sub-projects the access reads of such a top-level project
+ *   on the legacy path, which every deployment left behind with
+ *   internal/navBackfill;
+ * - and a view's own reads that follow the organization, as the Board's
+ *   search through a label's assignments (lib/board.ts boardSearch). */
 
 import { getDocumentSize } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -335,13 +350,14 @@ export function viewAccess(ctx: QueryCtx, guard: ViewBudget, me: Doc<'profiles'>
   return {
     me,
     /** Keeps project `p`, which the view read, so the access does not read
-     * it again, and charges it at its fixed size. */
-    seen(p: Doc<'projects'>): void {
+     * it again, and charges it at its fixed size, unless the view charges
+     * each of its reads itself (`chargedByView`). */
+    seen(p: Doc<'projects'>, chargedByView = false): void {
       access.seen(p)
       rows.add(p.id)
       if (charged.has(p.id)) return
       charged.add(p.id)
-      guard.charge(p, PROJECT_ROW_MAX_BYTES)
+      if (!chargedByView) guard.charge(p, PROJECT_ROW_MAX_BYTES)
     },
     /** The project with this id as the access read it, or null. */
     project: (id: string): Promise<Doc<'projects'> | null> => access.project(id),
@@ -500,9 +516,9 @@ export type Selection = {
  * (src/store/planner.ts) builds a meta's groups; one the reader sees only to
  * navigate to its sub-projects selects the sub-projects they see. Live
  * follows archived_at, as P.projects and Access.live do. It reads the
- * project by id and, for a meta, its sub-projects in steps, each charged at
- * PROJECT_ROW_MAX_BYTES, as the reader may not see them, and the reader's
- * access to each.
+ * project by id and, for a meta, its sub-projects in steps, each row a read
+ * returns charged at PROJECT_ROW_MAX_BYTES, as the reader may not see them,
+ * before it asks the reader's access about the meta and each of them.
  */
 export async function projectSelection(
   ctx: QueryCtx,
@@ -517,7 +533,11 @@ export async function projectSelection(
   seat.seen(project)
   if (project.parent_id !== undefined)
     return (await seat.visible([project.id]))[0] ? { project, subProjects: [project] } : null
-  if (!inMetaTree(project, project) || !(await seat.visible([project.id]))[0]) return null
+  if (!inMetaTree(project, project)) return null
+  // the sub-projects first, so a reader who sees the meta only to navigate
+  // to some of them finds them read (lib/access.ts navigates reads the ones
+  // their reach rows name by id); each row a step returns, the one a step
+  // goes on from included, counts at its fixed size
   const children: Doc<'projects'>[] = []
   const range: StepRange<Doc<'projects'>> = {
     open: (from) =>
@@ -529,12 +549,14 @@ export async function projectSelection(
             : q.eq('parent_id', project.id).gte('_creationTime', from),
         ),
   }
-  for await (const step of inSteps(guard, [range], PROJECT_ROW)) {
+  const charge = (child: Doc<'projects'>) => guard.charge(child, PROJECT_ROW_MAX_BYTES)
+  for await (const step of inSteps(guard, [range], PROJECT_ROW, charge)) {
     for (const child of step) {
-      seat.seen(child)
+      seat.seen(child, true)
       children.push(child)
     }
   }
+  if (!(await seat.visible([project.id]))[0]) return null
   const live = children.filter((c) => c.org_id === project.org_id && c.archived_at === undefined)
   const shown = await seat.visible(live.map((c) => c.id))
   return { project, subProjects: live.filter((_, i) => shown[i]) }
