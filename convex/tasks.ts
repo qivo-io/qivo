@@ -12,15 +12,21 @@
  *   its group facts. It reads the caller's seats, for a project the project
  *   by id, its sub-projects (projects by_parent) and the caller's access to
  *   each, and their active tasks (issues by_project_archived, or under
- *   Focus by_project_archived_status_done by status); for My view and My
- *   tasks the person's own tasks instead (by_assignee_archived_status,
- *   by_reviewer_archived_status). Then each matching task's active
- *   subtasks (by_parent_archived), the parents it shows by id, and for a
- *   search the assignees by id, the texts (issue_descriptions by_issue or
- *   by_project_archived) and the label rows of tasks still unmatched
- *   (issue_labels by_issue_label or by_issue). It never reads the
- *   organization's tasks, so its reads follow the selection, not the
- *   organization.
+ *   Focus one by_project_archived_status_done span of its statuses); for My
+ *   view and My tasks the person's own tasks instead
+ *   (by_assignee_archived_status, by_reviewer_archived_status). Then the
+ *   active subtasks (by_parent_archived) of each task it checks for being a
+ *   group: each task the other filters keep, matched or not, each one a
+ *   search reads a status name for, and each shown subtask of a group it
+ *   shows, created before the rule of one level (lib/viewReads.ts
+ *   ONE_LEVEL_SINCE); the parents it shows by id and their projects; and for
+ *   a search the assignees by id, the texts (issue_descriptions by_issue or
+ *   by_project_archived), the organization's labels (labels by_org), and
+ *   the label rows of tasks a label could still make match (issue_labels
+ *   by_issue_label or by_issue, or past lib/board.ts BOARD.labelTasks such
+ *   tasks each such label's active assignments, by_label). Only that last
+ *   read takes rows of tasks outside the selection; no read takes the
+ *   organization's tasks.
  *
  * It answers `ok`, `over_ceiling` once more than lib/limits.ts BOARD_TASKS
  * matching tasks were found, `over_budget` when its reads reach
@@ -28,11 +34,13 @@
  * selection the caller does not hold, alike for every reason, or with
  * `reason: 'access_unchecked'` where a bound of the caller's own access
  * reads stopped a check (lib/access.ts accessUnchecked). A live query: a
- * change to any task, project or access row it read reruns it, so a change
- * to a task of the selection, or to the subtasks and parents it shows, does,
- * and edits elsewhere in the organization do not. authedQuery, not
- * orgQuery, as My view spans seats and a project selection whose seat goes
- * away answers `unavailable` instead of throwing in a subscription. */
+ * change to a document one of those reads returned or would now return
+ * reruns it, such as a task of a selected sub-project or of the person, a
+ * subtask or parent it read, a project or access row it asked about, and
+ * for a search a profile, text, label or label row it read; edits to other
+ * projects' tasks do not. authedQuery, not orgQuery, as My view spans seats
+ * and a project selection whose seat goes away answers `unavailable`
+ * instead of throwing in a subscription. */
 
 import { v } from 'convex/values'
 import { readBoard } from './lib/board'

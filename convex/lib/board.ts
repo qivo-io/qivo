@@ -13,6 +13,14 @@
  * only tasks of the reader's working set (lib/workingSet.ts). Admin status
  * adds nothing beyond what lib/access.ts accessOf answers.
  *
+ * Under Focus a group whose stored status is Backlog or Done is no row,
+ * though the app's passesFilters keeps every group: no surface shows one
+ * then, as the phone list places each task in the section of its stored
+ * status and hides Backlog and Done (src/components/MobileWorkspace.tsx
+ * MobileTaskList), and the desktop shows a group only as the heading of its
+ * cards, which `parents` holds whatever its status. So Focus reads only the
+ * To do, In progress and In review tasks.
+ *
  * The ceiling counts matching tasks without subtasks, each subtask
  * included, across the whole selection: the desktop Board shows them as
  * cards, and a parent heading repeats in each cell as context without
@@ -73,8 +81,8 @@ import {
  * 8,000 documents and 496 index ranges under Convex's 16 MiB, 32,000 and
  * 4,096 for what one step reads past the guard's last look. Measured under
  * convex-test's transaction limits with titles at the cap in a three-byte
- * script and description rows at the cap (tests/board.test.ts, real
- * limits), in ranges, documents and MiB:
+ * script and, where the Board reads them, description rows at the cap
+ * (tests/board.test.ts, real limits), in ranges, documents and MiB:
  *
  * - 1,000 tasks of one sub-project: 1,020, 1,018 and 1.08; 1,001 stop at
  *   the ceiling after about as much.
@@ -83,16 +91,29 @@ import {
  * - 1,000 tasks under 50 groups: 1,071, 2,069 and 2.29.
  * - My view of 600 and 400 tasks in two seats: 1,035, 1,021 and 1.13.
  * - The envelope's largest Board, 1,000 subtasks under 1,000 parents over
- *   200 sub-projects, each shared with each of the person's 25 teams: 2,476,
- *   9,289 and 4.35, with or without Focus, the 5,000 shares about 6,300 of
- *   those documents.
+ *   200 sub-projects, each shared with each of the person's 25 teams: 2,475,
+ *   9,288 and 4.45, with or without Focus, the 5,000 shares about 6,300 of
+ *   those documents; the same subtasks as the person's own in My view,
+ *   their parents read by id: 3,513, 9,293 and 4.46.
+ * - A priority filter that keeps one subtask under each of 400 parents of
+ *   ten, the selection's 4,400 tasks read whole and each parent's subtasks
+ *   again: 473, 8,471 and 9.43; the same as the person's own in My view:
+ *   816, 4,809 and 5.36.
  * - A search over 5,000 tasks of 390-character texts, the measured
- *   average: 213, 10,159 and 4.69.
+ *   average: 213, 10,159 and 4.69; over 4,000 tasks for a word only the
+ *   labels of 667 hold: 801, 8,798 and 2.42.
  *
  * Each task the filters keep costs about one range, its group check, and a
- * group one more for its subtasks, so ranges run out first, at about 1,500
- * cards under as many parents; the ceiling comes well before. A search
- * whose candidates hold texts near the cap does not fit and answers
+ * group one more for its subtasks. The subtasks of a shown group that the
+ * filters drop cost nothing more where the group or the subtask was created
+ * under the rule of one level (lib/viewReads.ts ONE_LEVEL_SINCE); data
+ * stored before it gets a check of each such subtask, which a legacy nested
+ * group may be, a range each, so for that data the priority filter above
+ * answers over_budget at 3,600 ranges, and the largest Board's My view,
+ * whose fixture data predates the rule, comes within 90 of them. Ranges
+ * run out first at about 1,500 cards under as many parents; the ceiling
+ * comes before. A
+ * search whose candidates hold texts near the cap does not fit and answers
  * over_budget, as does the people filter over a selection of about 11,000
  * tasks at the title cap, whose rows the filter must read.
  *
@@ -130,7 +151,10 @@ export type BoardFilters = {
    * stale, null when the Stale filter is off */
   stale_before: string | null
   focus: boolean
-  /** at most LIMITS.search characters */
+  /** at most LIMITS.search characters, trimmed here, so whitespace alone is
+   * no filter, also not for the lanes a filter Clear clears drops
+   * (heldLanes). The app trims it before that test and before sending, as
+   * its Board treats the raw text as a filter today. */
   search: string
 }
 
@@ -139,10 +163,11 @@ export type BoardAnswer =
   | {
       state: 'ok'
       /** every matching task, groups included, by number, then
-       * organization and id. The answer holds no list of owners: each row
-       * carries its organization, assignee, reviewer, status and
-       * has_subtasks, from which lib/review.ts taskOwnerId gives its owner
-       * for planning.ownerLoads, an organization at a time. */
+       * organization and id; under Focus not a group whose stored status
+       * is Backlog or Done (see the header). The answer holds no list of
+       * owners: each row carries its organization, assignee, reviewer,
+       * status and has_subtasks, from which lib/review.ts taskOwnerId gives
+       * its owner for planning.ownerLoads, an organization at a time. */
       rows: ViewRow[]
       /** the shown ancestors of rows that are not rows themselves, in that
        * order */
