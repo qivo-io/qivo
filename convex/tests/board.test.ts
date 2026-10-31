@@ -15,7 +15,8 @@ import { OWN_READS } from '../lib/access'
 import { BOARD, type BoardAnswer, type BoardFilters, type BoardScope } from '../lib/board'
 import { TEXT_TASK_READS } from '../lib/core'
 import { ISSUE_STATUSES } from '../lib/enums'
-import { BOARD_TASKS, LIMITS, MIB, PROJECT_ROW_MAX_BYTES } from '../lib/limits'
+import { BOARD_TASKS, LIMITS, MIB, NAME_MAX, PROJECT_ROW_MAX_BYTES } from '../lib/limits'
+import { named, nameKey } from '../lib/nameKey'
 import { ownTasks, type ViewRow, viewAccess, viewBudget } from '../lib/viewReads'
 import {
   boardFor,
@@ -916,6 +917,74 @@ const archive = (t: T, task: Doc<'issues'>) =>
 /** A task at the caps: its title, and its description row's text. */
 const atCaps = { title: TITLE, text: TEXT }
 
+/* Real sentences in a three-byte script, for the texts a search reads and
+ * for realistic titles. None holds a word the cases search for. */
+const SENTENCES = [
+  'センサーの値が朝から少しずつ上がっているので原因を調べる。',
+  '試作基板の電源回路を見直し、発熱の少ない部品に替える。',
+  '組み立て手順書を更新して、新しい治具の使い方を書き加える。',
+  '来週の出荷に向けて検査項目を整理し、担当者と日程を決める。',
+  '画面の文字が小さすぎるという声があったので表示を大きくする。',
+  '通信が途切れる不具合は再起動の順番に関係しているようだ。',
+  '部品の納期が遅れているため、代わりの仕入れ先を探している。',
+  '試験結果を表にまとめて、前回との違いを分かりやすく示す。',
+  '設定画面の項目が多いので、よく使うものだけを最初に並べる。',
+  '静かな部屋で騒音を測り、ファンの回転数との関係を確かめる。',
+  '古い資料と新しい図面の食い違いを洗い出して直しておく。',
+  '顧客からの問い合わせに答えるため、仕様書の該当箇所を探す。',
+]
+
+/** `length` characters of SENTENCES from sentence `from` on. */
+const words = (from: number, length: number): string => {
+  let s = ''
+  for (let k = from; s.length < length; k++) s += SENTENCES[k % SENTENCES.length]
+  return s.slice(0, length)
+}
+
+/** The real-limits searches' texts: 390 characters, the measured average. */
+const TEXT_CHARS = 390
+
+/** The word the real-limits searches look for, in no sentence. */
+const RARE = 'クオッカ'
+
+/** A name at the cap in a three-byte script, distinct for each `i`: an
+ * ideograph for `i`, then 班. No ideograph has an NFKD form, so the name key
+ * keeps every byte. */
+const nameAtCap = (i: number) => String.fromCodePoint(0x4e00 + i) + '班'.repeat(NAME_MAX - 1)
+
+/** `n` sub-projects of `parent` as model/projects.ts writes them: a name at
+ * the cap with its key, `parent`'s lead and a live archive state. */
+async function plantSubs(t: T, parent: Doc<'projects'>, n: number): Promise<Doc<'projects'>[]> {
+  const subs: Doc<'projects'>[] = []
+  for (let i = 0; i < n; i++)
+    subs.push(
+      await plantProject(t, {
+        org_id: parent.org_id,
+        type: 'project',
+        parent_id: parent.id,
+        ...named(nameAtCap(i)),
+        lead_id: parent.lead_id,
+        archive_state: 'live',
+      }),
+    )
+  return subs
+}
+
+/** Gives `tasks` the label `labelId`, as model/labels.ts setTaskLabel
+ * writes an assignment, with the task's window key. */
+const labelAll = async (t: T, labelId: string, tasks: readonly Doc<'issues'>[]) => {
+  for (let from = 0; from < tasks.length; from += 2000)
+    await t.run(async (ctx) => {
+      for (const task of tasks.slice(from, from + 2000))
+        await ctx.db.insert('issue_labels', {
+          org_id: task.org_id,
+          issue_id: task.id,
+          label_id: labelId,
+          task_key: task.window_key,
+        })
+    })
+}
+
 describe('real limits', () => {
   it('answers 999 and 1,000 matching tasks of one sub-project and over_ceiling at 1,001, inside Convex limits', async () => {
     const t = newT({ transactionLimits: true })
@@ -945,9 +1014,7 @@ describe('real limits', () => {
   it('answers 1,000 matching tasks over 200 sub-projects of one project and over_ceiling at one more', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const subs: Doc<'projects'>[] = []
-    for (let i = 0; i < 200; i++)
-      subs.push(await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }))
+    const subs = await plantSubs(t, f.meta, 200)
     for (const sub of subs) await plantTasks(t, sub, 5, () => atCaps)
     const scope = projectScope(f.guest, f.meta.id)
     const full = await boardRead(t, [f.guest], scope)
@@ -1054,22 +1121,34 @@ describe('real limits', () => {
     expect(owners.answer.state).toBe('over_budget')
   }, 600_000)
 
-  it('searches a 5,000-task selection of 390-character texts', async () => {
+  /* A search for RARE over 5,000 tasks of FW titled `title(i)`, with texts
+   * of TEXT_CHARS, every 100th from the 7th ending in RARE */
+  const searchOf5000 = async (title: (i: number) => string) => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const words = 'the sensor reads calm air and the room stays quiet while the team ships '
-    const text = words.repeat(6).slice(0, 390)
     await plantTasks(
       t,
       f.sub,
       5000,
-      (i) => ({ text: i % 100 === 7 ? `${text.slice(0, 380)} quokka` : text }),
+      (i) => ({
+        title: title(i),
+        text: i % 100 === 7 ? `${words(i, TEXT_CHARS - RARE.length)}${RARE}` : words(i, TEXT_CHARS),
+      }),
       1000,
     )
-    const { answer, read } = await boardRead(t, [f.guest], projectScope(f.guest, f.sub.id), {
-      search: 'quokka',
-    })
-    record('a search of 5,000 tasks', answer, read)
+    const scope = projectScope(f.guest, f.sub.id)
+    return { ...(await boardRead(t, [f.guest], scope, { search: RARE })), f }
+  }
+
+  it('answers over_budget for a search of 5,000 tasks with titles at the cap and 390-character texts', async () => {
+    const { answer, read, f } = await searchOf5000(() => TITLE)
+    record('a search of 5,000 tasks, titles at the cap', answer, read)
+    expect(answer).toEqual({ state: 'over_budget', projects: [f.sub.id] })
+  }, 600_000)
+
+  it('searches 5,000 tasks with realistic titles and 390-character texts', async () => {
+    const { answer, read } = await searchOf5000((i) => words(i + 5, 40 + (i % 21)))
+    record('a search of 5,000 tasks, realistic titles', answer, read)
     expect(stateOf(answer)).toEqual({ state: 'ok', rows: 50 })
   }, 600_000)
 
@@ -1138,23 +1217,26 @@ describe('real limits', () => {
     }
     const bug = await labelOf('Bug')
     await labelOf('Design')
+    /* titles at the cap and 390-character texts keep this search within
+     * about 6 percent of the bytes at which a search stops fitting, on
+     * purpose: rows that grow make it answer over_budget, and BOARD's
+     * measured sizes then need measuring again */
     // a tenth of every sixth task's titles say login
     const tasks = await plantTasks(
       t,
       f.sub,
       4000,
-      (i) => ({ title: i % 60 === 0 ? `Login form ${i}` : `Task ${i}`, text: 'plain words' }),
+      (i) => ({
+        title: i % 60 === 0 ? `Login ${TITLE.slice(6)}` : TITLE,
+        text: words(i, TEXT_CHARS),
+      }),
       1000,
     )
-    await t.run(async (ctx) => {
-      for (const [i, task] of tasks.entries())
-        if (i % 6 === 0)
-          await ctx.db.insert('issue_labels', {
-            org_id: f.org.id,
-            issue_id: task.id,
-            label_id: bug,
-          })
-    })
+    await labelAll(
+      t,
+      bug,
+      tasks.filter((_, i) => i % 6 === 0),
+    )
     const scope = projectScope(f.guest, f.sub.id)
     const labelled = await boardRead(t, [f.guest], scope, { search: 'bug' })
     record('a label word over 4,000 tasks', labelled.answer, labelled.read)
@@ -1193,18 +1275,15 @@ describe('real limits', () => {
       type: 'project',
       parent_id: f.hidden.id,
     })
-    const mine = await plantTasks(t, f.sub, 600, () => ({ text: 'plain words' }), 600)
+    const mine = await plantTasks(
+      t,
+      f.sub,
+      600,
+      (i) => ({ title: TITLE, text: words(i, TEXT_CHARS) }),
+      600,
+    )
     const theirs = await plantTasks(t, elsewhere, 29_400, () => ({}), 2000)
-    const labelled = [...mine, ...theirs]
-    for (let from = 0; from < labelled.length; from += 2000)
-      await t.run(async (ctx) => {
-        for (const task of labelled.slice(from, from + 2000))
-          await ctx.db.insert('issue_labels', {
-            org_id: f.org.id,
-            issue_id: task.id,
-            label_id: bug,
-          })
-      })
+    await labelAll(t, bug, [...mine, ...theirs])
     const { answer, read } = await boardRead(t, [f.guest], projectScope(f.guest, f.sub.id), {
       search: 'bug',
     })
@@ -1216,26 +1295,33 @@ describe('real limits', () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
-    const top = await plantProject(t, { org_id: f.org.id })
-    const subs: Doc<'projects'>[] = []
-    for (let i = 0; i < 200; i++)
-      subs.push(await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: top.id }))
+    const top = await plantProject(t, { org_id: f.org.id, lead_id: f.user.id })
+    const subs = await plantSubs(t, top, 200)
+    // the teams, memberships and shares with the name keys their writers
+    // copy (model/teams.ts, model/projectAccess.ts)
     await t.run(async (ctx) => {
       for (let i = 0; i < 25; i++) {
         const team = uuid()
+        const name = nameAtCap(i)
         await ctx.db.insert('teams', {
           id: team,
           org_id: f.org.id,
-          name: `Team ${i}`,
-          track_delay_default: false,
+          ...named(name),
+          track_delay_default: true,
           created_at: NOW,
         })
-        await ctx.db.insert('team_members', { team_id: team, profile_id: me.id, is_leader: false })
+        await ctx.db.insert('team_members', {
+          team_id: team,
+          profile_id: me.id,
+          is_leader: false,
+          name_key: nameKey(me.name),
+        })
         for (const sub of subs)
           await ctx.db.insert('project_team_access', {
             project_id: sub.id,
             team_id: team,
             level: 'user',
+            name_key: nameKey(name),
           })
       }
     })

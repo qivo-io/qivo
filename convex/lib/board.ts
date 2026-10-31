@@ -80,31 +80,39 @@ import {
  * access rows included (lib/viewReads.ts viewBudget), and keeps 4 MiB,
  * 8,000 documents and 496 index ranges under Convex's 16 MiB, 32,000 and
  * 4,096 for what one step reads past the guard's last look. Measured under
- * convex-test's transaction limits with titles at the cap in a three-byte
- * script and, where the Board reads them, description rows at the cap
- * (tests/board.test.ts, real limits), in ranges, documents and MiB:
+ * convex-test's transaction limits with rows as the app writes them, each
+ * task with its creator, reporter and status stamp and each team share and
+ * membership with its copy of a name key, titles and names at the cap in a
+ * three-byte script and, where the Board reads them, description rows of
+ * 390 characters, the measured average, in a three-byte script
+ * (tests/board.test.ts, real limits), in ranges, documents and MiB. A task
+ * row at the title cap is then about 1.25 KB, a subtask's with its
+ * assignee about 1.35. A real backend timed on 31 October 2026 read 6.41
+ * MiB for the largest Board below and 10.99 for the search at the title
+ * cap, with rows the app's own writers made.
  *
- * - 1,000 tasks of one sub-project: 1,020, 1,018 and 1.08; 1,001 stop at
+ * - 1,000 tasks of one sub-project: 1,020, 1,018 and 1.21; 1,001 stop at
  *   the ceiling after about as much.
  * - 1,000 tasks over 200 sub-projects of one project: 1,239, 1,208 and
- *   1.14, under Focus 1,241.
- * - 1,000 tasks under 50 groups: 1,071, 2,069 and 2.29.
- * - My view of 600 and 400 tasks in two seats: 1,035, 1,021 and 1.13.
+ *   1.37, under Focus 1,241.
+ * - 1,000 tasks under 50 groups: 1,071, 2,069 and 2.56.
+ * - My view of 600 and 400 tasks in two seats: 1,035, 1,021 and 1.26.
  * - The envelope's largest Board, 1,000 subtasks under 1,000 parents over
  *   200 sub-projects, each shared with each of the person's 25 teams: 2,475,
- *   9,288 and 4.45, with or without Focus, the 5,000 shares about 6,300 of
+ *   9,288 and 6.39, with or without Focus, the 5,000 shares about 6,300 of
  *   those documents; the same subtasks as the person's own in My view,
- *   their parents read by id: 3,513, 9,293 and 4.46.
+ *   their parents read by id: 3,513, 9,293 and 6.40.
  * - A priority filter that keeps one subtask under each of 400 parents of
  *   ten, the selection's 4,400 tasks read whole and each parent's subtasks
- *   again: 473, 8,471 and 9.43; the same as the person's own in My view:
- *   816, 4,809 and 5.36.
- * - A search over 5,000 tasks of 390-character texts, the measured
- *   average: 213, 10,159 and 4.69; over 4,000 tasks for a word only the
- *   labels of 667 hold: 801, 8,798 and 2.42; over 600 tasks of one
- *   sub-project for a word a label holds that 29,400 other tasks of the
- *   organization carry, read through each task's own rows: 1,235, 4,391
- *   and 0.95.
+ *   again: 473, 8,471 and 10.52; the same as the person's own in My view:
+ *   816, 4,809 and 5.98.
+ * - A search over 5,000 tasks with realistic titles, 40 to 60 characters:
+ *   213, 10,159 and 9.81. The same search with every title at the cap does
+ *   not fit and answers over_budget after 178, 8,802 and 10.99 (below).
+ * - A search over 4,000 tasks for a word only the labels of 667 hold: 801,
+ *   8,798 and 10.37; over 600 tasks of one sub-project for a word a label
+ *   holds that 29,400 other tasks of the organization carry, read through
+ *   each task's own rows: 1,235, 4,391 and 2.20.
  *
  * Each task the filters keep costs about one range, its group check, and a
  * group one more for its subtasks. The subtasks of a shown group that the
@@ -115,10 +123,21 @@ import {
  * answers over_budget at 3,600 ranges, and the largest Board's My view,
  * whose fixture data predates the rule, comes within 90 of them. Ranges
  * run out first at about 1,500 cards under as many parents; the ceiling
- * comes before. A
- * search whose candidates hold texts near the cap does not fit and answers
- * over_budget, as does the people filter over a selection of about 11,000
- * tasks at the title cap, whose rows the filter must read.
+ * comes before.
+ *
+ * Bytes stop a selection whose tasks a filter must read whole: the search,
+ * the people filter, Priority and Stale read every task of the selection's
+ * ranges before they drop any (`take`), where My tasks and Focus read only
+ * their own ranges. A search that reads every candidate's text, of 390
+ * characters in a three-byte script, stops fitting at about 4,200 tasks
+ * with titles at the cap and about 5,600 with realistic titles, and one
+ * whose candidates hold texts near the cap fits far fewer. The people
+ * filter, Priority and Stale stop at about 9,600 tasks at the title cap,
+ * the people filter measured. A filter that keeps subtasks under many
+ * parents stops sooner, as it reads each such parent's subtasks again: the
+ * 400 parents of ten above take 10.52 of the 12 MiB. Each answers
+ * over_budget, and the owner chose on 31 October 2026 that the Board then
+ * asks the person to narrow.
  *
  * `context` caps the groups among the rows and the shown parents together,
  * the rows a Board holds beside its BOARD_TASKS cards. They count in
