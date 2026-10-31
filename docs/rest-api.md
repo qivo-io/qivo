@@ -670,6 +670,11 @@ project`.
   (`this project, or the top-level project above it, has sub-projects that hold more data than one change can read, so it cannot be archived or restored at once. Shorten the longest project names or descriptions there, or delete some of those sub-projects first.`), and nothing changes. When a request that archives or
   restores and renames is refused on that budget, send the archive or
   restore and the rename as two requests, which each get the whole budget.
+  A top-level project that more people have among their favorites than one
+  change can update is a `400` (`more people have this project among their favorites than one change can update, so it cannot be archived, restored or renamed at once. Contact support@qivo.io so we can help.`),
+  and nothing changes. One request that archives or restores and renames
+  it updates each favorite once, so two requests would meet the same
+  refusal.
   A project takes no archive reason, as in the app, where only
   archiving a task asks for one. A body with `archive_reason` is a `400`
   (`only tasks take an archive reason; archive a project with archived

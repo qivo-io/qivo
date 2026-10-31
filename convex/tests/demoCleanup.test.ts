@@ -173,6 +173,8 @@ const APP_OWNED: TableNames[] = [
   'projects',
   // which projects each seat and team reaches, deleted with the projects
   'project_reach',
+  // each seat's favorite projects, deleted with the projects
+  'project_favorites',
   // the projects the nightly archive checks next, deleted with the projects
   'archive_rechecks',
   'issues',
@@ -1014,6 +1016,67 @@ describe('public Northstar provisioning and bounded deletion', () => {
       ).toEqual([])
     for (const file of files)
       expect(await t.run((ctx) => ctx.db.system.get(file as Id<'_storage'>))).toBeNull()
+  })
+
+  it("deletes the visitor's favorites with the projects, and those an earlier release left, in the last phase", async () => {
+    const t = testBackend()
+    const a = await makeDemo(t)
+    const orgId = a.org_id as string
+    const ofOrg = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query('project_favorites').collect()).filter((row) => row.org_id === orgId),
+      )
+    /* A favorites row of `profileId` on project `projectId` of the demo. */
+    const plant = (profileId: string, projectId: string) =>
+      t.run((ctx) =>
+        ctx.db.insert('project_favorites', {
+          org_id: orgId,
+          profile_id: profileId,
+          project_id: projectId,
+          name_key: 'a favorite',
+          live: true,
+          created_at: new Date(NOW).toISOString(),
+        }),
+      )
+    // the visitor's star on a top-level project of the demo
+    const { profile, project } = await t.run(async (ctx) => ({
+      profile: (await ctx.db
+        .query('profiles')
+        .withIndex('by_auth', (q) => q.eq('auth_user_id', a.auth_user_id))
+        .first())!,
+      project: (
+        await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .collect()
+      ).find((p) => p.parent_id === undefined)!,
+    }))
+    await plant(profile.id, project.id)
+    await t.run((ctx) => ctx.db.patch(a._id, { status: 'deleting' }))
+    let planted = false
+    for (let n = 0; n < 80 && (await t.run((ctx) => ctx.db.get(a._id))) !== null; n++) {
+      await t.mutation(purge, { demo_id: a.id })
+      const progress = await t.run((ctx) => ctx.db.get(a._id))
+      const phase = progress?.cleanup_phase ?? 'sessions'
+      if (!planted && ['profiles', 'labels', 'activity', 'webhooks'].includes(phase)) {
+        // the projects phase took the star with the projects
+        expect(await ofOrg()).toEqual([])
+        // an earlier release left one past that phase
+        await plant(uuid(), uuid())
+        planted = true
+      }
+      if (phase === 'uploads')
+        vi.setSystemTime(
+          Math.max(
+            Date.now() + 5000,
+            progress?.cleanup_file_after ?? 0,
+            progress?.cleanup_file_wait_until ?? 0,
+          ),
+        )
+    }
+    expect(planted).toBe(true)
+    expect(await t.run((ctx) => ctx.db.get(a._id))).toBeNull()
+    expect(await ofOrg()).toEqual([])
   })
 
   it("ends a demo export past the demo's archive cap, while the same data fits the cap elsewhere", async () => {

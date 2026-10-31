@@ -17,6 +17,7 @@ import {
   marketingInstant,
 } from '../internal/marketingDemoData'
 import { canSeeProject, hasProjectLevel } from '../lib/access'
+import { nameKey } from '../lib/nameKey'
 import { MCP_PROVENANCE } from '../machine/shared'
 import { logActivity, machineDetail } from '../model/activity'
 import { removeProfile } from '../model/cascade'
@@ -1355,6 +1356,55 @@ describe('marketing demo rebuild ownership', () => {
     expect((await t.run(async (ctx) => ctx.db.query('issues').collect())).map((i) => i.id)).toEqual(
       issueIds,
     )
+  }, 30_000)
+
+  it("wipes the seats' favorites with the projects, and refuses a seed while one is left", async () => {
+    const t = newAuthT()
+    const result = await seeded(t)
+    const ofOrg = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query('project_favorites').collect()).filter(
+          (row) => row.org_id === result.org_id,
+        ),
+      )
+    const { seat, project } = await t.run(async (ctx) => ({
+      seat: (await ctx.db
+        .query('profiles')
+        .withIndex('by_org', (q) => q.eq('org_id', result.org_id))
+        .first())!,
+      project: (
+        await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', result.org_id))
+          .collect()
+      ).find((p) => p.parent_id === undefined)!,
+    }))
+    /* A favorite of the seat on the Northstar project's id. */
+    const plant = () =>
+      t.run((ctx) =>
+        ctx.db.insert('project_favorites', {
+          org_id: result.org_id,
+          profile_id: seat.id,
+          project_id: project.id,
+          name_key: nameKey(project.name),
+          live: true,
+          created_at: NOW,
+        }),
+      )
+    await plant()
+    await wipe(t)
+    expect(await ofOrg()).toEqual([])
+    // one an earlier release's wipe left would name an id the seed writes
+    // again
+    await plant()
+    await expectRefusal(
+      apply(t, 'seed', NEXT_ANCHOR),
+      'rule',
+      /work was added after wipe.*use reset/,
+    )
+    expect(await reset(t, NEXT_ANCHOR)).toMatchObject({ state: 'ready' })
+    expect(await ofOrg()).toEqual([])
+    await assertNoDanglingRefs(t, 'marketing demo reset after a favorite')
   }, 30_000)
 
   it('does not treat an empty receipt as permission to erase manual work added after wipe', async () => {

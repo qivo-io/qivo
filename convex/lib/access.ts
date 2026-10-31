@@ -94,6 +94,27 @@ const higherLevel = (a: AccessLevel | null, b: AccessLevel | null): AccessLevel 
 export const receivesTeamAccess = (me: Doc<'profiles'>): boolean =>
   isOrgStaff(me) || me.org_role === 'viewer'
 
+/** `me` as ordinary access judges them: an organization admin as a standard
+ * user with the same rows, anyone else as they are. The level rule treats
+ * the two roles alike but for its admin branches, in levelUnder, in
+ * projectLevelsOf's sees (a copy of levelUnder's checks) and in levelsFrom,
+ * which this turns off. canLeadProjects and isOrgStaff accept both, both
+ * receive team access, and cappedLevel caps only viewers. So
+ * projectLevelsOf and accessOf of it give the level an admin holds once
+ * those branches are gone, the ordinary level. The management predicates
+ * (canManageOwnProjectAccess, canWriteOrgLabels, canManageOrgLabels) keep
+ * their own admin branches and are not asked with it.
+ * A guest or a viewer stays as they are, because as a user a guest would
+ * receive the shares of a team it still holds an old membership of, and a
+ * viewer would lead a project whose lead_id still names it. The admin
+ * access report (internal/adminAccessReport.ts) and a project favorite
+ * (model/projectFavorites.ts) ask with it. tests/adminAccessReport.test.ts
+ * fails when those helpers start telling admins and users apart. Once the
+ * admin access split removes all three branches, this changes nothing and
+ * can go. */
+export const ordinaryOf = (me: Doc<'profiles'>): Doc<'profiles'> =>
+  me.org_role === 'admin' ? { ...me, org_role: 'user' } : me
+
 async function teamGrantOn(ctx: QueryCtx, me: Doc<'profiles'>, root: Doc<'projects'>) {
   if (!receivesTeamAccess(me)) return null
   let level: AccessLevel | null = null

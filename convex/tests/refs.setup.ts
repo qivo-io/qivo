@@ -71,6 +71,10 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'archive_rechecks', field: 'org_id', target: 'organizations' },
   { table: 'project_reach', field: 'project_id', target: 'projects' },
   { table: 'project_reach', field: 'root_id', target: 'projects' },
+  { table: 'project_favorites', field: 'org_id', target: 'organizations' },
+  { table: 'project_favorites', field: 'profile_id', target: 'profiles' },
+  // a favorite stays while its project is in Deleted items
+  { table: 'project_favorites', field: 'project_id', target: 'projects', trashed: true },
   { table: 'issues', field: 'project_id', target: 'projects' },
   { table: 'issues', field: 'org_id', target: 'organizations' },
   { table: 'issues', field: 'assignee_id', target: 'profiles' },

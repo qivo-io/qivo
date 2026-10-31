@@ -26,6 +26,7 @@ import { recipientItems, stateRows } from './inboxItems'
 import { deleteSweepRow } from './messages'
 import { jobsOf, partsOf, requestsOf } from './orgExports'
 import { deleteOrgBookkeeping } from './orgs'
+import { favoritesOfOrg, favoritesOfProfile } from './projectFavorites'
 import { grantee, reachOfGrantee, reachOfOrg } from './projectNav'
 import { deleteStamp } from './syncStamps'
 import { emitTaskEvent } from './taskEvents'
@@ -235,6 +236,7 @@ type AccessTable =
   | 'team_members'
   | 'project_access'
   | 'project_reach'
+  | 'project_favorites'
   | 'user_prefs'
   | 'org_export_requests'
 
@@ -255,6 +257,8 @@ type AccessTable =
  *   background step deletes it (model/teamCounts.ts).
  * - project_reach: navigation reads the rows of a live seat, and the rows
  *   grant nothing (model/projectNav.ts).
+ * - project_favorites: navigation reads the favorites of a live seat, and a
+ *   favorite grants nothing (model/projectFavorites.ts).
  * - user_prefs: only the person's own seats read them (prefs.ts).
  * - org_export_requests: an export job checks each requester through the
  *   live profile, and one created after the request never counts
@@ -276,6 +280,7 @@ const ACCESS_RANGES: ((
   (ctx, profileId) =>
     ctx.db.query('project_access').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
   (ctx, profileId) => reachOfGrantee(ctx, grantee.profile(profileId)),
+  (ctx, profileId) => favoritesOfProfile(ctx, profileId),
   (ctx, profileId) =>
     ctx.db.query('user_prefs').withIndex('by_profile', (q) => q.eq('profile_id', profileId)),
   (ctx, profileId) =>
@@ -329,8 +334,8 @@ const ACTED_ROWS_FIRST_PASS = 500
  * the person's own list hides them at once. Every session, credential and
  * OAuth path requires the profile row, so access fails closed here. It
  * deletes the first ACCESS_FIRST_PASS.rows of its own agent keys, MCP
- * tokens, memberships, grants, reach rows, preferences and export requests
- * (ACCESS_RANGES,
+ * tokens, memberships, grants, reach rows, favorites, preferences and export
+ * requests (ACCESS_RANGES,
  * which says why the rest grant nothing), and clears its newest ACTED_ROWS_FIRST_PASS
  * activity rows and as many open tasks as REMOVAL_BUDGET allows, assignee
  * and reviewer fields first. That is every row unless the profile holds
@@ -354,7 +359,8 @@ const ACTED_ROWS_FIRST_PASS = 500
  *   comments.edited_by (0054:15/19), messages.actor_id (0074:24),
  *   agent_keys.created_by (0100:51), issue_attachments.uploaded_by (0018:23).
  * - DELETE: team_members (0001:52), project_access (0001:81), the
- *   profile's project_reach rows (model/projectNav.ts),
+ *   profile's project_reach rows (model/projectNav.ts), its
+ *   project_favorites (model/projectFavorites.ts),
  *   issue_subscriptions (0114:86), messages by recipient, the whole inbox
  *   (0074:23), user_prefs (0036:11), the Team sync stamp (sync_stamps),
  *   the read-message sweep row (message_sweeps), agent_keys by profile
@@ -469,9 +475,10 @@ export async function removeProfile(
  * issue_labels, issue_subscriptions, issue_attachments) and profiles
  * (user_prefs, agent_keys, mcp_tokens, messages via recipient); each is
  * explicit here, right after its parent, as are a profile's inbox items and
- * their build state after its messages (model/inboxItems.ts). The used_ids
- * rows of the ids its tasks and projects held go after the org row
- * (model/usedIds.ts).
+ * their build state after its messages (model/inboxItems.ts). Its reach
+ * rows and its people's project favorites (model/projectFavorites.ts) go
+ * before its projects. The used_ids rows of the ids its tasks and projects
+ * held go after the org row (model/usedIds.ts).
  * Deliberately NOT swept, because none of it is org-scoped: Better Auth
  * users (a login may hold seats elsewhere — adminAuth.deleteOrphanLogin is
  * the operator's tool once no profile references it), the appearance tables
@@ -628,6 +635,8 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
       await ctx.db.delete(row._id)
 
   for (const row of await reachOfOrg(ctx, org.id).collect()) await ctx.db.delete(row._id)
+  // its people's favorites, before the projects they name free their ids
+  for (const row of await favoritesOfOrg(ctx, org.id).collect()) await ctx.db.delete(row._id)
   // the nightly archive's rechecks of its projects (model/archiveRechecks.ts)
   for (const row of await rechecksOfOrg(ctx, org.id).collect()) await ctx.db.delete(row._id)
   for (const p of await ctx.db

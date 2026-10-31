@@ -1484,6 +1484,40 @@ export default defineSchema({
     .index('by_root_child', ['root_id', 'kind', 'live'])
     .index('by_org', ['org_id']),
 
+  // The top-level projects a seat starred, which the All projects directory
+  // and the sidebar list first, in name order: one row for each seat and
+  // project, so each seat of a login keeps its own. A row is a preference
+  // and grants nothing. Only projectNav.setFavorite writes one, for a
+  // top-level project the seat sees through ordinary access, and deletes it
+  // again (model/projectFavorites.ts). A rename, an archive or a restore of
+  // the project brings the copies in line in its transaction, within its
+  // tree budget (model/projectNav.ts treeFavorites, settleFavorites). A
+  // loss of access leaves the row, so every reader shows one only for a
+  // live top-level project of the row's organization that the seat sees
+  // through ordinary access and whose copies the row holds, the rule in
+  // model/projectFavorites.ts. Not a stored table: a move to Deleted items
+  // leaves the rows, whose project_id then names the stored copy, a restore
+  // keeps them and the purge deletes them (model/deletedItems.ts). Profile
+  // removal, the organization teardowns and the public demo's cleanup
+  // delete them too. Never sent to clients, REST, MCP, webhooks or the
+  // export.
+  project_favorites: defineTable({
+    org_id: v.string(), // the project's, which is the seat's
+    profile_id: v.string(), // the seat
+    project_id: v.string(), // a top-level project of a meta's tree
+    // copies of the project's name key (lib/nameKey.ts of its name) and of
+    // whether it is live (archived_at absent)
+    name_key: v.string(),
+    live: v.boolean(),
+    created_at: v.string(), // when the seat starred it
+  })
+    // a seat's favorites in name order, live or archived, the project id
+    // breaking ties; profile removal reads all of a seat's by its first field
+    .index('by_profile_list', ['profile_id', 'live', 'name_key', 'project_id'])
+    // a seat's row on one project, at most one, and every row on a project
+    .index('by_project_profile', ['project_id', 'profile_id'])
+    .index('by_org', ['org_id']),
+
   issues: issuesTable,
 
   /* A task's description in a row of its own, so that the reads of task

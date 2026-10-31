@@ -6,6 +6,7 @@ import type { Doc, TableNames } from '../_generated/dataModel'
 import { createAuth, createAuthOptions } from '../auth'
 import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, MARKETING_DEMO_VERSION } from '../internal/marketingDemoData'
+import { accessOf, ordinaryOf } from '../lib/access'
 import { byId } from '../lib/db'
 import {
   DEMO_INSERTS_TOTAL,
@@ -652,6 +653,44 @@ describe('demo lifetime and capabilities', () => {
       write_window_count: 2,
       write_count: 2,
     })
+  })
+
+  it('counts a star as one write and its row as one record, and a refused star as nothing', async () => {
+    const a = await readyDemo()
+    const org_id = a.profile.org_id
+    // a top-level project the visitor sees through ordinary access, and
+    // one they do not
+    const { mine, other } = await t.run(async (ctx) => {
+      const tops = (
+        await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', org_id))
+          .collect()
+      ).filter((p) => p.parent_id === undefined && p.archived_at === undefined)
+      const access = accessOf(ctx, ordinaryOf(a.profile), tops)
+      const seen = await Promise.all(tops.map((p) => access.visible(p.id)))
+      return {
+        mine: tops.find((_, i) => seen[i]),
+        other: tops.find((_, i) => !seen[i]),
+      }
+    })
+    if (mine === undefined) throw new Error('the visitor sees no top-level project')
+    const counts = async () => {
+      const row = await countsOf(a.receipt)
+      return { writes: row?.write_count ?? 0, records: row?.insert_count ?? 0 }
+    }
+    const star = (project_id: string, favorite = true) =>
+      a.as.mutation(api.projectNav.setFavorite, { org_id, project_id, favorite })
+    const start = await counts()
+    await star(mine.id)
+    expect(await counts()).toEqual({ writes: start.writes + 1, records: start.records + 1 })
+    await star(mine.id)
+    expect(await counts()).toEqual({ writes: start.writes + 2, records: start.records + 1 })
+    await star(mine.id, false)
+    expect(await counts()).toEqual({ writes: start.writes + 3, records: start.records + 1 })
+    // a refused star rolls its write back
+    await expectRefusal(star(other?.id ?? uuid()), 'not_found', /^project not found$/)
+    expect(await counts()).toEqual({ writes: start.writes + 3, records: start.records + 1 })
   })
 
   it('starts the counts of a receipt from before them at what it holds', async () => {

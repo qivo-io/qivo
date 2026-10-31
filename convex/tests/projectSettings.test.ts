@@ -446,7 +446,7 @@ describe('projectSettings.get', () => {
       inherited_review_hours: DEFAULT_REVIEW_HOURS,
       lead: { ...personOf(f.user), inherited: false },
       // The admin access split makes an admin's level their ordinary one,
-      // projectLevel of internal/adminAccessReport.ts ordinaryOf(admin),
+      // projectLevel of lib/access.ts ordinaryOf(admin),
       // here null; no right below changes with it.
       level: 'lead',
       can_edit: true,

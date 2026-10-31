@@ -149,6 +149,7 @@ import {
   isAccessUnchecked,
   OWN_READS,
   type OwnReads,
+  ordinaryOf,
   projectLevelsOf,
   tokenExpired,
 } from '../lib/access'
@@ -424,17 +425,9 @@ function phaseOf(raw: string): Phase {
   return known
 }
 
-/** `admin` as a standard user with the same rows. lib/access.ts treats the
- * two roles alike everywhere but the admin branch of levelUnder and
- * levelsFrom. canLeadProjects and isOrgStaff accept both, both receive team
- * access, and cappedLevel caps only viewers. So projectLevelsOf of it gives
- * the level the admin holds once that branch is gone, the ordinary level.
- * adminAccessReport.test.ts fails when those helpers start telling the two
- * roles apart. */
-export const ordinaryOf = (admin: Doc<'profiles'>): Doc<'profiles'> => ({
-  ...admin,
-  org_role: 'user',
-})
+/* An admin as a standard user with the same rows (lib/access.ts), which
+ * adminAccessReport.test.ts imports from here. */
+export { ordinaryOf }
 
 /* An admin's ordinary levels (ordinaryOf), with the projects they read. */
 type Levels = ReturnType<typeof projectLevelsOf>

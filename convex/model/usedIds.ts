@@ -44,7 +44,10 @@ const HOLDER_READS = { issues: 3, projects: 2 } as const
  * row of its own. Every teardown takes the organization's rows out before
  * this runs: its deletion in steps and the public demo's cleanup drain
  * them, deleteOrgDeep deletes them, and the Northstar wipe takes out every
- * counted file with its task, which deletes a row once it holds none. */
+ * counted file with its task, which deletes a row once it holds none.
+ * Neither are favorites rows (model/projectFavorites.ts): every teardown
+ * deletes the organization's before this runs, and a reader skips one whose
+ * organization is not the project's. */
 async function heldOutside(ctx: QueryCtx, row: Doc<'used_ids'>): Promise<object[]> {
   const id = row.row_id
   const found = [

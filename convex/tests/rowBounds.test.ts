@@ -161,6 +161,15 @@ describe('the rows a project read brings along', () => {
       live: true,
       on_root: true,
     } satisfies WithoutSystemFields<Doc<'project_reach'>>,
+    // a favorite copies its project's name key, at the same cap
+    project_favorites: {
+      org_id: uuid(),
+      profile_id: uuid(),
+      project_id: uuid(),
+      name_key: key,
+      live: true,
+      created_at: NOW,
+    } satisfies WithoutSystemFields<Doc<'project_favorites'>>,
   }
 
   it.each(Object.keys(rows) as (keyof typeof rows)[])(

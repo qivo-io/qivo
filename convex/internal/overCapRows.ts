@@ -58,7 +58,11 @@
  * splitting an emoji (cutText); a file name keeps its extension. A cut
  * profile, team, project, agent key or personal token name gets the name key
  * of its new form, and the copies of a profile's or team's follow it
- * (model/nameKeys.ts). It lowers remaining hours to the cap, stores each
+ * (model/nameKeys.ts). It leaves a project's favorites rows
+ * (model/projectFavorites.ts) as they are: its checks of 2026-10-22 found
+ * no live project name over the cap on any deployment, every writer has
+ * refused one since v0.1.49, and favorites are written only from the release
+ * that added them, so no favorite names a project this would cut. It lowers remaining hours to the cap, stores each
  * task description trimmed, and rewrites an address to its punycode form
  * (asciiEmail). A label or address
  * whose fixed form another row of its organization already has is skipped,
