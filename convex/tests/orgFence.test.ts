@@ -492,6 +492,17 @@ describe('0056 §A+B — every ref-taking door: a foreign ref answers byte-ident
       answer: { code: 'not_found', message: 'project not found' },
     },
     {
+      name: 'projectNav.setFavorite',
+      ref: () => f.otherProject.id,
+      call: (ref) =>
+        as(t, f.admin).mutation(api.projectNav.setFavorite, {
+          org_id: f.org.id,
+          project_id: ref,
+          favorite: true,
+        }),
+      answer: { code: 'not_found', message: 'project not found' },
+    },
+    {
       name: 'projects.deleteDeep',
       ref: () => f.otherProject.id,
       call: (ref) =>

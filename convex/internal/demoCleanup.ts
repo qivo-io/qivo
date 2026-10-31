@@ -29,6 +29,7 @@ import { recipientItems, stateRows, taskItems } from '../model/inboxItems'
 import { deleteLabelCount } from '../model/labelCounts'
 import { jobsOf, partsOf, requestsOf } from '../model/orgExports'
 import { deleteOrgBookkeeping, tallyRow } from '../model/orgs'
+import { favoritesOfOrg } from '../model/projectFavorites'
 import { reachOfOrg } from '../model/projectNav'
 import { uncountFile } from '../model/storageTotals'
 import { deleteTeamCount } from '../model/teamCounts'
@@ -271,6 +272,9 @@ async function projectRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
   // the reach rows of every project, and of any a move left absent
   // (model/projectNav.ts)
   if (!(await drain(ctx, budget, (n) => reachOfOrg(ctx, orgId).take(n)))) return false
+  // the visitor's favorites, before the projects they name free their ids
+  // (model/projectFavorites.ts)
+  if (!(await drain(ctx, budget, (n) => favoritesOfOrg(ctx, orgId).take(n)))) return false
   // the nightly archive's rechecks of its projects, which the tasks phase
   // before leaves nothing to write (model/archiveRechecks.ts)
   if (!(await drain(ctx, budget, (n) => rechecksOfOrg(ctx, orgId).take(n)))) return false
@@ -731,11 +735,18 @@ export const purge = internalMutation({
       // Export rows an earlier release left past the activity phase, which
       // knew no export tables, as a cleanup that spans a rollback does.
       else if (phase === 'finish' && orgId && !(await exportRows(ctx, orgId, budget))) done = false
-      // Likewise rechecks an earlier release left past the projects phase.
+      // Likewise rechecks an earlier release left past the projects phase,
+      // and favorites one that knew none left.
       else if (
         phase === 'finish' &&
         orgId &&
         !(await drain(ctx, budget, (n) => rechecksOfOrg(ctx, orgId).take(n)))
+      )
+        done = false
+      else if (
+        phase === 'finish' &&
+        orgId &&
+        !(await drain(ctx, budget, (n) => favoritesOfOrg(ctx, orgId).take(n)))
       )
         done = false
       else if (phase === 'finish') {
@@ -751,6 +762,7 @@ export const purge = internalMutation({
             'issue_descriptions',
             'projects',
             'project_reach',
+            'project_favorites',
             'teams',
             'profiles',
             'labels',

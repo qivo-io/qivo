@@ -62,9 +62,11 @@ import {
   deleteGrant,
   grantBatch,
   patchRows,
+  settleFavorites,
   syncLeads,
   type TreeBudget,
   treeBudget,
+  treeFavorites,
   treeRows,
   treeSubProjects,
 } from './projectNav'
@@ -585,7 +587,8 @@ export async function updateProjectCore(
     expected?: Readonly<Record<string, unknown>>
     view?: View
     /** The tree budget an archive or restore of the same mutation shares
-     * (model/projectNav.ts TreeBudget). */
+     * (model/projectNav.ts TreeBudget); the caller then settles the
+     * favorites both changes read. */
     budget?: TreeBudget
   },
 ): Promise<Doc<'projects'>> {
@@ -639,20 +642,23 @@ export async function updateProjectCore(
     db.lead_id = nextLead
   }
   // The reach rows copy the project's name key and key (model/projectNav.ts),
-  // read before anything is written, so a change past
-  // LIMITS.projectTreeChange is refused whole.
+  // and a top-level project's favorites its name key, read before anything
+  // is written, so a change past LIMITS.projectTreeChange or
+  // TREE_FAVORITES is refused whole.
   const copies: { name_key?: string; key?: string } = {}
   if (db.name_key !== undefined && db.name_key !== nameKey(project.name))
     copies.name_key = db.name_key
   if (db.key !== undefined && db.key !== project.key) copies.key = db.key
+  const budget = a.budget ?? treeBudget()
   const reach =
-    Object.keys(copies).length > 0
-      ? await treeRows(ctx, project.org_id, [id], a.budget ?? treeBudget())
-      : []
+    Object.keys(copies).length > 0 ? await treeRows(ctx, project.org_id, [id], budget) : []
+  if (copies.name_key !== undefined && project.parent_id === undefined)
+    await treeFavorites(ctx, project.org_id, [id], budget)
   // The project row goes first, so the reach rows the handover's grants
   // below bring in line copy it as it is now.
   if (Object.keys(db).length > 0) await ctx.db.patch(project._id, db)
   await patchRows(ctx, reach, copies)
+  if (a.budget === undefined) await settleFavorites(ctx, budget)
   if (leadChanged) await syncLeads(ctx, id, [prevLead, nextLead])
   // the handover's new grants write their reach rows together
   const given = grantBatch(ctx)
@@ -730,7 +736,8 @@ async function writeGrants(
 
 /** An archive or a restore as a caller asks for it. `budget` is the tree
  * budget a rename of the same mutation shares (model/projectNav.ts
- * TreeBudget), else the change takes its own. */
+ * TreeBudget), and the caller then settles the favorites the changes read;
+ * else the change takes its own and settles them itself. */
 type TreeChange = {
   me: Doc<'profiles'>
   project: Doc<'projects'>
@@ -744,11 +751,12 @@ type TreeChange = {
  * (0106:86-91): a meta stamps its active subs with the parent's OWN instant,
  * which is the only record of "these came along" and what restoring reads.
  * Every sub-project then sits under an archived parent (archive_state
- * 'under'), and the reach rows of the projects it archives say they are no
- * longer live (model/projectNav.ts). A tree whose sub-projects and the
- * rows it reads pass LIMITS.projectTreeChange.max or TREE_READ.bytes is
- * refused before anything is written; when it carries sub-projects, those
- * rows include the archived child rows its restore will read. Existing
+ * 'under'), and the reach rows of the projects it archives, and the
+ * favorites rows of a top-level one, say they are no longer live
+ * (model/projectNav.ts). A tree whose sub-projects and the rows it reads
+ * pass LIMITS.projectTreeChange.max, TREE_FAVORITES.max or TREE_READ.bytes
+ * is refused before anything is written; when it carries sub-projects,
+ * those rows include the archived child rows its restore will read. Existing
  * tasks are untouched; the snapshot stops shipping them because its
  * section filters on project.archived_at. Their inbox messages are marked
  * read for every recipient in the background
@@ -776,6 +784,8 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
     for (const row of await childRows(ctx, project.org_id, project.id, undefined, budget))
       if (row.live && ids.has(row.project_id)) reach.push(row)
   }
+  if (project.parent_id === undefined)
+    await treeFavorites(ctx, project.org_id, [project.id], budget)
   const parent =
     project.parent_id === undefined ? null : await byId(ctx, 'projects', project.parent_id)
   for (const s of subs) {
@@ -788,6 +798,7 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
     archive_state: archiveStateOf({ archived_at: now }, parent),
   })
   await patchRows(ctx, reach, { live: false })
+  if (a.budget === undefined) await settleFavorites(ctx, budget)
   await scheduleArchivedReads(ctx, { projects: archived })
   await logActivity(ctx, {
     org_id: me.org_id,
@@ -817,8 +828,9 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
  * parent as well; a sub-project's own lead cannot bring back a project its
  * lead archived. The sub-projects that stay archived then sit under a live
  * parent (archive_state 'listed'), and the reach rows of the projects it
- * restores say they are live again (model/projectNav.ts). A tree whose
- * sub-projects and those rows pass LIMITS.projectTreeChange.max is refused
+ * restores, and the favorites rows of the top-level one, say they are live
+ * again (model/projectNav.ts). A tree whose sub-projects and those rows
+ * pass LIMITS.projectTreeChange.max or TREE_FAVORITES.max is refused
  * before anything is written. Not archived is a silent no-op. Returns
  * whether it restored anything. The restored projects' tasks make the
  * parents they have in other active projects groups again, which then lose
@@ -859,6 +871,8 @@ export async function unarchiveProjectCore(ctx: MutationCtx, a: TreeChange): Pro
       restored.map((p) => p.id),
       budget,
     )
+    // the archived parent it restores holds the tree's favorites
+    if (parentArchived) await treeFavorites(ctx, project.org_id, [parent.id], budget)
   } else {
     const subs = await treeSubProjects(ctx, project.id, budget)
     const back = subs.filter((s) => s.archived_at === stamp)
@@ -871,6 +885,7 @@ export async function unarchiveProjectCore(ctx: MutationCtx, a: TreeChange): Pro
     if (ids.size > 0)
       for (const row of await childRows(ctx, project.org_id, project.id, false, budget))
         if (ids.has(row.project_id)) reach.push(row)
+    await treeFavorites(ctx, project.org_id, [project.id], budget)
   }
   const ids = restored.map((p) => p.id)
   // Their Done tasks keep their done_at, so the nightly archive checks
@@ -882,6 +897,7 @@ export async function unarchiveProjectCore(ctx: MutationCtx, a: TreeChange): Pro
   for (const s of left)
     if (s.archive_state !== 'listed') await ctx.db.patch(s._id, { archive_state: 'listed' })
   await patchRows(ctx, reach, { live: true })
+  if (a.budget === undefined) await settleFavorites(ctx, budget)
   await ctx.scheduler.runAfter(0, restoredStepRef, { projects: ids, restorer_id: me.id })
   await logActivity(ctx, {
     org_id: me.org_id,

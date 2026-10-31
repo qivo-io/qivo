@@ -1106,6 +1106,25 @@ incomplete when it finishes. `organization export sweep` expires the ready
 archives and erases their parts, and it alone deletes ended jobs with their
 request rows, 30 days after they ended. Nothing needs a manual step.
 
+Each seat's favorite top-level projects are rows in `project_favorites`,
+which only `projectNav:setFavorite` writes; no app calls it yet. The table
+starts empty and needs no backfill. A rename, archive or restore of a
+project keeps the rows' name key and live copies in its transaction, and
+profile removal, organization deletion, the public demo's cleanup, the
+Northstar wipe and the Deleted items purge delete them. A rollback past the
+release that added the table deploys, because Convex leaves the rows of
+tables the schema does not list alone, but the earlier code writes, keeps
+and deletes no favorite. A deletion or demo cleanup that goes on after the
+roll forward deletes the favorites left behind in its last phase, and the
+Northstar seed refuses until a wipe of the later release has deleted the
+favorites of the wiped projects. What stays are copies the earlier code did
+not update, which readers skip until the seat stars the project again or a
+later rename, archive or restore updates them, and the rows of profiles the
+earlier code removed and of organizations it finished deleting. No reader
+shows those, except that a seat created later in the same organization with
+a removed seat's id would list that seat's favorites among its own, of
+projects it sees anyway.
+
 The nightly archive of Done tasks reads only the tasks whose Done time passed
 the 30-day threshold since its last finished run, which the one
 `archive_runs` row records, and the projects in `archive_rechecks`, which

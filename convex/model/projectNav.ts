@@ -16,7 +16,10 @@
  * level. A rename, a key change, an archive or a restore updates the copies
  * on the rows of the projects it changes, read with treeRows, which refuses
  * a change past LIMITS.projectTreeChange.max or TREE_READ.bytes before
- * anything is written.
+ * anything is written. A top-level project's favorites rows
+ * (model/projectFavorites.ts) copy its name key and live state too: the
+ * same changes read them with treeFavorites, within an allowance of their
+ * own (TREE_FAVORITES), and write each once with settleFavorites.
  * Teardowns delete a grantee's or an organization's rows outright
  * (reachOfGrantee, reachOfOrg).
  *
@@ -38,6 +41,7 @@ import { rule } from '../lib/functions'
 import { LIMITS, MIB } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { readyRow } from './nameKeys'
+import { copiesOf, favoritesOn } from './projectFavorites'
 
 /** The archive state of `project` (schema.ts projects.archive_state), with
  * `parent` the project above it, if any: 'live' while it is not archived,
@@ -452,8 +456,9 @@ export async function syncLeads(
     if (lead !== undefined) await syncReach(ctx, grantee.profile(lead), projectId, read)
 }
 
-/** The bytes of sub-projects and reach rows the tree changes of one
- * mutation may read, as Convex counts a document's size (TreeBudget).
+/** The bytes of sub-projects, reach rows and favorites rows the tree
+ * changes of one mutation may read, as Convex counts a document's size
+ * (TreeBudget).
  * Convex reads a document again to patch it, and an archive or a restore
  * patches nearly every row it read, so the change reads up to twice this
  * and one row more, beside the project, its parent and the rest of the
@@ -463,9 +468,11 @@ export async function syncLeads(
  * at the name and description caps and about 3 KB a reach row) reach it
  * before LIMITS.projectTreeChange.max, once 2,000 entries average more
  * than about 3.7 KB. A rename or a key change alone reads at most 2,001
- * reach rows, about 5.9 MB at the name cap, so only one that a REST or MCP
- * update makes after an archive or a restore, which share one budget, can
- * reach it. A REST or MCP update that archives or restores then reads
+ * reach rows, about 5.9 MB at the name cap, and a rename of a top-level
+ * project TREE_FAVORITES.max favorites more, about 2.9 MB at that cap, so
+ * only a name whose key NFKD expands (U+FDFA) brings one alone near it,
+ * and otherwise one that a REST or MCP update makes after an archive or a
+ * restore, which share one budget. A REST or MCP update that archives or restores then reads
  * every project of the organization for its answer (machine/projects.ts
  * projectOut, lib/core.ts loadCatalogue), which nothing bounds yet, so near
  * this bound at the row bounds it can pass Convex's read limit after its
@@ -473,11 +480,34 @@ export async function syncLeads(
 export const TREE_READ = { bytes: 7 * MIB }
 
 /** The index ranges a mutation's tree changes may spend on their queries,
- * besides LIMITS.projectTreeChange.max for what they write: at most four
- * for one change (its sub-projects, the rows of the project, of its parent
- * and of the sub-projects under it), and two changes, an archive or a
- * restore and a rename, in one REST or MCP update. */
+ * besides what they write. An archive or a restore of a top-level project
+ * takes four (its sub-projects, its reach rows, the child rows under it
+ * and its favorites), a restore of a sub-project under an archived parent
+ * four (the parent's sub-projects, the reach rows of each of the two and
+ * the parent's favorites), and a rename two (the project's reach rows and,
+ * for a top-level project, its favorites). A REST or MCP update makes an
+ * archive or a restore and then a rename of the same project, which reads
+ * no favorites again (treeFavorites), so it takes at most five. */
 const TREE_QUERIES = 8
+
+/** The favorites rows the tree changes of one mutation may read and write
+ * (TreeBudget `favorites`): one for each seat that starred a top-level
+ * project they rename, archive or restore. 1,000 is the most people the
+ * testing envelope gives an organization, agents and invitations included,
+ * which cannot star. Convex reads each row again by id to write it, so
+ * with LIMITS.projectTreeChange.max entries a change reads about 3,000 rows
+ * by id, inside the 4,096 index ranges one transaction may read (measured
+ * in tests/projectFavorites.test.ts, "at the limits"). A REST or MCP update
+ * that archives or restores a project and renames it reads and writes each
+ * favorite once (settleFavorites). Not in LIMITS, as only an organization
+ * past the envelope meets it. A mutable object, so tests can lower it. */
+export const TREE_FAVORITES = { max: 1_000 }
+
+/** The refusal of a tree change past TREE_FAVORITES.max. Separate changes
+ * do not help, as each reads every favorite of the project, so it names
+ * who can. */
+export const TREE_TOO_MANY_FAVORITES =
+  'more people have this project among their favorites than one change can update, so it cannot be archived, restored or renamed at once. Contact support@qivo.io so we can help.'
 
 /** The refusal of a tree change whose sub-projects and reach rows pass
  * TREE_READ.bytes: those of the project, or of the archived top-level
@@ -496,19 +526,33 @@ export const TREE_TOO_LARGE =
  * write may change and Convex reads by id first, within
  * LIMITS.projectTreeChange.max, which keeps them to about half of the
  * 4,096 index ranges one transaction may read, as model/labels.ts
- * LABEL_REMOVAL measured; `bytes`, what those rows hold, within
- * TREE_READ.bytes; and `queries`, the ranges their reads take.
+ * LABEL_REMOVAL measured; `favorites`, the favorites rows they read,
+ * within TREE_FAVORITES.max; `bytes`, what all those rows hold, within
+ * TREE_READ.bytes; and `queries`, the ranges their reads take. `starred`
+ * holds the favorites rows read so far by top-level project, for
+ * settleFavorites, so a second change of the same project neither reads
+ * nor spends them again.
  * A rename, a key change, an archive and a restore each take one unless the
  * caller passes the one it shares, as a REST or MCP update that archives or
- * restores a project and changes its fields does.
+ * restores a project and changes its fields does. A change that takes its
+ * own settles its favorites after its last write; a caller that passes one
+ * settles them once its changes are done.
  */
-export type TreeBudget = { entries: number; queries: number; bytes: number }
+export type TreeBudget = {
+  entries: number
+  favorites: number
+  queries: number
+  bytes: number
+  starred: Map<string, Doc<'project_favorites'>[]>
+}
 
 /** A fresh budget for a mutation's tree changes. */
 export const treeBudget = (): TreeBudget => ({
   entries: LIMITS.projectTreeChange.max,
+  favorites: TREE_FAVORITES.max,
   queries: TREE_QUERIES,
   bytes: TREE_READ.bytes,
+  starred: new Map(),
 })
 
 /* Spends one query of `budget`; a change that needs more is a bug, not the
@@ -519,20 +563,23 @@ function query(budget: TreeBudget): void {
 }
 
 /* The rows of `rows`, one query of `budget`, each spent from it as it is
- * read: an entry, refused with LIMITS.projectTreeChange's sentence past
- * them, and its bytes, refused with TREE_TOO_LARGE past them. So a read
- * stops at the first row past either, and as every caller reads before it
- * writes, a refusal leaves everything as it was. */
+ * read: one of `counter`, refused past them with LIMITS.projectTreeChange's
+ * sentence for an entry and TREE_TOO_MANY_FAVORITES for a favorite, and its
+ * bytes, refused with TREE_TOO_LARGE past them. So a read stops at the
+ * first row past either, and as every caller reads before it writes, a
+ * refusal leaves everything as it was. */
 async function spent<D extends GenericDocument>(
   budget: TreeBudget,
   rows: AsyncIterable<D>,
+  counter: 'entries' | 'favorites' = 'entries',
   size: (row: D) => number = getDocumentSize,
 ): Promise<D[]> {
   query(budget)
   const out: D[] = []
   for await (const row of rows) {
-    budget.entries -= 1
-    if (budget.entries < 0) throw rule(LIMITS.projectTreeChange.refusal)
+    budget[counter] -= 1
+    if (budget[counter] < 0)
+      throw rule(counter === 'entries' ? LIMITS.projectTreeChange.refusal : TREE_TOO_MANY_FAVORITES)
     budget.bytes -= size(row)
     if (budget.bytes < 0) throw rule(TREE_TOO_LARGE)
     out.push(row)
@@ -616,6 +663,7 @@ export async function treeSubProjects(
   return await spent(
     budget,
     ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', parentId)),
+    'entries',
     archivedSize,
   )
 }
@@ -630,6 +678,49 @@ export async function patchRows(
   for (const row of rows)
     if (Object.entries(fields).some(([field, value]) => row[field as keyof ReachRow] !== value))
       await ctx.db.patch(row._id, fields)
+}
+
+/**
+ * The favorites rows on each of top-level projects `rootIds`, every seat's,
+ * for a change that updates their copies (a rename, an archive or a
+ * restore), kept in `budget` for settleFavorites. Each project is read in
+ * one query of `budget`, each row spent from its favorites and bytes
+ * (spent), unless `budget` read it already. Call it before the change
+ * writes anything, so a refusal leaves everything as it was. A row another
+ * organization left on a reused project id until its teardown deletes it
+ * counts but is kept out, so the change never writes it.
+ */
+export async function treeFavorites(
+  ctx: QueryCtx,
+  orgId: string,
+  rootIds: readonly string[],
+  budget: TreeBudget,
+): Promise<void> {
+  for (const id of new Set(rootIds)) {
+    if (budget.starred.has(id)) continue
+    const got = await spent(budget, favoritesOn(ctx, id), 'favorites')
+    budget.starred.set(
+      id,
+      got.filter((row) => row.org_id === orgId),
+    )
+  }
+}
+
+/** Gives each favorites row `budget` read (treeFavorites) the copies of its
+ * project as stored now (model/projectFavorites.ts copiesOf), writing only
+ * the rows that differ, each once however many changes of the mutation
+ * read it. A row a release without favorites left stale gets them too. */
+export async function settleFavorites(ctx: MutationCtx, budget: TreeBudget): Promise<void> {
+  for (const [id, rows] of budget.starred) {
+    const project = await byId(ctx, 'projects', id)
+    if (project === null) continue
+    const copies = copiesOf(project)
+    for (const [i, row] of rows.entries())
+      if (row.name_key !== copies.name_key || row.live !== copies.live) {
+        await ctx.db.patch(row._id, copies)
+        rows[i] = { ...row, ...copies }
+      }
+  }
 }
 
 /** Every reach row of the grantee, for a teardown that deletes them all: a

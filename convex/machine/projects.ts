@@ -89,7 +89,7 @@ import {
   setProjectGrantCore,
   vHeldTasks,
 } from '../model/projectAccess'
-import { treeBudget } from '../model/projectNav'
+import { settleFavorites, treeBudget } from '../model/projectNav'
 import {
   archiveProjectCore,
   createProjectCore,
@@ -328,7 +328,8 @@ async function applyUpdate(
   const now = new Date().toISOString()
   const { archived, expected, ...patch } = input
   // the archive or restore and the rename share one tree budget
-  // (model/projectNav.ts TreeBudget), as one transaction runs both
+  // (model/projectNav.ts TreeBudget), as one transaction runs both, and
+  // the favorites they read are written once, after both
   const budget = treeBudget()
   let current = project
   if (archived !== undefined) {
@@ -349,6 +350,7 @@ async function applyUpdate(
       budget,
     })
   }
+  await settleFavorites(ctx, budget)
   return current
 }
 

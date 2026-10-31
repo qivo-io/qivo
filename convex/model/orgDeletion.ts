@@ -60,6 +60,7 @@ import { recipientItems, stateRows, taskItems } from './inboxItems'
 import { deleteLabelCount } from './labelCounts'
 import { jobsOf, partsOf, requestsOf } from './orgExports'
 import { deleteOrgBookkeeping, tallyRow } from './orgs'
+import { favoritesOfOrg, favoritesOfProfile } from './projectFavorites'
 import { grantee, reachOfGrantee, reachOfOrg } from './projectNav'
 import { uncountFile } from './storageTotals'
 import { deleteTeamCount } from './teamCounts'
@@ -233,9 +234,10 @@ const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: Removal
               .query('project_access')
               .withIndex('by_profile', (q) => q.eq('profile_id', profile.id)),
           ),
-        // the profile's reach rows go before it frees its id
-        // (model/projectNav.ts)
+        // the profile's reach rows and favorites go before it frees its id
+        // (model/projectNav.ts, model/projectFavorites.ts)
         () => drain(ctx, budget, reachOfGrantee(ctx, grantee.profile(profile.id))),
+        () => drain(ctx, budget, favoritesOfProfile(ctx, profile.id)),
         () =>
           drain(
             ctx,
@@ -473,12 +475,15 @@ const liveTasks = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
     { before: (issue) => tallyRow(ctx, 'issues', issue, null) },
   )
 
-/** The organization's reach rows (model/projectNav.ts) and the nightly
- * archive's rechecks of its projects (model/archiveRechecks.ts), then its
- * projects with their milestones and access grants. The tasks phase before
- * leaves no task a recheck could be written for. */
+/** The organization's reach rows (model/projectNav.ts), its favorites
+ * (model/projectFavorites.ts), which a wipe that keeps the profiles leaves
+ * to no other phase, and the nightly archive's rechecks of its projects
+ * (model/archiveRechecks.ts), then its projects with their milestones and
+ * access grants. The tasks phase before leaves no task a recheck could be
+ * written for. */
 const projectRows = async (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   (await drain(ctx, budget, reachOfOrg(ctx, orgId))) &&
+  (await drain(ctx, budget, favoritesOfOrg(ctx, orgId))) &&
   (await drain(ctx, budget, rechecksOfOrg(ctx, orgId))) &&
   parents(
     ctx,
@@ -719,6 +724,7 @@ async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<v
     'issue_descriptions',
     'projects',
     'project_reach',
+    'project_favorites',
     'teams',
     'profiles',
     'labels',
@@ -842,8 +848,11 @@ export async function deleteOrgStep(
       // Export rows an earlier release left past the activity phase, which
       // knew no export tables, as a deletion that spans a rollback does.
       if (!(await exportRows(ctx, removal.org_id, budget))) break
-      // Likewise rechecks an earlier release left past the projects phase.
+      // Likewise rechecks an earlier release left past the projects phase,
+      // and favorites one that knew none left past the profiles and
+      // projects phases.
       if (!(await drain(ctx, budget, rechecksOfOrg(ctx, removal.org_id)))) break
+      if (!(await drain(ctx, budget, favoritesOfOrg(ctx, removal.org_id)))) break
       // The organization goes first, so every call through access the
       // profiles phase deleted hears that it is being deleted until it is
       // gone. What that phase recorded (removed_access) goes after, over as

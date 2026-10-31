@@ -65,7 +65,7 @@ export function archiveRow(row: OrgExportRow): OrgExportRow {
 export const COMMON_EXCLUSIONS = [
   'Private inbox messages (messages)',
   'Personal task subscriptions (task_subscriptions)',
-  'Personal preferences (user_prefs)',
+  'Personal preferences and project favorites (user_prefs, project_favorites)',
   'Personal appearance and backgrounds (account_appearance, custom_backgrounds, background_uploads)',
   'Personal MCP tokens (mcp_tokens)',
   'Authentication accounts, sessions, login identifiers, and credentials',

@@ -622,10 +622,18 @@ function reservedFor(step: NorthstarStep): (typeof RESERVED)[number][] {
 /* The refusal of a seed of a demo that is not empty. */
 const ADDED_AFTER_WIPE = 'marketing demo: work was added after wipe; use reset to replace it'
 
-/* Whether organization `orgId` has no projects, reach rows, tasks, teams or
- * labels, live or in Deleted items. */
+/* Whether organization `orgId` has no projects, reach rows, favorites,
+ * tasks, teams or labels, live or in Deleted items. A favorite left of the
+ * wiped projects would name the Northstar ids a seed writes again. */
 async function holdsNoWork(ctx: QueryCtx, orgId: string): Promise<boolean> {
-  for (const table of ['projects', 'project_reach', 'issues', 'teams', 'labels'] as const) {
+  for (const table of [
+    'projects',
+    'project_reach',
+    'project_favorites',
+    'issues',
+    'teams',
+    'labels',
+  ] as const) {
     const row = await ctx.db
       .query(table)
       .withIndex('by_org', (q) => q.eq('org_id', orgId))

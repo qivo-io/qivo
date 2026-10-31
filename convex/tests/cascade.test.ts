@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Doc, Id } from '../_generated/dataModel'
+import { nameKey } from '../lib/nameKey'
 import { recordApiCall } from '../model/billingUsage'
 import { deleteOrgDeep, deleteTeamDeep, removeProfile } from '../model/cascade'
 import {
@@ -483,6 +484,21 @@ describe('deleteOrgDeep', () => {
         project_id: f.otherProject.id,
       })
     })
+    // a favorite of a seat of each organization
+    await t.run(async (ctx) => {
+      for (const [seat, project] of [
+        [f.user, f.meta],
+        [f.otherAdmin, f.otherProject],
+      ] as const)
+        await ctx.db.insert('project_favorites', {
+          org_id: project.org_id,
+          profile_id: seat.id,
+          project_id: project.id,
+          name_key: nameKey(project.name),
+          live: true,
+          created_at: NOW,
+        })
+    })
 
     await t.run(async (ctx) => {
       const org = (await ctx.db.get(f.org._id)) as Doc<'organizations'>
@@ -501,6 +517,7 @@ describe('deleteOrgDeep', () => {
       'task_comment_counts',
       'comment_rates',
       'archive_rechecks',
+      'project_favorites',
     ] as const) {
       const rows = await t.run(async (ctx) => await ctx.db.query(table).collect())
       expect(
@@ -511,7 +528,8 @@ describe('deleteOrgDeep', () => {
         table === 'org_counters' ||
         table === 'task_comment_counts' ||
         table === 'comment_rates' ||
-        table === 'archive_rechecks'
+        table === 'archive_rechecks' ||
+        table === 'project_favorites'
       )
         expect(
           rows.map((r) => r.org_id),

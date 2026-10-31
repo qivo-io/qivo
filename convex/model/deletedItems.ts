@@ -28,7 +28,10 @@
  * (restoreAccess), and their stored rows go after it (restoreGrants), so
  * everyone who had access sees the projects at once. A move deletes the
  * reach rows of its projects with their grants (clearProjectRows); nothing
- * stores them. A project item's
+ * stores them. It leaves the favorites of its top-level project
+ * (model/projectFavorites.ts), which keep naming the stored project, so a
+ * restore keeps every star, and a purge deletes them with the rest
+ * (purgeLive, clearOrgTrash). A project item's
  * tasks whose parent is outside it go back without that parent and get it
  * after the reveal, by the state then
  * (attachParents). That happens in the reveal's
@@ -148,6 +151,7 @@ import {
   scheduleArchivedReads,
 } from './messages'
 import { newUuid, tallyRow } from './orgs'
+import { favoritesOn } from './projectFavorites'
 import {
   archiveStateOf,
   type Grantee,
@@ -1398,6 +1402,10 @@ async function purgeLive(run: Run): Promise<boolean> {
   }
   for (const id of await absentProjects(run)) {
     if (!(await clearProjectRows(run, id, 'purge'))) return false
+    // the favorites that stayed with it while it was in Deleted items
+    // (model/projectFavorites.ts), before the stored row frees its id
+    if (!(await drain(run.budget, favoritesOn(run.ctx, id), (row) => run.ctx.db.delete(row._id))))
+      return false
     if (!(await clearProjectTasks(run, id, 'purge'))) return false
   }
   return true
@@ -1507,6 +1515,7 @@ async function purgeLeft(run: Run): Promise<boolean> {
   for (const id of await absentProjects(run)) {
     if (await holdsRows(run.ctx, PROJECT_ROWS, id)) return true
     if ((await reachOn(run.ctx, id).first()) !== null) return true
+    if ((await favoritesOn(run.ctx, id).first()) !== null) return true
     const stranded = await run.ctx.db
       .query('issues')
       .withIndex('by_project', (q) => q.eq('project_id', id))
@@ -4288,8 +4297,8 @@ async function clearDescriptions(
  * their restores wait to attach, so a step still scheduled finds nothing to
  * do. Then each stored task goes with the rows a move or restore left of it
  * in the live tables, and each stored row, a project after the milestones,
- * grants, reach rows and tasks still live under it, so no live row is left
- * to a project that takes its id later. An attachment leaves the
+ * grants, reach rows, favorites and tasks still live under it, so no live
+ * row is left to a project that takes its id later. An attachment leaves the
  * stored-byte totals with its row (model/storageTotals.ts), and its file is
  * let go unless another row, live or stored, still names it, and is held
  * for a restore before it is erased (model/fileHolds.ts releaseFile).
@@ -4352,13 +4361,18 @@ export async function clearOrgTrash(
           })
           if (!cleared) return false
         }
-        // and its reach rows, which go before the stored row frees its id
-        // (model/projectNav.ts)
+        // and its reach rows and favorites, which go before the stored row
+        // frees its id (model/projectNav.ts, model/projectFavorites.ts)
         const reached = await clearPages(budget, reachOn(ctx, row.owner_id), async (reach) => {
           await ctx.db.delete(reach._id)
           return true
         })
         if (!reached) return false
+        const starred = await clearPages(budget, favoritesOn(ctx, row.owner_id), async (fave) => {
+          await ctx.db.delete(fave._id)
+          return true
+        })
+        if (!starred) return false
         const stranded = await clearPages(
           budget,
           ctx.db.query('issues').withIndex('by_project', (q) => q.eq('project_id', row.owner_id)),

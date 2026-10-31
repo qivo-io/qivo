@@ -85,6 +85,9 @@ const EXCLUDED_TABLES = [
   'inbox_items',
   'inbox_state',
   'user_prefs',
+  // Each seat's favorite projects: personal navigation like user_prefs,
+  // not organization work.
+  'project_favorites',
   'mcp_tokens',
   // Cleanup progress of a profile that is already removed.
   'profile_removals',
