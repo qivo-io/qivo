@@ -898,8 +898,10 @@ function App() {
   )
   const [openIssue, setOpenIssue] = useState(r0?.issue || held0 || null)
   // A new task's handle is a preview that moves when another person's create
-  // takes its number while the write waits. The open window follows its task,
-  // with every move of one repaint applied at once.
+  // takes its number while the write waits, and a change of the home
+  // organization moves the handles of the old and the new home organization's
+  // tasks. The open window follows its task, with every move of one repaint
+  // applied at once.
   useEffect(
     () => P.watchHandles((moved) => setOpenIssue((cur) => (cur && moved.get(cur)) || cur)),
     [],

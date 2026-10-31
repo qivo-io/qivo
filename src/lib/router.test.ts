@@ -510,6 +510,27 @@ describe('buildPath', () => {
     expect(issueLink('uuid-home-19')).toBe('/app/home/tasks/qn-19')
   })
 
+  it('names a task that left the store by its new handle after the home organization changed', () => {
+    // Home's QN-21 is open, then archived: it leaves the store, and the
+    // address goes on naming it
+    const home21 = { ...store.issueById['QN-5'], id: 'QN-21', key: 'QN-21', uuid: 'uuid-home-21' }
+    store.issues = [...store.issues, home21]
+    store.issueById['QN-21'] = home21
+    expect(buildPath({ view: 'kanban', openIssue: 'QN-21' })).toBe('/app/home/board/tasks/qn-21')
+    store.issues = store.issues.filter((i) => i !== home21)
+    delete store.issueById['QN-21']
+    expect(buildPath({ view: 'kanban', openIssue: 'QN-21' })).toBe('/app/home/board/tasks/qn-21')
+    // Acme becomes the home organization, and the window follows the task
+    // to the handle it opens by now, its uuid (P.watchHandles)
+    store.homeOrg = ACME
+    expect(buildPath({ view: 'kanban', openIssue: 'uuid-home-21' })).toBe(
+      '/app/home/board/tasks/qn-21',
+    )
+    expect(issueLink('uuid-home-21')).toBe('/app/home/tasks/qn-21')
+    // and its old handle names the home organization's QN-21, never Home's
+    expect(issueLink('QN-21')).toBe('/app/~/tasks/qn-21')
+  })
+
   it("names a task by its uuid once its organization left too, never the home organization's task of that number", () => {
     const open = 'uuid-acme-5'
     const sync = { scope: 'all', step: 'team' }

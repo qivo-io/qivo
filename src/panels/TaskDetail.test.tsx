@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { TiptapEditorHTMLElement } from '@tiptap/core'
 import { getFunctionName } from 'convex/server'
-import { act, useState } from 'react'
+import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
@@ -67,6 +67,8 @@ let subs: Live[]
 let publish: (next: Snapshot) => void
 let onOpen: Mock<(id: string) => void>
 let onClose: Mock<() => void>
+// the handle the window is on now, which follows handle moves as App's does
+let shownHandle: string | null
 
 const task = (id: string, num: number, extra: Partial<Task> = {}): Task => ({
   id,
@@ -249,14 +251,19 @@ async function noteTask(row: Task) {
   return P.handleNow(row.id, row.org_id, row.num)
 }
 
-/* Opens the window on handle `first`, which follows the tasks it opens,
-   on a desktop, or on a phone with `phone`. */
+/* Opens the window on handle `first`, which follows the tasks it opens
+   and, as App does, the moves of their handles (P.watchHandles). */
 async function openWindow(first: string) {
   const { IssueDetail } = await import('./IssueDetail')
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
   function Host() {
     usePlannerVersion()
     const [issueId, setIssueId] = useState<string | null>(first)
+    useEffect(
+      () => P.watchHandles((moved) => setIssueId((cur) => (cur && moved.get(cur)) || cur)),
+      [],
+    )
+    shownHandle = issueId
     return (
       <IssueDetail
         issueId={issueId}
@@ -819,6 +826,105 @@ describe('the task window as the workspace and the answer disagree', { timeout: 
     await act(async () => publish(snap))
     expect(dialog()?.dataset.taskSource).toBe('workspace')
     expect(picker()).toBeNull()
+  })
+})
+
+describe('the task window when the home organization changes', { timeout: 30_000 }, () => {
+  const BETA = 'org-beta'
+  /* Mira also holds a seat in Beta, which holds its own QN-40. */
+  const withBeta = (next: Snapshot) => {
+    const org = next.orgs[0]
+    next.orgs.push({ ...org, id: BETA, slug: 'beta', name: 'Beta' })
+    const mira = next.profiles.find((p) => p.id === 'mira')
+    if (!mira) throw new Error('missing Mira')
+    next.profiles.push({ ...mira, id: 'mira-beta', org_id: BETA, org_role: 'user' })
+    next.myProfileIds.push('mira-beta')
+    const work = next.projects.find((p) => p.id === 'work')
+    if (!work) throw new Error('missing Work')
+    next.projects.push(
+      {
+        ...work,
+        id: 'beta-plan',
+        org_id: BETA,
+        type: 'meta',
+        key: 'BP',
+        num: 1,
+        name: 'Beta plan',
+        parent_id: undefined,
+        lead_id: 'mira-beta',
+      },
+      {
+        ...work,
+        id: 'beta-work',
+        org_id: BETA,
+        key: 'BW',
+        num: 2,
+        name: 'Beta work',
+        parent_id: 'beta-plan',
+      },
+    )
+    next.issues.push(
+      task('beta-40', 40, { org_id: BETA, project_id: 'beta-work', title: 'Beta task 40' }),
+    )
+  }
+
+  for (const state of ['ok', 'archived'] as const)
+    it(`keeps showing ${state === 'ok' ? 'a task from its answer' : 'an archived task'}, and its address names it, when the new home holds its number`, async () => {
+      await load(false, withBeta)
+      expect(P.homeOrg).toBe(snap.orgs[0].id)
+      await openWindow(await noteTask(far()))
+      expect(shownHandle).toBe('QN-40')
+      await answer('taskWindow:task', state === 'ok' ? okAnswer(far()) : archivedAnswer(far()))
+      const { buildPath, issueLink } = await import('../lib/router')
+      const address = () => buildPath({ view: 'kanban', openIssue: shownHandle })
+      expect(address()).toBe('/app/testbed/board/tasks/qn-40')
+      // Mira's Testbed seat becomes a guest one: Beta is her home now,
+      // where QN-40 is Beta's own task
+      const next = structuredClone(snap)
+      for (const p of next.profiles) if (p.id === 'mira') p.org_role = 'guest'
+      await act(async () => publish(next))
+      expect(P.homeOrg).toBe(BETA)
+      expect(P.issueById['QN-40']?.title).toBe('Beta task 40')
+      // the window follows the task to its new handle and goes on showing it
+      expect(shownHandle).toBe(FAR)
+      expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
+      expect(dialog()?.dataset.taskSource).toBe('answer')
+      expect(dialog()?.hasAttribute('data-task-archived')).toBe(state === 'archived')
+      expect(one('taskWindow:task').args).toEqual({ org_id: snap.orgs[0].id, ref: FAR })
+      // and the address and Copy link name it in Testbed
+      expect(address()).toBe('/app/testbed/board/tasks/qn-40')
+      expect(issueLink(FAR)).toBe('/app/testbed/tasks/qn-40')
+    })
+
+  it('keeps saying what became of a task that left, rather than show the new home task of its number', async () => {
+    await load(false, (next) => {
+      withBeta(next)
+      next.issues.push(
+        task('beta-27', 27, { org_id: BETA, project_id: 'beta-work', title: 'Beta task 27' }),
+      )
+    })
+    await openWindow('QN-27')
+    expect(dialog()?.dataset.taskSource).toBe('workspace')
+    // someone deletes it: it leaves the board before its read answers
+    const left = structuredClone(snap)
+    left.issues = left.issues.filter((t) => t.id !== FAM)
+    await act(async () => publish(left))
+    expect(note()?.textContent).toBe('QN-27 is no longer on the board.')
+    const { buildPath } = await import('../lib/router')
+    for (const p of left.profiles) if (p.id === 'mira') p.org_role = 'guest'
+    await act(async () => publish(left))
+    expect(P.issueById['QN-27']?.title).toBe('Beta task 27')
+    // the window follows it, saying the same of it, and its read answers
+    expect(shownHandle).toBe(FAM)
+    expect(note()?.textContent).toBe('QN-27 is no longer on the board.')
+    await answer('taskWindow:task', { state: 'unavailable' })
+    expect(note()?.textContent).toBe(
+      'QN-27 is no longer here. It was deleted, or you can no longer open it.',
+    )
+    expect(document.querySelector('[data-task-title]')).toBeNull()
+    expect(buildPath({ view: 'kanban', openIssue: shownHandle })).toBe(
+      '/app/testbed/board/tasks/qn-27',
+    )
   })
 })
 

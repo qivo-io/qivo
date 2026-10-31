@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { act, useState } from 'react'
+import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
@@ -46,6 +46,8 @@ let deliver: (snapshot: Snapshot) => void
 // the archived rows the server holds
 let archive: Task[]
 let onClose: ReturnType<typeof vi.fn<() => void>>
+// the handle the Inbox host's address names now
+let paneHandle: string | null
 
 /* One subscription of the window's read of a task (taskWindow:task). */
 type Read = {
@@ -180,11 +182,17 @@ async function open(
   onClose = vi.fn<() => void>()
   const { Inbox } = await import('./Inbox')
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
-  /** The Inbox as App holds it, its pane on the task the address names, and
-      closing it the move to no task. */
+  /** The Inbox as App holds it, its pane on the task the address names,
+      which follows handle moves (P.watchHandles), and closing it the move
+      to no task. */
   function InboxHost() {
     usePlannerVersion()
     const [openIssue, setOpenIssue] = useState<string | null>(task.id)
+    useEffect(
+      () => store.P.watchHandles((moved) => setOpenIssue((cur) => (cur && moved.get(cur)) || cur)),
+      [],
+    )
+    paneHandle = openIssue
     const openTask = (handle: string | null) => {
       if (handle === null) onClose()
       setOpenIssue(handle)
@@ -861,6 +869,51 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
       `${task.key} was archived. Restore it to bring it back to the board.`,
       `${task.key} was archived. Restore it to bring it back to the board.`,
     ])
+  })
+
+  it('keeps an archived task in the Inbox pane and its pop-out when a new home organization holds its number', async () => {
+    const task = await open('admin', undefined, 'inbox')
+    // the person also holds a seat in Beta, which holds its own QN-27
+    const BETA = 'org-beta'
+    const me = snap.profiles[0]
+    snap.orgs.push({ ...snap.orgs[0], id: BETA, slug: 'beta', name: 'Beta' })
+    snap.profiles.push({ ...me, id: 'me-beta', org_id: BETA, org_role: 'admin' })
+    snap.myProfileIds.push('me-beta')
+    snap.projects.push({ ...snap.projects[0], id: 'beta-project', org_id: BETA, key: 'BET' })
+    snap.issues.push({
+      ...snap.issues[0],
+      id: 'beta-27',
+      org_id: BETA,
+      project_id: 'beta-project',
+      title: 'Beta task 27',
+    })
+    await act(async () => deliver(snap))
+    expect(paneHandle).toBe(task.id)
+    await dropTask({ archived: true })
+    await click(document.querySelector<HTMLElement>('[data-task-popout]'))
+    const windows = () => [...document.querySelectorAll<HTMLElement>('[aria-label="Task"]')]
+    await act(async () => {
+      await vi.waitFor(() => {
+        if (windows().filter((w) => w.dataset.taskArchived === '').length < 2)
+          throw new Error('the pop-out has not shown the task yet')
+      })
+    })
+    // the seat in this organization becomes a guest one: Beta is the home
+    // now, and QN-27 its task
+    snap.profiles = snap.profiles.map((p) => (p.id === me.id ? { ...p, org_role: 'guest' } : p))
+    await act(async () => deliver(snap))
+    const { P } = await import('../store/planner')
+    expect(P.issueById['QN-27']?.title).toBe('Beta task 27')
+    expect(paneHandle).toBe('task-a')
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(windows().map((w) => [w.dataset.issueLayout, w.dataset.taskArchived])).toEqual([
+      ['embedded', ''],
+      ['columns', ''],
+    ])
+    for (const w of windows()) {
+      expect(w.textContent).toContain('Run the soak test')
+      expect(w.textContent).not.toContain('Beta task 27')
+    }
   })
 
   it('closes without the note when the window archives its own task', async () => {

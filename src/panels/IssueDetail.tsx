@@ -1885,15 +1885,32 @@ function IssueDetail({
   const stale = fromAnswer && (detail?.state === 'failed' || detail?.state === 'retrying')
   // the window shows an active task: the workspace's, or one from its answer
   const active = !!held || (fromAnswer && !archived)
-  // a task the window shows from its answer is noted (lib/openedTasks.ts),
-  // so another window on its handle finds it too, as the Inbox pane's
-  // pop-out or the window a crumb opens over the Board
-  const answerNum = fromAnswer ? (detail?.num ?? null) : null
+  // a task the window shows that the workspace does not hold, from its
+  // answer or as what became of it, is noted (lib/openedTasks.ts), so
+  // another window on its handle finds it too, as the Inbox pane's pop-out
+  // or the window a crumb opens over the Board, and a change of the home
+  // organization moves its handle (P.watchHandles). Its number is its
+  // answer's, else that of its display key (QN-n).
+  const unheld = held ? null : (answerView ?? identity)
+  const unheldNum = unheld
+    ? (detail?.num ?? Number(unheld.key.slice(P.ISSUE_PREFIX.length + 1)))
+    : null
   useEffectID(() => {
-    if (!answerView || answerNum === null) return
-    const { uuid, key, title, project, org } = answerView
-    noteOpenedTask({ uuid, num: answerNum, key, title, project, org })
-  }, [answerView?.uuid, answerNum, answerView?.title, answerView?.project])
+    if (!unheld || unheldNum === null || !Number.isInteger(unheldNum)) return
+    const { uuid, key, title, project, org } = unheld
+    noteOpenedTask({ uuid, num: unheldNum, key, title, project, org })
+  }, [unheld?.uuid, unheldNum, unheld?.title, unheld?.project])
+  // the task the window showed follows its handle as it moves, as App's
+  // address does, so the window goes on showing the same task
+  useEffectID(
+    () =>
+      P.watchHandles((moved) => {
+        const shown = shownTask.current
+        const to = shown && moved.get(shown.at)
+        if (shown && to) shownTask.current = { ...shown, at: to }
+      }),
+    [],
+  )
   if (it && issueId) {
     const { uuid, org, key, title, project } = it
     shownTask.current = { at: issueId, task: { uuid, org, key, title, project } }

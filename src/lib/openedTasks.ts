@@ -3,9 +3,10 @@
    which Search finds on the server, and a task a task window opened from
    its Parent, Subtasks or Linked tasks that the workspace does not hold
    (panels/IssueDetail.tsx MiniIssueRow), as while a large workspace still
-   loads, and a task a window shows from its own read, so another window on
-   its handle finds it too, as the Inbox pane's pop-out. A task Search found may also be archived, deleted or moved out of
-   sight since the search. The task window (panels/IssueDetail.tsx) knows
+   loads, and a task a window shows that the workspace does not hold, from
+   its own read or as what became of it, so another window on its handle
+   finds it too, as the Inbox pane's pop-out. A task Search found may also
+   be archived, deleted or moved out of sight since the search. The task window (panels/IssueDetail.tsx) knows
    such a task's uuid and organization from here, and shows it from its own
    read (store/planner.ts P.taskDetail), or what became of it (TaskGone);
    the address names the task's organization and key (lib/router.ts
@@ -17,7 +18,8 @@
    is kept. Every reader derives the handle when it resolves an entry
    (`handleOf`, the store's P.handleNow), so after a change history opens
    the task that was noted, never another organization's task that now has
-   its old handle.
+   its old handle, and the store moves the handle of an open window's task
+   with the change (openedTaskList, P.watchHandles).
    It holds the last OPENED_MAX tasks opened and nothing else, and goes once
    the app opens an unloaded task by itself (t3/limits-direct-links). */
 
@@ -43,6 +45,10 @@ export function noteOpenedTask(task: OpenedTask): void {
   opened.set(task.uuid, task)
   if (opened.size > OPENED_MAX) opened.delete(opened.keys().next().value ?? task.uuid)
 }
+
+/** Every task noted, oldest first, as the store reads them to move their
+    handles when the home organization changes (store/planner.ts). */
+export const openedTaskList = (): readonly OpenedTask[] => [...opened.values()]
 
 /** The newest task noted whose handle, as `handleOf` derives it now, is
     `handle`, if it is among the newest OPENED_MAX. */

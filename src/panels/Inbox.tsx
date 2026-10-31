@@ -490,6 +490,18 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // the task the pane showed, kept while the address names it once the task
   // left the board, so its window stays and says so (IssueDetail TaskGone)
   const paneShown = useRef<{ at: string; id: string; uuid: string } | null>(null)
+  // and follows the task's handle as it moves, as the address does
+  // (P.watchHandles), so the pane keeps a task that left once a change of
+  // the home organization gives it another handle
+  useEffect(
+    () =>
+      P.watchHandles((moved) => {
+        const shown = paneShown.current
+        const to = shown && moved.get(shown.at)
+        if (shown && to) paneShown.current = { ...shown, at: to, id: moved.get(shown.id) ?? to }
+      }),
+    [],
+  )
   if (paneIssue && openIssue)
     paneShown.current = { at: openIssue, id: paneIssue.id, uuid: paneIssue.uuid }
   else if (paneShown.current?.at !== openIssue) paneShown.current = null

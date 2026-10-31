@@ -124,6 +124,7 @@ import { loadFailureText } from '../lib/loadFailure'
 import { watchLocalDay } from '../lib/localDay'
 import { pauseSentence } from '../lib/noticeText'
 import { desktopNotify } from '../lib/notify'
+import { openedTaskList } from '../lib/openedTasks'
 import { reloadPage } from '../lib/pageHistory'
 import { matchesAllWords, taskSearchText } from '../lib/search'
 import { type OfflineWindow, type SavePause, syncStatus } from '../lib/syncStatus'
@@ -1759,8 +1760,12 @@ const uuidToKey = tasks.uuidToKey // uuid -> handle
 const uuidToDisplayKey = tasks.uuidToDisplayKey // uuid -> "QN-482" (what's rendered)
 // org id -> ("QN-482" -> uuid): resolves an org-prefixed URL exactly (0081)
 const keyByOrg = tasks.keyByOrg
+/* The handle of task `uuid` of organization `orgId`, display key `key`,
+   while `home` is the home organization. */
+const handleUnder = (home: string, uuid: string, orgId: string, key: string) =>
+  orgId && orgId === home ? key : uuid
 const handleFor = (uuid: string, orgId: string, key: string) =>
-  orgId && orgId === HOME_ORG ? key : uuid
+  handleUnder(HOME_ORG, uuid, orgId, key)
 
 // Week indexes are UNBOUNDED offsets from TIMELINE_START (negative and past
 // the prototype's 28 alike) — the roadmap's user-chosen window clips them
@@ -2210,7 +2215,9 @@ let lastMoves: ReadonlyMap<string, string> = new Map()
 /** Tells P.watchHandles' listeners, once per repaint, every task whose
     handle the repaint moved, as one map from the old handle to the new. A
     new task's preview number moves when another person's create takes it
-    while the write waits, and again when the server's answer fixes it.
+    while the write waits, and again when the server's answer fixes it. A
+    change of the home organization moves the handles of the old and the
+    new home organization's tasks, held or not (withUnheldMoves).
     Taken together, two creates that both move cannot make a caller follow
     the wrong one. */
 function moveHandles(moved: ReadonlyMap<string, string>) {
@@ -4283,6 +4290,8 @@ function rebuild(now = new Date(), full = false) {
     lastMoves = tasks.full(sources)
     committedByOwner.clear()
   }
+  if (HOME_ORG !== lastHome) lastMoves = withUnheldMoves(lastMoves, lastHome)
+  lastHome = HOME_ORG
   // the delays a staged load held back (delayOf) show now: the tasks that
   // show one paint again
   if (rebuiltLoading && stillLoading === null) {
@@ -4414,6 +4423,33 @@ const byStamp = (a: string, aId: string, b: string, bId: string) =>
 /* The home organization and the signed-in person's profiles the tasks were
    last shaped for; another shapes them all again. */
 let lastIdentity = ''
+/* The home organization the handles were last given under. */
+let lastHome = ''
+
+/** `moved`, the handles the task index moved, with those a change of the
+    home organization from `homeBefore` moved for tasks the index does not
+    hold: the tasks the app opened (lib/openedTasks.ts), which a window
+    notes when it shows one, and the one a window shows from its own read
+    (P.taskDetail). The index reports only its own tasks (store/taskIndex.ts
+    full), and a window on one of these must go on following it by its uuid
+    and organization (P.watchHandles), never take the task of the new home
+    organization that now has its old handle. */
+function withUnheldMoves(moved: ReadonlyMap<string, string>, homeBefore: string) {
+  const detail = PLANNER.detail
+  const known = [
+    ...openedTaskList(),
+    ...(detail?.num != null ? [{ uuid: detail.task, org: detail.org, num: detail.num }] : []),
+  ]
+  const next = new Map(moved)
+  for (const { uuid, org, num } of known) {
+    if (uuidToKey.has(uuid)) continue
+    const key = `${ISSUE_PREFIX}-${num}`
+    const from = handleUnder(homeBefore, uuid, org, key)
+    const to = handleUnder(HOME_ORG, uuid, org, key)
+    if (from !== to && !next.has(from)) next.set(from, to)
+  }
+  return next
+}
 
 /** The rows and facts the task index shapes the tasks from. */
 function taskSources(): TaskSources {

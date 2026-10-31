@@ -640,6 +640,47 @@ describe('a task the workspace does not hold, in the store', () => {
       expect(one('snapshot:threadHistory').args).toEqual({ org_id: org, issue_id: 'far-1' })
     })
 
+    it('moves the handles of tasks it does not hold when the home organization changes', async () => {
+      const { P } = store
+      // the partner organization holds its own QN-40
+      snap.issues.push(task('guest-40', 40, { org_id: GUEST, project_id: GUEST_PROJECT }))
+      publishWhole(snap)
+      expect(P.handleOf('guest-40')).toBe('guest-40')
+      // a window shows the home organization's QN-40 from its answer, and
+      // Search opened its archived QN-41
+      P.watchComments('far-1', org)
+      one('taskWindow:task').deliver(okAnswer('far-1', 40))
+      const { noteOpenedTask } = await import('../lib/openedTasks')
+      noteOpenedTask({
+        uuid: 'far-2',
+        num: 41,
+        key: 'QN-41',
+        title: 'Archived far task',
+        project: snap.projects[0].id,
+        org,
+      })
+      const moves: Record<string, string>[] = []
+      P.watchHandles((moved) => moves.push(Object.fromEntries(moved)))
+      // the home seat becomes a guest one, and the partner seat the home
+      snap.profiles = snap.profiles.map((p) =>
+        p.org_id === org && snap.myProfileIds.includes(p.id)
+          ? { ...p, org_role: 'guest' }
+          : p.id === 'me-guest'
+            ? { ...p, org_role: 'user' }
+            : p,
+      )
+      publishWhole(snap)
+      expect(P.homeOrg).toBe(GUEST)
+      // one move of every handle at once: the partner's task takes QN-40,
+      // and the tasks the workspace does not hold keep theirs by uuid
+      expect(moves).toHaveLength(1)
+      expect(moves[0]).toMatchObject({ 'guest-40': 'QN-40', 'QN-40': 'far-1', 'QN-41': 'far-2' })
+      expect(P.handleNow('far-1', org, 40)).toBe('far-1')
+      // the window's read goes on for the same task
+      expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: 'far-1' })
+      expect(detail('far-1')?.state).toBe('ok')
+    })
+
     it('forgets the watched task and its organization with a demo store', async () => {
       demo.on = true
       const { P } = store

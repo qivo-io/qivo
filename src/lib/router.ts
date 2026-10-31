@@ -349,18 +349,22 @@ const refOf = (open: string) => heldRef(open) ?? open
    address names it by its uuid, because `~` would read its key in the home
    organization; that new address replaces the old one in place
    (namedBefore). */
-const named = new Map<
-  string,
-  Pick<IssueVM, 'org' | 'key' | 'uuid'> & { num: number; seg: string }
->()
+type NamedTask = Pick<IssueVM, 'org' | 'key' | 'uuid'> & { num: number; seg: string }
+const named = new Map<string, NamedTask>()
 const NAMED_MAX = 64
 
-/* What `named` keeps for handle `open`, while that handle still opens the
-   task it names: after the home organization changed, the store gives the
-   handle to another task (P.handleNow), whose address it must not name. */
+/* What `named` keeps of the task handle `open` opens now (P.handleNow).
+   After the home organization changed, the handle an entry was kept by
+   can open another task, whose address it must not name, and the task the
+   entry names opens by another handle, which the window follows
+   (P.watchHandles): the newest entry whose task opens by `open` answers. */
 function namedNow(open: string) {
+  const handleOf = (was: NamedTask) => P.handleNow(was.uuid, was.org, was.num)
   const was = named.get(open)
-  return was && P.handleNow(was.uuid, was.org, was.num) === open ? was : undefined
+  if (was && handleOf(was) === open) return was
+  let found: NamedTask | undefined
+  for (const entry of named.values()) if (handleOf(entry) === open) found = entry
+  return found
 }
 
 /* Names, as `named` does, a task Search or a task window opened that the
