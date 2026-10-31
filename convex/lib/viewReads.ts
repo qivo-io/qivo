@@ -1056,8 +1056,8 @@ export async function shownParents(
   return out
 }
 
-/* `rows` by `key`, in order. */
-function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[]> {
+/** `rows` by `key`, in order. */
+export function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<string, T[]> {
   const out = new Map<string, T[]>()
   for (const row of rows) out.set(key(row), [...(out.get(key(row)) ?? []), row])
   return out

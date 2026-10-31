@@ -12,6 +12,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import { getDocumentSize } from 'convex/values'
 import { describe, expect, it } from 'vitest'
 import type { Doc, TableNames } from '../_generated/dataModel'
+import { LABEL_ASSIGNMENT_BYTES } from '../lib/board'
 import { newWindowKey } from '../lib/db'
 import {
   LIMITS,
@@ -235,5 +236,25 @@ describe('a task row', () => {
 
   it('refuses one more character of title', () => {
     expect(() => cleanTitle(THREE_BYTES.repeat(LIMITS.title.max + 1))).toThrow(LIMITS.title.refusal)
+  })
+})
+
+describe('a label assignment row', () => {
+  const row: WithoutSystemFields<Doc<'issue_labels'>> = {
+    org_id: uuid(),
+    issue_id: uuid(),
+    label_id: uuid(),
+    task_archived: true,
+    task_key: newWindowKey(),
+  }
+
+  it('sets every field the schema has', () => {
+    expect(Object.keys(row).sort()).toEqual(fieldsOf('issue_labels'))
+  })
+
+  it("stays within the Board search's LABEL_ASSIGNMENT_BYTES", async () => {
+    const size = await measured('issue_labels', row)
+    console.log(`a label assignment row: ${size} bytes`)
+    expect(size).toBeLessThanOrEqual(LABEL_ASSIGNMENT_BYTES)
   })
 })
