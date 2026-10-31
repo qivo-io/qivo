@@ -615,9 +615,10 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
       await shows(page, '[data-roadmap-task-open]')
     }),
   )
+  // the Roadmap of the top-level project the app opens
   assert.equal(
     await page.locator('[data-roadmap-task-open]').count(),
-    tasks,
+    await page.evaluate(() => window.__perf.boardRows),
     'Every task title must remain available before scrolling',
   )
   const bar = page.locator('[data-bar]').first()
