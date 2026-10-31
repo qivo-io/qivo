@@ -1046,9 +1046,10 @@ type Held = { teams: string[]; onRoot: string[]; seat: boolean }
  * (OWN_READS). Every answer rejects with accessUnchecked where a bound
  * stopped its check, never answering no access for it. The workspace parts
  * (lib/workspaceParts.ts), the inbox reads (model/inboxReads.ts), the task
- * window (lib/taskWindow.ts), main Search (lib/mainSearch.ts) and project
- * settings (model/projectSettings.ts) apply this one rule, each with its
- * own answer for that refusal. */
+ * window (lib/taskWindow.ts), main Search (lib/mainSearch.ts), the Board
+ * (lib/board.ts, which answers it `unavailable` with access_unchecked) and
+ * project settings (model/projectSettings.ts) apply this one rule, each with
+ * its own answer for that refusal. */
 export function accessOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,

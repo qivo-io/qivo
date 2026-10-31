@@ -136,6 +136,26 @@ export const DEFAULT_PAGE_SIZE = 50
  * its views read their milestones there. */
 export const MILESTONE_READ_PROJECTS = 200
 
+/** The most a task row takes as Convex counts a document without the
+ * description copy no writer sets since the third release of the
+ * description move (model/descriptions.ts), with every other field set at
+ * the caps (1,663 bytes measured): a title of LIMITS.title characters in a
+ * three-byte script, and an archive date. A rollback to v0.1.98, the floor,
+ * writes that copy again, which can add about 60 KB. Read budgets charge a
+ * task the reader may not be shown at this size, so its title's length
+ * moves no answer (lib/viewReads.ts viewBudget). Not in LIMITS, as nobody
+ * meets it; tests/rowBounds.test.ts checks it against the schema. */
+export const TASK_ROW_MAX_BYTES = 2 * 1024
+
+/** The most matching tasks one Board answers (tasks.ts board), across its
+ * whole selection: every seat and sub-project together, each subtask
+ * counted. A parent heading repeats as context and counts toward the
+ * Board's read budgets, not here. It is exported for the app, which names
+ * it in the sentence that asks to narrow a larger selection;
+ * t3/limits-board-view adds its Limits guide row when the Board enforces
+ * it. */
+export const BOARD_TASKS = 1000
+
 /** The rows one batch of an app list holds before Load more, such as the
  * labels of Settings > Labels and of the task label picker (labels.ts). A
  * batch size, not a limit on what the list holds. */

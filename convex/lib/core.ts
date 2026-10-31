@@ -439,11 +439,12 @@ export type ListView = {
   readable: (projectId: string) => boolean
 }
 
-/* The names of `labels` that the task carries, in their order, read through
+/** The names of `labels` that the task carries, in their order, read through
  * the task's own assignment of each (by_issue_label), archive marks
  * included. One index range and at most one document per label, however
- * many other labels the task carries. */
-async function labelNamesOf(
+ * many other labels the task carries. The Board's search reads them too
+ * (lib/board.ts). */
+export async function labelNamesOf(
   ctx: QueryCtx,
   taskId: string,
   labels: readonly Doc<'labels'>[],
@@ -459,11 +460,12 @@ async function labelNamesOf(
   return labels.filter((_, i) => held[i] !== null).map((label) => label.name)
 }
 
-/* The names of `labels` that the task carries, in their order, read through
+/** The names of `labels` that the task carries, in their order, read through
  * all the task's own assignments (by_issue) in one index range, archive
  * marks included, for a task restored so recently that its assignments are
- * still marked. */
-async function markedLabelNamesOf(
+ * still marked, and by the Board's search where it starts fewer ranges than
+ * labelNamesOf (lib/board.ts). */
+export async function markedLabelNamesOf(
   ctx: QueryCtx,
   taskId: string,
   labels: readonly Doc<'labels'>[],

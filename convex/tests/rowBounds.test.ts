@@ -1,6 +1,7 @@
-/* The row bounds lib/limits.ts states for projects and teams
- * (PROJECT_ROW_MAX_BYTES, TEAM_ROW_MAX_BYTES), at which read budgets count
- * a project, a team and the rows a project read brings along. Each case
+/* The row bounds lib/limits.ts states for projects, teams and tasks
+ * (PROJECT_ROW_MAX_BYTES, TEAM_ROW_MAX_BYTES, TASK_ROW_MAX_BYTES), at which
+ * read budgets count a project, a team, the rows a project read brings
+ * along and a task the reader may not be shown. Each case
  * builds the largest row the writers accept through their own helpers,
  * with every field the schema has set, stores it so the schema checks it,
  * and measures it as Convex counts a document. A field added to one of
@@ -11,9 +12,17 @@ import type { WithoutSystemFields } from 'convex/server'
 import { getDocumentSize } from 'convex/values'
 import { describe, expect, it } from 'vitest'
 import type { Doc, TableNames } from '../_generated/dataModel'
+import { LABEL_ASSIGNMENT_BYTES } from '../lib/board'
 import { newWindowKey } from '../lib/db'
-import { LIMITS, NAME_MAX, PROJECT_ROW_MAX_BYTES, TEAM_ROW_MAX_BYTES } from '../lib/limits'
+import {
+  LIMITS,
+  NAME_MAX,
+  PROJECT_ROW_MAX_BYTES,
+  TASK_ROW_MAX_BYTES,
+  TEAM_ROW_MAX_BYTES,
+} from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
+import { cleanTitle } from '../model/issues'
 import { assertNameShape } from '../model/people'
 import { cleanProjectName, projectDescription } from '../model/projects'
 import { cleanTeamName } from '../model/teams'
@@ -181,4 +190,71 @@ describe('the rows a project read brings along', () => {
       expect(size).toBeLessThanOrEqual(TEAM_ROW_MAX_BYTES)
     },
   )
+})
+
+describe('a task row', () => {
+  // the longest status and priority, and a date and an instant of each field
+  const day = '2026-12-31'
+  const row: WithoutSystemFields<Doc<'issues'>> = {
+    id: uuid(),
+    project_id: uuid(),
+    org_id: uuid(),
+    num: Number.MAX_SAFE_INTEGER,
+    title: cleanTitle(THREE_BYTES.repeat(LIMITS.title.max)),
+    status: 'progress',
+    priority: 'urgent',
+    assignee_id: uuid(),
+    reviewer_id: uuid(),
+    parent_id: uuid(),
+    start_week: day,
+    end_week: day,
+    due_date: day,
+    remaining_hours: LIMITS.remainingHours.max,
+    remaining_set_at: NOW,
+    paused: true,
+    created_by: uuid(),
+    reporter_id: uuid(),
+    done_at: NOW,
+    review_at: NOW,
+    status_at: NOW,
+    archived_at: NOW,
+    relations_marked: true,
+    window_key: newWindowKey(),
+    created_at: NOW,
+    updated_at: NOW,
+  }
+
+  it('sets every field the schema has but the description no writer sets', () => {
+    expect(Object.keys(row).sort()).toEqual(fieldsOf('issues').filter((f) => f !== 'description'))
+  })
+
+  it('stays within TASK_ROW_MAX_BYTES at the title cap', async () => {
+    const size = await measured('issues', row)
+    console.log(`a task row at the title cap: ${size} bytes`)
+    expect(size).toBeLessThanOrEqual(TASK_ROW_MAX_BYTES)
+  })
+
+  it('refuses one more character of title', () => {
+    expect(() => cleanTitle(THREE_BYTES.repeat(LIMITS.title.max + 1))).toThrow(LIMITS.title.refusal)
+  })
+})
+
+describe('a label assignment row', () => {
+  const row: WithoutSystemFields<Doc<'issue_labels'>> = {
+    org_id: uuid(),
+    issue_id: uuid(),
+    label_id: uuid(),
+    task_archived: true,
+    task_key: newWindowKey(),
+  }
+
+  it('sets every field the schema has', () => {
+    expect(Object.keys(row).sort()).toEqual(fieldsOf('issue_labels'))
+  })
+
+  it("stays within the Board search's LABEL_ASSIGNMENT_BYTES", async () => {
+    const size = await measured('issue_labels', row)
+    console.log(`a label assignment row: ${size} bytes`)
+    expect(size).toBeLessThanOrEqual(LABEL_ASSIGNMENT_BYTES)
+  })
 })
