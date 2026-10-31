@@ -1,8 +1,9 @@
 /* The Board's server read (convex/tasks.ts board) against the app's own
  * rules. Each case boots the real store from the caller's real workspace,
  * as projectTags.test.ts does, and compares what tasks.board answers for
- * the same caller with what the Board and the phone list derive in the
- * browser today: the phone set (scopedIssues with passesFilters), the
+ * the same caller with what the app derives in the browser, as the Board
+ * shows it until the answer arrives (src/views/board/useBoardView.ts
+ * provisionalBoard): the phone set (scopedIssues with passesFilters), the
  * desktop cards (its leaves), each card's shown parent chain
  * (groupBoardCell), the group facts (isGroup, isDone, the calculated span
  * and its partial flag, the hidden flags) and, without a filter Clear
@@ -10,7 +11,10 @@
  * cutoff equals stale_before. Northstar runs as Nora (admin), Leo and Ben
  * over every selection; the small fixture runs every access shape for a
  * user, a guest and a viewer, and the admin, over plants that hide parents,
- * subtasks and projects. Two cases must fail if the Reviewer rule drifts. */
+ * subtasks and projects. Two cases must fail if the Reviewer rule drifts.
+ * Every case also compares the stand-in the jsdom tests and the browser
+ * benchmark answer with (store/boardStandIn.setup.ts), given the caller's
+ * workspace and the store's canSee. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Doc } from '../../convex/_generated/dataModel'
@@ -35,6 +39,7 @@ import {
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import { groupBoardCell } from '../lib/boardGroups'
+import { boardStandIn } from './boardStandIn.setup'
 import type { Snapshot } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -75,7 +80,7 @@ async function start(snap: Snapshot) {
   await store.initStore()
   // the week indexes of the store's own timeline (src/lib/dates.ts)
   const { isoToWeek } = await import('../lib/dates')
-  return Object.assign(store.P, { weekOf: isoToWeek })
+  return Object.assign(store.P, { weekOf: isoToWeek, snapshot: snap })
 }
 
 type Store = Awaited<ReturnType<typeof start>>
@@ -213,6 +218,40 @@ function expectParity(
     expect(sorted(answer.projects ?? []), `${label}: projects`).toEqual(sorted(info.subIds))
 }
 
+/** Compares the stand-in's answer for `scope` and `filters`, from the
+ * workspace store `P` booted on, with `answer`, the server's: its state,
+ * rows, parents, group facts, lanes and sub-projects. */
+function expectStandIn(
+  P: Store,
+  answer: BoardAnswer,
+  scope: BoardScope,
+  filters: BoardFilters,
+  label: string,
+) {
+  const stood = boardStandIn(P.snapshot, { scope, filters }, { sees: (id) => P.canSee(id) })
+  expect(stood.state, `${label}: stand-in state`).toBe(answer.state)
+  if (answer.state !== 'ok' || stood.state !== 'ok') return
+  const ids = (rows: { id: string }[]) => rows.map((row) => row.id)
+  expect(ids(stood.rows), `${label}: stand-in rows`).toEqual(ids(answer.rows))
+  expect(ids(stood.parents), `${label}: stand-in parents`).toEqual(ids(answer.parents))
+  const facts = (rows: BoardAnswer & { state: 'ok' }) =>
+    [...rows.rows, ...rows.parents].map((row) => [
+      row.id,
+      row.has_subtasks,
+      row.has_hidden_subtasks,
+      row.parent_id ?? null,
+      row.group_done ?? null,
+      row.span?.partial ?? null,
+    ])
+  expect(facts(stood), `${label}: stand-in facts`).toEqual(facts(answer))
+  expect(sorted(stood.held_projects), `${label}: stand-in lanes`).toEqual(
+    sorted(answer.held_projects),
+  )
+  expect(sorted(stood.projects ?? []), `${label}: stand-in projects`).toEqual(
+    sorted(answer.projects ?? []),
+  )
+}
+
 /** A filter row named for a case's label. */
 type Filters = [label: string, filters: Partial<BoardFilters>]
 
@@ -237,7 +276,9 @@ async function compareAll(
         ...(scope.kind === 'mine' ? { mine: true, owners: [] } : {}),
       }
       const answer = await boardFor(t, profile, scope, filters)
-      expectParity(P, answer, storeScope, filters, `${profile.name}, ${scopeLabel}, ${filterLabel}`)
+      const label = `${profile.name}, ${scopeLabel}, ${filterLabel}`
+      expectParity(P, answer, storeScope, filters, label)
+      expectStandIn(P, answer, scope, filters, label)
       if (answer.state === 'ok')
         found.set(filterLabel, (found.get(filterLabel) ?? 0) + answer.rows.length)
     }

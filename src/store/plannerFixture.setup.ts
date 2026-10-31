@@ -69,3 +69,23 @@ export function plannerFixture(): Snapshot {
     delivered_at: '2026-09-15T08:00:00.000Z',
   }
 }
+
+/** Puts the fixture's project under a top-level project of its own, as
+    every writer stores a project that holds tasks. The Board's server read
+    (convex/tasks.ts board) answers only a top-level project with its
+    sub-projects or one sub-project, so a test that draws a Board from the
+    server's answer places the project so. Answers `snapshot`. */
+export function underProgram(snapshot: Snapshot): Snapshot {
+  const project = snapshot.projects[0]
+  const program = {
+    ...project,
+    id: crypto.randomUUID(),
+    type: 'meta' as const,
+    key: 'PROG',
+    num: 99,
+    name: 'Fixture program',
+  }
+  project.parent_id = program.id
+  snapshot.projects.push(program)
+  return snapshot
+}
