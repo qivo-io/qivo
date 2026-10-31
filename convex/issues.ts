@@ -138,8 +138,9 @@ const assertWritable = (ctx: MeCtx, projectId: string) => assertCanEdit(ctx, ctx
 
 /* --------------------------------------------------------------- archived
  * Issue reads that live OUTSIDE the snapshot: the Archived tasks page's
- * paged list (P.fetchArchivedPage) and the task window's look-up of its own
- * task (P.fetchArchivedTask).
+ * paged list (P.fetchArchivedPage) and the deprecated look-up of one
+ * archived task (archivedTask), which the task window used before it read
+ * its task from taskWindow.task.
  *
  * issues_select stayed can_see_project(project_id) (0003:165) for archived
  * rows too — fetchAll excluded them by filter, not by policy — so the fence
@@ -227,11 +228,15 @@ export const archivedPage = authedQuery({
   },
 })
 
-/** The archived task `id` as archivedPage shows it to the caller, or null
+/** Deprecated: the task window reads an archived task from
+ * taskWindow.task, which answers it with its text, labels and the caller's
+ * level. Kept for one release, with the same answer, for browser tabs and
+ * desktop clients loaded before; remove it with its manifest line in the
+ * release after.
+ * The archived task `id` as archivedPage shows it to the caller, or null
  * when the task is active, deleted, unknown or in a project the caller
  * cannot see, which all answer alike (lib/archivedTasks.ts
- * archivedTaskCore). The task window asks it once its task has left the
- * board, to say whether it was archived. */
+ * archivedTaskCore). */
 export const archivedTask = authedQuery({
   args: { id: v.string() },
   handler: async (ctx, { id }): Promise<ArchivedPageRow | null> =>

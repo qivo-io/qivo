@@ -14,7 +14,8 @@ import { newWindowKey } from '../lib/db'
 import { LIMITS, MIB, NAME_MAX } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { readWindowLinks, readWindowTask, TASK_WINDOW } from '../lib/taskWindow'
-import type { TaskRow } from '../lib/workspaceParts'
+import { relationRow, type TaskRow } from '../lib/workspaceParts'
+import { descriptionOf } from '../model/descriptions'
 import {
   as,
   NOW,
@@ -95,9 +96,24 @@ async function expectParity(t: T, orgId: string, person: Doc<'profiles'>): Promi
         .unique()
       levels.push([id, project === null ? null : await projectLevel(ctx, me, project)])
     }
+    // each archived task the caller sees with what the window shows of it
     const archived: [string, unknown][] = []
-    for (const task of tasks.filter((row) => row.archived_at !== undefined))
-      archived.push([task.id, await archivedTaskCore(ctx, new Map([[orgId, me]]), task.id)])
+    for (const task of tasks.filter((row) => row.archived_at !== undefined)) {
+      const row = await archivedTaskCore(ctx, new Map([[orgId, me]]), task.id)
+      const labels = await ctx.db
+        .query('issue_labels')
+        .withIndex('by_issue', (q) => q.eq('issue_id', task.id))
+        .collect()
+      archived.push([
+        task.id,
+        row && {
+          state: 'archived',
+          task: row,
+          description: await descriptionOf(ctx.db, task),
+          labels: labels.map(relationRow),
+        },
+      ])
+    }
     return { tasks, levels, archived }
   })
   const { tasks } = read
@@ -162,11 +178,15 @@ async function expectParity(t: T, orgId: string, person: Doc<'profiles'>): Promi
     })
   }
   for (const task of tasks.filter((row) => !byId.has(row.id))) {
-    const row = archived.get(task.id) ?? null
+    const shown = archived.get(task.id) ?? null
     expect(
       await caller.query(api.taskWindow.task, { org_id: orgId, ref: task.id }),
       task.title,
-    ).toEqual(row === null ? { state: 'unavailable' } : { state: 'archived', task: row })
+    ).toEqual(
+      shown === null
+        ? { state: 'unavailable' }
+        : { ...(shown as object), level: levels.get(task.project_id) },
+    )
     expect(await caller.query(api.taskWindow.links, { org_id: orgId, issue_id: task.id })).toEqual({
       state: 'unavailable',
     })
@@ -471,7 +491,7 @@ describe('refusals', () => {
     expect(row).not.toBeNull()
     expect(
       await as(t, f.guest).query(api.taskWindow.task, { org_id: f.org.id, ref: w.archived.id }),
-    ).toEqual({ state: 'archived', task: row })
+    ).toEqual({ state: 'archived', task: row, description: '', labels: [], level: 'user' })
     // the guest cannot see the hidden project, so its archived task is unavailable
     const secret = await plantIssue(t, {
       org_id: f.org.id,
@@ -481,6 +501,83 @@ describe('refusals', () => {
     expect(
       await as(t, f.guest).query(api.taskWindow.task, { org_id: f.org.id, ref: secret.id }),
     ).toEqual({ state: 'unavailable' })
+  })
+
+  it("answers an archived task's text, labels and the caller's level, so the window shows it read-only", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      description: 'Protection ratings and both connector orientations',
+      archived_at: NOW,
+    })
+    await t.run(async (ctx) => {
+      for (const label of ['label-b', 'label-a'])
+        await ctx.db.insert('issue_labels', {
+          org_id: f.org.id,
+          issue_id: task.id,
+          label_id: label,
+          task_archived: true,
+          task_key: task.window_key,
+        })
+    })
+    // the text is in its description row alone, as the third release left it
+    expect(task.description).toBeUndefined()
+    for (const [who, level] of [
+      [f.admin, 'lead'],
+      [f.guest, 'user'],
+      [f.viewer, 'viewer'],
+    ] as const) {
+      const answer = await as(t, who).query(api.taskWindow.task, { org_id: f.org.id, ref: task.id })
+      expect(answer, who.name).toMatchObject({
+        state: 'archived',
+        task: { id: task.id, is_group: false, archived_at: NOW },
+        description: 'Protection ratings and both connector orientations',
+        level,
+      })
+      if (answer.state !== 'archived') throw new Error(answer.state)
+      // label rows as the tasks part sends them, without the archive mark
+      expect(answer.labels.map((label) => label.label_id).sort()).toEqual(['label-a', 'label-b'])
+      for (const label of answer.labels) expect(Object.keys(label)).not.toContain('task_archived')
+      // the page row names no parent and holds no text
+      expect(Object.keys(answer.task)).not.toContain('description')
+    }
+    // nothing of it reaches a person who cannot see its project, nor
+    // another organization's admin
+    const secret = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.hidden.id,
+      description: 'Secret notes',
+      archived_at: NOW,
+    })
+    expect(
+      await as(t, f.guest).query(api.taskWindow.task, { org_id: f.org.id, ref: secret.id }),
+    ).toEqual({ state: 'unavailable' })
+    const elsewhere = await plantIssue(t, {
+      org_id: f.otherOrg.id,
+      project_id: f.otherProject.id,
+      description: 'Elsewhere',
+      archived_at: NOW,
+    })
+    expect(
+      await as(t, f.admin).query(api.taskWindow.task, { org_id: f.org.id, ref: elsewhere.id }),
+    ).toEqual({ state: 'unavailable' })
+  })
+
+  it('answers an archived task in an archived project as archived', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub2.id,
+      description: 'Board notes',
+      archived_at: NOW,
+    })
+    await t.run((ctx) => ctx.db.patch(f.sub2._id, { archived_at: NOW, archive_state: 'listed' }))
+    expect(
+      await as(t, f.guest).query(api.taskWindow.task, { org_id: f.org.id, ref: task.id }),
+    ).toMatchObject({ state: 'archived', task: { id: task.id }, description: 'Board notes' })
   })
 })
 
@@ -787,6 +884,32 @@ async function distinctShares(t: T, f: OrgFixture, project: Doc<'projects'>, n: 
 }
 
 describe('real limits', () => {
+  it('reads an archived task at the description cap with its labels within TASK_WINDOW', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const [task] = await plantMany(t, f, 1, () => ({ description: LARGEST, archived_at: NOW }), {
+      each: 1,
+      rows: true,
+    })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < LIMITS.labels.max; i++)
+        await ctx.db.insert('issue_labels', {
+          org_id: f.org.id,
+          issue_id: task.id,
+          label_id: uuid(),
+          task_archived: true,
+          task_key: task.window_key,
+        })
+    })
+    const { answer, read, documents, ranges } = await taskRead(t, f, task.id)
+    if (answer.state !== 'archived') throw new Error(answer.state)
+    expect(answer.description).toBe(LARGEST)
+    expect(answer.labels).toHaveLength(LIMITS.labels.max)
+    expect(read).toBeLessThan(1)
+    expect(documents).toBeLessThan(TASK_WINDOW.documents)
+    expect(ranges).toBeLessThan(TASK_WINDOW.ranges)
+  }, 120_000)
+
   it('reads 100 subtasks at the description cap in a three-byte script, complete and within TASK_WINDOW.bytes', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)

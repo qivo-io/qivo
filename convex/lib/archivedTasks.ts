@@ -9,9 +9,10 @@
  * id, which sorts like its text. A cursor names a position in that order, so
  * a page reads only what follows it, whatever the size of the archive.
  * Callers get the position sealed (archiveCursorText, scopeCursorText), since
- * it can be a task of a project they cannot see. The task window looks up its
- * own task in the archive by id instead (issues.archivedTask, archivedTaskCore
- * below).
+ * it can be a task of a project they cannot see. The deprecated
+ * issues.archivedTask looks one task up in the archive by id instead
+ * (archivedTaskCore below); the task window reads an archived task from
+ * taskWindow.task (lib/taskWindow.ts), with the same row (archivedRowOf).
  *
  * Both surfaces page through archivedTasksPage, under one read budget, over a
  * scope (ArchiveScope) that either merges a list of projects or reads the
