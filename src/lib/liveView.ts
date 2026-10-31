@@ -5,7 +5,7 @@
    The view subscribes from an effect, so a kept page (components/KeptView.tsx)
    stops its read with its other effects while another page shows, and reads
    afresh when it shows again. A result counts only for the subscription that
-   brought it: after a pause, a kept page shown again, new arguments or Try
+   brought it. After a pause, a kept page shown again, new arguments or Try
    again, the view has no current result until a transition brings one, so
    it can say that it is refreshing. */
 

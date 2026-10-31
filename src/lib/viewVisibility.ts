@@ -1,6 +1,6 @@
 /* The one gate that pauses a view's live reads (lib/liveView.ts) while the
    tab or the desktop window is hidden. It follows document.visibilityState,
-   not focus: a window people can see keeps updating while another one has
+   not focus. A window people can see keeps updating while another one has
    focus, side by side or on another monitor, and a minimized or hidden one
    pauses (the limits plan's "Hidden tabs and minimized windows"). The
    workspace's parts, the unread count and notifications do not use it. */

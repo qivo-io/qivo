@@ -720,8 +720,8 @@ function KanbanBoard({
        moment Focus emptied them, with no note (it isn't clearable) and, in
        the Boards layout, nothing left to draw. The answer's held_projects
        says it (useBoardView), with the groups of the cards on screen.
-     The search counts trimmed, as the server trims it: spaces alone are no
-     filter. */
+     The search counts trimmed, as the server trims it, so spaces alone are
+     no filter. */
   const clearable =
     (!mine && filters.mine) ||
     filters.assignees.length > 0 ||
