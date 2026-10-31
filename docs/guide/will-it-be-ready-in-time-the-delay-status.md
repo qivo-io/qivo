@@ -58,7 +58,9 @@ due date.
   tooltip also explains projected misses.
 - **Task window** shows **Currently delayed** or **Delayed** beside Due.
   Hover for the projected finish week. A missed or projected-to-miss deadline
-  outlines Due in red.
+  outlines Due in red. While tasks still load, or for a task that has not
+  loaded yet, it says **Delay unknown** when the projection needs the
+  owner's other work, and a passed due date still shows **Overdue**.
 - **Overview** includes projected misses in **Overdue & at risk** and counts
   **Delayed** and **Slipping** tasks in the health table.
 - **REST and MCP** task results carry the same verdict as `delay`, judged on

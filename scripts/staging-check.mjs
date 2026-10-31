@@ -19,10 +19,13 @@
  * Show earlier activity in its task window. It opens the Settings page
  * Archived tasks in the browser, and searches main Search there for an
  * active task it made, which must show with Include archived tasks off, and
- * for a task it archived, which must show only with it on, marked Archived
+ * for a task it archived, which must show only with it on, marked Archived,
+ * and open read-only with its description and its history under All
  * (ui/search-archived), which checks that the deployment's search index
  * takes the absent archived_at filter and still returns active matches
- * (convex/lib/mainSearch.ts ARCHIVED_FILTER). Every task, comment, grant and
+ * (convex/lib/mainSearch.ts ARCHIVED_FILTER), and that the deployment
+ * answers an archived task's text and history (taskWindow.task,
+ * snapshot.threadHistory). Every task, comment, grant and
  * file lives
  * in projects the run creates and names with its run tag. It revokes every
  * credential in the app, checks that the next call is refused, and removes
@@ -3443,16 +3446,21 @@ async function archivedTasksPageCheck(target) {
   })
 }
 
+/** The description of the archived task Search opens (archiveChecks). */
+const archivedNotes = () => `${run.tag} notes kept with the archived task`
+
 /** Main Search in the browser finds `active`, an active task the run made,
  *  with Include archived tasks off, and `target`, a task the run archived,
- *  only with it on, marked Archived. It searches each task's title, whose
- *  run tag no other run's task holds, as Nora, whose admin seat is searched
- *  whole, and only reads. It must run before the run archives its project,
- *  as Search leaves out the tasks of archived projects. With the toggle
- *  off, the search filters archived tasks out in the search index
- *  (convex/lib/mainSearch.ts ARCHIVED_FILTER), so this checks on the
- *  deployment that the filter is accepted and still returns active
- *  matches. */
+ *  only with it on, marked Archived. Opening `target` shows its window
+ *  read-only (data-task-archived) with its description and, under All, its
+ *  history, from the deployment's taskWindow.task and threadHistory. It
+ *  searches each task's title, whose run tag no other run's task holds, as
+ *  Nora, whose admin seat is searched whole, and only reads. It must run
+ *  before the run archives its project, as Search leaves out the tasks of
+ *  archived projects. With the toggle off, the search filters archived
+ *  tasks out in the search index (convex/lib/mainSearch.ts
+ *  ARCHIVED_FILTER), so this checks on the deployment that the filter is
+ *  accepted and still returns active matches. */
 async function paletteSearchCheck(target, active) {
   await check('ui/search-archived', async () => {
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/all`, {
@@ -3497,9 +3505,29 @@ async function paletteSearchCheck(target, active) {
       'Archived',
       'the mark on the archived result',
     )
-    await input.press('Escape')
+    // opened, it shows read-only with its text, and its history under All
+    await row.click()
     await palette.waitFor({ state: 'detached', timeout: 10_000 })
-    return `found the active ${active.key} with the toggle off, and the archived ${target.key} only with it on`
+    const opened = app.locator('[role="dialog"][data-task-archived]')
+    await opened.waitFor({ timeout: 30_000 })
+    expect(
+      await until(async () =>
+        ((await opened.locator('[data-task-description]').textContent()) ?? '').includes(
+          archivedNotes(),
+        ),
+      ),
+      `the window of ${target.key} does not show its description`,
+    )
+    eq(await opened.locator('[data-composer]').count(), 0, 'a composer on an archived task')
+    await opened.locator('.task-activity-head button').filter({ hasText: /^All$/ }).click()
+    expect(
+      await until(async () => (await opened.locator('[data-event]').count()) > 0),
+      `the window of ${target.key} shows no history under All`,
+    )
+    eq(await opened.locator('[data-thread-failure]').count(), 0, 'a failed history read')
+    await opened.locator('[data-task-close]').click()
+    await opened.waitFor({ state: 'detached', timeout: 10_000 })
+    return `found the active ${active.key} with the toggle off, and the archived ${target.key} only with it on, which opens read-only with its text and history`
   })
 }
 
@@ -3517,9 +3545,11 @@ async function archiveChecks() {
       [Z, 2],
       [A, 3],
     ]) {
+      // the third, which Search opens, with a text its window shows
       const t = await restOk(w, 'POST', '/tasks', {
         project: p.id,
         title: `${run.tag} archived ${n}`,
+        ...(n === 3 ? { description: archivedNotes() } : {}),
       })
       run.created.push(t)
       await restOk(w, 'PATCH', `/tasks/${t.key}`, { archived: true })

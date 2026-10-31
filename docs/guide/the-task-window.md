@@ -167,6 +167,15 @@ choose **Details**. A card or file that has not loaded into the workspace yet
 keeps its **×** disabled with **Available once every task has loaded**,
 because removing it waits for every task.
 
+A task you open from these lists, or from Search, before it has loaded into
+the workspace shows at once, read from the server: its fields, labels,
+description, comments and lists. You can comment on it at once. Its other
+fields, its labels and its relationships can be changed once every task has
+loaded, and until then they are disabled with **Available once every task
+has loaded**, or with **Read-only project access** when you can only read
+its project. When the task arrives, the window turns editable in place, and
+a comment you were typing stays.
+
 The **×** button removes a relationship without deleting the task.
 **Remove subtask** clears the child's parent and keeps the task.
 
@@ -324,13 +333,13 @@ restarts its auto-archive clock. Archived tasks appear only in **Archived
 tasks** and in Search with **Include archived tasks** on, and shared task
 links work again only after restoration.
 
-When someone else archives a task you have open, its window stays and says
-the task was archived. If you can edit its project, **Restore** in the
-window brings the task back into it. Otherwise the window says that someone
-who can edit the project can restore it from Archived tasks. A task that is
-deleted while you have it open, or that you can no longer open, says it is
-no longer here. If Qivo cannot check the archive, the window says so, and
-**Retry** checks again. Text you typed in the window and did not send, such
+When someone else archives a task you have open, its window stays, says the
+task was archived and shows the task read-only under that note. If you can
+edit its project, **Restore** in the window brings the task back into it.
+Otherwise the window says that someone who can edit the project can restore
+it from Archived tasks. A task that is deleted while you have it open, or
+that you can no longer open, says it is no longer here. If Qivo cannot check
+the archive, the window says so, and **Retry** checks again. Text you typed in the window and did not send, such
 as a comment, a new title or remaining hours, is discarded then, and Qivo
 says so. A reason you typed in **Archive or delete…** stays in the window,
 which says it was not used, and **Copy reason** copies it. Once the task is
@@ -341,9 +350,12 @@ stays open with your reason, and once the task leaves the board, the window
 keeps the reason the same way.
 
 Search finds archived tasks when **Include archived tasks** is on ([Search palette](./finding-your-way-around.md#search-palette)).
-Opening one shows its title, its project and when it was archived, with the
-same note, and **Restore** for someone who can edit its project. Its
-description and comments do not show there.
+Opening one shows the task read-only under the same note: its title, fields,
+labels, description, comments and, under **All**, its changes, with its
+project and when it was archived. **Restore** shows for someone who can edit
+its project, and the fields say **Restore this task to change it**. An
+archived task's window shows no subtasks, links or attachments, and no one
+can comment on it.
 
 ## Deleting
 
