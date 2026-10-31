@@ -610,6 +610,36 @@ describe('a task the workspace does not hold, in the store', () => {
       expect(one('snapshot:threadComments').args).toEqual({ org_id: org, issue_id: 'task-a' })
     })
 
+    it('asks for no thread or history of a gone task as later deliveries come, until it comes back', () => {
+      const { P } = store
+      P.watchComments('far-1', org)
+      P.showHistory(pane, true)
+      const read = one('taskWindow:task')
+      read.deliver(okAnswer('far-1', 40))
+      read.deliver({ state: 'unavailable' })
+      const asked = () =>
+        subs.filter(
+          (s) => s.name === 'snapshot:threadComments' || s.name === 'snapshot:threadHistory',
+        ).length
+      const before = asked()
+      // three workspace deliveries, the same twice and one that changes
+      // another task
+      publishWhole(snap)
+      publishWhole(snap)
+      snap.issues = snap.issues.map((t) => (t.id === 'task-a' ? { ...t, title: 'Renamed' } : t))
+      publishWhole(snap)
+      expect(P.issues.find((t) => t.uuid === 'task-a')?.title).toBe('Renamed')
+      expect(asked()).toBe(before)
+      // nor does Retry for a failed thread
+      P.retryComments()
+      expect(asked()).toBe(before)
+      // the task comes back: its thread and history, once each
+      read.deliver(okAnswer('far-1', 40))
+      expect(asked()).toBe(before + 2)
+      expect(one('snapshot:threadComments').args).toEqual({ org_id: org, issue_id: 'far-1' })
+      expect(one('snapshot:threadHistory').args).toEqual({ org_id: org, issue_id: 'far-1' })
+    })
+
     it('forgets the watched task and its organization with a demo store', async () => {
       demo.on = true
       const { P } = store

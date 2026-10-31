@@ -835,13 +835,14 @@ function watchedCreating(): boolean {
    task watched while its create was on its way (watchComments), and with
    the kept organization (watchedOrg) for a task the workspace does not
    hold. Asking earlier for a task whose create is on its way would refuse
-   with not_found, which the server logs as an error. Runs after each
+   with not_found, which the server logs as an error, and so would asking
+   for a task its answer says is gone (watchedGone). Runs after each
    snapshot delivery and after a boot, so a re-init of the parts brings the
    thread back, and again once the rows show a delivery (syncThread), as a
    delivery that leaves the task out runs this before its rows do. */
 function subscribeWaitingThread() {
   const t = watchedComments
-  if (!t || threadWatched) return
+  if (!t || threadWatched || watchedGone()) return
   const row = serverTask(t)
   if (row) subscribeThread(t, row.org_id)
   else if (watchedOrg && !rows.issues.has(t)) subscribeThread(t, watchedOrg)
@@ -1001,19 +1002,23 @@ function sidesWanted(): Record<SectionSide, boolean> {
    for a deleted task, whose thread the server refuses. The answer goes on,
    so a task that comes back subscribes them again. */
 function syncThread() {
-  const t = watchedComments
-  if (!t) return
-  const answer = sectionAnswers.issue === t ? sectionAnswers.task : null
-  const gone =
-    !rows.issues.has(t) && answer !== null && answer !== CREATING && answer.state === 'unavailable'
-  if (!gone) {
-    subscribeWaitingThread()
-    return
-  }
-  if (threadWatched) {
+  if (!watchedComments) return
+  if (!watchedGone()) subscribeWaitingThread()
+  else if (threadWatched) {
     stopThread()
     stopHistory()
   }
+}
+
+/* Whether the watched task is one the workspace does not hold and its
+   answer says is unavailable, as a deleted task, whose thread and history
+   the server refuses. No delivery asks for them again until it comes back
+   (subscribeWaitingThread, retryComments). */
+function watchedGone(): boolean {
+  const t = watchedComments
+  if (!t || rows.issues.has(t)) return false
+  const answer = sectionAnswers.issue === t ? sectionAnswers.task : null
+  return answer !== null && answer !== CREATING && answer.state === 'unavailable'
 }
 
 /* Makes each section side run exactly while it is wanted (sidesWanted), in
@@ -8062,7 +8067,7 @@ export const PLANNER = {
       thread failed. */
   retryComments: () => {
     const org = watchedOrgOf()
-    if (!watchedComments || !org || PLANNER.commentsFailure !== 'failed') return
+    if (!watchedComments || !org || PLANNER.commentsFailure !== 'failed' || watchedGone()) return
     PLANNER.commentsFailure = 'retrying'
     // the new subscription has delivered nothing yet
     threadCurrent = false
