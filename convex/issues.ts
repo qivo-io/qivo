@@ -52,10 +52,8 @@ import {
   ARCHIVED_PAGE_ROWS,
   ARCHIVED_SCOPE,
   type ArchivedListRow,
-  type ArchivedPageRow,
   type ArchivedPageScope,
   archivedPageCore,
-  archivedTaskCore,
   parseScopeCursor,
   scopeCursorText,
 } from './lib/archivedTasks'
@@ -137,10 +135,9 @@ async function myIssue(ctx: MeCtx, id: string): Promise<Doc<'issues'>> {
 const assertWritable = (ctx: MeCtx, projectId: string) => assertCanEdit(ctx, ctx.me, projectId)
 
 /* --------------------------------------------------------------- archived
- * Issue reads that live OUTSIDE the snapshot: the Archived tasks page's
- * paged list (P.fetchArchivedPage) and the deprecated look-up of one
- * archived task (archivedTask), which the task window used before it read
- * its task from taskWindow.task.
+ * The Archived tasks page's paged list (P.fetchArchivedPage) reads issues
+ * OUTSIDE the snapshot. The task window reads an archived task from
+ * taskWindow.task.
  *
  * issues_select stayed can_see_project(project_id) (0003:165) for archived
  * rows too — fetchAll excluded them by filter, not by policy — so the fence
@@ -226,21 +223,6 @@ export const archivedPage = authedQuery({
       scanned: page.scanned,
     }
   },
-})
-
-/** Deprecated: the task window reads an archived task from
- * taskWindow.task, which answers it with its text, labels and the caller's
- * level. Kept for one release, with the same answer, for browser tabs and
- * desktop clients loaded before; remove it with its manifest line in the
- * release after.
- * The archived task `id` as archivedPage shows it to the caller, or null
- * when the task is active, deleted, unknown or in a project the caller
- * cannot see, which all answer alike (lib/archivedTasks.ts
- * archivedTaskCore). */
-export const archivedTask = authedQuery({
-  args: { id: v.string() },
-  handler: async (ctx, { id }): Promise<ArchivedPageRow | null> =>
-    await archivedTaskCore(ctx, ctx.myProfiles, id),
 })
 
 /* ----------------------------------------------------------------- create

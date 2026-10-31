@@ -462,7 +462,20 @@ describe('refusals', () => {
       num: 4242,
     })
     const deleted = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    await as(t, f.admin).mutation(api.issues.deleteDeep, { org_id: f.org.id, id: deleted.id })
+    const deletedArchived = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      archived_at: NOW,
+    })
+    // the window answers it while it is archived, so its refusal below is the delete's
+    expect(
+      await as(t, f.admin).query(api.taskWindow.task, {
+        org_id: f.org.id,
+        ref: deletedArchived.id,
+      }),
+    ).toMatchObject({ state: 'archived' })
+    for (const task of [deleted, deletedArchived])
+      await as(t, f.admin).mutation(api.issues.deleteDeep, { org_id: f.org.id, id: task.id })
     // the admin's login also holds a seat in the other organization, where
     // this task is archived
     await plantSeat(t, {
@@ -481,6 +494,7 @@ describe('refusals', () => {
       ['a number only another organization holds', f.admin, 'QN-4242'],
       ['a task in a project the caller cannot see', f.guest, w.secret.id],
       ['a task moved to Deleted items', f.admin, deleted.id],
+      ['an archived task moved to Deleted items', f.admin, deletedArchived.id],
       ['an active task in an archived project', f.admin, w.kids.shelved.id],
       [
         "an archived task of another organization of the caller's login",
@@ -540,8 +554,13 @@ describe('refusals', () => {
     const t = newT()
     const f = await withOrg(t)
     const w = await plantWorld(t, f)
-    const row = await as(t, f.guest).query(api.issues.archivedTask, { id: w.archived.id })
-    expect(row).not.toBeNull()
+    const page = await as(t, f.guest).query(api.issues.archivedPage, {
+      scope: { org_id: f.org.id, project_ids: [f.sub.id] },
+    })
+    const listed = page.rows.find((row) => row.id === w.archived.id)
+    expect(listed).toBeDefined()
+    // the page's row without what only the list shows
+    const { place: _place, owner_name: _owner, can_restore: _restore, ...row } = listed ?? {}
     expect(
       await as(t, f.guest).query(api.taskWindow.task, { org_id: f.org.id, ref: w.archived.id }),
     ).toEqual({ state: 'archived', task: row, description: '', labels: [], level: 'user' })
