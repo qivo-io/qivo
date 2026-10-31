@@ -22,8 +22,6 @@
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId } from './db'
-import { ISSUE_STATUSES } from './enums'
-import { taskOwnerId } from './review'
 
 /** Whether the project with this id exists and is not archived. */
 export type ProjectLive = (projectId: string) => boolean
@@ -150,46 +148,4 @@ export async function liveTasksOf(
     ),
   )
   return reads.flat().sort((a, b) => a._creationTime - b._creationTime)
-}
-
-/* The statuses of tasks that can carry load, every one but Done, as
- * planning.ts orgLoadRows skips Done tasks. */
-const OPEN_STATUSES = ISSUE_STATUSES.filter((status) => status !== 'done')
-
-/**
- * The live tasks `ownerId` owns by the Reviewer rule (lib/review.ts
- * taskOwnerId) that are not Done, oldest first by creation. One index range
- * per open status of the tasks the person is assigned, and one of the In
- * Review tasks they review, so Done tasks, which stay active until the
- * nightly archive and forever in an archived project, are never read. The
- * rule is read as for a task without subtasks, which is right for callers
- * that leave groups out.
- */
-export async function ownedOpenTasks(
-  ctx: QueryCtx,
-  ownerId: string,
-  live: ProjectLive,
-): Promise<Doc<'issues'>[]> {
-  const ranges = await Promise.all([
-    ...OPEN_STATUSES.map((status) =>
-      ctx.db
-        .query('issues')
-        .withIndex('by_assignee_archived_status', (q) =>
-          q.eq('assignee_id', ownerId).eq('archived_at', undefined).eq('status', status),
-        )
-        .collect(),
-    ),
-    // a reviewer owns a task only while it is in review (lib/review.ts)
-    ctx.db
-      .query('issues')
-      .withIndex('by_reviewer_archived_status', (q) =>
-        q.eq('reviewer_id', ownerId).eq('archived_at', undefined).eq('status', 'review'),
-      )
-      .collect(),
-  ])
-  const owned = new Map<string, Doc<'issues'>>()
-  for (const task of ranges.flat()) {
-    if (taskOwnerId(task) === ownerId && live(task.project_id)) owned.set(task.id, task)
-  }
-  return [...owned.values()].sort((a, b) => a._creationTime - b._creationTime)
 }

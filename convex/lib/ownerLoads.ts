@@ -61,11 +61,19 @@ import { taskOwnerId } from './review'
  * questions and each round of subtask checks, and counts each row it reads
  * itself between those looks (getDocumentSize), so it passes `call` by one
  * row for each read in flight at most, or by what its last round of
- * questions read past the price it gave each question (QUESTION). Past `call` come the shared reads, at
- * most 266 ranges, 7,098 documents and about 1.2 MiB of JSON at OWN_READS'
- * values, and the access instance's single-row reads beside its questions,
- * at most 193 ranges and 705 documents (the OWN_READS docstring), so a call
- * stays inside Convex's 4,096 ranges, 32,000 documents and 16 MiB.
+ * questions read past the price it gave each question (QUESTION). Past
+ * `call` come the shared reads (OWN_READS states them): at most 266 ranges
+ * and 7,098 documents, or 521 ranges for a person in 129 to 256 teams, past
+ * the testing envelope; up to about 1.2 MiB of the organization's teams,
+ * which counts JSON; and the person's own rows (grants, memberships,
+ * shares), a few hundred bytes each at ordinary name lengths and up to
+ * about 3 KB at the name caps. Beside its questions the access instance
+ * reads single rows too, at most 193 ranges and 705 documents. At most
+ * 2,714 ranges and 23,803 documents in all, so a call stays inside
+ * Convex's 4,096 ranges and 32,000 documents; and inside its 16 MiB for a
+ * person in the envelope's 25 teams, whose own rows at ordinary name
+ * lengths add a few MB to `call`'s 8 MiB. A person with thousands of
+ * those rows near the name caps can still make a call pass 16 MiB.
  *
  * A lone owner reads 1 range for the profile, 5 for the open tasks, 1 for
  * each project its scheduled tasks name, at most 6 for each live one asked

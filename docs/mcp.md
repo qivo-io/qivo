@@ -1766,8 +1766,10 @@ On `get_task`, `delay` can also be `{"status": "unavailable",
 work is too large for it to read in one request, or it could not finish
 checking which projects you can see. It can happen for any user, a viewer
 or guest included, also when most of that work is in projects they cannot
-read. It never counts the work it could not read as free time. A
-`list_tasks` result never says `unavailable`.
+read. It never counts the work it could not read as free time. It also
+replaces `late` on a task whose due date has passed, because the projected
+week rests on that work, so `list_tasks` can say `late` for the same task.
+A `list_tasks` result never says `unavailable`.
 
 `last_comment_at` is when the newest comment on the task was posted, or
 `null` when it has none. Editing a comment does not change it, and deleting

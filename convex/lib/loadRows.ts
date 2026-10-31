@@ -68,10 +68,12 @@ export type LoadFacts = {
  * so past its budgets a guest's or Viewer's answer about another person can
  * be unavailable because of that person's tasks in projects the reader
  * cannot see. That one fact is all the answer tells of them: never their
- * ids, projects, titles, creation order or count. Every hidden row that
- * does go out goes in one total order with the others. The options not
- * taken were two more task indexes read per visible project, and only the
- * reader's own load for guests and Viewers.
+ * ids, projects, titles, creation order or count. planning.ownerLoads
+ * reads one owner a call for them, so where its `not_read` starts follows
+ * the order they asked in alone, not another person's hidden reads. Every
+ * hidden row that does go out goes in one total order with the others.
+ * The options not taken were two more task indexes read per visible
+ * project, and only the reader's own load for guests and Viewers.
  */
 export function loadShown(f: {
   staff: boolean

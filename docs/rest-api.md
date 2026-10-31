@@ -1701,9 +1701,11 @@ Qivo says this when the owner's other open work is too large for it to
 read in one request, or it could not finish checking which projects the
 caller can see. It can happen for any caller, a viewer or guest included,
 also when most of that work is in projects they cannot read. It never
-counts the work it could not read as free time. A list row never says
-`unavailable`. `unavailable` arrived in October 2026, so treat a `status`
-you do not know as no verdict.
+counts the work it could not read as free time. It also replaces `late`
+on a task whose due date has passed, because the projected week rests on
+that work, so the list row for the same task can say `late`. A list row
+never says `unavailable`. `unavailable` arrived in October 2026, so treat
+a `status` you do not know as no verdict.
 
 `last_comment_at` is when the newest comment on the task was posted, or
 `null` when it has none. Editing a comment does not change it, and deleting

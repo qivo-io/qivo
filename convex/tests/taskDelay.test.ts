@@ -479,15 +479,21 @@ describe('today is the request’s UTC day', () => {
 })
 
 describe('a verdict reads the owner’s other work only when it can change it', () => {
-  /* 300 scheduled active tasks of `owner` in PCB, more than a read may
-   * take, To Do unless `status` says otherwise. */
-  const busy = async (fx: Fx, owner: Doc<'profiles'>, status: Doc<'issues'>['status'] = 'todo') => {
+  /* `count` (300 unless given) scheduled active tasks of `owner` in
+   * `project_id` (PCB unless given), more than a read may take, To Do
+   * unless `status` says otherwise. */
+  const busy = async (
+    fx: Fx,
+    owner: Doc<'profiles'>,
+    status: Doc<'issues'>['status'] = 'todo',
+    { count = 300, project_id = fx.sub2.id }: { count?: number; project_id?: string } = {},
+  ) => {
     await fx.t.run(async (ctx) => {
-      for (let i = 0; i < 300; i++) {
+      for (let i = 0; i < count; i++) {
         await ctx.db.insert('issues', {
           id: uuid(),
           org_id: fx.org.id,
-          project_id: fx.sub2.id,
+          project_id,
           num: 70_000 + i,
           title: `Load ${i}`,
           description: '',
@@ -551,9 +557,10 @@ describe('a verdict reads the owner’s other work only when it can change it', 
   })
 
   it('says unavailable past the owner’s subtask checks, where the list still judges', async () => {
-    // 300 subtask checks would take more index ranges than the read may
-    const fx = await setup(newT({ transactionLimits: { databaseQueries: 200 } }))
-    await busy(fx, fx.user)
+    const fx = await setup()
+    // 150 of the user's tasks in the task's own sub-project, so the read
+    // asks about FW and TBED alone and its room holds every check
+    await busy(fx, fx.user, 'todo', { count: 150, project_id: fx.sub.id })
     const estimated = await task(fx, {
       assignee_id: fx.user.id,
       start_week: W(0),
@@ -561,9 +568,26 @@ describe('a verdict reads the owner’s other work only when it can change it', 
       remaining_hours: 10,
       remaining_set_at: NOW,
     })
+    // the list read every active task anyway
+    const listed = await restTasks(fx.t, {
+      callerId: fx.admin.id,
+      access: 'read',
+      today: TODAY,
+      owner: fx.user.id,
+      // the task's number is the lowest of the user's, which orders
+      // tasks created at the same instant
+      limit: '1',
+    })
+    const judged = listed.find((r) => r.id === estimated.id)?.delay
+    expect(judged?.status).toBe('behind')
     const bounds = structuredClone(OWNER_LOADS)
-    OWNER_LOADS.checks = 100
     try {
+      // more checks allowed than the 151 tasks: the single read judges as
+      // the list does
+      OWNER_LOADS.checks = 200
+      expect((await single(fx, estimated.id)).delay).toEqual(judged)
+      // fewer: the checks bound alone makes it unavailable
+      OWNER_LOADS.checks = 100
       expect((await single(fx, estimated.id)).delay).toEqual(UNAVAILABLE_DELAY)
       const mcp = JSON.parse(
         await fx.t.query(internal.machine.mcp.getIssue, {
@@ -574,21 +598,58 @@ describe('a verdict reads the owner’s other work only when it can change it', 
         }),
       )
       expect(mcp.delay).toEqual(UNAVAILABLE_DELAY)
-      // the list read every active task anyway: the 300 tasks fill the
-      // user's next three weeks
-      const listed = await restTasks(fx.t, {
+    } finally {
+      Object.assign(OWNER_LOADS, bounds)
+    }
+  })
+
+  it('answers a REST create’s and update’s delay as the task’s read does, unavailable past the bounds', async () => {
+    const fx = await setup()
+    await busy(fx, fx.user, 'todo', { count: 60, project_id: fx.sub.id })
+    // the write answers judge in the real day, so the read compared with
+    // them does too
+    const read = async (ref: string) =>
+      (
+        await fx.t.query(internal.machine.rest.getIssue, {
+          callerId: fx.admin.id,
+          access: 'read',
+          today: new Date().toISOString().slice(0, 10),
+          ref,
+        })
+      ).delay
+    const created = await fx.t.mutation(internal.machine.rest.createIssue, {
+      callerId: fx.admin.id,
+      access: 'write',
+      keyName: 'delay test',
+      body: JSON.stringify({
+        project: 'TBED',
+        sub_project: 'fw',
+        title: 'Planned by a machine',
+        assignee_id: fx.user.id,
+        start_week: W(0),
+        end_week: W(0),
+        remaining_hours: 10,
+      }),
+    })
+    expect(created.delay).not.toBeNull()
+    expect(created.delay).not.toEqual(UNAVAILABLE_DELAY)
+    expect(created.delay).toEqual(await read(created.id))
+    const update = (title: string) =>
+      fx.t.mutation(internal.machine.rest.updateIssue, {
         callerId: fx.admin.id,
-        access: 'read',
-        today: TODAY,
-        owner: fx.user.id,
-        // the task's number is the lowest of the user's, which orders
-        // tasks created at the same instant
-        limit: '1',
+        access: 'write',
+        keyName: 'delay test',
+        ref: created.id,
+        body: JSON.stringify({ title }),
       })
-      expect(listed.find((r) => r.id === estimated.id)?.delay).toEqual({
-        status: 'behind',
-        projected_end_week: W(3),
-      })
+    const updated = await update('Planned by a machine, renamed')
+    expect(updated.delay).toEqual(created.delay)
+    const bounds = structuredClone(OWNER_LOADS)
+    try {
+      // the user's 61 open tasks pass a lowered bound
+      OWNER_LOADS.open = 50
+      expect((await update('Planned by a machine, once more')).delay).toEqual(UNAVAILABLE_DELAY)
+      expect(await read(created.id)).toEqual(UNAVAILABLE_DELAY)
     } finally {
       Object.assign(OWNER_LOADS, bounds)
     }

@@ -314,15 +314,27 @@ describe('an owner’s spans are the organization’s rows of that owner', () =>
         }
         const owners = Object.values(who)
         for (const reader of [fx.admin, fx.user2, fx.viewer, fx.guest]) {
+          const staff = isOrgStaff(reader)
           const answer = await loads(
             fx.t,
             fx,
             reader,
             owners.map((p) => p.id),
           )
-          expect(answer.hidden).toBe(isOrgStaff(reader) ? 'counted' : 'own_only')
+          expect(answer.hidden).toBe(staff ? 'counted' : 'own_only')
+          // a guest or Viewer gets one owner a call, so asks for each alone
+          const answered = staff
+            ? answer.owners
+            : await Promise.all(
+                owners.map(async (p) => (await loads(fx.t, fx, reader, [p.id])).owners[0]),
+              )
+          if (!staff) {
+            expect(answer.owners.slice(1).map((o) => o.state)).toEqual(
+              owners.slice(1).map(() => 'not_read'),
+            )
+          }
           for (const [i, owner] of owners.entries()) {
-            const one = answer.owners[i]
+            const one = answered[i]
             const label = `${owner.name} for ${reader.name}`
             expect(one?.owner_id, label).toBe(owner.id)
             if (one?.state !== 'ok') throw new Error(`${label} is ${one?.state}`)
@@ -534,7 +546,7 @@ describe('who receives which spans', () => {
         hidden: 'own_only',
         owners: [
           { owner_id: fx.user.id, state: 'unavailable' },
-          { owner_id: fx.guest.id, state: 'ok', spans: [] },
+          { owner_id: fx.guest.id, state: 'not_read' },
         ],
       })
       const refused = await expectRefusal(
@@ -637,6 +649,45 @@ describe('the owners of a call', () => {
     expect((await loads(fx.t, fx, fx.admin, many.slice(1))).owners).toHaveLength(OWNER_LOADS.owners)
     expect((await loads(fx.t, fx, fx.admin, [])).owners).toEqual([])
     await expectRefusal(loads(fx.t, fx, fx.otherAdmin, [fx.user.id]), 'forbidden')
+  })
+
+  it('reads a guest or Viewer one owner a call, so where not_read starts tells nothing of hidden work', async () => {
+    const fx = await setup()
+    await task(fx, { assignee_id: fx.user.id, ...plan(3) })
+    await task(fx, { assignee_id: fx.admin.id, ...plan(2) })
+    const states = async (reader: Doc<'profiles'>, ids: string[]) =>
+      (await loads(fx.t, fx, reader, ids)).owners.map((o) => o.state)
+    const asked = [fx.user.id, fx.admin.id, fx.user2.id]
+    const before = {
+      guest: await states(fx.guest, asked),
+      viewer: await states(fx.viewer, asked),
+    }
+    expect(before).toEqual({
+      guest: ['ok', 'not_read', 'not_read'],
+      viewer: ['ok', 'not_read', 'not_read'],
+    })
+    // the user's hidden open work grows, which only staff receive (as busy
+    // time without a task id)
+    await plantMany(fx.t, fx.org.id, 40, {
+      project_id: fx.sib.id,
+      assignee_id: fx.user.id,
+      ...plan(1),
+    })
+    await plantMany(fx.t, fx.org.id, 20, {
+      project_id: fx.sib.id,
+      assignee_id: fx.user.id,
+      status: 'backlog',
+    })
+    expect({
+      guest: await states(fx.guest, asked),
+      viewer: await states(fx.viewer, asked),
+    }).toEqual(before)
+    // asking again for the not_read owners reads the next one
+    expect(await states(fx.guest, asked.slice(1))).toEqual(['ok', 'not_read'])
+    expect(await states(fx.viewer, asked.slice(2))).toEqual(['ok'])
+    // staff keep every owner the room holds
+    expect(await states(fx.admin, asked)).toEqual(['ok', 'ok', 'ok'])
+    expect(await states(fx.user2, asked)).toEqual(['ok', 'ok', 'ok'])
   })
 })
 
@@ -824,10 +875,11 @@ describe('past a bound an owner is unavailable, never fewer spans', () => {
         ...plan(1),
       })
     expect((await loads(fx.t, fx, fx.admin, [fx.user.id])).owners[0]?.state).toBe('unavailable')
-    await expectRefusal(
+    const refused = await expectRefusal(
       as(fx.t, fx.admin).query(api.planning.assigneeLoad, { assignee_id: fx.user.id }),
       'rule',
     )
+    expect((refused.data as { reason?: string }).reason).toBe(LOAD_UNAVAILABLE)
   }, 60_000)
 })
 
@@ -1166,10 +1218,10 @@ describe('at the testing envelope', () => {
     await plantMany(t, fx.org.id, 1, { project_id: subs[0]?.id ?? '', assignee_id: busy.id })
     expect((await call([busy.id])).out.owners[0]?.state).toBe('unavailable')
     // each read inside Convex's limits, the call's ceiling and one step
-    // past it; measured at deecadb1: alone 999 ranges, 8,329 documents, 3.6 MB;
-    // the 50 owners in two calls, 23 of them and then 27, 2,032 and 1,735
-    // ranges, 9,272 and 7,385 documents, 4.7 and 2.5 MB; the single read
-    // 1,125 ranges, 8,489 documents, 3.6 MB
+    // past it; measured when the reader was written: alone 999 ranges,
+    // 8,329 documents, 3.6 MB; the 50 owners in two calls, 23 of them and
+    // then 27, 2,032 and 1,735 ranges, 9,272 and 7,385 documents, 4.7 and
+    // 2.5 MB; the single read 1,125 ranges, 8,489 documents, 3.6 MB
     for (const read of [alone, assignee, single, ...calls]) {
       expect(read.ranges).toBeLessThan(4096)
       expect(read.documents).toBeLessThan(32_000)

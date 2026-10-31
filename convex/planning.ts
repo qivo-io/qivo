@@ -172,7 +172,8 @@ export type OwnerLoadSpan = Omit<OrgLoadRow, 'owner_id'>
 /** One owner of planning.ownerLoads' answer: `ok` with every span of their
  * load, `unavailable` when it did not fit the reader's bounds or a check of
  * the caller's access stopped, `not_read` when the call had no room left
- * for it, so asking again with fewer owners reads it. */
+ * for it, or did not read it because the caller is a guest or Viewer and
+ * it is not the first, so asking again with fewer owners reads it. */
 export type OwnerLoadJson =
   | { owner_id: string; state: 'ok'; spans: OwnerLoadSpan[] }
   | { owner_id: string; state: 'unavailable' }
@@ -201,6 +202,15 @@ export type OwnerLoadsJson = {
  * past OWNER_LOADS.spans answers `not_read`, unless it is the first, and so
  * does every owner after a `not_read` one.
  *
+ * A guest or organization Viewer gets one owner a call, the first, and
+ * every later owner answers `not_read`. One room serves every owner of a
+ * call, and the reader spends it on an owner's open tasks before it knows
+ * which of them the caller can see, so where `not_read` started would
+ * tell such a caller how much hidden work the owners before it hold.
+ * Asking again for the `not_read` owners reads the next one. Staff keep
+ * every owner the room holds: they already receive each person's hidden
+ * work as busy time without a task id (lib/loadRows.ts loadShown).
+ *
  * It reads each owner's profile and five open-task ranges, the project row
  * of each project their scheduled tasks name, the caller's access to the
  * live ones (their own grants, memberships and team shares among it) and a
@@ -216,12 +226,15 @@ export const ownerLoads = orgQuery({
     if (ids.length > OWNER_LOADS.owners) {
       throw badRequest(`at most ${OWNER_LOADS.owners} people at a time`)
     }
+    const staff = isOrgStaff(ctx.me)
     const access = accessOf(ctx, ctx.me)
     const reader = ownerLoadReader(ctx, { me: ctx.me, access, room: callRoom })
     const owners: OwnerLoadJson[] = []
     let spans = 0
     let ended = false
     for (const owner_id of ids) {
+      // a guest's or Viewer's cut follows the order asked alone (above)
+      if (!staff && owners.length > 0) ended = true
       const load = ended ? null : await reader.read(owner_id)
       if (load === null || load.state === 'not_read') {
         ended = true
@@ -239,7 +252,7 @@ export const ownerLoads = orgQuery({
         }
       }
     }
-    return { hidden: isOrgStaff(ctx.me) ? 'counted' : 'own_only', owners }
+    return { hidden: staff ? 'counted' : 'own_only', owners }
   },
 })
 
