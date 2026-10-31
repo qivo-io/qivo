@@ -981,8 +981,10 @@ function KanbanBoard({
         label={pendingLabel}
         listRole
         blockSize={BOARD_BLOCK_SIZE}
-        // tasks still arriving land among the cards (DeferredList hold)
-        hold={view.busy}
+        // tasks still arriving land among the cards (DeferredList hold),
+        // while the workspace loads in stages; a wait for the Board's answer
+        // holds no slice back
+        hold={P.stillLoading() !== null}
       />
     )
   }

@@ -692,8 +692,10 @@ function MobileTaskBoard({
               initial={initialOf(group.id)}
               scheduler={scheduler}
               label={pendingRows}
-              // tasks still arriving land among the rows (DeferredList hold)
-              hold={view.busy}
+              // tasks still arriving land among the rows (DeferredList hold),
+              // while the workspace loads in stages; a wait for the Board's answer
+              // holds no slice back
+              hold={P.stillLoading() !== null}
             />
           </div>
         </section>

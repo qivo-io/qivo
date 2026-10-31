@@ -73,6 +73,7 @@ afterEach(async () => {
 
 const cards = () => document.querySelectorAll('[data-card]')
 const pane = () => document.querySelector('[data-scroll]')
+const state = () => document.querySelector('[data-board-root]')?.getAttribute('data-board-state')
 /** Runs the next slice, or every slice left. */
 const slice = () => act(async () => slices.shift()?.())
 const finish = async () => {
@@ -117,6 +118,63 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     for (const block of blocks) expect(block.children.length).toBeLessThanOrEqual(16)
     expect(pane()?.getAttribute('data-board-mount')).toBe('complete')
     expect(pane()?.hasAttribute('aria-busy')).toBe(false)
+  })
+
+  it("mounts the rest in slices while the Board's answer is still on its way", async () => {
+    const board = await loadBoard(network, tasks(500))
+    board.server.hold = true
+    await board.render(root)
+    expect(state()).toBe('loading')
+    expect(cards().length).toBeLessThanOrEqual(EAGER)
+    // the answer's wait holds no slice back
+    await finish()
+    expect(state()).toBe('loading')
+    expect(cards()).toHaveLength(500)
+    expect(pane()?.getAttribute('data-board-mount')).toBe('complete')
+    await board.answer()
+    expect(state()).toBe('ok')
+    expect(cards()).toHaveLength(500)
+  })
+
+  it('mounts the phone rows in slices while its answer is on its way', async () => {
+    const board = await loadBoard(network, tasks(500), { phone: true })
+    board.server.hold = true
+    await board.render(root)
+    const rows = () => document.querySelectorAll('.mobile-task-row')
+    expect(rows().length).toBeLessThan(500)
+    await finish()
+    expect(state()).toBe('loading')
+    expect(rows()).toHaveLength(500)
+  })
+
+  it('lands an answer that adds and drops cards after the slices mounted', async () => {
+    const board = await loadBoard(network, tasks(500))
+    board.server.hold = true
+    await board.render(root)
+    await finish()
+    expect(cards()).toHaveLength(500)
+    const kept = new Map(
+      [...cards()].slice(-20).map((card) => [card.getAttribute('data-card'), card]),
+    )
+    // the server holds a new urgent task and leaves five out
+    const dropped = ['t0', 't1', 't2', 't3', 't4']
+    board.snapshot.issues.push({
+      ...taskRow(board.snapshot, 'top', 'todo', 900),
+      priority: 'urgent',
+    })
+    board.server.edit = (answer) =>
+      answer.state === 'ok'
+        ? { ...answer, rows: answer.rows.filter((row) => !dropped.includes(row.id)) }
+        : answer
+    board.server.hold = false
+    await board.deliver()
+    await finish()
+    expect(state()).toBe('ok')
+    expect(cards()).toHaveLength(496)
+    expect(cards()[0].textContent).toContain('Task top')
+    for (const id of dropped) expect(board.card(id)).toBeNull()
+    for (const [id, node] of kept) expect(document.querySelector(`[data-card="${id}"]`)).toBe(node)
+    expect(pane()?.getAttribute('data-board-mount')).toBe('complete')
   })
 
   it('keeps every mounted card node when a task arrives at the top of its cell', async () => {
