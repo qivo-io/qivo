@@ -66,6 +66,7 @@ function scripted() {
       failedRun.delete(token)
       return {
         token,
+        joined: false,
         stop: () => {
           log.push(`stop ${token}`)
           const n = (watched.get(token) ?? 1) - 1

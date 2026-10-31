@@ -12,8 +12,10 @@ import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
    part from it, each window with the rows whose ids fall in it, and tells
    the store of the parts whose answer changed in one transition, as Convex
    would. A test can hold back one task window (holdWindow). Any other
-   query, such as a task's thread, is watched through the client's own
-   onUpdate, each result a transition of its own.
+   query, such as a task's thread or the Board's, is watched through the
+   client's own onUpdate, each result a transition of its own. A view's own
+   handler (onTransition `view`) hears every transition but starts no store
+   generation.
 
    Each store test file mocks lib/convex with `{ convex: network, live:
    liveOver(network) }`. */
@@ -91,6 +93,8 @@ export function liveOver(client: Client): LiveQueries & {
   holdWindow(from: string | null): void
 } {
   const handlers = new Set<(transition: LiveTransition) => void>()
+  // the handlers of views' own reads, which start no generation
+  const viewHandlers = new Set<(transition: LiveTransition) => void>()
   // what each watched token names, its latest result as JSON, and how many
   // watch it; a workspace part's result follows `whole`
   type Watch = {
@@ -176,10 +180,9 @@ export function liveOver(client: Client): LiveQueries & {
       if (isPart(w.name)) Object.assign(w, { value: undefined, error: undefined, json: undefined })
     // a test drives one store at a time: the one that just started, whose
     // handler came last, so a store an earlier test left running hears no
-    // more of it
-    const newest = [...handlers].at(-1)
-    handlers.clear()
-    if (newest) handlers.add(newest)
+    // more of it; views' handlers stay
+    const newest = [...handlers].filter((fn) => !viewHandlers.has(fn)).at(-1)
+    for (const fn of handlers) if (fn !== newest && !viewHandlers.has(fn)) handlers.delete(fn)
     const stop = client.onUpdate(
       makeFunctionReference<'query'>(WHOLE),
       {},
@@ -262,6 +265,9 @@ export function liveOver(client: Client): LiveQueries & {
       let stopped = false
       return {
         token,
+        // every watch hears its first answer in a transition of its own
+        // (above), so none reads one at once
+        joined: false,
         stop: () => {
           if (stopped) return
           stopped = true
@@ -283,10 +289,14 @@ export function liveOver(client: Client): LiveQueries & {
       if (w.error !== undefined) throw w.error
       return w.value
     },
-    onTransition(fn) {
-      generation++
+    onTransition(fn, options) {
+      if (options?.view) viewHandlers.add(fn)
+      else generation++
       handlers.add(fn)
-      return () => handlers.delete(fn)
+      return () => {
+        handlers.delete(fn)
+        viewHandlers.delete(fn)
+      }
     },
     /** Keeps the parts of organization `orgId` from answering, such as a
         new seat's still loading, and with null lets them answer. */
