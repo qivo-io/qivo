@@ -196,7 +196,8 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
   })
 
   it('renders only the growing block of a long cell in a slice', async () => {
-    const board = await loadBoard(network, tasks(2000))
+    // the most cards one Board shows (BOARD_TASKS)
+    const board = await loadBoard(network, tasks(1000))
     await board.render(root)
     // past two blocks, so a list that rendered all it holds would fail
     while (cards().length < 600) await slice()

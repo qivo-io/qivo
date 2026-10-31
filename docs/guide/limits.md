@@ -58,6 +58,7 @@ A character is one UTF-16 code unit, the count a browser's text field uses. Most
 | Sub-projects and access entries one project archive, restore, rename or key change updates | 2,000 sub-projects and access entries | Archiving, restoring or renaming a project, or changing its key, can update at most 2,000 sub-projects and access entries at once. Each sub-project counts, and each person or team with access counts once for the project and once for each sub-project they have their own access to. Archive all of its sub-projects on their own first, or remove some access. |
 | Projects a removed person may lead | 1,000 projects | This person leads more than 1,000 projects and cannot be removed at once. Give some of those projects another lead first, or make the person Inactive to end their access now. |
 | Inbox messages the app shows | 500 messages | The app shows your newest 500 inbox messages. Mark older ones read or remove them to see the rest. |
+| Tasks one Board shows | 1,000 tasks, subtasks included, across the project or sub-project with its filters, or My view | This selection exceeds the Board's 1,000-task limit. |
 | Active billable users with online billing | 1,000 users | Online billing supports up to 1,000 active billable users. Email support@qivo.io to arrange billing for a larger organization. |
 
 ## Numbers and settings

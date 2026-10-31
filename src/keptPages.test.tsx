@@ -4,6 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
+import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { plannerFixture } from './store/plannerFixture.setup'
 import { taskRow } from './views/boardFixture.setup'
 
@@ -105,9 +106,10 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   snap.issues[0].title = 'Write the release notes'
   prepare(snap)
   threads.length = 0
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  network.onUpdate.mockImplementation((ref, args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
+    else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
     else if (name === 'teamSync:lastComments')
       next({ rows: [{ issue_id: 't1', at: '2026-09-10T08:00:00.000Z' }], complete: true })
     else if (name === 'snapshot:threadComments') {

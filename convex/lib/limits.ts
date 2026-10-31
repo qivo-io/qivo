@@ -150,10 +150,8 @@ export const TASK_ROW_MAX_BYTES = 2 * 1024
 /** The most matching tasks one Board answers (tasks.ts board), across its
  * whole selection: every seat and sub-project together, each subtask
  * counted. A parent heading repeats as context and counts toward the
- * Board's read budgets, not here. It is exported for the app, which names
- * it in the sentence that asks to narrow a larger selection;
- * t3/limits-board-view adds its Limits guide row when the Board enforces
- * it. */
+ * Board's read budgets, not here. The Board names it through
+ * LIMITS.boardTasks, the Limits guide's row. */
 export const BOARD_TASKS = 1000
 
 /** The rows one batch of an app list holds before Load more, such as the
@@ -538,6 +536,16 @@ export const LIMITS = {
     max: INBOX_LIMIT,
     unit: 'messages',
     refusal: `the app shows your newest ${grouped(INBOX_LIMIT)} inbox messages. Mark older ones read or remove them to see the rest.`,
+    on: ['app'],
+  },
+  // the Board says it in place of its columns, with how to narrow the
+  // selection after it (src/views/board/BoardNote.tsx)
+  boardTasks: {
+    label: 'Tasks one Board shows',
+    group: 'tasks',
+    max: BOARD_TASKS,
+    unit: 'tasks, subtasks included, across the project or sub-project with its filters, or My view',
+    refusal: `this selection exceeds the Board's ${grouped(BOARD_TASKS)}-task limit.`,
     on: ['app'],
   },
   restoreBatch: {

@@ -1,8 +1,7 @@
 /* The Board's live query, which answers one Board selection with its
- * filters applied on the server. Nothing in the app calls it yet:
- * t3/limits-board-view switches the desktop Board, the phone list and My
- * view's Board to it. Readers and budgets are in lib/board.ts, on the shared
- * view reader lib/viewReads.ts.
+ * filters applied on the server. The desktop Board, the phone list and My
+ * view's Board read it (src/views/board/useBoardView.ts). Readers and
+ * budgets are in lib/board.ts, on the shared view reader lib/viewReads.ts.
  *
  * - board: the matching tasks of a selection, a top-level project with its
  *   visible live sub-projects, one sub-project, or My view across every

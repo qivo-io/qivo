@@ -33,8 +33,10 @@
     "src/lib/searchNote.ts",
     "src/lib/taskSections.ts",
     "src/lib/tokenExpiry.ts",
+    "src/lib/viewVisibility.ts",
     "src/lib/weekDrafts.ts",
     "src/lib/workload.ts",
+    "src/store/boardStandIn.setup.ts",
     "src/store/entityLookup.ts",
     "src/store/preferences.ts",
     "src/store/updates.ts"

@@ -1204,6 +1204,38 @@ function relatedTask(uuid: string, short: ShortRow | undefined): RelatedTaskVM |
   }
 }
 
+/* Whether two rows hold the same fields, as a paint's copy of an untouched
+   row does. */
+const sameRow = (a: object, b: object) => {
+  const x = a as Record<string, unknown>
+  const y = b as Record<string, unknown>
+  const keys = new Set([...Object.keys(x), ...Object.keys(y)])
+  for (const key of keys) if (!Object.is(x[key], y[key])) return false
+  return true
+}
+
+/* The uuids of the tasks a live layer changed from the applied rows
+   (P.ownPaintedTasks). A paint's overlay also holds copies of rows it only
+   read, which match their applied row and are left out. */
+function paintedTaskIds(): Set<string> {
+  const out = new Set<string>()
+  const applied = base.map('issues')
+  for (const [uuid, own] of rows.issues.overlay) {
+    const was = applied.get(uuid)
+    if (typeof own === 'symbol' ? was !== undefined : !was || !sameRow(own, was)) out.add(uuid)
+  }
+  const labels = workspaceRows.peekList('issueLabels')
+  const appliedLabels = base.list('issueLabels')
+  if (labels !== appliedLabels) {
+    const key = (row: { issue_id: string; label_id: string }) => `${row.issue_id}:${row.label_id}`
+    const shown = new Set(labels.map(key))
+    const server = new Set(appliedLabels.map(key))
+    for (const row of labels) if (!server.has(key(row))) out.add(row.issue_id)
+    for (const row of appliedLabels) if (!shown.has(key(row))) out.add(row.issue_id)
+  }
+  return out
+}
+
 /* The watched task `t`'s Subtasks from the task answer and, where they
    differ from the applied rows, the painted ones (lib/taskSections.ts
    shows): the answer's subtasks and the painted subtasks of `t` are the
@@ -6810,6 +6842,12 @@ export const PLANNER = {
       outlasts a moment, such as an image upload, follows a task by uuid,
       because a new task's handle can move to another task meanwhile. */
   handleOf: (uuid: string): string | null => uuidToKey.get(uuid) ?? null,
+  /** The tasks, by uuid, that a live layer of the person's own writes
+      changed from the server's applied rows: created, removed, edited or
+      given other labels. Where a view's own answer and the rows on screen
+      disagree about such a task, the rows on screen decide, as the task
+      window's sections do (lib/taskSections.ts shows). */
+  ownPaintedTasks: (): ReadonlySet<string> => paintedTaskIds(),
   /** The handle task `uuid`, number `num` of organization `orgId` opens by
       now: the store's when it holds the task, else the home organization's
       key or another organization's uuid (handleFor). Read when the task

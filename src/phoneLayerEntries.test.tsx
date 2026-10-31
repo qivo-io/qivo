@@ -5,6 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
+import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 
 /* The entries App's pages and phone layers leave, on App and the real
@@ -162,6 +163,7 @@ async function boot(address: string, phone: boolean, second = false) {
       }
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
     else if (name === 'taskWindow:task') {
       // the server's answer, a moment later, as from Convex: an archived
       // task with its text, or the task the workspace holds
@@ -267,7 +269,8 @@ async function boot(address: string, phone: boolean, second = false) {
 
 describe('a phone layer that closes with the move it started', { timeout: 30_000 }, () => {
   it("gives a created task the create dialog's entry, and Back returns to the Board", async () => {
-    await boot('/app/~/board/all', true)
+    // a project's Board: All projects asks to choose a project instead
+    await boot('/app/testbed/board/p/1', true)
     await waitFor(() => document.querySelector('.mobile-task-row'), 'the task list')
     await settle()
     const entries = history.length
@@ -298,7 +301,7 @@ describe('a phone layer that closes with the move it started', { timeout: 30_000
     expect(history.length).toBe(entries + 1)
     await act(async () => history.back())
     await settle()
-    expect(location.pathname).toBe('/app/~/board/all')
+    expect(location.pathname).toBe('/app/testbed/board/p/1')
     expect(document.querySelector('[data-task-chrome]')).toBeNull()
   })
 
