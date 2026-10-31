@@ -1813,6 +1813,34 @@ describe('threadHistory events', () => {
     }
   })
 
+  it('answers the history of an archived task in an archived project as REST and MCP do', async () => {
+    const archivedProject = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      archived_at: NOW,
+    })
+    const task = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: archivedProject.id,
+      archived_at: NOW,
+    })
+    const ids = await plantRows([
+      ev({ target_id: task.id, project_id: task.project_id, verb: 'created' }),
+      ev({ target_id: task.id, project_id: task.project_id, verb: 'archived' }),
+    ])
+    for (const p of [f.admin, f.guest]) {
+      // the window shows the task read-only, as it shows any archived task
+      // whose project the caller sees, and its history with it
+      const window = await as(t, p).query(api.taskWindow.task, { org_id: f.org.id, ref: task.id })
+      expect(window.state).toBe('archived')
+      const got = await events(p, task.id)
+      expect(got).toEqual(ids)
+      expect(await rest(p, task.id)).toEqual(got)
+      expect(await mcp(p, task.id)).toEqual(got)
+    }
+  })
+
   it("drops only an archive row's legacy subtask count, singular or plural, for members", async () => {
     const counted = { named_task_nums: [] as number[] }
     const ids = await plantRows([

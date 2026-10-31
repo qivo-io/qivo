@@ -217,8 +217,9 @@ const linkRow = (
 
 /**
  * The fixture's tasks the window must tell apart. Before it, the guest's
- * grant on TBED moves to FW and PCB, and a sub-project of TBED the guest
- * cannot see (`sibling`) and an archived one (`shelved`) are planted.
+ * grant on TBED moves to FW and PCB, so the guest sees TBED only to reach
+ * them, and a sub-project of TBED the guest cannot see (`sibling`) and an
+ * archived one (`shelved`) are planted.
  */
 async function plantWorld(t: T, f: OrgFixture) {
   const sibling = await plantHiddenSibling(t, f, f.guest)
@@ -260,6 +261,18 @@ async function plantWorld(t: T, f: OrgFixture) {
   // stored under the top-level project, as older code did
   const onMeta = await task(f.meta, { title: 'On the top-level project' })
   const archived = await task(f.sub, { title: 'Archived', archived_at: NOW })
+  // archived on the top-level project, which the guest sees only to reach
+  // its sub-projects, in the sibling the guest cannot see, and in the
+  // archived sub-project
+  const archivedOnMeta = await task(f.meta, { title: 'Archived on TBED', archived_at: NOW })
+  const archivedInSibling = await task(sibling, {
+    title: 'Archived in the sibling',
+    archived_at: NOW,
+  })
+  const archivedShelved = await task(shelved, {
+    title: 'Archived in the archived sub-project',
+    archived_at: NOW,
+  })
   // restored before its archive marks were cleared
   const marked = await task(f.sub, { title: 'Marked', relations_marked: true })
   const markedToo = await task(f.sub, { title: 'Also marked', relations_marked: true })
@@ -342,6 +355,9 @@ async function plantWorld(t: T, f: OrgFixture) {
     secret,
     onMeta,
     archived,
+    archivedOnMeta,
+    archivedInSibling,
+    archivedShelved,
     marked,
     markedToo,
     gone,
@@ -350,12 +366,49 @@ async function plantWorld(t: T, f: OrgFixture) {
 }
 
 describe('parity with the tasks part', () => {
-  it('answers what the tasks part says of every task, for guest, viewer, member and admin seats', async () => {
+  it('answers what the tasks part says of every task, for guest, viewer, member, admin and FW-only seats', async () => {
     const t = newT()
     const f = await withOrg(t)
     const w = await plantWorld(t, f)
-    for (const person of [f.guest, f.viewer, f.user, f.admin])
+    // a seat with User on FW alone, which sees TBED only to reach it
+    const fwOnly = await plantSeat(t, {
+      org_id: f.org.id,
+      auth_user_id: `seat_${uuid()}`,
+      email: `${uuid()}@testbed.test`,
+    })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: fwOnly.id,
+        level: 'user',
+      }),
+    )
+    for (const person of [f.guest, f.viewer, f.user, f.admin, fwOnly])
       expect(await expectParity(t, f.org.id, person), person.name).toBeGreaterThan(5)
+    // an archived task follows archivedTaskCore's rule (canSeeProject),
+    // which expectParity checks, as an active one follows the tasks part. A
+    // seat that sees TBED only to reach a sub-project gets the task stored
+    // on TBED, active or archived, and not the sibling's; one that sees the
+    // archived sub-project gets its archived task, which the Archived tasks
+    // page leaves out, but never its active one
+    const states = (person: Doc<'profiles'>, ...tasks: Doc<'issues'>[]) =>
+      Promise.all(
+        tasks.map((task) =>
+          as(t, person)
+            .query(api.taskWindow.task, { org_id: f.org.id, ref: task.id })
+            .then((window) => window.state),
+        ),
+      )
+    for (const person of [f.guest, fwOnly])
+      expect(
+        await states(person, w.onMeta, w.archivedOnMeta, w.archivedInSibling, w.archivedShelved),
+        person.name,
+      ).toEqual(['ok', 'archived', 'unavailable', 'unavailable'])
+    expect(await states(f.user, w.archivedInSibling, w.archivedShelved, w.kids.shelved)).toEqual([
+      'archived',
+      'archived',
+      'unavailable',
+    ])
     // the part sends each marked link once: into the restored task from an
     // unflagged source with that task, and between flagged tasks with its source
     const part = await tasksPart(as(t, f.guest), f.org.id)

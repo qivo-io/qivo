@@ -566,12 +566,14 @@ async function shownParent(
  *   archived project is neither a row nor hidden. A live one the caller is
  *   not shown sets has_hidden_subtasks and sends no row.
  * - `{ state: 'archived', task, description, labels, level }` for an
- *   archived task of the organization that the Archived tasks page lists
- *   for the caller (lib/archivedTasks.ts archivedTaskCore's rule), so the
- *   window shows it read-only. `task` is that page's row (ArchivedPageRow),
- *   which names no parent, `description` its text from its description row,
- *   `labels` its label rows and `level` the caller's level on its project,
- *   by which the app offers Restore. An answer from before this release
+ *   archived task of the organization whose project the caller sees
+ *   (lib/archivedTasks.ts archivedTaskCore's rule, canSeeProject), so the
+ *   window shows it read-only. That includes a task in an archived
+ *   project, which the Archived tasks page leaves out until the project is
+ *   restored. `task` is the page's row (ArchivedPageRow), which names no
+ *   parent, `description` its text from its description row, `labels` its
+ *   label rows and `level` the caller's level on its project, by which the
+ *   app offers Restore. An answer from before this release
  *   holds only `task`. It asks with the caller's seat in this organization
  *   only, never another seat of the login (lib/functions.ts loadMember), so
  *   another organization's archived task answers unavailable.

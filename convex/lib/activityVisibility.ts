@@ -35,8 +35,12 @@ function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_ev
  * task is in their working set, which keeps out the history of a task that
  * was deleted, archived or moved to a project the member cannot access, and
  * they can access every project the row names: the project it was filed
- * under and its related project, such as a move's destination. Seeing a
- * parent only to reach one of its sub-projects is not access. Deleting a
+ * under and its related project, such as a move's destination. The history
+ * of one task (memberSight) counts that task as in the working set whatever
+ * its state, archived included, since its reader already found the member
+ * can read it (REST and MCP through lib/core.ts findIssue, the task window
+ * through snapshot.ts threadTask). Seeing a parent only to reach one of its
+ * sub-projects is not access. Deleting a
  * project clears project_id on its rows (model/deletedItems.ts
  * purgeActivity), so a task that moved out first keeps those rows. A row that
  * names another task (a parent change or a link) also needs access to that

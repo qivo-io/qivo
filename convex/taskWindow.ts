@@ -32,15 +32,15 @@
  * the same for every reason, a check of its access or its parent's that a
  * bound of the caller's own reads stopped included (lib/access.ts
  * accessUnchecked), and `task` answers `{state: 'archived'}` for an
- * archived task the Archived tasks page lists for the caller, with its row,
- * its text, its labels and the caller's level, which the window shows
- * read-only. The app subscribes `task` while a window shows the task's
- * details, and while a window shows a task the workspace does not hold. A
- * list a
- * budget stops answers `complete: false`, never an error. orgQuery still
- * refuses a caller without a seat in the organization, or one whose
- * organization is being deleted, before the handler runs, so the app must
- * treat that refusal as it treats one of snapshot.threadComments. */
+ * archived task whose project the caller sees, also in an archived project,
+ * with its row, its text, its labels and the caller's level, which the
+ * window shows read-only. The app subscribes `task` while a window shows
+ * the task's details, and while a window shows a task the workspace does
+ * not hold. A list a budget stops answers `complete: false`, never an
+ * error. orgQuery still refuses a caller without a seat in the
+ * organization, or one whose organization is being deleted, before the
+ * handler runs, so the app must treat that refusal as it treats one of
+ * snapshot.threadComments. */
 
 import { v } from 'convex/values'
 import { orgQuery } from './lib/functions'
