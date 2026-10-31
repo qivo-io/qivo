@@ -19,8 +19,10 @@ export default defineConfig({
   test: {
     /* Runs inside the test environment before the test file is imported —
      * the only hook early enough for convex/auth.ts's module-scope SITE_URL
-     * requirement. See convex/tests/env.setup.ts. */
-    setupFiles: ['convex/tests/env.setup.ts'],
+     * requirement. See convex/tests/env.setup.ts. The editor teardown waits
+     * out Tiptap's deferred destroys before jsdom closes; see
+     * src/lib/editorTeardown.setup.ts. */
+    setupFiles: ['convex/tests/env.setup.ts', 'src/lib/editorTeardown.setup.ts'],
     server: { deps: { inline: ['convex-test'] } },
     /* A test's or hook's limit only has to catch a hang. A test shares the CPU
      * with the other workers, and a busy machine or CI runner makes it several
