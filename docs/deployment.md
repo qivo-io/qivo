@@ -1119,11 +1119,15 @@ roll forward deletes the favorites left behind in its last phase, and the
 Northstar seed refuses until a wipe of the later release has deleted the
 favorites of the wiped projects. What stays are copies the earlier code did
 not update, which readers skip until the seat stars the project again or a
-later rename, archive or restore updates them, and the rows of profiles the
-earlier code removed and of organizations it finished deleting. No reader
-shows those, except that a seat created later in the same organization with
-a removed seat's id would list that seat's favorites among its own, of
-projects it sees anyway.
+later rename that changes the name key, an archive or a restore updates
+them, and the rows of profiles the earlier code removed, of projects it
+purged from Deleted items and of organizations it finished deleting. No
+reader shows those, except that a seat created later in the same
+organization with a removed seat's id would list that seat's favorites
+among its own, of projects it sees anyway. A Northstar reset under the
+earlier code keeps its seats and recreates its projects with the same ids
+and names, so its seats' earlier stars would show again; reset Northstar
+once more after the roll forward.
 
 The nightly archive of Done tasks reads only the tasks whose Done time passed
 the 30-day threshold since its last finished run, which the one

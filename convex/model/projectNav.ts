@@ -509,10 +509,10 @@ export const TREE_FAVORITES = { max: 1_000 }
 export const TREE_TOO_MANY_FAVORITES =
   'more people have this project among their favorites than one change can update, so it cannot be archived, restored or renamed at once. Contact support@qivo.io so we can help.'
 
-/** The refusal of a tree change whose sub-projects and reach rows pass
- * TREE_READ.bytes: those of the project, or of the archived top-level
- * project a restore of a sub-project brings back. Within the caps only
- * names whose key NFKD expands (U+FDFA, U+3307) or descriptions stored
+/** The refusal of a tree change whose sub-projects, reach rows and
+ * favorites pass TREE_READ.bytes: those of the project, or of the archived
+ * top-level project a restore of a sub-project brings back. Within the caps
+ * only names whose key NFKD expands (U+FDFA, U+3307) or descriptions stored
  * before the caps make rows that large; access entries reach the count of
  * LIMITS.projectTreeChange first. Archiving or restoring some sub-projects
  * on their own first does not help, as the change reads every sub-project
