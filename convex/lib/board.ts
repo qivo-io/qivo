@@ -605,7 +605,10 @@ function boardSearch(
       return 'group'
     if (c.name === undefined) return 'name'
     if (c.text === undefined) return 'text'
-    if (c.labels === undefined) return 'labels'
+    if (c.labels === undefined)
+      // which labels can finish its match turns on whether its status line
+      // counts, which only its group check tells
+      return group === undefined && statusDecides(c) ? 'group' : 'labels'
     return false
   }
   const route = (c: Candidate) => {
@@ -619,8 +622,8 @@ function boardSearch(
     return out
   }
   /* the pieces of the search that `c`'s own fields, assignee name and text
-   * do not hold, the status line counted unless `c` is a group */
-  const missing = (c: Candidate): string[] => {
+   * do not hold, its status line counted unless it is a group (`asGroup`) */
+  const missing = (c: Candidate, asGroup: boolean): string[] => {
     const t = c.task
     const hay = taskSearchText({
       key: issueKey(t.num),
@@ -630,15 +633,21 @@ function boardSearch(
       description: c.text ?? '',
       assigneeName: c.name ?? null,
       labelNames: [],
-      group: isGroupIn(subtasks, t.id) === true,
+      group: asGroup,
     }).toLowerCase()
     return pieces.filter((piece) => !hay.includes(piece))
   }
+  /* whether `c`'s status line holds a piece its other fields do not, so
+   * the pieces its labels must hold depend on whether it is a group, whose
+   * stored status is dormant and not searched */
+  const statusDecides = (c: Candidate): boolean =>
+    missing(c, true).length !== missing(c, false).length
   /* the organization's labels that can finish `c`'s match: those holding a
    * piece its other fields do not, or none when some such piece is in no
-   * label, so its labels cannot make it match */
+   * label, so its labels cannot make it match. `c`'s group fact is known
+   * wherever its status line decides those pieces (answer). */
   const usefulLabels = (c: Candidate): Doc<'labels'>[] => {
-    const left = missing(c)
+    const left = missing(c, isGroupIn(subtasks, c.task.id) === true)
     const labels = (labelsOf.get(c.task.org_id) ?? []).filter((label) => {
       const name = label.name.toLowerCase()
       return left.some((piece) => name.includes(piece))

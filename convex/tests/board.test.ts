@@ -537,6 +537,62 @@ describe('search', () => {
   })
 })
 
+describe('search, labels and a status a group does not search', () => {
+  /** A label of `f`'s organization named `name`. */
+  const labelIn = async (t: T, orgId: string, name: string) => {
+    const id = uuid()
+    await t.run((ctx) =>
+      ctx.db.insert('labels', {
+        id,
+        org_id: orgId,
+        name,
+        name_lower: name.toLowerCase(),
+        color: '#336699',
+        created_at: NOW,
+      }),
+    )
+    return id
+  }
+
+  for (const [status, words, statusLabel, otherLabel] of [
+    ['todo', 'to quartz', 'To', 'Quartz'],
+    ['done', 'done bug', 'Done', 'Bug'],
+  ] as const)
+    it(`finds a group stored ${status} with labels ${statusLabel} and ${otherLabel} by "${words}", whose dormant status holds no word`, async () => {
+      const t = newT()
+      const f = await withOrg(t)
+      const [byStatus, other] = [
+        await labelIn(t, f.org.id, statusLabel),
+        await labelIn(t, f.org.id, otherLabel),
+      ]
+      const task = (title: string, fields: Partial<Doc<'issues'>> = {}) =>
+        plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title, ...fields })
+      // titles that hold neither word
+      const group = await task('Mount kit', { status })
+      await task('Bracket', { parent_id: group.id })
+      const bare = await task('Hinge set', { status })
+      await task('Pin', { parent_id: bare.id })
+      const leaf = await task('Mount plate', { status })
+      await t.run(async (ctx) => {
+        for (const [issue, label] of [
+          [group, byStatus],
+          [group, other],
+          [bare, other],
+          [leaf, other],
+        ] as const)
+          await ctx.db.insert('issue_labels', {
+            org_id: f.org.id,
+            issue_id: issue.id,
+            label_id: label,
+          })
+      })
+      const answer = await boardFor(t, f.guest, projectScope(f.guest, f.sub.id), { search: words })
+      // the group through its two labels, the leaf through its status and
+      // one label; the group with one label holds no word for its status
+      expect(rowIds(answer)).toEqual([group.id, leaf.id])
+    })
+})
+
 /* ------------------------------------------- reads follow the selection */
 
 describe('reads', () => {
