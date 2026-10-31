@@ -130,6 +130,7 @@ import type * as lib_oauthAdapter from "../lib/oauthAdapter.js";
 import type * as lib_oauthProvider from "../lib/oauthProvider.js";
 import type * as lib_oauthRegistration from "../lib/oauthRegistration.js";
 import type * as lib_orgExport from "../lib/orgExport.js";
+import type * as lib_ownerLoads from "../lib/ownerLoads.js";
 import type * as lib_panorama from "../lib/panorama.js";
 import type * as lib_panoramaCuration from "../lib/panoramaCuration.js";
 import type * as lib_panoramaFilename from "../lib/panoramaFilename.js";
@@ -382,6 +383,7 @@ declare const fullApi: ApiFromModules<{
   "lib/oauthProvider": typeof lib_oauthProvider;
   "lib/oauthRegistration": typeof lib_oauthRegistration;
   "lib/orgExport": typeof lib_orgExport;
+  "lib/ownerLoads": typeof lib_ownerLoads;
   "lib/panorama": typeof lib_panorama;
   "lib/panoramaCuration": typeof lib_panoramaCuration;
   "lib/panoramaFilename": typeof lib_panoramaFilename;

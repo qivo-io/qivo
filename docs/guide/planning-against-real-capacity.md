@@ -25,7 +25,9 @@ The planning panel offers:
 
 Agents have no weekly capacity limit. Auto-fit ends in the start or measurement
 week, whichever is later, and shows **No weekly capacity limit for auto-fit**.
-If workload data is unavailable, auto-fit pauses.
+When Qivo cannot read the owner's workload, for example when they hold more
+open work than it reads at once, the panel shows **Workload is unavailable**
+and auto-fit pauses. That applies to agents too.
 
 ## The Team strip
 

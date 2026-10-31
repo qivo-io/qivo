@@ -2,8 +2,12 @@
  * verdict's inputs come from stored rows the way the app's store builds them
  * from its snapshot (src/store/planner.ts rebuild). They are the task's plan,
  * due date and remaining hours, its owner's plannable hours, and its owner's
- * other scheduled work as the reader may see it (planning.ts orgLoadRows, the
- * snapshot's own rule). A group's plan weeks and completion are its group
+ * other scheduled work as the reader may see it, the load rows of the
+ * snapshot's own rule (lib/loadRows.ts loadRowFor). A list row takes them
+ * from the organization's active tasks the list read (planning.ts
+ * orgLoadRows), and a single-task read from the owner's own open tasks
+ * (lib/ownerLoads.ts), which answers `unavailable` where that work does not
+ * fit the reader's bounds. A group's plan weeks and completion are its group
  * facts (lib/core.ts groupFacts), the app's groupSpan and isIssueDone.
  *
  * Today is the request's UTC day, which the HTTP action passes as `today`
@@ -16,17 +20,21 @@
  * two can differ. Week indexes on the two grids differ by a constant, which
  * every comparison and projection cancels. */
 
+import type { TransactionMetrics } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { hasSubtasks } from '../model/issues'
+import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { orgLoadRows } from '../planning'
+import { type Access, accessOf, OWN_READS } from './access'
+import { LEVEL_STEP_READS, type ReadCeiling, roomOf } from './archivedTasks'
 import type { Caller, GroupFacts } from './core'
 import { byId } from './db'
 import { type DelayInfo, type DelayIssue, type DelayStatus, delayOf, delayProjector } from './delay'
-import { liveIn, liveTasksOf, ownedOpenTasks } from './liveTasks'
+import { TEAM_ROW_MAX_BYTES } from './limits'
 import type { OrgLoadRow } from './loadRows'
+import { loadRowsOf, OWNER_LOADS, ownerLoadReader, type ReadRoom } from './ownerLoads'
 import { taskOwnerId } from './review'
-import { type OrgProjectView, orgProjectView } from './visibility'
+import type { OrgProjectView } from './visibility'
 import {
   canonicalLoad,
   DEFAULT_PLANNABLE_HOURS,
@@ -38,8 +46,16 @@ import {
 
 /** A delay verdict as REST and MCP send it, with the app's status and the
  * first day of the week the work is projected to finish, null when `late`
- * rests on a passed due date alone. */
-export type DelayJson = { status: DelayStatus; projected_end_week: string | null }
+ * rests on a passed due date alone. A single-task read's status is
+ * `unavailable`, with no week, where the owner's other work did not fit the
+ * owner reader's bounds (UNAVAILABLE_DELAY); a list row's never is. */
+export type DelayJson = { status: DelayStatus | 'unavailable'; projected_end_week: string | null }
+
+/** The verdict of a single-task read whose owner's other scheduled work
+ * Qivo could not read within its bounds, or whose check of the caller's
+ * access a bound stopped (lib/ownerLoads.ts). It is never a verdict that
+ * counts missing work as free time. */
+export const UNAVAILABLE_DELAY: DelayJson = { status: 'unavailable', projected_end_week: null }
 
 /** The day every verdict of one read is judged on, and the organization's
  * week grid. */
@@ -188,16 +204,82 @@ export function listForecaster(o: {
   }
 }
 
+/** What a single-task read keeps back from the request's limits while its
+ * owner's load is read (taskForecaster). lib/core.ts taskOut reads the
+ * verdict after everything else, so nothing is read after it, and this
+ * holds what the owner reader (lib/ownerLoads.ts) may read past its last
+ * look at the metrics while it asks about one sub-project and its top-level
+ * project (past those it holds STEP_READS too): the row it read last, up to
+ * Convex's document size limit, and the single-row reads of the caller's
+ * access that no price counts, within the testing envelope the caller's
+ * membership in each team that shares the two projects (at most 50, 25 a
+ * project) and the rows of the caller's teams among them (at most 25), each
+ * a range and a document. A small single read takes 29 ranges and 16
+ * documents in all (convex/tests/taskDelay.test.ts reads the owner's
+ * Done-free load under a limit of 250 documents). Tests lower these. */
+export const DELAY_READ_RESERVE: ReadCeiling = {
+  ranges: 96,
+  documents: 96,
+  bytes: DOCUMENT_MAX_BYTES + 96 * TEAM_ROW_MAX_BYTES,
+}
+
+/* What the caller's access may read of the caller's own rows at once in
+ * one round of questions (lib/ownerLoads.ts ReadRoom `wide`): the largest
+ * step of their grants, memberships and teams' shares
+ * (lib/archivedTasks.ts LEVEL_STEP_READS) and the organization's teams,
+ * which a question reads once the caller's teams are known (lib/access.ts
+ * OWN_READS orgTeamsMost and bytes, which counts JSON, of which Convex
+ * counts up to about 2.3 times). */
+const STEP_READS: ReadCeiling = {
+  ranges: LEVEL_STEP_READS.ranges + 1,
+  documents: LEVEL_STEP_READS.documents + OWN_READS.orgTeamsMost + 1,
+  bytes: LEVEL_STEP_READS.bytes + 3 * OWN_READS.bytes,
+}
+
+/* The room of the owner reader of a single-task read that starts at
+ * `start`: OWNER_LOADS.call from there, past the access instance's shared
+ * reads, and within the request's limits less DELAY_READ_RESERVE, and less
+ * STEP_READS where a round may read the caller's own rows at once, as those
+ * reads count against the request's limits like any other. */
+const delayRoom =
+  (start: TransactionMetrics): ReadRoom =>
+  (m, shared, wide) => {
+    const room = roomOf(m, DELAY_READ_RESERVE)
+    const hold = wide ? STEP_READS : { ranges: 0, documents: 0, bytes: 0 }
+    const since = (now: number, then: number, own: number) => now - then - own
+    return {
+      ranges: Math.min(
+        OWNER_LOADS.call.ranges -
+          since(m.databaseQueries.used, start.databaseQueries.used, shared.ranges),
+        room.ranges - hold.ranges - m.databaseQueries.used,
+      ),
+      documents: Math.min(
+        OWNER_LOADS.call.documents -
+          since(m.documentsRead.used, start.documentsRead.used, shared.documents),
+        room.documents - hold.documents - m.documentsRead.used,
+      ),
+      bytes: Math.min(
+        OWNER_LOADS.call.bytes - since(m.bytesRead.used, start.bytesRead.used, shared.bytes),
+        room.bytes - hold.bytes - m.bytesRead.used,
+      ),
+    }
+  }
+
 /**
  * Verdicts for single-task reads, for `me`. A verdict reads the owner's
- * profile. It reads the owner's load (ownerLoadSpans) over the
- * organization's projects as `me` sees them only when that load can change
- * the verdict, that is, for a task without subtasks that is not Done, has a
+ * profile. It reads the owner's load only when that load can change the
+ * verdict, that is, for a task without subtasks that is not Done, has a
  * planned end or a due date to be judged against, has remaining hours above
- * zero and an owner with a finite plannable week.
+ * zero and an owner with a finite plannable week. The load is the owner's
+ * own open tasks as `me` may see them (lib/ownerLoads.ts ownerLoadReader,
+ * through one accessOf instance made on first need), within the reader's
+ * bounds and the room the request has left (delayRoom). Where it does not
+ * fit, or a check of `me`'s access a bound stopped, the verdict is
+ * UNAVAILABLE_DELAY, also when the due date has passed, because the
+ * projected finish rests on the load.
  */
 export function taskForecaster(ctx: QueryCtx, me: Caller, clock: DelayClock): Forecaster {
-  let view: Promise<LoadView> | undefined
+  let access: Access | undefined
   return async (issue, project, facts) => {
     if (!tracked(issue, project)) return null
     const owner = taskOwnerId(issue, facts !== null)
@@ -209,68 +291,23 @@ export function taskForecaster(ctx: QueryCtx, me: Caller, clock: DelayClock): Fo
     // finish with neither a planned end nor a due date has nothing to be
     // judged against, so its verdict is null whatever the load
     const needsLoad =
-      profile !== null &&
       facts === null &&
       issue.status !== 'done' &&
       (it.end !== null || it.dueWeek !== null) &&
       (issue.remaining_hours ?? 0) > 0 &&
       Number.isFinite(capacity) &&
       capacity > 0
-    let load: LoadSpan[] = []
-    if (needsLoad) {
-      view ??= orgProjectView(ctx, me)
-      load = await ownerLoadSpans(ctx, me, profile, clock.grid, await view)
+    if (profile === null || !needsLoad) {
+      return delayJson(delayOf(it, [], clock.todayWeek), clock.grid)
     }
-    return delayJson(delayOf(it, load, clock.todayWeek), clock.grid)
+    access ??= accessOf(ctx, me)
+    const room = delayRoom(await ctx.meta.getTransactionMetrics())
+    const load = await ownerLoadReader(ctx, { me, access, room }).read(profile.id)
+    if (load.state !== 'ok') return UNAVAILABLE_DELAY
+    // spansByOwner puts the rows in the order the list's load and the
+    // app's take (canonicalLoad), so each week's hours add up in the same
+    // order and round the same way
+    const spans = spansByOwner(loadRowsOf(me, load.tasks), clock.grid).get(profile.id) ?? []
+    return delayJson(delayOf(it, spans, clock.todayWeek), clock.grid)
   }
-}
-
-/* How many of an owner's tasks a delay verdict checks for subtasks, one
- * by_parent_archived read each, before it reads the organization's live
- * tasks once instead, about the read an active list makes anyway. With the single read's subtree walk (lib/core.ts SUBTREE_WALK)
- * that keeps the read's index ranges far below Convex's 4,096. Tests lower
- * `reads`. */
-export const OWNER_LOAD_CHECKS = { reads: 500 }
-
-/**
- * The load rows of `owner`'s work as `me` may see them, as delay walks
- * them. These are orgLoadRows' rows owned by `owner`, read through the
- * owner's own open tasks (lib/liveTasks.ts ownedOpenTasks, those assigned
- * to them that are not Done and those In Review that they review) rather
- * than the organization's active ones. A group carries no load, so each candidate that orgLoadRows would
- * keep is checked for a subtask that makes it one (model/issues.ts
- * hasSubtasks). Past OWNER_LOAD_CHECKS candidates it reads the
- * organization's live tasks instead (lib/liveTasks.ts liveTasksOf), where
- * orgLoadRows finds the groups itself. Empty for an owner outside `me`'s
- * organization, as orgLoadRows gives such an owner no rows.
- */
-export async function ownerLoadSpans(
-  ctx: QueryCtx,
-  me: Caller,
-  owner: Doc<'profiles'>,
-  grid: WeekGrid,
-  view: LoadView,
-): Promise<LoadSpan[]> {
-  if (owner.org_id !== me.org_id) return []
-  const live = liveIn(view.byUuid)
-  // what orgLoadRows drops anyway needs no subtask read. spansByOwner puts
-  // the rows in the order the list's load and the app's take
-  // (canonicalLoad), so each week's hours add up in the same order and
-  // round the same way, whatever order the reads give
-  const candidates = (await ownedOpenTasks(ctx, owner.id, live)).filter(
-    (task) =>
-      task.org_id === me.org_id &&
-      task.start_week !== undefined &&
-      !task.paused &&
-      (task.remaining_hours ?? 0) > 0,
-  )
-  let rows: Doc<'issues'>[] = []
-  if (candidates.length > OWNER_LOAD_CHECKS.reads) {
-    rows = await liveTasksOf(ctx, [...view.byUuid.values()])
-  } else {
-    for (const task of candidates) {
-      if (!(await hasSubtasks(ctx, task, live))) rows.push(task)
-    }
-  }
-  return spansByOwner(orgLoadRows(me, view, new Set([owner.id]), rows), grid).get(owner.id) ?? []
 }

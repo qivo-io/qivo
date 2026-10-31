@@ -250,7 +250,10 @@ Useful field rules:
   completion is unknown. `delay` is the app's
   projected delay (`status` `ok`, `behind` or `late`, with
   `projected_end_week`), or `null` when the project does not track delay or
-  the app shows no verdict; it is judged on today's date in UTC.
+  the app shows no verdict; it is judged on today's date in UTC. On a single
+  task its `status` can be `unavailable`, with no week, when the owner's
+  other open work is too large to read in one request; never read that as
+  free time.
   `last_comment_at` is when the task was last commented on, or `null`. `get_project` and
   `GET /v1/projects/{ref}` add `completion`, the Overview's done and total
   tasks. If a task list asks for a smaller limit, its rows' descriptions,

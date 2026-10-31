@@ -637,6 +637,7 @@ panoramaUploads:addFile action public {"type":"object","value":{"storage_id":{"f
 panoramaUploads:retainFile mutation internal {"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"title":{"fieldType":{"type":"string"},"optional":false},"location":{"fieldType":{"type":"string"},"optional":true},"creator":{"fieldType":{"type":"string"},"optional":false},"rights_confirmed":{"fieldType":{"type":"boolean"},"optional":false},"source_url":{"fieldType":{"type":"string"},"optional":true},"width":{"fieldType":{"type":"number"},"optional":false},"height":{"fieldType":{"type":"number"},"optional":false},"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
 panoramaUploads:uploadUrl mutation public {"type":"object","value":{}}
 planning:assigneeLoad query public {"type":"object","value":{"assignee_id":{"fieldType":{"type":"string"},"optional":false}}}
+planning:ownerLoads query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 prefs:get query public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":true}}}
 prefs:save mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"prefs":{"fieldType":{"type":"any"},"optional":false}}}
 profileRemovals:recover mutation internal {"type":"object","value":{}}
@@ -1039,7 +1040,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     recordExport: 'authedMutation',
   },
   orgs: { update: 'adminMutation', setSlug: 'adminMutation' },
-  planning: { assigneeLoad: 'authedQuery' },
+  planning: { assigneeLoad: 'authedQuery', ownerLoads: 'orgQuery' },
   // Operator-only management of shared photo curation; org credentials cannot enter.
   panoramaCuration: {
     keys: 'platformQuery',
@@ -1172,7 +1173,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 208
+const PUBLIC_COUNT = 209
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

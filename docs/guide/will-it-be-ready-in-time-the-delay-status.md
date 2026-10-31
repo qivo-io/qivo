@@ -62,7 +62,8 @@ due date.
 - **Overview** includes projected misses in **Overdue & at risk** and counts
   **Delayed** and **Slipping** tasks in the health table.
 - **REST and MCP** task results carry the same verdict as `delay`, judged on
-  today's date in UTC. See [Automation & AI](./automation-ai-the-rest-api-and-the-mcp-server.md).
+  today's date in UTC. A single task's verdict says it is unavailable when
+  Qivo cannot read the owner's other open work in one request. See [Automation & AI](./automation-ai-the-rest-api-and-the-mcp-server.md).
 
 ## Turning it on and off
 
