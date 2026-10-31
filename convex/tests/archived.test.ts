@@ -3,9 +3,8 @@
  * issues.archivedPage (P.fetchArchivedPage) pages the archived tasks of a
  * scope, some projects of one organization or all of them, with a cursor
  * sealed to that scope, and searches them on the server
- * (lib/archivedTasks.ts). The deprecated issues.archivedTask finds one
- * archived task by id, which the task window did before it read its task
- * from taskWindow.task. Fence: can_see_project
+ * (lib/archivedTasks.ts). The task window reads one archived task from
+ * taskWindow.task (tests/taskWindow.test.ts). Fence: can_see_project
  * through the caller's seat in the project's OWN org; an unknown or
  * invisible project answers nothing (no existence oracle). Only archived
  * rows come back. */
@@ -1802,82 +1801,6 @@ describe('issues.archivedPage', () => {
     expect(page.rows).toEqual([])
     expect(page.next_cursor).not.toBeNull()
   }, 300_000)
-})
-
-/* ------------------------------------------------------------ archivedTask */
-
-describe('issues.archivedTask', () => {
-  /** One archivedTask call as `profile`. */
-  const taskOf = (t: T, profile: Doc<'profiles'>, id: string) =>
-    as(t, profile).query(api.issues.archivedTask, { id })
-
-  it('finds an archived task that a full first search page leaves out, as the page shows it', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const soak = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      title: 'Soak test',
-      archived_at: day(3),
-    })
-    // archived with it and created after it, so they come first in the archive
-    for (let i = 0; i < 10; i++) {
-      await plantIssue(t, {
-        org_id: f.org.id,
-        project_id: f.sub.id,
-        title: `Soak test step ${i}`,
-        archived_at: day(3),
-      })
-    }
-    const scope = scopeOf(f.org.id, f.sub.id)
-    const first = await pageOf(t, f.admin, { ...scope, search: 'soak', limit: 10 })
-    expect(first.rows.map((row) => row.id)).not.toContain(soak.id)
-    const { rows } = await pageOf(t, f.admin, scope)
-    const listed = rows.find((row) => row.id === soak.id)
-    expect(listed).toBeDefined()
-    // the page's row without what only the list shows
-    const { place: _place, owner_name: _owner, can_restore: _restore, ...shown } = listed ?? {}
-    expect(await taskOf(t, f.admin, soak.id)).toEqual(shown)
-    // a guest with a grant on the top-level project sees its sub-project's task
-    expect((await taskOf(t, f.guest, soak.id))?.id).toBe(soak.id)
-  })
-
-  it('answers null for a project the caller cannot see, in their organization or another', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const hidden = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.hidden.id,
-      archived_at: day(2),
-    })
-    const foreign = await plantIssue(t, {
-      org_id: f.otherOrg.id,
-      project_id: f.otherProject.id,
-      archived_at: day(2),
-    })
-    expect(await taskOf(t, f.guest, hidden.id)).toBeNull()
-    // no seat in the other organization
-    expect(await taskOf(t, f.admin, foreign.id)).toBeNull()
-    // the same tasks, to someone who can see their projects
-    expect((await taskOf(t, f.admin, hidden.id))?.id).toBe(hidden.id)
-    expect((await taskOf(t, f.otherAdmin, foreign.id))?.id).toBe(foreign.id)
-  })
-
-  it('answers null for an active, a deleted or an unknown task', async () => {
-    const t = newT()
-    const f = await withOrg(t)
-    const active = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const deleted = await plantIssue(t, {
-      org_id: f.org.id,
-      project_id: f.sub.id,
-      archived_at: day(2),
-    })
-    expect((await taskOf(t, f.admin, deleted.id))?.id).toBe(deleted.id)
-    await as(t, f.admin).mutation(api.issues.deleteDeep, { org_id: f.org.id, id: deleted.id })
-    expect(await taskOf(t, f.admin, active.id)).toBeNull()
-    expect(await taskOf(t, f.admin, deleted.id)).toBeNull()
-    expect(await taskOf(t, f.admin, uuid())).toBeNull()
-  })
 })
 
 describe('a check of the caller access that a bound stops', () => {

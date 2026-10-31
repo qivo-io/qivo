@@ -1095,9 +1095,6 @@ describe('the task window on a task Search found that the workspace does not hol
     )
     expect(document.querySelector('[data-composer]')).toBeNull()
     expect(subscribed()).toEqual([{ org_id: snap.orgs[0].id, ref: 'task-a' }])
-    expect(network.query.mock.calls.map(([ref]) => getFunctionName(ref))).not.toContain(
-      'issues:archivedTask',
-    )
     await click(button('Restore'))
     const restores = network.mutation.mock.calls.filter(
       ([ref]) => getFunctionName(ref) === 'issues:unarchive',

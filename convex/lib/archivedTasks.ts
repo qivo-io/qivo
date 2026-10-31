@@ -9,10 +9,9 @@
  * id, which sorts like its text. A cursor names a position in that order, so
  * a page reads only what follows it, whatever the size of the archive.
  * Callers get the position sealed (archiveCursorText, scopeCursorText), since
- * it can be a task of a project they cannot see. The deprecated
- * issues.archivedTask looks one task up in the archive by id instead
- * (archivedTaskCore below); the task window reads an archived task from
- * taskWindow.task (lib/taskWindow.ts), with the same row (archivedRowOf).
+ * it can be a task of a project they cannot see. The task window reads one
+ * archived task instead, from taskWindow.task (lib/taskWindow.ts), with the
+ * same row (archivedRowOf) and the rule of archivedTaskCore below.
  *
  * Both surfaces page through archivedTasksPage, under one read budget, over a
  * scope (ArchiveScope) that either merges a list of projects or reads the
@@ -1303,7 +1302,10 @@ async function pageRow(task: ArchivedTask, facts: TaskFacts): Promise<ArchivedPa
  * live, and REST and MCP archived lists of that project list it either way
  * (lib/core.ts taskListScope), so the answer tells nothing the caller
  * cannot read. An active, deleted or unknown task and one in a project the
- * caller cannot see all answer null.
+ * caller cannot see all answer null. The task window's archived answer
+ * follows this rule through Access.visible (lib/taskWindow.ts
+ * readWindowTask). Only the task window's tests call this function, as the
+ * reference for that answer.
  */
 export async function archivedTaskCore(
   ctx: QueryCtx,

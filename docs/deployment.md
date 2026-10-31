@@ -450,7 +450,11 @@ cannot load comments. The app before v0.1.99 reads Archived tasks through
 `issues.archivedPage` with `project_id`, API access through
 `apiAccess.list`, and each account's `keys` in Billing's usage report, so its
 Archived tasks and API access pages cannot load, and Billing shows "This view
-could not be loaded" while the period has API calls. The app before v0.1.15
+could not be loaded" while the period has API calls. The app from v0.1.84 to
+v0.1.106 reads the window of a task that left the board through
+`issues.archivedTask`, and from v0.1.103 also the window of a task Search
+opened that the workspace does not hold, so that window says it couldn't check
+the archive. The app before v0.1.15
 reads Archived tasks through `issues.archivedFor`, the v0.1.15 app sends
 `access` and `team_access` maps to `projects.update`, and the app before
 v0.1.11 saves the Blue appearance through `appearance.save`, so their Archived

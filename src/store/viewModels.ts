@@ -447,8 +447,7 @@ export type MessageGroupVM = ReturnType<typeof shapeMessageGroup>
    it (shapeArchivedListRow), so it carries the same handle/key split live
    ones get in rebuild(). The server searches the archive, so a row carries
    no description, labels or links, and it names no parent. It takes the
-   page's row (ArchivedPageRow), which the deprecated issues.archivedTask
-   answers too, so that query can go without a change here. */
+   page's row (ArchivedPageRow). */
 export const shapeArchivedIssue = (r: ArchivedPageRow, id: string, key: string) => ({
   id,
   key,
