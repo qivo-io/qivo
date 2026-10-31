@@ -37,6 +37,7 @@ import type { OrgExportPage, OrgExportRow, OrgExportSection } from '../lib/orgEx
 import type { EventOwner } from '../lib/taskEvents'
 import { PAGE, readTasks } from '../lib/workspaceParts'
 import { cleanDescription } from '../model/issues'
+import { NO_FILTERS } from './board.setup'
 import {
   activityFor,
   as,
@@ -204,6 +205,17 @@ async function readers(t: T, f: OrgFixture, pair: Pair, words: [string, string])
     (await as(t, f.admin).query(api.search.page, { text, include_archived: archived })).rows.map(
       (row) => row.id,
     )
+  // the Board's search, over a project it reads whole, which reads most of
+  // a project's texts by chunks, and under Focus, which reads them one by
+  // one until TEXT_TASK_READS, then by chunks
+  const boardSearch = async (text: string, focus: boolean) => {
+    const answer = await as(t, f.admin).query(api.tasks.board, {
+      scope: { kind: 'project', org_id: f.org.id, project_id: f.sub.id },
+      filters: { ...NO_FILTERS, search: text, focus },
+    })
+    if (answer.state !== 'ok') throw new Error(answer.state)
+    return answer.rows.some((row) => row.id === pair.active.id)
+  }
 
   return {
     workspace: pick(window.issues as Row[], pair.active),
@@ -237,6 +249,9 @@ async function readers(t: T, f: OrgFixture, pair: Pair, words: [string, string])
     // its rows carry no text, so it tells only whether the search found it
     mainSearchFound: (await mainSearch(words[0], false)).includes(pair.active.id),
     mainArchivedSearchFound: (await mainSearch(words[1], true)).includes(pair.archived.id),
+    // its rows carry no text, so it tells only whether the search found it
+    boardSearchFound: await boardSearch(words[0], false),
+    boardFocusSearchFound: await boardSearch(words[0], true),
   }
 }
 
@@ -260,6 +275,8 @@ const everywhere = (active: string, archived: string) => ({
   taskWindow: active,
   mainSearchFound: true,
   mainArchivedSearchFound: true,
+  boardSearchFound: true,
+  boardFocusSearchFound: true,
 })
 
 /** The searches of `readers`, which find nothing for words the readers do
@@ -272,6 +289,8 @@ const searches = (found: Awaited<ReturnType<typeof readers>>) => ({
   archivedPageFound: found.archivedPageFound,
   mainSearchFound: found.mainSearchFound,
   mainArchivedSearchFound: found.mainArchivedSearchFound,
+  boardSearchFound: found.boardSearchFound,
+  boardFocusSearchFound: found.boardFocusSearchFound,
 })
 
 const notFound = {
@@ -282,6 +301,8 @@ const notFound = {
   archivedPageFound: false,
   mainSearchFound: false,
   mainArchivedSearchFound: false,
+  boardSearchFound: false,
+  boardFocusSearchFound: false,
 }
 
 /* A search reads the rows of the tasks it needs one by one, and past
