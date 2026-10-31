@@ -717,9 +717,9 @@ export const ownerSettled = (task: Doc<'issues'>): boolean =>
  * charged at lib/limits.ts TASK_ROW_MAX_BYTES, those they are shown at their
  * real size. A task a legacy writer stored on a top-level project is in no
  * selection, as in the app's scopes (src/store/planner.ts scopedIssues).
- * lib/liveTasks.ts ownedOpenTasks reads the same two indexes but collects
- * them whole, leaves Done out and reads the rule as for a task without
- * subtasks, so this does not build on it.
+ * lib/ownerLoads.ts ownerLoadReader reads the same two indexes for one
+ * owner's load, but leaves Done out, stops at its own bounds and reads the
+ * rule as for a task without subtasks, so this does not build on it.
  */
 export async function* ownTasks(
   ctx: QueryCtx,
