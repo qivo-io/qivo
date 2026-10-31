@@ -34,8 +34,11 @@ let container: HTMLDivElement
 let root: Root
 let removeHistory = () => {}
 // the archived tasks Search finds with Include archived tasks and the
-// archive answers (issues.archivedTask), which a test sets after boot
+// task window's own read answers (taskWindow.task), which a test sets
+// after boot
 let archive: (Snapshot['issues'][number] & { archived_at: string })[] = []
+// how many times the window subscribed its read of a task
+let reads = 0
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -147,12 +150,53 @@ async function boot(address: string, phone: boolean, second = false) {
     })
   }
   let publish = (_: Snapshot) => {}
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  reads = 0
+  // what the server holds: the workspace last published
+  let server = snap
+  network.onUpdate.mockImplementation((ref, args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
-      publish = (value) => next(structuredClone(value))
+      publish = (value) => {
+        server = value
+        next(structuredClone(value))
+      }
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    else if (name === 'taskWindow:task') {
+      // the server's answer, a moment later, as from Convex: an archived
+      // task with its text, or the task the workspace holds
+      reads++
+      let closed = false
+      setTimeout(() => {
+        if (closed) return
+        const row = archive.find((task) => task.id === args.ref)
+        const live = server.issues.find((task) => task.id === args.ref)
+        next(
+          row
+            ? {
+                state: 'archived',
+                task: { ...row, is_group: false },
+                description: row.description,
+                labels: [],
+                level: 'lead',
+              }
+            : live
+              ? {
+                  state: 'ok',
+                  task: live,
+                  level: 'lead',
+                  labels: [],
+                  follow: null,
+                  parent: null,
+                  subtasks: { rows: [], complete: true },
+                }
+              : { state: 'unavailable' },
+        )
+      }, 0)
+      return () => {
+        closed = true
+      }
+    }
     return () => {}
   })
   // main Search (search:page) answers the tasks whose titles hold every
@@ -161,10 +205,6 @@ async function boot(address: string, phone: boolean, second = false) {
   archive = []
   network.query.mockImplementation(async (ref, args) => {
     const name = getFunctionName(ref)
-    if (name === 'issues:archivedTask') {
-      const row = archive.find((task) => task.id === args.id)
-      return row ? { ...row, is_group: false } : null
-    }
     if (name !== 'search:page') return null
     const words: string[] = args.text.toLowerCase().split(/\s+/).filter(Boolean)
     const rows = [...snap.issues, ...(args.include_archived ? archive : [])]
@@ -617,9 +657,7 @@ describe('an archived task Search opened', { timeout: 30_000 }, () => {
           ?.textContent?.includes('was archived'),
       'the archived note',
     )
-  const asked = () =>
-    network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === 'issues:archivedTask')
-      .length
+  const asked = () => reads
 
   it('closes with an entry of its own, so Back opens it again', async () => {
     const { board, task } = await openArchived()
@@ -638,7 +676,7 @@ describe('an archived task Search opened', { timeout: 30_000 }, () => {
     await settle()
     expect(location.pathname).toBe(task)
     await archivedNote()
-    // the window asks the archive again
+    // the window reads the task again
     expect(asked()).toBe(2)
   })
 

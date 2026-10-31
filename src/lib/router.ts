@@ -352,9 +352,9 @@ const refOf = (open: string) => heldRef(open) ?? open
 const named = new Map<string, Pick<IssueVM, 'org' | 'key' | 'uuid'> & { seg: string }>()
 const NAMED_MAX = 64
 
-/* Names, as `named` does, a task Search opened that the store does not
-   hold, such as an archived one (lib/openedTasks.ts), so the address names
-   its organization and key from the start. It is derived on every call and
+/* Names, as `named` does, a task Search or a task window opened that the
+   store does not hold, such as an archived one (lib/openedTasks.ts), so the
+   address names its organization and key from the start. It is derived on every call and
    kept nowhere, as the handle `open` names can change with the home
    organization. */
 function namedOpened(open: string) {
@@ -562,11 +562,20 @@ export function buildPath(s: UiState): string {
 }
 
 /* The shareable address of one task (the window's Copy link) — the SHORT
-   form, so the recipient lands in their own saved view. */
+   form, so the recipient lands in their own saved view. A task the store
+   does not hold, such as one archived while its window was open or one a
+   window shows from its own read, is named by its organization and key as
+   the window's address names it (taskNamed's `named`, then the
+   opened-task registry), never by `~`, which the recipient would read in
+   their own home organization. */
 export function issueLink(handle: string): string {
-  const it = P.issueById[String(handle)]
-  const ref = it?.key ? it.key : String(handle)
-  return `${APP_PREFIX}/${orgSegment(it?.org)}/tasks/${encodeURIComponent(ref.toLowerCase())}`
+  const open = String(handle)
+  const it = P.issueById[open]
+  const was = it ? undefined : (named.get(open) ?? namedOpened(open))
+  const org = it?.org ?? was?.org
+  // an organization this person can no longer name reads its task by uuid
+  const ref = it?.key ?? (was && (orgSegment(was.org) === ORG_NONE ? was.uuid : was.key)) ?? open
+  return `${APP_PREFIX}/${orgSegment(org)}/tasks/${encodeURIComponent(ref.toLowerCase())}`
 }
 
 // true when `path` already describes exactly this state (so the URL only

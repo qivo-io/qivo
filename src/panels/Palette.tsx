@@ -175,9 +175,10 @@ function scopeChoices(): {
  * gives it now (P.handleNow), not the one its page arrived with, as a role
  * change meanwhile can change it. It notes the task first in the
  * opened-task registry (lib/openedTasks.ts), so a task window opened on a
- * task the workspace does not hold, archived, deleted or moved out of sight
- * since the search, says what became of it. t3/limits-direct-links opens
- * such a task by itself instead.
+ * task the workspace does not hold shows it from its own read, archived
+ * ones read-only, or says what became of one deleted or moved out of sight
+ * since the search. t3/limits-direct-links opens such a task by itself
+ * instead.
  */
 function openTaskResult(row: SearchTaskRow, open: (handle: string) => void): void {
   noteOpenedTask({
@@ -187,7 +188,6 @@ function openTaskResult(row: SearchTaskRow, open: (handle: string) => void): voi
     title: row.title,
     project: row.project.id,
     org: row.org_id,
-    archived: row.archived,
   })
   open(P.handleNow(row.id, row.org_id, row.num))
 }

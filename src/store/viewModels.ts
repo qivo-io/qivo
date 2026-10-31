@@ -1,6 +1,7 @@
 /** Pure snapshot-to-view transformations. Store identity and caches arrive as arguments. */
 import type { FunctionReturnType } from 'convex/server'
 import type { api } from '../../convex/_generated/api'
+import type { ArchivedPageRow } from '../../convex/lib/archivedTasks'
 import { LIMITS } from '../../convex/lib/limits'
 import { reviewerOwns, taskOwnerId } from '../../convex/lib/review'
 import type { SyncStamp } from '../../convex/lib/teamSync'
@@ -442,16 +443,13 @@ export const shapeMessageGroup = (issueUuid: string, newestFirst: MessageVM[]) =
 }
 export type MessageGroupVM = ReturnType<typeof shapeMessageGroup>
 
-/* one archived task outside the snapshot, as the task window finds it
-   (P.fetchArchivedTask) and as the Archived tasks page lists it
-   (shapeArchivedListRow), so it carries the same handle/key split live ones
-   get in rebuild(). The server searches the archive, so a row carries no
-   description, labels or links, and it names no parent. */
-export const shapeArchivedIssue = (
-  r: NonNullable<FunctionReturnType<typeof api.issues.archivedTask>>,
-  id: string,
-  key: string,
-) => ({
+/* one archived task outside the snapshot, as the Archived tasks page lists
+   it (shapeArchivedListRow), so it carries the same handle/key split live
+   ones get in rebuild(). The server searches the archive, so a row carries
+   no description, labels or links, and it names no parent. It takes the
+   page's row (ArchivedPageRow), which the deprecated issues.archivedTask
+   answers too, so that query can go without a change here. */
+export const shapeArchivedIssue = (r: ArchivedPageRow, id: string, key: string) => ({
   id,
   key,
   uuid: r.id,
