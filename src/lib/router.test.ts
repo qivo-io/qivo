@@ -65,6 +65,7 @@ import {
   parsePath,
   pathMatchesState,
   scopeForIssue,
+  scopeForIssueOn,
   syncPlaceOf,
   taskSegmentOf,
   type UiState,
@@ -729,6 +730,26 @@ describe('scopeForIssue', () => {
     expect(scopeForIssue('uuid-acme-5', 'mine')).toBe('mine')
     // …but this one is somebody else's: land on a board that actually shows it
     expect(scopeForIssue('QN-9', 'mine')).toBe('p-home-7')
+  })
+})
+
+describe('scopeForIssueOn', () => {
+  it("opens the issue's sub-project on the Board, which has no All projects", () => {
+    expect(scopeForIssueOn('kanban', 'QN-5', 'all')).toBe('p-home-1a')
+    expect(scopeForIssueOn('kanban', 'uuid-acme-5', 'all')).toBe(scopeForIssue('uuid-acme-5', null))
+  })
+
+  it('keeps All projects on the Overview and the Roadmap', () => {
+    expect(scopeForIssueOn('overview', 'QN-5', 'all')).toBe('all')
+    expect(scopeForIssueOn('roadmap', 'QN-5', 'all')).toBe('all')
+  })
+
+  it('answers as scopeForIssue everywhere else', () => {
+    expect(scopeForIssueOn('kanban', 'QN-5', 'p-home-1')).toBe('p-home-1')
+    expect(scopeForIssueOn('kanban', 'QN-5', 'mine')).toBe('mine')
+    expect(scopeForIssueOn('kanban', 'QN-9', 'mine')).toBe('p-home-7')
+    // a task the store does not hold keeps what was preferred
+    expect(scopeForIssueOn('kanban', 'QN-404', 'all')).toBe('all')
   })
 })
 

@@ -199,10 +199,12 @@ const foreignOrg = (org: string): string | null =>
 
 type SearchPaletteProps = {
   ctx: { setScope: (scopeId: string) => void; openIssue: (issueId: string) => void }
+  /** the project or sub-project Search in starts on, null for All projects */
+  searchIn?: string | null
   onClose: () => void
 }
 
-function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
+function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
   const mobile = useMobile()
   const [text, setText] = useState('')
   // the text a search asks with: the text once typing rests, and at once
@@ -211,8 +213,8 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
   const [includeArchived, setIncludeArchived] = useState(false)
   // the Search in choice, '' for All projects, and the one a search asks
   // with, which waits for a choice from the keyboard to rest
-  const [choice, setChoice] = useState('')
-  const [settledChoice, setSettledChoice] = useState('')
+  const [choice, setChoice] = useState(searchIn ?? '')
+  const [settledChoice, setSettledChoice] = useState(searchIn ?? '')
   const [shown, setShown] = useState<Shown | null>(null)
   const [running, setRunning] = useState<Running | null>(null)
   const [failed, setFailed] = useState<Failed | null>(null)

@@ -172,6 +172,21 @@ export const scopeForIssue = (issueKey: string, preferred?: string | null): stri
   return it.project
 }
 
+/* The scope to show behind a task link on `view`. The Board has no All
+   projects selection (convex/tasks.ts board): where scopeForIssue keeps All
+   projects, the Board shows the task's own sub-project instead, so its card
+   can be shown. Overview and Roadmap keep All projects. */
+export const scopeForIssueOn = (
+  view: string,
+  issueKey: string,
+  preferred?: string | null,
+): string | undefined => {
+  const scope = scopeForIssue(issueKey, preferred)
+  return view === 'kanban' && scope === ALL_SCOPE
+    ? (P.issueById[issueKey]?.project ?? scope)
+    : scope
+}
+
 /* ---------------------------------------------------------------------------
    The grammar below the prefix — shared by both parsers, so a path and a
    legacy hash can never come to mean different things.
