@@ -265,6 +265,44 @@ describe('a task the workspace does not hold, in the store', () => {
       expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: 'far-1' })
     })
 
+    it('starts the watch over when a later call brings the organization', () => {
+      const { P } = store
+      P.showSections(pane, true)
+      P.watchComments('far-1')
+      // no organization: an empty thread and empty lists, as for a create
+      expect(P.commentsLoaded).toBe(true)
+      expect(P.sections?.subtasks).toMatchObject({ state: 'ready', complete: true })
+      P.watchComments('far-1', org)
+      // the task's own thread and lists, loading until they answer
+      expect(P.commentsLoaded).toBe(false)
+      expect(P.sections?.subtasks).toMatchObject({ state: 'loading', delivered: false })
+      expect(one('snapshot:threadComments').args).toEqual({ org_id: org, issue_id: 'far-1' })
+      expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: 'far-1' })
+      expect(detail('far-1')).toMatchObject({ state: 'loading', view: null })
+    })
+
+    it('gives a task whose create is on its way empty lists each time a window shows its sections', () => {
+      const { P } = store
+      const key = P.addIssue({ project: snap.projects[0].id, title: 'New task' })
+      if (!key) throw new Error('the task was not created')
+      P.watchComments(P.issueById[key].uuid, org)
+      const created = {
+        state: 'ready',
+        complete: true,
+        delivered: true,
+        source: 'answer',
+        rows: [],
+      }
+      P.showSections(pane, true)
+      expect(P.sections?.subtasks).toMatchObject(created)
+      // a phone's Details, Activity, then Details again
+      P.showSections(pane, false)
+      P.showSections(pane, true)
+      expect(P.sections?.subtasks).toMatchObject(created)
+      expect(P.sections?.links).toMatchObject(created)
+      expect(named('taskWindow:task')).toEqual([])
+    })
+
     it('keeps the task answer when the last section owner leaves, as a phone switch or a closed pop-out does', () => {
       const { P } = store
       P.watchComments('far-1', org)
@@ -395,6 +433,50 @@ describe('a task the workspace does not hold, in the store', () => {
       expect(detail('far-1')?.view?.start).toBe(P.isoToWeek('2026-03-01'))
     })
 
+    it('holds its links and files while the sections read them, without description images', () => {
+      const { P } = store
+      P.watchComments('far-1', org)
+      P.showSections(pane, true)
+      one('taskWindow:task').deliver(okAnswer('far-1', 40))
+      one('taskWindow:links').deliver({
+        state: 'ok',
+        links: [
+          { id: 'link-1', source_id: 'far-2', target_id: 'far-1', type: 'blocks', created_at: AT },
+        ],
+        tasks: [short('far-2', 41)],
+        complete: true,
+      })
+      const file = (id: string, extra: object = {}) => ({
+        id,
+        issue_id: 'far-1',
+        name: `${id}.pdf`,
+        size_bytes: 1200,
+        storage_id: `storage-${id}`,
+        uploaded_by: snap.profiles[0].id,
+        inline: false,
+        created_at: AT,
+        ...extra,
+      })
+      one('taskWindow:attachments').deliver({
+        state: 'ok',
+        rows: [file('file-1'), file('image-1', { inline: true })],
+        count: 2,
+        complete: true,
+      })
+      const view = detail('far-1')?.view
+      // a link into the task reads as blocked by, from its side
+      expect(view?.links).toEqual([{ type: 'blocked_by', id: 'QN-41' }])
+      expect(view?.attachments.map((a) => a.id)).toEqual(['file-1'])
+      expect(view?.attachmentCount).toBe(2)
+      // without the sections, none of them
+      P.showSections(pane, false)
+      expect(detail('far-1')?.view).toMatchObject({
+        links: [],
+        attachments: [],
+        attachmentCount: 0,
+      })
+    })
+
     it('shows an archived task with its text and labels, and an archived group with unknown dates', () => {
       const { P } = store
       P.watchComments('far-1', org)
@@ -487,6 +569,45 @@ describe('a task the workspace does not hold, in the store', () => {
         okAnswer('guest-1', 7, { task: { org_id: GUEST, title: 'Renamed' } }),
       )
       expect(detail('guest-1')?.view?.title).toBe('Renamed')
+    })
+
+    it('subscribes again when the first delivery after the parts start over leaves a held task out', async () => {
+      const { P } = store
+      P.watchComments('task-a', org)
+      P.showSections(pane, true)
+      one('taskWindow:task').deliver(okAnswer('task-a', 1))
+      const before = [one('snapshot:threadComments'), one('taskWindow:task')]
+      // archived elsewhere while the parts start over
+      snap.issues = snap.issues.filter((i) => i.id !== 'task-a')
+      await store.initStore()
+      await later()
+      for (const live of before) expect(live.closed).toBe(true)
+      expect(one('snapshot:threadComments').args).toEqual({ org_id: org, issue_id: 'task-a' })
+      expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: 'task-a' })
+      one('taskWindow:task').deliver(archivedAnswer('task-a', 1))
+      expect(detail('task-a')?.state).toBe('archived')
+    })
+
+    it('stops the thread and history of a task its answer says is gone, and starts them if it comes back', () => {
+      const { P } = store
+      P.watchComments('far-1', org)
+      P.showHistory(pane, true)
+      const read = one('taskWindow:task')
+      read.deliver(okAnswer('far-1', 40))
+      expect(one('snapshot:threadHistory').args).toEqual({ org_id: org, issue_id: 'far-1' })
+      read.deliver({ state: 'unavailable' })
+      expect(open('snapshot:threadComments')).toEqual([])
+      expect(open('snapshot:threadHistory')).toEqual([])
+      // the read goes on, and brings them back for a task that returns
+      expect(one('taskWindow:task')).toBe(read)
+      read.deliver(okAnswer('far-1', 40))
+      expect(one('snapshot:threadComments').args).toEqual({ org_id: org, issue_id: 'far-1' })
+      expect(one('snapshot:threadHistory').args).toEqual({ org_id: org, issue_id: 'far-1' })
+      // a held task keeps its thread whatever the answer says
+      P.watchComments('task-a', org)
+      P.showSections(pane, true)
+      one('taskWindow:task').deliver({ state: 'unavailable' })
+      expect(one('snapshot:threadComments').args).toEqual({ org_id: org, issue_id: 'task-a' })
     })
 
     it('forgets the watched task and its organization with a demo store', async () => {

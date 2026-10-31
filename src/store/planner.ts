@@ -837,7 +837,8 @@ function watchedCreating(): boolean {
    hold. Asking earlier for a task whose create is on its way would refuse
    with not_found, which the server logs as an error. Runs after each
    snapshot delivery and after a boot, so a re-init of the parts brings the
-   thread back. */
+   thread back, and again once the rows show a delivery (syncThread), as a
+   delivery that leaves the task out runs this before its rows do. */
 function subscribeWaitingThread() {
   const t = watchedComments
   if (!t || threadWatched) return
@@ -992,25 +993,50 @@ function sidesWanted(): Record<SectionSide, boolean> {
   return { task: shown || detail, links: shown, attachments: shown }
 }
 
-/* Makes each section side run exactly while it is wanted (sidesWanted),
-   beside the watched thread and in its organization: a side that starts
-   subscribes afresh (watchSection), so the window decides from an answer
-   read after the change, and one that runs already goes on, so the
-   Subtasks section and a task shown from its answer read one task answer.
-   A side no window wants stops and drops its answer, while a re-init of the
-   parts (stopParts) keeps the answers until the new subscriptions deliver.
-   A side waits for the thread, as a task whose create is on its way gets
-   complete, empty lists (CREATING) until a delivery holds it. It runs as
-   the sections build (rebuildSections), so whether the workspace holds the
-   task is the rows' word in the same repaint. Answers whether an answer
-   changed. */
+/* Makes the watched thread run while its task may show, after a repaint:
+   it subscribes the thread of a task the rows no longer hold, as after a
+   re-init of the parts whose first delivery leaves the task out
+   (subscribeWaitingThread), and stops the thread and the history of a task
+   the workspace does not hold once its answer says it is unavailable, as
+   for a deleted task, whose thread the server refuses. The answer goes on,
+   so a task that comes back subscribes them again. */
+function syncThread() {
+  const t = watchedComments
+  if (!t) return
+  const answer = sectionAnswers.issue === t ? sectionAnswers.task : null
+  const gone =
+    !rows.issues.has(t) && answer !== null && answer !== CREATING && answer.state === 'unavailable'
+  if (!gone) {
+    subscribeWaitingThread()
+    return
+  }
+  if (threadWatched) {
+    stopThread()
+    stopHistory()
+  }
+}
+
+/* Makes each section side run exactly while it is wanted (sidesWanted), in
+   the watched task's organization: a side that starts subscribes afresh
+   (watchSection), so the window decides from an answer read after the
+   change, and one that runs already goes on, so the Subtasks section and a
+   task shown from its answer read one task answer. A side no window wants
+   stops and drops its answer, while a re-init of the parts (stopParts)
+   keeps the answers until the new subscriptions deliver. A task whose
+   create is on its way gets complete, empty lists (CREATING) until a
+   delivery holds it, also when a window shows its sections again. It runs
+   as the sections build (rebuildSections), after the thread (syncThread),
+   so whether the workspace holds the task is the rows' word in the same
+   repaint. Answers whether an answer changed. */
 function syncSections(): boolean {
+  syncThread()
   const t = watchedComments
   const wanted = sidesWanted()
-  const thread = threadWatched && threadWatched.task === t ? threadWatched : null
+  const org = t && !watchedCreating() ? watchedOrgOf() : undefined
+  const watched = t && org ? { task: t, org } : null
   let changed = false
   for (const side of SECTION_SIDES) {
-    const target = wanted[side] ? thread : null
+    const target = wanted[side] ? watched : null
     const now = sectionsWatched[side]
     if (target) {
       if (!parts || (now?.task === target.task && now.org === target.org)) continue
@@ -1032,7 +1058,15 @@ function syncSections(): boolean {
       changed = true
     }
   }
-  if (t && wanted.links && !thread && sectionAnswers.issue !== t && watchedCreating()) {
+  // every answer dropped when the sections hid, so they show again empty
+  const unanswered = SECTION_SIDES.every((side) => sectionAnswers[side] === null)
+  if (
+    t &&
+    wanted.links &&
+    !watched &&
+    (sectionAnswers.issue !== t || unanswered) &&
+    watchedCreating()
+  ) {
     sectionAnswers = { issue: t, task: CREATING, links: CREATING, attachments: CREATING }
     changed = true
   }
@@ -1457,8 +1491,10 @@ function sectionAttachment(attId: string): { row: Row<'issue_attachments'>; org:
    (P.taskDetail, convex/lib/imageRefs.ts imageRefs), as on a phone's
    Activity tab, where no attachments answer runs, and for an archived
    task, whose attachments answer is unavailable, or null. files.mintUrls
-   checks access, so an id of another task gets no URL. The lookup ends
-   with the detail. t3/limits-image-bounds rewrites the mints later. */
+   mints only a file of a task in that organization whose project the
+   person can see, the gateway checks the same again, so the text can name
+   no file the person could not open anyway. The lookup ends with the
+   detail. t3/limits-image-bounds rewrites the mints later. */
 function detailAttachment(attId: string): { org: string } | null {
   const detail = PLANNER.detail
   const text = detail?.view?.description
@@ -7897,15 +7933,15 @@ export const PLANNER = {
       go. `orgId` is the task's organization as its window knows it, which
       a task the workspace does not hold takes its thread, its history and
       its task answer through (P.taskDetail); the workspace's row decides
-      while it holds the task. A later call for the watched task keeps an
-      organization the first did not bring. */
+      while it holds the task. A later call for the watched task that
+      brings an organization the first did not starts the watch over with
+      it. */
   watchComments: (issueUuid: string | null, orgId?: string) => {
+    // the organization a later call brings for the watched task starts its
+    // watch over, so the empty thread and lists of a task without one go
     if (watchedComments === issueUuid) {
       if (!issueUuid || !orgId || watchedOrg) return
-      watchedOrg = orgId
-      subscribeWaitingThread()
-      repaint({ sections: true })
-      return
+      watchedComments = null
     }
     ++commentsWatchEpoch
     watchedComments = issueUuid
@@ -7937,10 +7973,11 @@ export const PLANNER = {
       threadStart = true
       if (historyOwners.size > 0) startHistory()
     }
-    // the sections and the task answer start with the thread (syncSections)
-    repaint({ thread: true, sections: true })
+    // the thread, and with it the sections and the task answer
+    // (syncSections), then the emptied thread and lists show
     const org = row?.org_id ?? watchedOrg
     if (issueUuid && org && !creating) subscribeThread(issueUuid, org)
+    repaint({ thread: true, sections: true })
   },
 
   /** Registers whether the window `owner` shows All for the watched task,
