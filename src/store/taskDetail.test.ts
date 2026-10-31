@@ -523,7 +523,12 @@ describe('a task the workspace does not hold, in the store', () => {
       })
       P.retryTask()
       expect(read.closed).toBe(true)
-      expect(detail('far-1')?.state).toBe('retrying')
+      // so does Retry, until the server answers
+      expect(detail('far-1')).toMatchObject({
+        state: 'retrying',
+        answered: 'ok',
+        view: { title: 'Task 40' },
+      })
       one('taskWindow:task').deliver(okAnswer('far-1', 40, { task: { title: 'Back' } }))
       expect(detail('far-1')).toMatchObject({ state: 'ok', view: { title: 'Back' } })
       // Retry does nothing while the read has not failed

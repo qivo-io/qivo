@@ -449,13 +449,14 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     await answer('taskWindow:task', archivedAnswer(snap.issues[0]))
     expect(dialog()?.dataset.taskArchived).toBe('')
     // while tasks still load, a task the window showed before waits for its
-    // read as for the tasks still to come
+    // read as for the tasks still to come, once no answer shows it
     await act(async () => root.unmount())
     root = createRoot(container)
     await load(true)
     const handle = await noteTask(far())
     await openWindow(handle)
     await answer('taskWindow:task', okAnswer(far()))
+    await answer('taskWindow:task', { state: 'unavailable' })
     await act(async () => one('taskWindow:task').fail(new Error('Server Error')))
     expect(note()?.textContent).toBe("QN-40 is no longer on the board. Couldn't check the archive.")
     await click(buttonNamed('Retry'))
@@ -464,6 +465,48 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     )
     await answer('taskWindow:task', okAnswer(far()))
     expect(dialog()?.dataset.taskSource).toBe('answer')
+  })
+
+  it('keeps a task and the comment typed for it through a failed read and its Retry, until the server says it is gone', async () => {
+    await load()
+    const handle = await noteTask(far())
+    await openWindow(handle)
+    await answer('taskWindow:task', okAnswer(far()))
+    await answer('snapshot:threadComments', { comments: [], earlier: false })
+    const composer = await editorOf('Leave a comment')
+    await act(async () => composer.commands.insertContent('Gain looks low'))
+    const stale = () => document.querySelector<HTMLElement>('[data-task-stale]')
+    // the read fails: the task stays as it last loaded, with the draft
+    await act(async () => one('taskWindow:task').fail(new Error('Server Error')))
+    expect(stale()?.dataset.taskStale).toBe('failed')
+    expect(stale()?.textContent).toContain(
+      "Couldn't check QN-40 for changes, so it shows as it was last loaded.",
+    )
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    expect(document.querySelector('[data-task-gone]')).toBeNull()
+    expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
+    expect((await editorOf('Leave a comment')).getText()).toBe('Gain looks low')
+    expect(composer.isDestroyed).toBe(false)
+    // Retry reads it again, and the draft stays meanwhile
+    await click(buttonNamed('Retry', stale() ?? document))
+    expect(stale()?.dataset.taskStale).toBe('retrying')
+    expect(stale()?.textContent).toBe('Checking QN-40 for changes…')
+    expect(reads()).toHaveLength(2)
+    expect(composer.getText()).toBe('Gain looks low')
+    await answer('taskWindow:task', okAnswer(far({ title: 'Tune the antenna again' })))
+    expect(stale()).toBeNull()
+    expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna again')
+    expect(composer.isDestroyed).toBe(false)
+    expect(composer.getText()).toBe('Gain looks low')
+    expect(window.showToast).not.toHaveBeenCalledWith('Unsaved comment discarded')
+    // gone for good: its note replaces the task, and the draft with it
+    await answer('taskWindow:task', { state: 'unavailable' })
+    expect(note()?.textContent).toBe(
+      'QN-40 is no longer here. It was deleted, or you can no longer open it.',
+    )
+    expect(dialog()?.dataset.taskSource).toBeUndefined()
+    expect(document.querySelector('[role="textbox"][aria-label="Leave a comment"]')).toBeNull()
+    expect(stale()).toBeNull()
   })
 
   it('shows a task from its answer read-only, saying why each control is off, with comments for an editor', async () => {
@@ -772,6 +815,24 @@ describe('the archived task window', { timeout: 30_000 }, () => {
     expect(dialog()?.dataset.taskSource).toBe('workspace')
     expect(document.querySelector('[data-task-gone]')).toBeNull()
     expect(field('Priority')?.disabled).toBe(false)
+  })
+
+  it('keeps the archived window, its note and Restore through a failed read', async () => {
+    await openArchived()
+    await act(async () => one('taskWindow:task').fail(new Error('Server Error')))
+    expect(dialog()?.dataset.taskArchived).toBe('')
+    expect(document.querySelector('[data-task-stale]')?.textContent).toContain(
+      "Couldn't check QN-40 for changes",
+    )
+    expect(note()?.textContent).toBe(
+      'QN-40 was archived. Restore it to bring it back to the board.',
+    )
+    expect(buttonNamed('Restore')).toBeDefined()
+    expect(document.querySelector('[data-comment="c-1"]')).not.toBeNull()
+    await click(buttonNamed('Retry', document.querySelector('[data-task-stale]') ?? document))
+    await answer('taskWindow:task', archivedAnswer(far()))
+    expect(document.querySelector('[data-task-stale]')).toBeNull()
+    expect(dialog()?.dataset.taskArchived).toBe('')
   })
 
   it('offers no Restore to someone who views its project, and says who can', async () => {

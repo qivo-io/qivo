@@ -395,7 +395,8 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
   })
 
   it('says it could not check the archive, and finds the task on Retry', async () => {
-    const task = await open()
+    // the read its details column asked for has not answered yet
+    const task = await open('admin', undefined, 'window', true)
     readMode = 'fail'
     vi.spyOn(console, 'error').mockImplementation(() => {})
     await dropTask({ archived: true })
@@ -420,6 +421,37 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     // Retry reads the task afresh
     const read = { org_id: snap.orgs[0].id, ref: 'task-a' }
     expect(subscribed()).toEqual([read, read])
+  })
+
+  it('keeps the task as it last loaded when its read fails as it leaves, and finds it archived on Retry', async () => {
+    const task = await open()
+    // the read its details column asked for answered while the board held it
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    readMode = 'fail'
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await leave({ archived: true })
+    const stale = () => document.querySelector<HTMLElement>('[data-task-stale]')
+    expect(stale()?.textContent).toContain(
+      `Couldn't check ${task.key} for changes, so it shows as it was last loaded.`,
+    )
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    expect(dialog()?.textContent).toContain('Run the soak test')
+    expect(document.querySelector('[data-task-gone]')).toBeNull()
+    readMode = 'answer'
+    const retry = [...(stale()?.querySelectorAll('button') ?? [])].find(
+      (b) => b.textContent === 'Retry',
+    )
+    await click(retry)
+    await act(async () => {
+      await vi.waitFor(() => {
+        if (!note()?.textContent?.includes('was archived')) throw new Error('still checking')
+      })
+    })
+    expect(stale()).toBeNull()
+    expect(dialog()?.dataset.taskArchived).toBe('')
+    expect(note()?.textContent).toBe(
+      `${task.key} was archived. Restore it to bring it back to the board.`,
+    )
   })
 
   it('offers Restore again when the restore is refused', async () => {

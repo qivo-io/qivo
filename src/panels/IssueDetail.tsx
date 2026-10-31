@@ -1349,6 +1349,44 @@ function TaskGone({
   )
 }
 
+/* The note above a task the window shows from its last answer while the
+   read after that answer failed, with Retry, or runs again from Retry. The
+   task stays as that answer had it, with a comment typed for it, since the
+   answer shows nothing the window did not show already and the server
+   checks every write. In LoadFailure's style, without its control height,
+   as it sits under the task's title. */
+function StaleTask({
+  taskKey,
+  retrying,
+  mobile,
+}: {
+  taskKey: string
+  retrying: boolean
+  mobile: boolean
+}) {
+  return (
+    <div
+      data-task-stale={retrying ? 'retrying' : 'failed'}
+      className="flex shrink-0 flex-wrap items-center gap-3 px-5 pt-1 pb-3 text-sm text-text-2"
+    >
+      <span
+        role="status"
+        className={cn(mobile ? 'basis-full' : 'flex-1', retrying && 'italic text-text-3')}
+      >
+        {retrying
+          ? `Checking ${taskKey} for changes…`
+          : `Couldn't check ${taskKey} for changes, so it shows as it was last loaded.`}
+      </span>
+      {!retrying && (
+        <Button type="button" variant="ghost" onClick={P.retryTask}>
+          <Icon name="rotateCcw" size={16} />
+          Retry
+        </Button>
+      )}
+    </div>
+  )
+}
+
 /* Where an archived task lives and the day it was archived, read-only, as
    the note on a task Search opened and the archived window's details say
    them. */
@@ -1807,23 +1845,26 @@ function IssueDetail({
   // the task as the window shows it from its own read while the workspace
   // does not hold it (P.taskDetail)
   const detail: TaskDetailVM | null = !held && identity ? P.taskDetail(identity.uuid) : null
-  // the view of a current answer that holds the task, active or archived,
-  // but not while this window's own archive or delete is on its way: that
-  // closes the window, and the answer must not show the task under its
-  // dialog. A failed read says so instead (TaskGone), whatever it said
-  // before; the store keeps that for when the read answers again.
+  // the view of the last answer that held the task, active or archived,
+  // also while a read after it failed or runs again (`stale`), so a
+  // comment typed for the task stays; but not while this window's own
+  // archive or delete is on its way: that closes the window, and the answer
+  // must not show the task under its dialog
   const answerView =
     leaving.current !== issueId &&
     detail?.view &&
     !detail.textless &&
-    (detail.state === 'ok' || detail.state === 'archived')
+    (detail.answered === 'ok' || detail.answered === 'archived')
       ? detail.view
       : null
   const it = held ?? answerView
   // a task shown from its answer, read-only but for its comments, and of
   // those an archived one, with its note above it and no comments either
   const fromAnswer = !held && !!it
-  const archived = fromAnswer && detail?.state === 'archived'
+  const archived = fromAnswer && detail?.answered === 'archived'
+  // the window shows the task as its last answer had it, because the read
+  // after it failed, or runs again from Retry (the note above the task)
+  const stale = fromAnswer && (detail?.state === 'failed' || detail?.state === 'retrying')
   // the window shows an active task: the workspace's, or one from its answer
   const active = !!held || (fromAnswer && !archived)
   if (it && issueId) {
@@ -1845,20 +1886,28 @@ function IssueDetail({
   // window says what became of it (TaskGone), also once its own call was
   // refused (stopLeaving), and above an archived task it shows read-only
   const gone = !active && !waiting && issueId && leaving.current !== issueId ? identity : null
-  // what the window's read says became of it, for TaskGone
+  // what the window's read says became of it, for TaskGone: the archived
+  // window's own answer, also while a read after it failed, else what the
+  // read says now
+  const archivedRow =
+    detail?.view && detail.archivedAt !== null
+      ? {
+          project: detail.view.project,
+          title: detail.view.title,
+          org: detail.org,
+          archivedAt: detail.archivedAt,
+        }
+      : undefined
   const goneAnswer: GoneAnswer =
-    detail?.state === 'failed'
-      ? 'failed'
-      : detail?.state === 'unavailable'
-        ? null
-        : detail?.state === 'archived' && detail.view && detail.archivedAt !== null
-          ? {
-              project: detail.view.project,
-              title: detail.view.title,
-              org: detail.org,
-              archivedAt: detail.archivedAt,
-            }
-          : undefined
+    archived && archivedRow
+      ? archivedRow
+      : detail?.state === 'failed'
+        ? 'failed'
+        : detail?.state === 'unavailable'
+          ? null
+          : detail?.state === 'archived'
+            ? archivedRow
+            : undefined
   // the caller's level on a task shown from its answer, which decides the
   // controls offered there, together with the workspace's (canComment);
   // an archived answer of an older backend holds none, and the workspace's
@@ -3341,6 +3390,16 @@ function IssueDetail({
                   </div>
                 ),
               })}
+
+              {/* the task as its last answer had it, while the read after
+                  that answer failed or runs again */}
+              {stale && (
+                <StaleTask
+                  taskKey={it.key}
+                  retrying={detail?.state === 'retrying'}
+                  mobile={mobile}
+                />
+              )}
 
               {/* an archived task: what became of it, with Restore for
                   someone who can edit its project, above the task shown

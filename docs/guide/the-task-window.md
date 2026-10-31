@@ -174,7 +174,9 @@ fields, its labels and its relationships can be changed once every task has
 loaded, and until then they are disabled with **Available once every task
 has loaded**, or with **Read-only project access** when you can only read
 its project. When the task arrives, the window turns editable in place, and
-a comment you were typing stays.
+a comment you were typing stays. If Qivo cannot check such a task for
+changes, the window keeps showing it as it last loaded and says so, with
+**Retry**, and a comment you are typing stays then too.
 
 The **×** button removes a relationship without deleting the task.
 **Remove subtask** clears the child's parent and keeps the task.
