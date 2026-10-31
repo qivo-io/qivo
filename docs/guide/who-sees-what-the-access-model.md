@@ -96,7 +96,10 @@ Unshared projects are absent from navigation, search, pickers, feeds and your
 inbox. Direct links do not open them. For organization admins and users,
 capacity views count hidden work anonymously under **Other projects**. Guests
 and organization Viewers receive workload only for tasks they can access or
-own; they cannot see other people's hidden workload.
+own; they cannot see other people's hidden workload. When a person has a
+very large amount of open work, a guest's or Viewer's workload and delay for
+that person can show as unavailable, even when most of that work is in
+projects they cannot see.
 
 Change history follows the same rules. You see a task's changes only if you
 can access the task and every project a change involves, such as both ends of

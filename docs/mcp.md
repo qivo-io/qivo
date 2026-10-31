@@ -174,6 +174,13 @@ Later in October 2026 every `list_tasks` and `get_task` result gained
 older catalogue reads it too, but its model does not learn what it means
 until the client refreshes its tool list.
 
+At the end of October 2026 the `delay` of a `get_task` result gained the
+status `unavailable`, for an owner whose other open work Qivo cannot read
+in one request (see [Task results](#task-results)), and the `get_task`
+description now names it. A client holding the older catalogue receives it
+too, but its model learns what it means only after the client refreshes its
+tool list.
+
 The label limit added `maxLength` 40 to `name` on `set_label`. A client
 holding the older catalogue keeps working.
 
@@ -1753,6 +1760,14 @@ work they can read or own, so two users can get different verdicts for one
 task. A group with subtasks you cannot read can only be `late`, as in the
 app. The server judges today's date in UTC, so near midnight or a week
 boundary it can differ from the app, which uses the browser's time zone.
+
+On `get_task`, `delay` can also be `{"status": "unavailable",
+"projected_end_week": null}`. Qivo says this when the owner's other open
+work is too large for it to read in one request, or it could not finish
+checking which projects you can see. It can happen for any user, a viewer
+or guest included, also when most of that work is in projects they cannot
+read. It never counts the work it could not read as free time. A
+`list_tasks` result never says `unavailable`.
 
 `last_comment_at` is when the newest comment on the task was posted, or
 `null` when it has none. Editing a comment does not change it, and deleting

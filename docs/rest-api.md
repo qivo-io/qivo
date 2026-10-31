@@ -1690,6 +1690,21 @@ read can only be `late`, as in the app. The server judges today's date in
 UTC, so near midnight or a week boundary it can differ from the app, which
 uses the browser's time zone.
 
+On a single task, `GET /v1/tasks/{ref}` and the answers of `POST
+/v1/tasks` and `PATCH /v1/tasks/{ref}`, `delay` can also be:
+
+```json
+{ "delay": { "status": "unavailable", "projected_end_week": null } }
+```
+
+Qivo says this when the owner's other open work is too large for it to
+read in one request, or it could not finish checking which projects the
+caller can see. It can happen for any caller, a viewer or guest included,
+also when most of that work is in projects they cannot read. It never
+counts the work it could not read as free time. A list row never says
+`unavailable`. `unavailable` arrived in October 2026, so treat a `status`
+you do not know as no verdict.
+
 `last_comment_at` is when the newest comment on the task was posted, or
 `null` when it has none. Editing a comment does not change it, and deleting
 the newest one makes the one before it the newest.
