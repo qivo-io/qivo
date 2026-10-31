@@ -75,7 +75,10 @@ let nextNum = 900_000
 /** Plants `n` active tasks in `project` with `fields(i)`, `each` a
  * transaction, as raw inserts with their description rows, as the third
  * release of the description move stores them: the text in the row only,
- * unless `fields` sets issues.description too, as a rollback writes it. */
+ * unless `fields` sets issues.description too, as a rollback writes it.
+ * Each task row holds what model/issues.ts createIssueCore writes on every
+ * task, its creator and reporter, here the organization's first profile,
+ * and its status stamp, so it takes as many bytes as the app's row. */
 export async function plantTasks(
   t: T,
   project: Doc<'projects'>,
@@ -85,6 +88,13 @@ export async function plantTasks(
   ) => Partial<WithoutSystemFields<Doc<'issues'>>> & { text?: string } = () => ({}),
   each = 100,
 ): Promise<Doc<'issues'>[]> {
+  const reporter = await t.run(async (ctx) => {
+    const first = await ctx.db
+      .query('profiles')
+      .withIndex('by_org', (q) => q.eq('org_id', project.org_id))
+      .first()
+    return first?.id
+  })
   const planted: Doc<'issues'>[] = []
   for (let from = 0; from < n; from += each)
     planted.push(
@@ -101,6 +111,9 @@ export async function plantTasks(
             status: 'todo',
             priority: 'medium',
             paused: false,
+            created_by: reporter,
+            reporter_id: reporter,
+            status_at: rest.created_at ?? NOW,
             created_at: NOW,
             updated_at: NOW,
             window_key: newWindowKey(),
