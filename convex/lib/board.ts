@@ -101,7 +101,10 @@ import {
  *   816, 4,809 and 5.36.
  * - A search over 5,000 tasks of 390-character texts, the measured
  *   average: 213, 10,159 and 4.69; over 4,000 tasks for a word only the
- *   labels of 667 hold: 801, 8,798 and 2.42.
+ *   labels of 667 hold: 801, 8,798 and 2.42; over 600 tasks of one
+ *   sub-project for a word a label holds that 29,400 other tasks of the
+ *   organization carry, read through each task's own rows: 1,235, 4,391
+ *   and 0.95.
  *
  * Each task the filters keep costs about one range, its group check, and a
  * group one more for its subtasks. The subtasks of a shown group that the
@@ -124,13 +127,16 @@ import {
  * still fit. `owners` caps the ids the people filter may name, the
  * envelope's 1,000 people. `labelTasks` is how many candidates of one
  * organization a search reads labels for through their own rows, a range
- * each, before it reads each label that can finish their matches by its
- * assignments instead, many to a range (boardSearch). */
+ * each, before it tries each label that can finish their matches by its
+ * assignments, many to a range, and `labelScan` how many assignments a
+ * candidate that try reads before it goes back to the own rows, as a label
+ * may be on thousands of other tasks (boardSearch). */
 export const BOARD = {
   reads: { bytes: 12 * MIB, documents: 24_000, ranges: 3_600 },
   context: 2000,
   owners: 1000,
-  labelTasks: 500,
+  labelTasks: 64,
+  labelScan: 4,
 }
 
 /** A Board selection: a project of one organization, a top-level project
@@ -311,19 +317,10 @@ async function boardOf(
  * settles at once, so the count is known after each step. */
 const STEP = 64
 
-/** A label row or a label assignment, as a read keeps room for it: smaller
- * than a team row (lib/limits.ts TEAM_ROW_MAX_BYTES), as a label holds a
- * name of at most 40 characters and an assignment three ids and a window
- * key. */
+/** A label row, as a read keeps room for it: smaller than a team row
+ * (lib/limits.ts TEAM_ROW_MAX_BYTES), as a label holds a name of at most 40
+ * characters. */
 const LABEL_ROW: Reads = { bytes: TEAM_ROW_MAX_BYTES, documents: 1, ranges: 0 }
-
-/** What one task's label read takes at most: one range and LIMITS.labels.max
- * assignments (lib/core.ts markedLabelNamesOf), or one (labelNamesOf). */
-const LABEL_TASK: Reads = {
-  bytes: LIMITS.labels.max * LABEL_ROW.bytes,
-  documents: LIMITS.labels.max,
-  ranges: 1,
-}
 
 /** The most a label assignment row takes, as Convex counts a document: an
  * organization, a task and a label id, the task's window key and the
@@ -334,6 +331,26 @@ export const LABEL_ASSIGNMENT_BYTES = 512
 
 /** One label assignment read in a label's range. */
 const ASSIGNMENT: Reads = { bytes: LABEL_ASSIGNMENT_BYTES, documents: 1, ranges: 0 }
+
+/** What one task's label read takes at most through its own rows: for one
+ * label, one range and its assignment (lib/core.ts labelNamesOf), for more,
+ * one range and up to LIMITS.labels.max assignments (markedLabelNamesOf). */
+const LABEL_ONE: Reads = { bytes: LABEL_ASSIGNMENT_BYTES, documents: 1, ranges: 1 }
+const LABEL_TASK: Reads = {
+  bytes: LIMITS.labels.max * LABEL_ASSIGNMENT_BYTES,
+  documents: LIMITS.labels.max,
+  ranges: 1,
+}
+
+/** No reads. */
+const NO_READS: Reads = { bytes: 0, documents: 0, ranges: 0 }
+
+/* `a` and `b` together. */
+const plus = (a: Reads, b: Reads): Reads => ({
+  bytes: a.bytes + b.bytes,
+  documents: a.documents + b.documents,
+  ranges: a.ranges + b.ranges,
+})
 
 /** How many assignments one step of a label's range asks for. */
 const ASSIGNMENTS_PER_STEP = 256
@@ -552,11 +569,19 @@ function boardRead(
  * one by_issue_label range for one useful label (lib/core.ts
  * labelNamesOf), else the task's by_issue range (markedLabelNamesOf). Past
  * BOARD.labelTasks candidates of one organization, each useful label's
- * active assignments are read instead (issue_labels by_label), many to a
- * range. Those follow the organization rather than the selection, and hold
- * tasks the reader cannot see: each counts at LABEL_ASSIGNMENT_BYTES, so
- * their contents move no answer, but how many there are can move it at the
- * budget's margin, as lib/viewReads.ts lists for its other reads.
+ * active assignments are read (issue_labels by_label), many to a range,
+ * as long as that is the cheaper read: within BOARD.labelScan assignments a
+ * candidate while the room holds the own-row reads too, else only where it
+ * does not hold those (readLabels). The assignments follow the
+ * organization rather than the selection, and hold tasks the reader cannot
+ * see: each counts at LABEL_ASSIGNMENT_BYTES, so their contents move no
+ * answer, but how many there are can move it at the budget's margin, as
+ * lib/viewReads.ts lists for its other reads.
+ *
+ * Whether a candidate's status line counts decides which pieces its labels
+ * must hold, so a candidate whose status line holds a piece its other
+ * fields do not gets its group check before its labels: a group's stored
+ * status is dormant and not searched.
  */
 function boardSearch(
   ctx: QueryCtx,
@@ -697,14 +722,18 @@ function boardSearch(
   /* the label names of `step`, the candidates waiting for them: none for a
    * candidate whose other fields leave a piece no label of its organization
    * holds, so no label can make it match; else those of the labels that can
-   * finish its match, through its own rows (lib/core.ts labelNamesOf for one
-   * such label, markedLabelNamesOf for more), a range each, or past
-   * BOARD.labelTasks candidates of one organization through each such
-   * label's active assignments (issue_labels by_label), many to a range.
-   * Those include assignments of tasks the reader cannot see, each counted
-   * at LABEL_ASSIGNMENT_BYTES, and a task restored so recently that its
-   * assignments are still marked reads its own rows. A candidate the room
-   * does not hold goes back. */
+   * finish its match. Up to BOARD.labelTasks candidates of one organization
+   * read them through their own rows (readOwn), a range each. Past it the
+   * search reads each such label's active assignments instead (issue_labels
+   * by_label), many to a range, but a label may be on thousands of other
+   * tasks of the organization, so it does so only as far as it pays: while
+   * the room also holds the own-row reads, it reads at most BOARD.labelScan
+   * assignments a candidate and reads the own rows once it passes that;
+   * where the room holds only the own-row reads, it reads those; and where
+   * it holds neither it reads the assignments, the one read that may still
+   * fit. The assignments include those of tasks the reader cannot see, each
+   * counted at LABEL_ASSIGNMENT_BYTES, and a task restored so recently that
+   * its assignments are still marked reads its own rows. */
   const readLabels = async (step: readonly Candidate[]) => {
     for (const org of new Set(step.map((c) => c.task.org_id)))
       if (!labelsOf.has(org)) labelsOf.set(org, await piecedLabels(org))
@@ -714,17 +743,49 @@ function boardSearch(
       step.filter((c) => c.labels === undefined),
       (c) => c.task.org_id,
     )) {
-      const byLabel = theirs.length > BOARD.labelTasks
-      const own = byLabel ? theirs.filter((c) => c.task.relations_marked === true) : theirs
-      if (byLabel)
-        await readAssignments(
-          theirs.filter((c) => !own.includes(c)),
-          useful,
-        )
-      // those the room holds, a range and the rows each may read
-      const reading = own.slice(
+      const marked = theirs.filter((c) => c.task.relations_marked === true)
+      const rest = theirs.filter((c) => c.task.relations_marked !== true)
+      let own = theirs
+      if (rest.length > BOARD.labelTasks) {
+        const labels = new Set(rest.flatMap((c) => (useful.get(c) ?? []).map((l) => l.id)))
+        const cap = BOARD.labelScan * rest.length
+        // a scan of `cap` assignments, with the step past it and a range a label
+        const rows = cap + labels.size * ASSIGNMENTS_PER_STEP
+        const scan: Reads = {
+          bytes: rows * LABEL_ASSIGNMENT_BYTES,
+          documents: rows,
+          ranges: labels.size + Math.ceil(rows / ASSIGNMENTS_PER_STEP),
+        }
+        const perTask = rest.reduce((total, c) => plus(total, ownCost(c, useful)), NO_READS)
+        const holds = async (cost: Reads) => (await guard.count(cost, 1)) >= 1
+        if (await holds(plus(perTask, scan))) {
+          if (await readAssignments(rest, useful, cap)) own = marked
+        } else if (!(await holds(perTask))) {
+          await readAssignments(rest, useful)
+          own = marked
+        }
+      }
+      await readOwn(own, useful)
+    }
+  }
+
+  /* what reading `c`'s labels through its own rows takes at most */
+  const ownCost = (c: Candidate, useful: ReadonlyMap<Candidate, readonly Doc<'labels'>[]>) =>
+    (useful.get(c) ?? []).length === 1 ? LABEL_ONE : LABEL_TASK
+
+  /* the label names of `cands` through their own rows, one by_issue_label
+   * range for one useful label (lib/core.ts labelNamesOf), else the task's
+   * by_issue range (markedLabelNamesOf); a candidate the room does not hold
+   * goes back */
+  const readOwn = async (
+    cands: readonly Candidate[],
+    useful: ReadonlyMap<Candidate, readonly Doc<'labels'>[]>,
+  ) => {
+    for (const cost of [LABEL_ONE, LABEL_TASK]) {
+      const these = cands.filter((c) => ownCost(c, useful) === cost)
+      const reading = these.slice(
         0,
-        await guard.upTo(LABEL_TASK, own.length, own.length === 0 ? 0 : 1),
+        await guard.upTo(cost, these.length, these.length === 0 ? 0 : 1),
       )
       const got = await settled(
         reading.map((c) => {
@@ -739,11 +800,13 @@ function boardSearch(
   }
 
   /* the label names of `cands`, candidates of one organization, through
-   * the active assignments of each label that can finish one's match */
+   * the active assignments of each label that can finish one's match, or
+   * false, with none set, once they pass `cap` assignments */
   const readAssignments = async (
     cands: readonly Candidate[],
     useful: ReadonlyMap<Candidate, readonly Doc<'labels'>[]>,
-  ) => {
+    cap = Number.POSITIVE_INFINITY,
+  ): Promise<boolean> => {
     const labels = [
       ...new Map(cands.flatMap((c) => useful.get(c) ?? []).map((l) => [l.id, l])).values(),
     ]
@@ -759,14 +822,19 @@ function boardSearch(
       }),
     )
     const charge = (row: Doc<'issue_labels'>) => guard.charge(row, LABEL_ASSIGNMENT_BYTES)
-    for await (const rows of inSteps(guard, ranges, ASSIGNMENT, charge, ASSIGNMENTS_PER_STEP))
+    let read = 0
+    for await (const rows of inSteps(guard, ranges, ASSIGNMENT, charge, ASSIGNMENTS_PER_STEP)) {
+      read += rows.length
+      if (read > cap) return false
       for (const row of rows)
         if (wanted.has(row.issue_id))
           carried.set(row.issue_id, (carried.get(row.issue_id) ?? new Set()).add(row.label_id))
+    }
     for (const c of cands) {
       const held = carried.get(c.task.id) ?? new Set()
       c.labels = (useful.get(c) ?? []).filter((l) => held.has(l.id)).map((l) => l.name)
     }
+    return true
   }
 
   // the texts in flight: those read one at a time, and those read by

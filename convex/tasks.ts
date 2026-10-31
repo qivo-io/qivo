@@ -24,9 +24,9 @@
  *   by_project_archived), the organization's labels (labels by_org), and
  *   the label rows of tasks a label could still make match (issue_labels
  *   by_issue_label or by_issue, or past lib/board.ts BOARD.labelTasks such
- *   tasks each such label's active assignments, by_label). Only that last
- *   read takes rows of tasks outside the selection; no read takes the
- *   organization's tasks.
+ *   tasks, where it is the cheaper read, each such label's active
+ *   assignments, by_label). Only that last read takes rows of tasks outside
+ *   the selection; no read takes the organization's tasks.
  *
  * It answers `ok`, `over_ceiling` once more than lib/limits.ts BOARD_TASKS
  * matching tasks were found, `over_budget` when its reads reach

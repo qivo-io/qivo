@@ -1173,6 +1173,45 @@ describe('real limits', () => {
     expect(own.read.ranges).toBeLessThan(both.read.ranges + 100)
   }, 600_000)
 
+  it("searches a word a label holds over a small selection through each task's own rows when the label is on many other tasks", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const bug = uuid()
+    await t.run((ctx) =>
+      ctx.db.insert('labels', {
+        id: bug,
+        org_id: f.org.id,
+        name: 'Bug',
+        name_lower: 'bug',
+        color: '#336699',
+        created_at: NOW,
+      }),
+    )
+    // the label on 600 tasks of FW and 29,400 of a sub-project the guest cannot see
+    const elsewhere = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.hidden.id,
+    })
+    const mine = await plantTasks(t, f.sub, 600, () => ({ text: 'plain words' }), 600)
+    const theirs = await plantTasks(t, elsewhere, 29_400, () => ({}), 2000)
+    const labelled = [...mine, ...theirs]
+    for (let from = 0; from < labelled.length; from += 2000)
+      await t.run(async (ctx) => {
+        for (const task of labelled.slice(from, from + 2000))
+          await ctx.db.insert('issue_labels', {
+            org_id: f.org.id,
+            issue_id: task.id,
+            label_id: bug,
+          })
+      })
+    const { answer, read } = await boardRead(t, [f.guest], projectScope(f.guest, f.sub.id), {
+      search: 'bug',
+    })
+    record('a label word over 600 tasks, the label on 29,400 others', answer, read)
+    expect(stateOf(answer)).toEqual({ state: 'ok', rows: 600 })
+  }, 600_000)
+
   it("answers the envelope's largest Board: 200 sub-projects shared with each of a person's 25 teams, Focus alone, tasks under distinct parents", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
