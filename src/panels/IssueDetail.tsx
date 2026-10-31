@@ -116,11 +116,13 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
 const NO_PROFILE = '__none__'
 /* Why moving, archiving or deleting waits while tasks still load: each acts
    on subtasks and blockers that may be still to arrive. Removing a related
-   task the workspace does not hold yet waits too, since the removal edits
-   its row there, and so does every change but a comment to a task the
-   window shows from its own read (P.taskDetail), for someone who could
-   make it. */
+   task or a file the workspace does not hold yet waits too, since the
+   removal edits its row there. */
 const WAITS_FOR_TASKS = 'Available once every task has loaded'
+/* Why every change but a comment waits on a task the window shows from its
+   own read (P.taskDetail), for someone who could make it: the window turns
+   editable in place once the workspace holds the task. */
+const WAITS_FOR_TASK = 'Available once this task has loaded'
 /* Why the fields of an archived task the window shows read-only are off,
    for someone who could restore it. */
 const RESTORE_TO_CHANGE = 'Restore this task to change it'
@@ -2360,13 +2362,13 @@ function IssueDetail({
   // one sentence for every control the read-only case switches off, so a
   // viewer is told WHY rather than left prodding a dead field. A task shown
   // from its answer says, to someone who could change it, that it waits
-  // for every task, or for a restore
+  // for the task to load, or for a restore
   const roTip = canLabel
     ? undefined
     : fromAnswer && answerEditor
       ? archived
         ? RESTORE_TO_CHANGE
-        : WAITS_FOR_TASKS
+        : WAITS_FOR_TASK
       : READ_ONLY
   // The phone's Activity view keeps the two frequent edits within reach.
   // Details uses the same controls, with the same choices and access checks.
@@ -3334,7 +3336,7 @@ function IssueDetail({
                       <IssueSubscribers
                         key={it.uuid}
                         issue={it}
-                        disabled={held ? undefined : WAITS_FOR_TASKS}
+                        disabled={held ? undefined : WAITS_FOR_TASK}
                       />
                     )}
                     <span data-issue-key className="[display:inline-flex] [align-items:center]">
@@ -4005,7 +4007,7 @@ function IssueDetail({
                                   data-plan-on-roadmap
                                   className="text-text-1 h-control-sm"
                                   disabled={!held}
-                                  title={held ? undefined : archived ? roTip : WAITS_FOR_TASKS}
+                                  title={held ? undefined : archived ? roTip : WAITS_FOR_TASK}
                                   onClick={() => onPlanOnRoadmap?.(it.id)}
                                 >
                                   <Icon name="timeline" size={16} />

@@ -172,14 +172,16 @@ the workspace shows at once, read from the server: its fields, labels,
 description, comments and lists. You can comment on it at once. Its fields
 and relationships can be changed once the task itself has loaded, which can
 be before every task has, and until then they are disabled with **Available
-once every task has loaded**, or with **Read-only project access** when you
-can only read its project. Its labels show without the buttons that add or
-remove one, and the eye shows whether you follow the task but opens
-**Subscribers** only once the task has loaded. Moving, archiving and
-deleting it wait for every task. When the task arrives, the window turns
-editable in place, and a comment you were typing stays. If Qivo cannot check such a task for
-changes, the window keeps showing it as it last loaded and says so, with
-**Retry**, and a comment you are typing stays then too.
+once this task has loaded**, or with **Read-only project access** when you
+can only read its project. **Plan on roadmap** waits for the task the same
+way. Its labels show without the buttons that add or remove one, and the
+eye shows whether you follow the task but opens **Subscribers** only once
+the task has loaded. Moving, archiving and deleting it wait for every task,
+with **Available once every task has loaded**. When the task arrives, the
+window turns editable in place, and a comment you were typing stays. If
+Qivo cannot check such a task for changes, the window keeps showing it as
+it last loaded and says so, with **Retry**, and a comment you are typing
+stays then too.
 
 The **×** button removes a relationship without deleting the task.
 **Remove subtask** clears the child's parent and keeps the task.

@@ -46,6 +46,7 @@ type Live = {
 
 const AT = '2026-09-14T08:00:00.000Z'
 const WAITS = 'Available once every task has loaded'
+const WAITS_FOR_IT = 'Available once this task has loaded'
 const READ_ONLY = 'Read-only project access'
 /* The family task, in the first task window, which a staged load brings
    first. */
@@ -541,23 +542,24 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     })
     for (const label of ['Status', 'Priority', 'Assignee', 'Reviewer']) {
       expect(field(label)?.disabled, label).toBe(true)
-      expect(await hintOf(field(label)), label).toBe(WAITS)
+      expect(await hintOf(field(label)), label).toBe(WAITS_FOR_IT)
     }
     const remaining = document.querySelector<HTMLInputElement>('[data-remaining-input]')
     expect(remaining?.disabled).toBe(true)
-    expect(await hintOf(remaining)).toBe(WAITS)
+    expect(await hintOf(remaining)).toBe(WAITS_FOR_IT)
     const roadmap = document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]')
     expect(roadmap?.disabled).toBe(true)
-    expect(await hintOf(roadmap)).toBe(WAITS)
+    expect(await hintOf(roadmap)).toBe(WAITS_FOR_IT)
     // the title stays as it is, and the description reads, without a field
     await click(document.querySelector('[data-task-title]'))
     expect(document.querySelector('[aria-label="Task title"]')).toBeNull()
     expect(document.querySelector('[data-task-description] .descfield')).toBeNull()
     expect(document.querySelector('[data-task-description]')?.textContent).toContain('three')
-    // the follow eye says Mira follows it, and waits
+    // the follow eye says Mira follows it, and waits for the task
     const eye = document.querySelector<HTMLButtonElement>('[data-task-subscribe]')
     expect(eye?.dataset.taskSubscribe).toBe('on')
     expect(eye?.disabled).toBe(true)
+    expect(await hintOf(eye)).toBe(WAITS_FOR_IT)
     // no label is added or removed
     expect(document.querySelector('[aria-label="Add label"]')).toBeNull()
     // Parent from the answer, exactly
@@ -594,7 +596,7 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     // the Roadmap opens a task of a project the person views, once it loads
     const roadmap = document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]')
     expect(roadmap?.disabled).toBe(true)
-    expect(await hintOf(roadmap)).toBe(WAITS)
+    expect(await hintOf(roadmap)).toBe(WAITS_FOR_IT)
     expect(document.querySelector('[data-composer]')).toBeNull()
     // an author edits their own comment; a viewer no one else's
     expect(
