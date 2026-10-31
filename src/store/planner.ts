@@ -6645,7 +6645,9 @@ export const PLANNER = {
       from its answer takes its group facts from P.taskDetail, a held one
       from the workspace's tasks, by the rules the task index judges with
       (store/taskIndex.ts judge). DELAY_UNKNOWN where the verdict needs the
-      owner's other work. */
+      owner's other work, or a group's subtasks not all there. Only a held
+      group can have subtasks still to load: those an answer leaves out
+      are hidden from the person, which no load changes. */
   delayBeforeLoads: (it: IssueVM): DelayInfo | typeof DELAY_UNKNOWN | null => {
     const detail = PLANNER.taskDetail(it.uuid)
     const group = isIssueGroup(it)
@@ -6667,7 +6669,10 @@ export const PLANNER = {
         remainingSet: it.remainingSet,
         capacity: (owner && plannableHoursOf(owner)) || DEFAULT_PLANNABLE_HOURS,
       },
-      { datesKnown: detail ? detail.datesKnown : true, loading: stillLoading !== null },
+      {
+        datesKnown: detail ? detail.datesKnown : true,
+        loading: !detail && stillLoading !== null,
+      },
     )
   },
   tracksDelay: (x: IssueVM | string): boolean => {

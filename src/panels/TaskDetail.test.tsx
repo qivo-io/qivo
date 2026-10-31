@@ -198,11 +198,12 @@ function fixture(loading: boolean) {
   return next
 }
 
-/* Loads the store; with `loading`, the last task window stays back until
-   arrive(). */
-async function load(loading = false) {
+/* Loads the store, its fixture changed by `edit`; with `loading`, the last
+   task window stays back until arrive(). */
+async function load(loading = false, edit?: (next: Snapshot) => void) {
   vi.resetModules()
   snap = fixture(loading)
+  edit?.(snap)
   subs = []
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
@@ -838,6 +839,58 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
     expect(delayChip()?.textContent).toBe('Delayed')
   })
 
+  it('says the delay of a held group is unknown while some of its subtasks load, naming them as the cause', async () => {
+    // the family task is a group due in two weeks: one subtask ends within
+    // a week, in the first task window, and one in three weeks, still to come
+    await load(true, (next) => {
+      const fam = next.issues.find((t) => t.id === FAM)
+      Object.assign(fam ?? {}, { due_date: day(14), has_subtasks: true })
+      next.issues.push(
+        task('01000000-0000-4000-8000-000000000029', 29, {
+          parent_id: FAM,
+          start_week: day(0),
+          end_week: day(7),
+        }),
+        task(FAR_KID, 42, { parent_id: FAM, start_week: day(0), end_week: day(21) }),
+      )
+    })
+    await openWindow('QN-27')
+    expect(dialog()?.dataset.taskSource).toBe('workspace')
+    expect(delayChip()?.dataset.delayChip).toBe('unknown')
+    expect(await hintOf(delayChip())).toBe(
+      "Its subtasks' dates decide it, and they have not all loaded yet.",
+    )
+    // the subtask still to come ends after the due date
+    await arrive()
+    expect(delayChip()?.dataset.delayChip).toBe('late')
+  })
+
+  it('judges a group shown from its answer with hidden subtasks by its visible span, while tasks load too', async () => {
+    await load(true)
+    await openWindow(await noteTask(far()))
+    const kid = short(task(FAR_KID, 42, { parent_id: FAR, start_week: day(0), end_week: day(7) }))
+    await answer(
+      'taskWindow:task',
+      okAnswer(far(), {
+        task: { ...far(), has_subtasks: true, has_hidden_subtasks: true },
+        subtasks: { rows: [kid], complete: true },
+      }),
+    )
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    // hidden subtasks prove neither on track nor behind, loaded or not
+    expect(delayChip()).toBeNull()
+    // a visible span that ends past the due date proves it late
+    const late = short(task(FAR_KID, 42, { parent_id: FAR, start_week: day(0), end_week: day(28) }))
+    await answer(
+      'taskWindow:task',
+      okAnswer(far(), {
+        task: { ...far(), has_subtasks: true, has_hidden_subtasks: true },
+        subtasks: { rows: [late], complete: true },
+      }),
+    )
+    expect(delayChip()?.dataset.delayChip).toBe('late')
+  })
+
   it('says Overdue for a passed due date, and nothing for a Done task or one without a due date or plan', async () => {
     await load()
     const handle = await noteTask(far())
@@ -974,6 +1027,9 @@ describe('the archived task window', { timeout: 30_000 }, () => {
     expect(document.querySelector('[data-progress]')?.textContent).toContain('Completion unknown.')
     expect(document.querySelector('[data-remaining-rollup]')?.textContent).toBe('Unknown')
     expect(document.querySelector('[data-plan-unknown]')?.textContent).toBe('Unknown')
+    expect(await hintOf(document.querySelector('[data-plan-unknown]'))).toBe(
+      'Dates come from subtasks, which an archived task does not show',
+    )
     // a group has no status of its own
     expect(field('Status')).toBeNull()
   })

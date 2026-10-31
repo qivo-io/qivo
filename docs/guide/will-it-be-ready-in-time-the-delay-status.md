@@ -60,7 +60,10 @@ due date.
   Hover for the projected finish week. A missed or projected-to-miss deadline
   outlines Due in red. While tasks still load, or for a task that has not
   loaded yet, it says **Delay unknown** when the projection needs the
-  owner's other work, and a passed due date still shows **Overdue**.
+  owner's other work, and a passed due date still shows **Overdue**. A task
+  with subtasks takes its delay from its subtasks' dates, not from anyone's
+  other work, so it says **Delay unknown** only while some of those dates
+  have not loaded.
 - **Overview** includes projected misses in **Overdue & at risk** and counts
   **Delayed** and **Slipping** tasks in the health table.
 - **REST and MCP** task results carry the same verdict as `delay`, judged on

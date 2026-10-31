@@ -3832,7 +3832,15 @@ function IssueDetail({
                                   is the red border of the date box and the red glyph. An
                                   unknown delay is muted, with a neutral glyph. */}
                               {unknown ? (
-                                <HoverTooltip content="The projection needs the owner's other work, which has not loaded yet.">
+                                <HoverTooltip
+                                  content={
+                                    // a group's verdict reads its subtasks' dates,
+                                    // a task's its owner's other work
+                                    P.isGroup(it)
+                                      ? "Its subtasks' dates decide it, and they have not all loaded yet."
+                                      : "The projection needs the owner's other work, which has not loaded yet."
+                                  }
+                                >
                                   <span
                                     data-delay-chip="unknown"
                                     tabIndex={-1}
@@ -3917,12 +3925,19 @@ function IssueDetail({
                             upd({ end: w, start: it.start != null ? Math.min(w, it.start) : w })
                           }
                           // a group shown from its answer whose subtasks the answer
-                          // does not all hold has dates no one can know here
+                          // does not all hold has dates no one can know here; an
+                          // archived one shows no subtasks at all
                           const datesUnknown = fromAnswer && !!detail && !detail.datesKnown
                           return (
                             <DetailField label="Plan">
                               {datesUnknown ? (
-                                <HoverTooltip content="Dates come from subtasks, which have not all loaded">
+                                <HoverTooltip
+                                  content={
+                                    archived
+                                      ? 'Dates come from subtasks, which an archived task does not show'
+                                      : 'Dates come from subtasks, which have not all loaded'
+                                  }
+                                >
                                   <span
                                     data-plan-unknown
                                     tabIndex={-1}

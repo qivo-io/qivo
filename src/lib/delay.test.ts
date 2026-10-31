@@ -339,6 +339,58 @@ describe("delayBeforeLoads — the window without the owners' loads", () => {
     expect(delayBeforeLoads(owned, leaf)).toBe(DELAY_UNKNOWN)
     expect(delayBeforeLoads(iss({ dueWeek: T + 3, remaining: 8 }), leaf)).toBe(DELAY_UNKNOWN)
   })
+  it('judges exactly a task with no hours left, and one an agent owns, whose finish no load moves', () => {
+    const busy = [span({ start: T - 2, end: T + 30, remaining: 4000 })]
+    const finished = iss({ start: T + 1, end: T + 2, dueWeek: T + 3, remaining: 0 })
+    expect(delayBeforeLoads(finished, leaf)).toEqual({ status: 'ok', fin: T + 1 })
+    expect(delayOf(finished, busy)).toEqual({ status: 'ok', fin: T + 1 })
+    const agent = iss({ end: T - 1, dueWeek: T + 3, remaining: 400, capacity: Infinity })
+    expect(delayBeforeLoads(agent, leaf)).toEqual({ status: 'behind', fin: T })
+    expect(delayOf(agent, busy)).toEqual({ status: 'behind', fin: T })
+    // a finite capacity with hours left still needs the load
+    expect(delayBeforeLoads({ ...agent, capacity: 37.5 }, leaf)).toBe(DELAY_UNKNOWN)
+  })
+  it('returns a verdict only where every load of the owner gives the same one', () => {
+    const week = fc.option(fc.integer({ min: T - 10, max: T + 30 }), { nil: null })
+    fc.assert(
+      fc.property(
+        fc.record({
+          status: fc.constantFrom('backlog', 'progress', 'done'),
+          owner: fc.constantFrom('u1', null),
+          start: week,
+          end: week,
+          dueWeek: week,
+          duePast: fc.boolean(),
+          isGroup: fc.boolean(),
+          isDone: fc.option(fc.boolean(), { nil: undefined }),
+          partial: fc.boolean(),
+          remaining: fc.option(
+            fc.integer({ min: 0, max: 2000 }).map((hours) => hours / 10),
+            { nil: undefined },
+          ),
+          remainingSet: week,
+          capacity: fc.constantFrom(0, 16, 37.5, Infinity),
+        }),
+        fc.record({ datesKnown: fc.boolean(), loading: fc.boolean() }),
+        fc.array(
+          fc.record({
+            issueUuid: fc.constantFrom('self', 'other', null),
+            start: fc.integer({ min: T - 10, max: T + 30 }),
+            end: fc.integer({ min: T - 10, max: T + 30 }),
+            remaining: fc.integer({ min: 0, max: 400 }),
+          }),
+          { maxLength: 6 },
+        ),
+        (fields, facts, load) => {
+          const it: DelayIssue = { uuid: 'self', ...fields }
+          const verdict = delayBeforeLoads(it, facts)
+          if (verdict === null || verdict === DELAY_UNKNOWN) return
+          expect(verdict).toEqual(delayOf(it, load))
+        },
+      ),
+      { seed: 20261031, numRuns: 500 },
+    )
+  })
   it('draws nothing for a Done task, one without a due date or plan, and a passed due date', () => {
     expect(delayBeforeLoads(iss({ status: 'done', dueWeek: T, remaining: 8 }), leaf)).toBeNull()
     expect(delayBeforeLoads(iss({ remaining: 8 }), leaf)).toBeNull()
