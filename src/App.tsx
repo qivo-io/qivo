@@ -1134,17 +1134,26 @@ function App() {
 
   // toasts
   useEffect(() => {
+    // the expiry timers still pending, cleared when App goes so none sets
+    // state after it
+    const expiries = new Set<ReturnType<typeof setTimeout>>()
     window.showToast = (text, tone, opts = {}) => {
       const id = ++toastSeq
       announce(text, toastLook(tone).politeness)
       const { sticky, key, onDismiss } = opts
       setToasts((t) => withToast(t, { id, text, tone, sticky, key, onDismiss }))
-      if (!sticky) setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)
+      if (sticky) return
+      const expiry = setTimeout(() => {
+        expiries.delete(expiry)
+        setToasts((t) => t.filter((x) => x.id !== id))
+      }, 4200)
+      expiries.add(expiry)
     }
     // a keyed toast whose news no longer holds, such as a bulk Inbox
     // action's stop that a later run finished
     window.dismissToast = (key) => setToasts((t) => t.filter((x) => x.key !== key))
     return () => {
+      for (const expiry of expiries) clearTimeout(expiry)
       window.showToast = null
       window.dismissToast = null
     }
