@@ -744,10 +744,15 @@ export async function* ownTasks(
           return from === undefined ? own : own.gte('_creationTime', from)
         }),
     })
-  // each task once, and how often each read returned it
+  // each task once, the tasks the reader is shown, and how often each read
+  // returned a task not settled yet; a read of a task shown already, the
+  // row a step goes on from or the same task in the assignee and the
+  // reviewer range, counts at its real size at once
   const yielded = new Set<string>()
+  const shown = new Set<string>()
   const times = new Map<string, number>()
   const charge = (task: Doc<'issues'>) => {
+    if (shown.has(task.id)) return
     guard.charge(task, TASK_ROW_MAX_BYTES)
     times.set(task.id, (times.get(task.id) ?? 0) + 1)
   }
@@ -763,6 +768,7 @@ export async function* ownTasks(
       // a task the reader is shown counts at its real size
       for (let n = times.get(task.id) ?? 0; n > 0; n--) guard.refund(task, TASK_ROW_MAX_BYTES)
       times.delete(task.id)
+      shown.add(task.id)
       if ((await seat.project(task.project_id))?.parent_id !== undefined) out.push(task)
     }
     yield out
