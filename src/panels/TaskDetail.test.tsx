@@ -487,8 +487,12 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
     expect((await editorOf('Leave a comment')).getText()).toBe('Gain looks low')
     expect(composer.isDestroyed).toBe(false)
-    // Retry reads it again, and the draft stays meanwhile
-    await click(buttonNamed('Retry', stale() ?? document))
+    // Retry reads it again, and the draft stays meanwhile; focus moves
+    // from Retry, which leaves, to the note
+    const retry = buttonNamed('Retry', stale() ?? document)
+    act(() => retry?.focus())
+    await click(retry)
+    expect(document.activeElement).toBe(stale()?.querySelector('[role="status"]'))
     expect(stale()?.dataset.taskStale).toBe('retrying')
     expect(stale()?.textContent).toBe('Checking QN-40 for changes…')
     expect(reads()).toHaveLength(2)
@@ -498,7 +502,7 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna again')
     expect(composer.isDestroyed).toBe(false)
     expect(composer.getText()).toBe('Gain looks low')
-    expect(window.showToast).not.toHaveBeenCalledWith('Unsaved comment discarded')
+    expect(window.showToast).not.toHaveBeenCalledWith('Unsaved comment discarded', 'error')
     // gone for good: its note replaces the task, and the draft with it
     await answer('taskWindow:task', { state: 'unavailable' })
     expect(note()?.textContent).toBe(
@@ -579,6 +583,10 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
       earlier: false,
     })
     expect(await hintOf(field('Priority'))).toBe(READ_ONLY)
+    // the Roadmap opens a task of a project the person views, once it loads
+    const roadmap = document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]')
+    expect(roadmap?.disabled).toBe(true)
+    expect(await hintOf(roadmap)).toBe(WAITS)
     expect(document.querySelector('[data-composer]')).toBeNull()
     // an author edits their own comment; a viewer no one else's
     expect(
@@ -693,6 +701,123 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(one('taskWindow:task')).toBe(read)
     expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
+  })
+})
+
+describe('the task window as the workspace and the answer disagree', { timeout: 30_000 }, () => {
+  /* The family task as the workspace holds it. */
+  const fam = () => {
+    const row = snap.issues.find((t) => t.id === FAM)
+    if (!row) throw new Error('missing the family task')
+    return row
+  }
+  /* A delivery of the workspace without the family task. */
+  const withoutFam = () => {
+    const left = structuredClone(snap)
+    left.issues = left.issues.filter((t) => t.id !== FAM)
+    return left
+  }
+  const leadEdit = () =>
+    document.querySelector('[data-comment="c-2"] [aria-label="Edit comment (project lead)"]')
+
+  it('offers the composer, lead edits and Restore only when both the answer and the workspace allow them', async () => {
+    await load()
+    // the answer says Mira leads Manuals, which the workspace says she views
+    const row = task(FAR_RO, 41, { title: 'Read the far manual', project_id: 'manuals' })
+    await openWindow(await noteTask(row))
+    await answer('taskWindow:task', okAnswer(row, { level: 'lead' }))
+    await answer('snapshot:threadComments', {
+      comments: [comment('c-2', FAR_RO, 'leo', 'Theirs')],
+      earlier: false,
+    })
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    expect(document.querySelector('[data-composer]')).toBeNull()
+    expect(leadEdit()).toBeNull()
+    await answer('taskWindow:task', archivedAnswer(row, 'lead'))
+    expect(note()?.textContent).toContain('was archived')
+    expect(buttonNamed('Restore')).toBeUndefined()
+    // and the other way: the answer says she views Work, which she leads
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await load()
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far(), { level: 'viewer' }))
+    await answer('snapshot:threadComments', {
+      comments: [comment('c-2', FAR, 'leo', 'Theirs')],
+      earlier: false,
+    })
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    expect(document.querySelector('[data-composer]')).toBeNull()
+    expect(leadEdit()).toBeNull()
+    await answer('taskWindow:task', archivedAnswer(far(), 'viewer'))
+    expect(buttonNamed('Restore')).toBeUndefined()
+    // both agree: all three
+    await answer('taskWindow:task', okAnswer(far()))
+    expect(document.querySelector('[data-composer]')).not.toBeNull()
+    expect(leadEdit()).not.toBeNull()
+    await answer('taskWindow:task', archivedAnswer(far()))
+    expect(buttonNamed('Restore')).toBeDefined()
+  })
+
+  it('discards a comment typed for a task its answer then says is archived, and says so', async () => {
+    await load()
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    await answer('snapshot:threadComments', { comments: [], earlier: false })
+    const composer = await editorOf('Leave a comment')
+    await act(async () => composer.commands.insertContent('Gain looks low'))
+    await answer('taskWindow:task', archivedAnswer(far()))
+    expect(dialog()?.dataset.taskArchived).toBe('')
+    expect(document.querySelector('[role="textbox"][aria-label="Leave a comment"]')).toBeNull()
+    expect(window.showToast).toHaveBeenCalledWith('Unsaved comment discarded', 'error')
+  })
+
+  it('discards a title typed for a task that leaves the workspace and stays shown from its answer', async () => {
+    await load()
+    await openWindow('QN-27')
+    await answer('taskWindow:task', okAnswer(fam()))
+    await click(document.querySelector('[data-task-title]'))
+    const title = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
+    if (!title) throw new Error('the title field did not open')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(title), 'value')?.set?.call(
+        title,
+        'Calibrate the sensor twice',
+      )
+      title.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => publish(withoutFam()))
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    expect(document.querySelector('[aria-label="Task title"]')).toBeNull()
+    expect(document.querySelector('[data-task-title]')?.textContent).toBe('Calibrate the sensor')
+    expect(window.showToast).toHaveBeenCalledWith('Unsaved title discarded')
+    expect(
+      network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref).startsWith('issues:')),
+    ).toEqual([])
+  })
+
+  it('closes a picker of a task that leaves the workspace, so it does not open again when the task comes back', async () => {
+    await load()
+    await openWindow('QN-27')
+    await answer('taskWindow:task', okAnswer(fam()))
+    const picker = () => document.querySelector('input[placeholder="Add labels…"]')
+    // the window takes focus a frame after it opens, which would close a
+    // picker opened before; the picker opens a frame after the press
+    await act(async () => {
+      await vi.waitFor(() => {
+        if (!dialog()?.contains(document.activeElement))
+          throw new Error('the window has no focus yet')
+      })
+    })
+    await click(document.querySelector('button[aria-label="Add label"]'))
+    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    expect(picker()).not.toBeNull()
+    await act(async () => publish(withoutFam()))
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    expect(picker()).toBeNull()
+    await act(async () => publish(snap))
+    expect(dialog()?.dataset.taskSource).toBe('workspace')
+    expect(picker()).toBeNull()
   })
 })
 

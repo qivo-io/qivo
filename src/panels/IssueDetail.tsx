@@ -1210,13 +1210,15 @@ type GoneAnswer =
    showed shows its key and title, and once the read answers, its place
    and when it was archived. Above an archived task the window shows
    read-only (`inWindow`), the window around it says those, and the note
-   says only what became of the task. */
+   says only what became of the task, and where it lives and when it was
+   archived when the window has no details column to say it (`showPlace`). */
 function TaskGone({
   task,
   found,
   canRestore,
   onRetry,
   inWindow = false,
+  showPlace = false,
   unusedReason,
   onCopied,
   onClose,
@@ -1227,6 +1229,9 @@ function TaskGone({
   canRestore: boolean
   onRetry: () => void
   inWindow?: boolean
+  /** above an archived task in a window without its details column, as
+      the desktop Inbox pane: where it lives and when it was archived */
+  showPlace?: boolean
   /** the reason typed for the Archive or delete window, which nothing sent */
   unusedReason: string | null
   /** the reason is on the clipboard, so closing need not ask about it */
@@ -1296,6 +1301,11 @@ function TaskGone({
         inWindow ? 'shrink-0 px-5 pt-1 pb-3' : 'overflow-y-auto p-6',
       )}
     >
+      {inWindow && showPlace && row && (
+        <div className="basis-full">
+          <ArchivedPlace project={row.project} archivedAt={row.archivedAt} />
+        </div>
+      )}
       {opened && !inWindow && (
         <div data-task-gone-task className="flex min-w-0 basis-full flex-col gap-1">
           <div className="flex min-w-0 items-baseline gap-2">
@@ -1364,13 +1374,21 @@ function StaleTask({
   retrying: boolean
   mobile: boolean
 }) {
+  const noteRef = useRefID<HTMLSpanElement>(null)
+  // Retry leaves with the failure, so focus stays on the note, as in TaskGone
+  const retry = () => {
+    noteRef.current?.focus()
+    P.retryTask()
+  }
   return (
     <div
       data-task-stale={retrying ? 'retrying' : 'failed'}
       className="flex shrink-0 flex-wrap items-center gap-3 px-5 pt-1 pb-3 text-sm text-text-2"
     >
       <span
+        ref={noteRef}
         role="status"
+        tabIndex={-1}
         className={cn(mobile ? 'basis-full' : 'flex-1', retrying && 'italic text-text-3')}
       >
         {retrying
@@ -1378,7 +1396,7 @@ function StaleTask({
           : `Couldn't check ${taskKey} for changes, so it shows as it was last loaded.`}
       </span>
       {!retrying && (
-        <Button type="button" variant="ghost" onClick={P.retryTask}>
+        <Button type="button" variant="ghost" onClick={retry}>
           <Icon name="rotateCcw" size={16} />
           Retry
         </Button>
@@ -1867,6 +1885,15 @@ function IssueDetail({
   const stale = fromAnswer && (detail?.state === 'failed' || detail?.state === 'retrying')
   // the window shows an active task: the workspace's, or one from its answer
   const active = !!held || (fromAnswer && !archived)
+  // a task the window shows from its answer is noted (lib/openedTasks.ts),
+  // so another window on its handle finds it too, as the Inbox pane's
+  // pop-out or the window a crumb opens over the Board
+  const answerNum = fromAnswer ? (detail?.num ?? null) : null
+  useEffectID(() => {
+    if (!answerView || answerNum === null) return
+    const { uuid, key, title, project, org } = answerView
+    noteOpenedTask({ uuid, num: answerNum, key, title, project, org })
+  }, [answerView?.uuid, answerNum, answerView?.title, answerView?.project])
   if (it && issueId) {
     const { uuid, org, key, title, project } = it
     shownTask.current = { at: issueId, task: { uuid, org, key, title, project } }
@@ -1948,12 +1975,19 @@ function IssueDetail({
   }, [goneUuid])
   // a task that leaves the workspace while the window goes on showing it
   // from its answer, as during a staged load, takes the title typed for it,
-  // as one that leaves the board does
+  // as one that leaves the board does, and closes the pickers and Move
+  // window it had open, which a task shown from its answer does not offer
   const heldNow = useRefID({ issueId, uuid: held?.uuid })
   useEffectID(() => {
     const was = heldNow.current
     heldNow.current = { issueId, uuid: held?.uuid }
-    if (was.issueId !== issueId || !was.uuid || held || gone || !editTitle) return
+    if (was.issueId !== issueId || !was.uuid || held || gone) return
+    setLabelAnchor(null)
+    setSubAnchor(null)
+    setParentAnchor(null)
+    setLinkAnchor(null)
+    setMoveOpen(false)
+    if (!editTitle) return
     if (titleDraft !== titleSeen) sayDiscarded('title')
     setEditTitle(false)
   }, [held?.uuid])
@@ -3408,6 +3442,7 @@ function IssueDetail({
                 <TaskGone
                   key={gone.uuid}
                   inWindow
+                  showPlace={embedded && !mobile}
                   task={gone}
                   found={goneAnswer}
                   canRestore={canRestore}
@@ -3928,14 +3963,17 @@ function IssueDetail({
                           (capped at the due week) to drag into place. A group
                           is only shown there, read-only. */}
                               <div className="task-plan-actions">
-                                {/* the Roadmap opens only a task the workspace holds */}
+                                {/* the Roadmap opens only a task the workspace holds,
+                                    so a task shown from its answer waits for
+                                    it, whoever looks; an archived one says why
+                                    its fields are off */}
                                 <Button
                                   type="button"
                                   variant="ghost"
                                   data-plan-on-roadmap
                                   className="text-text-1 h-control-sm"
                                   disabled={!held}
-                                  title={held ? undefined : roTip}
+                                  title={held ? undefined : archived ? roTip : WAITS_FOR_TASKS}
                                   onClick={() => onPlanOnRoadmap?.(it.id)}
                                 >
                                   <Icon name="timeline" size={16} />

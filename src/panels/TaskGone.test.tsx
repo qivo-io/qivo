@@ -818,12 +818,49 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     expect(windows().map((w) => w.dataset.taskArchived)).toEqual(['', ''])
     expect(windows()[1].textContent).toContain('Measure the drift.')
     expect(document.querySelectorAll('[data-composer]')).toHaveLength(0)
+    // the pane, without a details column, says where the task lives and
+    // when it was archived in its note; the pop-out in its details
+    const placed = (w: HTMLElement) => [
+      w.querySelector('[data-task-gone] [data-task-gone-place]')?.textContent,
+      w
+        .querySelector('[data-task-gone] [data-task-gone-archived]')
+        ?.textContent?.startsWith('Archived '),
+    ]
+    expect(windows().map(placed)).toEqual([
+      [snap.projects[0].name, true],
+      [undefined, undefined],
+    ])
+    expect(windows()[1].querySelector('[data-task-gone-archived]')).not.toBeNull()
     // the pane's Close goes back to the inbox
     const pane = windows().find((w) => w.dataset.issueLayout === 'embedded')
     const close = [...(pane?.querySelectorAll<HTMLButtonElement>('[data-task-gone] button') ?? [])]
     await click(close.find((b) => b.textContent === 'Close'))
     expect(onClose).toHaveBeenCalledOnce()
     expect(document.querySelector('[data-task-gone]')).toBeNull()
+  })
+
+  it('pops out the task the pane shows from its own read after it left the board', async () => {
+    const task = await open('admin', undefined, 'inbox')
+    await dropTask({ archived: true })
+    // the pop-out names the task only by its handle, which the workspace
+    // no longer holds: it finds the task the pane noted
+    await click(document.querySelector<HTMLElement>('[data-task-popout]'))
+    const windows = () => [...document.querySelectorAll<HTMLElement>('[aria-label="Task"]')]
+    await act(async () => {
+      await vi.waitFor(() => {
+        if (windows().filter((w) => w.dataset.taskArchived === '').length < 2)
+          throw new Error('the pop-out has not shown the task yet')
+      })
+    })
+    expect(windows().map((w) => w.dataset.issueLayout)).toEqual(['embedded', 'columns'])
+    expect(windows()[1].textContent).toContain('Run the soak test')
+    expect(windows()[1].textContent).toContain('Measure the drift.')
+    expect(
+      [...document.querySelectorAll('[data-task-gone] [role="status"]')].map((n) => n.textContent),
+    ).toEqual([
+      `${task.key} was archived. Restore it to bring it back to the board.`,
+      `${task.key} was archived. Restore it to bring it back to the board.`,
+    ])
   })
 
   it('closes without the note when the window archives its own task', async () => {

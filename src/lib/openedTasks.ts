@@ -3,7 +3,8 @@
    which Search finds on the server, and a task a task window opened from
    its Parent, Subtasks or Linked tasks that the workspace does not hold
    (panels/IssueDetail.tsx MiniIssueRow), as while a large workspace still
-   loads. A task Search found may also be archived, deleted or moved out of
+   loads, and a task a window shows from its own read, so another window on
+   its handle finds it too, as the Inbox pane's pop-out. A task Search found may also be archived, deleted or moved out of
    sight since the search. The task window (panels/IssueDetail.tsx) knows
    such a task's uuid and organization from here, and shows it from its own
    read (store/planner.ts P.taskDetail), or what became of it (TaskGone);

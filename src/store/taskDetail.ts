@@ -65,6 +65,9 @@ export type TaskDetailVM = {
   parent: RelatedTaskVM | null
   /** when it was archived (ms), null for an active task */
   archivedAt: number | null
+  /** its number, which the opened-task registry notes (lib/openedTasks.ts),
+      null without a view */
+  num: number | null
   /** whether a group's dates are known (always true for a leaf); unknown
       dates are null in `view` */
   datesKnown: boolean
@@ -210,6 +213,7 @@ function okView(answer: TaskOk, inputs: DetailInputs) {
     done: group ? isIssueDone(view, byId) : view.status === 'done',
     parent: answer.parent ? inputs.related(answer.parent) : null,
     level: answer.level,
+    num: row.num,
   }
 }
 
@@ -245,6 +249,7 @@ function archivedView(answer: ArchivedAnswer, inputs: DetailInputs) {
     parent: null,
     level: answer.level ?? null,
     archivedAt: Date.parse(answer.task.archived_at),
+    num: row.num,
     textless: answer.description === undefined,
   }
 }
@@ -261,6 +266,7 @@ export function shapeTaskDetail(inputs: DetailInputs): TaskDetailVM {
     state,
     textless: false,
     archivedAt: null,
+    num: null,
   }
   if (answer?.state === 'ok') return { ...base, answered: 'ok', ...okView(answer, inputs) }
   if (answer?.state === 'archived')
