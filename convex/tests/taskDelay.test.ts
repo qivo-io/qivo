@@ -7,7 +7,8 @@
  *   2. The single read's load, read through the owner's own tasks, is the
  *      list's, read from the organization's, for random organizations.
  *   3. Today is the request's UTC day, and a verdict reads the owner's other
- *      work only when it can change the answer.
+ *      work only when it can change the answer, and says `unavailable` where
+ *      that work does not fit in the read.
  *
  * delayRules.test.ts shows the shared rules agree on the two week grids. */
 /// <reference types="vite/client" />
@@ -30,8 +31,10 @@ import {
 } from '../../src/lib/workload'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { accessOf } from '../lib/access'
 import { byId } from '../lib/db'
-import { type DelayJson, OWNER_LOAD_CHECKS, ownerLoadSpans, utcToday } from '../lib/machineDelay'
+import { type DelayJson, UNAVAILABLE_DELAY, utcToday } from '../lib/machineDelay'
+import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
 import { taskOwnerId } from '../lib/review'
 import { orgProjectView } from '../lib/visibility'
 import { weekGrid } from '../lib/workload'
@@ -428,18 +431,21 @@ describe('a single read’s load is the list’s load', () => {
                   })),
               )
               // in the same order too (canonicalLoad), as each week's hours
-              // add up in order, whether it checks each task for subtasks or
-              // reads them all
-              const fromOwner = await ownerLoadSpans(ctx, me, owner, grid, view)
+              // add up in order
+              const reader = ownerLoadReader(ctx, { me, access: accessOf(ctx, me), room: callRoom })
+              const load = await reader.read(owner.id)
+              if (load.state !== 'ok') throw new Error(`${owner.name}'s load is ${load.state}`)
+              const fromOwner = canonicalLoad(
+                loadRowsOf(me, load.tasks).map((r) => ({
+                  issueUuid: r.issue_id,
+                  start: grid.ofDay(r.start_week),
+                  end: grid.ofDay(r.end_week),
+                  remaining: r.remaining,
+                  remainingSet:
+                    r.remaining_set_at === null ? null : grid.ofInstant(r.remaining_set_at),
+                })),
+              )
               expect(fromOwner, `${owner.name} for ${me.name}`).toEqual(fromList)
-              const checks = OWNER_LOAD_CHECKS.reads
-              OWNER_LOAD_CHECKS.reads = 0
-              try {
-                const bulk = await ownerLoadSpans(ctx, me, owner, grid, view)
-                expect(bulk, `${owner.name} for ${me.name}, read at once`).toEqual(fromList)
-              } finally {
-                OWNER_LOAD_CHECKS.reads = checks
-              }
             }
           })
         }
@@ -539,10 +545,12 @@ describe('a verdict reads the owner’s other work only when it can change it', 
       remaining_hours: 10,
       remaining_set_at: NOW,
     })
-    await expect(single(fx, estimated.id)).rejects.toThrow()
+    // the owner's 300 tasks do not fit in what the read may take, so the
+    // verdict says so instead of failing or leaving them out
+    expect((await single(fx, estimated.id)).delay).toEqual(UNAVAILABLE_DELAY)
   })
 
-  it('checks a busy owner’s tasks for subtasks in one read past OWNER_LOAD_CHECKS', async () => {
+  it('says unavailable past the owner’s subtask checks, where the list still judges', async () => {
     // 300 subtask checks would take more index ranges than the read may
     const fx = await setup(newT({ transactionLimits: { databaseQueries: 200 } }))
     await busy(fx, fx.user)
@@ -553,17 +561,103 @@ describe('a verdict reads the owner’s other work only when it can change it', 
       remaining_hours: 10,
       remaining_set_at: NOW,
     })
-    const checks = OWNER_LOAD_CHECKS.reads
-    OWNER_LOAD_CHECKS.reads = 100
+    const bounds = structuredClone(OWNER_LOADS)
+    OWNER_LOADS.checks = 100
     try {
-      // the 300 tasks fill the user's next three weeks
-      expect((await single(fx, estimated.id)).delay).toEqual({
+      expect((await single(fx, estimated.id)).delay).toEqual(UNAVAILABLE_DELAY)
+      const mcp = JSON.parse(
+        await fx.t.query(internal.machine.mcp.getIssue, {
+          callerId: fx.admin.id,
+          access: 'read',
+          today: TODAY,
+          ref: estimated.id,
+        }),
+      )
+      expect(mcp.delay).toEqual(UNAVAILABLE_DELAY)
+      // the list read every active task anyway: the 300 tasks fill the
+      // user's next three weeks
+      const listed = await restTasks(fx.t, {
+        callerId: fx.admin.id,
+        access: 'read',
+        today: TODAY,
+        owner: fx.user.id,
+        // the task's number is the lowest of the user's, which orders
+        // tasks created at the same instant
+        limit: '1',
+      })
+      expect(listed.find((r) => r.id === estimated.id)?.delay).toEqual({
         status: 'behind',
         projected_end_week: W(3),
       })
     } finally {
-      OWNER_LOAD_CHECKS.reads = checks
+      Object.assign(OWNER_LOADS, bounds)
     }
+  })
+
+  it('says unavailable where the read’s earlier reads leave too little room for the load', async () => {
+    const fx = await setup(newT({ transactionLimits: { documentsRead: 450 } }))
+    // 50 open tasks of the user's in the task's own sub-project, which fit
+    // in the read on their own
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < 50; i++) {
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: fx.org.id,
+          project_id: fx.sub.id,
+          num: 71_000 + i,
+          title: `Load ${i}`,
+          status: 'todo',
+          priority: 'low',
+          assignee_id: fx.user.id,
+          start_week: W(3),
+          end_week: W(3),
+          remaining_hours: 1,
+          remaining_set_at: NOW,
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+      }
+    })
+    const estimated = await task(fx, {
+      assignee_id: fx.user.id,
+      start_week: W(0),
+      end_week: W(0),
+      remaining_hours: 10,
+      remaining_set_at: NOW,
+    })
+    expect((await single(fx, estimated.id)).delay).toEqual({
+      status: 'ok',
+      projected_end_week: W(0),
+    })
+    // 100 linked tasks, which the read takes before the verdict
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < 100; i++) {
+        const other = uuid()
+        await ctx.db.insert('issues', {
+          id: other,
+          org_id: fx.org.id,
+          project_id: fx.sub.id,
+          num: 72_000 + i,
+          title: `Linked ${i}`,
+          status: 'todo',
+          priority: 'low',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+        await ctx.db.insert('issue_links', {
+          id: uuid(),
+          org_id: fx.org.id,
+          source_id: estimated.id,
+          target_id: other,
+          type: 'blocks',
+          pair_key: [estimated.id, other].sort().join(':'),
+          created_at: NOW,
+        })
+      }
+    })
+    expect((await single(fx, estimated.id)).delay).toEqual(UNAVAILABLE_DELAY)
   })
 
   it('reads none for a task with neither a planned end nor a due date', async () => {

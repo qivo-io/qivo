@@ -6943,7 +6943,10 @@ export const PLANNER = {
       project is attributed only when the CALLER can see it — hidden ones
       arrive visible:false with a null project so the client folds them into
       "Other projects". Weeks are converted to the client's grid indexes.
-      Returns null on transport error only (fence misses are empty arrays). */
+      Returns null on a transport error, and when the server refuses because
+      it could not read all of the person's planned work in one request or
+      finish checking which projects the caller can see; the plan card then
+      says the workload is unavailable (fence misses are empty arrays). */
   assigneeLoad: async (assigneeUuid: string) => {
     let data: FunctionReturnType<typeof api.planning.assigneeLoad>
     try {

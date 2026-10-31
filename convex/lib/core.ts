@@ -1356,7 +1356,8 @@ type IssueOutCommon = {
   end_week: string | null
   due_date: string | null
   /** the app's projected delay, null when its project does not track delay
-   *  or the app shows no verdict (lib/machineDelay.ts) */
+   *  or the app shows no verdict; on a single-task read `unavailable` when
+   *  the owner's other work does not fit in one read (lib/machineDelay.ts) */
   delay: DelayJson | null
   /** null for an active group, whose time is its subtasks'
    *  (group_remaining_hours on the single-task read), even while it still
@@ -2304,10 +2305,17 @@ export async function taskOut(
   const live = await indexLiveness(ctx, issue, children, projectOf)
   const subtree = { project, children, live, counts, partial }
   const org = await byId(ctx, 'organizations', issue.org_id)
+  // the delay verdict is read last, so the owner's load it may read takes
+  // only the room every other read of the task leaves (lib/machineDelay.ts
+  // taskForecaster); issueOut hands over what it judges by
+  let judged: Parameters<Forecaster> | undefined
   const read = {
     ...subtree,
     orgSlug: opts.orgSlug ?? org?.slug,
-    forecast: taskForecaster(ctx, opts.me, delayClock(org, opts.today)),
+    forecast: async (...args: Parameters<Forecaster>) => {
+      judged = args
+      return null
+    },
     texts,
   }
   const row =
@@ -2320,6 +2328,9 @@ export async function taskOut(
     isGroup: row.is_group,
     readable,
   })
+  if (judged !== undefined) {
+    row.delay = await taskForecaster(ctx, opts.me, delayClock(org, opts.today))(...judged)
+  }
   return { ...row, ...detail, attachments }
 }
 

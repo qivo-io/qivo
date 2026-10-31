@@ -1,6 +1,10 @@
-/* The plan_* load family. Both walks disclose busy TIME from projects the
+/* The plan_* load family. Two walks disclose busy TIME from projects the
  * caller cannot see, while the projection strips the identity. The fence is
  * in the filter, the anonymization in the projection — kept distinct here.
+ * orgLoadRows walks an organization's live tasks, for the REST and MCP
+ * lists and workload. The owner reader (lib/ownerLoads.ts) walks one
+ * owner's open tasks, for assigneeLoad, ownerLoads and the single-task
+ * delay, within bounds past which an owner's load is unavailable.
  *
  * Shared fence (both walks):
  *   scheduled (start_week set — the 0037 envelope CHECK means end_week too),
@@ -11,27 +15,29 @@
  *   (lib/review.ts: the reviewer while In Review with one set, else the
  *   assignee) is a profile of THIS org (0065 — deliberately NO active and NO
  *   kind test: an inactive person's or an agent's scheduled work still counts
- *   as load), and the disclosure trio (0085 guests / 0102 viewers):
+ *   as load), and the disclosure trio (0085 guests / 0102 viewers,
+ *   lib/loadRows.ts loadShown):
  *   isOrgStaff(caller) OR can_see_project(issue) OR the caller owns the row.
  *   So staff get every qualifying row (invisible ones anonymized), while
  *   guests/viewers get only visible-or-own rows — other people's hidden work
  *   does not arrive at all, not even anonymously.
  *
- * org_load ONLY adds `remaining_hours > 0`; assigneeLoad has NO remaining
- * filter — unestimated/zero-remaining scheduled rows are included. */
+ * org_load and ownerLoads ONLY add `remaining_hours > 0`; assigneeLoad has
+ * NO remaining filter — unestimated/zero-remaining scheduled rows are
+ * included. */
 
-import { v } from 'convex/values'
+import { ConvexError, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { QueryCtx } from './_generated/server'
-import { isOrgStaff } from './lib/access'
+import { accessOf, accessUnchecked, isOrgStaff } from './lib/access'
 import { byId } from './lib/db'
 import type { OrgRole, ProfileKind } from './lib/enums'
-import { authedQuery, badRequest } from './lib/functions'
-import { groupTest, liveIn, liveTasksOf, ownedOpenTasks } from './lib/liveTasks'
+import { authedQuery, badRequest, orgQuery, type Refusal } from './lib/functions'
+import { groupTest, liveIn, liveTasksOf } from './lib/liveTasks'
 import { loadRowFor, type OrgLoadRow } from './lib/loadRows'
+import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from './lib/ownerLoads'
 import { type OrgProjectView, orgProjectView } from './lib/visibility'
 import { canonicalLoad, committedByWeek, type LoadSpan, weekGrid } from './lib/workload'
-import { hasSubtasks } from './model/issues'
 import { roundTenths } from './model/taskValues'
 
 export type { OrgLoadRow }
@@ -83,60 +89,34 @@ export function orgLoadRows(
   return rows
 }
 
-/** How many of a person's tasks their load checks for subtasks, one
- * by_parent_archived range each, before it reads the organization's live
- * tasks once instead (lib/machineDelay.ts OWNER_LOAD_CHECKS does the same
- * for a delay verdict). Tests lower `reads`. */
-export const ASSIGNEE_LOAD_CHECKS = { reads: 500 }
+/** The reason of the refusal of a load that does not fit the owner
+ * reader's bounds (loadUnavailable). */
+export const LOAD_UNAVAILABLE = 'load_unavailable'
 
-/* plan_assignee_load: the person's own live tasks that are not Done
- * (lib/liveTasks.ts ownedOpenTasks), never the organization's. A task that
- * passes every other test is checked for subtasks on its own (hasSubtasks),
- * or, past ASSIGNEE_LOAD_CHECKS such tasks, against the organization's live
- * tasks (lib/liveTasks.ts groupTest), so a group is left out as in
- * orgLoadRows. */
-async function assigneeLoadRows(
-  ctx: QueryCtx,
-  me: Doc<'profiles'>,
-  view: OrgProjectView,
-  assigneeId: string,
-): Promise<AssigneeLoadRow[]> {
-  const staff = isOrgStaff(me)
-  const live = liveIn(view.byUuid)
-  // each task that passes every test but the group one, with its row
-  const candidates: { task: Doc<'issues'>; row: AssigneeLoadRow }[] = []
-  // ownedOpenTasks leaves out Done tasks and tasks outside active projects
-  for (const i of await ownedOpenTasks(ctx, assigneeId, live)) {
-    if (i.start_week === undefined || i.end_week === undefined) continue
-    if (i.paused) continue
-    const project = view.byUuid.get(i.project_id)
-    if (project === undefined) continue
-    const vis = view.visible(i.project_id)
-    if (!(staff || vis || assigneeId === me.id)) continue
-    candidates.push({
-      task: i,
-      row: {
-        issue_id: vis ? i.id : null,
-        title: vis ? i.title : null,
-        project_id: vis ? i.project_id : null,
-        project_name: vis ? project.name : null,
-        start_week: i.start_week,
-        end_week: i.end_week,
-        remaining: i.remaining_hours ?? null,
-        remaining_set_at: i.remaining_set_at ?? null,
-        visible: vis,
-      },
-    })
-  }
-  const isGroup =
-    candidates.length > ASSIGNEE_LOAD_CHECKS.reads
-      ? groupTest(await liveTasksOf(ctx, view.projects), live)
-      : null
-  const rows: AssigneeLoadRow[] = []
-  for (const { task, row } of candidates) {
-    if (!(isGroup === null ? await hasSubtasks(ctx, task, live) : isGroup(task))) rows.push(row)
-  }
-  return rows
+/** The refusal of a person's load that the owner reader (lib/ownerLoads.ts)
+ * could not read within its bounds, so the planning panel says the
+ * workload is unavailable rather than counting the missing work as free
+ * time. */
+export const loadUnavailable = (): ConvexError<Refusal> =>
+  new ConvexError<Refusal>({
+    code: 'rule',
+    reason: LOAD_UNAVAILABLE,
+    message: "Qivo could not read all of this person's planned work in one request.",
+  })
+
+/* AssigneeLoadRows in one total order, so the answer never tells the
+ * creation order or project of a row the caller cannot see: by weeks, the
+ * measurement and the hours, an unestimated row first, then the task id, a
+ * hidden row's null first (lib/ownerLoads.ts byLoadRow). */
+function byAssigneeRow(a: AssigneeLoadRow, b: AssigneeLoadRow): number {
+  const keys = (r: AssigneeLoadRow) => [r.start_week, r.end_week, r.remaining_set_at ?? '']
+  const [x, y] = [keys(a), keys(b)]
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1
+  if (a.remaining !== b.remaining) return (a.remaining ?? -1) - (b.remaining ?? -1)
+  if (a.issue_id === b.issue_id) return 0
+  if (a.issue_id === null) return -1
+  if (b.issue_id === null) return 1
+  return a.issue_id < b.issue_id ? -1 : 1
 }
 
 /* The person whose owned load: the assignee, or the reviewer while the task
@@ -144,7 +124,14 @@ async function assigneeLoadRows(
  * org is resolved server-side as that person's own org (the client's
  * `rows.profiles.get(uuid).org_id || HOME_ORG` fallback wart, removed).
  * Parity with the SQL fences: an unknown person, or a caller holding no
- * active seat in that person's org, yields an EMPTY ARRAY, not an error. */
+ * active seat in that person's org, yields an EMPTY ARRAY, not an error.
+ *
+ * The rows are the person's own open tasks, read by the owner reader
+ * (lib/ownerLoads.ts) with unestimated ones kept, in one total order
+ * (byAssigneeRow). Where the reader's bounds stop the read it refuses with
+ * loadUnavailable, and where a bound stopped a check of the caller's access
+ * with accessUnchecked, so the planning panel says the workload is
+ * unavailable, never that the person is free. */
 export const assigneeLoad = authedQuery({
   args: { assignee_id: v.string() },
   handler: async (ctx, { assignee_id }): Promise<AssigneeLoadRow[]> => {
@@ -152,8 +139,107 @@ export const assigneeLoad = authedQuery({
     if (assignee === null) return []
     const me = ctx.myProfiles.get(assignee.org_id)
     if (me === undefined) return []
-    const view = await orgProjectView(ctx, me)
-    return await assigneeLoadRows(ctx, me, view, assignee.id)
+    const access = accessOf(ctx, me)
+    const reader = ownerLoadReader(ctx, { me, access, room: callRoom, unestimated: true })
+    const load = await reader.read(assignee.id)
+    if (load.state === 'unavailable' && load.why === 'access') throw accessUnchecked()
+    // the first owner of a read is never not_read
+    if (load.state !== 'ok') throw loadUnavailable()
+    return load.tasks
+      .map(
+        ({ task, project, visible }): AssigneeLoadRow => ({
+          issue_id: visible ? task.id : null,
+          title: visible ? task.title : null,
+          project_id: visible ? task.project_id : null,
+          project_name: visible ? project.name : null,
+          // the reader answers scheduled tasks only
+          start_week: task.start_week ?? '',
+          end_week: task.end_week ?? '',
+          remaining: task.remaining_hours ?? null,
+          remaining_set_at: task.remaining_set_at ?? null,
+          visible,
+        }),
+      )
+      .sort(byAssigneeRow)
+  },
+})
+
+/** One span of an owner's load on the wire: a load row (lib/loadRows.ts
+ * OrgLoadRow) without its owner. `issue_id` is the task's id when the
+ * caller can see its project, else null. */
+export type OwnerLoadSpan = Omit<OrgLoadRow, 'owner_id'>
+
+/** One owner of planning.ownerLoads' answer: `ok` with every span of their
+ * load, `unavailable` when it did not fit the reader's bounds or a check of
+ * the caller's access stopped, `not_read` when the call had no room left
+ * for it, so asking again with fewer owners reads it. */
+export type OwnerLoadJson =
+  | { owner_id: string; state: 'ok'; spans: OwnerLoadSpan[] }
+  | { owner_id: string; state: 'unavailable' }
+  | { owner_id: string; state: 'not_read' }
+
+/** planning.ownerLoads' answer. */
+export type OwnerLoadsJson = {
+  /** 'counted': spans of projects the caller cannot see are in every
+   * owner's load, without a task id (organization admins and users).
+   * 'own_only': only in the caller's own load (guests and organization
+   * Viewers), so another person's load leaves them out and is a
+   * permission-limited figure. It follows the caller's role alone. */
+  hidden: 'counted' | 'own_only'
+  /** the owners in the order asked, each once */
+  owners: OwnerLoadJson[]
+}
+
+/**
+ * The load of each of `owner_ids` (at most OWNER_LOADS.owners, compared in
+ * lowercase, each once, in the order given) as the caller may see it, for
+ * delays and availability without the workspace's load rows. Each owner's
+ * spans are their load rows (the fence above, remaining hours above zero)
+ * in one total order (lib/ownerLoads.ts byLoadRow), read by the owner
+ * reader within its bounds. An owner of another organization or an unknown
+ * id answers `ok` with no spans. An owner whose spans would take the answer
+ * past OWNER_LOADS.spans answers `not_read`, unless it is the first, and so
+ * does every owner after a `not_read` one.
+ *
+ * It reads each owner's profile and five open-task ranges, the project row
+ * of each project their scheduled tasks name, the caller's access to the
+ * live ones (their own grants, memberships and team shares among it) and a
+ * subtask range for each task left. So a change to those reruns it, and no
+ * other change in the organization does. Nothing in the app calls it yet:
+ * the view stages and the task window read it once they stop reading the
+ * workspace's load rows.
+ */
+export const ownerLoads = orgQuery({
+  args: { owner_ids: v.array(v.string()) },
+  handler: async (ctx, { owner_ids }): Promise<OwnerLoadsJson> => {
+    const ids = [...new Set(owner_ids.map((id) => id.toLowerCase()))]
+    if (ids.length > OWNER_LOADS.owners) {
+      throw badRequest(`at most ${OWNER_LOADS.owners} people at a time`)
+    }
+    const access = accessOf(ctx, ctx.me)
+    const reader = ownerLoadReader(ctx, { me: ctx.me, access, room: callRoom })
+    const owners: OwnerLoadJson[] = []
+    let spans = 0
+    let ended = false
+    for (const owner_id of ids) {
+      const load = ended ? null : await reader.read(owner_id)
+      if (load === null || load.state === 'not_read') {
+        ended = true
+        owners.push({ owner_id, state: 'not_read' })
+      } else if (load.state === 'unavailable') {
+        owners.push({ owner_id, state: 'unavailable' })
+      } else {
+        const rows = loadRowsOf(ctx.me, load.tasks).map(({ owner_id: _, ...span }) => span)
+        if (owners.length > 0 && spans + rows.length > OWNER_LOADS.spans) {
+          ended = true
+          owners.push({ owner_id, state: 'not_read' })
+        } else {
+          spans += rows.length
+          owners.push({ owner_id, state: 'ok', spans: rows })
+        }
+      }
+    }
+    return { hidden: isOrgStaff(ctx.me) ? 'counted' : 'own_only', owners }
   },
 })
 

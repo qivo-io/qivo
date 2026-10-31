@@ -11,16 +11,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { accessOf } from '../lib/access'
 import { ACCESS_POINT_CHECKS, taskOut } from '../lib/core'
 import { byId } from '../lib/db'
 import { countsAsSubtask, groupTest, LIVE_PROJECT_READS } from '../lib/liveTasks'
-import { OWNER_LOAD_CHECKS, ownerLoadSpans } from '../lib/machineDelay'
-import { orgProjectView } from '../lib/visibility'
-import { weekGrid } from '../lib/workload'
+import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
 import { readTasks } from '../lib/workspaceParts'
 import { getProject } from '../machine/rest'
 import { MOVE_SUBTREE_HOLDER_RULE, REVIEWER_RULE } from '../model/issues'
-import { ASSIGNEE_LOAD_CHECKS, assigneeLoad, workloadCore } from '../planning'
+import { assigneeLoad, LOAD_UNAVAILABLE, workloadCore } from '../planning'
 import { finishedBefore, positionAfter, RESTORE_REGROUP, restoredStep } from '../regroup'
 import {
   as,
@@ -442,29 +441,31 @@ describe('reading only live tasks', () => {
     }
   })
 
-  it("a busy person's load finds the groups in one read past ASSIGNEE_LOAD_CHECKS", async () => {
+  it("a busy person's load past the subtask checks is unavailable, read in few ranges", async () => {
     // 300 subtask checks would take more index ranges than the read may
     const fx = await setup(newT({ transactionLimits: { databaseQueries: 200 } }))
     const plan = { assignee_id: fx.user.id, start_week: '2026-09-07', end_week: '2026-09-14' }
-    await plantMany(fx, 300, { project_id: fx.sub.id, ...plan })
+    await plantMany(fx, 299, { project_id: fx.sub.id, ...plan })
     const group = await task(fx, plan)
     await task(fx, { parent_id: group.id })
+    // a leaf whose only subtask is archived away is one of them
     const shelvedOnly = await task(fx, plan)
     await task(fx, { project_id: fx.shelf.id, parent_id: shelvedOnly.id })
-    const checks = ASSIGNEE_LOAD_CHECKS.reads
-    ASSIGNEE_LOAD_CHECKS.reads = 100
-    try {
-      const rows = await as(fx.t, fx.admin).query((ctx) =>
+    const load = () =>
+      as(fx.t, fx.admin).query((ctx) =>
         handlerOf<{ assignee_id: string }, { issue_id: string | null }[]>(assigneeLoad)(ctx, {
           assignee_id: fx.user.id,
         }),
       )
-      const ids = rows.map((r) => r.issue_id)
-      expect(ids).toHaveLength(301)
-      expect(ids).toContain(shelvedOnly.id)
-      expect(ids).not.toContain(group.id)
+    const bounds = structuredClone(OWNER_LOADS)
+    OWNER_LOADS.checks = 300
+    try {
+      // 301 tasks to check, one past the bound: no fewer rows and no empty
+      // list, and none of the 301 checks is read
+      const refused = await expectRefusal(load(), 'rule')
+      expect((refused.data as { reason?: string }).reason).toBe(LOAD_UNAVAILABLE)
     } finally {
-      ASSIGNEE_LOAD_CHECKS.reads = checks
+      Object.assign(OWNER_LOADS, bounds)
     }
   })
 
@@ -477,25 +478,14 @@ describe('reading only live tasks', () => {
     const group = await task(fx, { ...plan, remaining_hours: 7 })
     await task(fx, { parent_id: group.id })
     await task(fx, { ...plan, project_id: fx.shelf.id, remaining_hours: 11 })
-    const checks = OWNER_LOAD_CHECKS.reads
-    try {
-      // task by task, and past the checks in one read of the live tasks
-      for (const reads of [checks, 0]) {
-        OWNER_LOAD_CHECKS.reads = reads
-        const spans = await fx.t.run(async (ctx) => {
-          const me = (await byId(ctx, 'profiles', fx.admin.id)) as Doc<'profiles'>
-          const owner = (await byId(ctx, 'profiles', fx.user.id)) as Doc<'profiles'>
-          const view = await orgProjectView(ctx, me)
-          return await ownerLoadSpans(ctx, me, owner, weekGrid(fx.org.week_start), view)
-        })
-        expect(
-          spans.map((span) => span.issueUuid),
-          `${reads} checks`,
-        ).toEqual([leaf.id])
-      }
-    } finally {
-      OWNER_LOAD_CHECKS.reads = checks
-    }
+    const rows = await fx.t.run(async (ctx) => {
+      const me = (await byId(ctx, 'profiles', fx.admin.id)) as Doc<'profiles'>
+      const access = accessOf(ctx, me)
+      const load = await ownerLoadReader(ctx, { me, access, room: callRoom }).read(fx.user.id)
+      if (load.state !== 'ok') throw new Error(`the load is ${load.state}`)
+      return loadRowsOf(me, load.tasks)
+    })
+    expect(rows.map((row) => row.issue_id)).toEqual([leaf.id])
   })
 
   it('the workload reads the live tasks of the organization, also when it is limited to a project', async () => {
@@ -524,10 +514,10 @@ describe('reading only live tasks', () => {
     for (const read of [all, scoped]) expect(read.documents).toBeLessThan(400)
   })
 
-  it('the load, workload and snapshot reads past LIVE_PROJECT_READS read the active tasks in one range', async () => {
+  it('the workload and snapshot reads past LIVE_PROJECT_READS read the active tasks in one range', async () => {
     const fx = await setup()
     const plan = { assignee_id: fx.user.id, start_week: '2026-09-07', end_week: '2026-09-07' }
-    const leaf = await task(fx, { ...plan, remaining_hours: 3, remaining_set_at: NOW })
+    await task(fx, { ...plan, remaining_hours: 3, remaining_set_at: NOW })
     const group = await task(fx, { ...plan, remaining_hours: 5 })
     await task(fx, { project_id: fx.away.id, parent_id: group.id })
     const shelvedOnly = await task(fx, { ...plan, remaining_hours: 2 })
@@ -540,50 +530,22 @@ describe('reading only live tasks', () => {
     const read = () =>
       as(fx.t, fx.admin).query(async (ctx) => {
         const me = (await byId(ctx, 'profiles', fx.admin.id)) as Doc<'profiles'>
-        const owner = (await byId(ctx, 'profiles', fx.user.id)) as Doc<'profiles'>
-        const ranges = async <R>(run: () => Promise<R>) => {
-          const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
-          const out = await run()
-          return {
-            out,
-            ranges: (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before,
-          }
-        }
-        const view = await orgProjectView(ctx, me)
+        const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+        const out = await workloadCore(ctx, me, { fromDay: '2026-09-07', weeks: 1, project: null })
         return {
-          workload: await ranges(() =>
-            workloadCore(ctx, me, { fromDay: '2026-09-07', weeks: 1, project: null }),
-          ),
-          assignee: await ranges(() =>
-            handlerOf<{ assignee_id: string }, unknown[]>(assigneeLoad)(ctx, {
-              assignee_id: fx.user.id,
-            }),
-          ),
-          owner: await ranges(() =>
-            ownerLoadSpans(ctx, me, owner, weekGrid(fx.org.week_start), view),
-          ),
+          out,
+          ranges: (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before,
         }
       })
     const reads = LIVE_PROJECT_READS.reads
-    const checks = { owner: OWNER_LOAD_CHECKS.reads, assignee: ASSIGNEE_LOAD_CHECKS.reads }
-    // past the checks, the two load reads take the organization's live tasks
-    OWNER_LOAD_CHECKS.reads = 0
-    ASSIGNEE_LOAD_CHECKS.reads = 0
     try {
       const perProject = await read()
       LIVE_PROJECT_READS.reads = 1
       const oneRange = await read()
-      for (const key of ['workload', 'assignee', 'owner'] as const) {
-        expect(oneRange[key].out, key).toEqual(perProject[key].out)
-        expect(oneRange[key].ranges, key).toBeLessThan(perProject[key].ranges - 40)
-      }
-      // in the canonical order (lib/workload.ts canonicalLoad): the same
-      // weeks, so fewer remaining hours first
-      expect(oneRange.owner.out.map((span) => span.issueUuid)).toEqual([shelvedOnly.id, leaf.id])
+      expect(oneRange.out).toEqual(perProject.out)
+      expect(oneRange.ranges).toBeLessThan(perProject.ranges - 40)
     } finally {
       LIVE_PROJECT_READS.reads = reads
-      OWNER_LOAD_CHECKS.reads = checks.owner
-      ASSIGNEE_LOAD_CHECKS.reads = checks.assignee
     }
   })
 })
