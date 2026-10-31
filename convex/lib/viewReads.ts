@@ -68,6 +68,12 @@ export const RANGE: Reads = { bytes: 0, documents: 0, ranges: 1 }
 /** One document read by id or as the first of a range: a range and a row. */
 export const BY_ID: Reads = { bytes: ROW_BYTES, documents: 1, ranges: 1 }
 
+/** No reads. */
+const NONE: Reads = { bytes: 0, documents: 0, ranges: 0 }
+
+/* `n` index ranges. */
+const rangesOf = (n: number): Reads => ({ bytes: 0, documents: 0, ranges: n })
+
 /** The real bytes a view's reads stop at, whatever the fixed charges say:
  * Convex's 16 MiB less 2 MiB for what one step can read past its last look,
  * an access question past PROJECT_ASK or a row stored over the caps. Only a
@@ -121,13 +127,21 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
       ranges: reads.ranges - m.databaseQueries.used,
     }
   }
-  /* how many reads of `cost` the room holds */
-  const roomFor = (cost: Reads): number =>
-    Math.min(
-      cost.bytes > 0 ? Math.floor(room.bytes / cost.bytes) : Number.POSITIVE_INFINITY,
-      cost.documents > 0 ? Math.floor(room.documents / cost.documents) : Number.POSITIVE_INFINITY,
-      cost.ranges > 0 ? Math.floor(room.ranges / cost.ranges) : Number.POSITIVE_INFINITY,
+  /* how many reads of `cost` the room holds beside `base`, -1 when it
+   * does not hold `base` */
+  const roomFor = (cost: Reads, base: Reads = NONE): number => {
+    const left = {
+      bytes: room.bytes - base.bytes,
+      documents: room.documents - base.documents,
+      ranges: room.ranges - base.ranges,
+    }
+    if (left.bytes < 0 || left.documents < 0 || left.ranges < 0) return -1
+    return Math.min(
+      cost.bytes > 0 ? Math.floor(left.bytes / cost.bytes) : Number.POSITIVE_INFINITY,
+      cost.documents > 0 ? Math.floor(left.documents / cost.documents) : Number.POSITIVE_INFINITY,
+      cost.ranges > 0 ? Math.floor(left.ranges / cost.ranges) : Number.POSITIVE_INFINITY,
     )
+  }
   const spend = (cost: Reads, n: number) => {
     if (n > 0) looked = false
     room = {
@@ -136,18 +150,27 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
       ranges: room.ranges - n * cost.ranges,
     }
   }
-  /** How many reads of `cost` the room holds, up to `most`, looking first
-   * when it holds fewer. It takes nothing. */
-  const count = async (cost: Reads, most: number): Promise<number> => {
-    if (roomFor(cost) < most && !looked) await look()
-    return Math.max(0, Math.min(most, roomFor(cost)))
+  /** How many reads of `cost` the room holds beside `base`, up to `most`,
+   * looking first when it holds fewer; -1 when it does not hold `base`. It
+   * takes nothing. */
+  const count = async (cost: Reads, most: number, base: Reads = NONE): Promise<number> => {
+    if (roomFor(cost, base) < most && !looked) await look()
+    return Math.min(most, roomFor(cost, base))
   }
-  /** Takes room for as many reads of `cost` as fit, up to `most`, and
-   * answers how many it took, so a step near the budget's end reads fewer
-   * rows rather than none. Throws OverBudget when fewer than `least` fit. */
-  const upTo = async (cost: Reads, most: number, least = 1): Promise<number> => {
-    const n = await count(cost, most)
-    if (n < least) throw new OverBudget()
+  /** Takes room for `base` and as many reads of `cost` as fit beside it, up
+   * to `most`, in one step, so no look between them can drop either, and
+   * answers how many reads of `cost` it took: a step near the budget's end
+   * reads fewer rows rather than none. Throws OverBudget when fewer than
+   * `least` fit. */
+  const upTo = async (
+    cost: Reads,
+    most: number,
+    least = 1,
+    base: Reads = NONE,
+  ): Promise<number> => {
+    const n = await count(cost, most, base)
+    if (n < least || n < 0) throw new OverBudget()
+    spend(base, 1)
     spend(cost, n)
     return n
   }
@@ -404,6 +427,7 @@ export async function* inSteps<D extends { _id: unknown; _creationTime: number }
   ranges: readonly StepRange<D>[],
   cost: Reads = ROW,
   read: (row: D) => void = () => {},
+  perRange: number = STEP.rows,
 ): AsyncGenerator<D[]> {
   type Open = { range: StepRange<D>; from?: number; seen: Set<unknown> }
   const opened = (range: StepRange<D>): Open => ({
@@ -414,22 +438,24 @@ export async function* inSteps<D extends { _id: unknown; _creationTime: number }
   let open: Open[] = ranges.map(opened)
   const againIn = (k: number) => open.slice(0, k).reduce((n, s) => n + s.seen.size, 0)
   while (open.length > 0) {
-    // the rows the room holds, then as many ranges as get STEP.share of
-    // them each, and at least one row each, with the rows each reads again
-    const most = Math.min(STEP.ranges, open.length)
-    let rows = await guard.count(cost, most * STEP.rows + againIn(most))
-    let k = Math.min(most, Math.max(1, Math.floor(rows / STEP.share)))
-    k = Math.min(k, await guard.count(RANGE, k))
+    // the rows the room holds beside the step's ranges, then as many ranges
+    // as get STEP.share of them each, and at least one row each, with the
+    // rows each reads again
+    let k = await guard.count(RANGE, Math.min(STEP.ranges, open.length))
+    if (k <= 0) throw new OverBudget()
+    let rows = await guard.count(cost, k * perRange + againIn(k), rangesOf(k))
+    k = Math.min(k, Math.max(1, Math.floor(Math.max(0, rows) / STEP.share)))
+    rows = await guard.count(cost, k * perRange + againIn(k), rangesOf(k))
     while (k > 0 && rows < k + againIn(k)) {
       k--
-      rows = await guard.count(cost, k * STEP.rows + againIn(k))
+      rows = await guard.count(cost, k * perRange + againIn(k), rangesOf(k))
     }
     if (k === 0) throw new OverBudget()
     const again = againIn(k)
     const step = open.slice(0, k)
     open = open.slice(k)
-    await guard.take(RANGE, k)
-    const n = await guard.upTo(cost, k * STEP.rows + again, k + again)
+    // the ranges and the rows in one reservation
+    const n = await guard.upTo(cost, k * perRange + again, k + again, rangesOf(k))
     const each = Math.floor((n - again) / k)
     const got = await settled(step.map((s) => s.range.open(s.from).take(each + s.seen.size)))
     guard.giveBack(cost, n - got.reduce((total, rows) => total + rows.length, 0))
