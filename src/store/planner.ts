@@ -1205,12 +1205,16 @@ function relatedTask(uuid: string, short: ShortRow | undefined): RelatedTaskVM |
 }
 
 /* Whether two rows hold the same fields, as a paint's copy of an untouched
-   row does. */
+   row does, whose objects and lists are copies (rowMap.ts copyRow). */
 const sameRow = (a: object, b: object) => {
   const x = a as Record<string, unknown>
   const y = b as Record<string, unknown>
   const keys = new Set([...Object.keys(x), ...Object.keys(y)])
-  for (const key of keys) if (!Object.is(x[key], y[key])) return false
+  for (const key of keys) {
+    const [p, q] = [x[key], y[key]]
+    if (Object.is(p, q)) continue
+    if (!p || !q || typeof p !== 'object' || JSON.stringify(p) !== JSON.stringify(q)) return false
+  }
   return true
 }
 
