@@ -20,8 +20,7 @@ Until it is gone, the Board and the task list show the tasks that have
 arrived, without counts. Search works meanwhile, but on a slow connection
 its results come after the tasks already on their way. A task you open from
 Search, or from a task's subtasks or linked tasks, before it has arrived
-shows at once, read-only apart from its comments, until every task has
-loaded. The
+shows at once, read-only apart from its comments, until it has arrived. The
 Overview, the Roadmap and Team sync open once every task has loaded, and so
 do moving, archiving and deleting a task. An open task's subtasks, linked
 tasks and attachments load on their own, and removing one that has not

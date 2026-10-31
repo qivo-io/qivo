@@ -2302,8 +2302,9 @@ from the organization. Organization admins receive
 every row. Other users do not receive a row that names a project they cannot
 access, such as the project the task was in before a move, or one that names
 another task they cannot read, such as the other end of a link. An
-archived task's history is answered too, by the same rule; the app shows it
-again once the task is restored. A task keeps all its activity rows, and an
+archived task's history is answered too, by the same rule, as the app's
+read-only window on an archived task shows it under **All**. A task keeps
+all its activity rows, and an
 answer holds at most 500 of them. To read further back, pass the `id` of the
 first row in the array as `before`, and repeat until the array is empty. Only
 an empty array means there is no earlier history. A `before` that is not the

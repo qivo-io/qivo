@@ -169,12 +169,15 @@ because removing it waits for every task.
 
 A task you open from these lists, or from Search, before it has loaded into
 the workspace shows at once, read from the server: its fields, labels,
-description, comments and lists. You can comment on it at once. Its other
-fields, its labels and its relationships can be changed once every task has
-loaded, and until then they are disabled with **Available once every task
-has loaded**, or with **Read-only project access** when you can only read
-its project. When the task arrives, the window turns editable in place, and
-a comment you were typing stays. If Qivo cannot check such a task for
+description, comments and lists. You can comment on it at once. Its fields
+and relationships can be changed once the task itself has loaded, which can
+be before every task has, and until then they are disabled with **Available
+once every task has loaded**, or with **Read-only project access** when you
+can only read its project. Its labels show without the buttons that add or
+remove one, and the eye shows whether you follow the task but opens
+**Subscribers** only once the task has loaded. Moving, archiving and
+deleting it wait for every task. When the task arrives, the window turns
+editable in place, and a comment you were typing stays. If Qivo cannot check such a task for
 changes, the window keeps showing it as it last loaded and says so, with
 **Retry**, and a comment you are typing stays then too.
 
@@ -356,8 +359,8 @@ Opening one shows the task read-only under the same note: its title, fields,
 labels, description, comments and, under **All**, its changes, with its
 project and when it was archived. **Restore** shows for someone who can edit
 its project, and the fields say **Restore this task to change it**. An
-archived task's window shows no subtasks, links or attachments, and no one
-can comment on it.
+archived task's window shows no parent, subtasks, links or attachments, and
+has no comment box and no eye.
 
 ## Deleting
 

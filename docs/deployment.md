@@ -174,7 +174,10 @@ the search on **Settings → Projects → Archived tasks** and main Search, wher
 an active task the run made must show with **Include archived tasks** off
 and a task the run archived only with it on. That shows whether the
 deployment's search index takes the filter for an absent `archived_at` and
-still returns active matches. Everything it creates
+still returns active matches. The archived task must then open read-only in
+its task window, with its description and, under **All**, its history,
+which shows whether the deployment answers an archived task's text and
+history. Everything it creates
 carries a run tag such as `stgchk-1a2b3c`, and its tasks live in projects it
 creates. It deletes all of it at the end, also after a failure. Its deleted
 projects and tasks then wait in Deleted items for 30 days, where an admin can
