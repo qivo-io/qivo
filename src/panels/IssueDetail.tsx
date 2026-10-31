@@ -2640,9 +2640,10 @@ function IssueDetail({
       </div>
     ) : it.description ? (
       // a viewer's copy has no field border to close, so the cap stays on the
-      // wrapper here; descWrapRef rides whichever of the two is mounted, which
-      // is what the per-issue scroll reset resets
-      <div ref={descWrapRef} style={box}>
+      // wrapper here, and the text scrolls inside it, as in the field, rather
+      // than over Activity; descWrapRef rides whichever of the two is
+      // mounted, which is what the per-issue scroll reset resets
+      <div ref={descWrapRef} style={box} className="overflow-y-auto overscroll-contain">
         <Markdown text={it.description} />
       </div>
     ) : (
