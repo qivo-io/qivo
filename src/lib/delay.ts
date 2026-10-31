@@ -8,6 +8,7 @@ import {
   type DelayStatus,
   computeDelayMap as delayMapOn,
   delayOf as delayOn,
+  delayWithProjection,
 } from '../../convex/lib/delay'
 import { TODAY_WEEK } from './dates'
 import type { LoadSpan } from './workload'
@@ -47,4 +48,39 @@ export const DELAY_LABELS: Record<DelayStatus, string> = {
 export const DELAY_MARK: Record<Exclude<DelayStatus, 'ok'>, { glyph: string; color: string }> = {
   behind: { glyph: 'clockFading', color: 'var(--pressure-warn)' },
   late: { glyph: 'warning', color: 'var(--pressure-over)' },
+}
+
+/** What the task window says of a delay it cannot judge from the owners'
+    loads, while tasks still load or for a task it shows from its own read
+    (delayBeforeLoads): the delay is not known. */
+export const DELAY_UNKNOWN = 'unknown'
+
+/** The task window's delay verdict for task `it` where the owners' loads
+    are not there to judge it: while tasks still load, or for a task the
+    window shows from its own read. A verdict that needs no owner's other
+    work, as for a task without an owner, hours or capacity, or a group,
+    is judged exactly (convex/lib/delay.ts delayWithProjection). One that
+    needs it is DELAY_UNKNOWN, unless it has nothing to be judged against,
+    or its due date has passed, which needs no projection and draws as
+    overdue: both answer null, which draws what the window draws without a
+    verdict. A group whose dates are not known (`datesKnown` false), or
+    that is partial while tasks still load (`loading`), whose subtasks
+    still to come can move its end, is DELAY_UNKNOWN in the same way,
+    unless the visible span already proves it late. */
+export function delayBeforeLoads(
+  it: DelayIssue,
+  { datesKnown, loading }: { datesKnown: boolean; loading: boolean },
+): DelayInfo | typeof DELAY_UNKNOWN | null {
+  if (it.isDone ?? (!it.isGroup && it.status === 'done')) return null
+  // a passed due date, or nothing to be on time for, needs no projection
+  const unknown = it.duePast || (it.dueWeek === null && it.end === null) ? null : DELAY_UNKNOWN
+  if (it.isGroup && !datesKnown) return it.duePast ? null : DELAY_UNKNOWN
+  let asked = false
+  const verdict = delayWithProjection(it, TODAY_WEEK, () => {
+    asked = true
+    return TODAY_WEEK
+  })
+  if (asked) return unknown
+  if (it.isGroup && loading && it.partial) return verdict?.status === 'late' ? verdict : unknown
+  return verdict
 }

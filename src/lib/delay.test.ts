@@ -1,7 +1,7 @@
 import fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import { TODAY_WEEK } from './dates'
-import { computeDelayMap, type DelayIssue, delayOf } from './delay'
+import { computeDelayMap, DELAY_UNKNOWN, type DelayIssue, delayBeforeLoads, delayOf } from './delay'
 import type { LoadSpan } from './workload'
 
 const T = TODAY_WEEK
@@ -314,5 +314,58 @@ describe('delayOf — task groups', () => {
       status: 'behind',
       fin: T + 1,
     })
+  })
+})
+
+describe("delayBeforeLoads — the window without the owners' loads", () => {
+  const leaf = { datesKnown: true, loading: true }
+  it('judges exactly a task whose verdict needs no projection', () => {
+    // no owner: the plan's end decides, as with every load
+    const unowned = iss({ owner: null, start: T, end: T + 1, dueWeek: T + 3, remaining: 60 })
+    expect(delayBeforeLoads(unowned, leaf)).toEqual(delayOf(unowned, []))
+    expect(delayBeforeLoads(unowned, leaf)).toEqual({ status: 'ok', fin: T + 1 })
+    // no hours, and an agent without capacity, likewise
+    const noHours = iss({ start: T - 3, end: T - 1, dueWeek: T + 2 })
+    expect(delayBeforeLoads(noHours, leaf)).toEqual({ status: 'behind', fin: T })
+    const late = iss({ owner: null, end: T + 4, dueWeek: T + 2 })
+    expect(delayBeforeLoads(late, leaf)).toEqual({ status: 'late', fin: T + 4 })
+    expect(delayBeforeLoads(iss({ capacity: 0, end: T + 1, remaining: 9 }), leaf)).toEqual({
+      status: 'ok',
+      fin: T + 1,
+    })
+  })
+  it("says unknown for an owned task with hours, whose finish needs the owner's other work", () => {
+    const owned = iss({ start: T, end: T + 1, dueWeek: T + 3, remaining: 60 })
+    expect(delayBeforeLoads(owned, leaf)).toBe(DELAY_UNKNOWN)
+    expect(delayBeforeLoads(iss({ dueWeek: T + 3, remaining: 8 }), leaf)).toBe(DELAY_UNKNOWN)
+  })
+  it('draws nothing for a Done task, one without a due date or plan, and a passed due date', () => {
+    expect(delayBeforeLoads(iss({ status: 'done', dueWeek: T, remaining: 8 }), leaf)).toBeNull()
+    expect(delayBeforeLoads(iss({ remaining: 8 }), leaf)).toBeNull()
+    // the window's own overdue mark says it, as without a verdict
+    expect(delayBeforeLoads(iss({ dueWeek: T - 1, duePast: true, remaining: 8 }), leaf)).toBeNull()
+  })
+  it('judges a group by its span, and says unknown while its dates are not known', () => {
+    const group = iss({ isGroup: true, isDone: false, start: T, end: T + 2, dueWeek: T + 1 })
+    expect(delayBeforeLoads(group, leaf)).toEqual({ status: 'late', fin: T + 2 })
+    expect(delayBeforeLoads(group, { datesKnown: false, loading: false })).toBe(DELAY_UNKNOWN)
+    expect(
+      delayBeforeLoads({ ...group, duePast: true }, { datesKnown: false, loading: false }),
+    ).toBeNull()
+    expect(
+      delayBeforeLoads({ ...group, isDone: true }, { datesKnown: false, loading: false }),
+    ).toBeNull()
+  })
+  it('says unknown for a partial group while tasks load, unless its visible span is late already', () => {
+    const partial = iss({ isGroup: true, isDone: false, partial: true, start: T, end: T + 1 })
+    expect(delayBeforeLoads({ ...partial, dueWeek: T + 3 }, leaf)).toBe(DELAY_UNKNOWN)
+    expect(delayBeforeLoads({ ...partial, dueWeek: T }, leaf)).toEqual({
+      status: 'late',
+      fin: T + 1,
+    })
+    // once loaded, hidden subtasks prove neither on track nor behind
+    expect(
+      delayBeforeLoads({ ...partial, dueWeek: T + 3 }, { datesKnown: true, loading: false }),
+    ).toBeNull()
   })
 })
