@@ -29,7 +29,11 @@
  * how many subtasks a shown group has, hidden ones included, as the tasks
  * part's kidsOf (lib/workspaceParts.ts) reads them, and the grant and team
  * share rows the reader's access reads on a hidden project. Both can move a
- * view's answer at its budget's margin only. */
+ * view's answer at its budget's margin only. So can, in an organization
+ * whose reach rows are not complete yet (org_ready nav_at), the sub-projects
+ * the access reads of a top-level project the reader sees only to navigate
+ * to them (lib/access.ts projectLevelsOf, the legacy path), which every
+ * deployment left behind with internal/navBackfill. */
 
 import { getDocumentSize } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
