@@ -762,8 +762,10 @@ const activeKids = (ctx: QueryCtx, id: string, from?: number) =>
 
 /** What a view knows of its tasks' subtasks: by task id, the active
  * subtasks in live projects, which make it a group (lib/liveTasks.ts
- * countsAsSubtask), once read (groupCheck); by subtask id whether the
- * reader is shown it (groupFacts); and the tasks known to be groups before
+ * countsAsSubtask), once read (groupCheck); by task id whether the reader
+ * is shown it (groupFacts, and the view for the tasks it read in the
+ * reader's working set, whose reads as subtasks then count at their real
+ * size); and the tasks known to be groups before
  * that read, the parents of tasks the view read in its working set
  * (`parents`), which an active subtask in a live project makes groups. */
 export type Subtasks = {
@@ -778,6 +780,25 @@ export const noSubtasks = (): Subtasks => ({
   shown: new Map(),
   parents: new Set(),
 })
+
+/** The release from which every backend that can run keeps one level of
+ * subtasks: v0.1.98, the backend's rollback floor, released everywhere on
+ * this instant. The rule itself shipped in v0.1.17: the parent fence
+ * (model/issues.ts parentChainCheck) refuses a parent that has a parent of
+ * its own and a parent for a task that has subtasks, on the app, REST and
+ * MCP, and a Deleted items restore drops such a parent (model/deletedItems.ts
+ * keptParent). Data stored before it keeps its shape, so a subtask with
+ * subtasks of its own, a nested group, needs both of its links stored
+ * before this instant: a task created at or after it never holds a parent
+ * and a subtask at once, and a task's subtasks it gained at or after it were
+ * then without subtasks and stay so. Every create stamps created_at with the
+ * server's clock, and no write changes it. */
+export const ONE_LEVEL_SINCE = '2026-10-29T00:24:00.000Z'
+
+/** Whether `task`, which has a parent, was created under the rule of one
+ * level (ONE_LEVEL_SINCE), so it has no subtasks and needs no group check. */
+export const withoutSubtasks = (task: Pick<Doc<'issues'>, 'parent_id' | 'created_at'>): boolean =>
+  task.parent_id !== undefined && task.created_at >= ONE_LEVEL_SINCE
 
 /** Whether the task with this id is a group, once groupCheck read it. */
 export const isGroupIn = (known: Subtasks, id: string): boolean | undefined => {
@@ -794,9 +815,10 @@ export const isGroupIn = (known: Subtasks, id: string): boolean | undefined => {
  * without one, and then the rest of those that have one in steps
  * (inSteps), so it sees every row it reads. A task known to be a group
  * (Subtasks parents) skips the first look and reads its subtasks in steps
- * from the start, a range less. Each subtask counts at lib/limits.ts
- * TASK_ROW_MAX_BYTES, as the reader may not be shown it, and so does each
- * subtask's project (viewAccess). A group's subtasks are read whole, so its
+ * from the start, a range less, and a subtask created under the rule of one
+ * level (withoutSubtasks) reads nothing. Each subtask counts at lib/limits.ts
+ * TASK_ROW_MAX_BYTES, as the reader may not be shown it, unless `known`
+ * says they are, and so does each subtask's project (viewAccess). A group's subtasks are read whole, so its
  * group facts need no other range.
  */
 export async function groupCheck(
@@ -806,10 +828,16 @@ export async function groupCheck(
   tasks: readonly Doc<'issues'>[],
   known: Subtasks,
 ): Promise<void> {
+  for (const t of tasks)
+    if (!known.kids.has(t.id) && withoutSubtasks(t) && !known.parents.has(t.id))
+      known.kids.set(t.id, [])
   const todo = [
     ...new Map(tasks.filter((t) => !known.kids.has(t.id)).map((t) => [t.id, t])).values(),
   ]
-  const charge = (kid: Doc<'issues'>) => guard.charge(kid, TASK_ROW_MAX_BYTES)
+  // a subtask the view knows the reader is shown counts at its real size
+  const charge = (kid: Doc<'issues'>) => {
+    if (known.shown.get(kid.id) !== true) guard.charge(kid, TASK_ROW_MAX_BYTES)
+  }
   for (let at = 0; at < todo.length; ) {
     // a step ends before the first task whose first look the room does not hold
     const window = todo.slice(at, at + CHECKS)
@@ -891,6 +919,12 @@ export async function groupFacts(
   while (level.length > 0) {
     for (const t of level) visited.add(t.id)
     await groupCheck(ctx, guard, seats, level, known)
+    // a subtask a group gained under the rule of one level has none of its
+    // own (ONE_LEVEL_SINCE), so only those of older groups get a check
+    for (const t of level)
+      if (t.created_at >= ONE_LEVEL_SINCE)
+        for (const kid of known.kids.get(t.id) ?? [])
+          if (!known.kids.has(kid.id) && !known.parents.has(kid.id)) known.kids.set(kid.id, [])
     const kids = level.flatMap((t) => known.kids.get(t.id) ?? [])
     const asking = kids.filter((k) => !known.shown.has(k.id))
     for (const [org, theirs] of groupBy(asking, (k) => k.org_id)) {

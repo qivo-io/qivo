@@ -434,8 +434,10 @@ function boardRead(
         for (const t of batch) {
           read.set(t.id, t)
           if (o.whole) sizes.set(t.project_id, (sizes.get(t.project_id) ?? 0) + 1)
-          // an active task in a live project makes its parent a group
+          // an active task in a live project makes its parent a group, and
+          // the reader is shown it
           if (t.parent_id !== undefined) subtasks.parents.add(t.parent_id)
+          subtasks.shown.set(t.id, true)
         }
         const passing = batch.filter((t) => keep(t) && cheap(t))
         pending.push(...(search === null ? passing : search.add(passing)))
