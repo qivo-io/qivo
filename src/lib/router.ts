@@ -91,22 +91,22 @@ const findProject = (s: string | undefined, org?: string) => {
   }
   return P.projects.find((p) => p.id === s.toLowerCase())
 }
-/** The handle a task Search opened (lib/openedTasks.ts) opens by now,
-    derived from its identity, as a home organization that changed since
-    gives it another one. */
+/** The handle a noted task (lib/openedTasks.ts), one Search or a task
+    window opened, opens by now, derived from its identity, as a home
+    organization that changed since gives it another one. */
 const handleOfOpened = (task: OpenedTask) => P.handleNow(task.uuid, task.org, task.num)
 
-/* The handle of the task Search opened that `match` names, if any. */
+/* The handle of the noted task that `match` names, if any. */
 const openedHandle = (match: Parameters<typeof openedTaskMatching>[0]) => {
   const task = openedTaskMatching(match)
   return task && handleOfOpened(task)
 }
 
-/* A task the store does not hold that Search opened, such as an archived
-   one, resolves by its organization and key, or its uuid, to the handle it
-   opens by now (lib/openedTasks.ts), so closing its window earns an entry
-   and Back or Forward to its address opens it again, as they do a loaded
-   task, also after the home organization changed. */
+/* A task the store does not hold that Search or a task window opened, such
+   as an archived one, resolves by its organization and key, or its uuid,
+   to the handle it opens by now (lib/openedTasks.ts), so closing its window
+   earns an entry and Back or Forward to its address opens it again, as
+   they do a loaded task, also after the home organization changed. */
 const findIssueKey = (s: string | undefined, org?: string) => {
   if (!s) return undefined
   const m = new RegExp(`^(?:${ISSUE_PREFIX}-)?(\\d+)$`, 'i').exec(s)
@@ -349,24 +349,43 @@ const refOf = (open: string) => heldRef(open) ?? open
    address names it by its uuid, because `~` would read its key in the home
    organization; that new address replaces the old one in place
    (namedBefore). */
-const named = new Map<string, Pick<IssueVM, 'org' | 'key' | 'uuid'> & { seg: string }>()
+const named = new Map<
+  string,
+  Pick<IssueVM, 'org' | 'key' | 'uuid'> & { num: number; seg: string }
+>()
 const NAMED_MAX = 64
+
+/* What `named` keeps for handle `open`, while that handle still opens the
+   task it names: after the home organization changed, the store gives the
+   handle to another task (P.handleNow), whose address it must not name. */
+function namedNow(open: string) {
+  const was = named.get(open)
+  return was && P.handleNow(was.uuid, was.org, was.num) === open ? was : undefined
+}
 
 /* Names, as `named` does, a task Search or a task window opened that the
    store does not hold, such as an archived one (lib/openedTasks.ts), so the
-   address names its organization and key from the start. It is derived on every call and
-   kept nowhere, as the handle `open` names can change with the home
-   organization. */
+   address names its organization and key from the start. It is derived on
+   every call and kept nowhere, as the handle `open` names can change with
+   the home organization. */
 function namedOpened(open: string) {
   const task = openedTask(open, handleOfOpened)
-  return task && { org: task.org, key: task.key, uuid: task.uuid, seg: orgSegment(task.org) }
+  return (
+    task && {
+      org: task.org,
+      key: task.key,
+      uuid: task.uuid,
+      num: task.num,
+      seg: orgSegment(task.org),
+    }
+  )
 }
 
 /** The task handle `open` names: the live task, or the one it last was. */
 function taskNamed(open: string) {
   const it = P.issueById[open]
   if (!it) {
-    const was = named.get(open) ?? namedOpened(open)
+    const was = namedNow(open) ?? namedOpened(open)
     if (!was) return was
     const seg = orgSegment(was.org)
     if (seg === ORG_NONE) return { ...was, key: was.uuid }
@@ -375,7 +394,9 @@ function taskNamed(open: string) {
     return was
   }
   named.delete(open)
-  named.set(open, { org: it.org, key: it.key, uuid: it.uuid, seg: orgSegment(it.org) })
+  // the display key is QN-n, the task's number in its organization
+  const num = Number(it.key.slice(ISSUE_PREFIX.length + 1))
+  named.set(open, { org: it.org, key: it.key, uuid: it.uuid, num, seg: orgSegment(it.org) })
   if (named.size > NAMED_MAX) named.delete(named.keys().next().value ?? open)
   return it
 }
@@ -405,7 +426,7 @@ export function namesProjectPage(path: string, page: string | null | undefined) 
     it was last named by, as the address did before that organization left
     the store. */
 function namedBefore(path: string, open: string | null | undefined) {
-  const was = open ? named.get(open) : undefined
+  const was = open ? namedNow(open) : undefined
   return (
     !!was &&
     orgSegmentOf(path) === was.seg &&
@@ -571,7 +592,7 @@ export function buildPath(s: UiState): string {
 export function issueLink(handle: string): string {
   const open = String(handle)
   const it = P.issueById[open]
-  const was = it ? undefined : (named.get(open) ?? namedOpened(open))
+  const was = it ? undefined : (namedNow(open) ?? namedOpened(open))
   const org = it?.org ?? was?.org
   // an organization this person can no longer name reads its task by uuid
   const ref = it?.key ?? (was && (orgSegment(was.org) === ORG_NONE ? was.uuid : was.key)) ?? open

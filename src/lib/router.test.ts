@@ -477,6 +477,39 @@ describe('buildPath', () => {
     )
   })
 
+  it('names the task a handle opens now, not the one it named before the home organization changed', () => {
+    // Home's QN-19, which the registry knows nothing of, as no other test does
+    const home19 = { ...store.issueById['QN-5'], id: 'QN-19', key: 'QN-19', uuid: 'uuid-home-19' }
+    store.issues = [...store.issues, home19]
+    store.issueById['QN-19'] = home19
+    // the window on it names it by Home's address
+    expect(buildPath({ view: 'kanban', openIssue: 'QN-19' })).toBe('/app/home/board/tasks/qn-19')
+    expect(issueLink('QN-19')).toBe('/app/home/tasks/qn-19')
+    // Acme becomes the home organization: Home's QN-19 opens by its uuid,
+    // and QN-19 is the handle of Acme's QN-19, which has not loaded
+    store.homeOrg = ACME
+    store.issues = store.issues.map((i) => (i === home19 ? { ...i, id: 'uuid-home-19' } : i))
+    store.issueById = Object.fromEntries(store.issues.map((i) => [i.id, i] as const))
+    store.issueRefIn = (org: string, key: string) =>
+      store.issues.find((i) => i.org === org && i.key === key)?.id ?? null
+    // QN-19 reads in the home organization, never as Home's task
+    expect(issueLink('QN-19')).toBe('/app/~/tasks/qn-19')
+    expect(buildPath({ view: 'kanban', openIssue: 'QN-19' })).toBe('/app/~/board/tasks/qn-19')
+    // and once a window noted Acme's QN-19, by Acme's address
+    noteOpenedTask({
+      uuid: 'uuid-acme-19',
+      num: 19,
+      key: 'QN-19',
+      title: 'Acme task',
+      project: 'p-acme-1',
+      org: ACME,
+    })
+    expect(issueLink('QN-19')).toBe('/app/acme/tasks/qn-19')
+    expect(buildPath({ view: 'kanban', openIssue: 'QN-19' })).toBe('/app/acme/board/tasks/qn-19')
+    // Home's task keeps its own address by its new handle
+    expect(issueLink('uuid-home-19')).toBe('/app/home/tasks/qn-19')
+  })
+
   it("names a task by its uuid once its organization left too, never the home organization's task of that number", () => {
     const open = 'uuid-acme-5'
     const sync = { scope: 'all', step: 'team' }
