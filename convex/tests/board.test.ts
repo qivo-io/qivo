@@ -343,6 +343,25 @@ describe('filters', () => {
     expect(rowIds(own.answer)).toEqual(mine.map((task) => task.id))
     expect(own.read.documents).toBeLessThan(100)
   })
+  it('narrows My view by the people filter too, the person being the selection', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantLogin(t, f.user)
+    const handed = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      status: 'review',
+      assignee_id: me.id,
+      reviewer_id: f.guest.id,
+    })
+    const own = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id: me.id })
+    const mine = { kind: 'mine' } as const
+    expect(rowIds(await boardFor(t, me, mine, { mine: true }))).toEqual([own.id])
+    expect(rowIds(await boardFor(t, me, mine, { mine: true, owners: [me.id] }))).toEqual([own.id])
+    // the task handed to review is the reviewer's, so no filter brings it back
+    expect(rowIds(await boardFor(t, me, mine, { mine: true, owners: [f.guest.id] }))).toEqual([])
+    expect(handed.id).not.toBe(own.id)
+  })
 })
 
 /* ------------------------------------------------------------------- lanes */
