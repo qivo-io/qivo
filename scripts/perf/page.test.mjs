@@ -28,5 +28,7 @@ describe('the baseline checkout', () => {
     vi.stubEnv('GIT_DIR', join(other, '.git'))
     const folder = await checkoutOf(root, commit, temporary)
     expect(existsSync(join(folder, 'scripts/perf/page.mjs'))).toBe(true)
+    // the app imports the vendored Convex Better Auth adapter
+    expect(existsSync(join(folder, 'vendor/convex-better-auth/src/client/plugins'))).toBe(true)
   })
 })

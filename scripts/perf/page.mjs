@@ -72,12 +72,25 @@ export async function buildPage(source, outDir, temporary) {
 }
 
 /** The source of `commit` in `root`'s repository, in a folder of its own
-    under `temporary`, with `root`'s dependencies. */
+    under `temporary`, with `root`'s dependencies: the app, the backend and
+    the scripts, and from the commits that hold it the copy of the Convex
+    Better Auth adapter the app imports (vendor/). */
 export async function checkoutOf(root, commit, temporary) {
   const folder = join(temporary, `baseline-${commit.slice(0, 12)}`)
   await mkdir(folder)
   const archive = join(temporary, 'baseline.tar')
-  await gitIn(root, ['archive', '-o', archive, commit, 'app.html', 'src', 'convex', 'scripts'])
+  const vendor = await gitIn(root, ['ls-tree', '--name-only', commit, 'vendor'])
+  await gitIn(root, [
+    'archive',
+    '-o',
+    archive,
+    commit,
+    'app.html',
+    'src',
+    'convex',
+    'scripts',
+    ...(vendor ? ['vendor'] : []),
+  ])
   await promisify(execFile)('tar', ['-xf', archive, '-C', folder])
   await symlink(join(root, 'node_modules'), join(folder, 'node_modules'))
   return folder
