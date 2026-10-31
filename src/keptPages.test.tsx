@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
-import { plannerFixture } from './store/plannerFixture.setup'
+import { plannerFixture, underProgram } from './store/plannerFixture.setup'
 import { taskRow } from './views/boardFixture.setup'
 
 /* The main pages stay loaded while the person moves between them, on App
@@ -273,6 +273,51 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
       "the new sitting's review tick",
     )
     expect(fresh.dataset.syncReviewed).toBe('0')
+  })
+
+  it("opens an all-project sync row's Board jump on the task's sub-project, and its Roadmap jump on All projects", async () => {
+    // the fixture's project as a sub-project (p/1) of a top-level one
+    const org = await boot((snap) => void underProgram(snap))
+    const { P } = await import('./store/planner')
+    const me = P.CURRENT_USER
+    const later = async () => {
+      await go(`/app/${org}/sync/all/people/${me}`)
+      const sync = await shownPage('sync')
+      const open = await waitFor(
+        () => sync.querySelector<HTMLElement>(`[data-sync-later="${me}"]`),
+        'Later',
+      )
+      // Later stays open while the sitting is kept
+      if (!sync.querySelector('[data-sync-board="QN-1"]')) await act(async () => open.click())
+      return sync
+    }
+    let sync = await later()
+    const roadmap = await waitFor(
+      () => sync.querySelector<HTMLElement>('[data-sync-roadmap="QN-1"]'),
+      'the Roadmap jump',
+    )
+    await act(async () => roadmap.click())
+    await shownPage('roadmap')
+    expect(location.pathname).toBe('/app/~/roadmap/all')
+    sync = await later()
+    const board = await waitFor(
+      () => sync.querySelector<HTMLElement>('[data-sync-board="QN-1"]'),
+      'the Board jump',
+    )
+    await act(async () => board.click())
+    await shownPage('kanban')
+    // the project form of a task's address, not All projects' (board/all)
+    expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-1`)
+    await waitFor(
+      () =>
+        document
+          .querySelector('[data-workspace-view="kanban"] [data-board-root]')
+          ?.getAttribute('data-board-state') === 'ok',
+      "the sub-project's Board",
+    )
+    expect(
+      document.querySelector('[data-workspace-view="kanban"] [data-card="QN-1"]'),
+    ).not.toBeNull()
   })
 
   it('shows the Inbox again with an empty pane, holding nothing of the item picked before', async () => {

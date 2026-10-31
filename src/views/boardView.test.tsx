@@ -132,6 +132,35 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(board.card('a')).toBeNull()
   })
 
+  it('narrows at once when another person moves a task out of the selection, to Done under Focus or out of a search', async () => {
+    const board = await loadBoard(network, (snap) => {
+      plan(snap)
+      for (const [n, id] of ['a', 'b', 'c'].entries())
+        snap.issues.push({ ...taskRow(snap, id, 'todo', n + 10), title: `Order cable ${id}` })
+    })
+    await board.render(root)
+    expect(state()).toBe('ok')
+    await board.filter({ focus: true })
+    await board.search('cable')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    await board.answer()
+    expect(state()).toBe('ok')
+    expect(['a', 'b', 'c'].map((id) => board.card(id) !== null)).toEqual([true, true, true])
+    board.server.hold = true
+    const task = (id: string) => {
+      const found = board.snapshot.issues.find((t) => t.id === id)
+      if (!found) throw new Error(`no task ${id}`)
+      return found
+    }
+    // out of the selection, to Done under Focus, out of the search
+    task('a').project_id = 'two'
+    task('b').status = 'done'
+    task('c').title = 'Order the case'
+    await board.deliver()
+    expect(['a', 'b', 'c'].map((id) => board.card(id) !== null)).toEqual([false, false, false])
+    expect(state()).toBe('ok')
+  })
+
   it("shows the person's own pending writes as painted, both ways", async () => {
     const board = await loadBoard(network, (snap) => {
       three(snap)
