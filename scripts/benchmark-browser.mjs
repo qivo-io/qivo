@@ -853,7 +853,10 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   await scrollBoard(opened, metrics, 'boardScroll')
   // A filter that matches nothing, then clearing it, which brings every card
   // back.
-  const filter = await handle(page.getByPlaceholder('Filter tasks…', { exact: true }))
+  // the Board's own filter row: a Roadmap kept hidden holds another field
+  const filter = await handle(
+    page.locator('[data-filter-row]').getByPlaceholder('Filter tasks…', { exact: true }),
+  )
   phase('boardFilter')
   metrics.boardFilter.push(
     await timed(async () => {
