@@ -234,6 +234,9 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // (nameCopies.ts).
   'name_copies.source_id',
   'name_copies.scheduled_id',
+  // A regroup row names its next step, which recovery reads to tell a
+  // stalled chain from a waiting one (overviewRegroup.ts recover)
+  'overview_regroups.scheduled_id',
   // A reach row names a profile or a team, by grantee_kind (schema.ts
   // project_reach); tests/projectReach.setup.ts checks that every row's
   // grantee and sources are there.
