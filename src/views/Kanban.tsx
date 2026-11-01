@@ -1075,9 +1075,10 @@ function KanbanBoard({
       />
     )
   }
-  if (visible.length === 0 && view.empty()) {
+  // an incomplete Board is no empty one: its note says tasks are missing
+  if (visible.length === 0 && view.state !== 'incomplete' && view.empty()) {
     // the tasks of this view may be still to come
-    if (view.busy) {
+    if (view.busy || P.stillLoading() !== null) {
       return <EmptyState icon="board" title="Loading tasks…" hint="Tasks are still arriving." />
     }
     // My view empties for a reason of its own — an empty board here doesn't
@@ -1101,7 +1102,10 @@ function KanbanBoard({
   // a filter that matches nothing keeps the status columns standing (empty)
   // with an inline note — a full-screen empty state would hide the board.
   // Gated on the CLEARABLE filters: the note's only action is Clear.
-  const noMatches = visible.length === 0 && clearable
+  // not while tasks the answer names are missing, which may match
+  const noMatches = visible.length === 0 && clearable && view.state !== 'incomplete'
+  // the note waits while the workspace or the answer still brings tasks
+  const waiting = view.busy || P.stillLoading() !== null
   const gridCols = `repeat(${statuses.length}, minmax(${minColumnWidth}px, 1fr))`
 
   // ---- side-boards layout (each group its own mini board) ----------------
@@ -1125,7 +1129,7 @@ function KanbanBoard({
           {/* every sub-board hides itself when filtered empty, so a zero-match
             filter leaves nothing — say so instead of a blank pane */}
           {view.state === 'incomplete' && <IncompleteNote onRetry={view.retry} />}
-          {noMatches && <NoMatchNote onClear={actions.clearFilters} waiting={view.busy} />}
+          {noMatches && <NoMatchNote onClear={actions.clearFilters} waiting={waiting} />}
           <div className="[position:relative] [display:flex] [align-items:flex-start] [gap:var(--panel-gap)]">
             {boards.map(({ g, cells: boardCells }) => {
               const proj = g.proj
@@ -1323,7 +1327,11 @@ function KanbanBoard({
           </div>
         </div>
       </div>
-      {view.state === 'incomplete' && <IncompleteNote onRetry={view.retry} />}
+      {view.state === 'incomplete' && (
+        <div style={{ padding: `0 ${CANVAS_PAD_X}px var(--panel-gap)` }}>
+          <IncompleteNote onRetry={view.retry} />
+        </div>
+      )}
       <div
         ref={scrollRef}
         data-scroll
@@ -1441,7 +1449,7 @@ function KanbanBoard({
                 <LaneFoot />
               </div>
             ))}
-            {noMatches && <NoMatchNote onClear={actions.clearFilters} waiting={view.busy} />}
+            {noMatches && <NoMatchNote onClear={actions.clearFilters} waiting={waiting} />}
           </div>
         </div>
       </div>

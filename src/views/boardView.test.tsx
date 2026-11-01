@@ -220,6 +220,92 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(board.card(uuid)).toBeNull()
   })
 
+  it('stays loading while the store lacks a parent heading the answer names', async () => {
+    const board = await loadBoard(network, three)
+    await board.render(root)
+    await board.filter({ priority: 'high' })
+    const a = board.snapshot.issues.find((t) => t.id === 'a')
+    if (!a) throw new Error('no task a')
+    a.priority = 'high'
+    await board.deliver()
+    expect(state()).toBe('ok')
+    // the server holds a parent of a, which the filter leaves a heading
+    board.snapshot.issues.push(taskRow(board.snapshot, 'par', 'todo', 9))
+    a.parent_id = 'par'
+    await board.answer()
+    expect(state()).toBe('loading')
+    expect(count('todo')).toBe('…')
+    await board.deliver()
+    expect(state()).toBe('ok')
+    expect(document.body.textContent).toContain('Task par')
+  })
+
+  it('never looks empty or unmatched while tasks the answer names are missing', async () => {
+    const board = await loadBoard(network, () => {})
+    const { STALL } = await import('../store/liveParts')
+    const stall = STALL.ms
+    STALL.ms = 40
+    try {
+      await board.render(root)
+      expect(document.body.textContent).toContain('No tasks yet')
+      board.snapshot.issues.push({
+        ...taskRow(board.snapshot, 'late', 'todo', 1),
+        priority: 'high',
+      })
+      await board.answer()
+      expect(state()).toBe('loading')
+      expect(document.body.textContent).toContain('Loading tasks…')
+      await wait(100)
+      expect(state()).toBe('incomplete')
+      expect(document.body.textContent).not.toContain('No tasks yet')
+      expect(document.querySelector('[data-board-incomplete]')).not.toBeNull()
+      // a filter the tasks held miss says nothing matches only once all arrived
+      await board.filter({ priority: 'high' })
+      await board.answer()
+      await wait(100)
+      expect(state()).toBe('incomplete')
+      expect(document.body.textContent).not.toContain('Nothing matches your filters')
+      expect(document.querySelector('[data-board-incomplete]')).not.toBeNull()
+    } finally {
+      STALL.ms = stall
+    }
+  })
+
+  it('puts the phone note above its sections, with no empty card', async () => {
+    const board = await loadBoard(network, three, { phone: true })
+    const { STALL } = await import('../store/liveParts')
+    const stall = STALL.ms
+    STALL.ms = 40
+    try {
+      await board.render(root)
+      board.snapshot.issues.push(taskRow(board.snapshot, 'late', 'todo', 4))
+      await board.answer()
+      await wait(100)
+      expect(state()).toBe('incomplete')
+      const note = document.querySelector('[data-board-incomplete]')
+      const section = document.querySelector('.mobile-task-section')
+      expect(note && section).toBeTruthy()
+      expect(
+        note && section
+          ? note.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING
+          : 0,
+      ).toBeTruthy()
+      // with no task held, the note stands alone
+      await board.filter({ priority: 'urgent' })
+      board.snapshot.issues.push({
+        ...taskRow(board.snapshot, 'urgent', 'todo', 5),
+        priority: 'urgent',
+      })
+      await board.answer()
+      await wait(100)
+      expect(state()).toBe('incomplete')
+      expect(document.querySelector('.mobile-task-row')).toBeNull()
+      expect(document.body.textContent).not.toContain('No tasks here')
+    } finally {
+      STALL.ms = stall
+    }
+  })
+
   it('stays loading while the store lacks a task the answer names, then says so past the bound', async () => {
     const board = await loadBoard(network, three)
     const { STALL } = await import('../store/liveParts')

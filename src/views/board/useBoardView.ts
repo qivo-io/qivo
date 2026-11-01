@@ -19,8 +19,10 @@
      own result for them (provisionalBoard), marked loading or refreshing,
      as long as it holds at most BOARD_TASKS cards.
    - A task the answer names that the store does not hold yet keeps the
-     Board loading. Once the workspace has loaded, it may stay missing for
-     STALL.ms before the Board says that some tasks could not be shown. */
+     Board loading, and so does a parent heading the desktop Board shows
+     above its cards. Once the workspace has loaded, it may stay missing for
+     STALL.ms before the Board says that some tasks have not reached it;
+     it never looks empty or complete meanwhile. */
 
 import { useEffect, useState } from 'react'
 import { api } from '../../../convex/_generated/api'
@@ -70,7 +72,8 @@ export type BoardView = {
   /** Whether a lane or side-board of the sub-projects `subIds`, headed by
       project `head`, stays on the Board. */
   holds: (head: string, subIds: readonly string[]) => boolean
-  /** Whether the selection holds no task at all, for the empty states. */
+  /** Whether the selection holds no task the store has, for the empty
+      states, which an incomplete Board does not take. */
   empty: () => boolean
   /** the answer when it is a state the Board shows a message for */
   answer: BoardAnswer | null
@@ -137,14 +140,20 @@ export function useBoardView(
   if (answer?.state === 'ok') {
     const own = P.ownPaintedTasks()
     const shown = new Set<string>()
+    const held = (uuid: string) => {
+      const handle = P.handleOf(uuid)
+      return handle === null ? undefined : P.issueById[handle]
+    }
     let missing = 0
     for (const row of answer.rows) {
       if (own.has(row.id)) continue
-      const handle = P.handleOf(row.id)
-      const it = handle === null ? undefined : P.issueById[handle]
+      const it = held(row.id)
       if (!it) missing++
       else if (passes(info, filters, it)) shown.add(it.id)
     }
+    // the parent headings the desktop Board draws above its cards
+    if (variant === 'desktop')
+      for (const row of answer.parents) if (!own.has(row.id) && !held(row.id)) missing++
     // the person's own pending writes decide for the tasks they changed
     for (const uuid of own) {
       const handle = P.handleOf(uuid)

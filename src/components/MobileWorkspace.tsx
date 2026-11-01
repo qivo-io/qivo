@@ -546,6 +546,8 @@ function MobileTaskBoard({
   const count = groups.reduce((sum, group) => sum + group.tasks.length, 0)
   // a scope across every project, with none to show (components/NoProjects)
   const noProjects = info.wide && info.metas.length === 0
+  // the list waits while the workspace or the Board's answer still brings tasks
+  const waiting = view.busy || P.stillLoading() !== null
   // Focus stays on a task's row when a change moves it to another section.
   const listRef = useRef<HTMLDivElement>(null)
   const followFocus = useFollowTaskFocus(listRef)
@@ -671,6 +673,8 @@ function MobileTaskBoard({
           </div>
         </DialogContent>
       </Dialog>
+      {/* above the sections, which hold what reached the list */}
+      {view.state === 'incomplete' && <IncompleteNote onRetry={view.retry} />}
       {shown.map((group) => (
         <section key={group.id} className="mobile-task-section">
           <h2>
@@ -700,18 +704,18 @@ function MobileTaskBoard({
           </div>
         </section>
       ))}
-      {view.state === 'incomplete' && <IncompleteNote onRetry={view.retry} />}
       {/* a message in place of the sections, except where no project at
           all shows: the card below says why */}
       {!view.shows && !noProjects && (
         <BoardNote view={view} info={info} actions={actions} variant="phone" />
       )}
-      {count === 0 && (view.shows || noProjects) && (
+      {/* none while tasks the answer names are missing: the note says so */}
+      {count === 0 && (view.shows || noProjects) && view.state !== 'incomplete' && (
         <div className="mobile-task-empty" data-empty-state>
           <Icon name="board" size={24} />
-          <h2 data-empty-state-title>{view.busy ? 'Loading tasks…' : 'No tasks here'}</h2>
+          <h2 data-empty-state-title>{waiting ? 'Loading tasks…' : 'No tasks here'}</h2>
           <p>
-            {view.busy
+            {waiting
               ? 'Tasks are still arriving.'
               : noProjects
                 ? noProjectsHint()

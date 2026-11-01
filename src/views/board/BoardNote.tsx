@@ -223,14 +223,22 @@ function Note({
 }
 
 /** The note a Board shows above its tasks while some the answer names did
-    not reach the store (state incomplete). */
+    not reach the store (state incomplete). The workspace counts as loaded
+    then, so no part of it waits to be asked again: Try again asks only for
+    the Board's answer, and the note says so rather than promise the tasks. */
 export function IncompleteNote({ onRetry }: { onRetry: () => void }) {
   return (
     <div
       data-board-incomplete
-      className="board-empty-note flex flex-col items-center gap-1.5 px-4 py-[26px]"
+      className="board-empty-note flex flex-col items-center gap-1.5 px-4 py-[26px] text-center"
     >
-      <span className="text-base text-text-3">Some tasks of this Board could not be shown.</span>
+      <span className="text-base text-text-3">
+        Some tasks of this Board have not reached this window.
+      </span>
+      <span className="text-sm text-text-3">
+        Try again asks the server for this Board once more. If the tasks still do not show, reload
+        the page.
+      </span>
       <Button type="button" onClick={onRetry}>
         Try again
       </Button>

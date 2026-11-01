@@ -111,8 +111,9 @@ task list also shows parent tasks as rows, so it can list more than 1,000
 rows.
 
 If some tasks the server named have not reached your browser a minute after
-the rest, the Board says that some tasks could not be shown, with **Try
-again**, and keeps the counts at **…**. When a Board is not available, for
+the rest, the Board says so and keeps the counts at **…**. **Try again** asks
+the server for the Board once more; if the tasks still do not show, reload
+the page. When a Board is not available, for
 example after your access to its project ended, it says so instead of
 showing an empty Board.
 
