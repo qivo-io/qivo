@@ -2459,7 +2459,13 @@ let boardLookup: { base: Record<string, IssueVM>; map: Record<string, IssueVM> }
 /* Which person the store's owner-load cache asks as, by organization: a
    staff seat reads up to CALL_OWNERS owners a call, a guest or Viewer one. */
 const ownerLoads = createOwnerLoadCache({
-  live,
+  // read at each call, so a module that never asks for a load needs no
+  // live transport
+  live: {
+    watch: (ref, args) => live.watch(ref, args),
+    read: (token) => live.read(token),
+    onTransition: (fn, options) => live.onTransition(fn, options),
+  },
   staffIn: (org) => {
     const me = rows.profiles.get(myProfiles.get(org) ?? '')
     return me?.org_role === 'admin' || me?.org_role === 'user'
@@ -7284,6 +7290,17 @@ export const PLANNER = {
     syncViewRead(slot)
     releaseViewRows(slot)
     viewReads.delete(slot)
+  },
+  /** Task `uuid` as the rows on screen show it to view `slot`, for a task
+      the person's own pending writes changed (P.ownPaintedTasks): the
+      workspace's where it holds the task, none where the workspace held it
+      and a write took it away (an archive or a delete), else the model of
+      the answer's row (store/viewRows.ts). */
+  ownOnScreen: (slot: ViewSlot, uuid: string): IssueVM | undefined => {
+    const handle = uuidToKey.get(uuid)
+    if (handle !== undefined) return PLANNER.issueById[handle]
+    if (base.map('issues').has(uuid)) return undefined
+    return viewRows.model(slot, uuid)
   },
   /** The view model of task `uuid` that view `slot`'s answer brings, when
       the workspace does not hold the task (store/viewRows.ts). */

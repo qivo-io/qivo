@@ -220,7 +220,7 @@ export function useBoardView(
     // the person's own pending writes decide for the tasks they changed,
     // each put in its place in the answer's order
     for (const uuid of own) {
-      const it = modelOf(uuid)
+      const it = P.ownOnScreen(slot, uuid)
       if (!it || shown.has(uuid) || !passes(info, filters, it)) continue
       shown.add(uuid)
       let at = tasks.length
@@ -295,8 +295,15 @@ export function useBoardView(
     shows: true,
     holds: (head, subIds) =>
       held.has(head) || subIds.some((id) => held.has(id) || cardProjects.has(id)),
-    // the answer's rows, then, while it names none, the store's tasks of
-    // the selection, which may be still to come while the workspace loads
-    empty: () => answer.rows.length === 0 && P.scopedIssues(info).length === 0,
+    // no row of the answer still shows a task (a person's own archive or
+    // delete takes one away at once), and none of the store's tasks of the
+    // selection, which may be still to come while the workspace loads
+    empty: () => {
+      const own = P.ownPaintedTasks()
+      return (
+        P.scopedIssues(info).length === 0 &&
+        answer.rows.every((row) => own.has(row.id) && !P.ownOnScreen(slot, row.id))
+      )
+    },
   }
 }
