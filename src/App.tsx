@@ -81,6 +81,7 @@ import {
   syncPlaceOf,
   taskSegmentOf,
   type UiState,
+  viewBehindTask,
 } from './lib/router'
 import { type Toast, toastLook, withToast } from './lib/toasts'
 import {
@@ -863,7 +864,8 @@ function App() {
   // underneath stays the saved one.
   const r0Scope =
     r0 && !r0.sync
-      ? r0.scope || (r0.issue ? scopeForIssueOn(r0.view || uiView, r0.issue, uiScope) : undefined)
+      ? r0.scope ||
+        (r0.issue ? scopeForIssueOn(viewBehindTask(r0, uiView), r0.issue, uiScope) : undefined)
       : undefined
   // project ids are DB uuids (not the prototype's fixed slugs): default the
   // scope to the first visible project org-wide (navigation is flat since 0078),
@@ -1245,7 +1247,8 @@ function App() {
       pendingTask.current = null
       return
     }
-    const issue = (parsePath(pending.pathname) || parseHash(pending.hash))?.issue
+    const route = parsePath(pending.pathname) || parseHash(pending.hash) || {}
+    const issue = route.issue
     if (!issue && P.stillLoading() !== null) return
     pendingTask.current = null
     const here = { scope, view, settingsPage, inboxOpen, projectsOpen, sync }
@@ -1257,7 +1260,7 @@ function App() {
     if (issue && unmoved && !sync) {
       const sc = liveScope(pending.scope)
         ? pending.scope
-        : scopeForIssueOn(view, issue, pending.preferred)
+        : scopeForIssueOn(viewBehindTask(route, view), issue, pending.preferred)
       if (liveScope(sc)) setScope(sc)
     }
     setOpenIssue(issue || null)
@@ -1309,7 +1312,7 @@ function App() {
         : liveScope(r.scope)
           ? r.scope
           : r.issue
-            ? scopeForIssueOn(r.view || was.view, r.issue, preferred)
+            ? scopeForIssueOn(viewBehindTask(r, was.view), r.issue, preferred)
             : undefined
       const next = {
         scope: liveScope(sc) ? sc : was.scope,

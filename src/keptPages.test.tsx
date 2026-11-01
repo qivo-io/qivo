@@ -320,6 +320,45 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     ).not.toBeNull()
   })
 
+  it('keeps a saved All projects scope under an Inbox task address, at boot, on Back or Forward and for a task still to load', async () => {
+    let key = ''
+    // 12,800 task numbers make 64 task windows; the last, from fc000000,
+    // holds QN-5 back
+    const org = await boot((snap) => {
+      underProgram(snap)
+      snap.orgs[0].next_issue_num = 64 * 200
+      snap.issues.push(
+        taskRow(snap, '01000000-early', 'todo', 4),
+        taskRow(snap, 'fd000000-late', 'todo', 5),
+      )
+      // a Board on All projects, saved before the page loaded
+      key = `planner.ui.v1:${snap.myProfileIds[0]}`
+      localStorage.setItem(key, JSON.stringify({ scope: 'all', view: 'kanban' }))
+      history.replaceState(null, '', '/app/testbed/inbox/tasks/qn-4')
+    }, 'fc000000')
+    try {
+      const { P } = await import('./store/planner')
+      await shownPage('inbox')
+      expect(P.loadUI()).toMatchObject({ scope: 'all', view: 'kanban' })
+      await go(`/app/${org}/board/all`)
+      await shownPage('kanban')
+      await go(`/app/${org}/inbox/tasks/qn-4`)
+      await shownPage('inbox')
+      expect(P.loadUI()).toMatchObject({ scope: 'all', view: 'kanban' })
+      // a task still to load, which the app opens once it arrived
+      await go(`/app/${org}/inbox/tasks/qn-5`)
+      await act(async () => {
+        double.live?.holdWindow(null)
+        await new Promise((resolve) => realTimeout(resolve, 0))
+      })
+      await waitFor(() => P.stillLoading() === null, 'every task')
+      await waitFor(() => location.pathname.endsWith('/inbox/tasks/qn-5'), 'the task that arrived')
+      expect(P.loadUI()).toMatchObject({ scope: 'all', view: 'kanban' })
+    } finally {
+      localStorage.removeItem(key)
+    }
+  })
+
   it('shows the Inbox again with an empty pane, holding nothing of the item picked before', async () => {
     const org = await boot((snap) => {
       const message = (id: string, issue: string, title: string) => ({

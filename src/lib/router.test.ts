@@ -69,6 +69,7 @@ import {
   syncPlaceOf,
   taskSegmentOf,
   type UiState,
+  viewBehindTask,
 } from './router'
 
 const project = (
@@ -742,6 +743,16 @@ describe('scopeForIssueOn', () => {
   it('keeps All projects on the Overview and the Roadmap', () => {
     expect(scopeForIssueOn('overview', 'QN-5', 'all')).toBe('all')
     expect(scopeForIssueOn('roadmap', 'QN-5', 'all')).toBe('all')
+  })
+
+  it('keeps All projects under an Inbox task address, which shows no Board', () => {
+    const inbox = parsePath('/app/home/inbox/tasks/qn-5')
+    expect(inbox).toMatchObject({ inbox: true, issue: 'QN-5' })
+    expect(viewBehindTask(inbox ?? {}, 'kanban')).toBeNull()
+    expect(scopeForIssueOn(viewBehindTask(inbox ?? {}, 'kanban'), 'QN-5', 'all')).toBe('all')
+    // a task address that names no view stays on the view that shows
+    expect(viewBehindTask({ issue: 'QN-5' }, 'kanban')).toBe('kanban')
+    expect(viewBehindTask({ view: 'roadmap', issue: 'QN-5' }, 'kanban')).toBe('roadmap')
   })
 
   it('answers as scopeForIssue everywhere else', () => {
