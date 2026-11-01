@@ -99,7 +99,10 @@ and organization Viewers receive workload only for tasks they can access or
 own; they cannot see other people's hidden workload. When a person has a
 very large amount of open work, a guest's or Viewer's workload and delay for
 that person can show as unavailable, even when most of that work is in
-projects they cannot see.
+projects they cannot see. In REST and MCP task lists, a guest's or Viewer's
+page reads the other work of only one person, so the delay of another
+person's task that depends on their other work says unavailable until the
+task itself is read.
 
 Change history follows the same rules. You see a task's changes only if you
 can access the task and every project a change involves, such as both ends of

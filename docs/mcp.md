@@ -162,11 +162,7 @@ and `last_comment_at`, and `get_project`, `create_project` and
 [Projects, access and milestones](#projects-access-and-milestones)). The
 three read tools' descriptions now name the new fields. A client holding the
 older catalogue reads them too, but its model does not learn what they mean
-until the client refreshes its tool list. An active `list_tasks` page whose
-tasks' newest comments do not fit in one request is refused with `this page
-of tasks is too large to read at once; ask for a smaller limit`, or with
-`this organization's active tasks are too large to list in one request`
-when none fit (see [Task results](#task-results)).
+until the client refreshes its tool list.
 
 Later in October 2026 every `list_tasks` and `get_task` result gained
 `delay`, the app's projected delay (see [Task results](#task-results)). The
@@ -289,6 +285,23 @@ task's or project's `description` have their fields' limits, and
 `format: "uuid"`. A client holding the older catalogue keeps working, but
 its model reads the old title limit until the client refreshes its tool
 list.
+
+In November 2026 `list_tasks` began to answer active tasks as
+`{next_cursor, tasks}` too, paged with `cursor`, in the same order. An
+`offset` other than `0` is refused with `offset does not apply to active
+tasks; pass next_cursor as cursor`, and `cursor` no longer needs `archived:
+true`. Active lists no longer refuse a page, a search or an organization as
+too large to read in one call. Each page reads a bounded amount instead,
+and only a list too large to read at all is refused (see [Task
+results](#task-results)). A `list_tasks` row's `delay` can now say
+`unavailable` too, and the `completion` of `get_project`, `create_project`
+and `update_project` gained `status`, `ok` or `unavailable` (see [Projects,
+access and milestones](#projects-access-and-milestones)). The `list_tasks`
+and `get_project` descriptions say so. A client holding the older catalogue
+gets the new answers too, so code that read an active list as an array must
+read its `tasks` and follow `next_cursor`. Its model learns how to page
+active tasks and what the new statuses mean only after the client refreshes
+its tool list.
 
 ## Access model: the credential is a user
 
@@ -1267,8 +1280,8 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |
 | `list_teams` | Teams in your organization, as `id`, `name` and `members` (`id`, `name`, `leader`, by name). Teams group users for project sharing and administration. A team's project grants are in `get_project`, and `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078). See [Teams](#teams) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106). Each row has `archived` and your `access` (`read`, `write`) on that project, as REST's rows do. See [Projects, access and milestones](#projects-access-and-milestones) |
-| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `offset`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Every result also has `progress` (for a group, the done and total tasks without subtasks under it that you can see), `delay` (the app's projected delay when the task's project tracks it) and `last_comment_at`. Active tasks only by default, oldest first by creation, so `offset` pages through them. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read, as `{next_cursor, tasks}` paged with `cursor` (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
-| `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks), the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
+| `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `cursor`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Every result also has `progress` (for a group, the done and total tasks without subtasks under it that you can see), `delay` (the app's projected delay when the task's project tracks it, `unavailable` when Qivo did not read the owner's other work) and `last_comment_at`. Answers `{next_cursor, tasks}`; pass `next_cursor` back as `cursor` until it is `null`, even after a short or empty page. `offset` is refused unless `0`. Active tasks only by default, oldest first by creation. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
+| `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks, or `status: "unavailable"` when they are too many to count in one call), the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name` (at most 80 characters), or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
 | `update_project` | Change a project you lead: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). An archive or restore and a rename in one call share one budget of 2,000 sub-projects and access entries (see [Limits](#limits)) and of the data one change can read; a project tree past that data is refused with `this project, or the top-level project above it, has sub-projects that hold more data than one change can read, so it cannot be archived or restored at once. Shorten the longest project names or descriptions there, or delete some of those sub-projects first.` and nothing changes. When a call that archives or restores and renames is refused on that budget, make the archive or restore and the rename two calls, which each get the whole budget. A top-level project that more people have among their favorites than one change can update is refused with `more people have this project among their favorites than one change can update, so it cannot be archived, restored or renamed at once. Contact support@qivo.io so we can help.` and nothing changes; one call that archives or restores and renames it updates each favorite once, so two calls would meet the same refusal. Answers like `get_project`. It takes no `archive_reason`, which only tasks take. `expected` holds what you last read of the fields it changes, `lead_id` as `get_project` shows it. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access. With a level, `expected` holds the `level` you last read in `get_project`'s `grants`, `null` for none; with `level: null` it is refused. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
@@ -1537,7 +1550,7 @@ A `list_projects` row:
 {
   "lead_id": "…uuid…", "lead_name": "Leo Martins",
   "review_hours": null, "effective_review_hours": 2, "track_delay": true,
-  "completion": { "done": 12, "total": 30, "percent": 40 },
+  "completion": { "status": "ok", "done": 12, "total": 30, "percent": 40 },
   "milestones": [{ "id": "…uuid…", "name": "Prototype validated", "date": "2026-11-02" }],
   "grants": {
     "users": [{ "id": "…uuid…", "name": "Emil Strand", "level": "user" }],
@@ -1554,8 +1567,13 @@ subtasks in the project, or for a top-level project in its sub-projects you
 can read that are not archived, and `done` counts those that are Done. A
 task whose only subtasks are hidden from you still counts as a group and is
 left out, as in the app. `percent` is rounded, and `0` when `total` is `0`.
-It is `null` for an archived project, and `create_project` answers zeros,
-because a new project holds no tasks. `milestones` belong to the top-level
+Its `status` is `ok`. When the project's tasks are too many to count in one
+call, it is `{"status": "unavailable", "done": null, "total": null,
+"percent": null}` instead, which never fails the read or `update_project`.
+`completion` is `null` for an archived project, and `create_project` answers
+`ok` with zeros, because a new project holds no tasks. `status` arrived in
+November 2026, so treat a `status` you do not know as no completion.
+`milestones` belong to the top-level
 project, so a sub-project shows its parent's, ordered by date. `grants` are
 the project's own individual and team grants, as its **Project access** list
 shows them; a sub-project also inherits its parent's. A project you cannot
@@ -1761,28 +1779,32 @@ task. A group with subtasks you cannot read can only be `late`, as in the
 app. The server judges today's date in UTC, so near midnight or a week
 boundary it can differ from the app, which uses the browser's time zone.
 
-On `get_task`, `delay` can also be `{"status": "unavailable",
-"projected_end_week": null}`. Qivo says this when the owner's other open
-work is too large for it to read in one request, or it could not finish
-checking which projects you can see. It can happen for any user, a viewer
-or guest included, also when most of that work is in projects they cannot
-read. It never counts the work it could not read as free time. It also
-replaces `late` on a task whose due date has passed, because the projected
-week rests on that work, so `list_tasks` can say `late` for the same task.
-A `list_tasks` result never says `unavailable`.
+`delay` can also be `{"status": "unavailable", "projected_end_week":
+null}`. Qivo says this when the owner's other open work is too large for it
+to read in one request, or it could not finish checking which projects you
+can see. It can happen for any user, a viewer or guest included, also when
+most of that work is in projects they cannot read. A `list_tasks` row also
+says it when its page did not read the owner's other work. A list reads the
+other open work of each page's owners within a fixed share of the page's
+budget, so the rows of a person with very much open work can say
+`unavailable` on every page. An organization admin or user gets every owner
+that share holds. A guest or
+organization Viewer gets the work of the first owner on the page whose task
+needs it, and the tasks of other owners on that page that need their
+owner's work say `unavailable`. Call `get_task` for such a task's own
+verdict. Qivo never counts the work it could not read as free time.
+`unavailable` also replaces `late` on a task whose due date has passed,
+because the projected week rests on that work. `unavailable` arrived on
+`get_task` in October 2026 and on `list_tasks` in November 2026, so treat a
+`status` you do not know as no verdict.
 
 `last_comment_at` is when the newest comment on the task was posted, or
 `null` when it has none. Editing a comment does not change it, and deleting
 the newest one makes the one before it the newest.
 
 Each row's `description` and `last_comment_at` are one read each, besides
-the task. An active `list_tasks` page of more than one task whose
-descriptions, comments and parents do not fit in one request is refused
-with `this page of tasks is too large to read at once; ask for a smaller
-limit`, and a smaller `limit` helps. An archived page instead ends early
-and answers a `next_cursor`. A search of active tasks whose descriptions
-do not fit is refused with `this search reads too many task descriptions
-to answer in one request; name a project or add a filter`.
+the task. A `list_tasks` page whose rows do not all fit in one request ends
+early and answers a `next_cursor`, active and archived alike.
 
 `get_task` adds eight fields, which name only tasks you can read:
 
@@ -1817,61 +1839,90 @@ stops at a subtask you cannot read.
 
 An archived group can have more tasks under it than one request can read,
 such as thousands of subtasks, or hundreds with very long descriptions until
-the deployment's operator has run the one-time description clear. `get_task`
-then still lists its direct `subtasks`, but `start_week` and
-`end_week` are `null`, `progress` is `0` of `0` with `partial: true` and
-`group_remaining_hours` is `null`. When even its direct subtasks do not all
-fit, `subtasks` lists those of the first ones that do which you can read,
-and `has_more_subtasks` is `true`. Find the rest with `list_tasks` and
+the deployment's operator has run the one-time description clear. So can an
+active group stored before the rule of one level of subtasks, whose
+subtasks have subtasks of their own. `get_task` then still lists its direct
+`subtasks`, but `start_week` and `end_week` are `null`, `progress` is `0` of
+`0` with `partial: true` and `group_remaining_hours` is `null`. An active
+task has at most 100 active subtasks, so it always lists all of them. When
+even an archived group's direct subtasks do not all fit, `subtasks` lists
+those of the first ones that do which you can read, and `has_more_subtasks`
+is `true`. Find the rest with `list_tasks` and
 `archived: true` for the group's top-level project, which covers its
 sub-projects, where each one's `parent_id` names the group.
 `has_more_subtasks` is `false` on every other task.
 
-`list_tasks` returns active tasks as an array, oldest first by creation,
-with tasks created at the same moment ordered by number, so `offset` pages
-through them until a page holds fewer tasks than `limit`. `limit` is 50 by
-default, and one that is not a whole number from 1 to 200 is refused with
-`limit must be a whole number of tasks from 1 to 200.`, as on REST. A
-`search` holds at most 200 characters, on active and archived lists alike,
-and a longer one is refused with `a search must be at most 200 characters.
-Search for fewer words.` Each row's
-`description` reads the task's description and its `last_comment_at` the
-task's newest comment, and a row whose parent is in an archived project
-reads that parent. When those reads do not fit in one request beside the
-rest of the page, as for a page of many long descriptions, the call is
-refused with `this page of tasks is too large to read at once; ask for a
-smaller limit`; call again with a smaller `limit`. A page of one task gets
-the sentence of what filled the call instead, one of the two below. A list also reads every active
-task in the organization's active projects, or every active task of the
-organization when it names an archived project or the organization has more
-than 1,000 active projects. When those alone leave no
-room for a single comment, the call is refused with `this organization's active tasks are too large to list in one request; archive done tasks and finished projects so fewer stay active`, and a smaller `limit`
-does not help. When the call instead runs out of index reads, which follow
-the active projects, your team memberships and the labels a search matches,
-it is refused with `this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words`. A `search` of active tasks reads, in list
-order, the label names of the tasks their other fields do not match, then
-the descriptions of those their labels do not match either. It stops once
-it has found the tasks up to the end of the page, whichever field matched
-them. A search that
-matches few tasks, such as one by task ID, reads every active task's
-description. With descriptions of a few hundred characters that fits an
-organization of about 13,000 active tasks in one call once the deployment's
-operator has run the one-time description clear, which moves the text off
-the task rows, and about 9,000 before it. A larger one is
-refused with `this search reads too many task descriptions to answer in one
-request; name a project or add a filter`. A search that finds its page
-early keeps the list's own scale. A `search` whose label names it would have
-to read for too many tasks at once is refused with `this search reads too
-many label assignments to answer in one request; name a project or add a
-filter`.
+`list_tasks` answers active tasks as an object, cursor first:
+
+```json
+{
+  "next_cursor": "…",
+  "tasks": [{ "id": "…uuid…", "key": "QN-3", "archived": false, "…": "…" }]
+}
+```
+
+Tasks come in creation order (`created_at`), oldest first, with tasks
+created at the same moment ordered by number, as on REST. Pass
+`next_cursor` unchanged as `cursor` for the next page and stop when it is
+`null`. A page can hold fewer than `limit` tasks, or none, while
+`next_cursor` is set, because each page reads a bounded amount however
+large the organization is. A short or empty page is never the end of the
+list. Only a `null` `next_cursor` is. `limit` is 50 by default and may
+change from one page to the next, and one that is not a whole number from 1
+to 200 is refused with `limit must be a whole number of tasks from 1 to
+200.`, as on REST. Each row's `description` reads the task's description
+and its `last_comment_at` the task's newest comment, and a row whose parent
+is not on the page reads that parent. A row whose reads do not fit
+in the rest of a page ends the page before it, and the next page starts
+with it. The first task a page looks at always answers, so paging moves on.
+If it is an active group stored before the rule of one level of subtasks,
+with more tasks under it than the page can read, its row has `start_week`
+and `end_week` set to `null` and a `progress` of `0` of `0` with `partial:
+true`, as on `get_task` above.
+
+A `search` holds at most 200 characters, on active and archived lists
+alike, and a longer one is refused with `a search must be at most 200
+characters. Search for fewer words.`, before the cursor or the page is
+read. A `search` of active tasks reads, in list order, the label names of
+the tasks their other fields do not match, then the descriptions of those
+their labels do not match either. It goes on across pages like any list, so
+a search that matches few tasks, such as one by task ID, may answer several
+short or empty pages with a `next_cursor` before it finds them.
+
+A cursor works only for the organization, caller, project, filters and
+search it came from, whether you name the project by number, key or uuid. A
+changed filter or search starts a new list, from the first page. A cursor
+from REST's `GET /v1/tasks` does not continue on `list_tasks`, even with the
+same search, because a `*` in a REST search widens it and here it stays
+literal.
+
+Pages are not a snapshot. A task created while you page lands at the end of
+the list. A task restored from Deleted items or from the archive keeps its
+creation time, so once you have paged past that time you miss it until you
+start again from the first page. So does a task of a project you gain
+access to while you page.
+
+A page reads only the projects the list covers, side by side, and never
+tasks of projects you cannot read. In a very large organization a list can
+be refused when the call has no room for a page beside your projects and
+access, or when the list covers more projects than one page can open side
+by side. Name a project to list one project's tasks instead.
+
+These active list calls are refused: an `offset` other than `0`, negative
+ones included (`offset does not apply to active tasks; pass next_cursor as
+cursor`), a `cursor` that is not the `next_cursor` of an earlier page of the
+same list (`cursor must be the next_cursor of an earlier page`) and a list
+too large to read, as above (`the task list could not be read within the
+request's limits; pass project to list one project's tasks`). A fractional
+`offset` is refused by the input schema before the tool runs.
 
 With `archived: true` it lists archived tasks one project at a time and
 needs `project`. Naming a project lists its archived tasks and those of all
 its sub-projects you can read, archived sub-projects included. The app's
 Archived tasks page leaves out a sub-project archived on its own. Tasks come
 most recently archived first, and tasks archived at the same moment keep one
-fixed order across pages. The answer is an object, cursor first, with the
-same rows as an active list:
+fixed order across pages. The answer is the same object as an active
+list's, with the same rows:
 
 ```json
 {
@@ -1912,8 +1963,7 @@ admin's call can read the organization's whole archive for such a project.
 
 These calls are refused: `archived: true` without `project` (`archived:
 true needs project, because archived tasks are listed one project at a
-time`), `cursor` without `archived: true` (`cursor works only with archived:
-true`), an `offset` other than `0` with `archived: true` (`offset does not
+time`), an `offset` other than `0` with `archived: true` (`offset does not
 apply to archived tasks; pass next_cursor as cursor`), a `cursor` that is
 not a `next_cursor` (`cursor must be the next_cursor of an earlier page`)
 and a project too wide to list together, as above (`this project has too

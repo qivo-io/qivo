@@ -71,8 +71,15 @@ due date.
 - **Overview** includes projected misses in **Overdue & at risk** and counts
   **Delayed** and **Slipping** tasks in the health table.
 - **REST and MCP** task results carry the same verdict as `delay`, judged on
-  today's date in UTC. A single task's verdict says it is unavailable when
-  Qivo cannot read the owner's other open work in one request. See [Automation & AI](./automation-ai-the-rest-api-and-the-mcp-server.md).
+  today's date in UTC. A task's verdict says it is unavailable when Qivo
+  cannot read the owner's other open work in one request. A row of a task
+  list can also say unavailable when Qivo did not read the owner's other
+  work for that page. A page reads that work within a fixed share of what it
+  may read, so the rows of a person with very much open work can say
+  unavailable on every page. For a guest or Viewer, Qivo reads it for only
+  the first person on a page who needs it. Reading the task itself gives its
+  verdict. See
+  [Automation & AI](./automation-ai-the-rest-api-and-the-mcp-server.md).
 
 ## Turning it on and off
 
