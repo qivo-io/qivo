@@ -1134,19 +1134,24 @@ export async function expectRefusal(
   return caught as ConvexError<Refusal>
 }
 
-/* REST GET /v1/tasks answers an array for active tasks and a page for
- * archived ones (machine/rest.ts listIssues). These call it and require the
- * shape they expect. The request's day is TODAY unless `today` says
- * otherwise. */
+/* REST GET /v1/tasks answers a page, `{next_cursor, tasks}`, for active and
+ * archived tasks alike (machine/rest.ts listIssues). These call it. The
+ * request's day is TODAY unless `today` says otherwise. A page with a next
+ * page seals its cursor with a key derived from BETTER_AUTH_SECRET
+ * (lib/archiveCursorSeal.ts), so the suites that call these get one unless
+ * they plant their own. */
+const env = globalThis as unknown as { process: { env: Record<string, string | undefined> } }
+env.process.env.BETTER_AUTH_SECRET ??= 'task-list-test-secret-not-a-deployment-key'
+
 type RestTaskListArgs = Omit<FunctionArgs<typeof internal.machine.rest.listIssues>, 'today'> & {
   today?: string
 }
 
-/** The active task list REST answers for `args`. */
+/** The rows of the first page of the active task list REST answers for
+ * `args`, or of the page `args.cursor` names. */
 export async function restTasks(t: T, args: RestTaskListArgs): Promise<RestIssueJson[]> {
   const out = await t.query(internal.machine.rest.listIssues, { today: TODAY, ...args })
-  if (!Array.isArray(out)) throw new Error(`expected an array, got ${JSON.stringify(out)}`)
-  return out
+  return out.tasks
 }
 
 /** The page of archived tasks REST answers for `args`. */
@@ -1154,13 +1159,11 @@ export async function restArchivedPage(
   t: T,
   args: Omit<RestTaskListArgs, 'archived'>,
 ): Promise<{ next_cursor: string | null; tasks: RestIssueJson[] }> {
-  const out = await t.query(internal.machine.rest.listIssues, {
+  return await t.query(internal.machine.rest.listIssues, {
     today: TODAY,
     ...args,
     archived: 'true',
   })
-  if (Array.isArray(out)) throw new Error(`expected a page, got ${JSON.stringify(out)}`)
-  return out
 }
 
 /* A caller as as() gives one. */

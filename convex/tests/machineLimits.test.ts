@@ -146,6 +146,9 @@ async function tool(fx: Fx, name: string, args: Record<string, unknown>) {
   return { text: result?.content?.[0]?.text ?? '', refused: result?.isError === true }
 }
 
+/* A page of a task list as both surfaces answer it. */
+type Page = { next_cursor: string | null; tasks: unknown[] }
+
 const refusedWith = (sentence: string) => ({ text: sentence, refused: true })
 const restRefusal = (sentence: string, status = 400) => ({ status, json: { error: sentence } })
 
@@ -188,12 +191,16 @@ describe('task lists', () => {
     }
     const page = await rest(fx, 'GET', '/v1/tasks?project=FW')
     expect(page.status).toBe(200)
-    expect(page.json).toHaveLength(DEFAULT_PAGE_SIZE)
-    const listed = await tool(fx, 'list_tasks', { project: 'FW' })
-    expect(JSON.parse(listed.text)).toHaveLength(DEFAULT_PAGE_SIZE)
+    const first = page.json as Page
+    expect(first.tasks).toHaveLength(DEFAULT_PAGE_SIZE)
+    expect(first.next_cursor).toEqual(expect.any(String))
+    const listed = JSON.parse((await tool(fx, 'list_tasks', { project: 'FW' })).text) as Page
+    expect(listed.tasks).toHaveLength(DEFAULT_PAGE_SIZE)
+    expect(listed.next_cursor).toEqual(expect.any(String))
     // the most a page holds
     const most = await rest(fx, 'GET', `/v1/tasks?project=FW&limit=${LIMITS.listTasks.max}`)
-    expect(most.json).toHaveLength(DEFAULT_PAGE_SIZE + 1)
+    expect((most.json as Page).tasks).toHaveLength(DEFAULT_PAGE_SIZE + 1)
+    expect((most.json as Page).next_cursor).toBeNull()
 
     for (const limit of ['500', '0', 'abc', '-5', '1.5', '']) {
       expect(await rest(fx, 'GET', `/v1/tasks?project=FW&limit=${limit}`), limit).toEqual(
@@ -205,9 +212,11 @@ describe('task lists', () => {
         refusedWith(LIMITS.listTasks.refusal),
       )
     }
-    // a negative offset is refused, not read as 0
-    expect((await rest(fx, 'GET', '/v1/tasks?project=FW&offset=-1')).status).toBe(400)
-    expect((await tool(fx, 'list_tasks', { project: 'FW', offset: -1 })).refused).toBe(true)
+    // an active list pages with a cursor, so a negative offset is refused
+    // like any other, not read as 0
+    const offset = 'offset does not apply to active tasks; pass next_cursor as cursor'
+    expect(await rest(fx, 'GET', '/v1/tasks?project=FW&offset=-1')).toEqual(restRefusal(offset))
+    expect(await tool(fx, 'list_tasks', { project: 'FW', offset: -1 })).toEqual(refusedWith(offset))
   })
 
   it('refuses a search over its cap on active and archived lists alike', async () => {

@@ -134,8 +134,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = '1dd335f8d27409b3c253243700c5f0b13945aed6b71225b16dac0b0f7e124610'
-const SHA_TOOLS_MODERN = '9f4884fca508b0311b5d0320e012fdf15627204c11eaf1ba003efd3380e9f329'
+const SHA_TOOLS_LEGACY = 'e8fb33e1aa3d209a81115c6b249106ac7dd26a49c32079054f473a63f31296a6'
+const SHA_TOOLS_MODERN = '31c431e5137665a9cebf51f06e3d5825bc424eb9e3329aaf504d7b9c3940af8f'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -1165,14 +1165,16 @@ describe('read tools', () => {
       'signed mobile',
       'roll*back',
     ]) {
-      const rows = JSON.parse(
-        await fx.t.query(internal.machine.mcp.listIssues, {
-          today: TODAY,
-          callerId: fx.guest.id,
-          access: 'read',
-          search,
-        }),
-      ) as { id: string }[]
+      const rows = (
+        JSON.parse(
+          await fx.t.query(internal.machine.mcp.listIssues, {
+            today: TODAY,
+            callerId: fx.guest.id,
+            access: 'read',
+            search,
+          }),
+        ) as { tasks: { id: string }[] }
+      ).tasks
       expect(
         rows.map((row) => row.id),
         search,
@@ -1213,8 +1215,8 @@ describe('read tools', () => {
             access: 'read',
             search,
           }),
-        ) as { id: string }[]
-      ).map((row) => row.id)
+        ) as { tasks: { id: string }[] }
+      ).tasks.map((row) => row.id)
     for (const search of ['in review', 'high', 'user brack', 'thermal']) {
       expect(await ids(search), search).toEqual([bracket.id])
     }
@@ -1252,7 +1254,8 @@ describe('read tools', () => {
       title: 'Old thing',
       archived_at: NOW,
     })
-    const list = async (callerId: string, args: Record<string, unknown> = {}) =>
+    /* One page of active tasks, as MCP answers it, next_cursor first. */
+    const page = async (callerId: string, args: Record<string, unknown> = {}) =>
       JSON.parse(
         await fx.t.query(internal.machine.mcp.listIssues, {
           today: TODAY,
@@ -1260,7 +1263,10 @@ describe('read tools', () => {
           access: 'read',
           ...args,
         }),
-      ) as Record<string, unknown>[]
+      ) as { next_cursor: string | null; tasks: Record<string, unknown>[] }
+    const list = async (callerId: string, args: Record<string, unknown> = {}) =>
+      (await page(callerId, args)).tasks
+    expect(Object.keys(await page(fx.guest.id))).toEqual(['next_cursor', 'tasks'])
     // without a scope, everything readable and active, oldest first by
     // creation as on REST, not by project key
     expect((await list(fx.admin.id)).map((i) => i.title)).toEqual([
@@ -1295,7 +1301,11 @@ describe('read tools', () => {
     ).toEqual([i1.id])
     expect((await list(fx.guest.id, { search: 'alpha' })).map((i) => i.id)).toEqual([i1.id])
     expect(await list(fx.guest.id, { search: '*' })).toEqual([]) // no wildcard on MCP
-    expect((await list(fx.guest.id, { limit: 1 })).map((i) => i.id)).toEqual([i2.id])
+    const first = await page(fx.guest.id, { limit: 1 })
+    expect(first.tasks.map((i) => i.id)).toEqual([i2.id])
+    // the next page follows from the cursor and is the last
+    const next = await page(fx.guest.id, { limit: 1, cursor: first.next_cursor ?? 'none' })
+    expect(next).toMatchObject({ next_cursor: null, tasks: [{ id: i1.id }] })
     // the uniform refusal: nonexistent, invisible, foreign — one sentence shape
     for (const [caller, ref] of [
       [fx.admin.id, 'NOPE'],
@@ -1841,8 +1851,8 @@ describe('write tools', () => {
         callerId: fx.agent.id,
         access: 'read',
       }),
-    ) as unknown[]
-    expect(rows).toHaveLength(2)
+    ) as { tasks: unknown[] }
+    expect(rows.tasks).toHaveLength(2)
   })
 
   test('update_task: the folded PATCH+archive — one write, one fan-out, one row', async () => {

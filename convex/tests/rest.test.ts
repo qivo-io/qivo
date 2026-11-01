@@ -14,7 +14,8 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
-import { CALLER_GONE, SUBTREE_WALK } from '../lib/core'
+import { ACTIVE_PAGE } from '../lib/activeTaskPage'
+import { CALLER_GONE, SUBTREE_WALK, TASK_READ_RESERVE } from '../lib/core'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
 import {
@@ -24,7 +25,6 @@ import {
   restAuth401,
   sha256hex,
 } from '../machine/auth'
-import { OFFSET_SENTENCE } from '../machine/shared'
 import { GROUP_DATES_MACHINE } from '../model/issues'
 import {
   activityFor,
@@ -45,6 +45,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { lowered, restPage, restPages } from './taskPages.setup'
 import { itemFor, plantCredential, storedRows } from './trash.setup'
 
 const KEY = 'drive'
@@ -165,7 +166,10 @@ describe('REST task routes', () => {
     expect(await jsonBody(fetched)).toMatchObject(task)
     const listed = await request('GET', '/v1/tasks')
     expect(listed.status).toBe(200)
-    expect(await jsonBody(listed)).toEqual([expect.objectContaining({ id: task.id })])
+    expect(await jsonBody(listed)).toEqual({
+      next_cursor: null,
+      tasks: [expect.objectContaining({ id: task.id })],
+    })
 
     const commented = await request('POST', `${path}/comments`, { body: 'A task comment' })
     expect(commented.status).toBe(201)
@@ -895,22 +899,40 @@ describe('GET /v1/tasks', () => {
     expect(await ids('high')).toEqual([])
   })
 
-  it('limit and offset page the list, and a value out of range is refused, not changed', async () => {
+  it('limit and the cursor page the list, and a limit out of range or an offset is refused, not changed', async () => {
     const t = newT()
     const f = await machineOrg(t)
     const a = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'first' })
     const b = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'second' })
     const c = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title: 'third' })
-    const call = (params: { limit?: string; offset?: string }) =>
-      restTasks(t, { callerId: f.agent.id, access: 'read', ...params })
-    expect((await call({ limit: '1' })).map((i) => i.id)).toEqual([a.id])
-    expect((await call({ limit: '1', offset: '1' })).map((i) => i.id)).toEqual([b.id])
-    expect((await call({ limit: '200' })).map((i) => i.id)).toEqual([a.id, b.id, c.id])
+    const call = (params: { limit?: string; offset?: string; cursor?: string }) =>
+      restPage(t, { callerId: f.agent.id, access: 'read', ...params })
+    const first = await call({ limit: '1' })
+    expect(first.tasks.map((i) => i.id)).toEqual([a.id])
+    const second = await call({ limit: '1', cursor: first.next_cursor ?? undefined })
+    expect(second.tasks.map((i) => i.id)).toEqual([b.id])
+    // the limit may change between pages
+    expect(await call({ limit: '5', cursor: second.next_cursor ?? undefined })).toEqual({
+      next_cursor: null,
+      tasks: [expect.objectContaining({ id: c.id })],
+    })
+    expect((await call({ limit: '200' })).tasks.map((i) => i.id)).toEqual([a.id, b.id, c.id])
     for (const limit of ['abc', '0', '-5', '201', '500', '2.5', ' ']) {
       await refused(call({ limit }), 'rule', LIMITS.listTasks.refusal)
     }
-    for (const offset of ['abc', '-1', '1.5']) {
-      await refused(call({ offset }), 'bad_request', OFFSET_SENTENCE)
+    // an offset reading as 0 is no offset; any other is refused
+    for (const offset of ['0', '00']) {
+      expect(
+        (await call({ offset })).tasks.map((i) => i.id),
+        offset,
+      ).toEqual([a.id, b.id, c.id])
+    }
+    for (const offset of ['1', 'abc', '-1', '1.5', ' ', '']) {
+      await refused(
+        call({ offset }),
+        'bad_request',
+        'offset does not apply to active tasks; pass next_cursor as cursor',
+      )
     }
   })
 })
@@ -2125,19 +2147,29 @@ describe("a group's dates on REST", () => {
     expect(out).toMatchObject(span('2026-05-04', '2026-05-17'))
   })
 
-  /* Convex lets a function read at most 4,096 index ranges. A single-task
-   * read walks a group's subtree one read per task up to SUBTREE_WALK.reads,
-   * then reads the organization's active tasks once, and a list reads them
-   * once for all its groups. Past the walk a large tree costs the same as a
-   * small one on list, get and PATCH. The test checks that on a smaller
-   * tree with a lower limit and a shorter walk, so it builds fewer rows.
-   * With the walk at 100 tasks the three calls need 130 to 165 ranges, under
-   * a limit of 256. Reading one range per task of this tree of 511 tasks
-   * would need more than 511. */
+  /* Convex lets a function read at most 4,096 index ranges. A group's facts
+   * walk its subtree one range per task, and this tree, stored before the
+   * rule of one level, needs 511. A list row walks within its page's budget
+   * and a single-task read within the request's room less
+   * TASK_READ_RESERVE, after a first walk of SUBTREE_WALK.reads. A group
+   * whose walk does not fit answers the facts of a subtree too large to
+   * read, so list, get and PATCH all stay within the limits however large
+   * the tree. The test checks that on a smaller tree with a lower limit, a
+   * lower page budget, a lower reserve and a shorter walk, so it builds
+   * fewer rows. */
   it('a large tree stays within transaction limits on list, get and PATCH', async () => {
     const t = newT({ transactionLimits: { databaseQueries: 256 } })
     const walk = SUBTREE_WALK.reads
+    const reserve = { ...TASK_READ_RESERVE }
     SUBTREE_WALK.reads = 100
+    // room for the second walk to read the epic's own subtasks in a request
+    // of 256 ranges, as the real reserve leaves in one of 4,096
+    TASK_READ_RESERVE.ranges = 64
+    const tooLarge = {
+      start_week: null,
+      end_week: null,
+      progress: { done: 0, total: 0, percent: 0, partial: true },
+    }
     try {
       const f = await machineOrg(t)
       const base = { org_id: f.org.id, project_id: f.sub.id }
@@ -2169,20 +2201,36 @@ describe("a group's dates on REST", () => {
           }
         }
       })
-      const listed = await restTasks(t, {
-        callerId: f.agent.id,
-        access: 'read',
-        limit: '100',
-      })
-      expect(listed.filter((i) => i.is_group)).toHaveLength(11)
-      expect(listed.find((i) => i.id === epic.id)).toMatchObject(span('2026-01-05', '2026-09-05'))
+      // a page budget of 160 ranges, which fits a request of 256
+      const budget = {
+        page: { ranges: 160, delays: { ...ACTIVE_PAGE.delays, ranges: 30 } },
+        reserve: { ranges: 16 },
+      }
+      const listed = await lowered(budget, () =>
+        restPages(t, { callerId: f.agent.id, access: 'read', limit: '100' }),
+      )
+      expect(listed.rows).toHaveLength(511)
+      expect(listed.sizes.length).toBeGreaterThan(1)
+      const groups = listed.rows.filter((i) => i.is_group)
+      expect(groups).toHaveLength(11)
+      // the epic's walk passes any page's budget, and a feature's fits
+      expect(groups[0]).toMatchObject({ id: epic.id, ...tooLarge })
+      for (const feature of groups.slice(1)) {
+        expect(feature).toMatchObject({
+          ...span('2026-01-05', '2026-09-05'),
+          progress: { total: 50, partial: false },
+        })
+      }
+      // the single read's walk passes the request's room too, and it still
+      // lists the epic's subtasks
       const got = await t.query(internal.machine.rest.getIssue, {
         today: TODAY,
         callerId: f.agent.id,
         access: 'read',
         ref: epic.id,
       })
-      expect(got).toMatchObject({ is_group: true, ...span('2026-01-05', '2026-09-05') })
+      expect(got).toMatchObject({ is_group: true, ...tooLarge, group_remaining_hours: null })
+      expect(got.subtasks.map((task) => task.id)).toEqual(groups.slice(1).map((task) => task.id))
       const renamed = await t.mutation(internal.machine.rest.updateIssue, {
         callerId: f.agent.id,
         access: 'write',
@@ -2190,9 +2238,18 @@ describe("a group's dates on REST", () => {
         ref: epic.id,
         body: JSON.stringify({ title: 'Renamed' }),
       })
-      expect(renamed).toMatchObject({ title: 'Renamed', ...span('2026-01-05', '2026-09-05') })
+      expect(renamed).toMatchObject({ title: 'Renamed', is_group: true, ...tooLarge })
+      // a feature's own read walks it whole
+      const feature = await t.query(internal.machine.rest.getIssue, {
+        today: TODAY,
+        callerId: f.agent.id,
+        access: 'read',
+        ref: groups[1].id,
+      })
+      expect(feature).toMatchObject(span('2026-01-05', '2026-09-05'))
     } finally {
       SUBTREE_WALK.reads = walk
+      Object.assign(TASK_READ_RESERVE, reserve)
     }
   })
 })

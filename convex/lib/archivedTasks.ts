@@ -635,10 +635,11 @@ export const profileNamesIn = (
  * more to tell whether that was all. Tests lower it. */
 export const ARCHIVE_LABELS = { scan: 1000 }
 
-/* The organization's labels whose lowercased name holds one of `pieces`,
+/** The organization's labels whose lowercased name holds one of `pieces`,
  * in the organization's label order, when it has at most
- * ARCHIVE_LABELS.scan labels, else null. */
-async function scannedLabels(
+ * ARCHIVE_LABELS.scan labels, else null. The archived matcher and the
+ * active list's search (lib/activeTaskPage.ts) read them so. */
+export async function scannedLabels(
   ctx: QueryCtx,
   orgId: string,
   pieces: readonly string[],
@@ -652,8 +653,8 @@ async function scannedLabels(
   return labels.length > ARCHIVE_LABELS.scan ? null : labels.filter(holdsPiece)
 }
 
-/* Labels in the order of by_org: creation time, then document id. */
-const labelOrder = (a: Doc<'labels'>, b: Doc<'labels'>): number =>
+/** Labels in the order of by_org: creation time, then document id. */
+export const labelOrder = (a: Doc<'labels'>, b: Doc<'labels'>): number =>
   a._creationTime - b._creationTime || (a._id < b._id ? -1 : a._id > b._id ? 1 : 0)
 
 /** A test of whether an archived task matches `search`. */

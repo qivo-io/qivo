@@ -14,10 +14,10 @@
  * restore can then leave that task a group with the own hours it took as a
  * leaf, which the restore's steps clear (regroup.ts).
  *
- * The readers that need the organization's live tasks read them per active
- * project (liveTasksOf), so tasks in archived projects are never read, until
- * an organization has more active projects than one read can take ranges
- * for. */
+ * REST and MCP workload (planning.ts workloadCore), the one reader that
+ * still needs the organization's live tasks, reads them per active project
+ * (liveTasksOf), so tasks in archived projects are never read, until an
+ * organization has more active projects than one read can take ranges for. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
