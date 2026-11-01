@@ -149,5 +149,7 @@ those links.
 
 Workload figures and delay projections use each task's Remaining hours. Update
 them in the task window's details ([The task window](./the-task-window.md#the-details-column)), or one person at a time in
-**Team sync** ([Team sync](./planning-against-real-capacity.md#team-sync)). Each saved Remaining starts a new
-measurement for delay projections ([Delay projections](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
+**Team sync** ([Team sync](./planning-against-real-capacity.md#team-sync)). Team sync lists your own
+organization's projects, so if you only have guest access, or the project is
+shared from another organization, use the task window. Each saved Remaining
+starts a new measurement for delay projections ([Delay projections](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).

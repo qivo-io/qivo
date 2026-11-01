@@ -7230,6 +7230,9 @@ export const PLANNER = {
         }
       },
     }
+    // No Roadmap control writes Remaining since Update estimates went, but a
+    // Remaining-only write made while the Roadmap records still joins its
+    // history, as it did for tabs loaded before that release.
     const planningOnly = Object.keys(wire).every((key) =>
       ['start_week', 'end_week', 'remaining_hours'].includes(key),
     )

@@ -307,6 +307,8 @@ try {
   await spanFollows(parent, child, 'Parent span did not follow the subtask after repeated Undo')
   log('Repeated Undo restores task dates and reverses milestone creation, edits and deletion')
 
+  // No Roadmap control edits Remaining any more, so this drives the store's
+  // path that still records a Remaining-only write in the Roadmap's history.
   await page.evaluate((id) => window.PLANNER.updateIssue(id, { remaining: 11 }), leaf)
   await settled(1)
   assert.equal((await persisted()).tasks[2].remaining, 11)
