@@ -101,13 +101,18 @@ function useRested(value: string, ms: number): string {
   return value === '' ? '' : rested
 }
 
-/** The Stale cutoff (staleCutoff) now: taken again each hour and whenever
-    the page shows again, before the Board asks afresh. */
+/** The Stale cutoff (staleCutoff) now: taken again each hour, whenever
+    the tab shows again and whenever a kept page (components/KeptView)
+    shows again, whose hidden effects stopped the hourly timer. */
 function useStaleCutoff(): string {
   const { shownAt } = useViewVisibility()
   const [tick, setTick] = useState(() => Date.now())
   useEffect(() => {
     const now = Date.now()
+    if (staleCutoff(now) !== staleCutoff(tick)) {
+      setTick(now)
+      return
+    }
     const timer = setTimeout(() => setTick(Date.now()), HOUR - (now % HOUR) + 1000)
     return () => clearTimeout(timer)
   }, [tick])

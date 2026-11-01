@@ -447,6 +447,44 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(board.server.asked.at(-1)?.filters.stale_before).toBe('2026-07-03T12:00:00.000Z')
   })
 
+  it('asks with a Stale cutoff taken again when a kept Board shows again', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.parse('2026-10-31T10:20:00.000Z'))
+    const board = await loadBoard(network, three)
+    const { Kanban } = await import('./Kanban')
+    const { KeptView } = await import('../components/KeptView')
+    const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
+      typeof Kanban
+    >[0]['actions']
+    const filters = {
+      mine: false,
+      assignees: [],
+      priority: null,
+      stale: true,
+      focus: false,
+      search: '',
+    }
+    const render = (shown: boolean) =>
+      board.renderView(root, (info) => (
+        <KeptView view="board" shown={shown} className="view">
+          <Kanban
+            info={info}
+            filters={filters}
+            tweaks={{ metaViz: 'swimlanes' }}
+            actions={actions}
+          />
+        </KeptView>
+      ))
+    await render(true)
+    expect(board.server.asked.at(-1)?.filters.stale_before).toBe('2026-07-03T10:00:00.000Z')
+    // another page shows while the hour turns; the tab stays visible
+    await render(false)
+    vi.setSystemTime(Date.parse('2026-10-31T12:05:00.000Z'))
+    await render(true)
+    expect(board.server.asked.at(-1)?.filters.stale_before).toBe('2026-07-03T12:00:00.000Z')
+    expect(state()).toBe('ok')
+  })
+
   it('waits for the answer before it takes a reveal', async () => {
     const board = await loadBoard(network, three)
     board.server.hold = true

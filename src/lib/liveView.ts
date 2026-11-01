@@ -7,7 +7,17 @@
    afresh when it shows again. A result counts only for the subscription that
    brought it. After a pause, a kept page shown again, new arguments or Try
    again, the view has no current result until a transition brings one, so
-   it can say that it is refreshing. */
+   it can say that it is refreshing.
+
+   A known cost: a kept page shown again first shows what it held and
+   renders its parent's new props a frame later (KeptView), and its effects
+   run in both commits. So when its arguments changed while it hid, such as
+   a filter changed on another page or the Board's Stale hour turned
+   (views/board/boardArgs.ts useStaleCutoff), the view subscribes once with
+   the arguments it held and again with the current ones, and the server
+   runs a query whose result nobody reads. Waiting until the page is current
+   would avoid that run but delay every page shown again by a frame, also
+   when nothing changed, so the view does not wait. */
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
 import type { Value } from 'convex/values'
