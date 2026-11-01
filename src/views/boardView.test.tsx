@@ -458,6 +458,20 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(board.consumed.count).toBe(1)
   })
 
+  it('takes a reveal without showing it where a message replaces the Board', async () => {
+    for (const phone of [false, true]) {
+      const board = await loadBoard(network, three, { phone })
+      board.server.force = 'unavailable'
+      await board.render(root)
+      expect(state()).toBe('unavailable')
+      const a = board.P.issues.find((it) => it.uuid === 'a')?.id ?? ''
+      await board.reveal(a)
+      expect(board.consumed.count).toBe(1)
+      await act(async () => root.unmount())
+      root = createRoot(container)
+    }
+  })
+
   it('builds owner lanes from the cards, so a reassignment moves the card at once', async () => {
     const board = await loadBoard(
       network,

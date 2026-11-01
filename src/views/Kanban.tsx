@@ -937,12 +937,18 @@ function KanbanBoard({
   )
   // A jump to the Board (Team sync, the Inbox, the task crumb, search)
   // shows the task's first card, mounting its cell through it.
-  // it waits for the answer, so the card it looks for is the Board's
-  const answered = view.state === 'ok' || view.state === 'incomplete'
-  useReveal(answered ? revealTask : null, onRevealConsumed, bodyRef, (id) => {
-    const [one] = holdingCards(latestCells(), id)
-    if (one) scheduler.mountThrough(one.cell, one.group)
-  })
+  // it waits for the answer, so the card it looks for is the Board's; a
+  // message in place of the Board takes it without showing anything
+  useReveal(
+    view.busy ? null : revealTask,
+    onRevealConsumed,
+    bodyRef,
+    (id) => {
+      const [one] = holdingCards(latestCells(), id)
+      if (one) scheduler.mountThrough(one.cell, one.group)
+    },
+    !view.shows,
+  )
 
   /** A cell's cards, mounting under the cell's key in slices past its first
       screen. Staleness is read only for the cards that mount. */

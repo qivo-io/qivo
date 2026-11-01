@@ -594,12 +594,18 @@ function MobileTaskBoard({
     [latestShown, scheduler],
   )
   // A jump to the Board shows the task's row, as the Board shows its card,
-  // once the Board's answer arrived.
-  const answered = view.state === 'ok' || view.state === 'incomplete'
-  useReveal(answered ? revealTask : null, onRevealConsumed, listRef, (id) => {
-    const group = latestShown().find((it) => it.tasks.some((task) => task.id === id))
-    if (group) scheduler.mountThrough(`phone:${group.id}`, id)
-  })
+  // once the Board's answer arrived; a message in place of the list takes
+  // it without showing anything.
+  useReveal(
+    view.busy ? null : revealTask,
+    onRevealConsumed,
+    listRef,
+    (id) => {
+      const group = latestShown().find((it) => it.tasks.some((task) => task.id === id))
+      if (group) scheduler.mountThrough(`phone:${group.id}`, id)
+    },
+    !view.shows,
+  )
   const renderRow = (task: IssueVM) => (
     <MobileTaskRow key={task.id} task={task} context={P.contextVersion} onOpen={openIssue} />
   )
