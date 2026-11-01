@@ -157,9 +157,9 @@ let boardReaders = 0
 
 /** The read of the Board's answer that view `slot` registers with the
     store (P.watchBoard) for the arguments `key`, while the page shows, with
-    Try again. Renders again on each change the store's `views` section
-    publishes. */
-function useBoardRead(slot: string, key: string | null) {
+    Try again, and whether the view shows its cards' delays. Renders again
+    on each change the store's `views` section publishes. */
+function useBoardRead(slot: string, key: string | null, delays: boolean) {
   const { visible } = useViewVisibility()
   const [attempt, setAttempt] = useState(0)
   // this mounted Board, which owns the read while it asks
@@ -167,9 +167,9 @@ function useBoardRead(slot: string, key: string | null) {
   usePlannerVersion('views')
   const ask = visible ? key : null
   useEffect(() => {
-    P.watchBoard(slot, ask, attempt, owner)
-    return () => P.watchBoard(slot, null, attempt, owner)
-  }, [slot, ask, attempt, owner])
+    P.watchBoard(slot, ask, attempt, owner, delays)
+    return () => P.watchBoard(slot, null, attempt, owner, delays)
+  }, [slot, ask, attempt, owner, delays])
   return { ...P.boardRead(slot), retry: () => setAttempt((n) => n + 1) }
 }
 
@@ -183,7 +183,9 @@ export function useBoardView(
   const filters = boardFilters(info, rawFilters, variant)
   const { want, send } = useBoardRequest(info, filters)
   const slot = BOARD_SLOTS[variant]
-  const read = useBoardRead(slot, send.kind === 'ask' ? send.key : null)
+  // the phone's list draws no delay band (MobileWorkspace.tsx), so it asks
+  // for no owner's load
+  const read = useBoardRead(slot, send.kind === 'ask' ? send.key : null, variant === 'desktop')
   const wantKey = want.kind === 'ask' ? want.key : null
   // what the read holds for the arguments on screen: its live result, or
   // the rows it kept while it was stopped

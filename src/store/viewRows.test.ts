@@ -5,6 +5,7 @@ import type { BoardAnswer } from '../../convex/lib/board'
 import type { ViewRow } from '../../convex/lib/viewReads'
 import type { OwnerLoadsJson } from '../../convex/planning'
 import { isoToWeek, TODAY_WEEK, weekToISO } from '../lib/dates'
+import { GUEST_CALLS } from './ownerLoadCache'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* The task rows a view's answer brings (store/viewRows.ts) on the real
@@ -379,6 +380,46 @@ describe('the delays of tasks only a view brings', () => {
     expect(P.delayOf(unknown ?? '')).toBeNull()
     expect(P.delayUnknown(unknown ?? '')).toBe(true)
     expect(P.delayBanner(unknown ?? '')).toBe(true)
+  })
+
+  it("asks no load for a view that shows no delays, as the phone's list", async () => {
+    snapshot.projects[0].track_delay = true
+    deliver(structuredClone(snapshot))
+    await turn()
+    answer = ok([planned('far', 9)])
+    store.P.watchBoard('board:phone', KEY, 0, 0, false)
+    await turn()
+    await turn()
+    expect(store.P.viewTask('board:phone', 'far')).toBeDefined()
+    expect(loads.size).toBe(0)
+    // the desktop Board over the same answer asks
+    store.P.releaseView('board:phone')
+    await open()
+    expect(loads.size).toBe(1)
+  })
+
+  it("says Delay unknown at once for a Viewer's owners past the cap", async () => {
+    snapshot.projects[0].track_delay = true
+    snapshot.profiles[0].org_role = 'viewer'
+    // GUEST_CALLS + 2 other people, each owning one planned task
+    const people = Array.from({ length: GUEST_CALLS + 2 }, (_, i) => ({
+      ...snapshot.profiles[0],
+      id: `person-${String(i).padStart(2, '0')}`,
+      auth_user_id: `account-${i}`,
+      name: `Person ${i}`,
+      org_role: 'user' as const,
+    }))
+    snapshot.profiles.push(...people)
+    deliver(structuredClone(snapshot))
+    await turn()
+    answer = ok(people.map((p, i) => ({ ...planned(`t${i}`, 10 + i), assignee_id: p.id })))
+    await open()
+    const P = store.P
+    const unknown = (i: number) => P.delayUnknown(P.viewTask(SLOT, `t${i}`) ?? '')
+    // one call an owner, at most GUEST_CALLS, by id among equal card counts
+    expect(loads.size).toBe(GUEST_CALLS)
+    for (let i = 0; i < GUEST_CALLS; i++) expect(unknown(i), `t${i}`).toBe(false)
+    for (let i = GUEST_CALLS; i < people.length; i++) expect(unknown(i), `t${i}`).toBe(true)
   })
 
   it("asks no load for a held task, whose delay stays the workspace's", async () => {

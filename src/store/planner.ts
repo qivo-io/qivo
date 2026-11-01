@@ -2302,6 +2302,9 @@ type ViewRead = {
   connection: number
   /** whether the read held a value before, so a wait is a refresh */
   answered: boolean
+  /** whether the view shows its cards' delays, which only then read the
+      owner-load cache (the desktop Board does, the phone's list does not) */
+  delays: boolean
 }
 const viewReads = new Map<ViewSlot, ViewRead>()
 /* The socket's newest connection count a view read's handler saw: after a
@@ -2414,49 +2417,70 @@ const viewDelayCtx: ViewDelayCtx = {
    judged it. */
 let viewDelays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
 
-/** Judges the delays of the tasks only the views hold, registers with the
-    owner-load cache the owners whose loads they need, and shapes their
-    models. Answers whether any model changed. */
+/* Whether reshapeViews runs: the owner-load cache's changes it hears then
+   are its own registration's, which the judging after it reads anyway. */
+let reshaping = false
+
+/** Registers with the owner-load cache the owners whose loads the cards of
+    the views that show delays need, judges those cards' delays and shapes
+    the models of the tasks only the views hold. Answers whether any model
+    changed. */
 function reshapeViews(): boolean {
-  // each owner's load is built once for every card that reads it
-  viewDelayCtx.memo = new Map()
-  viewDelayCtx.filed = undefined
-  const delays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
-  const views = viewRows.views()
-  for (const [slot, rows] of views) {
-    const needs = new Map<string, { org: string; owner: string; cards: number }>()
-    const read = viewReads.get(slot)
-    for (const row of rows.values()) {
-      if (uuidToKey.has(row.id)) continue
-      if (!delays.has(row.id)) delays.set(row.id, viewDelay(row, viewDelayCtx))
-      // a card whose verdict reads its owner's load registers the owner,
-      // where its project shows delays
-      const owner = taskOwnerId(row, row.has_subtasks)
-      if (
-        !owner ||
-        PLANNER.project(row.project_id)?.trackDelay === false ||
-        !needsLoad(row, viewDelayCtx.capacity)
-      )
+  reshaping = true
+  try {
+    const views = viewRows.views()
+    // first what each view needs, so the judging below reads the cap and any
+    // answer the registration took
+    for (const [slot, rows] of views) {
+      const read = viewReads.get(slot)
+      if (!read?.delays) {
+        ownerLoads.release(slot)
         continue
-      const key = `${row.org_id}:${owner}`
-      const need = needs.get(key) ?? { org: row.org_id, owner, cards: 0 }
-      need.cards++
-      needs.set(key, need)
+      }
+      const needs = new Map<string, { org: string; owner: string; cards: number }>()
+      for (const row of rows.values()) {
+        if (uuidToKey.has(row.id)) continue
+        // a card whose verdict reads its owner's load registers the owner,
+        // where its project shows delays
+        const owner = taskOwnerId(row, row.has_subtasks)
+        if (
+          !owner ||
+          PLANNER.project(row.project_id)?.trackDelay === false ||
+          !needsLoad(row, viewDelayCtx.capacity)
+        )
+          continue
+        const key = `${row.org_id}:${owner}`
+        const need = needs.get(key) ?? { org: row.org_id, owner, cards: 0 }
+        need.cards++
+        needs.set(key, need)
+      }
+      // a view whose read stops keeps its owners' loads, without reading them
+      ownerLoads.register(slot, [...needs.values()], read.want !== null)
     }
-    // a view whose read stops keeps its owners' loads, without reading them
-    ownerLoads.register(slot, [...needs.values()], !!read && read.want !== null)
+    for (const slot of viewReads.keys()) if (!views.has(slot)) ownerLoads.release(slot)
+    // each owner's load is built once for every card that reads it
+    viewDelayCtx.memo = new Map()
+    viewDelayCtx.filed = undefined
+    const delays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
+    for (const [slot, rows] of views) {
+      if (!viewReads.get(slot)?.delays) continue
+      for (const row of rows.values())
+        if (!uuidToKey.has(row.id) && !delays.has(row.id))
+          delays.set(row.id, viewDelay(row, viewDelayCtx))
+    }
+    viewDelays = delays
+    viewDelayCtx.memo = undefined
+    viewDelayCtx.filed = undefined
+    const changed = viewRows.reshape((uuid) => uuidToKey.has(uuid), {
+      handleNow: PLANNER.handleNow,
+      extra: (uuid) => JSON.stringify(delays.get(uuid) ?? null),
+      grid: PLANNER.gridEpoch,
+    })
+    if (changed) boardLookup = null
+    return changed
+  } finally {
+    reshaping = false
   }
-  for (const slot of viewReads.keys()) if (!views.has(slot)) ownerLoads.release(slot)
-  viewDelays = delays
-  viewDelayCtx.memo = undefined
-  viewDelayCtx.filed = undefined
-  const changed = viewRows.reshape((uuid) => uuidToKey.has(uuid), {
-    handleNow: PLANNER.handleNow,
-    extra: (uuid) => JSON.stringify(delays.get(uuid) ?? null),
-    grid: PLANNER.gridEpoch,
-  })
-  if (changed) boardLookup = null
-  return changed
 }
 
 /* The tasks a Board looks up by handle (P.boardTasksById): the workspace's
@@ -2479,6 +2503,7 @@ const ownerLoads = createOwnerLoadCache({
     return me?.org_role === 'admin' || me?.org_role === 'user'
   },
   changed: () => {
+    if (reshaping) return
     viewReadsChanged = true
     owe('view')
   },
@@ -7242,8 +7267,10 @@ export const PLANNER = {
       arguments, or a new `attempt` (Try again), drop what it held. `owner`
       names the mounted view: a leaving page stays mounted, hidden, until
       the next one painted (components/KeptView.tsx), so the one that asks
-      last owns the read, and another's null asks nothing. */
-  watchBoard: (slot: ViewSlot, key: string | null, attempt = 0, owner = 0) => {
+      last owns the read, and another's null asks nothing. `delays` says
+      whether the view shows its cards' delays, which then read owners'
+      loads (store/ownerLoadCache.ts). */
+  watchBoard: (slot: ViewSlot, key: string | null, attempt = 0, owner = 0, delays = true) => {
     let read = viewReads.get(slot)
     if (read && key === null && read.owner !== owner) return
     if (!read) {
@@ -7257,9 +7284,11 @@ export const PLANNER = {
         current: false,
         connection: 0,
         answered: false,
+        delays,
       }
       viewReads.set(slot, read)
     }
+    if (key !== null) read.delays = delays
     if (key !== null && read.owner !== owner) {
       // another mounted view takes the read over, with its own Try again
       read.owner = owner
