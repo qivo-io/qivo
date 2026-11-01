@@ -17,8 +17,9 @@ Views and dialogs may show **Loading…** the first time you open them.
 A very large workspace opens before all its tasks have arrived. A note at
 the bottom of the page says **Loading tasks…** with how far it has got.
 Until it is gone, the Board and the task list show the tasks that have
-arrived, without counts, until the server has said which tasks they show. Search works meanwhile, but on a slow connection
-its results come after the tasks already on their way. A task you open from
+arrived. Their counts show once the server has said which tasks they show
+and every one of those has arrived. Search works meanwhile, but on a slow
+connection its results come after the tasks already on their way. A task you open from
 Search, or from a task's subtasks or linked tasks, before it has arrived
 shows at once, read-only apart from its comments, until it has arrived. The
 Overview, the Roadmap and Team sync open once every task has loaded, and so

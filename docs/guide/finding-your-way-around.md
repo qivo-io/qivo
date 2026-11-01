@@ -53,12 +53,15 @@ tracks contain collapsible sub-project bands. Select an Overview health row
 to open its project's Board. The Board shows one project at a time
 ([Which tasks a Board shows](./the-board.md#which-tasks-a-board-shows)), so in
 All projects it lists your top-level projects, and choosing one opens its
-Board. A link to a task that would open on the All projects Board opens
-the Board of the task's sub-project instead.
+Board. A task link that names no project, such as `…/tasks/qn-12`, opens
+the Board of the task's sub-project instead when it would open on the All
+projects Board. A link that names All projects, such as
+`…/board/all/tasks/qn-12`, keeps it, with the task's window over the list.
 
-To create a task, open its project first. The Board's project list and
-empty states offer no way to create a task. The Team strip omits **This project
-only** because the scope already includes all projects.
+To create a task, open its project first. On a desktop, the Board's project
+list and empty states offer no way to create a task; on a phone, **New
+task** in the task list lets you choose its project. The Team strip omits
+**This project only** because the scope already includes all projects.
 
 When you can see no active project, Qivo opens All projects. Its pages, Team
 sync and the Inbox then say that no active projects are shared with you, and
@@ -166,9 +169,11 @@ another status before starting one.
 Open **Search** in the sidebar or use the phone header's search icon. Search
 covers every project you can open in every organization you belong to,
 whatever page you are on, and **Search in** shows that as **All projects**.
-To narrow it, choose an organization, a project with its sub-projects, or
-one sub-project there. The choice lasts while Search stays open. An empty
-search shows nothing.
+**Search this sub-project**, which a Board offers when it cannot load a
+sub-project's tasks, opens Search with **Search in** set to that
+sub-project. To narrow it, choose an organization, a project with its
+sub-projects, or one sub-project there. The choice lasts while Search stays
+open. An empty search shows nothing.
 
 Search finds a task by its ID (`QN-12` or `12`), the words of its title and
 the text its description shows, not link addresses or the hidden part of a

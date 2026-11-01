@@ -167,19 +167,20 @@ activity** until the first comment and the created row appear. Its uploads
 check that an upload URL stores one file, and one upload is a file at the
 organization's per-file limit (20 MiB by default), sent through a REST upload
 ticket, confirmed, downloaded and deleted again, which shows whether the
-deployment takes a body that large. It also
-checks task progress, last comment times, delay and project completion, the
-rule that a subtask in an archived project makes no group, and in the browser
-the search on **Settings → Projects → Archived tasks** and main Search, where
-an active task the run made must show with **Include archived tasks** off
-and a task the run archived only with it on. That shows whether the
-deployment's search index takes the filter for an absent `archived_at` and
-still returns active matches. The archived task must then open read-only in
-its task window, with its description and, under **All**, its history,
-which shows whether the deployment answers an archived task's text and
-history. It then opens the Board of the project it made, waits for the
-deployment's answer for it (`tasks.board`) and checks that the cards of its
-two fixture tasks show. Everything it creates
+deployment takes a body that large. It also checks task progress, last
+comment times, delay and project completion, and the rule that a subtask in
+an archived project makes no group. In the browser it then opens the Board of
+the project it made, waits for the deployment's answer for it (`tasks.board`)
+and checks that the cards of its two fixture tasks show, which it makes in
+To Do so that they show with **Focus** on or off. After that it checks the
+search on **Settings → Projects → Archived tasks** and main Search, where an
+active task the run made must show with **Include archived tasks** off and a
+task the run archived only with it on. That shows whether the deployment's
+search index takes the filter for an absent `archived_at` and still returns
+active matches. The archived task must then open read-only in its task
+window, with its description and, under **All**, its history, which shows
+whether the deployment answers an archived task's text and history.
+Everything it creates
 carries a run tag such as `stgchk-1a2b3c`, and its tasks live in projects it
 creates. It deletes all of it at the end, also after a failure. Its deleted
 projects and tasks then wait in Deleted items for 30 days, where an admin can
@@ -308,8 +309,9 @@ tasks spread over Northstar's 12 sub-projects put each top-level project
 over that limit and each sub-project under it, at about 840 tasks; from
 about 12,100 seeded tasks each sub-project passes it too. `--sub-project
 <key or name>` puts the tasks a run adds into that one sub-project, for
-checking a sub-project's Board at the limit: a family of a parent and three
-subtasks adds three tasks the limit counts, and a task on its own one.
+checking a sub-project's Board at the limit: a family, a parent over four
+tasks, adds four tasks the limit counts, and a task on its own one. A family
+an earlier run started finishes in the sub-project of its first task.
 
 `--archived <n>`, up to the `--tasks` count, archives the first `n` seeded
 tasks that are not parents, spread over the sub-projects as the tasks are,

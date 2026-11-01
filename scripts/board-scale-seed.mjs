@@ -17,17 +17,19 @@
  * estimates meet real text; each task's description names its number. A
  * second run adds only what is still missing, up to --tasks, and finishes a
  * family a stopped run left partial or a smaller --tasks left as tasks of
- * their own. The mix follows the benchmark's varied
- * workspace: every status, a parent with three subtasks every 25th task, a
- * due date every 7th (every other one past), a pause every 31st, a title of
- * the most characters a title holds (LIMITS.title) every 13th and no owner
- * every 11th. `--tasks 0` adds none.
+ * their own. The mix follows the benchmark's varied workspace: every
+ * status, a parent over every 25th task and the three after it, a due date
+ * every 7th (every other one past), a pause every 31st, a title of the most
+ * characters a title holds (LIMITS.title) every 13th and no owner every
+ * 11th. `--tasks 0` adds none.
  *
  * `--sub-project <key or name>` puts the tasks a run adds into that one
  * live sub-project instead of spreading them over all of them, for
- * checking a sub-project's Board at its 1,000-task ceiling: Board tasks
- * count each task without subtasks, so a family adds three cards and one
- * parent. The tasks an earlier run made stay where they are.
+ * checking a sub-project's Board at its 1,000-task ceiling: the ceiling
+ * counts each task without subtasks, so a family adds four tasks it counts
+ * and a parent it does not. The tasks an earlier run made stay where they
+ * are, and a family an earlier run started finishes in its first task's
+ * sub-project.
  *
  * A run makes the credentials first, each as the login that makes it in the
  * app, then the tasks as Nora, then archives as Nora, and posts the inbox

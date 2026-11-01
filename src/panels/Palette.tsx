@@ -2,7 +2,9 @@
    searches tasks and projects on the server (P.fetchSearchPage,
    search:page): every project the person can open in every organization of
    the login, whatever page it opened on, or the narrower scope chosen under
-   Search in, which lasts while the palette is open. Typing rests 250 ms
+   Search in, which lasts while the palette is open. It starts on All
+   projects, or on the sub-project it opened for (searchIn, the Board's
+   Search this sub-project). Typing rests 250 ms
    before a request, and so does a scope picked from the keyboard, which
    scanning the list walks through; a scope picked with the pointer or a
    change of Include archived tasks asks at once, and any change starts at
