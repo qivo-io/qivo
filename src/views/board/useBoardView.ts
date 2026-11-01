@@ -87,6 +87,10 @@ export type BoardView = {
   counted: boolean
   /** whether the Board waits for an answer (its root's aria-busy) */
   busy: boolean
+  /** whether the tasks are the store's own result, shown until the answer
+      for these arguments arrives (provisionalBoard), among which tasks a
+      staged load still brings land; an answer's tasks are all there */
+  provisional: boolean
   /** the filter row as the Board applies it on screen */
   filters: IssueFilters
   /** Whether a lane or side-board of the sub-projects `subIds`, headed by
@@ -344,6 +348,7 @@ export function useBoardView(
     filters,
     counted: false,
     busy: false,
+    provisional: false,
     answer: null,
     retry: read.retry,
     holds: () => false,
@@ -381,6 +386,7 @@ export function useBoardView(
       ...base,
       state: read.answered ? 'refreshing' : 'loading',
       busy: true,
+      provisional: true,
       tasks: provisional.shows ? provisional.tasks : [],
       shows: provisional.shows,
       holds: provisional.holds,

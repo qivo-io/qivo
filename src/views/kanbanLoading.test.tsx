@@ -154,4 +154,33 @@ describe('the Board while tasks still load', () => {
     },
     BOARD_TEST_TIMEOUT,
   )
+
+  it(
+    'mounts every card while a loaded subtask keeps the Board loading for its parent',
+    async () => {
+      const ids = Array.from({ length: 320 }, (_, i) => `01${i.toString(16).padStart(6, '0')}-x`)
+      const board = await loadBoard(network, (snapshot) => {
+        snapshot.orgs[0].next_issue_num = 64 * 200
+        snapshot.issues.push(
+          ...ids.map((id, i) => taskRow(snapshot, id, 'progress', i + 1)),
+          // a parent in the last task window, which is held, and its
+          // subtask in the first
+          taskRow(snapshot, 'fd000000-p', 'progress', 321),
+          { ...taskRow(snapshot, '01ffffff-k', 'progress', 322), parent_id: 'fd000000-p' },
+        )
+      })
+      await board.render(root)
+      const state = () =>
+        container.querySelector('[data-board-root]')?.getAttribute('data-board-state')
+      const cards = () => container.querySelectorAll('[data-card]').length
+      expect(board.P.handleOf('01ffffff-k')).not.toBeNull()
+      expect(board.P.handleOf('fd000000-p')).toBeNull()
+      expect(state()).toBe('loading')
+      // the answer's cards are all there: none waits for the workspace
+      await vi.waitFor(() => expect(cards()).toBe(321), { timeout: 10_000 })
+      expect(board.P.stillLoading()).not.toBeNull()
+      expect(state()).toBe('loading')
+    },
+    BOARD_TEST_TIMEOUT,
+  )
 })

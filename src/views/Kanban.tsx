@@ -995,8 +995,9 @@ function KanbanBoard({
         blockSize={BOARD_BLOCK_SIZE}
         // tasks still arriving land among the cards (DeferredList hold),
         // while the store's own result shows during a staged load; the
-        // answer's cards are all there, and a wait for it holds no slice back
-        hold={view.busy && P.stillLoading() !== null}
+        // answer's cards are all there, also while the Board waits for a
+        // model or the answer's next run, and hold no slice back
+        hold={view.provisional && P.stillLoading() !== null}
       />
     )
   }
