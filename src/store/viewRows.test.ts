@@ -347,7 +347,7 @@ describe('a write on a task only a view brings', () => {
     const stop = P.updates.views.subscribe(() => views++)
     try {
       // news of the read that changes no model: other lanes
-      answer = { ...ok([row('far', 9)]), held_projects: [] }
+      answer = { state: 'ok', rows: [row('far', 9)], parents: [], held_projects: [] }
       board?.(structuredClone(answer))
       // a repaint of the task window's sections before the views' paint
       P.showSections({}, true)
