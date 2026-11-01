@@ -4,7 +4,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
-import { plannerFixture } from './store/plannerFixture.setup'
+import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
+import { plannerFixture, underProgram } from './store/plannerFixture.setup'
 import { taskRow } from './views/boardFixture.setup'
 
 /* The main pages stay loaded while the person moves between them, on App
@@ -105,9 +106,10 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   snap.issues[0].title = 'Write the release notes'
   prepare(snap)
   threads.length = 0
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  network.onUpdate.mockImplementation((ref, args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
+    else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
     else if (name === 'teamSync:lastComments')
       next({ rows: [{ issue_id: 't1', at: '2026-09-10T08:00:00.000Z' }], complete: true })
     else if (name === 'snapshot:threadComments') {
@@ -271,6 +273,90 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
       "the new sitting's review tick",
     )
     expect(fresh.dataset.syncReviewed).toBe('0')
+  })
+
+  it("opens an all-project sync row's Board jump on the task's sub-project, and its Roadmap jump on All projects", async () => {
+    // the fixture's project as a sub-project (p/1) of a top-level one
+    const org = await boot((snap) => void underProgram(snap))
+    const { P } = await import('./store/planner')
+    const me = P.CURRENT_USER
+    const later = async () => {
+      await go(`/app/${org}/sync/all/people/${me}`)
+      const sync = await shownPage('sync')
+      const open = await waitFor(
+        () => sync.querySelector<HTMLElement>(`[data-sync-later="${me}"]`),
+        'Later',
+      )
+      // Later stays open while the sitting is kept
+      if (!sync.querySelector('[data-sync-board="QN-1"]')) await act(async () => open.click())
+      return sync
+    }
+    let sync = await later()
+    const roadmap = await waitFor(
+      () => sync.querySelector<HTMLElement>('[data-sync-roadmap="QN-1"]'),
+      'the Roadmap jump',
+    )
+    await act(async () => roadmap.click())
+    await shownPage('roadmap')
+    expect(location.pathname).toBe('/app/~/roadmap/all')
+    sync = await later()
+    const board = await waitFor(
+      () => sync.querySelector<HTMLElement>('[data-sync-board="QN-1"]'),
+      'the Board jump',
+    )
+    await act(async () => board.click())
+    await shownPage('kanban')
+    // the project form of a task's address, not All projects' (board/all)
+    expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-1`)
+    await waitFor(
+      () =>
+        document
+          .querySelector('[data-workspace-view="kanban"] [data-board-root]')
+          ?.getAttribute('data-board-state') === 'ok',
+      "the sub-project's Board",
+    )
+    expect(
+      document.querySelector('[data-workspace-view="kanban"] [data-card="QN-1"]'),
+    ).not.toBeNull()
+  })
+
+  it('keeps a saved All projects scope under an Inbox task address, at boot, on Back or Forward and for a task still to load', async () => {
+    let key = ''
+    // 12,800 task numbers make 64 task windows; the last, from fc000000,
+    // holds QN-5 back
+    const org = await boot((snap) => {
+      underProgram(snap)
+      snap.orgs[0].next_issue_num = 64 * 200
+      snap.issues.push(
+        taskRow(snap, '01000000-early', 'todo', 4),
+        taskRow(snap, 'fd000000-late', 'todo', 5),
+      )
+      // a Board on All projects, saved before the page loaded
+      key = `planner.ui.v1:${snap.myProfileIds[0]}`
+      localStorage.setItem(key, JSON.stringify({ scope: 'all', view: 'kanban' }))
+      history.replaceState(null, '', '/app/testbed/inbox/tasks/qn-4')
+    }, 'fc000000')
+    try {
+      const { P } = await import('./store/planner')
+      await shownPage('inbox')
+      expect(P.loadUI()).toMatchObject({ scope: 'all', view: 'kanban' })
+      await go(`/app/${org}/board/all`)
+      await shownPage('kanban')
+      await go(`/app/${org}/inbox/tasks/qn-4`)
+      await shownPage('inbox')
+      expect(P.loadUI()).toMatchObject({ scope: 'all', view: 'kanban' })
+      // a task still to load, which the app opens once it arrived
+      await go(`/app/${org}/inbox/tasks/qn-5`)
+      await act(async () => {
+        double.live?.holdWindow(null)
+        await new Promise((resolve) => realTimeout(resolve, 0))
+      })
+      await waitFor(() => P.stillLoading() === null, 'every task')
+      await waitFor(() => location.pathname.endsWith('/inbox/tasks/qn-5'), 'the task that arrived')
+      expect(P.loadUI()).toMatchObject({ scope: 'all', view: 'kanban' })
+    } finally {
+      localStorage.removeItem(key)
+    }
   })
 
   it('shows the Inbox again with an empty pane, holding nothing of the item picked before', async () => {

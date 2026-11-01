@@ -4,8 +4,8 @@
  *   QIVO_FIXTURE_LOCAL=true QIVO_LOCAL_ADMIN_KEY=… \
  *     node scripts/board-scale-seed.mjs --local --deployment local-<name>-<port> \
  *       --url http://127.0.0.1:<port> [--site-url http://localhost:5199] [--tasks 10000] \
- *       [--archived 160] [--inbox 600] [--credentials 45 --api-url http://127.0.0.1:<site port>] \
- *       [--relations]
+ *       [--sub-project FW] [--archived 160] [--inbox 600] \
+ *       [--credentials 45 --api-url http://127.0.0.1:<site port>] [--relations]
  *
  * It takes the same loopback-only target as `marketing-demo.mjs --local`, and
  * the same refusals: no deploy key, no staging, production or demo
@@ -17,11 +17,19 @@
  * estimates meet real text; each task's description names its number. A
  * second run adds only what is still missing, up to --tasks, and finishes a
  * family a stopped run left partial or a smaller --tasks left as tasks of
- * their own. The mix follows the benchmark's varied
- * workspace: every status, a parent with three subtasks every 25th task, a
- * due date every 7th (every other one past), a pause every 31st, a title of
- * the most characters a title holds (LIMITS.title) every 13th and no owner
- * every 11th. `--tasks 0` adds none.
+ * their own. The mix follows the benchmark's varied workspace: every
+ * status, a parent over every 25th task and the three after it, a due date
+ * every 7th (every other one past), a pause every 31st, a title of the most
+ * characters a title holds (LIMITS.title) every 13th and no owner every
+ * 11th. `--tasks 0` adds none.
+ *
+ * `--sub-project <key or name>` puts the tasks a run adds into that one
+ * live sub-project instead of spreading them over all of them, for
+ * checking a sub-project's Board at its 1,000-task ceiling: the ceiling
+ * counts each task without subtasks, so a family adds four tasks it counts
+ * and a parent it does not. The tasks an earlier run made stay where they
+ * are, and a family an earlier run started finishes in its first task's
+ * sub-project.
  *
  * A run makes the credentials first, each as the login that makes it in the
  * app, then the tasks as Nora, then archives as Nora, and posts the inbox
@@ -194,6 +202,7 @@ export function parseSeedArgs(args) {
     inbox: 0,
     credentials: 0,
     relations: false,
+    subProject: null,
   }
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -213,6 +222,7 @@ export function parseSeedArgs(args) {
     else if (arg === '--credentials') options.credentials = Number(value())
     else if (arg === '--api-url') options.apiUrl = value()
     else if (arg === '--relations') options.relations = true
+    else if (arg === '--sub-project') options.subProject = value()
     else throw new DemoCliError(`Unknown option ${arg}.`)
   }
   if (options.target !== 'local')
@@ -723,8 +733,22 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   for (const issue of issues)
     if (issue.assignee_id && owners.has(issue.project_id))
       owners.get(issue.project_id).add(issue.assignee_id)
-  const projects = [...owners.keys()]
+  let projects = [...owners.keys()]
   if (!projects.length) throw new DemoCliError('Northstar has no sub-projects to fill.')
+  if (options.subProject !== null) {
+    const named = joined('projects').find(
+      (p) => owners.has(p.id) && (p.key === options.subProject || p.name === options.subProject),
+    )
+    if (!named) {
+      const keys = joined('projects')
+        .filter((p) => owners.has(p.id))
+        .map((p) => `${p.key} (${p.name})`)
+      throw new DemoCliError(
+        `--sub-project names no live sub-project of Northstar; it has ${keys.join(', ')}.`,
+      )
+    }
+    projects = [named.id]
+  }
   if (options.credentials > 0)
     await seedCredentials(client, {
       key: target.key,

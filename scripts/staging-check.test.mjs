@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HISTORY_PAGE_MAX, WINDOW_HISTORY_PAGE } from '../convex/lib/activityVisibility'
+import { FOCUS_STATUSES } from '../convex/lib/viewReads'
 import {
   ACCESS_PUT_FIELDS,
   HELD_TASKS_FIELDS,
@@ -12,6 +13,7 @@ import {
   addDays,
   deleteOutcome,
   evaluate,
+  FIXTURE_STATUS,
   hasTag,
   historyRows,
   isSiteOf,
@@ -39,6 +41,9 @@ describe('staging check REST contract', () => {
       heldTasks: [...HELD_TASKS_FIELDS],
       memberPut: [...MEMBER_PUT_FIELDS],
     })
+  })
+  it('makes its fixture tasks in a status Focus keeps, so the Board shows them either way', () => {
+    expect(FOCUS_STATUSES).toContain(FIXTURE_STATUS)
   })
   it('fills a task to the page sizes of its thread', () => {
     expect(THREAD_PAGE).toEqual({

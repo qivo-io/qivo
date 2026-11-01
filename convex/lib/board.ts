@@ -178,8 +178,8 @@ export type BoardFilters = {
   focus: boolean
   /** at most LIMITS.search characters, trimmed here, so whitespace alone is
    * no filter, also not for the lanes a filter Clear clears drops
-   * (heldLanes). The app trims it before that test and before sending, as
-   * its Board treats the raw text as a filter today. */
+   * (heldLanes). The app trims it before that test and before sending
+   * (src/views/board/boardArgs.ts). */
   search: string
 }
 
@@ -989,9 +989,10 @@ function boardSearch(
 }
 
 /**
- * The projects whose lanes the Board keeps without a card, as src/views/
- * Kanban.tsx keeps a lane, a side-board or in My view a top-level project
- * for a group whose scope holds a task (holdsScoped), unless a filter the
+ * The projects whose lanes the Board keeps without a card, as the app's own
+ * result keeps a lane, a side-board or in My view a top-level project for a
+ * group whose scope holds a task (src/views/board/useBoardView.ts
+ * provisionalBoard), unless a filter the
  * Clear button clears is on (clearable: My tasks outside My view, people,
  * priority, Stale or a search) and drops a lane without cards. With such a
  * filter they are the projects of the cards; without one, every scoped task

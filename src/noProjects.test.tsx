@@ -4,6 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
+import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 
 /* The pages of a person who can see no active project, on the real store
@@ -93,12 +94,18 @@ async function app(snap: Snapshot, path = '/app/testbed') {
   vi.resetModules()
   history.replaceState(null, '', path)
   let publish = (_: Snapshot) => {}
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  // what the server holds: the workspace last published
+  let server = snap
+  network.onUpdate.mockImplementation((ref, args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
-      publish = (value) => next(structuredClone(value))
+      publish = (value) => {
+        server = value
+        next(structuredClone(value))
+      }
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
     return () => {}
   })
   network.query.mockResolvedValue(null)

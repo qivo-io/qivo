@@ -25,7 +25,9 @@
  * takes the absent archived_at filter and still returns active matches
  * (convex/lib/mainSearch.ts ARCHIVED_FILTER), and that the deployment
  * answers an archived task's text and history (taskWindow.task,
- * snapshot.threadHistory). Every task, comment, grant and
+ * snapshot.threadHistory). It opens the Board of the project it made and
+ * waits for the deployment's answer for it (tasks.board), whose cards must
+ * hold its two fixture tasks (ui/board). Every task, comment, grant and
  * file lives
  * in projects the run creates and names with its run tag. It revokes every
  * credential in the app, checks that the next call is refused, and removes
@@ -97,6 +99,10 @@ export const STAGING_APP_ORIGIN = 'https://preview.qivo.io'
 const PRODUCTION_HOSTS = new Set(['qivo.io', 'www.qivo.io', 'demo.qivo.io', 'api.qivo.io'])
 /** The longest REST or MCP request body (convex/machine/shared.ts BODY_MAX_BYTES). */
 const BODY_MAX = LIMITS.requestBody.max * MIB
+/** The status the run's fixture tasks start in: one Focus keeps
+ *  (convex/lib/viewReads.ts FOCUS_STATUSES), so ui/board finds their cards
+ *  whether or not Nora saved Focus on. */
+export const FIXTURE_STATUS = 'todo'
 /** The rows one page of a task's thread holds: comments
  *  (convex/model/comments.ts COMMENT_PAGE_MAX), history over REST and MCP
  *  (convex/lib/activityVisibility.ts HISTORY_PAGE_MAX), which answer one
@@ -3393,6 +3399,34 @@ async function subtaskRuleChecks() {
   })
 }
 
+/** The Board of the run's project, M, opens on the deployment's answer for
+ *  it (convex/tasks.ts board): the Board reaches its ok state and shows the
+ *  cards of the two fixture tasks, in Alpha and Zulu, in whatever layout
+ *  Nora chose, with Focus on or off (FIXTURE_STATUS). Only reads. It runs
+ *  before the run archives M. */
+async function boardCheck() {
+  const { M } = run.projects
+  await check('ui/board', async () => {
+    expect(Number.isInteger(M.num), 'the run project has no number')
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const ok = app.locator('[data-workspace-view] [data-board-root][data-board-state="ok"]')
+    await ok.waitFor({ timeout: 60_000 })
+    for (const t of [run.t0, run.tz]) {
+      const card = app
+        .locator('[data-workspace-view] [data-card]')
+        .filter({ hasText: t.title })
+        .first()
+      expect(
+        await until(async () => (await card.count()) === 1),
+        `the Board does not show ${t.key}`,
+      )
+    }
+    return `opened the Board of ${M.key} on the deployment's answer, with ${run.t0.key} and ${run.tz.key}`
+  })
+}
+
 /** The Settings page Archived tasks opens with its search as the first
  *  control, focused, and the server search finds `target`, a task the run
  *  archived in its project (#143). Its key is the search, because a key
@@ -4597,10 +4631,18 @@ async function setup() {
   })
   // fixture tasks: one in Alpha, one in Zulu
   run.t0 = await must('setup/rest/fixture-task-alpha', () =>
-    restOk(w, 'POST', '/tasks', { project: run.projects.A.id, title: `${tag} fixture Alpha` }),
+    restOk(w, 'POST', '/tasks', {
+      project: run.projects.A.id,
+      title: `${tag} fixture Alpha`,
+      status: FIXTURE_STATUS,
+    }),
   )
   run.tz = await must('setup/rest/fixture-task-zulu', () =>
-    restOk(w, 'POST', '/tasks', { project: run.projects.Z.id, title: `${tag} fixture Zulu` }),
+    restOk(w, 'POST', '/tasks', {
+      project: run.projects.Z.id,
+      title: `${tag} fixture Zulu`,
+      status: FIXTURE_STATUS,
+    }),
   )
   await check('setup/rest/fixture-comment', async () => {
     run.fixtureComment = await restOk(w, 'POST', `/tasks/${run.t0.key}/comments`, {
@@ -4777,6 +4819,8 @@ async function main() {
   await subtaskRuleChecks()
   // task and project facts, the live group rule and the billing pause
   await factChecks()
+  // the Board of the run's project, while it is active
+  await boardCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {

@@ -22,30 +22,27 @@ export type BoardAssigneeLane<T> = {
   items: T[]
 }
 
-/** Build lanes from scoped leaf tasks before filtering, so Focus can empty a
- * lane without removing it. Visible tasks alone populate cells. A lane's
- * person is its cards' effective owner (IssueVM.owner: the reviewer while a
- * task waits In Review, else the assignee). Profile IDs distinguish people
- * with the same name and preserve historical owners; only unowned tasks
- * belong to Unassigned, which sorts last. Lane keys stay
+/** Build a lane for each owner of the Board's cards `cards`, so a filter
+ * such as Focus leaves no lane empty (convex/lib/board.ts heldLanes). A
+ * lane's person is its cards' effective owner (IssueVM.owner: the reviewer
+ * while a task waits In Review, else the assignee). Profile IDs distinguish
+ * people with the same name and preserve historical owners; only unowned
+ * tasks belong to Unassigned, which sorts last. Lane keys stay
  * `assignee:<id|unassigned>`, the stable handle drives and data-lane read. */
 export function groupBoardAssignees<T extends { owner?: string | null }>(
-  scopedTasks: readonly T[],
-  visibleTasks: readonly T[],
+  cards: readonly T[],
   nameOf: (id: string) => string,
 ): BoardAssigneeLane<T>[] {
   const lanes = new Map<string | null, BoardAssigneeLane<T>>()
-  for (const task of scopedTasks) {
+  for (const task of cards) {
     const owner = task.owner || null
-    if (!lanes.has(owner)) {
-      lanes.set(owner, {
-        key: `assignee:${owner || 'unassigned'}`,
-        owner,
-        items: [],
-      })
+    let lane = lanes.get(owner)
+    if (!lane) {
+      lane = { key: `assignee:${owner || 'unassigned'}`, owner, items: [] }
+      lanes.set(owner, lane)
     }
+    lane.items.push(task)
   }
-  for (const task of visibleTasks) lanes.get(task.owner || null)?.items.push(task)
   return [...lanes.values()].sort((a, b) => {
     if (a.owner === null) return 1
     if (b.owner === null) return -1

@@ -261,6 +261,16 @@ describe('live queries over the base client', () => {
     expect(seen).toHaveLength(before)
   })
 
+  it('tells every handler of a transition that changed nothing', async () => {
+    const { live, seen, transition } = await start()
+    // a handler that runs after the first one
+    const later: string[][] = []
+    live.onTransition((t) => later.push([...t.tokens]))
+    transition([])
+    expect(seen.at(-1)?.tokens).toEqual([])
+    expect(later).toEqual([[]])
+  })
+
   it('after the socket reconnects, names every watched query again with the next connection count, unchanged values included', async () => {
     const { list, count, socket, seen } = await start()
     // The client reconnects after a jittered backoff of 0.5 to 1.5 s. Fake
@@ -315,6 +325,10 @@ describe('live queries over the base client', () => {
     list.stop()
     const again = live.watch(anyApi.tasks.list, {})
     expect(again.token).toBe(list.token)
+    // it joined no answered subscription, so the result the client still
+    // holds by this token is the old run's (lib/liveView.ts takes none)
+    expect(again.joined).toBe(false)
+    expect(live.read(again.token)).toBe('list 1')
     await tick()
     // the client asks the server for it under a new query id
     const adds = socket.sent
@@ -333,5 +347,22 @@ describe('live queries over the base client', () => {
     expect(seen.at(-1)?.tokens).toEqual([])
     transition([{ queryId: 2, value: 'list 2' }])
     expect(seen.at(-1)).toMatchObject({ tokens: [again.token], values: ['list 2'] })
+  })
+
+  it('says a watch joined a subscription whose result arrived, which it reads at once', async () => {
+    const { live, list, count, transition } = await start()
+    // the same query and arguments share the running subscription
+    const beside = live.watch(anyApi.tasks.list, {})
+    expect(beside).toMatchObject({ token: list.token, joined: true })
+    expect(live.read(beside.token)).toBe('list 1')
+    // one that has not answered yet is no join
+    const other = live.watch(anyApi.tasks.other, {})
+    const second = live.watch(anyApi.tasks.other, {})
+    expect([other.joined, second.joined]).toEqual([false, false])
+    beside.stop()
+    // a stop that leaves another watch keeps the subscription answered
+    expect(live.watch(anyApi.tasks.list, {}).joined).toBe(true)
+    transition([{ queryId: 1, value: 5 }])
+    expect(live.watch(anyApi.tasks.count, {})).toMatchObject({ token: count.token, joined: true })
   })
 })

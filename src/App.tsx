@@ -77,10 +77,11 @@ import {
   parsePath,
   pathMatchesState,
   type Route,
-  scopeForIssue,
+  scopeForIssueOn,
   syncPlaceOf,
   taskSegmentOf,
   type UiState,
+  viewBehindTask,
 } from './lib/router'
 import { type Toast, toastLook, withToast } from './lib/toasts'
 import {
@@ -850,14 +851,21 @@ function App() {
         : undefined
     return ref === undefined ? undefined : holdTask(ref)
   })
+  // prefs saved before the merge may still say "split"/"resources" — both
+  // collapsed into the roadmap (which now always docks the resource strip)
+  const uiView0 = ui0.view === 'split' || ui0.view === 'resources' ? 'roadmap' : ui0.view
+  const uiView = ['overview', 'kanban', 'roadmap'].includes(uiView0) ? uiView0 : 'overview'
   // issue URLs carry no scope segment (the issue names its own project):
   // keep the saved scope when the issue lives inside it, else jump to the
   // issue's sub-project — link recipients land on a board that shows it.
-  // A task over Team sync is the exception: the page names its own scope,
-  // and the one underneath stays the saved one.
+  // On the Board, which has no All projects selection, a saved All projects
+  // gives way to the issue's sub-project too (scopeForIssueOn). A task over
+  // Team sync is the exception: the page names its own scope, and the one
+  // underneath stays the saved one.
   const r0Scope =
     r0 && !r0.sync
-      ? r0.scope || (r0.issue ? scopeForIssue(r0.issue, uiScope) : undefined)
+      ? r0.scope ||
+        (r0.issue ? scopeForIssueOn(viewBehindTask(r0, uiView), r0.issue, uiScope) : undefined)
       : undefined
   // project ids are DB uuids (not the prototype's fixed slugs): default the
   // scope to the first visible project org-wide (navigation is flat since 0078),
@@ -880,10 +888,6 @@ function App() {
   const autoAll = useRef<boolean>(null)
   autoAll.current ??=
     P.isAllScope(scope) && !P.isAllScope(uiScope) && (!liveScope(r0Scope) || autoAllNoted())
-  // prefs saved before the merge may still say "split"/"resources" — both
-  // collapsed into the roadmap (which now always docks the resource strip)
-  const uiView0 = ui0.view === 'split' || ui0.view === 'resources' ? 'roadmap' : ui0.view
-  const uiView = ['overview', 'kanban', 'roadmap'].includes(uiView0) ? uiView0 : 'overview'
   const [view, setView] = useState(() =>
     // a viewless issue short link keeps the saved view (the modal sits over
     // whatever's behind), and so does Team sync, which returns to it on Done;
@@ -1124,6 +1128,8 @@ function App() {
     if (settingsPage !== ARCHIVED_TASKS_PAGE) setArchiveProject(null)
   }, [settingsPage])
   const [paletteOpen, setPaletteOpen] = useState(false)
+  // the project Search opens on, as the Board's pointer to it sets it
+  const [paletteIn, setPaletteIn] = useState<string | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
   const rev = usePlannerVersion()
   // Views over every task wait while a large workspace still loads them
@@ -1241,7 +1247,8 @@ function App() {
       pendingTask.current = null
       return
     }
-    const issue = (parsePath(pending.pathname) || parseHash(pending.hash))?.issue
+    const route = parsePath(pending.pathname) || parseHash(pending.hash) || {}
+    const issue = route.issue
     if (!issue && P.stillLoading() !== null) return
     pendingTask.current = null
     const here = { scope, view, settingsPage, inboxOpen, projectsOpen, sync }
@@ -1251,7 +1258,9 @@ function App() {
     replaceNextHistory.current = true
     // the scope Back or Forward gives a task address (onPop)
     if (issue && unmoved && !sync) {
-      const sc = liveScope(pending.scope) ? pending.scope : scopeForIssue(issue, pending.preferred)
+      const sc = liveScope(pending.scope)
+        ? pending.scope
+        : scopeForIssueOn(viewBehindTask(route, view), issue, pending.preferred)
       if (liveScope(sc)) setScope(sc)
     }
     setOpenIssue(issue || null)
@@ -1303,7 +1312,7 @@ function App() {
         : liveScope(r.scope)
           ? r.scope
           : r.issue
-            ? scopeForIssue(r.issue, preferred)
+            ? scopeForIssueOn(viewBehindTask(r, was.view), r.issue, preferred)
             : undefined
       const next = {
         scope: liveScope(sc) ? sc : was.scope,
@@ -1671,8 +1680,9 @@ function App() {
     })
   }
   /* A row's Board or Roadmap jump: leave the page for that view, scoped so
-     the task is on it (All projects when the sync covers all projects, else
-     the task's own sub-project). Filters left from before the sync are
+     the task is on it (the Roadmap's All projects when the sync covers all
+     projects, else the task's own sub-project, which the Board always
+     takes, as it has no All projects selection). Filters left from before the sync are
      cleared, Focus kept, since nothing on the sync could show why the task
      is missing. The Board opens the task window over it, as showOnBoard
      does, and reveals its card behind it; the Roadmap reveals its bar
@@ -1681,7 +1691,7 @@ function App() {
   const showTaskOn = (v: 'kanban' | 'roadmap', handle: string) => {
     const it = P.issueById[handle]
     if (!it) return
-    const to = sync?.scope === 'all' ? P.ALL_SCOPE : it.project
+    const to = v === 'roadmap' && sync?.scope === 'all' ? P.ALL_SCOPE : it.project
     const task = v === 'kanban' ? handle : null
     move({ sync: null, scope: to, view: v, openIssue: task }, () => {
       clearFilters()
@@ -1816,7 +1826,12 @@ function App() {
       }),
     setView: navView,
     planOnRoadmap,
-    openPalette: () => setPaletteOpen(true),
+    // a project id opens Search on that project; a click opens it on All
+    // projects
+    openPalette: (searchIn?: unknown) => {
+      setPaletteIn(typeof searchIn === 'string' ? searchIn : null)
+      setPaletteOpen(true)
+    },
     createOrg: (focusAfterClose?: () => HTMLElement | null) =>
       setModal({ kind: 'createorg', focusAfterClose }),
   }
@@ -1854,11 +1869,12 @@ function App() {
     window.showToast?.(`Created ${P.issueById[key]?.key || key}`)
     const curProj = P.project(scope)
     /* All projects already shows it — jumping out of the widest scope to a
-       single sub-project would be a demotion, not a "so you can see it". My
+       single sub-project would be a demotion, not a "so you can see it" —
+       except on the Board, whose All projects asks to choose a project. My
        view shows it only if it landed on me; a task created from a side-board's
        + is unassigned, so that one still jumps to its sub-project. */
     const inScope =
-      P.isAllScope(scope) ||
+      (P.isAllScope(scope) && view !== 'kanban') ||
       (P.isMineScope(scope) && P.isMine(P.issueById[key])) ||
       (curProj &&
         (curProj.id === issue.project || (curProj.children || []).includes(issue.project)))
@@ -2349,7 +2365,11 @@ function App() {
         )}
         {!settingsPage && paletteOpen && (
           <DeferredOverlay onClose={() => setPaletteOpen(false)}>
-            <SearchPalette ctx={paletteCtx} onClose={() => setPaletteOpen(false)} />
+            <SearchPalette
+              ctx={paletteCtx}
+              searchIn={paletteIn}
+              onClose={() => setPaletteOpen(false)}
+            />
           </DeferredOverlay>
         )}
         {!settingsPage && <ToastHost toasts={toasts} dismiss={dismissToast} />}

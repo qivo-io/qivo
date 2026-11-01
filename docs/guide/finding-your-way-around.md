@@ -48,14 +48,20 @@ Create tasks from the Board controls described in [Creating a task](./how-work-i
 **All projects** shows Overview, Board and Roadmap across every project you
 can access, including projects shared by other organizations ([Guest access](./who-sees-what-the-access-model.md#people-outside-your-organization)).
 
-Board lanes, Roadmap tracks and Overview health rows represent projects.
-Cards show their sub-project, and Roadmap tracks contain collapsible
-sub-project bands. Select an Overview health row to open its project's Board.
+Roadmap tracks and Overview health rows represent projects, and Roadmap
+tracks contain collapsible sub-project bands. Select an Overview health row
+to open its project's Board. The Board shows one project at a time
+([Which tasks a Board shows](./the-board.md#which-tasks-a-board-shows)), so in
+All projects it lists your top-level projects, and choosing one opens its
+Board. A task link that names no project, such as `…/tasks/qn-12`, opens
+the Board of the task's sub-project instead when it would open on the All
+projects Board. A link that names All projects, such as
+`…/board/all/tasks/qn-12`, keeps it, with the task's window over the list.
 
-To create a task, use a project's **+** in Swimlanes by project or
-Side-by-side boards, or open that project first. Shared status columns and
-empty states offer no way to create a task. The Team strip omits **This project
-only** because the scope already includes all projects.
+To create a task, open its project first. On a desktop, the Board's project
+list and empty states offer no way to create a task; on a phone, **New
+task** in the task list lets you choose its project. The Team strip omits
+**This project only** because the scope already includes all projects.
 
 When you can see no active project, Qivo opens All projects. Its pages, Team
 sync and the Inbox then say that no active projects are shared with you, and
@@ -86,8 +92,9 @@ hidden. Completion counts and remaining-hour totals cover only your work.
 selects your work. Text and Priority filters remain on desktop Board and
 Roadmap; Stale and Focus remain Board-only.
 
-Task creation works as in All projects. A new task starts unassigned, so Qivo
-opens its sub-project where you can see and assign it.
+To create a task, use a project's **+** in Swimlanes by project or
+Side-by-side boards, or open that project first. A new task starts
+unassigned, so Qivo opens its sub-project where you can see and assign it.
 
 ## The three views
 
@@ -99,7 +106,10 @@ They follow you across devices and reloads.
 Each page you open stays loaded while you use Qivo: the Overview, the Board,
 the Roadmap, the Inbox, Team sync and Projects. Going back to one shows it at
 once, scrolled where you left it, and changes made while it was out of sight
-follow right after. The Overview, the Board and the Roadmap belong to the
+follow right after. The Board checks which tasks it shows again when it
+shows. It does the same when you return to a browser tab or desktop window
+you had hidden or minimized, where it stops updating meanwhile. The Overview,
+the Board and the Roadmap belong to the
 sidebar choice, such as a project or All projects. Choosing another one loads
 them again for it. Settings loads each time you open it.
 
@@ -126,7 +136,10 @@ Phone lists and Roadmap ignore desktop text queries.
 **Filter tasks…** matches case-insensitive word fragments in any order.
 Every fragment must occur in the task's key, title, description, status,
 priority, assignee name or labels. For example, “to do cable” finds a To Do
-task with “cable” in its title. Wildcard characters are not needed.
+task with “cable” in its title. Wildcard characters are not needed. Spaces
+around the text do not count. The Board narrows its cards as you type and
+asks the server once you pause; a text filter longer than 200 characters
+shows its limit in place of the Board until you shorten it.
 
 Task filters, Archived tasks, Inbox and searchable pickers use the same
 fragment-matching rule. Search matches whole words instead ([Search palette](#search-palette)).
@@ -156,9 +169,11 @@ another status before starting one.
 Open **Search** in the sidebar or use the phone header's search icon. Search
 covers every project you can open in every organization you belong to,
 whatever page you are on, and **Search in** shows that as **All projects**.
-To narrow it, choose an organization, a project with its sub-projects, or
-one sub-project there. The choice lasts while Search stays open. An empty
-search shows nothing.
+**Search this sub-project**, which a Board offers when it cannot load a
+sub-project's tasks, opens Search with **Search in** set to that
+sub-project. To narrow it, choose an organization, a project with its
+sub-projects, or one sub-project there. The choice lasts while Search stays
+open. An empty search shows nothing.
 
 Search finds a task by its ID (`QN-12` or `12`), the words of its title and
 the text its description shows, not link addresses or the hidden part of a

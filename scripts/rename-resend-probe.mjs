@@ -101,6 +101,7 @@ export function watching(base) {
       let stopped = false
       return {
         token: watched.token,
+        joined: watched.joined,
         stop: () => {
           if (stopped) return
           stopped = true

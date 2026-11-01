@@ -4,7 +4,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
-import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
+import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
+import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
 
 /* Archiving a task on a phone, on App and the real store: the task leaves
    the board while its Archive or delete dialog is open, and the window
@@ -99,7 +100,8 @@ const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 50))
     delivery that drops the task. */
 async function openArchive() {
   vi.resetModules()
-  const snap: Snapshot = plannerFixture()
+  // a sub-project's Board, which the Board's query answers
+  const snap: Snapshot = underProgram(plannerFixture())
   snap.orgs[0].next_issue_num = 1
   snap.issues.push({
     id: crypto.randomUUID(),
@@ -117,12 +119,18 @@ async function openArchive() {
     has_hidden_parent: false,
   })
   let publish = (_: Snapshot) => {}
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  // what the server holds: the workspace last published
+  let server = snap
+  network.onUpdate.mockImplementation((ref, args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
-      publish = (value) => next(structuredClone(value))
+      publish = (value) => {
+        server = value
+        next(structuredClone(value))
+      }
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
     return () => {}
   })
   let answer = () => {}

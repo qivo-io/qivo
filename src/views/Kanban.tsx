@@ -32,8 +32,10 @@ import {
 } from '../store/planner'
 import { BoardPanelMaterial } from './BoardPanelMaterial'
 import './Board.css'
+import { BoardFrame, BoardNote, IncompleteNote } from './board/BoardNote'
 import { createEstimateCache } from './board/cardEstimate'
 import { BOARD_TASK_TYPE, createDropOver, type DropOver, useDropOver } from './board/dropOver'
+import { type BoardView, useBoardView } from './board/useBoardView'
 import { BoardCard } from './kanbanCards'
 import { useBoardPanelClipping } from './useBoardPanelClipping'
 
@@ -508,10 +510,13 @@ function LaneFoot() {
 function ColHeaderRow({
   statuses,
   counts,
+  counted,
   onAdd,
 }: {
   statuses: typeof P.STATUSES
   counts: Record<string, number>
+  /** whether the counts are the Board's answer, else they wait (…) */
+  counted: boolean
   onAdd: ((statusId: string) => void) | null
 }) {
   return (
@@ -532,8 +537,8 @@ function ColHeaderRow({
             {s.name}
           </span>
           <span data-status-count={s.id} className="[font-size:var(--fs-xs)] [color:var(--text-3)]">
-            {/* a count waits while tasks still load */}
-            {P.stillLoading() === null ? counts[s.id] || 0 : '…'}
+            {/* a count waits for the Board's answer */}
+            {counted ? counts[s.id] || 0 : '…'}
           </span>
           <div className="[flex:1]" />
           {/* a column names a status, not a place — across all projects there
@@ -561,7 +566,7 @@ function ColHeaderRow({
   )
 }
 
-function NoMatchNote({ onClear }: { onClear: () => void }) {
+function NoMatchNote({ onClear, waiting }: { onClear: () => void; waiting: boolean }) {
   return (
     <div
       // an empty state, as taskFocus.ts reads it
@@ -569,9 +574,9 @@ function NoMatchNote({ onClear }: { onClear: () => void }) {
       className="board-empty-note animate-in fade-in slide-in-from-bottom-1 [display:flex] [flex-direction:column] [align-items:center] [gap:6px] [padding:26px_16px]"
     >
       <span data-empty-state-title className="[font-size:var(--fs-base)] [color:var(--text-3)]">
-        {P.stillLoading() === null
-          ? 'Nothing matches your filters'
-          : 'Nothing matches your filters yet. Tasks are still loading.'}
+        {waiting
+          ? 'Nothing matches your filters yet. Tasks are still loading.'
+          : 'Nothing matches your filters'}
       </span>
       <Button type="button" onClick={onClear}>
         Clear filters
@@ -580,14 +585,7 @@ function NoMatchNote({ onClear }: { onClear: () => void }) {
   )
 }
 
-function Kanban({
-  info,
-  filters,
-  tweaks,
-  actions,
-  revealTask = null,
-  onRevealConsumed,
-}: {
+type KanbanProps = {
   info: ScopeInfo
   filters: IssueFilters
   tweaks: { metaViz: string }
@@ -595,7 +593,30 @@ function Kanban({
   /** A task to scroll to and ring for a moment, behind its task window */
   revealTask?: RevealRequest | null
   onRevealConsumed?: (n: number) => void
-}) {
+}
+
+/** The desktop Board of `info` with the filter row `filters` (App's
+    effFilters): the server's answer for the selection, joined to the
+    store's tasks (board/useBoardView.ts), in the layout `tweaks` chooses. */
+function Kanban(props: KanbanProps) {
+  const view = useBoardView(props.info, props.filters, 'desktop')
+  return (
+    <BoardFrame view={view} grow>
+      <KanbanBoard {...props} view={view} />
+    </BoardFrame>
+  )
+}
+
+function KanbanBoard({
+  info,
+  tweaks,
+  actions,
+  revealTask = null,
+  onRevealConsumed,
+  view,
+}: KanbanProps & { view: BoardView }) {
+  // the filter row as the Board applies it
+  const filters = view.filters
   // App makes its actions again every render; the cards keep one identity
   const onOpenIssue = useLatest(actions.openIssue)
   const [dragId, setDragId] = useStateK<string | null>(null)
@@ -672,9 +693,12 @@ function Kanban({
   // Keyboard focus stays on a task's card when a change moves the card.
   const followFocus = useFollowTaskFocus(bodyRef)
 
-  const scoped = P.scopedIssues(info)
-  const scopedLeaves = scoped.filter((it) => !P.isGroup(it))
-  const visible = scopedLeaves.filter((it) => P.passesFilters(it, filters))
+  // the cards: the leaves among the tasks the Board shows
+  const visible = view.tasks.filter((it) => !P.isGroup(it))
+  // a message in place of the Board ends a drag over it
+  React.useEffect(() => {
+    if (!view.shows && dragId) endDrag()
+  }, [view.shows, dragId, endDrag])
   // Focus drops the Backlog and Done COLUMNS, not just their cards —
   // passesFilters already emptied them, and an empty shell column would
   // read as "no backlog" rather than "backlog hidden"
@@ -694,15 +718,17 @@ function Kanban({
        project scope has always done, and what "the board keeps its shape"
        promises. Asking `anyFilter` here instead would hide EVERY group the
        moment Focus emptied them, with no note (it isn't clearable) and, in
-       the Boards layout, nothing left to draw. */
+       the Boards layout, nothing left to draw. The answer's held_projects
+       says it (useBoardView), with the groups of the cards on screen.
+     The search counts trimmed, as the server trims it, so spaces alone are
+     no filter. */
   const clearable =
     (!mine && filters.mine) ||
     filters.assignees.length > 0 ||
     filters.priority ||
     filters.stale ||
-    filters.search
-  const scopedProjects = new Set(scoped.map((i) => i.project))
-  const holdsScoped = (gsubIds) => gsubIds.some((id) => scopedProjects.has(id))
+    filters.search.trim()
+  const holdsScoped = (g: { proj: ProjectVM; subIds: string[] }) => view.holds(g.proj.id, g.subIds)
   const byPrio = (a, b) => P.PRIORITIES[a.priority].rank - P.PRIORITIES[b.priority].rank
 
   const counts = {}
@@ -743,7 +769,7 @@ function Kanban({
     ? info.groups.flatMap((g) => {
         const gset = new Set(g.subIds)
         const list = visible.filter((i) => gset.has(i.project))
-        if (!holdsScoped(g.subIds) || (clearable && list.length === 0)) return []
+        if (!holdsScoped(g) || (clearable && list.length === 0)) return []
         const cells = statuses.map((s) =>
           cellOf(`${g.proj.id}:${s.id}`, list.filter((i) => i.status === s.id).sort(byPrio)),
         )
@@ -761,12 +787,14 @@ function Kanban({
   let lanes: Lane[] = sideBoards
     ? []
     : byAssignee
-      ? groupBoardAssignees(scopedLeaves, visible, (id) => P.user(id)?.name || 'Unknown user')
-          .map((lane) => ({ ...lane, proj: null }))
-          .filter((lane) => !(clearable && lane.items.length === 0))
+      ? // a lane for each owner of a card, so no lane is empty
+        groupBoardAssignees(visible, (id) => P.user(id)?.name || 'Unknown user').map((lane) => ({
+          ...lane,
+          proj: null,
+        }))
       : swimlanes
         ? info.groups
-            .filter((g) => holdsScoped(g.subIds))
+            .filter((g) => holdsScoped(g))
             .map((g) => {
               const gset = new Set(g.subIds)
               return {
@@ -909,10 +937,18 @@ function Kanban({
   )
   // A jump to the Board (Team sync, the Inbox, the task crumb, search)
   // shows the task's first card, mounting its cell through it.
-  useReveal(revealTask, onRevealConsumed, bodyRef, (id) => {
-    const [one] = holdingCards(latestCells(), id)
-    if (one) scheduler.mountThrough(one.cell, one.group)
-  })
+  // it waits for the answer, so the card it looks for is the Board's; a
+  // message in place of the Board takes it without showing anything
+  useReveal(
+    view.busy ? null : revealTask,
+    onRevealConsumed,
+    bodyRef,
+    (id) => {
+      const [one] = holdingCards(latestCells(), id)
+      if (one) scheduler.mountThrough(one.cell, one.group)
+    },
+    !view.shows,
+  )
 
   /** A cell's cards, mounting under the cell's key in slices past its first
       screen. Staleness is read only for the cards that mount. */
@@ -951,7 +987,9 @@ function Kanban({
         label={pendingLabel}
         listRole
         blockSize={BOARD_BLOCK_SIZE}
-        // tasks still arriving land among the cards (DeferredList hold)
+        // tasks still arriving land among the cards (DeferredList hold),
+        // while the workspace loads in stages; a wait for the Board's answer
+        // holds no slice back
         hold={P.stillLoading() !== null}
       />
     )
@@ -1018,6 +1056,9 @@ function Kanban({
       : (statusId) => actions.newIssue({ status: statusId, project: defaultProject })
 
   /* ---------- empty states ---------- */
+  // a message in place of the columns: the chooser of All projects, a
+  // selection past the Board's limits, a Board that did not load
+  if (!view.shows) return <BoardNote view={view} info={info} actions={actions} variant="desktop" />
   if (subIds.length === 0) {
     if (wide) {
       return info.metas.length === 0 ? (
@@ -1040,9 +1081,10 @@ function Kanban({
       />
     )
   }
-  if (scoped.length === 0) {
+  // an incomplete Board is no empty one: its note says tasks are missing
+  if (visible.length === 0 && view.state !== 'incomplete' && view.empty()) {
     // the tasks of this view may be still to come
-    if (P.stillLoading() !== null) {
+    if (view.busy || P.stillLoading() !== null) {
       return <EmptyState icon="board" title="Loading tasks…" hint="Tasks are still arriving." />
     }
     // My view empties for a reason of its own — an empty board here doesn't
@@ -1066,7 +1108,10 @@ function Kanban({
   // a filter that matches nothing keeps the status columns standing (empty)
   // with an inline note — a full-screen empty state would hide the board.
   // Gated on the CLEARABLE filters: the note's only action is Clear.
-  const noMatches = visible.length === 0 && clearable
+  // not while tasks the answer names are missing, which may match
+  const noMatches = visible.length === 0 && clearable && view.state !== 'incomplete'
+  // the note waits while the workspace or the answer still brings tasks
+  const waiting = view.busy || P.stillLoading() !== null
   const gridCols = `repeat(${statuses.length}, minmax(${minColumnWidth}px, 1fr))`
 
   // ---- side-boards layout (each group its own mini board) ----------------
@@ -1089,7 +1134,8 @@ function Kanban({
         <div style={{ padding: `${CANVAS_PAD_T}px ${CANVAS_PAD_X}px ${CANVAS_PAD_B}px` }}>
           {/* every sub-board hides itself when filtered empty, so a zero-match
             filter leaves nothing — say so instead of a blank pane */}
-          {noMatches && <NoMatchNote onClear={actions.clearFilters} />}
+          {view.state === 'incomplete' && <IncompleteNote onRetry={view.retry} />}
+          {noMatches && <NoMatchNote onClear={actions.clearFilters} waiting={waiting} />}
           <div className="[position:relative] [display:flex] [align-items:flex-start] [gap:var(--panel-gap)]">
             {boards.map(({ g, cells: boardCells }) => {
               const proj = g.proj
@@ -1185,7 +1231,7 @@ function Kanban({
                               <StatusDot status={s.id} size={12} />
                               {s.name}{' '}
                               <span className="[font-weight:400]">
-                                {P.stillLoading() === null ? items.length : '…'}
+                                {view.counted ? items.length : '…'}
                               </span>
                             </div>
                             {/* biome-ignore lint/a11y/useSemanticElements: a styled flex div inside the cell that takes drops */}
@@ -1278,10 +1324,21 @@ function Kanban({
             }`}
             data-board-fused={fused}
           >
-            <ColHeaderRow statuses={statuses} counts={counts} onAdd={addTo} />
+            <ColHeaderRow
+              statuses={statuses}
+              counts={counts}
+              counted={view.counted}
+              onAdd={addTo}
+            />
           </div>
         </div>
       </div>
+      {view.state === 'incomplete' && (
+        // inset as the canvas below (CANVAS_PAD_X)
+        <div className="px-[20px] pb-[var(--panel-gap)]">
+          <IncompleteNote onRetry={view.retry} />
+        </div>
+      )}
       <div
         ref={scrollRef}
         data-scroll
@@ -1399,7 +1456,7 @@ function Kanban({
                 <LaneFoot />
               </div>
             ))}
-            {noMatches && <NoMatchNote onClear={actions.clearFilters} />}
+            {noMatches && <NoMatchNote onClear={actions.clearFilters} waiting={waiting} />}
           </div>
         </div>
       </div>

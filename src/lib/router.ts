@@ -172,6 +172,28 @@ export const scopeForIssue = (issueKey: string, preferred?: string | null): stri
   return it.project
 }
 
+/* The view a task address `r` shows behind its task window, `view` being
+   the one that stays where the address names none: null under the Inbox,
+   which covers every view. */
+export const viewBehindTask = (r: Route, view: string): string | null =>
+  r.inbox ? null : r.view || view
+
+/* The scope to show behind a task link on `view` (viewBehindTask). The
+   Board has no All projects selection (convex/tasks.ts board): where
+   scopeForIssue keeps All projects, the Board shows the task's own
+   sub-project instead, so its card can be shown. Overview, Roadmap and the
+   Inbox, which shows no view, keep All projects. */
+export const scopeForIssueOn = (
+  view: string | null,
+  issueKey: string,
+  preferred?: string | null,
+): string | undefined => {
+  const scope = scopeForIssue(issueKey, preferred)
+  return view === 'kanban' && scope === ALL_SCOPE
+    ? (P.issueById[issueKey]?.project ?? scope)
+    : scope
+}
+
 /* ---------------------------------------------------------------------------
    The grammar below the prefix — shared by both parsers, so a path and a
    legacy hash can never come to mean different things.

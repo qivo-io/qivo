@@ -35,19 +35,29 @@ export type LiveTransition = {
     scripts/perf/transport.mjs). */
 export type LiveQueries = {
   /** Subscribes to `ref` with `args`. Watching the same query twice shares
-      one subscription and one token. */
+      one subscription and one token. `joined` says the watch joined a
+      subscription whose result already arrived, so `read` answers its
+      current result at once; otherwise the first result comes with a
+      transition that names the token. A result read before then may be
+      one Convex kept from an earlier subscription to the same query and
+      arguments, as it keeps a result by token until the next transition
+      after the last unsubscribe. */
   watch(
     ref: FunctionReference<'query'>,
     args: Record<string, Value>,
   ): {
     token: string
     stop: () => void
+    joined: boolean
   }
   /** The latest result of the query `token` names, undefined while none
       arrived. Throws the query's error when it failed. */
   read(token: string): unknown
-  /** Calls `fn` once per transition. Answers the way to stop. */
-  onTransition(fn: (transition: LiveTransition) => void): () => void
+  /** Calls `fn` once per transition. Answers the way to stop. `view` marks
+      the handler of a view's own read (lib/liveView.ts) rather than the
+      store's, which the transport treats alike and test doubles tell
+      apart. */
+  onTransition(fn: (transition: LiveTransition) => void, options?: { view?: boolean }): () => void
   /** Runs one-shot query `ref`. */
   query<Q extends FunctionReference<'query'>>(
     ref: Q,
@@ -65,21 +75,25 @@ export function createLiveQueries(
   client: BaseConvexClient,
   query: LiveQueries['query'],
 ): LiveQueries {
-  // what each watched token names, and how many watch it
-  const watched = new Map<string, { name: string; args: Record<string, Value>; count: number }>()
-  // the newest transition's database time, in nanoseconds
-  let last = 0n
+  // what each watched token names, how many watch it, and whether a
+  // transition named it since its subscription started
+  const watched = new Map<
+    string,
+    { name: string; args: Record<string, Value>; count: number; answered: boolean }
+  >()
   let warned = false
   return {
     watch(ref, args) {
       const name = getFunctionName(ref)
       const { queryToken, unsubscribe } = client.subscribe(name, args)
       const entry = watched.get(queryToken)
+      const joined = entry?.answered === true
       if (entry) entry.count++
-      else watched.set(queryToken, { name, args, count: 1 })
+      else watched.set(queryToken, { name, args, count: 1, answered: false })
       let stopped = false
       return {
         token: queryToken,
+        joined,
         stop: () => {
           if (stopped) return
           stopped = true
@@ -94,9 +108,18 @@ export function createLiveQueries(
       return entry ? client.localQueryResult(entry.name, entry.args) : undefined
     },
     onTransition(fn) {
+      // the newest database time this handler was told of, in nanoseconds:
+      // each handler keeps its own, as the one that runs first must not
+      // make a later one miss a transition
+      let last = 0n
       return client.addOnTransitionHandler((transition) => {
         const tokens = new Set<string>()
-        for (const { token } of transition.queries) if (watched.has(token)) tokens.add(token)
+        for (const { token } of transition.queries) {
+          const entry = watched.get(token)
+          if (!entry) continue
+          tokens.add(token)
+          entry.answered = true
+        }
         // the database clock in nanoseconds (a Long)
         const ns = BigInt(transition.timestamp.toString())
         const advanced = ns > last

@@ -204,10 +204,13 @@ Use the row controls to change tasks without opening them:
   Roadmap finds its bar or unplanned row without starting a planning session.
 - The **review tick** marks the task reviewed without changing it.
 
-Board and Roadmap links use All projects for an all-project sync, or the
-task's sub-project otherwise. The links beside a person's name filter to that
-person, using the selected project when applicable. Other filters clear so
-tasks remain visible; Focus stays unchanged.
+A row's **Board** link opens the task's sub-project. Its **Roadmap** link
+uses All projects for an all-project sync, or the task's sub-project
+otherwise. The links beside a person's name filter to that person, using
+the selected project when applicable; for an all-project or team sync they
+open All projects, where the Board asks you to choose a project and then
+shows that person's tasks in it. Other filters clear so tasks remain
+visible; Focus stays unchanged.
 
 Read-only projects disable edits and mentions. On phones, Back closes an open
 menu or picker before leaving Team sync.

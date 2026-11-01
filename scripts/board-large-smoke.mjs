@@ -1,16 +1,20 @@
 /* A large Board, driven in a real browser without a backend.
  * Usage: node scripts/board-large-smoke.mjs [--tasks 10000]
  * Builds the benchmark page (scripts/perf/page.mjs) from this checkout,
- * serves it on loopback and opens the Board with that many tasks. While the
- * Board still mounts in slices (with the CPU 4x slower, so that lasts), it
- * checks the first commit's size, the busy mark, Tab through the waiting
- * space, focus that follows a moved card, a drag and Ctrl+F. Then, at full
- * speed, a drag between statuses, keyboard focus through a card and back
- * from the task window, Find on the last card, scrolling back into a lane
- * that changed above the view, the owner picker on the first tap of a
- * touch screen, the frames of the pooled Board mounting at 4x, and that
- * the pages log no errors. Writes go to the page's synthetic
- * transport only. */
+ * serves it on loopback and opens the Board in a workspace of that many
+ * tasks. The workspace spreads them over a top-level project of three
+ * sub-projects for each 1,000 or part of them (perf/page.mjs programsFor),
+ * so the Board, which shows at most 1,000 tasks (convex/lib/limits.ts
+ * BOARD_TASKS), opens on about 900 cards in three lanes, about 100 of them
+ * in the first lane's To Do. While the Board still mounts in slices (with
+ * the CPU 4x slower, so that lasts), it checks the first commit's size, the
+ * busy mark, Tab through the waiting space, focus that follows a moved
+ * card, a drag and Ctrl+F. Then, at full speed, a drag between statuses,
+ * keyboard focus through a card and back from the task window, Find on
+ * the last card, scrolling back into a lane that changed above the view,
+ * the owner picker on the first tap of a touch screen, the frames of the
+ * pooled Board mounting at 4x, and that the pages log no errors. Writes go
+ * to the page's synthetic transport only. */
 import assert from 'node:assert/strict'
 import { rmSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -18,7 +22,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
-import { buildPage, serve } from './perf/page.mjs'
+import { buildPage, programsFor, serve } from './perf/page.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const at = process.argv.indexOf('--tasks')
@@ -28,8 +32,11 @@ const tasks = at < 0 ? 10_000 : Number(process.argv[at + 1])
    cards still waiting in the first lane's To Do when they start: the drag
    check after the Tab and focus checks runs on that cell while slices go
    on.
-   Cells near the view mount first, so at 2,000 tasks that cell is often
-   whole by then; 3,000 tasks put about 100 cards there. */
+   Cells near the view mount first, so with ten lanes that cell is often
+   whole by then; three lanes of about 300 cards put about 100 there. The
+   Board shows one top-level project, which the page fills with at most
+   1,000 tasks whatever --tasks says (programs), and 3,000 tasks keep the
+   workspace behind it large. */
 const LEAST_TASKS = 3000
 if (!Number.isInteger(tasks) || tasks < LEAST_TASKS) {
   console.error(`[board-large] --tasks takes a whole number of ${LEAST_TASKS} or more`)
@@ -80,7 +87,9 @@ try {
       long animation frame from the first card on. */
   const openBoard = async (page) => {
     // a fast network: this checks the Board, not how long results take
-    await page.goto(`${server.origin}/?tasks=${tasks}&latency=0&mbps=10000`)
+    await page.goto(
+      `${server.origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&subprojects=3&latency=0&mbps=10000`,
+    )
     await page.locator('[data-view-switch]').waitFor(slow)
     await page.evaluate(() => {
       const state = { first: null, firstAt: null, frames: [], observer: null }
@@ -261,7 +270,7 @@ try {
   // stand-in server counts them
   assert.equal(
     await page.locator('[data-card]').count(),
-    await page.evaluate(() => window.__perf.cards),
+    await page.evaluate(() => window.__perf.boardCards),
     'The Board must show every task',
   )
   log(`opened with ${tasks} tasks`)
@@ -320,8 +329,12 @@ try {
   assert.equal(await progress.locator(`[data-card="${id}"]`).count(), 1)
   log('a drag between statuses writes once')
 
-  // Find reaches the last card, wherever it is on the Board.
-  const last = await page.evaluate(() => window.PLANNER.issues.at(-1).title)
+  // Find reaches the last card, wherever it is on the Board: the last task
+  // of the top-level project it shows.
+  const last = await page.evaluate(() => {
+    const P = window.PLANNER
+    return P.scopedIssues(P.scopeInfo(P.visibleProjects()[0].id)).at(-1).title
+  })
   assert.equal(
     await page.evaluate((text) => window.find(text, true), last),
     true,
@@ -407,7 +420,9 @@ try {
   // cost a card takes on a shared machine some run over, and no frame may
   // come near the seconds main freezes for.
   const pooled = await open()
-  await pooled.page.goto(`${server.origin}/?tasks=${tasks}&latency=0&mbps=10000`)
+  await pooled.page.goto(
+    `${server.origin}/?tasks=${tasks}&programs=${programsFor(tasks)}&subprojects=3&latency=0&mbps=10000`,
+  )
   await pooled.page.locator('[data-view-switch]').waitFor(slow)
   await pooled.page.evaluate(() => window.PLANNER.saveUI({ metaViz: 'pool' }))
   await pooled.cpu(4)

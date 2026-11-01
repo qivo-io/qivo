@@ -11,6 +11,8 @@ import { useLatest } from '../lib/useLatest'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/planner'
 import type { StoreVersion } from '../store/updates'
+import { BoardFrame, BoardNote, IncompleteNote } from '../views/board/BoardNote'
+import { type BoardView, useBoardView } from '../views/board/useBoardView'
 import { DeferredList } from './DeferredList'
 import {
   Avatar,
@@ -480,14 +482,7 @@ const MobileTaskRow = memo(function MobileTaskRow({
   )
 })
 
-export function MobileTaskList({
-  info,
-  filters,
-  setFilters,
-  actions,
-  revealTask = null,
-  onRevealConsumed,
-}: {
+type MobileTaskListProps = {
   info: ScopeInfo
   filters: IssueFilters
   setFilters: React.Dispatch<React.SetStateAction<IssueFilters>>
@@ -495,23 +490,41 @@ export function MobileTaskList({
   /** A task to scroll to and ring for a moment, behind its task window */
   revealTask?: RevealRequest | null
   onRevealConsumed?: (n: number) => void
-}) {
+}
+
+/** The phone's Board: the tasks of the selection `info` by status, from the
+    server's answer joined to the store's tasks (views/board/useBoardView.ts),
+    with the raw filter row `filters`, which it reads without the text. */
+export function MobileTaskList(props: MobileTaskListProps) {
+  const view = useBoardView(props.info, props.filters, 'phone')
+  return (
+    <BoardFrame view={view} grow={false}>
+      <MobileTaskBoard {...props} view={view} />
+    </BoardFrame>
+  )
+}
+
+function MobileTaskBoard({
+  info,
+  filters,
+  setFilters,
+  actions,
+  revealTask = null,
+  onRevealConsumed,
+  view,
+}: MobileTaskListProps & { view: BoardView }) {
   const [status, setStatus] = useState('all')
   const [filterOpen, setFilterOpen] = useState(false)
   const closeFilters = useMobileBackLayer(filterOpen, () => setFilterOpen(false))
   // the Filters button, which takes focus back once the filter page has closed
   const filterButton = useRef<HTMLButtonElement>(null)
-  const effective = {
-    ...filters,
-    search: '',
-    ...(info.mine ? { mine: true, assignees: [] } : {}),
-  }
   const activeFilters =
     Number(!!filters.priority) +
     Number(filters.stale) +
     Number(filters.focus) +
     (info.mine ? 0 : Number(filters.mine || filters.assignees.length > 0))
-  const tasks = P.scopedIssues(info).filter((task) => P.passesFilters(task, effective))
+  // the tasks the Board shows, groups as rows
+  const tasks = view.tasks
   const statusOrder = info.mine
     ? ['progress', 'review', 'todo', 'backlog', 'done']
     : P.STATUSES.map((item) => item.id)
@@ -533,6 +546,8 @@ export function MobileTaskList({
   const count = groups.reduce((sum, group) => sum + group.tasks.length, 0)
   // a scope across every project, with none to show (components/NoProjects)
   const noProjects = info.wide && info.metas.length === 0
+  // the list waits while the workspace or the Board's answer still brings tasks
+  const waiting = view.busy || P.stillLoading() !== null
   // Focus stays on a task's row when a change moves it to another section.
   const listRef = useRef<HTMLDivElement>(null)
   const followFocus = useFollowTaskFocus(listRef)
@@ -578,11 +593,19 @@ export function MobileTaskList({
       }),
     [latestShown, scheduler],
   )
-  // A jump to the Board shows the task's row, as the Board shows its card.
-  useReveal(revealTask, onRevealConsumed, listRef, (id) => {
-    const group = latestShown().find((it) => it.tasks.some((task) => task.id === id))
-    if (group) scheduler.mountThrough(`phone:${group.id}`, id)
-  })
+  // A jump to the Board shows the task's row, as the Board shows its card,
+  // once the Board's answer arrived; a message in place of the list takes
+  // it without showing anything.
+  useReveal(
+    view.busy ? null : revealTask,
+    onRevealConsumed,
+    listRef,
+    (id) => {
+      const group = latestShown().find((it) => it.tasks.some((task) => task.id === id))
+      if (group) scheduler.mountThrough(`phone:${group.id}`, id)
+    },
+    !view.shows,
+  )
   const renderRow = (task: IssueVM) => (
     <MobileTaskRow key={task.id} task={task} context={P.contextVersion} onOpen={openIssue} />
   )
@@ -656,13 +679,15 @@ export function MobileTaskList({
           </div>
         </DialogContent>
       </Dialog>
+      {/* above the sections, which hold what reached the list */}
+      {view.state === 'incomplete' && <IncompleteNote onRetry={view.retry} />}
       {shown.map((group) => (
         <section key={group.id} className="mobile-task-section">
           <h2>
             <StatusDot status={group.id} /> {group.name}
             <span className="text-xs text-text-2">
-              {/* a count waits while tasks still load */}
-              {P.stillLoading() === null ? group.tasks.length : '…'}
+              {/* a count waits for the Board's answer */}
+              {view.counted ? group.tasks.length : '…'}
             </span>
           </h2>
           {/* the phone's Board cell for one status, as taskFocus reads it */}
@@ -677,20 +702,26 @@ export function MobileTaskList({
               initial={initialOf(group.id)}
               scheduler={scheduler}
               label={pendingRows}
-              // tasks still arriving land among the rows (DeferredList hold)
+              // tasks still arriving land among the rows (DeferredList hold),
+              // while the workspace loads in stages; a wait for the Board's answer
+              // holds no slice back
               hold={P.stillLoading() !== null}
             />
           </div>
         </section>
       ))}
-      {count === 0 && (
+      {/* a message in place of the sections, except where no project at
+          all shows: the card below says why */}
+      {!view.shows && !noProjects && (
+        <BoardNote view={view} info={info} actions={actions} variant="phone" />
+      )}
+      {/* none while tasks the answer names are missing: the note says so */}
+      {count === 0 && (view.shows || noProjects) && view.state !== 'incomplete' && (
         <div className="mobile-task-empty" data-empty-state>
           <Icon name="board" size={24} />
-          <h2 data-empty-state-title>
-            {P.stillLoading() === null ? 'No tasks here' : 'Loading tasks…'}
-          </h2>
+          <h2 data-empty-state-title>{waiting ? 'Loading tasks…' : 'No tasks here'}</h2>
           <p>
-            {P.stillLoading() !== null
+            {waiting
               ? 'Tasks are still arriving.'
               : noProjects
                 ? noProjectsHint()

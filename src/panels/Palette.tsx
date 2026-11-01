@@ -2,7 +2,9 @@
    searches tasks and projects on the server (P.fetchSearchPage,
    search:page): every project the person can open in every organization of
    the login, whatever page it opened on, or the narrower scope chosen under
-   Search in, which lasts while the palette is open. Typing rests 250 ms
+   Search in, which lasts while the palette is open. It starts on All
+   projects, or on the sub-project it opened for (searchIn, the Board's
+   Search this sub-project). Typing rests 250 ms
    before a request, and so does a scope picked from the keyboard, which
    scanning the list walks through; a scope picked with the pointer or a
    change of Include archived tasks asks at once, and any change starts at
@@ -199,10 +201,12 @@ const foreignOrg = (org: string): string | null =>
 
 type SearchPaletteProps = {
   ctx: { setScope: (scopeId: string) => void; openIssue: (issueId: string) => void }
+  /** the project or sub-project Search in starts on, null for All projects */
+  searchIn?: string | null
   onClose: () => void
 }
 
-function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
+function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
   const mobile = useMobile()
   const [text, setText] = useState('')
   // the text a search asks with: the text once typing rests, and at once
@@ -211,8 +215,8 @@ function SearchPalette({ ctx, onClose }: SearchPaletteProps) {
   const [includeArchived, setIncludeArchived] = useState(false)
   // the Search in choice, '' for All projects, and the one a search asks
   // with, which waits for a choice from the keyboard to rest
-  const [choice, setChoice] = useState('')
-  const [settledChoice, setSettledChoice] = useState('')
+  const [choice, setChoice] = useState(searchIn ?? '')
+  const [settledChoice, setSettledChoice] = useState(searchIn ?? '')
   const [shown, setShown] = useState<Shown | null>(null)
   const [running, setRunning] = useState<Running | null>(null)
   const [failed, setFailed] = useState<Failed | null>(null)

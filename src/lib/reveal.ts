@@ -72,12 +72,15 @@ const reducedMotion = () =>
     correction. `onConsumed` gets the request's nonce as soon as it is taken. A
     request is taken once: a view that shows again (KeptView) runs its
     effects again, and may still hold a request it took before it hid.
-    Nothing happens when the pane does not show the task. */
+    Nothing happens when the pane does not show the task, or when `drop`
+    says the view shows a message in place of its tasks: the request is
+    taken all the same, so no other view takes it later. */
 export function useReveal(
   request: RevealRequest | null | undefined,
   onConsumed: ((n: number) => void) | undefined,
   pane: RefObject<HTMLElement | null>,
   mount: (id: string) => void,
+  drop = false,
 ) {
   const consumed = useLatest((n: number) => onConsumed?.(n))
   const mountTask = useLatest(mount)
@@ -90,6 +93,7 @@ export function useReveal(
     taken.current = request.n
     cancel.current()
     consumed(request.n)
+    if (drop) return
     const frames: number[] = []
     let timer = 0
     let ringed: HTMLElement | null = null

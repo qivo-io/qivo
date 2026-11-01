@@ -103,6 +103,27 @@ describe('the Board while tasks still load', () => {
   )
 
   it(
+    'says it still loads where the answer names no task for a filter yet',
+    async () => {
+      const board = await loadBoard(network, (snapshot) => {
+        snapshot.orgs[0].next_issue_num = 64 * 200
+        snapshot.issues.push(taskRow(snapshot, 'fd000000-b', 'todo', 1))
+      })
+      await board.render(root)
+      // the server holds no urgent task, so its answer names none
+      await board.filter({ priority: 'urgent' })
+      expect(container.querySelector('[data-board-root]')?.getAttribute('data-board-state')).toBe(
+        'ok',
+      )
+      expect(container.textContent).toContain('Loading tasks…')
+      expect(container.textContent).not.toContain('No tasks yet')
+      await act(async () => double.live?.holdWindow(null))
+      expect(container.textContent).not.toContain('Loading tasks…')
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
     'mounts no more cards than its first screen while tasks arrive, then all of them',
     async () => {
       // more cards than the Board mounts at once (SYNC_LIMIT), all in the
