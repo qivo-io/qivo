@@ -2416,6 +2416,8 @@ let viewDelays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
     owner-load cache the owners whose loads they need, and shapes their
     models. Answers whether any model changed. */
 function reshapeViews(): boolean {
+  // each owner's load is built once for every card that reads it
+  viewDelayCtx.memo = new Map()
   const delays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
   const views = viewRows.views()
   for (const [slot, rows] of views) {
@@ -2443,6 +2445,7 @@ function reshapeViews(): boolean {
   }
   for (const slot of viewReads.keys()) if (!views.has(slot)) ownerLoads.release(slot)
   viewDelays = delays
+  viewDelayCtx.memo = undefined
   const changed = viewRows.reshape((uuid) => uuidToKey.has(uuid), {
     handleNow: PLANNER.handleNow,
     extra: (uuid) => JSON.stringify(delays.get(uuid) ?? null),

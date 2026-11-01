@@ -41,6 +41,9 @@ export type ViewDelayCtx = {
   projectLive: (id: string) => boolean
   /** the organization of person `id` */
   orgOf: (id: string) => string | undefined
+  /** each owner's projection, built once while the rows hold still (one
+      reshape of the views), by organization and owner; viewDelay fills it */
+  memo?: Map<string, (it: DelayIssue) => DelayInfo | null>
 }
 
 /* A week index of an ISO week date, or null. */
@@ -132,8 +135,14 @@ export function viewDelay(
   const load = issue.owner ? ctx.load(row.org_id, issue.owner) : null
   // with the owner's load the verdict is exact, the projected week too
   if (issue.owner && load?.state === 'ok') {
-    const spans = viewLoadOf(row.org_id, issue.owner, load, ctx)
-    return delayProjector(() => spans, TODAY_WEEK)(issue)
+    const key = `${row.org_id}\u0000${issue.owner}`
+    let project = ctx.memo?.get(key)
+    if (!project) {
+      const spans = viewLoadOf(row.org_id, issue.owner, load, ctx)
+      project = delayProjector(() => spans, TODAY_WEEK)
+      ctx.memo?.set(key, project)
+    }
+    return project(issue)
   }
   const exact = delayBeforeLoads(issue, { datesKnown: true, loading: false })
   // a passed due date is late whatever the load (convex/lib/delay.ts), with
