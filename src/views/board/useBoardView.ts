@@ -108,7 +108,7 @@ const numOf = (it: IssueVM) => Number(it.key.slice(it.key.lastIndexOf('-') + 1))
 /** Whether `a` comes before `b` in the answer's order: by number, then
     organization and id (convex/lib/board.ts BoardAnswer). */
 const before = (a: IssueVM, b: IssueVM) =>
-  numOf(a) - numOf(b) || (a.org < b.org ? -1 : a.org > b.org ? 1 : a.uuid < b.uuid ? -1 : 1)
+  (numOf(a) - numOf(b) || (a.org < b.org ? -1 : a.org > b.org ? 1 : a.uuid < b.uuid ? -1 : 1)) < 0
 
 /** The store's view slot each variant's read and rows live under
     (P.watchBoard, store/viewRows.ts). */

@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { staleCutoff } from './board/boardArgs'
-import { BOARD_TEST_TIMEOUT, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, cell, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
 
 /* The Board from the server's answer (board/useBoardView.ts): the answer
    decides which tasks show, each as the store's own card, or as its row
@@ -209,6 +209,38 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(created).not.toBeNull()
     expect(board.card(P.issueById[created ?? '']?.uuid ?? '')).not.toBeNull()
     expect(state()).toBe('ok')
+  })
+
+  it("keeps the answer's order for the person's own pending writes among cards of one priority", async () => {
+    const board = await loadBoard(network, (snap) => {
+      three(snap)
+      snap.orgs[0].next_issue_num = 3
+    })
+    await board.render(root)
+    board.server.hold = true
+    const { P } = board
+    const handle = (uuid: string) => P.issues.find((it) => it.uuid === uuid)?.id ?? ''
+    const order = () =>
+      [...(cell('todo')?.querySelectorAll<HTMLElement>('[data-card]') ?? [])].map(
+        (card) => card.dataset.card,
+      )
+    const keys = ['a', 'b', 'c'].map(handle)
+    expect(order()).toEqual(keys)
+    // a pending edit keeps its card in its number's place…
+    await act(async () => void P.updateIssue(handle('b'), { title: 'Task b, renamed' }))
+    expect(order()).toEqual(keys)
+    // …and a pending new task, numbered after them, lands last
+    let created: string | null = null
+    await act(async () => {
+      created = P.addIssue({
+        project: board.snapshot.projects[0].id,
+        title: 'New one',
+        status: 'todo',
+        priority: 'medium',
+      })
+    })
+    expect(created).not.toBeNull()
+    expect(order()).toEqual([...keys, created])
   })
 
   it('takes a refused create away again', async () => {
