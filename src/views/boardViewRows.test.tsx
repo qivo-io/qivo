@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ViewRow } from '../../convex/lib/viewReads'
 import { isoFromDate, TODAY_WEEK, weekToISO } from '../lib/dates'
+import type { ScopeInfo } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { BOARD_TEST_TIMEOUT, cell, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
 
@@ -218,6 +219,53 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("lets the other layout's rows go when the window crosses the phone's width", async () => {
+    // the phone's list first, as on a narrow window
+    const board = await loadBoard(network, (snap) => {
+      snap.issues.push(taskRow(snap, 'a', 'todo', 1))
+    })
+    board.server.edit = (answer) =>
+      answer.state === 'ok' ? { ...answer, rows: [...answer.rows, far(board.snapshot)] } : answer
+    const { useBoardView } = await import('./board/useBoardView')
+    const filters = {
+      mine: false,
+      assignees: [],
+      priority: null,
+      stale: false,
+      focus: false,
+      search: '',
+    }
+    /** The Board's view in `variant`, as the phone's list or the desktop Board reads it. */
+    function Probe({ info, variant }: { info: ScopeInfo; variant: 'desktop' | 'phone' }) {
+      const view = useBoardView(info, filters, variant)
+      return <div data-probe={variant} data-state={view.state} />
+    }
+    const show = (variant: 'desktop' | 'phone') =>
+      board.renderView(root, (info) => <Probe key={variant} info={info} variant={variant} />)
+    await show('phone')
+    await board.answer()
+    expect(board.P.viewTask('board:phone', 'far')?.status).toBe('progress')
+    // wider than a phone: the desktop Board takes over
+    await show('desktop')
+    await board.answer()
+    expect(board.P.boardRead('board:phone').key).toBeNull()
+    expect(board.P.viewTask('board:phone', 'far')).toBeUndefined()
+    // another person moves the task on; the phone's old row does not stand in
+    const edit = board.server.edit
+    board.server.edit = (answer) => {
+      const next = edit ? edit(answer) : answer
+      return next.state === 'ok'
+        ? {
+            ...next,
+            rows: next.rows.map((r) => (r.id === 'far' ? { ...r, status: 'review' as const } : r)),
+          }
+        : next
+    }
+    await board.answer()
+    const id = board.P.viewTask('board:desktop', 'far')?.id ?? ''
+    expect(board.P.anyTask(id)?.status).toBe('review')
   })
 
   it("opens in the task window from the window's own read", async () => {

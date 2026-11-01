@@ -183,6 +183,12 @@ export function useBoardView(
   const filters = boardFilters(info, rawFilters, variant)
   const { want, send } = useBoardRequest(info, filters)
   const slot = BOARD_SLOTS[variant]
+  // the other variant's rows, kept since the layout crossed the phone's
+  // width, would stand in for this one's in lookups, writes and delays
+  // (store/viewRows.ts), so they go when this variant mounts
+  useEffect(() => {
+    P.releaseView(BOARD_SLOTS[variant === 'desktop' ? 'phone' : 'desktop'])
+  }, [variant])
   // the phone's list draws no delay band (MobileWorkspace.tsx), so it asks
   // for no owner's load
   const read = useBoardRead(slot, send.kind === 'ask' ? send.key : null, variant === 'desktop')
