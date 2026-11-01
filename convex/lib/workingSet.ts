@@ -6,9 +6,9 @@
  * total that a read sends goes through these rules, so no read names or
  * counts a task its reader is not shown. It may only say that such a task
  * exists (has_hidden_parent, has_hidden_subtasks). The app's workspace
- * parts (lib/workspaceParts.ts), its task window (lib/taskWindow.ts) and
- * its Board (lib/board.ts, through lib/viewReads.ts) apply them, and machine
- * outputs reuse them. */
+ * parts (lib/workspaceParts.ts), its task window (lib/taskWindow.ts), its
+ * Board (lib/board.ts) and its Overview (lib/overview.ts), both through
+ * lib/viewReads.ts, apply them, and machine outputs reuse them. */
 
 import type { Doc } from '../_generated/dataModel'
 import { countsAsSubtask, layerOf, liveIn, type ProjectLive } from './liveTasks'
