@@ -215,9 +215,10 @@ export type OwnerLoadsJson = {
  * of each project their scheduled tasks name, the caller's access to the
  * live ones (their own grants, memberships and team shares among it) and a
  * subtask range for each task left. So a change to those reruns it, and no
- * other change in the organization does. Nothing in the app calls it yet:
- * the view stages and the task window read it once they stop reading the
- * workspace's load rows.
+ * other change in the organization does. The app's owner-load cache
+ * (src/store/ownerLoadCache.ts) reads it for the delays of Board cards the
+ * workspace does not hold yet; the other views and the task window read it
+ * once they stop reading the workspace's load rows.
  */
 export const ownerLoads = orgQuery({
   args: { owner_ids: v.array(v.string()) },
