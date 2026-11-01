@@ -99,6 +99,10 @@ export const STAGING_APP_ORIGIN = 'https://preview.qivo.io'
 const PRODUCTION_HOSTS = new Set(['qivo.io', 'www.qivo.io', 'demo.qivo.io', 'api.qivo.io'])
 /** The longest REST or MCP request body (convex/machine/shared.ts BODY_MAX_BYTES). */
 const BODY_MAX = LIMITS.requestBody.max * MIB
+/** The status the run's fixture tasks start in: one Focus keeps
+ *  (convex/lib/viewReads.ts FOCUS_STATUSES), so ui/board finds their cards
+ *  whether or not Nora saved Focus on. */
+export const FIXTURE_STATUS = 'todo'
 /** The rows one page of a task's thread holds: comments
  *  (convex/model/comments.ts COMMENT_PAGE_MAX), history over REST and MCP
  *  (convex/lib/activityVisibility.ts HISTORY_PAGE_MAX), which answer one
@@ -3398,7 +3402,8 @@ async function subtaskRuleChecks() {
 /** The Board of the run's project, M, opens on the deployment's answer for
  *  it (convex/tasks.ts board): the Board reaches its ok state and shows the
  *  cards of the two fixture tasks, in Alpha and Zulu, in whatever layout
- *  Nora chose. Only reads. It runs before the run archives M. */
+ *  Nora chose, with Focus on or off (FIXTURE_STATUS). Only reads. It runs
+ *  before the run archives M. */
 async function boardCheck() {
   const { M } = run.projects
   await check('ui/board', async () => {
@@ -4626,10 +4631,18 @@ async function setup() {
   })
   // fixture tasks: one in Alpha, one in Zulu
   run.t0 = await must('setup/rest/fixture-task-alpha', () =>
-    restOk(w, 'POST', '/tasks', { project: run.projects.A.id, title: `${tag} fixture Alpha` }),
+    restOk(w, 'POST', '/tasks', {
+      project: run.projects.A.id,
+      title: `${tag} fixture Alpha`,
+      status: FIXTURE_STATUS,
+    }),
   )
   run.tz = await must('setup/rest/fixture-task-zulu', () =>
-    restOk(w, 'POST', '/tasks', { project: run.projects.Z.id, title: `${tag} fixture Zulu` }),
+    restOk(w, 'POST', '/tasks', {
+      project: run.projects.Z.id,
+      title: `${tag} fixture Zulu`,
+      status: FIXTURE_STATUS,
+    }),
   )
   await check('setup/rest/fixture-comment', async () => {
     run.fixtureComment = await restOk(w, 'POST', `/tasks/${run.t0.key}/comments`, {
