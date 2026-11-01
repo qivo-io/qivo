@@ -2172,9 +2172,12 @@ function repaint(parts: {
       const shown = sections && rebuildSections()
       if (thread || shown) emit('comments')
     }
-    if (view && reshapeViews()) emit('views')
-    else if (view && viewReadsChanged) emit('views')
-    viewReadsChanged = false
+    // only a repaint of the views shows what a read changed; a thread's or
+    // the sections' leaves it for the views' paint still owed
+    if (view) {
+      if (reshapeViews() || viewReadsChanged) emit('views')
+      viewReadsChanged = false
+    }
   }
 }
 
@@ -2315,13 +2318,19 @@ let latestConnection = 0
    as a failure, so the next view repaint renders it. */
 let viewReadsChanged = false
 
-/** Whether every live view read's newest result is a live delivery on the
-    socket's current connection, so a write accepted now, with a view
-    delivery since it was sent, is held by every view's rows
-    (settleAccepted). */
+/** Whether every view read that is live or keeps rows has a newest result
+    that is a live delivery on the socket's current connection, so a write
+    accepted now, with a view delivery since it was sent, is held by every
+    view's rows (settleAccepted). A read stopped with its rows kept, as a
+    hidden tab's, is not: no delivery of it can hold the write until it
+    reads again. */
 function viewsCurrent(): boolean {
-  for (const read of viewReads.values())
-    if (read.live !== null && !(read.current && read.connection === latestConnection)) return false
+  for (const [slot, read] of viewReads)
+    if (
+      (read.live !== null || viewRows.holds(slot)) &&
+      !(read.current && read.connection === latestConnection)
+    )
+      return false
   return true
 }
 
@@ -2381,15 +2390,21 @@ function syncViewRead(slot: ViewSlot) {
   if (watch.joined) takeViewResult(slot, read, key, watch.token)
 }
 
-/** Forgets view `slot`'s rows, its owners' loads and what its read held. */
+/** Forgets view `slot`'s rows, its owners' loads and what its read held,
+    and repaints the views when it held any, such as a failure Try again
+    leaves, so the view shows its wait at once. */
 function releaseViewRows(slot: ViewSlot) {
   const read = viewReads.get(slot)
+  const held = !!read?.held
   if (read) read.held = null
   ownerLoads.release(slot)
-  if (!viewRows.holds(slot)) return
-  viewRows.release(slot)
-  // no delivery of a released view holds a write over its rows again
-  if (!viewRows.any()) layers.dropSaved('view')
+  const rows = viewRows.holds(slot)
+  if (rows) {
+    viewRows.release(slot)
+    // no delivery of a released view holds a write over its rows again
+    if (!viewRows.any()) layers.dropSaved('view')
+  }
+  if (!rows && !held) return
   viewReadsChanged = true
   owe('view')
 }

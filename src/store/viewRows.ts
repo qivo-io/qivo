@@ -75,6 +75,8 @@ export function createViewRows(toWeek: (iso: string) => number) {
   const shaped = new Map<ViewSlot, Map<string, Shaped>>()
   const facts = new WeakMap<IssueVM, ViewFacts>()
   let byHandle = new Map<string, IssueVM>()
+  // whether a release took models away since the last reshape
+  let released = false
 
   /** The row of `uuid` a view shows, in the first view that holds it. */
   const peek = (uuid: string): ViewRow | undefined => {
@@ -154,10 +156,12 @@ export function createViewRows(toWeek: (iso: string) => number) {
     take(slot: ViewSlot, rows: readonly ViewRow[]) {
       anchors.set(slot, new Map(rows.map((row) => [row.id, row])))
     },
-    /** Forgets view `slot`'s rows and models. The caller repaints. */
+    /** Forgets view `slot`'s rows and models. The caller repaints, and
+        the next reshape answers that the models changed. */
     release(slot: ViewSlot) {
       anchors.delete(slot)
       painted.delete(slot)
+      if (shaped.get(slot)?.size) released = true
       shaped.delete(slot)
     },
     /** Whether view `slot` holds rows. */
@@ -212,7 +216,8 @@ export function createViewRows(toWeek: (iso: string) => number) {
         workspace does not, reusing each object while its data holds.
         Answers whether any model changed. */
     reshape(held: (uuid: string) => boolean, ctx: ViewShapeCtx): boolean {
-      let changed = false
+      let changed = released
+      released = false
       const handles = new Map<string, IssueVM>()
       for (const [slot, rows] of painted) {
         const before = shaped.get(slot) ?? new Map<string, Shaped>()
@@ -236,7 +241,11 @@ export function createViewRows(toWeek: (iso: string) => number) {
         if (after.size !== before.size) changed = true
         shaped.set(slot, after)
       }
-      for (const slot of shaped.keys()) if (!painted.has(slot)) shaped.delete(slot)
+      for (const [slot, models] of shaped)
+        if (!painted.has(slot)) {
+          if (models.size > 0) changed = true
+          shaped.delete(slot)
+        }
       byHandle = handles
       return changed
     },
@@ -266,6 +275,7 @@ export function createViewRows(toWeek: (iso: string) => number) {
       copies = new Set()
       shaped.clear()
       byHandle = new Map()
+      released = false
     },
   }
 }

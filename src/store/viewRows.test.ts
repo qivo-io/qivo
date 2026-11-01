@@ -314,6 +314,51 @@ describe('a write on a task only a view brings', () => {
     expect(probe().layerCount()).toBe(0)
   })
 
+  it('stays painted on the rows a stopped read keeps when the server accepts it', async () => {
+    answer = ok([row('far', 9)])
+    await open()
+    const id = store.P.viewTask(SLOT, 'far')?.id ?? ''
+    void store.P.updateIssue(id, { status: 'progress' })
+    // an answer from before the write arrives after it was sent
+    await serve(ok([row('far', 9, { title: 'Echo' })]))
+    // the tab hides: the read stops and keeps its rows
+    store.P.watchBoard(SLOT, null)
+    // the server accepts it, which no delivery of the stopped read can hold
+    writes[0]?.resolve(null)
+    await turn()
+    expect(store.P.viewTask(SLOT, 'far')?.status).toBe('progress')
+    // shown again, the fresh answer holds it and ends the paint
+    answer = ok([row('far', 9, { title: 'Echo', status: 'progress' })])
+    store.P.watchBoard(SLOT, KEY)
+    await turn()
+    await turn()
+    expect(store.P.viewTask(SLOT, 'far')?.status).toBe('progress')
+    expect(probe().layerCount()).toBe(0)
+  })
+
+  it("shows a read's news that waited for a pending write, past a repaint of the sections", async () => {
+    answer = ok([row('far', 9)])
+    await open()
+    const P = store.P
+    // a write of the person's own waits, so the views' paint waits with it
+    void P.updateIssue(P.handleOf('task-a') ?? '', { title: 'Renamed' })
+    await turn()
+    let views = 0
+    const stop = P.updates.views.subscribe(() => views++)
+    try {
+      // news of the read that changes no model: other lanes
+      answer = { ...ok([row('far', 9)]), held_projects: [] }
+      board?.(structuredClone(answer))
+      // a repaint of the task window's sections before the views' paint
+      P.showSections({}, true)
+      await turn()
+      expect(P.boardRead(SLOT).value).toMatchObject({ held_projects: [] })
+      expect(views).toBeGreaterThan(0)
+    } finally {
+      stop()
+    }
+  })
+
   it('leaves no layer behind when its view closes before a delivery holds it', async () => {
     answer = ok([row('far', 9)])
     await open()

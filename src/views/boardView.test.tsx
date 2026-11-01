@@ -798,12 +798,18 @@ describe('what the Board says in place of its columns', { timeout: BOARD_TEST_TI
     expect(document.querySelector('[data-card]')).toBeNull()
     expect(message()?.textContent).toBe('The Board could not be loaded')
     board.server.fail = undefined
+    board.server.hold = true
     const asked = board.server.asked.length
     const retry = [...document.querySelectorAll('button')].find(
       (b) => b.textContent === 'Try again',
     )
     await act(async () => retry?.click())
     expect(board.server.asked.length).toBe(asked + 1)
+    // the error goes at once, and the Board waits for the fresh answer
+    expect(state()).toBe('loading')
+    expect(busy()).toBe(true)
+    expect(message()).toBeNull()
+    await board.answer()
     expect(state()).toBe('ok')
     expect(board.card('a')).not.toBeNull()
   })
