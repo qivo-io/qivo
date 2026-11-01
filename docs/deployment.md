@@ -923,12 +923,16 @@ that the tasks do not give or that went below zero, any count or regroup
 under way, and the rows left without their organization, project or task.
 `"recount": true` mends the differing rows.
 
-An earlier release moves none of these counts, so they drift while it runs.
-After the backend has run an earlier release, read a dry run again once the
-later release serves, then run the backfill with `"recount": true`, calling
-again with each answered `cursor` until it answers `done`. A recount deletes
-each organization's rows and counts its tasks again, and the readers answer
-that its counts are not ready until it ends.
+Earlier releases do not accept the `org_ready` field `overview_counts_at`,
+and every new organization and every counted one holds it, so the release
+that added the counts is a rollback floor for the backend as soon as it
+deploys (see Rollback and hotfixes). Roll forward instead. An earlier
+release would also move none of these counts. If counts drift for another
+reason, a dry run lists them as differing: run the backfill with
+`"recount": true`, calling again with each answered `cursor` until it
+answers `done`. A recount deletes each organization's rows and counts its
+tasks again, and the readers answer that its counts are not ready until it
+ends.
 
 Every inbox item, a person's messages about one task, has an `inbox_items`
 row that every message write keeps in step, and each person an
