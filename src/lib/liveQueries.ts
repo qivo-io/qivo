@@ -81,8 +81,6 @@ export function createLiveQueries(
     string,
     { name: string; args: Record<string, Value>; count: number; answered: boolean }
   >()
-  // the newest transition's database time, in nanoseconds
-  let last = 0n
   let warned = false
   return {
     watch(ref, args) {
@@ -110,6 +108,10 @@ export function createLiveQueries(
       return entry ? client.localQueryResult(entry.name, entry.args) : undefined
     },
     onTransition(fn) {
+      // the newest database time this handler was told of, in nanoseconds:
+      // each handler keeps its own, as the one that runs first must not
+      // make a later one miss a transition
+      let last = 0n
       return client.addOnTransitionHandler((transition) => {
         const tokens = new Set<string>()
         for (const { token } of transition.queries) {

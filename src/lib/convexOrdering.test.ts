@@ -261,6 +261,16 @@ describe('live queries over the base client', () => {
     expect(seen).toHaveLength(before)
   })
 
+  it('tells every handler of a transition that changed nothing', async () => {
+    const { live, seen, transition } = await start()
+    // a handler that runs after the first one
+    const later: string[][] = []
+    live.onTransition((t) => later.push([...t.tokens]))
+    transition([])
+    expect(seen.at(-1)?.tokens).toEqual([])
+    expect(later).toEqual([[]])
+  })
+
   it('after the socket reconnects, names every watched query again with the next connection count, unchanged values included', async () => {
     const { list, count, socket, seen } = await start()
     // The client reconnects after a jittered backoff of 0.5 to 1.5 s. Fake
