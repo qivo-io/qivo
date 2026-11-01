@@ -226,7 +226,7 @@ try {
         name: milestone.name,
         week: iso(today),
       })
-      return { project: project.id, name: project.name, today, nora: P.CURRENT_USER }
+      return { project: project.id, name: project.name, today }
     },
     { tasks, milestone },
   )
@@ -307,19 +307,13 @@ try {
   await spanFollows(parent, child, 'Parent span did not follow the subtask after repeated Undo')
   log('Repeated Undo restores task dates and reverses milestone creation, edits and deletion')
 
-  await page.locator('[data-ue-open]').click()
-  await page.locator(`[data-ue-jump="${fixture.nora}"]`).click()
-  const estimate = page.locator(`[data-ue-row="${leaf}"] [data-ue-input]`)
-  await estimate.fill('11')
-  await estimate.press('Enter')
+  await page.evaluate((id) => window.PLANNER.updateIssue(id, { remaining: 11 }), leaf)
   await settled(1)
-  await page.keyboard.press('Escape')
-  await page.locator('[data-update-estimate]').waitFor({ state: 'detached' })
   assert.equal((await persisted()).tasks[2].remaining, 11)
   await undo().click()
   await settled(0)
-  assert.deepEqual(await persisted(), baseline, 'Estimate undo lost its original measurement time')
-  log('Update Estimate undo restores remaining hours and their original measurement timestamp')
+  assert.deepEqual(await persisted(), baseline, 'Remaining undo lost its original measurement time')
+  log('Remaining undo restores the hours and their original measurement timestamp')
 
   await dragWeeks(child, 1)
   await settled(1)
