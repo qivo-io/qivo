@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Snapshot } from '../store/plannerFixture.setup'
+import { staleCutoff } from './board/boardArgs'
 import { BOARD_TEST_TIMEOUT, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
 
 /* The Board from the server's answer (board/useBoardView.ts): the answer
@@ -62,6 +63,11 @@ const count = (status: string) =>
   document.querySelector(`[data-status-count="${status}"]`)?.textContent
 const message = () => document.querySelector('[data-empty-state] [data-empty-state-title]')
 const wait = (ms: number) => act(async () => new Promise((resolve) => setTimeout(resolve, ms)))
+
+/** `hours`:`minutes` today, local time: a faked clock stays on the day the
+    stores of earlier tests in this file watch (lib/localDay.ts), which
+    would otherwise rebuild for a day that moved back. */
+const today = (hours: number, minutes: number) => new Date().setHours(hours, minutes, 0, 0)
 
 /** Three To Do tasks, a, b and c, of medium priority. */
 const three = (snap: Snapshot) => {
@@ -466,26 +472,26 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
 
   it('asks with a Stale cutoff taken again when the tab shows', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(Date.parse('2026-10-31T10:20:00.000Z'))
+    vi.setSystemTime(today(12, 20))
     const board = await loadBoard(network, three)
     await board.render(root)
     await board.filter({ stale: true })
     await wait(0)
     const first = board.server.asked.at(-1)?.filters.stale_before
-    expect(first).toBe('2026-07-03T10:00:00.000Z')
+    expect(first).toBe(staleCutoff(today(12, 0)))
     await setVisibility('hidden')
-    vi.setSystemTime(Date.parse('2026-10-31T10:50:00.000Z'))
+    vi.setSystemTime(today(12, 50))
     await setVisibility('visible')
     expect(board.server.asked.at(-1)?.filters.stale_before).toBe(first)
     await setVisibility('hidden')
-    vi.setSystemTime(Date.parse('2026-10-31T12:05:00.000Z'))
+    vi.setSystemTime(today(14, 5))
     await setVisibility('visible')
-    expect(board.server.asked.at(-1)?.filters.stale_before).toBe('2026-07-03T12:00:00.000Z')
+    expect(board.server.asked.at(-1)?.filters.stale_before).toBe(staleCutoff(today(14, 0)))
   })
 
   it('asks with a Stale cutoff taken again when a kept Board shows again', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(Date.parse('2026-10-31T10:20:00.000Z'))
+    vi.setSystemTime(today(12, 20))
     const board = await loadBoard(network, three)
     const { Kanban } = await import('./Kanban')
     const { KeptView } = await import('../components/KeptView')
@@ -512,12 +518,12 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
         </KeptView>
       ))
     await render(true)
-    expect(board.server.asked.at(-1)?.filters.stale_before).toBe('2026-07-03T10:00:00.000Z')
+    expect(board.server.asked.at(-1)?.filters.stale_before).toBe(staleCutoff(today(12, 0)))
     // another page shows while the hour turns; the tab stays visible
     await render(false)
-    vi.setSystemTime(Date.parse('2026-10-31T12:05:00.000Z'))
+    vi.setSystemTime(today(14, 5))
     await render(true)
-    expect(board.server.asked.at(-1)?.filters.stale_before).toBe('2026-07-03T12:00:00.000Z')
+    expect(board.server.asked.at(-1)?.filters.stale_before).toBe(staleCutoff(today(14, 0)))
     expect(state()).toBe('ok')
   })
 
