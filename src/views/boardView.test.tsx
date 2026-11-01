@@ -271,6 +271,42 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     }
   })
 
+  it('says tasks are missing on side-boards, not that nothing matches', async () => {
+    const board = await loadBoard(network, plan, { scope: 'plan', metaViz: 'sideboards' })
+    const { STALL } = await import('../store/liveParts')
+    const stall = STALL.ms
+    STALL.ms = 40
+    try {
+      await board.render(root)
+      expect(state()).toBe('ok')
+      board.snapshot.issues.push({
+        ...taskRow(board.snapshot, 'late', 'todo', 9),
+        project_id: 'two',
+        priority: 'high',
+      })
+      await board.filter({ priority: 'high' })
+      await wait(100)
+      expect(state()).toBe('incomplete')
+      expect(document.querySelector('[data-board-incomplete]')).not.toBeNull()
+      expect(document.body.textContent).not.toContain('Nothing matches your filters')
+    } finally {
+      STALL.ms = stall
+    }
+  })
+
+  it('names only the tasks a pending write changed, not the rows its paint read', async () => {
+    const board = await loadBoard(network, (snap) => {
+      three(snap)
+      snap.issues.push(taskRow(snap, 'd', 'todo', 4))
+      for (const t of snap.issues) if (t.id === 'a' || t.id === 'b') t.parent_id = 'c'
+    })
+    await board.render(root)
+    const id = (uuid: string) => board.P.issues.find((it) => it.uuid === uuid)?.id ?? ''
+    // the paint reads parent c, a copy that matches its applied row
+    await act(async () => void board.P.updateIssue(id('d'), { parent: id('c') }))
+    expect([...board.P.ownPaintedTasks()]).toEqual(['d'])
+  })
+
   it('puts the phone note above its sections, with no empty card', async () => {
     const board = await loadBoard(network, three, { phone: true })
     const { STALL } = await import('../store/liveParts')

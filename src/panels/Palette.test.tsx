@@ -137,8 +137,16 @@ function fixture(partner: boolean): Snapshot {
   return next
 }
 
-/** Opens the palette on a fresh store, with or without the Partner Co seat. */
-async function open({ partner = false } = {}) {
+/** Opens the palette on a fresh store, with or without the Partner Co seat,
+    on the scope `searchIn` names once the fixture exists (All projects by
+    default). */
+async function open({
+  partner = false,
+  searchIn = () => null,
+}: {
+  partner?: boolean
+  searchIn?: () => string | null
+} = {}) {
   vi.resetModules()
   snap = fixture(partner)
   calls = []
@@ -184,7 +192,7 @@ async function open({ partner = false } = {}) {
   onClose = vi.fn<() => void>()
   function Live() {
     version.usePlannerVersion()
-    return <palette.SearchPalette ctx={ctx} onClose={onClose} />
+    return <palette.SearchPalette ctx={ctx} searchIn={searchIn()} onClose={onClose} />
   }
   await act(async () =>
     root.render(
@@ -366,6 +374,16 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     await choose('')
     expect(last().args).toEqual({ text: 'firm', include_archived: true })
     expect(calls).toHaveLength(6)
+  })
+
+  it('starts Search in on the sub-project it opened for', async () => {
+    await open({ searchIn: () => FW })
+    expect(find<HTMLSelectElement>('[data-palette-scope]').value).toBe(FW)
+    await type('firm')
+    expect(last().args.scope).toEqual({ org_id: ORG, project_id: FW })
+    await last().answer([task(14)])
+    await choose('')
+    expect(last().args).toEqual({ text: 'firm', include_archived: false })
   })
 
   it('asks once for a scope scanned with the keyboard, and at once for one picked with the pointer', async () => {
