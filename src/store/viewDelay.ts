@@ -131,7 +131,12 @@ export function viewLoadOf(
     if (!span.issueUuid || (!ctx.held(span.issueUuid) && !ctx.inView(span.issueUuid)))
       spans.push(span)
   spans.push(...ctx.heldSpans(owner))
-  const filed = ctx.memo ? (ctx.filed ??= filedSpans(ctx)) : filedSpans(ctx)
+  let filed = ctx.filed
+  if (!filed) {
+    filed = filedSpans(ctx)
+    // kept while the rows hold still (one reshape, `memo`)
+    if (ctx.memo) ctx.filed = filed
+  }
   spans.push(...(filed.get(`${org}\u0000${owner}`) ?? []))
   return canonicalLoad(spans)
 }

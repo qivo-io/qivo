@@ -135,15 +135,13 @@ describe('the owner-load cache', () => {
     for (const need of needs(60)) expect(s.cache.loadOf('org', need.owner).state).toBe('ok')
     // an answer that arrives again unchanged tells nothing
     s.answerTogether(
-      calls
-        .slice(0, 1)
-        .map((call) => [
-          call.token,
-          {
-            hidden: 'counted',
-            owners: call.owners.map((owner_id) => ({ owner_id, state: 'ok' as const, spans: [] })),
-          },
-        ]),
+      calls.slice(0, 1).map((call) => [
+        call.token,
+        {
+          hidden: 'counted',
+          owners: call.owners.map((owner_id) => ({ owner_id, state: 'ok' as const, spans: [] })),
+        },
+      ]),
     )
     expect(s.changes()).toBe(before + 1)
   })

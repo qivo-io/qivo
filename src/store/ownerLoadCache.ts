@@ -246,7 +246,7 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
     stopTransitions ??= deps.live.onTransition(
       (transition) => {
         let resync = false
-        for (const sub of [...subs.values()])
+        for (const sub of subs.values())
           if (transition.tokens.has(sub.token) && answered(sub)) resync = true
         if (resync) sync()
         else flush()
