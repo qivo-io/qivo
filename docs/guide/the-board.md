@@ -99,7 +99,11 @@ the task has loaded. Until the server answers, as when the Board opens or
 after you change a filter, the Board shows the tasks your browser already
 holds, before it has checked them: its counts show **…** until the answer
 arrives. Your own changes show at once. Other people's changes take a task
-off the Board at once, and add one once the server answers. While the
+off the Board at once, and add one once the server answers. With a text
+filter, a task you move or give to someone else before your browser has
+loaded it stays on the Board until the server has checked it again, as
+only the server holds all of its text. If your change may have removed the
+words the filter found it by, the counts show **…** meanwhile. While the
 browser tab or the desktop window is hidden, the Board stops updating.
 When you return, it shows the tasks it had, with its counts at **…**,
 until it has checked them again.
