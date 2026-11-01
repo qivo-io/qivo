@@ -7,15 +7,18 @@
  * convex-test must be inlined so its import.meta.glob default and the
  * `global.Convex` syscall proxy are processed by vite inside that VM.
  * Inlining also lets convexTestTableIds apply convex/convex-test#154 to it,
- * so that a query reads only its own table's documents. Both projects get
- * the plugin, because some node tests build convex-test backends too. */
+ * so that a query reads only its own table's documents, and lets
+ * convexTestActionStorage give an action's file writes transactions of their
+ * own. Both projects get the plugins, because some node tests build
+ * convex-test backends too. */
 import { fileURLToPath } from 'node:url'
 import { configDefaults, defineConfig } from 'vitest/config'
+import { convexTestActionStorage } from './scripts/convex-test-action-storage.mjs'
 import { convexTestTableIds } from './scripts/convex-test-table-ids.mjs'
 
 export default defineConfig({
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
-  plugins: [convexTestTableIds()],
+  plugins: [convexTestTableIds(), convexTestActionStorage()],
   test: {
     /* Runs inside the test environment before the test file is imported —
      * the only hook early enough for convex/auth.ts's module-scope SITE_URL

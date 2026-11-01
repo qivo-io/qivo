@@ -163,8 +163,17 @@ describe('useMobileBackLayer', () => {
       history.back()
       await popped
     })
-  /** Lets the page's moves and what waits for them land. */
-  const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 30)))
+  /** Lets the page's moves and what waits for them land. Each of their steps
+      runs from a 0 ms timer (a jsdom traversal from two), and timers of the
+      same delay run in the order they were set, so twenty such timers in a
+      row outlast every chain of up to twenty steps, however busy the worker.
+      A wait by the clock does not. After a stall past it, its timer runs
+      before the steps the chain's next timer sets. The longest chain here,
+      a Back that goes on twice, takes six. */
+  const settle = () =>
+    act(async () => {
+      for (let turn = 0; turn < 20; turn++) await new Promise((resolve) => setTimeout(resolve, 0))
+    })
   const marker = () => history.state?.qivoLayer
 
   it("leaves a finished layer's marker as a spare, and one Back leaves the page", async () => {
