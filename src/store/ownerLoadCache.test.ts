@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { OwnerLoadsJson } from '../../convex/planning'
-import { isoToWeek } from '../lib/dates'
+import { isoToWeek, setWeekConfig } from '../lib/dates'
 import type { LiveTransition } from '../lib/liveQueries'
 import type { Visibility } from '../lib/viewVisibility'
 import { CALL_OWNERS, createOwnerLoadCache, GUEST_CALLS, staffCalls } from './ownerLoadCache'
@@ -153,6 +153,34 @@ describe('the owner-load cache', () => {
     })
     expect(s.cache.loadOf('org', 'p1')).toEqual({ state: 'unavailable' })
     expect(s.changes()).toBeGreaterThan(0)
+  })
+
+  it('reads its kept spans on the week grid of now, the same object while it holds', () => {
+    const s = setup(true)
+    s.cache.register('board', needs(1))
+    const [call] = s.calls()
+    if (!call) throw new Error('no call')
+    s.answer(call.token, {
+      hidden: 'counted',
+      owners: [{ owner_id: 'p0', state: 'ok', spans: [span('task-1')] }],
+    })
+    const startOf = (load: ReturnType<typeof s.cache.loadOf>) =>
+      load.state === 'ok' ? load.spans[0]?.start : undefined
+    const before = s.cache.loadOf('org', 'p0')
+    expect(s.cache.loadOf('org', 'p0')).toBe(before)
+    expect(startOf(before)).toBe(isoToWeek('2026-09-07'))
+    // a week later the grid's anchor moved one week on (src/lib/dates.ts)
+    const later = new Date()
+    later.setDate(later.getDate() + 7)
+    try {
+      setWeekConfig(null, null, later)
+      const after = s.cache.loadOf('org', 'p0')
+      expect(after).not.toBe(before)
+      expect(startOf(after)).toBe(isoToWeek('2026-09-07'))
+      expect(startOf(after)).toBe((startOf(before) ?? 0) - 1)
+    } finally {
+      setWeekConfig(null, null, new Date())
+    }
   })
 
   it('asks again for the owners a call answered not_read, and says failed when a call fails', () => {

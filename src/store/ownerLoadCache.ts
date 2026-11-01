@@ -30,7 +30,7 @@ import type { FunctionReference } from 'convex/server'
 import type { Value } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { OwnerLoadsJson } from '../../convex/planning'
-import { isoToWeek, tsToWeek } from '../lib/dates'
+import { isoToWeek, TIMELINE_START, tsToWeek } from '../lib/dates'
 import type { LiveQueries } from '../lib/liveQueries'
 import type { Visibility } from '../lib/viewVisibility'
 import type { LoadSpan } from '../lib/workload'
@@ -97,7 +97,10 @@ export function staffCalls(org: string, owners: readonly string[]): Call[] {
   return calls.filter((call) => call.owners.length > 0)
 }
 
-/** What one owner of a planning.ownerLoads answer says, as the cache keeps
+/** One owner's spans as an answer sends them, in ISO weeks and stamps. */
+type AnswerSpans = Extract<OwnerLoadsJson['owners'][number], { state: 'ok' }>['spans']
+
+/** What one owner of a planning.ownerLoads answer says, as the views read
     it, or null for `not_read`, which is no answer. */
 export function ownerLoadOf(
   one: OwnerLoadsJson['owners'][number],
@@ -109,8 +112,9 @@ export function ownerLoadOf(
     : { state: 'unavailable' }
 }
 
-/** The spans of one owner of an answer, as the app's load spans. */
-const spansOf = (spans: Extract<OwnerLoadsJson['owners'][number], { state: 'ok' }>['spans']) =>
+/** The spans of one owner of an answer, as the app's load spans on the week
+    grid of now. */
+const spansOf = (spans: AnswerSpans) =>
   spans.map(
     (span): LoadSpan => ({
       issueUuid: span.issue_id,
@@ -121,12 +125,21 @@ const spansOf = (spans: Extract<OwnerLoadsJson['owners'][number], { state: 'ok' 
     }),
   )
 
+/** What the cache keeps of one owner's answer: an ok answer's spans as the
+    server sent them, so they convert on the week grid of the moment they
+    are read (loadOf). */
+type Kept =
+  | { state: 'ok'; spans: AnswerSpans; hidden: OwnerLoadsJson['hidden'] }
+  | { state: 'unavailable' | 'failed' }
+
 /** Creates the cache over `deps`. */
 export function createOwnerLoadCache(deps: OwnerLoadDeps) {
   // what each view needs, and whether it reads now
   const needs = new Map<string, { owners: OwnerNeed[]; live: boolean }>()
   // each owner's last answer, kept while the page hides
-  const loads = new Map<string, OwnerLoad>()
+  const loads = new Map<string, Kept>()
+  // each kept ok answer converted on the grid it was last read on
+  const converted = new Map<string, { kept: Kept; grid: number; load: OwnerLoad }>()
   // the owners past a guest's or Viewer's cap in every view that needs them
   let capped = new Set<string>()
   // the live calls by key: the call, its watch and its handler's stop
@@ -150,7 +163,7 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
     }
     let changed = false
     const notRead: string[] = []
-    const set = (owner: string, load: OwnerLoad) => {
+    const set = (owner: string, load: Kept) => {
       const key = keyOf(call.org, owner)
       const was = loads.get(key)
       if (was && JSON.stringify(was) === JSON.stringify(load)) return
@@ -166,9 +179,14 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
     const byOwner = new Map(answer.owners.map((o) => [o.owner_id.toLowerCase(), o]))
     for (const owner of call.owners) {
       const one = byOwner.get(owner.toLowerCase())
-      const load = one ? ownerLoadOf(one, answer.hidden) : null
-      if (load === null) notRead.push(owner)
-      else set(owner, load)
+      if (!one || one.state === 'not_read') notRead.push(owner)
+      else
+        set(
+          owner,
+          one.state === 'ok'
+            ? { state: 'ok', spans: one.spans, hidden: answer.hidden }
+            : { state: 'unavailable' },
+        )
     }
     return { changed, notRead }
   }
@@ -271,6 +289,7 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
     for (const key of loads.keys())
       if (!needed.has(key)) {
         loads.delete(key)
+        converted.delete(key)
         forgot = true
       }
     if (cappedChanged || forgot) deps.changed()
@@ -314,11 +333,21 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
       if (!needs.delete(view)) return
       sync()
     },
-    /** Owner `owner` of organization `org`'s load as the cache knows it. */
+    /** Owner `owner` of organization `org`'s load as the cache knows it,
+        its spans on the week grid of now: the same object while neither
+        the answer nor the grid changed. */
     loadOf(org: string, owner: string): OwnerLoad {
       const key = keyOf(org, owner)
       if (capped.has(key)) return { state: 'capped' }
-      return loads.get(key) ?? { state: 'waiting' }
+      const kept = loads.get(key)
+      if (!kept) return { state: 'waiting' }
+      if (kept.state !== 'ok') return kept
+      const grid = TIMELINE_START.getTime()
+      const was = converted.get(key)
+      if (was?.kept === kept && was.grid === grid) return was.load
+      const load: OwnerLoad = { state: 'ok', spans: spansOf(kept.spans), hidden: kept.hidden }
+      converted.set(key, { kept, grid, load })
+      return load
     },
     /** The calls live now, for tests and the report: organization and
         owners of each. */
@@ -329,6 +358,7 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
       subs.clear()
       needs.clear()
       loads.clear()
+      converted.clear()
       capped = new Set()
     },
     /** Stops following the gate (tests). */
