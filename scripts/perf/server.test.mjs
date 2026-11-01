@@ -189,6 +189,15 @@ describe('the benchmark server', () => {
     expect(spread.posted.boardCards).toBe(900)
     expect(spread.posted.cards).toBe(9000)
     expect(spread.snap.projects.filter((p) => p.type === 'meta')).toHaveLength(10)
+    // many programs of many sub-projects, each with its own id and a key
+    // the schema takes
+    const wide = await board('tasks=100&programs=12&subprojects=200')
+    const ids = wide.snap.projects.map((p) => p.id)
+    const keys = wide.snap.projects.map((p) => p.key)
+    expect(ids).toHaveLength(12 * 201)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(new Set(keys).size).toBe(keys.length)
+    expect(keys.every((key) => /^[A-Z0-9]{1,5}$/.test(key))).toBe(true)
     // fewer sub-projects to a program
     const three = await board('tasks=3000&programs=3&subprojects=3')
     expect(three.answer.projects).toHaveLength(3)

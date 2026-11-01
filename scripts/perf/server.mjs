@@ -157,13 +157,17 @@ const teamMembers = profiles.map((profile, n) => ({
   profile_id: profile.id,
   is_leader: n % 10 === 0,
 }))
-/** A top-level program and its `size` sub-projects, numbered from `num`. */
-const program = (n, key, name, size, num) => {
+/** The key of project number `num`: unique, as no two projects share a
+    number, and at most five characters, as the schema asks. */
+const projectKey = (num) => `P${num.toString(36).toUpperCase()}`
+/** A top-level program and its `size` sub-projects, numbered from `num`.
+    A sub-project's id comes from its number too, so no two share one. */
+const program = (n, name, size, num) => {
   const meta = {
     id: id('2', n),
     org_id: org,
     type: 'meta',
-    key,
+    key: projectKey(num),
     num,
     name,
     description: prose(120),
@@ -173,10 +177,10 @@ const program = (n, key, name, size, num) => {
   }
   const children = Array.from({ length: size }, (_, c) => ({
     ...meta,
-    id: id('3', n * 100 + c),
+    id: id('3', num + c + 1),
     type: 'project',
     parent_id: meta.id,
-    key: `${key}${c}`,
+    key: projectKey(num + c + 1),
     num: num + c + 1,
     name: `${name.replace('program', 'project')} ${c + 1}`,
     sort_order: c,
@@ -188,7 +192,6 @@ const program = (n, key, name, size, num) => {
 const programs = Array.from({ length: programCount }, (_, n) =>
   program(
     n,
-    n ? `TEST${n + 1}` : 'TEST',
     n ? `Testbed program ${n + 1}` : 'Testbed program',
     subprojectCount,
     1 + n * (subprojectCount + 1),
@@ -196,7 +199,7 @@ const programs = Array.from({ length: programCount }, (_, n) =>
 )
 const visible = programs[0]
 const hiddenNum = Math.max(20, 1 + programCount * (subprojectCount + 1))
-const hidden = program(programCount, 'HIDE', 'Hidden program', hiddenCount, hiddenNum)
+const hidden = program(programCount, 'Hidden program', hiddenCount, hiddenNum)
 const projects = programs.flatMap((p) => p.children)
 // a grant on each program reaches its sub-projects; the hidden one has none
 const access = programs.map((p) => ({ project_id: p.meta.id, profile_id: me.id, level: 'user' }))
