@@ -8,9 +8,13 @@
  * projections, are read from the tasks within a budget and answer
  * "unavailable" past it; they are never counted here.
  *
- * A task is a leaf unless it has an active subtask in a live project
- * (lib/liveTasks.ts countsAsSubtask), whoever reads it, as the app's
- * P.isGroup decides, and a leaf's owner is lib/review.ts taskOwnerId's.
+ * A task is stored a leaf unless it has an active subtask in a live project
+ * (hasLiveSubtask), whoever reads it, and a leaf's owner is lib/review.ts
+ * taskOwnerId's. For a task in a live project that is lib/liveTasks.ts
+ * countsAsSubtask's rule, as the app's P.isGroup decides. A task in an
+ * archived sub-project keeps what it held, by that stored rule, only until
+ * a restore's regroup reads it again, and the readers give an archived
+ * sub-project no figure (subProjectCounts).
  * overview_tasks holds, for each active task, what the counts hold for it:
  * whether a group, and the leaf it adds to its rows (its slot). Each write
  * reconciles a task with that row (reconcileTask), moving the rows by the
@@ -58,7 +62,10 @@
  * A row that would go below zero is a bug. It is written as it is and
  * logged, and the readers answer `counting` for its scope, never a clamped
  * figure. internal/overviewCountsBackfill's dry run finds it, and a
- * recount mends it, as after a rollback to a release that kept no counts. */
+ * recount mends it. A release before this one keeps no counts, but it
+ * cannot run on a deployment once any organization holds
+ * overview_counts_at, which its schema does not accept: this release is a
+ * backend rollback floor (docs/deployment.md). */
 
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize } from 'convex/values'
@@ -272,13 +279,15 @@ export class CountMoves {
   }
 
   /** Writes every row that moved. A row of an earlier project with the
-   * same id (project_at) starts again from zero; a missing row is inserted
+   * same id (project_at) starts again from zero, and a move for an earlier
+   * project than the row's counts for nothing; a missing row is inserted
    * without spending a public demo's record limit (lib/demo.ts
    * uncountedWriter). Logs a row that goes below zero (see the header). */
   async apply(db: Writer): Promise<void> {
     for (const { key, org_id, project_at, counts } of this.rows.values()) {
       if (isZero(counts)) continue
       const row = await countRow(db, key)
+      if (row !== null && row.org_id === org_id && row.project_at > project_at) continue
       const fresh = row !== null && row.org_id === org_id && row.project_at === project_at
       const next = addCounts(fresh ? row : noCounts(), counts)
       if (isNegative(next))
@@ -366,7 +375,9 @@ export type GroupBy = 'read' | 'kept' | 'fresh'
  * slot out and its row goes. Whether it is a group follows `by` (GroupBy):
  * a write that cannot have changed its subtasks keeps what the row holds,
  * and one that may have, a task without a row and a background step read
- * them. Answers whether anything moved. Every caller asks countsKept first.
+ * them. `live` holds the projects known live or not, which a caller
+ * reconciling many tasks shares (hasLiveSubtask). Answers whether anything
+ * moved. Every caller asks countsKept first.
  */
 export async function reconcileTask(
   db: Writer,
@@ -374,6 +385,7 @@ export async function reconcileTask(
   taskId: string,
   task: Doc<'issues'> | null,
   by: GroupBy,
+  live?: Map<string, boolean>,
 ): Promise<boolean> {
   const record = await taskRecord(db, taskId)
   // a row of an earlier task with the same id holds nothing
@@ -393,7 +405,7 @@ export async function reconcileTask(
         ? false
         : by === 'kept' && held !== null
           ? held.group
-          : await hasLiveSubtask(db, task.id, orgId)
+          : await hasLiveSubtask(db, task.id, orgId, live)
     want = slotOf(task, await byId({ db }, 'projects', task.project_id), group)
   }
   if (!sameSlot(had, want)) {
@@ -432,15 +444,30 @@ async function parentMade(db: Reader, task: Doc<'issues'> | null): Promise<strin
   return (await isLive(db, task.project_id)) ? task.parent_id : undefined
 }
 
+/** The parent an active subtask `before` leaves in a write that deletes,
+ * archives or reparents it, whatever its project's liveness now: a project
+ * archived or moved to Deleted items in this or an earlier transaction makes
+ * parentMade answer nothing, while the parent's overview_tasks row may
+ * still hold it a group that a regroup step has not reached. */
+const parentLeft = (before: Doc<'issues'> | null, after: Doc<'issues'> | null) =>
+  before === null || before.archived_at !== undefined || before.parent_id === undefined
+    ? undefined
+    : after === null || after.archived_at !== undefined || after.parent_id !== before.parent_id
+      ? before.parent_id
+      : undefined
+
 /**
  * Moves the overview counts for `writes`, each of which turned a stored
  * `before` task into an `after` one in this transaction, in the order they
  * were written: it reconciles the task (reconcileTask), reading its
  * subtasks only where the write may have changed what it knows of them (a
  * task written back or made active again), then each parent the task
- * stopped or started making a group, whose subtasks it reads. `fresh` says
- * `after` is a task just created with a new id, which has no subtask yet.
- * The caller asked countsKept for the organization.
+ * stopped or started making a group, whose subtasks it reads. A parent an
+ * active subtask leaves by a delete, an archive or a new parent is read
+ * again whatever the subtask's project is now (parentLeft), unless its
+ * overview_tasks row holds it a leaf already, which losing a subtask cannot
+ * change. `fresh` says `after` is a task just created with a new id, which
+ * has no subtask yet. The caller asked countsKept for the organization.
  */
 export async function tallyOverview(
   db: Writer,
@@ -465,9 +492,14 @@ export async function tallyOverview(
     )
     const was = await parentMade(db, before)
     const now = await parentMade(db, after)
-    if (was === now) continue
-    for (const parentId of [was, now]) {
-      if (parentId === undefined) continue
+    const parents = new Set<string>()
+    if (was !== now) for (const id of [was, now]) if (id !== undefined) parents.add(id)
+    const left = parentLeft(before, after)
+    if (left !== undefined && left !== now && !parents.has(left)) {
+      const record = await taskRecord(db, left)
+      if (record === null || record.group) parents.add(left)
+    }
+    for (const parentId of parents) {
       const parent = await byId({ db }, 'issues', parentId)
       if (parent !== null && parent.org_id === task.org_id)
         await reconcileTask(db, task.org_id, parent.id, parent, 'read')
@@ -488,8 +520,9 @@ const regroupStepRef = makeFunctionReference<'mutation', { family_id: string }, 
  * `family` (itself among them when it is one of them) just archived,
  * restored, moved to Deleted items or revealed again, and the parents of
  * those tasks, in the transaction that changed them. A regroup of the same
- * top-level project under way reads them after its own. An organization
- * whose counts are not kept needs none.
+ * top-level project under way reads them after its own, each project it
+ * has not read yet once. An organization whose counts are not kept needs
+ * none. A chain that stopped is restarted by overviewRegroup.ts recover.
  */
 export async function startRegroup(
   ctx: MutationCtx,
@@ -501,17 +534,20 @@ export async function startRegroup(
   const now = new Date().toISOString()
   const row = await overviewRegroupOf(ctx.db, family.id)
   if (row !== null) {
-    await ctx.db.patch(row._id, { projects: [...row.projects, ...projects], progress_at: now })
+    const waiting = new Set(row.projects.slice(row.at))
+    const added = [...new Set(projects)].filter((id) => !waiting.has(id))
+    if (added.length > 0) await ctx.db.patch(row._id, { projects: [...row.projects, ...added] })
     return
   }
-  await ctx.db.insert('overview_regroups', {
+  const _id = await ctx.db.insert('overview_regroups', {
     org_id: family.org_id,
     family_id: family.id,
-    projects: [...projects],
+    projects: [...new Set(projects)],
     at: 0,
     progress_at: now,
   })
-  await ctx.scheduler.runAfter(0, regroupStepRef, { family_id: family.id })
+  const scheduled_id = await ctx.scheduler.runAfter(0, regroupStepRef, { family_id: family.id })
+  await ctx.db.patch(_id, { scheduled_id })
 }
 
 // --- counting from the tasks --------------------------------------------------
@@ -572,37 +608,63 @@ export const keyOf = (r: {
   project_at: number
 }) => `${r.project_id}|${r.owner_id ?? ''}|${r.shard}|${r.project_at}`
 
-/** What `tasks`, active tasks of organization `orgId`, add to each row by
- * key (keyOf), as a recount gives it, each checked for subtasks, and how
- * many of them are groups. A dry run adds the pages up without writing. */
+/** How many of `tasks`, in _creationTime order, a bulk count or reconcile
+ * goes through before `full` answers true: it asks only between two
+ * creation times, so the tasks it goes through end where a later read from
+ * the last one's _creationTime (taskPage) takes up, and always goes
+ * through the first creation time's, so each call gets further. */
+export async function throughTasks(
+  tasks: readonly Doc<'issues'>[],
+  each: (task: Doc<'issues'>) => Promise<void>,
+  full: () => Promise<boolean>,
+): Promise<number> {
+  for (const [i, task] of tasks.entries()) {
+    if (i > 0 && task._creationTime !== tasks[i - 1]._creationTime && (await full())) return i
+    await each(task)
+  }
+  return tasks.length
+}
+
+/** What `tasks`, active tasks of organization `orgId` in _creationTime
+ * order, add to each row by key (keyOf), as a recount gives it, each
+ * checked for subtasks with one map of the projects known live, and how
+ * many of them are groups: the first `counted` of them, those throughTasks
+ * goes through before `full` answers true. A dry run adds the pages up
+ * without writing. */
 export async function countTasks(
   db: Reader,
   orgId: string,
   tasks: readonly Doc<'issues'>[],
-): Promise<{ rows: Map<string, LeafCounts>; groups: number }> {
+  full: () => Promise<boolean> = async () => false,
+): Promise<{ rows: Map<string, LeafCounts>; groups: number; counted: number }> {
   const rows = new Map<string, LeafCounts>()
   const projects = new Map<string, Doc<'projects'> | null>()
+  const live = new Map<string, boolean>()
   let groups = 0
-  for (const task of tasks) {
-    const group = await hasLiveSubtask(db, task.id, orgId)
-    if (group) groups++
-    if (!projects.has(task.project_id))
-      projects.set(task.project_id, await byId({ db }, 'projects', task.project_id))
-    const slot = slotOf(task, projects.get(task.project_id) ?? null, group)
-    if (slot === undefined) continue
-    for (const k of rowKeysOf(slot)) {
-      const key = keyOf({ ...k, project_at: slot.project_at })
-      rows.set(key, addCounts(rows.get(key) ?? noCounts(), countsOf(slot)))
-    }
-  }
-  return { rows, groups }
+  const counted = await throughTasks(
+    tasks,
+    async (task) => {
+      const group = await hasLiveSubtask(db, task.id, orgId, live)
+      if (group) groups++
+      if (!projects.has(task.project_id))
+        projects.set(task.project_id, await byId({ db }, 'projects', task.project_id))
+      const slot = slotOf(task, projects.get(task.project_id) ?? null, group)
+      if (slot === undefined) return
+      for (const k of rowKeysOf(slot)) {
+        const key = keyOf({ ...k, project_at: slot.project_at })
+        rows.set(key, addCounts(rows.get(key) ?? noCounts(), countsOf(slot)))
+      }
+    },
+    full,
+  )
+  return { rows, groups, counted }
 }
 
-/** Writes the overview_tasks rows of `tasks`, active tasks of organization
+/* Writes the overview_tasks rows of `tasks`, active tasks of organization
  * `orgId` that have none, each checked for subtasks, and moves no count: a
  * count that starts from no row, which countRecords then adds up. `live`
  * holds the projects known live or not, shared between calls. */
-export async function recordTasks(
+async function recordTasks(
   db: Writer,
   orgId: string,
   tasks: readonly Doc<'issues'>[],
@@ -625,11 +687,11 @@ export async function recordTasks(
   }
 }
 
-/** Writes organization `orgId`'s count rows from its overview_tasks rows,
+/* Writes organization `orgId`'s count rows from its overview_tasks rows,
  * after deleting any it has, and stamps it counted at `now`. Every active
  * task must have its row (recordTasks), and no write may have moved the
- * counts meanwhile, as none does while the organization is not stamped. */
-export async function countRecords(db: Writer, orgId: string, now: string): Promise<void> {
+ * counts meanwhile, as none does in countWhole's one transaction. */
+async function countRecords(db: Writer, orgId: string, now: string): Promise<void> {
   for (const row of await db
     .query('overview_counts')
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
@@ -661,9 +723,9 @@ export async function countRecords(db: Writer, orgId: string, now: string): Prom
   await stampOverview(db, orgId, now)
 }
 
-/** Deletes organization `orgId`'s count and task rows, so a seed counts it
- * from the start (recordTasks, countRecords). */
-export async function clearCounts(db: Writer, orgId: string): Promise<void> {
+/* Deletes organization `orgId`'s count and task rows, so countWhole counts
+ * it from the start. */
+async function clearCounts(db: Writer, orgId: string): Promise<void> {
   for (const table of ['overview_counts', 'overview_tasks'] as const)
     for (const row of await db
       .query(table)
@@ -675,9 +737,11 @@ export async function clearCounts(db: Writer, orgId: string): Promise<void> {
 /** Counts every active task of organization `orgId` in this transaction,
  * from the start, and stamps it counted at `now` (clearCounts, recordTasks,
  * countRecords), for a small organization whose tasks were written while it
- * was not stamped. A Northstar seed does the same over several steps
- * (model/demoSeed.ts); anything larger goes through
- * internal/overviewCountsBackfill. */
+ * was not stamped: a Northstar seed's last step (model/demoSeed.ts
+ * NorthstarStep 'counts'), over the organization's tasks as they are then,
+ * those people made between its steps included. One transaction, so no
+ * write and no backfill step lands between its reads and its rows; anything
+ * larger goes through internal/overviewCountsBackfill. */
 export async function countWhole(db: Writer, orgId: string, now: string): Promise<void> {
   await clearCounts(db, orgId)
   const live = new Map<string, boolean>()
@@ -727,9 +791,11 @@ export const subProjectRows = (db: Reader, projectId: string) =>
     .take(OVERVIEW_SHARDS)
 
 /**
- * The leaf counts of sub-project `project` (a project of its organization
- * with a parent), or null while they are not whole (countsReady) or a row
- * went negative: never a partial figure or a zero for one not counted. It
+ * The leaf counts of sub-project `project` (a live project of its
+ * organization with a parent), or null for an archived one, whose rows wait
+ * for a restore's regroup, while they are not whole (countsReady) or where
+ * a row went negative: never a partial figure or a zero for one not
+ * counted. It
  * reads the organization's readiness and the regroup of the project's
  * top-level project (three ranges) and the project's OVERVIEW_SHARDS rows
  * (one range). The counts hold every leaf, whoever reads them; a caller
@@ -741,16 +807,16 @@ export async function subProjectCounts(
   db: Reader,
   project: Doc<'projects'>,
 ): Promise<LeafCounts | null> {
-  if (project.parent_id === undefined) return null
+  if (project.parent_id === undefined || project.archived_at !== undefined) return null
   if (!(await countsReady(db, project.org_id, project.parent_id))) return null
   return countsOfRows(await subProjectRows(db, project.id), project)
 }
 
 /** Every count row of person `ownerId`, by sub-project, up to
  * OVERVIEW_SHARDS rows each, in one range. A caller keeps the rows of the
- * sub-projects the person may see and whose counts are whole
+ * live sub-projects the person may see and whose counts are whole
  * (countsReady), each of its current generation (countsOfRows), as My view
- * does. */
+ * does: an archived sub-project's rows wait for a restore's regroup. */
 export const ownerRows = (db: Reader, ownerId: string) =>
   db.query('overview_counts').withIndex('by_owner_project', (q) => q.eq('owner_id', ownerId))
 

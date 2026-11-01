@@ -24,9 +24,11 @@ import {
   PUBLIC_DEMO_STEPS,
   stepCalls,
 } from '../model/demoSeed'
+import { countsReady } from '../model/overviewCounts'
 import schema from '../schema'
 import { expectRefusal, newT, type T, uuid, workspaceOf } from './helpers.setup'
 import { NORTHSTAR, plantNorthstar } from './northstar.setup'
+import { expectCountsExact } from './overviewCounts.setup'
 import { forgetUsedId } from './trash.setup'
 
 const componentModules = import.meta.glob('../betterAuth/**/*.ts')
@@ -1047,6 +1049,17 @@ describe('public demo provisioning steps', () => {
     expect(org).toMatchObject({ id: answers.at(-1)?.orgId, max_attachment_mb: 5 })
     const tasks = await limited.run((ctx) => ctx.db.query('issues').collect())
     expect(tasks).toHaveLength(MARKETING_DEMO.issues.length)
+    // its last call counts the Overview's figures and stamps them ready
+    const metas = await limited.run((ctx) =>
+      ctx.db
+        .query('projects')
+        .filter((q) => q.eq(q.field('type'), 'meta'))
+        .collect(),
+    )
+    expect(metas.length).toBeGreaterThan(0)
+    for (const meta of metas)
+      expect(await limited.run((ctx) => countsReady(ctx.db, meta.org_id, meta.id))).toBe(true)
+    await expectCountsExact(limited, org?.id ?? '', 'the public demo')
   })
 
   it('gives the public demo the notices and follows of a seed that asks person by person', async () => {

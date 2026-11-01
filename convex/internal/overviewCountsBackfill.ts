@@ -10,17 +10,20 @@
  *
  * An organization's count runs in steps, each its own transaction. The
  * first step adds its overview_count_runs row. The reset steps then delete
- * its count rows and overview_tasks rows, a page at a time, while every
- * write leaves its counts alone. The count steps read its active tasks in
- * _creationTime order (issues.by_org_archived) and reconcile each
- * (model/overviewCounts.ts reconcileTask), checking it for an active
- * subtask in a live project, while every write in between reconciles the
- * tasks it writes. Reconciling moves the counts by what a task gives over
- * what its overview_tasks row holds, so whichever of a step and a write
+ * its count rows, overview_tasks rows and overview_regroups rows, a page at
+ * a time, while every write leaves its counts alone and no project change
+ * starts a regroup. The count steps read its active tasks in _creationTime
+ * order (issues.by_org_archived) and reconcile each (model/overviewCounts.ts
+ * reconcileTask), checking it for an active subtask in a live project,
+ * while every write in between reconciles the tasks it writes and every
+ * project archive, restore or move to Deleted items starts a regroup.
+ * Reconciling moves the counts by what a task gives over what its
+ * overview_tasks row holds, so whichever of a step, a write and a regroup
  * comes first, the count is exact however the tasks change while it runs.
- * The run row keeps the _creationTime read through. The last step deletes
- * the run row and any overview_regroups row of the organization, which the
- * count leaves with nothing to do, and sets overview_counts_at.
+ * The _creationTime a run counted through goes in the call's cursor, not
+ * in the run row, which every task write reads. The last step deletes the
+ * run row and sets overview_counts_at; a regroup started while it counted
+ * goes on, and its top-level project answers `counting` until it ends.
  *
  * Read the dry run first. It writes nothing and reports each organization
  * a run would count, with its tasks and the rows it would write
@@ -60,10 +63,13 @@
  * overview_regroups and deletes those whose organization, project or task
  * is gone, or whose project or task is a later one with the same id
  * (`orphans`), which a dry run counts without deleting. A release before
- * this one keeps no counts: run back on a deployment after this one, its
- * task writes move none, so the counts drift. After such a rollback, read a
- * dry run, then run with `"recount": true` until `done`, which mends them
- * all. Every call that is no dry run adds one platform_audit_log row
+ * this one keeps no counts, and its schema does not accept org_ready
+ * overview_counts_at, which every new organization and every counted one
+ * holds: this release is a backend rollback floor once it deploys
+ * (docs/deployment.md), and a fault is fixed forward. Counts that drift
+ * for another reason, which a dry run lists in `differ`, are mended by a
+ * run with `"recount": true` until `done`. Every call that is no dry run
+ * adds one platform_audit_log row
  * (action 'overview_counts_backfill', actor 'system') with its totals and
  * where it stopped, also when a step throws, with the error. Running it
  * again is safe. It writes no activity, sends no task event and changes
@@ -73,7 +79,7 @@ import { type Infer, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { internalAction, internalMutation, internalQuery } from '../_generated/server'
-import { byId } from '../lib/db'
+import { byId, usedMoreThan } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { audit as writeAudit } from '../model/admin'
 import {
@@ -90,19 +96,26 @@ import {
   reconcileTask,
   stampOverview,
   taskPage,
+  throughTasks,
 } from '../model/overviewCounts'
 
 /** Active tasks one count step reads, the bytes of tasks it reads before
  * it ends early, as Convex counts a document's size, the count or group
- * rows one reset step, orphan step or dry-run page reads, and the most
- * rows a dry run lists. A stored description can come close to Convex's
- * document size limit, so a step reads no more tasks at a time than its
- * unspent bytes could hold at that size (taskPage). Each task's check
- * reads its subtasks until one is in a live project, usually one range,
- * and a page then reads and writes at most two count rows for each task
- * and one group row: inside Convex's 4,096 ranges and 16,000 writes, and
- * small rows. Tests lower them. */
-export const COUNT_PAGE = { tasks: 100, rows: 500, bytes: 4 * MIB, listed: 100 }
+ * rows one reset step, orphan step or dry-run page reads, the most rows a
+ * dry run lists, and the share of any of Convex's limits for one
+ * transaction past which a count step or a dry-run page stops before its
+ * next creation time and leaves the rest to the next. A stored description
+ * can come close to Convex's document size limit, so a step reads no more
+ * tasks at a time than its unspent bytes could hold at that size
+ * (taskPage). Each task's check reads its subtasks until one is in a live
+ * project, usually one range, but every one of them where none is, up to
+ * LIMITS.subtasks rows and the rows' projects; a page asks about each
+ * project once, so a page of 100 tasks whose 5,000 subtasks sit in 50
+ * archived sub-projects read 416 ranges and 5,383 documents in convex-test
+ * (tests/overviewCounts.test.ts). A task then
+ * reads and writes at most four count rows and one group row. `room` stops
+ * a page whose subtasks are many and large. Tests lower them. */
+export const COUNT_PAGE = { tasks: 100, rows: 500, bytes: 4 * MIB, listed: 100, room: 0.5 }
 
 /** Organizations one page of a run reads, and how long one call of run
  * goes on before it answers where to go on from. Tests lower them. */
@@ -111,9 +124,11 @@ export const RUN = { orgs: 100, ms: 5 * 60_000 }
 /** Below every _creationTime: a run that has counted no task. */
 const START = Number.MIN_SAFE_INTEGER
 
-/** What one step did: whether the organization is counted, and the rows it
- * deleted, the tasks it read and how many of them moved the counts. */
-type Step = { done: boolean; deleted: number; tasks: number; rows: number }
+/** What one step did: whether the organization is counted, the rows it
+ * deleted, the tasks it counted and how many of them moved the counts, and
+ * for a count step the _creationTime it counted through, which the next
+ * count step goes on after. */
+type Step = { done: boolean; deleted: number; tasks: number; rows: number; through?: number }
 
 /** One page of a dry run: what its tasks add to each row by key
  * (model/overviewCounts.ts countTasks), how many tasks it read and the
@@ -122,34 +137,33 @@ type Checked = { rows: [string, LeafCounts][]; tasks: number; through: number }
 
 /**
  * One step of the organization's count, in its own transaction: it starts
- * the run, deletes a page of the organization's count and group rows, or
- * counts one page of tasks, and ends the run once no active task is past
- * where it counted. A run left unfinished goes on where it stopped, unless
- * `restart`, which sets it back to its start, as a recount does: an earlier
- * release run in between moves no count, so a count it left unfinished can
- * be wrong below where it stopped. An organization deleted meanwhile is
- * done.
+ * the run, deletes a page of the organization's count, group and regroup
+ * rows, or counts one page of the tasks created after `after` (from the
+ * start without it), and ends the run once no active task is past where it
+ * counted. A run left unfinished goes on where it is, unless `restart`,
+ * which sets it back to its reset, as a recount does. A count step that
+ * passes COUNT_PAGE.room stops before its next creation time (throughTasks)
+ * and answers the one it counted through. An organization deleted
+ * meanwhile is done.
  */
 export const step = internalMutation({
-  args: { org_id: v.string(), restart: v.optional(v.boolean()) },
-  handler: async (ctx, { org_id, restart = false }): Promise<Step> => {
+  args: { org_id: v.string(), restart: v.optional(v.boolean()), after: v.optional(v.number()) },
+  handler: async (ctx, { org_id, restart = false, after = START }): Promise<Step> => {
     const idle = { deleted: 0, tasks: 0, rows: 0 }
     if ((await byId(ctx, 'organizations', org_id)) === null) return { done: true, ...idle }
     let run = await overviewCountRun(ctx.db, org_id)
     if (run === null) {
-      const _id = await ctx.db.insert('overview_count_runs', {
-        org_id,
-        counting: false,
-        through: START,
-      })
+      const _id = await ctx.db.insert('overview_count_runs', { org_id, counting: false })
       run = (await ctx.db.get(_id)) as Doc<'overview_count_runs'>
     } else if (restart) {
-      await ctx.db.patch(run._id, { counting: false, through: START })
-      run = { ...run, counting: false, through: START }
+      await ctx.db.patch(run._id, { counting: false })
+      run = { ...run, counting: false }
     }
     if (!run.counting) {
+      // no regroup starts while the run resets, so those left go now, and
+      // those a project change starts while it counts go on after it
       let deleted = 0
-      for (const table of ['overview_counts', 'overview_tasks'] as const) {
+      for (const table of ['overview_counts', 'overview_tasks', 'overview_regroups'] as const) {
         const rows = await ctx.db
           .query(table)
           .withIndex('by_org', (q) => q.eq('org_id', org_id))
@@ -161,22 +175,22 @@ export const step = internalMutation({
       await ctx.db.patch(run._id, { counting: true })
       return { done: false, ...idle, deleted }
     }
-    const page = await taskPage(ctx.db, org_id, run.through, COUNT_PAGE)
+    const page = await taskPage(ctx.db, org_id, after, COUNT_PAGE)
     if (page === null) {
       await ctx.db.delete(run._id)
-      for (const regroup of await ctx.db
-        .query('overview_regroups')
-        .withIndex('by_org', (q) => q.eq('org_id', org_id))
-        .collect())
-        await ctx.db.delete(regroup._id)
       await stampOverview(ctx.db, org_id, new Date().toISOString())
       return { done: true, ...idle }
     }
     let rows = 0
-    for (const task of page.tasks)
-      if (await reconcileTask(ctx.db, org_id, task.id, task, 'read')) rows++
-    await ctx.db.patch(run._id, { through: page.through })
-    return { done: false, ...idle, tasks: page.tasks.length, rows }
+    const live = new Map<string, boolean>()
+    const went = await throughTasks(
+      page.tasks,
+      async (task) => {
+        if (await reconcileTask(ctx.db, org_id, task.id, task, 'read', live)) rows++
+      },
+      () => usedMoreThan(ctx, COUNT_PAGE.room),
+    )
+    return { done: false, ...idle, tasks: went, rows, through: page.tasks[went - 1]._creationTime }
   },
 })
 
@@ -221,14 +235,21 @@ export const storedPage = internalQuery({
 })
 
 /** Counts, without writing, one page of the organization's active tasks
- * created after `after` (taskPage). */
+ * created after `after` (taskPage), up to where it passes COUNT_PAGE.room
+ * (countTasks), and answers the _creationTime it counted through. */
 export const check = internalQuery({
   args: { org_id: v.string(), after: v.number() },
   handler: async (ctx, { org_id, after }): Promise<Checked | null> => {
     const page = await taskPage(ctx.db, org_id, after, COUNT_PAGE)
     if (page === null) return null
-    const counted = await countTasks(ctx.db, org_id, page.tasks)
-    return { rows: [...counted.rows], tasks: page.tasks.length, through: page.through }
+    const counted = await countTasks(ctx.db, org_id, page.tasks, () =>
+      usedMoreThan(ctx, COUNT_PAGE.room),
+    )
+    return {
+      rows: [...counted.rows],
+      tasks: counted.counted,
+      through: page.tasks[counted.counted - 1]._creationTime,
+    }
   },
 })
 
@@ -328,9 +349,16 @@ export const orphans = internalMutation({
   },
 })
 
-/** Where a call stopped inside organization `id`, among the steps of its
- * run. Without it, a call stopped before the organization. */
-const vInside = v.object({ id: v.string() })
+/** Where a call stopped at organization `id`: inside its run, once a step
+ * of it committed in that call, with the _creationTime its count steps
+ * counted through (`through`, absent before the first count step), or
+ * before the organization (`before`), which the next call takes up as if
+ * it came to it fresh. */
+const vInside = v.object({
+  id: v.string(),
+  through: v.optional(v.number()),
+  before: v.optional(v.boolean()),
+})
 type Inside = Infer<typeof vInside>
 
 /** Where a call of run goes on: a page of organizations from `cursor`,
@@ -364,9 +392,11 @@ export const audit = internalMutation({
   },
 })
 
-const stepRef = makeFunctionReference<'mutation', { org_id: string; restart?: boolean }, Step>(
-  'internal/overviewCountsBackfill:step',
-)
+const stepRef = makeFunctionReference<
+  'mutation',
+  { org_id: string; restart?: boolean; after?: number },
+  Step
+>('internal/overviewCountsBackfill:step')
 const storedPageRef = makeFunctionReference<
   'query',
   { org_id: string; cursor: string | null },
@@ -523,8 +553,10 @@ export const run = internalAction({
     // whether this call did anything yet, so it always gets somewhere
     let worked = false
     const late = () => worked && pastDeadline()
-    // the organization the call works inside, for the audit row of a call
-    // a step ends with an error
+    // the organization the call works on, and where it is inside its run
+    // once a step committed, for the cursor of a call a step ends with an
+    // error
+    let current: string | undefined
     let here: Inside | undefined
     /** A dry run of one organization. One whose read the deadline cut
      * short is unchecked, and the call goes on with the next. */
@@ -559,16 +591,26 @@ export const run = internalAction({
       if (toCount.length < COUNT_PAGE.listed) toCount.push({ org_id, tasks, rows: counts.size })
     }
     /** A run of one organization, from inside it when this call goes on
-     * there. Answers where it stopped, or null once done with it. */
-    const countOrg = async (org_id: string, resume: boolean): Promise<Inside | null> => {
+     * where an earlier one stopped inside it (`from`). Answers where it
+     * stopped, or null once done with it. A run whose cursor is lost counts
+     * from the start, which reconciling again leaves exact. */
+    const countOrg = async (org_id: string, from: Inside | undefined): Promise<Inside | null> => {
+      const resume = from !== undefined && from.before !== true
       if (!resume && !recount) {
         const due = await ctx.runQuery(dueOfRef, { org_id })
         worked = true
         if (due.stamped && !due.running) return null
       }
       let restart = recount && !resume
+      let after = resume ? from.through : undefined
+      // a call that goes on inside keeps that place should its first step fail
+      if (resume) here = from
       for (;;) {
-        const got: Step = await ctx.runMutation(stepRef, { org_id, restart })
+        const got: Step = await ctx.runMutation(stepRef, {
+          org_id,
+          restart,
+          ...(after === undefined ? {} : { after }),
+        })
         worked = true
         restart = false
         totals.deleted += got.deleted
@@ -578,7 +620,8 @@ export const run = internalAction({
           totals.counted++
           return null
         }
-        here = { id: org_id }
+        if (got.through !== undefined) after = got.through
+        here = { id: org_id, ...(after === undefined ? {} : { through: after }) }
         if (late()) return here
       }
     }
@@ -595,15 +638,15 @@ export const run = internalAction({
           let stopped: Inside | null = null
           for (const org_id of page.orgs.slice(Math.max(0, start))) {
             if (late()) {
-              stopped = { id: org_id }
+              stopped = { id: org_id, before: true }
               break
             }
-            const resume = inside?.id === org_id
-            here = { id: org_id }
+            current = org_id
             if (dry_run) await dryOrg(org_id)
-            else stopped = await countOrg(org_id, resume)
+            else stopped = await countOrg(org_id, inside?.id === org_id ? inside : undefined)
             worked = true
             here = undefined
+            current = undefined
             if (stopped !== null) break
             totals.orgs++
           }
@@ -633,7 +676,8 @@ export const run = internalAction({
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
-      if (at.table === 'organizations' && here !== undefined) at = { ...at, org: here }
+      if (at.table === 'organizations' && current !== undefined)
+        at = { ...at, org: here ?? { id: current, before: true } }
       throw e
     } finally {
       if (!dry_run)

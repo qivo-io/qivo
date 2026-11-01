@@ -548,9 +548,12 @@ async function labelRows(ctx: MutationCtx, orgId: string, budget: Budget): Promi
 
 /* The label and team counts of the organization, which its labels and
  * teams phases leave none of; only an earlier release, run in between,
- * leaves some. */
+ * leaves some. And the Overview's rows, which its tasks phase deleted, as
+ * organization deletion's finish does (model/orgDeletion.ts): a backfill
+ * step can add a run row, or a project change a regroup row, after that
+ * phase. */
 async function strayCounts(ctx: MutationCtx, orgId: string, budget: Budget): Promise<boolean> {
-  for (const table of ['label_counts', 'team_counts'] as const)
+  for (const table of ['label_counts', 'team_counts', ...OVERVIEW_TABLES] as const)
     if (
       !(await drain(ctx, budget, (n) =>
         ctx.db

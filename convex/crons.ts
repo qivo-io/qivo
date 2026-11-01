@@ -100,6 +100,9 @@ crons.interval('profile removal recovery', { minutes: 1 }, internal.profileRemov
 // Restarts label deletion cleanup whose step stopped (labelRemovals.ts).
 crons.interval('label removal recovery', { minutes: 10 }, internal.labelRemovals.recover)
 
+// Restarts the Overview count regroups whose step stopped (overviewRegroup.ts).
+crons.interval('overview regroup recovery', { minutes: 10 }, internal.overviewRegroup.recover)
+
 // Restarts the steps that bring a rename's name key copies in line, where
 // one stopped (nameCopies.ts).
 crons.interval('name key copy recovery', { minutes: 10 }, internal.nameCopies.recover)

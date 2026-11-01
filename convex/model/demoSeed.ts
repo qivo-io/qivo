@@ -46,7 +46,7 @@ import {
   setCounters,
   tallyRows,
 } from './orgs'
-import { clearCounts, countRecords, recordTasks } from './overviewCounts'
+import { countWhole } from './overviewCounts'
 import { insertShare, syncLeads } from './projectNav'
 import { cleanProjectName, projectDescription } from './projects'
 import { deleteStamp, writeStamp } from './syncStamps'
@@ -76,19 +76,17 @@ export function demoMonday(now: number): string {
 /** One part of the Northstar work: the organization, teams, people,
  * projects and labels; tasks `from` to `to` (data order); the links, short
  * histories and milestones; comments `from` to `to` (NORTHSTAR_COMMENTS
- * order); the archived tasks' marks; the Overview's task rows of tasks
- * `from` to `to`, which the steps before write while the organization is
- * not counted (model/overviewCounts.ts recordTasks); or the Overview's count
- * rows from them, which stamp the organization counted (countRecords). Each
- * part reads what earlier parts wrote, so they run in NORTHSTAR_STEPS
- * order. */
+ * order); the archived tasks' marks; or the Overview's counts of every
+ * active task as it is then, which the steps before write while the
+ * organization is not counted, made in one transaction and stamped
+ * (model/overviewCounts.ts countWhole). Each part reads what earlier parts
+ * wrote, so they run in NORTHSTAR_STEPS order. */
 export type NorthstarStep =
   | { kind: 'setup' }
   | { kind: 'tasks'; from: number; to: number }
   | { kind: 'history' }
   | { kind: 'comments'; from: number; to: number }
   | { kind: 'archive' }
-  | { kind: 'count_tasks'; from: number; to: number }
   | { kind: 'counts' }
 
 /** The tasks and the comments one step writes at most. Measured on the
@@ -109,7 +107,7 @@ export type NorthstarStep =
  * most 243 ranges. convex/tests/marketingDemo.test.ts holds every call to
  * 300 index ranges, 350 documents read and 150 written, so a step is a
  * small part of Convex's 1 s mutation limit. */
-export const NORTHSTAR_BATCH = { tasks: 12, comments: 13, counted: 40 }
+export const NORTHSTAR_BATCH = { tasks: 12, comments: 13 }
 
 /* The ranges [from, to) that cover `count` items, `size` at a time. */
 const batches = (count: number, size: number) =>
@@ -144,9 +142,6 @@ export const NORTHSTAR_STEPS: readonly NorthstarStep[] = [
     (range): NorthstarStep => ({ kind: 'comments', ...range }),
   ),
   { kind: 'archive' },
-  ...batches(MARKETING_DEMO.issues.length, NORTHSTAR_BATCH.counted).map(
-    (range): NorthstarStep => ({ kind: 'count_tasks', ...range }),
-  ),
   { kind: 'counts' },
 ]
 
@@ -716,23 +711,10 @@ async function writeStep(
     await tallyComments(ctx, inserted)
     return
   }
-  if (step.kind === 'count_tasks') {
-    // a seed counted again starts from no row
-    if (step.from === 0) await clearCounts(ctx.db, org.id)
-    const tasks = await Promise.all(
-      data.issues
-        .slice(step.from, step.to)
-        .map(async (i) => byId(ctx, 'issues', await id(`issue:${i.key}`))),
-    )
-    await recordTasks(
-      ctx.db,
-      org.id,
-      tasks.filter((task): task is Doc<'issues'> => task !== null),
-    )
-    return
-  }
   if (step.kind === 'counts') {
-    await countRecords(ctx.db, org.id, now)
+    // every task as it is now, people's writes between the steps included,
+    // and from no row, as a seed counted again
+    await countWhole(ctx.db, org.id, now)
     return
   }
   // The archived tasks' labels, links and follows carry the mark the archive
@@ -756,9 +738,10 @@ async function writeStep(
  * most 513 ranges and 724 documents and wrote at most 441. Comment counts
  * (model/commentLimits.ts) and the notices' inbox items
  * (model/inboxItems.ts), kept once per call, take the work to seven calls.
- * The Overview's counts (model/overviewCounts.ts recordTasks and
- * countRecords), made once every task is written, take an eighth, which in
- * convex-test read 198 ranges and 201 documents and wrote 195.
+ * The Overview's counts of every task as it is then, made and stamped in
+ * one transaction once every task is written (model/overviewCounts.ts
+ * countWhole), take an eighth, which in convex-test read 163 ranges and
+ * 221 documents and wrote 195.
  * The used_ids row each seeded task and project reads and writes (lib/db.ts
  * insertUsed) adds a range and a write to each, 51 to the first call and 54
  * to the second, which write the projects and tasks, so each call reads at
@@ -775,7 +758,7 @@ async function writeStep(
  * 1.5 and 0.4 to 1.4 of the calls those costs come from. A call with fewer
  * ranges stays inside 332 ms too, as a document past those costs about
  * 0.13 ms read and 0.06 ms written (the slopes over the hosted steps). */
-export const PUBLIC_DEMO_CALL_SIZES: readonly number[] = [4, 5, 6, 4, 4, 4, 4, 4]
+export const PUBLIC_DEMO_CALL_SIZES: readonly number[] = [4, 5, 6, 4, 4, 4, 4, 1]
 
 /** `steps` in calls of `sizes` steps each, in order, then each step past
  * them in a call of its own: a dataset that grows adds bounded calls

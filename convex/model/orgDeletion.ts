@@ -136,9 +136,10 @@ const countRows = (
 /** The organization's overview counts (model/overviewCounts.ts), before
  * the tasks they count: its readiness stamp first, so they read as
  * `counting` and no write moves them while the tasks go over many steps,
- * then its count rows, group rows, backfill run and regroup rows. The
- * Northstar wipe stamps the organization again once its work is gone
- * (internal/marketingDemo.ts). */
+ * then its count rows, group rows, backfill run and regroup rows. After the
+ * Northstar wipe (internal/marketingDemo.ts), the seed's last step counts
+ * and stamps the organization again (model/demoSeed.ts NorthstarStep
+ * 'counts', model/overviewCounts.ts countWhole). */
 async function overviewRows(ctx: MutationCtx, orgId: string, budget: RemovalBudget) {
   await unstampOverview(ctx.db, orgId)
   return await inOrder(

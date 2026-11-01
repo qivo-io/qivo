@@ -25,6 +25,7 @@ import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/del
 import { NORTHSTAR_BATCH, NORTHSTAR_STEPS } from '../model/demoSeed'
 import { nameKeysReady } from '../model/nameKeys'
 import { newOrgDefaults, newTeamDefaults } from '../model/orgs'
+import { countsReady } from '../model/overviewCounts'
 import { navReady } from '../model/projectNav'
 import schema from '../schema'
 import {
@@ -44,6 +45,7 @@ import {
   withOrg,
 } from './helpers.setup'
 import { expectExact } from './nameKeys.setup'
+import { expectCountsExact } from './overviewCounts.setup'
 import { expectReachExact, expectReachMatchesAccess } from './projectReach.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
@@ -193,6 +195,36 @@ const storeImage = (t: T): Promise<Id<'_storage'>> =>
     await ctx.db.patch(sid as never, { contentType: 'image/jpeg' } as never)
     return sid
   })
+
+/** The most documents the marketing seed's counts call may write: what it
+ * wrote in convex-test (seed steps, below). */
+const COUNTS_WRITES = 196
+
+/* A row without its system fields, as a copy inserts it. */
+const stripSystem = <D extends { _id: unknown; _creationTime: number }>({
+  _id,
+  _creationTime,
+  ...row
+}: D) => row
+
+/* Expects every top-level project of the demo organization ready to read
+ * and its count rows equal to a recount (tests/overviewCounts.setup.ts). */
+async function expectCountsSeeded(t: T, orgId: string, label: string) {
+  const metas = await t.run((ctx) =>
+    ctx.db
+      .query('projects')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .filter((q) => q.eq(q.field('type'), 'meta'))
+      .collect(),
+  )
+  expect(metas.length, label).toBeGreaterThan(0)
+  for (const meta of metas)
+    expect(
+      await t.run((ctx) => countsReady(ctx.db, orgId, meta.id)),
+      `${label}: ${meta.name}`,
+    ).toBe(true)
+  await expectCountsExact(t, orgId, label)
+}
 
 async function seeded(t: T) {
   await provision(t)
@@ -1872,14 +1904,23 @@ describe('marketing demo seed steps', () => {
   // about 2,500 index ranges, and the reserved-id check alone took up to 2 s
   // on a loaded machine. Every call of a seed, a check or a wipe now does a
   // small, bounded part of that.
+  // The Overview's counts of every task, made and stamped in one call at
+  // the end (model/overviewCounts.ts countWhole), write a group row for each
+  // of the 90 tasks and their count rows, and the call moves its receipt on:
+  // 196 documents, measured. That call alone may write COUNTS_WRITES.
   it('seeds, checks and wipes in calls of at most 300 index ranges, 350 documents read and 150 written', async () => {
-    const t = newAuthT({
-      transactionLimits: { databaseQueries: 300, documentsRead: 350, documentsWritten: 150 },
-    })
-    await provision(t)
+    // convex-test reads these at the start of each call, so the counts
+    // call can get its own cap
+    const limits = { databaseQueries: 300, documentsRead: 350, documentsWritten: 150 }
+    const t = newAuthT({ transactionLimits: limits })
+    const { org_id } = await provision(t)
+    const counts = RESERVED_PARTS + NORTHSTAR_STEPS.findIndex((step) => step.kind === 'counts')
     const answers = [await apply(t, 'seed')]
-    while (answers.at(-1)?.seed_done === false && answers.length < 200)
+    while (answers.at(-1)?.seed_done === false && answers.length < 200) {
+      limits.documentsWritten = answers.at(-1)?.seed_step === counts ? COUNTS_WRITES : 150
       answers.push(await apply(t, 'seed'))
+    }
+    limits.documentsWritten = 150
     const steps = answers[0].seed_steps ?? 0
     // the check parts, the work and the usage history
     expect(steps).toBe(RESERVED_PARTS + NORTHSTAR_STEPS.length + 1)
@@ -1895,8 +1936,44 @@ describe('marketing demo seed steps', () => {
     expect(await t.run(async (ctx) => ctx.db.query('marketing_demo').unique())).not.toHaveProperty(
       'seed',
     )
+    // the check reads every count and task row at once, past these caps
+    const capped = { ...limits }
+    Object.assign(limits, {
+      databaseQueries: 4096,
+      documentsRead: 32_000,
+      documentsWritten: 16_000,
+    })
+    await expectCountsSeeded(t, org_id, 'the seed')
+    Object.assign(limits, capped)
     expect(await wipe(t)).toMatchObject({ state: 'empty', counts: { tasks: 0 } })
   }, 60_000)
+
+  it("counts the tasks as they are at the seed's last step, a person's writes between steps included", async () => {
+    const t = newAuthT()
+    const { org_id } = await provision(t)
+    const counts = RESERVED_PARTS + NORTHSTAR_STEPS.findIndex((step) => step.kind === 'counts')
+    let answer = await apply(t, 'seed')
+    while (answer.seed_done === false && (answer.seed_step ?? 0) < counts)
+      answer = await apply(t, 'seed')
+    // the organization is not counted yet, so these move no count
+    await t.run(async (ctx) => {
+      const tasks = await ctx.db
+        .query('issues')
+        .withIndex('by_org_archived', (q) => q.eq('org_id', org_id).eq('archived_at', undefined))
+        .collect()
+      const open = tasks.find((task) => task.status === 'todo' && task.parent_id === undefined)
+      if (open === undefined) throw new Error('no open task')
+      await ctx.db.patch(open._id, { status: 'done', paused: true })
+      await ctx.db.insert('issues', {
+        ...stripSystem(open),
+        id: uuid(),
+        num: 9_999,
+        status: 'progress',
+      })
+    })
+    while (answer.seed_done === false) answer = await apply(t, 'seed')
+    await expectCountsSeeded(t, org_id, 'written to between steps')
+  }, 120_000)
 
   // first call, then the check parts: the next call is the setup step
   const toSetup = async (t: T, anchor = ANCHOR) => {

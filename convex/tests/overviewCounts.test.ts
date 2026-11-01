@@ -11,34 +11,45 @@
 import type { FunctionArgs, FunctionReturnType } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
 import { COUNT_PAGE, RUN } from '../internal/overviewCountsBackfill'
 import { byId } from '../lib/db'
-import { ISSUE_STATUSES } from '../lib/enums'
-import { taskOwnerId } from '../lib/review'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { writeNorthstarWork } from '../model/demoSeed'
 import { wipeWorkStep } from '../model/orgDeletion'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import {
-  addCounts,
+  CountMoves,
   countsOfRows,
   countsReady,
   countWhole,
-  type LeafCounts,
   noCounts,
   OVERVIEW_SHARDS,
   OVERVIEW_TABLES,
   overviewCountRun,
   overviewRegroupOf,
   ownerRows,
+  reconcileTask,
   stampOverview,
   subProjectCounts,
+  taskPage,
 } from '../model/overviewCounts'
 import { removeProjectGrantCore } from '../model/projectAccess'
-import { OVERVIEW_REGROUP } from '../overviewRegroup'
-import { as, NOW, newT, type OrgFixture, plantSeat, type T, uuid, withOrg } from './helpers.setup'
+import { OVERVIEW_REGROUP, STALLED_MS } from '../overviewRegroup'
+import { plantTasks } from './board.setup'
+import {
+  as,
+  NOW,
+  newT,
+  type OrgFixture,
+  plantProject,
+  plantSeat,
+  type T,
+  uuid,
+  withOrg,
+} from './helpers.setup'
 import { NORTHSTAR, northstarId, plantNorthstar } from './northstar.setup'
+import { countOrg, expectCountsExact, stored, truth } from './overviewCounts.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import { deleteProject, deleteTask, installTrashTimers, itemFor, runSteps } from './trash.setup'
 
@@ -54,109 +65,6 @@ afterEach(() => {
   Object.assign(REMOVAL_BUDGET, DEFAULT_REMOVAL)
   vi.restoreAllMocks()
 })
-
-/** Count rows as a test compares them: by sub-project, owner and shard,
- * all-zero rows left out. */
-type Rows = Record<string, LeafCounts>
-
-const isZero = (c: LeafCounts) =>
-  c.paused === 0 && c.left_tenths === 0 && ISSUE_STATUSES.every((s) => c.leaves[s] === 0)
-
-/** What the organization's tasks give, counted from the rows themselves
- * by lib/liveTasks.ts countsAsSubtask and lib/review.ts taskOwnerId: the
- * rows of every sub-project (live or archived) and owner, and the active
- * tasks with an active subtask in a live project. */
-const truth = (t: T, orgId: string) =>
-  t.run(async (ctx) => {
-    const projects = new Map(
-      (
-        await ctx.db
-          .query('projects')
-          .withIndex('by_org', (q) => q.eq('org_id', orgId))
-          .collect()
-      ).map((p) => [p.id, p]),
-    )
-    const tasks = await ctx.db
-      .query('issues')
-      .withIndex('by_org_archived', (q) => q.eq('org_id', orgId).eq('archived_at', undefined))
-      .collect()
-    const live = (id: string) => projects.get(id)?.archived_at === undefined && projects.has(id)
-    const active = new Set(tasks.map((task) => task.id))
-    const groups = new Set<string>()
-    for (const kid of tasks)
-      if (kid.parent_id !== undefined && live(kid.project_id) && active.has(kid.parent_id))
-        groups.add(kid.parent_id)
-    const rows: Rows = {}
-    const add = (key: string, task: Doc<'issues'>) => {
-      const c = noCounts()
-      c.leaves[task.status] = 1
-      c.paused = task.paused ? 1 : 0
-      c.left_tenths = task.status === 'done' ? 0 : Math.round((task.remaining_hours ?? 0) * 10)
-      rows[key] = addCounts(rows[key] ?? noCounts(), c)
-    }
-    for (const task of tasks) {
-      const project = projects.get(task.project_id)
-      if (groups.has(task.id) || project === undefined || project.parent_id === undefined) continue
-      add(`${project.id}||${task.num % OVERVIEW_SHARDS}`, task)
-      const owner = taskOwnerId(task, false)
-      if (owner !== undefined) add(`${project.id}|${owner}|${task.num % OVERVIEW_SHARDS}`, task)
-    }
-    for (const key of Object.keys(rows)) if (isZero(rows[key])) delete rows[key]
-    return { rows, groups: [...groups].sort() }
-  })
-
-/** What the organization's count rows hold, and the tasks its task rows
- * hold as groups, those of an earlier project or task with the same id left
- * out. */
-const stored = (t: T, orgId: string) =>
-  t.run(async (ctx) => {
-    const rows: Rows = {}
-    for (const row of await ctx.db
-      .query('overview_counts')
-      .withIndex('by_org', (q) => q.eq('org_id', orgId))
-      .collect()) {
-      const project = await byId(ctx, 'projects', row.project_id)
-      if (project === null || project._creationTime !== row.project_at) continue
-      const key = `${row.project_id}|${row.owner_id ?? ''}|${row.shard}`
-      expect(rows[key], `two rows for ${key}`).toBeUndefined()
-      const counts = { leaves: row.leaves, paused: row.paused, left_tenths: row.left_tenths }
-      if (!isZero(counts)) rows[key] = counts
-    }
-    const groups: string[] = []
-    for (const row of await ctx.db
-      .query('overview_tasks')
-      .withIndex('by_org', (q) => q.eq('org_id', orgId))
-      .collect()) {
-      const task = await byId(ctx, 'issues', row.task_id)
-      // a row holds only an active task's state
-      expect(task?.archived_at, `the task row of ${row.task_id}`).toBeUndefined()
-      if (task !== null && task._creationTime === row.task_at && row.group) groups.push(row.task_id)
-    }
-    return { rows, groups: groups.sort() }
-  })
-
-/** Expects the organization's rows to equal a recount, and every live
- * sub-project's counts to read whole and as the recount gives. */
-async function expectExact(t: T, orgId: string, label = ''): Promise<void> {
-  const want = await truth(t, orgId)
-  expect(await stored(t, orgId), label).toEqual(want)
-  const read = await t.run(async (ctx) => {
-    const out: Record<string, LeafCounts | null> = {}
-    for (const p of await ctx.db
-      .query('projects')
-      .withIndex('by_org', (q) => q.eq('org_id', orgId))
-      .collect())
-      if (p.parent_id !== undefined && p.archived_at === undefined)
-        out[p.id] = await subProjectCounts(ctx.db, p)
-    return out
-  })
-  for (const [projectId, counts] of Object.entries(read)) {
-    let sum = noCounts()
-    for (const [key, c] of Object.entries(want.rows))
-      if (key.startsWith(`${projectId}||`)) sum = addCounts(sum, c)
-    expect(counts, `${label} ${projectId}`).toEqual(sum)
-  }
-}
 
 /** Stamps an organization with no task counted, as insertOrgRows does. */
 const stamp = (t: T, orgId: string) => t.run((ctx) => stampOverview(ctx.db, orgId, NOW))
@@ -189,7 +97,7 @@ describe('overview counts', () => {
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
-    const exact = (label: string) => expectExact(t, org_id, label)
+    const exact = (label: string) => expectCountsExact(t, org_id, label)
 
     const a = await w.create({ status: 'progress', assignee_id: f.user.id, remaining_hours: 3.5 })
     const b = await w.create({
@@ -384,7 +292,7 @@ describe('overview counts', () => {
         ...(i % 3 === 0 ? { reviewer_id: f.user.id } : {}),
         remaining_hours: i / 10,
       })
-    await expectExact(t, org_id, 'before the handover')
+    await expectCountsExact(t, org_id, 'before the handover')
     await t.run(async (ctx) =>
       removeProjectGrantCore(ctx, {
         me: (await byId(ctx, 'profiles', f.user.id)) as Doc<'profiles'>,
@@ -396,7 +304,7 @@ describe('overview counts', () => {
     )
     const rows = (await truth(t, org_id)).rows
     expect(Object.keys(rows).some((key) => key.includes(holder.id))).toBe(false)
-    await expectExact(t, org_id, 'after the handover')
+    await expectCountsExact(t, org_id, 'after the handover')
   }, 60_000)
 
   it('a project archive, restore and move reconcile in background steps, whatever lands first', async () => {
@@ -412,7 +320,7 @@ describe('overview counts', () => {
       remaining_hours: 2,
     })
     await w.create({ project_id: f.sub2.id, parent_id: parent.id, assignee_id: f.user.id })
-    await expectExact(t, org_id, 'a subtask in the sibling')
+    await expectCountsExact(t, org_id, 'a subtask in the sibling')
 
     // the sibling archived: until the step runs its project's counts are
     // not whole, and a write meanwhile reconciles the parent first
@@ -422,29 +330,28 @@ describe('overview counts', () => {
     const second = await w.create({ parent_id: parent.id })
     await runSteps(t)
     expect(await ready()).toBe(true)
-    await expectExact(t, org_id, 'archived, with a second subtask meanwhile')
+    await expectCountsExact(t, org_id, 'archived, with a second subtask meanwhile')
     await w.archive(second.id)
-    await expectExact(t, org_id, 'its only live subtask archived')
+    await expectCountsExact(t, org_id, 'its only live subtask archived')
 
-    // restored, archived and restored again before any step runs
+    // restored, archived and restored again before any step runs: the
+    // project waits once, read as it is when its step comes
     await as(t, f.admin).mutation(api.projects.unarchive, { org_id, id: f.sub2.id })
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
     await as(t, f.admin).mutation(api.projects.unarchive, { org_id, id: f.sub2.id })
     expect((await t.run((ctx) => overviewRegroupOf(ctx.db, f.meta.id)))?.projects).toEqual([
       f.sub2.id,
-      f.sub2.id,
-      f.sub2.id,
     ])
     await runSteps(t)
-    await expectExact(t, org_id, 'restored, archived and restored again')
+    await expectCountsExact(t, org_id, 'restored, archived and restored again')
 
     // the top-level project with its sub-projects, and back
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.meta.id })
     await runSteps(t)
-    await expectExact(t, org_id, 'the top-level project archived')
+    await expectCountsExact(t, org_id, 'the top-level project archived')
     await as(t, f.admin).mutation(api.projects.unarchive, { org_id, id: f.meta.id })
     await runSteps(t)
-    await expectExact(t, org_id, 'the top-level project restored')
+    await expectCountsExact(t, org_id, 'the top-level project restored')
 
     // steps that stop on their room after one task each
     Object.assign(OVERVIEW_REGROUP, { tasks: 2, room: 0 })
@@ -455,7 +362,7 @@ describe('overview counts', () => {
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
     await runSteps(t)
     expect(await ready()).toBe(true)
-    await expectExact(t, org_id, 'archived in small steps')
+    await expectCountsExact(t, org_id, 'archived in small steps')
   }, 60_000)
 
   it('readers answer counting, never zero, and a row that goes negative says so', async () => {
@@ -468,13 +375,13 @@ describe('overview counts', () => {
     const task = await w.create({ status: 'todo', remaining_hours: 1 })
     expect(await read()).toBeNull()
     expect(await t.run((ctx) => ctx.db.query('overview_counts').collect())).toEqual([])
-    await countAll(t, org_id)
-    await expectExact(t, org_id, 'counted by the backfill')
+    await countOrg(t, org_id)
+    await expectCountsExact(t, org_id, 'counted by the backfill')
     expect((await read())?.leaves.todo).toBe(1)
 
     // a run or a regroup under way
     const run = await t.run((ctx) =>
-      ctx.db.insert('overview_count_runs', { org_id, counting: true, through: 0 }),
+      ctx.db.insert('overview_count_runs', { org_id, counting: true }),
     )
     expect(await read()).toBeNull()
     await t.run((ctx) => ctx.db.delete(run))
@@ -512,7 +419,7 @@ describe('overview counts', () => {
     const create = () => w.create({ status: 'todo', assignee_id: f.user.id, remaining_hours: 1 })
     const first = await create()
     for (let i = 0; i < OVERVIEW_SHARDS; i++) await create()
-    await expectExact(t, org_id, 'one person over every shard')
+    await expectCountsExact(t, org_id, 'one person over every shard')
     const mine = () =>
       t.run(async (ctx) =>
         (await ownerRows(ctx.db, f.user.id).collect()).filter((r) => r.project_id === f.sub.id),
@@ -532,7 +439,7 @@ describe('overview counts', () => {
         row.shard === edited.num % OVERVIEW_SHARDS,
       )
     }
-    await expectExact(t, org_id, 'after the edit')
+    await expectCountsExact(t, org_id, 'after the edit')
   })
 
   it('a row of an earlier sub-project or task with the same id counts for nothing', async () => {
@@ -566,7 +473,7 @@ describe('overview counts', () => {
     // a create with that id is a leaf, and its row starts from zero
     await w.create({ id, status: 'progress', remaining_hours: 3 })
     await w.create({ status: 'done' })
-    await expectExact(t, org_id, 'rows of an earlier generation')
+    await expectCountsExact(t, org_id, 'rows of an earlier generation')
     expect((await t.run((ctx) => subProjectCounts(ctx.db, f.sub)))?.leaves).toMatchObject({
       done: 1,
       progress: 1,
@@ -627,10 +534,10 @@ describe('overview counts', () => {
     await runSteps(t)
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
     await w.create({ status: 'review', assignee_id: f.admin.id })
-    await countAll(t, org_id)
+    await countOrg(t, org_id)
     await runSteps(t)
     expect(await t.run((ctx) => overviewCountRun(ctx.db, org_id))).toBeNull()
-    await expectExact(t, org_id, 'counted while it changed')
+    await expectCountsExact(t, org_id, 'counted while it changed')
   }, 60_000)
 
   it('a dry run writes nothing; a run counts what it lists, a recount mends a drift, orphans go', async () => {
@@ -646,7 +553,7 @@ describe('overview counts', () => {
     expect(dry.to_count).toContainEqual({ org_id, tasks: 2, rows: 3 })
     expect(await t.run((ctx) => ctx.db.query('overview_counts').collect())).toEqual([])
     expect(await backfill(t, { dry_run: false })).toMatchObject({ counted: 2, orphans: 0 })
-    await expectExact(t, org_id, 'counted')
+    await expectCountsExact(t, org_id, 'counted')
     expect(await t.run((ctx) => ctx.db.query('overview_count_runs').collect())).toEqual([])
 
     // rows an earlier state left: a zero row of a gone project, one of an
@@ -657,12 +564,12 @@ describe('overview counts', () => {
       await ctx.db.insert('overview_counts', { ...base, project_id: uuid(), project_at: 1 })
       await ctx.db.insert('overview_counts', { ...base, project_id: f.sub.id, project_at: 1 })
       await ctx.db.insert('overview_tasks', { org_id, task_id: uuid(), task_at: 1, group: true })
-      await ctx.db.insert('overview_count_runs', { org_id: uuid(), counting: true, through: 0 })
+      await ctx.db.insert('overview_count_runs', { org_id: uuid(), counting: true })
     })
     expect(await backfill(t, { dry_run: true })).toMatchObject({ counted: 0, orphans: 4 })
     // a second run leaves the counted organizations alone and takes them
     expect(await backfill(t, { dry_run: false })).toMatchObject({ counted: 0, orphans: 4 })
-    await expectExact(t, org_id, 'orphans gone')
+    await expectCountsExact(t, org_id, 'orphans gone')
     expect(await audits(t)).toEqual([
       { counted: 2, deleted: 0, tasks: 2, rows: 2, orphans: 0, cursor: null },
       { counted: 0, deleted: 0, tasks: 0, rows: 0, orphans: 4, cursor: null },
@@ -676,7 +583,7 @@ describe('overview counts', () => {
     const found = await backfill(t, { dry_run: true })
     expect(found).toMatchObject({ counted: 0, differing: 2, unsettled: 0 })
     await calls(t, { dry_run: false, recount: true })
-    await expectExact(t, org_id, 'recounted')
+    await expectCountsExact(t, org_id, 'recounted')
     expect((await backfill(t, { dry_run: true })).differing).toBe(0)
   })
 
@@ -690,20 +597,20 @@ describe('overview counts', () => {
     const got = await calls(t, { dry_run: false })
     expect(got.length).toBeGreaterThan(2)
     expect(got.some((call) => call.cursor?.table === 'organizations' && call.cursor.org)).toBe(true)
-    await expectExact(t, f.org.id, 'counted over many calls')
+    await expectCountsExact(t, f.org.id, 'counted over many calls')
   })
 
   it('the Northstar seed, the guest fixture and a new organization start counted', async () => {
     const t = newT()
     const { org } = await plantNorthstar(t)
     expect(await t.run((ctx) => countsReady(ctx.db, org.id, org.id))).toBe(true)
-    await expectExact(t, org.id, 'Northstar')
+    await expectCountsExact(t, org.id, 'Northstar')
     expect(Object.keys((await truth(t, org.id)).rows).length).toBeGreaterThan(0)
     const { org_id } = await t.mutation(internal.internal.guestOrg.zzGuestOrg, {})
-    await expectExact(t, org_id, 'the guest fixture')
+    await expectCountsExact(t, org_id, 'the guest fixture')
     expect(Object.keys((await truth(t, org_id)).rows).length).toBeGreaterThan(0)
     expect((await t.mutation(internal.internal.guestOrg.zzGuestOrg, {})).torn_down).toBe(true)
-    await expectExact(t, org_id, 'the guest fixture again')
+    await expectCountsExact(t, org_id, 'the guest fixture again')
     const made = await t.mutation(internal.adminOrgs.insertOrganization, {
       name: 'Starter Labs',
       people: [{ name: 'Ada', email: 'ada@starter.test', role: 'admin' }],
@@ -715,7 +622,7 @@ describe('overview counts', () => {
   it("the Northstar wipe takes the counts, and its seed counts again with the projects' new rows", async () => {
     const t = newT()
     const { org, profiles } = await plantNorthstar(t)
-    await expectExact(t, org.id, 'seeded')
+    await expectCountsExact(t, org.id, 'seeded')
     let done = false
     for (let n = 0; n < 400 && !done; n++)
       done = await t.run((ctx) =>
@@ -744,7 +651,7 @@ describe('overview counts', () => {
         now: NOW,
       })
     })
-    await expectExact(t, org.id, 'seeded again')
+    await expectCountsExact(t, org.id, 'seeded again')
     expect(await t.run((ctx) => countsReady(ctx.db, org.id, org.id))).toBe(true)
     expect(await northstarId('org')).toBe(org.id)
   }, 60_000)
@@ -778,10 +685,16 @@ describe('overview counts', () => {
             .withIndex('by_org', (q) => q.eq('org_id', org_id))
             .first()) === null,
       )
-    // a backfill step between two deletion steps, as a run meanwhile would
+    // a backfill step between two deletion steps, going on where the one
+    // before counted through, as a run meanwhile would
+    let after: number | undefined
     for (let n = 0; n < 400 && !(await gone()); n++) {
       await t.mutation(internal.orgRemovals.step, { org_id })
-      await t.mutation(internal.internal.overviewCountsBackfill.step, { org_id })
+      const got = await t.mutation(internal.internal.overviewCountsBackfill.step, {
+        org_id,
+        ...(after === undefined ? {} : { after }),
+      })
+      if (got.through !== undefined) after = got.through
     }
     expect(await gone()).toBe(true)
     for (const table of OVERVIEW_TABLES)
@@ -791,9 +704,212 @@ describe('overview counts', () => {
       ).toEqual([])
     await assertNoDanglingRefs(t, 'organization deletion')
   }, 120_000)
+
+  it('a parent whose only subtask leaves with its project is read again, whatever lands first', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    await stamp(t, org_id)
+    const w = writers(t, f)
+    // its only subtask in a sibling sub-project that goes to Deleted items,
+    // which deletes the project row before it moves the subtask
+    const parent = await w.create({
+      status: 'progress',
+      assignee_id: f.user.id,
+      remaining_hours: 2,
+    })
+    await w.create({ project_id: f.sub2.id, parent_id: parent.id })
+    await expectCountsExact(t, org_id, 'a group through a sibling subtask')
+    await deleteProject(t, f, f.sub2.id)
+    // the move read the parent again in its own transaction; the readers
+    // answer counting until the regroup ends
+    expect(await stored(t, org_id), 'its sibling sub-project in Deleted items').toEqual(
+      await truth(t, org_id),
+    )
+    await runSteps(t)
+    await expectCountsExact(t, org_id, 'after the regroup')
+
+    // its only subtask in a sibling archived, then archived itself before
+    // the regroup's step reads that sibling
+    const sibling = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
+    const other = await w.create({ status: 'todo', remaining_hours: 1 })
+    const kid = await w.create({ project_id: sibling.id, parent_id: other.id })
+    await expectCountsExact(t, org_id, 'a second group')
+    await as(t, f.admin).mutation(api.projects.archive, { org_id, id: sibling.id })
+    await w.archive(kid.id)
+    expect(await stored(t, org_id), 'its subtask archived before the step').toEqual(
+      await truth(t, org_id),
+    )
+    await runSteps(t)
+    await expectCountsExact(t, org_id, 'after that regroup')
+  })
+
+  it('a regroup that a project change starts while the backfill counts goes on after the count', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const w = writers(t, f)
+    // written while the organization is not counted
+    const parent = await w.create({ status: 'todo', remaining_hours: 1 })
+    await w.create({ project_id: f.sub2.id, parent_id: parent.id })
+    await w.create({ status: 'progress' })
+    Object.assign(COUNT_PAGE, { tasks: 1 })
+    const step = (after?: number) =>
+      t.mutation(internal.internal.overviewCountsBackfill.step, {
+        org_id,
+        ...(after === undefined ? {} : { after }),
+      })
+    // the reset, then a count step through the parent, which it counts as
+    // a group
+    expect(await step()).toMatchObject({ done: false, tasks: 0 })
+    const run = await t.run((ctx) => overviewCountRun(ctx.db, org_id))
+    expect(run).toMatchObject({ counting: true })
+    let got = await step()
+    expect(got).toMatchObject({ done: false, tasks: 1 })
+    // count steps leave the run row, which every task write reads, as it is
+    expect(await t.run((ctx) => overviewCountRun(ctx.db, org_id))).toEqual(run)
+    // the subtask's project archived while the count goes on
+    await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
+    for (let n = 0; n < 20 && !got.done; n++) got = await step(got.through)
+    expect(got.done).toBe(true)
+    // the regroup it started stays, and its project reads as counting
+    expect(await t.run((ctx) => overviewRegroupOf(ctx.db, f.meta.id))).not.toBeNull()
+    expect(await t.run((ctx) => countsReady(ctx.db, org_id, f.meta.id))).toBe(false)
+    await runSteps(t)
+    expect(await t.run((ctx) => countsReady(ctx.db, org_id, f.meta.id))).toBe(true)
+    await expectCountsExact(t, org_id, 'counted, then regrouped')
+  })
+
+  it('a count page whose subtasks sit in 50 archived sub-projects stays inside the limits', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // 100 parents created together, each with a subtask in each of 50
+    // archived sibling sub-projects: 5,100 active tasks
+    const parents = await plantTasks(t, f.sub, 100)
+    for (let n = 0; n < 50; n++) {
+      const sibling = await plantProject(t, {
+        org_id,
+        type: 'project',
+        parent_id: f.meta.id,
+        archived_at: NOW,
+      })
+      await plantTasks(t, sibling, 100, (i) => ({ parent_id: parents[i].id }))
+    }
+    const dry = await backfill(t, { dry_run: true })
+    expect(dry).toMatchObject({ unchecked: 0, unsettled: 0 })
+    expect(dry.to_count).toContainEqual({ org_id, tasks: 5100, rows: expect.any(Number) })
+    await countOrg(t, org_id)
+    // the parents count as leaves, as their subtasks are in archived projects
+    expect((await t.run((ctx) => subProjectCounts(ctx.db, f.sub)))?.leaves.todo).toBe(100)
+    // what one count step's page reads, the parents' subtasks with it
+    const took = await t.run(async (ctx) => {
+      const page = await taskPage(ctx.db, org_id, Number.MIN_SAFE_INTEGER, COUNT_PAGE)
+      const live = new Map<string, boolean>()
+      for (const task of page?.tasks ?? [])
+        await reconcileTask(ctx.db, org_id, task.id, task, 'read', live)
+      const m = await ctx.meta.getTransactionMetrics()
+      return { ranges: m.databaseQueries.used, documents: m.documentsRead.used }
+    })
+    console.log('one count page over 50 archived sub-projects:', took)
+    expect(took.ranges).toBeLessThan(1000)
+  }, 300_000)
+
+  it('recovery restarts a regroup whose step stopped', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    await stamp(t, org_id)
+    const w = writers(t, f)
+    const parent = await w.create({ status: 'todo' })
+    await w.create({ project_id: f.sub2.id, parent_id: parent.id })
+    await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
+    const row = await t.run((ctx) => overviewRegroupOf(ctx.db, f.meta.id))
+    if (row?.scheduled_id === undefined) throw new Error('no regroup step')
+    // a step waits: recovery leaves the row alone, however old its progress
+    const old = new Date(Date.now() - STALLED_MS - 1).toISOString()
+    await t.run((ctx) => ctx.db.patch(row._id, { progress_at: old }))
+    await t.mutation(internal.overviewRegroup.recover, {})
+    expect((await t.run((ctx) => ctx.db.get(row._id)))?.scheduled_id).toBe(row.scheduled_id)
+    // its step lost, as a failed step leaves it: recovery starts another
+    await t.run((ctx) => ctx.scheduler.cancel(row.scheduled_id as Id<'_scheduled_functions'>))
+    await t.mutation(internal.overviewRegroup.recover, {})
+    await runSteps(t)
+    expect(await t.run((ctx) => overviewRegroupOf(ctx.db, f.meta.id))).toBeNull()
+    await expectCountsExact(t, org_id, 'regrouped after recovery')
+  })
+
+  it('a regroup deletes every empty row of a project gone to Deleted items, a page a step', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    await stamp(t, org_id)
+    const w = writers(t, f)
+    for (const assignee_id of [f.user.id, f.admin.id, undefined])
+      for (let n = 0; n < 4; n++)
+        await w.create({
+          project_id: f.sub2.id,
+          ...(assignee_id === undefined ? {} : { assignee_id }),
+        })
+    const rows = () =>
+      t.run(async (ctx) =>
+        (await ctx.db.query('overview_counts').collect()).filter((r) => r.project_id === f.sub2.id),
+      )
+    expect((await rows()).length).toBeGreaterThan(4)
+    Object.assign(OVERVIEW_REGROUP, { rows: 2 })
+    await deleteProject(t, f, f.sub2.id)
+    await runSteps(t)
+    expect(await rows()).toEqual([])
+    await expectCountsExact(t, org_id, 'its rows gone')
+  })
+
+  it('a move of a dead project generation does not touch the current row', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    await stamp(t, org_id)
+    const w = writers(t, f)
+    await w.create({ status: 'todo' })
+    const before = await t.run((ctx) => ctx.db.query('overview_counts').collect())
+    expect(before).toHaveLength(1)
+    await t.run(async (ctx) => {
+      const moves = new CountMoves()
+      const counts = noCounts()
+      counts.leaves.todo = 1
+      moves.addRow(
+        { project_id: f.sub.id, owner_id: undefined, shard: before[0].shard },
+        { org_id, project_at: f.sub._creationTime - 1 },
+        counts,
+        -1,
+      )
+      await moves.apply(ctx.db)
+    })
+    expect(await t.run((ctx) => ctx.db.query('overview_counts').collect())).toEqual(before)
+  })
+
+  it('a call stopped before an organization comes to it fresh, not inside its run', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const w = writers(t, f)
+    await w.create({ status: 'todo' })
+    await calls(t, { dry_run: false })
+    await expectCountsExact(t, f.org.id, 'counted')
+    // a cursor that stopped before the counted organization
+    const got = await backfill(t, {
+      dry_run: false,
+      cursor: {
+        table: 'organizations',
+        cursor: null,
+        org: { id: f.org.id, before: true },
+      },
+    })
+    expect(got).toMatchObject({ counted: 0 })
+    expect(await t.run((ctx) => overviewCountRun(ctx.db, f.org.id))).toBeNull()
+    expect(await t.run((ctx) => countsReady(ctx.db, f.org.id, f.meta.id))).toBe(true)
+  })
 })
 
-const backfill = (t: T, args: { dry_run: boolean; recount?: boolean }) =>
+const backfill = (t: T, args: Omit<RunArgs, never>) =>
   t.action(internal.internal.overviewCountsBackfill.run, args)
 
 type RunArgs = FunctionArgs<typeof internal.internal.overviewCountsBackfill.run>
@@ -823,12 +939,3 @@ const audits = (t: T) =>
         .collect()
     ).map((row) => row.detail),
   )
-
-/** Runs the organization's count steps until it is counted. */
-async function countAll(t: T, org_id: string): Promise<void> {
-  for (let n = 0; n < 200; n++) {
-    const got = await t.mutation(internal.internal.overviewCountsBackfill.step, { org_id })
-    if (got.done) return
-  }
-  throw new Error('the count did not end')
-}
