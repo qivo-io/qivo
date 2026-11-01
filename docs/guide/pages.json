@@ -52,7 +52,10 @@
       "slug": "the-roadmap",
       "title": "The Roadmap",
       "order": 7,
-      "description": "The Roadmap shows scheduled tasks as bars on a weekly timeline. In a project, tasks sit under their sub-projects. All projects and My view group them by…"
+      "description": "The Roadmap shows scheduled tasks as bars on a weekly timeline. In a project, tasks sit under their sub-projects. All projects and My view group them by…",
+      "aliases": {
+        "refresh-remaining-hours-before-you-plan": ["estimates-refresh-the-numbers-before-you-plan"]
+      }
     },
     {
       "file": "will-it-be-ready-in-time-the-delay-status.md",
