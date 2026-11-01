@@ -96,6 +96,11 @@ export async function checkoutOf(root, commit, temporary) {
   return folder
 }
 
+/** The top-level projects of a stand-in workspace of `tasks` tasks (the
+    server's `programs`): one for each 1,000 tasks or part of them, so the
+    Board the app opens holds at most about 1,000 tasks, within its limit. */
+export const programsFor = (tasks) => Math.max(1, Math.ceil(tasks / 1000))
+
 /** Serves the page built into `outDir` on `host` at a free port. Resolves
     its origin and a function that stops the server. */
 export async function serve(outDir, host = '127.0.0.1') {

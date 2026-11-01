@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { checkoutEnvironment } from '../git.mjs'
-import { checkoutOf } from './page.mjs'
+import { checkoutOf, programsFor } from './page.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
 
@@ -13,6 +13,12 @@ let temporary = ''
 afterEach(() => {
   vi.unstubAllEnvs()
   rmSync(temporary, { recursive: true, force: true })
+})
+
+describe('the programs of a stand-in workspace', () => {
+  it('keeps the Board the app opens within its 1,000 tasks', () => {
+    expect([10, 1000, 1200, 3400, 10_000].map(programsFor)).toEqual([1, 1, 2, 4, 10])
+  })
 })
 
 describe('the baseline checkout', () => {

@@ -24,9 +24,10 @@
 //
 // The Board answers one top-level project from the server (tasks:board),
 // at most 1,000 tasks. The workspace spreads its tasks over a top-level
-// project for each 1,000 of them (the stand-in's `programs`), so the one the
-// app opens holds about 1,000 tasks and 900 cards at every size, in a build
-// that filters in the browser as in one that asks the server. The Board's
+// project for each 1,000 of them or part of them (perf/page.mjs
+// programsFor), so the one the app opens holds about 1,000 tasks and 900
+// cards at whole thousands and fewer between them, in a build that filters
+// in the browser as in one that asks the server. The Board's
 // phases wait for its answer where the build marks its state
 // (data-board-state), so they include the round trip and the answer's
 // bytes.
@@ -49,7 +50,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { BaselineError, resolveBaseline } from './benchmark-backend.mjs'
 import { gitIn } from './git.mjs'
-import { buildPage, checkoutOf, serve } from './perf/page.mjs'
+import { buildPage, checkoutOf, programsFor, serve } from './perf/page.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const option = (name, fallback) => {
@@ -341,10 +342,6 @@ const boardComplete = () => {
     every task of the top-level project it opens but the parents, whose
     subtasks are their cards. */
 const boardCards = (page) => page.evaluate(() => window.__perf.boardCards)
-
-/** The top-level projects of a workspace of `tasks` tasks: one for each
-    1,000, so the Board the app opens holds about 1,000 tasks. */
-const programsFor = (tasks) => Math.max(1, Math.round(tasks / 1000))
 
 /** The heap in use after a collection, in MiB, and the page's elements. */
 async function pageSize(page, cdp) {
@@ -1115,7 +1112,7 @@ try {
   if (process.argv.includes('--serve')) {
     for (const target of targets)
       console.log(
-        `Benchmark workspace (${target.label}): ${target.origin}/?tasks=${sizes[0]}&latency=${latency}&mbps=${bandwidth}${varied ? '&shape=varied' : ''}${target.query}`,
+        `Benchmark workspace (${target.label}): ${target.origin}/?tasks=${sizes[0]}&programs=${programsFor(sizes[0])}&latency=${latency}&mbps=${bandwidth}${varied ? '&shape=varied' : ''}${target.query}`,
       )
     // a supervised service stops with SIGTERM
     await new Promise((resolve) => {
