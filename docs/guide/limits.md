@@ -2,6 +2,8 @@ Every limit in Qivo is the same in the app, the REST API and the MCP server. A r
 
 A character is one UTF-16 code unit, the count a browser's text field uses. Most letters count as one and most emoji as two. Qivo trims spaces and line breaks from both ends of a text before counting and stores the trimmed text. A task description or comment keeps the spaces that start its first line, because Markdown reads them.
 
+A view never shows a number it could not count whole as if it were complete. Where a view cannot read everything a figure needs in one request, such as a count over a very large project, it shows that figure as unavailable or asks you to narrow the view, and the other figures stay.
+
 ## Text
 
 | Limit | Value | Past the limit |
