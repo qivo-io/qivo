@@ -29,7 +29,6 @@ import { groupSpan } from '../lib/issueGroups'
 import { autoMoves, dependencyPairs } from '../lib/schedule'
 import { captureWeekDates, restoreWeekDates } from '../lib/weekDrafts'
 import { fitEndWeekAgainst, type LoadItem, plannableHoursOf } from '../lib/workload'
-import { UpdateEstimateModal } from '../panels/UpdateEstimate'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/planner'
 import { LandscapeRoadmap } from './LandscapeRoadmap'
 import { MobileRoadmap } from './MobileRoadmap'
@@ -362,10 +361,6 @@ function Roadmap({
   const trackIds = new Set(tracks.map((tr) => tr.proj.id))
   const projMilestones =
     wide && tracks.length ? info.milestones.filter((m) => trackIds.has(m.project)) : info.milestones
-
-  // "Update Estimate" walk — organization-wide (wider than the roadmap's own
-  // top-project scope), so it lists everything the user can see
-  const [updEst, setUpdEst] = useStateR(false)
 
   const jump = Math.max(1, Math.ceil(NW * 0.2)) // pan = 20% of the span
   const isDefaultWin = P.sameWin(win, winDefault)
@@ -1097,9 +1092,9 @@ function Roadmap({
     winCut ? `. ${winCut}, the most the Roadmap shows` : ''
   }`
 
-  // Keep controls available in empty states so filters can be cleared and
-  // estimates opened. Pass moves explicitly and defer autoArrange through the
-  // click handler: empty returns occur before those bindings are initialized.
+  // Keep controls available in empty states so filters can be cleared. Pass
+  // moves explicitly and defer autoArrange through the click handler: empty
+  // returns occur before those bindings are initialized.
   const toolbarRow = (moves: { id: string; start: number; end: number }[]) => (
     /* The 12px top inset combines with the shell's 12px bottom inset for
        the 24px band below the view switcher. Controls sit one panel gap
@@ -1123,22 +1118,6 @@ function Roadmap({
         {/* the verbs wear the well's shape — quiet, the tighter radius its
             corners leave room for — the way ViewFilters' `ground` decides it */}
         <div data-roadmap-verbs className="flex shrink-0 items-center gap-1">
-          {/* "Estimates" — the button names what the window is about; the
-            window it opens keeps its "Update Estimate" title (deviation #236).
-            Never disabled — an empty scope opens the window with its note
-            instead (deviation #28). The walk is organization-wide anyway, so
-            it needs nothing from the scope and stays on in both sentinel scopes. */}
-          <Button
-            type="button"
-            variant="quiet"
-            className="rounded-sm"
-            data-ue-open
-            onClick={() => setUpdEst(true)}
-            title="Review remaining time by assignee"
-          >
-            <Icon name="clockFading" size={16} />
-            Estimates
-          </Button>
           {/* a milestone lands on ONE project's roadmap (0078) — across every
             them there is no project to put it on, so the button belongs to a
             project scope. Existing flags still render, and drag for people
@@ -1240,10 +1219,10 @@ function Roadmap({
     </>
   )
 
-  /* The frame an empty roadmap keeps: the toolbar and the estimate walk its
-     button can open — everything that still has something to do when there is
-     no grid under it. The window controls are NOT here: they live in the
-     timeline's header, and an empty scope without milestones has no timeline. */
+  /* The frame an empty roadmap keeps: the toolbar, everything that still has
+     something to do when there is no grid under it. The window controls are
+     NOT here: they live in the timeline's header, and an empty scope without
+     milestones has no timeline. */
   const showMobileAgenda =
     mobile && mobileLayout !== 'timeline' && !session && !focusPlan && !revealTask
   const mobileAgenda = (
@@ -1251,27 +1230,23 @@ function Roadmap({
     onAutoCorrect: () => void,
     empty?: React.ReactNode,
   ) => (
-    <>
-      <MobileRoadmap
-        info={info}
-        windowStart={w0}
-        windowEnd={w1}
-        filters={filters}
-        filterControls={filterControls}
-        actions={actions}
-        onTimeline={() => setMobileLayout('timeline')}
-        onUpdateEstimate={() => setUpdEst(true)}
-        corrections={corrections}
-        onAutoCorrect={onAutoCorrect}
-        undoControls={<RoadmapUndo onUndo={undoPlanning} />}
-        section={mobileAgendaSection}
-        onSectionChange={setMobileAgendaSection}
-        taskState={mobileTaskState}
-        onTaskStateChange={setMobileTaskState}
-        empty={empty}
-      />
-      {updEst && <UpdateEstimateModal onClose={() => setUpdEst(false)} />}
-    </>
+    <MobileRoadmap
+      info={info}
+      windowStart={w0}
+      windowEnd={w1}
+      filters={filters}
+      filterControls={filterControls}
+      actions={actions}
+      onTimeline={() => setMobileLayout('timeline')}
+      corrections={corrections}
+      onAutoCorrect={onAutoCorrect}
+      undoControls={<RoadmapUndo onUndo={undoPlanning} />}
+      section={mobileAgendaSection}
+      onSectionChange={setMobileAgendaSection}
+      taskState={mobileTaskState}
+      onTaskStateChange={setMobileTaskState}
+      empty={empty}
+    />
   )
   const withMobileTimeline = (timeline: React.ReactNode) =>
     mobile ? (
@@ -1309,7 +1284,6 @@ function Roadmap({
           <div className="roadmap-view [flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [background:var(--bg)]">
             {timelineToolbar([])}
             {note}
-            {updEst && <UpdateEstimateModal onClose={() => setUpdEst(false)} />}
           </div>,
         )
 
@@ -2347,7 +2321,6 @@ function Roadmap({
           onCancel={cancelPlanning}
         />
       )}
-      {updEst && <UpdateEstimateModal onClose={() => setUpdEst(false)} />}
     </div>,
   )
 }

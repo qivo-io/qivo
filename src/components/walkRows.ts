@@ -1,10 +1,10 @@
-/* The state and row helpers both person-by-person walks share (see walk.tsx
-   for the pieces they render). */
+/* The state and row helpers of Team sync's person-by-person walk (see
+   walk.tsx for the pieces it renders). */
 import { useState } from 'react'
 import { type IssueVM, P } from '@/store/planner'
 
-/** Which walk a piece sits in: its data hooks read `data-<hook>-…`. */
-export type WalkHook = 'ue' | 'sync'
+/** The prefix of a walk piece's data hooks: they read `data-<hook>-…`. */
+export type WalkHook = 'sync'
 
 /** Review ticks: session-local, keyed by task uuid, stored nowhere. An edit
     ticks a row, the tick button toggles it. `count` intersects the caller's
@@ -25,16 +25,6 @@ export function useReviewed() {
   }
 }
 export type Reviewed = ReturnType<typeof useReviewed>
-
-/** Scheduled first by planned start week, then unscheduled by due date
-    (undated last): the same per-track ordering the roadmap uses, so the
-    list reads in "this week first" order. */
-export function rowOrder(a: IssueVM, b: IssueVM) {
-  if (a.start != null && b.start != null) return a.start - b.start
-  if (a.start != null) return -1
-  if (b.start != null) return 1
-  return a.due && b.due ? a.due.localeCompare(b.due) : a.due ? -1 : b.due ? 1 : 0
-}
 
 /** The plan in a row's meta line: `W40` or `W40–W41`, else `due 23 Sep`. */
 export function planHint(it: IssueVM) {

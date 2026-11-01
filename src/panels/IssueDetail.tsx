@@ -3772,8 +3772,8 @@ function IssueDetail({
                           node instead of leaving a number on screen the server
                           doesn't hold — which the next blur would write back.
                           Parsing lives in lib/remaining so this field and the
-                          Update Estimate walk can't drift (empty = unset, and
-                          a stored 0 is a value, not a clear). */}
+                          Team sync walk's Remaining box can't drift (empty =
+                          unset, and a stored 0 is a value, not a clear). */}
                               <Input
                                 data-remaining-input
                                 aria-label="Remaining hours"

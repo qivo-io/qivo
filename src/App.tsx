@@ -2180,9 +2180,9 @@ function App() {
         return tasksLoading ? (
           <TasksLoadingView what="The roadmap" />
         ) : (
-          /* The roadmap's toolbar row is its own — the window controls, the
-             estimate walk and the auto-correct count are all local to it and
-             cannot be handed up to the bar. So the bar hands the FILTERS
+          /* The roadmap's toolbar row is its own — the window controls and
+             the Auto-move count are both local to it and cannot be handed up
+             to the bar. So the bar hands the FILTERS
              down instead, ready-made: App holds the state, the roadmap holds
              the row, and the controls themselves have one definition shared
              with the board, in the same order — but three of them are left

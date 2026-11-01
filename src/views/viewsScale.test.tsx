@@ -131,7 +131,6 @@ describe('a long list on another view', { timeout: BOARD_TEST_TIMEOUT * 4 }, () 
         filterControls={null}
         actions={{}}
         onTimeline={noop}
-        onUpdateEstimate={noop}
         onAutoCorrect={noop}
         corrections={0}
         undoControls={null}

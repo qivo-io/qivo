@@ -117,9 +117,9 @@ function ModalShell({
    * lose for good (a secret shown once). Close, Escape and the footer still
    * close it */
   keepOnOutsideClick?: boolean
-  /** for a dialog whose fields save on their own (Milestones, Update
-   * Estimate). They hold their own close-warning leases, so typing alone
-   * does not count as unsaved until the dialog closes */
+  /** for a dialog whose fields save on their own (Milestones). They hold
+   * their own close-warning leases, so typing alone does not count as
+   * unsaved until the dialog closes */
   savesAsYouGo?: boolean
   /** refuses every close without asking, for a dialog waiting for the
    * server; a phone keeps its Back step */
@@ -254,7 +254,7 @@ function ModalShell({
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2 px-5 pt-0 pb-5">
           {/* a custom footer replaces the Cancel/submit pair — for windows
-              that paginate rather than submit (the Update Estimate walk) */}
+              with no submit, such as Milestones with its Done button */}
           {footer !== undefined ? (
             typeof footer === 'function' ? (
               footer(closeLayer)

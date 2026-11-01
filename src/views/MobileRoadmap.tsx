@@ -26,7 +26,6 @@ type MobileRoadmapProps = {
   filterControls: React.ReactNode
   actions: Record<string, (...args: unknown[]) => void>
   onTimeline: () => void
-  onUpdateEstimate: () => void
   onAutoCorrect: () => void
   corrections: number
   undoControls: React.ReactNode
@@ -114,7 +113,6 @@ export function MobileRoadmap({
   filterControls,
   actions,
   onTimeline,
-  onUpdateEstimate,
   onAutoCorrect,
   corrections,
   undoControls,
@@ -208,10 +206,6 @@ export function MobileRoadmap({
         <Icon name="cog" size={16} /> Planning tools
       </summary>
       <div className="mobile-roadmap-tool-actions">
-        <Button type="button" onClick={onUpdateEstimate}>
-          <Icon name="clockFading" size={16} />
-          Estimates
-        </Button>
         <Button type="button" onClick={onAutoCorrect} disabled={corrections === 0}>
           <Icon name="arrowRightFromLine" size={16} />
           Auto-move{corrections > 0 ? ` (${corrections})` : ''}

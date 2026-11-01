@@ -79,7 +79,7 @@ beforeEach(async () => {
   await act(async () =>
     root.render(
       <TooltipProvider>
-        <RemainingInput hook="ue" it={task} title="Remaining" onCommit={onCommit} />
+        <RemainingInput hook="sync" it={task} title="Remaining" onCommit={onCommit} />
       </TooltipProvider>,
     ),
   )
@@ -94,7 +94,7 @@ afterEach(async () => {
 
 /** Types `hours` into the box and leaves it, which saves. */
 async function enter(hours: string) {
-  const box = container.querySelector<HTMLInputElement>('[data-ue-input]')
+  const box = container.querySelector<HTMLInputElement>('[data-sync-input]')
   if (!box) throw new Error('missing the box')
   await act(async () => {
     box.focus()

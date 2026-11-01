@@ -12,8 +12,8 @@
      mention) stamps the page owner (P.syncStamp) and ticks the row. The tick
      alone stamps nothing, and naming someone from the team opening stamps
      no one.
-   · Ticks are session-local, as in the Estimates walk; the one stored value
-     is each person's last-sync stamp.
+   · Ticks are session-local; the one stored value is each person's
+     last-sync stamp.
    · Where the page is (scope and step) lives in App and the URL; the page
      reports moves through `onPlace` and corrects a place it cannot show. */
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
