@@ -39,6 +39,7 @@ export const weeksOf = (day: string) => ({
     { length: 53 },
     (_, i) => Date.parse(`${day}T00:00:00.000Z`) - (52 - i) * 7 * 86_400_000,
   ),
+  week_end: Date.parse(`${day}T00:00:00.000Z`) + 7 * 86_400_000,
 })
 
 /** The statuses a fixture's leaves cycle through: 30% Done, 30% To do, 20%

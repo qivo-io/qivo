@@ -100,8 +100,8 @@ async function storeOf(t: T, profile: Doc<'profiles'>, now: number): Promise<Sto
 }
 
 /** The client's day and weeks as the store's own timeline gives them: its
- * day, the first day of its week and the instants its last 53 local weeks
- * began at. */
+ * day, the first day of its week, the instants its last 53 local weeks
+ * began at and the instant the next one begins at. */
 function clientDays(P: Store) {
   return {
     day: P.TODAY_ISO,
@@ -109,6 +109,7 @@ function clientDays(P: Store) {
     week_starts: Array.from({ length: 53 }, (_, i) =>
       P.weekToDate(P.TODAY_WEEK - 52 + i).getTime(),
     ),
+    week_end: P.weekToDate(P.TODAY_WEEK + 1).getTime(),
   }
 }
 
@@ -121,6 +122,7 @@ function utcDays(P: Store) {
     week_starts: Array.from({ length: 53 }, (_, i) =>
       Date.parse(`${P.isoFromDate(P.weekToDate(P.TODAY_WEEK - 52 + i))}T00:00:00.000Z`),
     ),
+    week_end: Date.parse(`${P.isoFromDate(P.weekToDate(P.TODAY_WEEK + 1))}T00:00:00.000Z`),
   }
 }
 
@@ -565,6 +567,46 @@ describe('rules a drift would break', () => {
     const { P, scoped, summary } = await adminCase()
     const drifted = scoped.filter((it) => it.status !== 'done' && it.due && it.due < P.TODAY_ISO)
     expect(summary.overdue).not.toEqual({ state: 'ok', count: drifted.length })
+  }, 120_000)
+
+  it('places an instant in the last hour of a fall-back week in that week', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run((ctx) => ctx.db.patch(f.sub._id, { track_delay: true }))
+    const owner = await plantSeat(t, {
+      org_id: f.org.id,
+      org_role: 'user',
+      auth_user_id: `auth_${uuid()}`,
+      plannable_hours: 40,
+    })
+    // New York's week of 26 October is 169 hours long, as its clocks fall
+    // back on 1 November; 04:30 UTC on 2 November is 23:30 on Sunday there,
+    // so 40 hours at 40 a week finish in that week, the task's due week
+    await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Measured in the last hour',
+      assignee_id: owner.id,
+      start_week: '2026-10-26',
+      end_week: '2026-10-26',
+      due_date: '2026-11-01',
+      remaining_hours: 40,
+      remaining_set_at: '2026-11-02T04:30:00.000Z',
+    })
+    await countOrg(t, f.org.id)
+    const P = await storeOf(t, f.admin, Date.parse('2026-11-02T04:45:00.000Z'))
+    const days = clientDays(P)
+    expect(days.day).toBe('2026-11-01')
+    expect(days.week_end - days.week_starts[52]).toBe(169 * 3_600_000)
+    const scope = projectScope(f.admin, f.sub.id)
+    expect(await expectParity(t, P, f.admin, scope, f.sub.id, 'fall-back week')).toBe(1)
+    // a week measured as 168 hours places the instant in the next one
+    const fixed = { ...days, week_end: days.week_starts[52] + 168 * 3_600_000 }
+    const local = await as(t, f.admin).query(api.overview.risk, { scope, ...days })
+    const drifted = await as(t, f.admin).query(api.overview.risk, { scope, ...fixed })
+    if (local.state !== 'ok' || drifted.state !== 'ok')
+      throw new Error(JSON.stringify([local, drifted]))
+    expect(drifted.projected).not.toEqual(local.projected)
   }, 120_000)
 
   it('differs from a server that places remaining_set_at in its UTC week', async () => {

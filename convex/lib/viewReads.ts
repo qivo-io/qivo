@@ -135,15 +135,25 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
   // was taken since it, so another look would show no more
   let room: Reads = { bytes: 0, documents: 0, ranges: 0 }
   let looked = false
+  // the room kept through every look for reads the view makes later (hold)
+  let held: Reads = { bytes: 0, documents: 0, ranges: 0 }
   const look = async () => {
     const m = await ctx.meta.getTransactionMetrics()
     looked = true
     room = {
-      bytes: Math.min(reads.bytes - (m.bytesRead.used + extra), REAL_BYTES - m.bytesRead.used),
-      documents: reads.documents - m.documentsRead.used,
-      ranges: reads.ranges - m.databaseQueries.used,
+      bytes:
+        Math.min(reads.bytes - (m.bytesRead.used + extra), REAL_BYTES - m.bytesRead.used) -
+        held.bytes,
+      documents: reads.documents - m.documentsRead.used - held.documents,
+      ranges: reads.ranges - m.databaseQueries.used - held.ranges,
     }
   }
+  /* `held` with `n` more reads of `cost` */
+  const holding = (cost: Reads, n: number): Reads => ({
+    bytes: held.bytes + n * cost.bytes,
+    documents: held.documents + n * cost.documents,
+    ranges: held.ranges + n * cost.ranges,
+  })
   /* how many reads of `cost` the room holds beside `base`, -1 when it
    * does not hold `base` */
   const roomFor = (cost: Reads, base: Reads = NONE): number => {
@@ -191,7 +201,7 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
     spend(cost, n)
     return n
   }
-  const bytes = () => Math.min(reads.bytes - extra, REAL_BYTES)
+  const bytes = () => Math.min(reads.bytes - extra, REAL_BYTES) - held.bytes
   return {
     count,
     upTo,
@@ -202,6 +212,18 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
     /** Gives back the room of `n` reads of `cost` that a read took and did
      * not make. */
     giveBack: (cost: Reads, n: number): void => spend(cost, -n),
+    /** Takes room for `n` reads of `cost` the view makes later, and keeps it
+     * through every look until release gives it back just before them, or
+     * throws OverBudget. */
+    hold: async (cost: Reads, n = 1): Promise<void> => {
+      await upTo(cost, n, n)
+      held = holding(cost, n)
+    },
+    /** Gives back the room of `n` reads of `cost` that hold kept. */
+    release: (cost: Reads, n: number): void => {
+      held = holding(cost, -n)
+      spend(cost, -n)
+    },
     /** Drops the room taken from the last look, so the next read looks
      * again first, after reads made outside the guard, as the description
      * readers make them by the request's totals (ceiling). */
@@ -221,12 +243,16 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
       extra -= size - getDocumentSize(doc as Parameters<typeof getDocumentSize>[0])
     },
     /** The request's totals the reads keep under, with the fixed charges
-     * folded in as they stand when a check reads them, for the description
-     * readers that step by them (model/descriptions.ts descriptionsOf and
-     * projectTextReader). */
+     * folded in and the held room left out as they stand when a check reads
+     * them, for the readers that step by them (model/descriptions.ts
+     * descriptionsOf and projectTextReader, lib/overview.ts loadRoom). */
     ceiling: {
-      ranges: reads.ranges,
-      documents: reads.documents,
+      get ranges() {
+        return reads.ranges - held.ranges
+      },
+      get documents() {
+        return reads.documents - held.documents
+      },
       get bytes() {
         return bytes()
       },
@@ -274,7 +300,7 @@ export const PROJECT_ASK: Reads = {
 }
 
 /** One project row read by id, for whether it is live. */
-const PROJECT_READ: Reads = { bytes: PROJECT_ROW_MAX_BYTES, documents: 1, ranges: 1 }
+export const PROJECT_READ: Reads = { bytes: PROJECT_ROW_MAX_BYTES, documents: 1, ranges: 1 }
 
 /** One project row as a range of them returns it. */
 const PROJECT_ROW: Reads = { bytes: PROJECT_ROW_MAX_BYTES, documents: 1, ranges: 0 }

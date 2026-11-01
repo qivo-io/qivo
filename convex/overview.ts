@@ -31,7 +31,8 @@
  * for every reason, or with `reason: 'access_unchecked'` and its sentence
  * where a bound of the caller's own access reads stopped a check
  * (lib/access.ts accessUnchecked), and `over_budget` where the scope's own
- * selection did not fit. Then each figure is a figure or unavailable on its
+ * selection, or a list batch's reads before it judged one candidate, did
+ * not fit. Then each figure is a figure or unavailable on its
  * own (`counting`, `budget` or `loads`), never a smaller number, and a list
  * batch says whether it is complete. The day and the weeks are the
  * client's (lib/overview.ts clockOf), passed as arguments, because a query
@@ -43,7 +44,8 @@
  * plannable hours or a project's delay tracking; the summary's counts rerun
  * only when a count row of the scope moves. authedQuery, not orgQuery, as My
  * view spans seats and a project scope whose seat goes away answers
- * `unavailable` instead of throwing in a subscription. */
+ * `unavailable` instead of throwing in a subscription; list positions are
+ * bound to the login, so no seat change refuses them. */
 
 import { v } from 'convex/values'
 import { authedQuery } from './lib/functions'
@@ -55,7 +57,12 @@ const vScope = v.union(
 )
 
 /* The client's day and weeks (lib/overview.ts clockOf). */
-const vWeeks = { day: v.string(), week: v.string(), week_starts: v.array(v.number()) }
+const vWeeks = {
+  day: v.string(),
+  week: v.string(),
+  week_starts: v.array(v.number()),
+  week_end: v.number(),
+}
 
 export const summary = authedQuery({
   args: { scope: vScope, day: v.string() },
@@ -69,10 +76,10 @@ export const risk = authedQuery({
 
 export const attention = authedQuery({
   args: { scope: vScope, ...vWeeks, cursor: v.optional(v.string()), end: v.optional(v.string()) },
-  handler: (ctx, args) => readAttention(ctx, ctx.myProfiles, args),
+  handler: (ctx, args) => readAttention(ctx, ctx.myProfiles, ctx.authUserId, args),
 })
 
 export const paused = authedQuery({
   args: { scope: vScope, cursor: v.optional(v.string()), end: v.optional(v.string()) },
-  handler: (ctx, args) => readPaused(ctx, ctx.myProfiles, args),
+  handler: (ctx, args) => readPaused(ctx, ctx.myProfiles, ctx.authUserId, args),
 })

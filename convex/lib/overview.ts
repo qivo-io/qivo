@@ -42,11 +42,13 @@
  *   capacity: an owner that does not fit makes the figure unavailable.
  *
  * The client passes its day (`day`, YYYY-MM-DD), the first day of its
- * current week (`week`) and the instants its last 53 local weeks began at
- * (`week_starts`), because the app judges dates in the browser's time zone
- * and a query has no zone data (the Convex runtime has no Intl). Days fall
- * in weeks by day arithmetic from `week`, and an instant (remaining_set_at)
- * by those instants, so every verdict matches the app's local weeks.
+ * current week (`week`), the instants its last 53 local weeks began at
+ * (`week_starts`) and the instant its next week begins at (`week_end`),
+ * because the app judges dates in the browser's time zone and a query has
+ * no zone data (the Convex runtime has no Intl). Days fall in weeks by day
+ * arithmetic from `week`, and an instant (remaining_set_at) by those
+ * instants, so every verdict matches the app's local weeks, the current
+ * one included when a daylight-saving change makes it 167 or 169 hours.
  *
  * The lists are read in one total order of positions, earliest due date
  * first, undated last, then creation time and document id, merged across
@@ -54,13 +56,15 @@
  * batch answers at most OVERVIEW.batch rows, `complete` false where its
  * reads stopped before the batch or the list ended, a sealed `next` that is
  * null only at the list's true end, and a sealed `end`, its last position.
+ * An At-risk candidate whose owner's load no batch can read is a row whose
+ * risk is `unknown`, so the list goes on past it.
  * A batch asked again with its `end` holds exactly the rows between its
  * start and that end, so rows that change due date, pause or verdict move
  * between batches and none is duplicated or skipped; one that grows past
  * OVERVIEW.split rows answers `split` with a middle position. Positions are
- * sealed (lib/archiveCursorSeal.ts) and bound to their list, scope and
- * days, because in My view one can fall on the person's own task in a
- * project they cannot see. */
+ * sealed (lib/archiveCursorSeal.ts) and bound to their list, the login,
+ * the scope and the days (listKey), because in My view one can fall on the
+ * person's own task in a project they cannot see. */
 
 import type { TransactionMetrics } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
@@ -105,6 +109,8 @@ import {
   noSubtasks,
   ownerSettled,
   ownHeldTasks,
+  PROJECT_ASK,
+  PROJECT_READ,
   projectSelection,
   RANGE,
   type Reads,
@@ -184,7 +190,9 @@ export type Figure<T extends object> =
  * that is not a meta), with `reason` and its sentence where a bound of the
  * caller's own access reads stopped a check (lib/access.ts
  * accessUnchecked), which is never answered as no access or a smaller
- * figure; `over_budget` where the scope's own selection did not fit. */
+ * figure; `over_budget` where the scope's own selection did not fit, or a
+ * list batch's reads before it judged one candidate, such as My view's
+ * reviewer range. */
 export type ScopeRefusal =
   | { state: 'unavailable'; reason?: typeof ACCESS_UNCHECKED; message?: string }
   | { state: 'over_budget' }
@@ -220,11 +228,18 @@ export type RiskAnswer =
   | ScopeRefusal
 
 /** A list row: the task as the Board sends it (lib/viewReads.ts viewRow),
- * and on an At-risk row whether it is overdue, by its due date, or
- * projected late, with the first day of the week it is projected to finish
- * in on the client's weeks (null where that is not known). */
+ * and on an At-risk row whether it is overdue, by its due date; projected
+ * late, with the first day of the week it is projected to finish in on the
+ * client's weeks (null where that is not known); or `unknown`, a candidate
+ * whose projection needs an owner's load no batch can read (the owner
+ * reader's bounds, or a guest's one-owner rule), which the list keeps so
+ * it can go on past it and may not be late. A list holding one is not
+ * whole. */
 export type OverviewRow = ViewRow & {
-  at_risk?: { kind: 'overdue' } | { kind: 'projected'; finish_week: string | null }
+  at_risk?:
+    | { kind: 'overdue' }
+    | { kind: 'projected'; finish_week: string | null }
+    | { kind: 'unknown' }
 }
 
 /** What overview.attention and overview.paused answer. */
@@ -269,6 +284,11 @@ function dayArg(value: string, name: string): number {
 /** How many local weeks `week_starts` holds: this one and the 52 before. */
 export const WEEK_STARTS = 53
 
+/* How far a local week may be from 7 days long: a daylight-saving change
+ * moves a week's start by an hour in most zones and by two in a few, such
+ * as Antarctica/Troll's. */
+const WEEK_SLACK_MS = 3 * 3_600_000
+
 /** The day and the weeks a verdict is judged by, on the client's grid:
  * week 0 is the client's current week. */
 export type Clock = {
@@ -283,16 +303,25 @@ export type Clock = {
 }
 
 /**
- * The clock of `day`, `week` and `week_starts`, or a badRequest where one
- * is malformed: `day` and `week` not real days, `week` not the first day of
- * a week holding `day`, or `week_starts` not exactly WEEK_STARTS instants in
- * milliseconds, ascending, each within an hour of 7 days after the one
- * before (a daylight-saving change moves a local week's start by an hour).
- * An instant before the first start falls in whole weeks of 7 days before
- * it, exact unless a daylight-saving change lies before the window, and
- * then only within an hour of a week's start.
+ * The clock of `day`, `week`, `week_starts` and `week_end`, or a badRequest
+ * where one is malformed: `day` and `week` not real days, `week` not the
+ * first day of a week holding `day`, `week_starts` not exactly WEEK_STARTS
+ * instants in milliseconds, ascending, each within three hours of 7 days
+ * after the one before (a daylight-saving change), or `week_end`, the
+ * instant the next local week begins at, not as far after the last of them.
+ * An instant falls in the local week whose start it is at or after and
+ * whose end it is before, so a week a daylight-saving change makes 167 or
+ * 169 hours long ends where the client's does. One before the first start
+ * falls in whole weeks of 7 days before it, and one after `week_end` in
+ * whole weeks after it, exact unless a daylight-saving change lies past
+ * the window, and then only within an hour of a week's start.
  */
-export function clockOf(a: { day: string; week: string; week_starts: readonly number[] }): Clock {
+export function clockOf(a: {
+  day: string
+  week: string
+  week_starts: readonly number[]
+  week_end: number
+}): Clock {
   const today = dayArg(a.day, 'day')
   const first = dayArg(a.week, 'week')
   if (today - first < 0 || today - first > 6)
@@ -303,15 +332,19 @@ export function clockOf(a: { day: string; week: string; week_starts: readonly nu
       `week_starts must hold the ${WEEK_STARTS} instants the last weeks began at, in milliseconds`,
     )
   for (let i = 1; i < starts.length; i++)
-    if (Math.abs(starts[i] - starts[i - 1] - WEEK_MS) > 3_600_000)
+    if (Math.abs(starts[i] - starts[i - 1] - WEEK_MS) > WEEK_SLACK_MS)
       throw badRequest('week_starts must be ascending, a week apart')
   const last = starts.length - 1
+  const end = a.week_end
+  if (!Number.isSafeInteger(end) || Math.abs(end - starts[last] - WEEK_MS) > WEEK_SLACK_MS)
+    throw badRequest('week_end must be the instant the week after the last of week_starts began at')
   return {
     day: a.day,
     ofDay: (iso) => Math.floor((dayNumber(iso) - first) / 7),
     ofInstant: (instant) => {
       const ms = Date.parse(instant)
-      if (ms >= starts[last]) return Math.floor((ms - starts[last]) / WEEK_MS)
+      if (ms >= end) return 1 + Math.floor((ms - end) / WEEK_MS)
+      if (ms >= starts[last]) return 0
       if (ms < starts[0]) return -last - Math.ceil((starts[0] - ms) / WEEK_MS)
       let lo = 0
       let hi = last
@@ -367,8 +400,8 @@ async function scopeOf(
 
 /* `read`'s answer over the scope, or the scope's refusal: unavailable for a
  * scope the caller does not hold or where a bound of the caller's own
- * access reads stopped a check, over_budget where the scope itself did not
- * fit. */
+ * access reads stopped a check, over_budget where the scope itself, or a
+ * read no figure or batch answers for itself, did not fit. */
 async function overScope<A>(
   ctx: QueryCtx,
   profiles: ReadonlyMap<string, Doc<'profiles'>>,
@@ -377,16 +410,13 @@ async function overScope<A>(
 ): Promise<A | ScopeRefusal> {
   const guard = viewBudget(ctx, OVERVIEW.reads)
   try {
-    let at: ScopeRead | null
-    try {
-      at = await scopeOf(ctx, guard, profiles, scope)
-    } catch (e) {
-      if (isOverBudget(e)) return { state: 'over_budget' }
-      throw e
-    }
+    const at = await scopeOf(ctx, guard, profiles, scope)
     if (at === null) return UNAVAILABLE
     return await read(guard, at)
   } catch (e) {
+    // a read the figures do not catch themselves, such as the scope's
+    // selection or a list's own reads, which answers no part of a list
+    if (isOverBudget(e)) return { state: 'over_budget' }
     if (isAccessUnchecked(e))
       return { state: 'unavailable', reason: ACCESS_UNCHECKED, message: e.data.message }
     throw e
@@ -434,12 +464,14 @@ async function projectCounts(
 }
 
 /* The counts of each seat's person in the live sub-projects they can see,
- * by sub-project id: every count row of the person (model/overviewCounts.ts
- * ownerRows, one range a seat), then whether each row's project is live, a
- * sub-project and one they see, then the readiness of the organization and
- * of each family those sub-projects belong to. The rows of projects they
- * cannot see are read too; they are alike in size, so only how many there
- * are can move an answer, at the budget's margin. */
+ * by sub-project id, or null while any seat's organization is not counted,
+ * a backfill counts it or a regroup runs in it: for each seat the
+ * organization's readiness and its first regroup row (three ranges), every
+ * count row of the person (model/overviewCounts.ts ownerRows, one range),
+ * then whether each row's project is live, a sub-project and one they see.
+ * The rows of projects they cannot see are read too; they are alike in
+ * size, so only how many there are can move an answer, at the budget's
+ * margin. */
 async function mineCounts(
   ctx: QueryCtx,
   guard: ViewBudget,
@@ -447,6 +479,17 @@ async function mineCounts(
 ): Promise<Map<string, LeafCounts> | null> {
   const out = new Map<string, LeafCounts>()
   for (const seat of seats.values()) {
+    // every seat's organization counted, with no count or regroup under way
+    // in it, before its rows say anything: a person may hold no row yet in
+    // an organization still counting, or in a family a regroup is reading
+    await guard.take(RANGE, 3)
+    const state = await orgCountState(ctx.db, seat.me.org_id)
+    if (!state.stamped || state.run !== null) return null
+    const regroup = await ctx.db
+      .query('overview_regroups')
+      .withIndex('by_org', (q) => q.eq('org_id', seat.me.org_id))
+      .first()
+    if (regroup !== null) return null
     const rows: Doc<'overview_counts'>[] = []
     for await (const step of inSteps(guard, [ownerRange(ctx, seat.me.id)], COUNT_ROW))
       rows.push(...step)
@@ -460,13 +503,6 @@ async function mineCounts(
       const p = await seat.project(id)
       if (shown[i] && p !== null && p.parent_id !== undefined) subs.push(p)
     }
-    if (subs.length === 0) continue
-    const families = [...new Set(subs.map((p) => p.parent_id as string))]
-    await guard.take(RANGE, 2 + families.length)
-    const state = await orgCountState(ctx.db, seat.me.org_id)
-    if (!state.stamped || state.run !== null) return null
-    const regroups = await settled(families.map((id) => overviewRegroupOf(ctx.db, id)))
-    if (regroups.some((r) => r !== null)) return null
     for (const p of subs) {
       const counts = countsOfRows(byProject.get(p.id) ?? [], p)
       if (counts === null) return null
@@ -810,14 +846,15 @@ const STEP_HOLD: ReadCeiling = {
 
 /** The room of the owner reader of an Overview query whose owner reads
  * start at `start`: lib/ownerLoads.ts OWNER_LOADS.call from there past the
- * access instance's shared reads, and within OVERVIEW.reads less STEP_HOLD
- * where a round may read the caller's own rows at once, as
- * lib/machineDelay.ts delayRoom builds it, so the loads share the query's
- * own budget and never pass Convex's limits. */
+ * access instance's shared reads, and within the query's `guard` (its
+ * ceiling, without the room it holds) less STEP_HOLD where a round may read
+ * the caller's own rows at once, as lib/machineDelay.ts delayRoom builds
+ * it, so the loads share the query's own budget and never pass Convex's
+ * limits. */
 const loadRoom =
-  (start: TransactionMetrics): ReadRoom =>
+  (start: TransactionMetrics, guard: ViewBudget): ReadRoom =>
   (m, shared, wide) => {
-    const budget = OVERVIEW.reads
+    const budget = guard.ceiling
     const hold = wide ? STEP_HOLD : { ranges: 0, documents: 0, bytes: 0 }
     const since = (now: number, then: number, own: number) => now - then - own
     return {
@@ -930,7 +967,7 @@ export function verdicts(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats, clo
       reader = ownerLoadReader(ctx, {
         me: seat.me,
         access,
-        room: loadRoom(await ctx.meta.getTransactionMetrics()),
+        room: loadRoom(await ctx.meta.getTransactionMetrics(), guard),
       })
       readers.set(orgId, reader)
     }
@@ -1072,23 +1109,24 @@ const LIST_VERSION: Record<ListKind, string> = {
  * seals to, so only junk is refused unopened. */
 const POSITION_MAX = 4096
 
-/** The key a list's positions are bound to: the list, the reader's seats,
- * the scope and the days its rows follow. A position from another key is
- * refused. */
+/** The key a list's positions are bound to: the list, the login (its
+ * auth user id), the scope and the days and weeks its rows follow, of one
+ * length whatever seats the login holds, so a seat gained or lost keeps the
+ * login's positions, and a scope whose seat is gone answers unavailable. A
+ * position from another key is refused. */
 async function listKey(
   kind: ListKind,
-  profiles: ReadonlyMap<string, Doc<'profiles'>>,
+  login: string,
   scope: OverviewScope,
   day: string,
-  weeks?: { week: string; week_starts: readonly number[] },
+  weeks?: { week: string; week_starts: readonly number[]; week_end: number },
 ): Promise<string> {
-  const seats = [...profiles.values()].map((p) => p.id).sort()
   const where = scope.kind === 'project' ? [scope.org_id, scope.project_id] : 'mine'
   const days =
     weeks === undefined
       ? [day]
-      : [day, weeks.week, await digestText(JSON.stringify(weeks.week_starts))]
-  return JSON.stringify([kind, seats, where, days])
+      : [day, weeks.week, await digestText(JSON.stringify([weeks.week_starts, weeks.week_end]))]
+  return JSON.stringify([kind, login, where, days])
 }
 
 /** `pos` sealed for list `kind` and `key`; a null position is the list's
@@ -1147,14 +1185,15 @@ const TIES = 4
 
 /** One ordered range of candidates (a source): the least position its rows
  * can hold, and a read of up to `n` rows after `after` (from its start when
- * null) in position order, answering them, how many rows it read, the ones
- * at `after` it left out included, and whether the source has no more. */
+ * null) in position order, answering them, every row its reads returned,
+ * the ones at `after` it left out and those past `n` included, and whether
+ * the source has no more. */
 type Source = {
   floor: Pos
   read(
     after: Pos | null,
     n: number,
-  ): Promise<{ rows: Doc<'issues'>[]; read: number; done: boolean }>
+  ): Promise<{ rows: Doc<'issues'>[]; returned: Doc<'issues'>[]; done: boolean }>
 }
 
 const LOWEST = (undated: boolean, due: string): Pos => ({
@@ -1181,11 +1220,11 @@ function datedSource(
     floor: LOWEST(false, from),
     read: async (after, n) => {
       const rows: Doc<'issues'>[] = []
-      let read = 0
+      const returned: Doc<'issues'>[] = []
       let part: DuePart = { kind: 'from', from, below }
-      if (after?.undated) return { rows, read, done: true }
+      if (after?.undated) return { rows, returned, done: true }
       if (after !== null && after.due >= from) {
-        if (after.due >= below) return { rows, read, done: true }
+        if (after.due >= below) return { rows, returned, done: true }
         // the rest of `after`'s due date, then the later due dates; a take
         // that only found rows at `after` reads further
         for (let take = n + TIES; ; take *= 2) {
@@ -1194,21 +1233,21 @@ function datedSource(
             due: after.due,
             from: after.at,
           }).take(take)
-          read += same.length
+          returned.push(...same)
           const past = same.filter((t) => pastPos(t, after))
           if (same.length === take && past.length === 0) continue
           rows.push(...past)
-          if (same.length === take) return { rows: rows.slice(0, n), read, done: false }
+          if (same.length === take) return { rows: rows.slice(0, n), returned, done: false }
           break
         }
         part = { kind: 'later', after: after.due, below }
       }
       const need = n - rows.length
-      if (need <= 0) return { rows: rows.slice(0, n), read, done: false }
+      if (need <= 0) return { rows: rows.slice(0, n), returned, done: false }
       const later = await dueQuery(ctx, key, paused, part).take(need)
-      read += later.length
+      returned.push(...later)
       rows.push(...later)
-      return { rows, read, done: later.length < need }
+      return { rows, returned, done: later.length < need }
     },
   }
 }
@@ -1227,7 +1266,7 @@ function undatedSource(ctx: QueryCtx, key: DueKey, paused: boolean): Source {
         if (got.length === take && past.length === 0) continue
         return {
           rows: past.slice(0, n),
-          read: got.length,
+          returned: got,
           done: got.length < take && past.length <= n,
         }
       }
@@ -1235,14 +1274,15 @@ function undatedSource(ctx: QueryCtx, key: DueKey, paused: boolean): Source {
   }
 }
 
-/* The rows `rows`, read before, as a source, in position order. */
+/* The rows `rows`, read and charged before, as a source, in position
+ * order, which returns no row from the database again. */
 function heldSource(rows: readonly Doc<'issues'>[]): Source {
   const sorted = [...rows].sort((a, b) => comparePos(posOf(a), posOf(b)))
   return {
-    floor: sorted.length === 0 ? LOWEST(true, '￿') : posOf(sorted[0]),
+    floor: sorted.length === 0 ? LOWEST(true, ANY_DAY) : posOf(sorted[0]),
     read: async (after, n) => {
       const past = sorted.filter((t) => pastPos(t, after))
-      return { rows: past.slice(0, n), read: 0, done: past.length <= n }
+      return { rows: past.slice(0, n), returned: [], done: past.length <= n }
     },
   }
 }
@@ -1308,10 +1348,11 @@ async function fill(
     const step = wanting.slice(at, at + ranges)
     at += ranges
     const got = await settled(step.map((s) => s.src.read(s.last, each)))
-    guard.giveBack(ROW, n - got.reduce((total, g) => total + g.read, 0))
+    guard.giveBack(ROW, n - got.reduce((total, g) => total + g.returned.length, 0))
     for (const [i, g] of got.entries()) {
       const s = step[i]
-      for (const t of g.rows) read(t)
+      // every row a read returned counts once, those it left out included
+      for (const t of g.returned) read(t)
       s.buf.push(...g.rows)
       const last = g.rows.at(-1)
       if (last !== undefined) s.last = posOf(last)
@@ -1326,9 +1367,9 @@ async function fill(
 const JUDGE = 16
 
 /** What a list makes of a candidate it judged: a row, with what an At-risk
- * row says; no row; or `stop` where its verdict needs an owner's load that
- * could not be read, so the batch ends before it. */
-type Judged = { row: OverviewRow['at_risk'] | true } | { drop: true } | { stop: true }
+ * row says; no row; or `stop`, naming the owner whose load its verdict
+ * needs and could not be read, so the batch ends before it. */
+type Judged = { row: OverviewRow['at_risk'] | true } | { drop: true } | { stop: string }
 
 /** One list over a scope: its sources and how it judges a round of
  * candidates, in order, with what the batch read of them. */
@@ -1338,18 +1379,32 @@ type ListSpec = {
 }
 
 /** What a batch read: the rows it keeps with their extras, in order; the
- * last candidate it judged; whether its reads stopped short; and the reads
- * by id it holds back for the parents of its rows (shownIds). */
+ * last candidate it judged; whether its reads stopped short; and the
+ * parents of its rows it holds room back for (shownIds). */
 type BatchRead = {
   rows: { task: Doc<'issues'>; at_risk?: OverviewRow['at_risk'] }[]
   last: Pos | null
   stopped: boolean
-  parents: number
+  parents: Set<string>
+}
+
+/* What reading one row's parent may take (shownIds): the parent by id, and
+ * whether the reader is shown it, its project's row and the access question
+ * about that project, held as the batch keeps the row (ViewBudget hold), so
+ * a batch its budget stopped still answers the rows it kept. */
+const PARENT_READ: Reads = {
+  ranges: BY_ID.ranges + PROJECT_READ.ranges + PROJECT_ASK.ranges,
+  documents: BY_ID.documents + PROJECT_READ.documents + PROJECT_ASK.documents,
+  bytes: BY_ID.bytes + PROJECT_READ.bytes + PROJECT_ASK.bytes,
 }
 
 /* The candidates of `spec` after `from`, up to `end` when given, judged in
  * order until `want` rows are kept, the candidates end, or the reads stop
- * (a budget, or a verdict without its owner's load). */
+ * (a budget, or a verdict without its owner's load). A candidate that stops
+ * the batch before it judged any other can never be judged by a later one,
+ * as a later batch starts at it with the same reads, so it is kept as a row
+ * whose risk is unknown and the batch goes on past it, as it does past the
+ * later candidates of that owner. */
 async function readBatch(
   guard: ViewBudget,
   spec: ListSpec,
@@ -1359,11 +1414,22 @@ async function readBatch(
   want: number,
   charge: (t: Doc<'issues'>) => void,
 ): Promise<BatchRead> {
-  const out: BatchRead = { rows: [], last: from, stopped: false, parents: 0 }
+  const out: BatchRead = { rows: [], last: from, stopped: false, parents: new Set() }
   const candidates = inOrder(guard, spec.sources, from, charge)
+  // the owners whose loads no batch can read
+  const unread = new Set<string>()
+  /* keeps `t` as a row, with room for reading its parent */
+  const keep = async (t: Doc<'issues'>, at_risk?: OverviewRow['at_risk']) => {
+    if (t.parent_id !== undefined && !out.parents.has(t.parent_id)) {
+      await guard.hold(PARENT_READ)
+      out.parents.add(t.parent_id)
+    }
+    out.last = posOf(t)
+    out.rows.push(at_risk === undefined ? { task: t } : { task: t, at_risk })
+  }
   try {
     for (let ended = false; !ended && out.rows.length < want; ) {
-      const round: Doc<'issues'>[] = []
+      let round: Doc<'issues'>[] = []
       while (round.length < JUDGE) {
         const next = await candidates.next()
         if (next.done === true || (end !== null && comparePos(posOf(next.value), end) > 0)) {
@@ -1372,22 +1438,29 @@ async function readBatch(
         }
         round.push(next.value)
       }
-      if (round.length === 0) break
-      const judged = await spec.judge(round, g)
-      for (const [i, t] of round.entries()) {
-        const j = judged[i]
-        if ('stop' in j) {
-          out.stopped = true
-          return out
+      while (round.length > 0) {
+        const judged = await spec.judge(round, g)
+        let rest: Doc<'issues'>[] = []
+        for (const [i, t] of round.entries()) {
+          const j = judged[i]
+          if ('stop' in j) {
+            if (out.last !== from && !unread.has(j.stop)) {
+              out.stopped = true
+              return out
+            }
+            // nothing judged before it, or an owner it could not read then:
+            // unknown, and on past it
+            unread.add(j.stop)
+            await keep(t, { kind: 'unknown' })
+            if (out.rows.length >= want) return out
+            rest = round.slice(i + 1)
+            break
+          }
+          if ('row' in j) await keep(t, j.row === true ? undefined : j.row)
+          else out.last = posOf(t)
+          if (out.rows.length >= want) return out
         }
-        if ('row' in j && t.parent_id !== undefined) {
-          // room for reading its parent, before the row counts as read
-          await guard.take(BY_ID)
-          out.parents++
-        }
-        out.last = posOf(t)
-        if ('row' in j) out.rows.push(j.row === true ? { task: t } : { task: t, at_risk: j.row })
-        if (out.rows.length >= want) return out
+        round = rest
       }
     }
   } catch (e) {
@@ -1431,10 +1504,36 @@ async function shownIds(
   return shown
 }
 
+/** The candidates a My view list read in projects the reader may not
+ * see, each counted at lib/limits.ts TASK_ROW_MAX_BYTES each time a read
+ * returned it, until it turns out to be a row of the batch, shown to the
+ * reader, which counts at its real size. A project scope's candidates are
+ * all shown. */
+function charges(guard: ViewBudget, at: ScopeRead) {
+  const times = new Map<string, number>()
+  return {
+    /** Counts `t`, which a read returned, at its fixed size. */
+    charge: (t: Doc<'issues'>): void => {
+      if (at.kind === 'project') return
+      guard.charge(t, TASK_ROW_MAX_BYTES)
+      times.set(t._id, (times.get(t._id) ?? 0) + 1)
+    },
+    /** Counts `t`, a row of the batch, at its real size. */
+    shown: (t: Doc<'issues'>): void => {
+      for (let n = times.get(t._id) ?? 0; n > 0; n--) guard.refund(t, TASK_ROW_MAX_BYTES)
+      times.delete(t._id)
+    },
+  }
+}
+
+/** What charges answers. */
+type Charges = ReturnType<typeof charges>
+
 /**
  * One batch of list `kind` over the scope `at`, after `from` (its start when
  * null), up to `end` when the client asks the batch again with its fixed
- * end, as ListAnswer states it.
+ * end, as ListAnswer states it, or `over_budget` where its budget stopped it
+ * before it judged a candidate.
  */
 async function listBatch(
   ctx: QueryCtx,
@@ -1445,18 +1544,13 @@ async function listBatch(
   spec: ListSpec,
   from: Pos | null,
   end: Pos | null,
+  c: Charges,
 ): Promise<ListAnswer> {
   const g = newGroups()
-  // a candidate read in a project the reader cannot see counts at a fixed
-  // size, and at its real size once it turns out to be shown (My view)
-  const charged = new Map<string, number>()
-  const charge = (t: Doc<'issues'>) => {
-    if (at.kind === 'project') return
-    guard.charge(t, TASK_ROW_MAX_BYTES)
-    charged.set(t._id, (charged.get(t._id) ?? 0) + 1)
-  }
   const want = end === null ? OVERVIEW.batch + 1 : OVERVIEW.split + 1
-  const got = await readBatch(guard, spec, g, from, end, want, charge)
+  const got = await readBatch(guard, spec, g, from, end, want, c.charge)
+  // a batch that could not judge one candidate would answer its own start
+  if (got.stopped && got.rows.length === 0 && got.last === from) return { state: 'over_budget' }
   const seal = (pos: Pos | null) => sealPos(kind, key, pos)
   let kept = got.rows
   let split: string | undefined
@@ -1464,7 +1558,9 @@ async function listBatch(
   let next: string | null
   let last: string | null
   if (end === null) {
-    if (got.rows.length > OVERVIEW.batch) {
+    // a batch is whole once it holds OVERVIEW.batch rows, whatever stopped
+    // the look past them
+    if (got.rows.length > OVERVIEW.batch || (got.stopped && got.rows.length === OVERVIEW.batch)) {
       kept = got.rows.slice(0, OVERVIEW.batch)
       last = await seal(posOf(kept[kept.length - 1].task))
       next = last
@@ -1489,10 +1585,9 @@ async function listBatch(
     next = got.stopped ? await seal(got.last) : last
   }
   // the rows are shown, so they count at their real size
-  for (const { task } of kept)
-    for (let n = charged.get(task._id) ?? 0; n > 0; n--) guard.refund(task, TASK_ROW_MAX_BYTES)
+  for (const { task } of kept) c.shown(task)
   const tasks = kept.map((r) => r.task)
-  guard.giveBack(BY_ID, got.parents)
+  guard.release(PARENT_READ, got.parents.size)
   const shown = await shownIds(ctx, guard, at.seats, tasks)
   const rows = kept.map(({ task, at_risk }) => {
     const row = viewRow(
@@ -1508,7 +1603,6 @@ async function listBatch(
 // --- the two lists ---------------------------------------------------------------------------
 
 const DROP: Judged = { drop: true }
-const STOP: Judged = { stop: true }
 
 /* The sources of list `kind` over the scope `at`: for a project scope each
  * selected sub-project's ranges of the due-date index; for My view each
@@ -1609,9 +1703,10 @@ function attentionSpec(
           out.push(DROP)
           continue
         }
-        const verdict = await v.of(t, isGroup(g, t) ? (g.facts.get(t.id) ?? null) : null)
+        const facts = isGroup(g, t) ? (g.facts.get(t.id) ?? null) : null
+        const verdict = await v.of(t, facts)
         if (verdict === UNKNOWN) {
-          out.push(STOP)
+          out.push({ stop: taskOwnerId(t, facts !== null) ?? '' })
           return out
         }
         out.push(
@@ -1712,12 +1807,18 @@ type SummaryAnswerCounts = Figure<{ leaves: Record<IssueStatus, number>; paused:
  * The projected delays of `scope` (RiskAnswer) on the client's day and
  * weeks (clockOf), for the login whose seats are `profiles`: the tasks due
  * on or after the day in projects that track delay, projected late. Refuses
- * a malformed day, week or week_starts.
+ * a malformed day, week, week_starts or week_end.
  */
 export async function readRisk(
   ctx: QueryCtx,
   profiles: ReadonlyMap<string, Doc<'profiles'>>,
-  args: { scope: OverviewScope; day: string; week: string; week_starts: readonly number[] },
+  args: {
+    scope: OverviewScope
+    day: string
+    week: string
+    week_starts: readonly number[]
+    week_end: number
+  },
 ): Promise<RiskAnswer> {
   const clock = clockOf(args)
   return await overScope(ctx, profiles, args.scope, async (guard, at) => {
@@ -1733,36 +1834,36 @@ export async function readRisk(
  * One batch of the Overdue & at risk list of `scope` (ListAnswer), on the
  * client's day and weeks (clockOf), after `cursor` (from its start
  * without), up to `end` when given, for the login whose seats are
- * `profiles`. Overdue rows come first, as their due dates are before the
- * day, then projected ones, each by due date. Refuses a malformed day,
- * week or week_starts, and a cursor or end this list did not answer for
- * the same key (listKey).
+ * `profiles` and whose auth user id is `login`. Overdue rows come first, as
+ * their due dates are before the day, then projected ones, each by due
+ * date; a row whose verdict could never be read is kept as `unknown`.
+ * Refuses a malformed day, week, week_starts or week_end, and a cursor or
+ * end this list did not answer for the same key (listKey).
  */
 export async function readAttention(
   ctx: QueryCtx,
   profiles: ReadonlyMap<string, Doc<'profiles'>>,
+  login: string,
   args: {
     scope: OverviewScope
     day: string
     week: string
     week_starts: readonly number[]
+    week_end: number
     cursor?: string
     end?: string
   },
 ): Promise<ListAnswer> {
   const clock = clockOf(args)
-  const key = await listKey('attention', profiles, args.scope, args.day, args)
+  const key = await listKey('attention', login, args.scope, args.day, args)
   const from =
     args.cursor === undefined ? null : await openPos('attention', key, args.cursor, 'cursor')
   const end = args.end === undefined ? null : await openPos('attention', key, args.end, 'end')
   return await overScope(ctx, profiles, args.scope, async (guard, at) => {
-    const charged: Doc<'issues'>[] = []
-    const sources = await listSources(ctx, guard, at, 'attention', clock.day, (t) =>
-      charged.push(t),
-    )
-    for (const t of charged) guard.charge(t, TASK_ROW_MAX_BYTES)
+    const c = charges(guard, at)
+    const sources = await listSources(ctx, guard, at, 'attention', clock.day, c.charge)
     const spec = attentionSpec(ctx, guard, at, clock, sources)
-    return await listBatch(ctx, guard, at, 'attention', key, spec, from, end)
+    return await listBatch(ctx, guard, at, 'attention', key, spec, from, end, c)
   })
 }
 
@@ -1771,31 +1872,23 @@ export async function readAttention(
  * without subtasks, earliest due date first, undated last, after `cursor`
  * (from its start without), up to `end` when given. No figure of it
  * follows the day. Refuses a cursor or end this list did not answer for
- * the same key (listKey).
+ * the same key (listKey), with `login` the caller's auth user id.
  */
 export async function readPaused(
   ctx: QueryCtx,
   profiles: ReadonlyMap<string, Doc<'profiles'>>,
+  login: string,
   args: { scope: OverviewScope; cursor?: string; end?: string },
 ): Promise<ListAnswer> {
-  const key = await listKey('paused', profiles, args.scope, '')
+  const key = await listKey('paused', login, args.scope, '')
   const from =
     args.cursor === undefined ? null : await openPos('paused', key, args.cursor, 'cursor')
   const end = args.end === undefined ? null : await openPos('paused', key, args.end, 'end')
   return await overScope(ctx, profiles, args.scope, async (guard, at) => {
-    const charged: Doc<'issues'>[] = []
-    const sources = await listSources(ctx, guard, at, 'paused', '', (t) => charged.push(t))
-    for (const t of charged) guard.charge(t, TASK_ROW_MAX_BYTES)
-    return await listBatch(
-      ctx,
-      guard,
-      at,
-      'paused',
-      key,
-      pausedSpec(ctx, guard, at, sources),
-      from,
-      end,
-    )
+    const c = charges(guard, at)
+    const sources = await listSources(ctx, guard, at, 'paused', '', c.charge)
+    const spec = pausedSpec(ctx, guard, at, sources)
+    return await listBatch(ctx, guard, at, 'paused', key, spec, from, end, c)
   })
 }
 

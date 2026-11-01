@@ -59,6 +59,9 @@ afterEach(() => {
 
 const WEEKS = weeksOf(DAY)
 
+/* A login id for the readers called outside a query. */
+const LOGIN = 'auth_overview_reader'
+
 const scopeOf = (me: Doc<'profiles'>, p: Doc<'projects'>): OverviewScope => ({
   kind: 'project',
   org_id: me.org_id,
@@ -91,12 +94,29 @@ async function pausedBatches(t: T, me: Doc<'profiles'>, scope: OverviewScope) {
   throw new Error('the list did not end')
 }
 
+/** The Paused list for `me` over `scope` a batch at a time, from its start:
+ * the batches, and the answer that refused one, if one did. Every batch
+ * goes on past its cursor. */
+async function walkPaused(t: T, me: Doc<'profiles'>, scope: OverviewScope) {
+  const batches: (ListAnswer & { state: 'ok' })[] = []
+  let cursor: string | undefined
+  for (let n = 0; n < 60; n++) {
+    const got = await as(t, me).query(api.overview.paused, { scope, ...(cursor ? { cursor } : {}) })
+    if (got.state !== 'ok') return { batches, refused: got }
+    if (cursor !== undefined) expect(got.next).not.toBe(cursor)
+    batches.push(got)
+    if (got.next === null) return { batches, refused: null }
+    cursor = got.next
+  }
+  throw new Error('the list did not end')
+}
+
 const titles = (rows: readonly OverviewRow[]) => rows.map((r) => r.title)
 
 // ----------------------------------------------------------------- arguments
 
 describe('arguments', () => {
-  it('refuses a malformed day, week or week_starts, and takes well-formed ones', async () => {
+  it('refuses a malformed day, week, week_starts or week_end, and takes well-formed ones', async () => {
     const t = newT()
     const f = await withOrg(t)
     const scope = scopeOf(f.user, f.meta)
@@ -108,7 +128,7 @@ describe('arguments', () => {
     // the week must hold the day
     await expectRefusal(risk({ week: shift(DAY, -7) }), 'bad_request', /week/)
     await expectRefusal(risk({ week: shift(DAY, 1) }), 'bad_request', /week/)
-    // exactly 53 instants, ascending, a week apart within an hour
+    // exactly 53 instants, ascending, a week apart within three hours
     await expectRefusal(
       risk({ week_starts: WEEKS.week_starts.slice(1) }),
       'bad_request',
@@ -120,11 +140,18 @@ describe('arguments', () => {
       /week_starts/,
     )
     const skewed = [...WEEKS.week_starts]
-    skewed[10] += 2 * 3_600_000
+    skewed[10] += 4 * 3_600_000
     await expectRefusal(risk({ week_starts: skewed }), 'bad_request', /week_starts/)
-    // a daylight-saving week is an hour shorter or longer
+    // the next week's start, a week after the last
+    for (const week_end of [WEEKS.week_end + 4 * 3_600_000, WEEKS.week_starts[52], 1.5])
+      await expectRefusal(risk({ week_end }), 'bad_request', /week_end/)
+    // a daylight-saving week is an hour shorter or longer, or two in a few
+    // zones
     const shifted = WEEKS.week_starts.map((s, i) => (i >= 20 ? s - 3_600_000 : s))
     expect((await risk({ week_starts: shifted })).state).toBe('ok')
+    const troll = WEEKS.week_starts.map((s, i) => (i >= 20 ? s + 2 * 3_600_000 : s))
+    const later = WEEKS.week_end + 2 * 3_600_000
+    expect((await risk({ week_starts: troll, week_end: later })).state).toBe('ok')
     expect((await risk({ day: shift(DAY, 6) })).state).toBe('ok')
   })
 })
@@ -242,6 +269,104 @@ describe('the day', () => {
       { kind: 'overdue' },
       { kind: 'overdue' },
     ])
+  })
+})
+
+// ------------------------------------------------------------------ counting
+
+describe('counting', () => {
+  it('answers counting while an organization is not counted, a run counts it or a regroup runs in it, in both scopes', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Mine',
+      assignee_id: f.user.id,
+    })
+    const scopes: [string, OverviewScope][] = [
+      ['FW', scopeOf(f.user, f.sub)],
+      ['TBED', scopeOf(f.user, f.meta)],
+      ['My view', { kind: 'mine' }],
+    ]
+    /* each scope's counts figure, or its refusal */
+    const counts = async () => {
+      const out: Record<string, unknown> = {}
+      for (const [label, scope] of scopes) {
+        const got = await as(t, f.user).query(api.overview.summary, { scope, day: DAY })
+        out[label] = got.state === 'ok' ? got.counts.state : got
+      }
+      return out
+    }
+    const counting = { FW: 'unavailable', TBED: 'unavailable', 'My view': 'unavailable' }
+    const counted = { FW: 'ok', TBED: 'ok', 'My view': 'ok' }
+    // not counted yet: the person holds no count row anywhere
+    expect(await counts()).toEqual(counting)
+    const summary = await as(t, f.user).query(api.overview.summary, {
+      scope: { kind: 'mine' },
+      day: DAY,
+    })
+    expect(summary).toMatchObject({ counts: { state: 'unavailable', reason: 'counting' } })
+    await countOrg(t, f.org.id)
+    expect(await counts()).toEqual(counted)
+    // a run counting the organization again
+    const run = await t.run((ctx) =>
+      ctx.db.insert('overview_count_runs', {
+        org_id: f.org.id,
+        counting: true,
+        generation: uuid(),
+      }),
+    )
+    expect(await counts()).toEqual(counting)
+    await t.run((ctx) => ctx.db.delete(run))
+    expect(await counts()).toEqual(counted)
+    // a regroup of a family where the person holds no row: My view waits
+    // for it, a project of another family does not
+    const regroup = (family: Doc<'projects'>) =>
+      t.run((ctx) =>
+        ctx.db.insert('overview_regroups', {
+          org_id: f.org.id,
+          family_id: family.id,
+          projects: [],
+          at: 0,
+          progress_at: NOW,
+        }),
+      )
+    const elsewhere = await regroup(f.hidden)
+    expect(await counts()).toEqual({ ...counted, 'My view': 'unavailable' })
+    await t.run((ctx) => ctx.db.delete(elsewhere))
+    await regroup(f.meta)
+    expect(await counts()).toEqual(counting)
+  })
+
+  it("answers My view counting while one of the login's organizations is not counted", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const other = await withOrg(t)
+    await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Mine',
+      assignee_id: f.user.id,
+    })
+    // an admin there, who sees every project
+    const there = await plantSeat(t, {
+      org_id: other.org.id,
+      org_role: 'admin',
+      auth_user_id: f.user.auth_user_id,
+    })
+    await plantIssue(t, {
+      org_id: other.org.id,
+      project_id: other.sub.id,
+      title: 'Mine there',
+      assignee_id: there.id,
+    })
+    await countOrg(t, f.org.id)
+    const mine = () =>
+      as(t, f.user).query(api.overview.summary, { scope: { kind: 'mine' }, day: DAY })
+    expect(await mine()).toMatchObject({ counts: { state: 'unavailable', reason: 'counting' } })
+    await countOrg(t, other.org.id)
+    expect(await mine()).toMatchObject({ counts: { state: 'ok', leaves: { todo: 2 } } })
   })
 })
 
@@ -378,9 +503,161 @@ describe('lists', () => {
       'bad_request',
       /cursor/,
     )
-    // an At-risk position is bound to the client's weeks too
-    const risky = await as(t, f.user).query(api.overview.attention, { scope, ...WEEKS })
-    if (risky.state !== 'ok' || risky.next !== null) return
+    // an At-risk position is bound to the client's day and weeks too: more
+    // than a batch overdue on a Thursday, whose week may be said to start on
+    // any of the days before it
+    for (let i = 0; i < 11; i++)
+      await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        title: `Overdue ${i}`,
+        due_date: shift(DAY, -1 - i),
+      })
+    const thursday = { ...WEEKS, day: shift(DAY, 3) }
+    const attention = (over: Partial<typeof WEEKS> & { cursor?: string }) =>
+      as(t, f.user).query(api.overview.attention, { scope, ...thursday, ...over })
+    const risky = await attention({})
+    if (risky.state !== 'ok' || risky.next === null) throw new Error(JSON.stringify(risky))
+    const cursor = risky.next
+    expect(await attention({ cursor })).toMatchObject({ state: 'ok' })
+    const shifted = WEEKS.week_starts.map((s, i) => (i >= 20 ? s - 3_600_000 : s))
+    for (const over of [
+      { day: shift(DAY, 4) },
+      { week: shift(DAY, 1) },
+      { week_starts: shifted },
+      { week_end: WEEKS.week_end + 3_600_000 },
+    ])
+      await expectRefusal(attention({ ...over, cursor }), 'bad_request', /cursor/)
+  })
+
+  it("binds positions to the login: 50 seats page whole, a seat gained keeps them, and the scope's seat lost answers unavailable", async () => {
+    const { t, f, expected, scope } = await pausedCase()
+    const login = f.user.auth_user_id as string
+    for (let i = 0; i < 49; i++) await plantSeat(t, { org_id: uuid(), auth_user_id: login })
+    const batches = await pausedBatches(t, f.user, scope)
+    expect(batches.flatMap((b) => titles(b.rows))).toEqual(expected)
+    // each batch again with its cursor and fixed end
+    let cursor: string | undefined
+    for (const batch of batches) {
+      const again = await as(t, f.user).query(api.overview.paused, {
+        scope,
+        ...(cursor ? { cursor } : {}),
+        ...(batch.end ? { end: batch.end } : {}),
+      })
+      expect(again).toMatchObject({ state: 'ok', complete: true })
+      if (again.state === 'ok') expect(titles(again.rows)).toEqual(titles(batch.rows))
+      cursor = batch.next ?? undefined
+    }
+    const [first, second] = batches
+    const rest = { cursor: first.next as string, end: second.end as string }
+    // a seat gained in another organization keeps the positions
+    const other = await withOrg(t)
+    await plantSeat(t, { org_id: other.org.id, auth_user_id: login })
+    const kept = await as(t, f.user).query(api.overview.paused, { scope, ...rest })
+    expect(kept.state === 'ok' && titles(kept.rows)).toEqual(titles(second.rows))
+    // the scope's own seat lost: unavailable, as without a position
+    await t.run((ctx) => ctx.db.patch(f.user._id, { active: false }))
+    expect(await as(t, f.user).query(api.overview.paused, { scope, ...rest })).toEqual({
+      state: 'unavailable',
+    })
+  })
+
+  it('stops a batch its reads do not fit as incomplete, with the rows it kept and their parents in another project, the next going on with no gap or duplicate', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = (fields: Partial<Doc<'issues'>>) =>
+      plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, paused: true, ...fields })
+    const parent = await task({ project_id: f.sub2.id, title: 'Parent in PCB', paused: false })
+    // 5 paused leaves, 40 paused groups the list leaves out, then 15
+    // leaves, so a batch reads and judges candidates in several rounds
+    const expected: string[] = []
+    for (let i = 0; i < 60; i++) {
+      const due_date = shift(DAY, i)
+      if (i < 5 || i >= 45) {
+        const title = `Leaf ${String(i).padStart(2, '0')}`
+        expected.push(title)
+        await task({ title, due_date, parent_id: parent.id })
+        continue
+      }
+      const group = await task({ title: `Group ${i}`, due_date })
+      await task({ title: `Its subtask ${i}`, parent_id: group.id, paused: false })
+    }
+    const scope = scopeOf(f.admin, f.sub)
+    const profiles = new Map([[f.admin.org_id, f.admin]])
+    const { took } = await measured(t, (ctx) => readPaused(ctx, profiles, LOGIN, { scope }))
+    let stops = 0
+    for (let documents = took.documents + 300; documents > 0; documents--) {
+      Object.assign(OVERVIEW.reads, { documents })
+      const got = await walkPaused(t, f.admin, scope)
+      for (const row of got.batches.flatMap((b) => b.rows)) expect(row.parent_id).toBe(parent.id)
+      // a batch its reads stopped still answers the rows it kept, with room
+      // held back for their parents
+      stops += got.batches.filter((b) => !b.complete && b.rows.length > 0).length
+      if (got.refused !== null) {
+        // a batch that cannot judge one candidate refuses, never answering
+        // its own cursor as where to go on
+        expect(got.refused).toEqual({ state: 'over_budget' })
+        if (got.batches.length === 0) break
+        continue
+      }
+      expect(
+        got.batches.flatMap((b) => titles(b.rows)),
+        `${documents} documents`,
+      ).toEqual(expected)
+    }
+    expect(stops).toBeGreaterThan(0)
+  })
+
+  it("answers over_budget where My view's reviewer range does not fit, never throwing", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (let i = 0; i < 60; i++)
+      await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.sub.id,
+        title: `For review ${i}`,
+        status: 'review',
+        assignee_id: f.admin.id,
+        reviewer_id: f.user.id,
+      })
+    const scope = { kind: 'mine' } as const
+    const profiles = new Map([[f.user.org_id, f.user]])
+    const { took, answer } = await measured(t, (ctx) => readPaused(ctx, profiles, LOGIN, { scope }))
+    expect(answer).toMatchObject({ state: 'ok', complete: true })
+    Object.assign(OVERVIEW.reads, { documents: took.documents - 30 })
+    expect(await as(t, f.user).query(api.overview.paused, { scope })).toEqual({
+      state: 'over_budget',
+    })
+    expect(await as(t, f.user).query(api.overview.attention, { scope, ...WEEKS })).toEqual({
+      state: 'over_budget',
+    })
+  })
+
+  it('links a row to a parent the reader is shown, and flags a hidden parent and hidden subtasks', async () => {
+    const { t, f, me } = await hiddenCase('x')
+    const task = (fields: Partial<Doc<'issues'>>) =>
+      plantIssue(t, { org_id: f.org.id, assignee_id: me.id, project_id: f.sub.id, ...fields })
+    const hidden = await task({ project_id: f.sub2.id, title: 'Hidden parent' })
+    await task({ title: 'Under a hidden parent', parent_id: hidden.id, due_date: shift(DAY, -2) })
+    const shown = await task({ title: 'Shown parent' })
+    await task({ title: 'Under a shown parent', parent_id: shown.id, due_date: shift(DAY, -1) })
+    for (const scope of [scopeOf(me, f.sub), { kind: 'mine' } as const]) {
+      const got = await as(t, me).query(api.overview.attention, { scope, ...WEEKS })
+      if (got.state !== 'ok') throw new Error(JSON.stringify(got))
+      const row = (title: string) => got.rows.find((r) => r.title === title)
+      expect(row('Overdue group'), scope.kind).toMatchObject({
+        has_subtasks: true,
+        has_hidden_subtasks: true,
+      })
+      expect(row('Under a hidden parent'), scope.kind).toMatchObject({ has_hidden_parent: true })
+      expect(row('Under a hidden parent'), scope.kind).not.toHaveProperty('parent_id')
+      expect(row('Under a shown parent'), scope.kind).toMatchObject({
+        parent_id: shown.id,
+        has_hidden_parent: false,
+        has_subtasks: false,
+        has_hidden_subtasks: false,
+      })
+    }
   })
 
   it('totals do not depend on the batches loaded', async () => {
@@ -408,7 +685,7 @@ async function verdictCase() {
   await t.run((ctx) =>
     ctx.db.insert('project_access', { project_id: f.sub.id, profile_id: guest.id, level: 'user' }),
   )
-  const late = (title: string, owner: Doc<'profiles'>) =>
+  const late = (title: string, owner: Doc<'profiles'>, due = shift(DAY, 10)) =>
     plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
@@ -416,7 +693,7 @@ async function verdictCase() {
       assignee_id: owner.id,
       start_week: DAY,
       end_week: shift(DAY, 7),
-      due_date: shift(DAY, 10),
+      due_date: due,
       remaining_hours: 200,
       remaining_set_at: `${DAY}T12:00:00.000Z`,
     })
@@ -453,6 +730,64 @@ describe('verdicts', () => {
     })
     expect(rest).toMatchObject({ state: 'ok', complete: true, next: null })
     if (rest.state === 'ok') expect(rest.rows).toHaveLength(1)
+  })
+
+  it("answers a guest's batch that kept 10 rows complete when the next candidate needs another owner", async () => {
+    const { t, f, guest, late } = await verdictCase()
+    for (let i = 0; i < 9; i++) await late(`Also too big ${i}`, f.user)
+    await late('Too big for its owner too', f.admin, shift(DAY, 11))
+    await countOrg(t, f.org.id)
+    const scope = scopeOf(guest, f.sub)
+    const first = await as(t, guest).query(api.overview.attention, { scope, ...WEEKS })
+    if (first.state !== 'ok') throw new Error(JSON.stringify(first))
+    expect(first).toMatchObject({ complete: true })
+    expect(first.rows).toHaveLength(OVERVIEW.batch)
+    expect(first.next).toBe(first.end)
+    const rest = await as(t, guest).query(api.overview.attention, {
+      scope,
+      ...WEEKS,
+      cursor: first.next as string,
+    })
+    expect(rest).toMatchObject({ state: 'ok', complete: true, next: null })
+    if (rest.state === 'ok') expect(titles(rest.rows)).toEqual(['Too big for its owner too'])
+  })
+
+  it("keeps a task whose owner's load no batch can read as unknown, and goes on past it", async () => {
+    const { t, f, late } = await verdictCase()
+    const third = await plantSeat(t, { org_id: f.org.id, name: 'Third', accepted_at: BEFORE_RULE })
+    // the user's load passes the bound below in every batch, with two open
+    // tasks; the admin and the third owner hold one each
+    await late('Theirs too', f.user, shift(DAY, 10))
+    await late("The admin's, before", f.admin, shift(DAY, 9))
+    await late("The third owner's, after", third, shift(DAY, 12))
+    await countOrg(t, f.org.id)
+    Object.assign(OWNER_LOADS, { open: 1 })
+    const scope = scopeOf(f.admin, f.sub)
+    const rows: OverviewRow[] = []
+    const batches: boolean[] = []
+    let cursor: string | undefined
+    for (let n = 0; n < 10; n++) {
+      const got = await as(t, f.admin).query(api.overview.attention, {
+        scope,
+        ...WEEKS,
+        ...(cursor ? { cursor } : {}),
+      })
+      if (got.state !== 'ok') throw new Error(JSON.stringify(got))
+      if (cursor !== undefined) expect(got.next).not.toBe(cursor)
+      rows.push(...got.rows)
+      batches.push(got.complete)
+      if (got.next === null) break
+      cursor = got.next
+    }
+    // the first batch stops at the user's task after judging the admin's;
+    // the next keeps both of theirs as unknown and goes on
+    expect(batches).toEqual([false, true])
+    expect(rows.map((r) => [r.title, r.at_risk?.kind])).toEqual([
+      ["The admin's, before", 'projected'],
+      ['Too big for one week', 'unknown'],
+      ['Theirs too', 'unknown'],
+      ["The third owner's, after", 'projected'],
+    ])
   })
 
   it("answers unavailable, never fewer, when an owner's load passes the reader's bounds", async () => {
@@ -604,10 +939,12 @@ describe('real limits', () => {
       const summary = await measured(t, (ctx) => readSummary(ctx, profiles, { scope, day: DAY }))
       record(`one sub-project, ${n} tasks due before the day`, summary.took, states(summary.answer))
       expect(states(summary.answer)).toEqual({ counts: 'ok', any_task: 'ok', overdue })
-      const batch = await measured(t, (ctx) => readAttention(ctx, profiles, { scope, ...WEEKS }))
+      const batch = await measured(t, (ctx) =>
+        readAttention(ctx, profiles, LOGIN, { scope, ...WEEKS }),
+      )
       record(`one sub-project, ${n} tasks, first At-risk batch`, batch.took, batch.answer.state)
       expect(batch.answer).toMatchObject({ state: 'ok', complete: true })
-      const paused = await measured(t, (ctx) => readPaused(ctx, profiles, { scope }))
+      const paused = await measured(t, (ctx) => readPaused(ctx, profiles, LOGIN, { scope }))
       record(`one sub-project, ${n} tasks, first Paused batch`, paused.took, paused.answer.state)
       expect(paused.answer).toMatchObject({ state: 'ok', complete: true })
     }
@@ -648,10 +985,12 @@ describe('real limits', () => {
       const risk = await measured(t, (ctx) => readRisk(ctx, profiles, { scope, ...WEEKS }))
       record(`${label}, risk`, risk.took, risk.answer)
       expect(risk.answer.state).toBe('ok')
-      const batch = await measured(t, (ctx) => readAttention(ctx, profiles, { scope, ...WEEKS }))
+      const batch = await measured(t, (ctx) =>
+        readAttention(ctx, profiles, LOGIN, { scope, ...WEEKS }),
+      )
       record(`${label}, first At-risk batch`, batch.took, batch.answer.state)
       expect(batch.answer.state).toBe('ok')
-      const paused = await measured(t, (ctx) => readPaused(ctx, profiles, { scope }))
+      const paused = await measured(t, (ctx) => readPaused(ctx, profiles, LOGIN, { scope }))
       record(`${label}, first Paused batch`, paused.took, paused.answer.state)
       expect(paused.answer).toMatchObject({ state: 'ok', complete: true })
     }
