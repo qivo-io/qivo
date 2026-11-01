@@ -554,6 +554,20 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
 })
 
 describe('what the Board says in place of its columns', { timeout: BOARD_TEST_TIMEOUT }, () => {
+  it('scrolls a message taller than the pane from its title, so every choice stays in reach', async () => {
+    const board = await loadBoard(network, plan, { scope: 'plan' })
+    board.server.force = 'over_ceiling'
+    await board.render(root)
+    const card = document.querySelector<HTMLElement>('[data-board-root] > [data-empty-state]')
+    expect(card?.classList).toContain('overflow-y-auto')
+    expect(card?.classList).not.toContain('justify-center')
+    // one block inside, centered by auto margins, holds the title and choices
+    const block = card?.firstElementChild
+    expect(block?.classList).toContain('m-auto')
+    expect(block?.querySelector('[data-empty-state-title]')).not.toBeNull()
+    expect(block?.querySelectorAll('[data-board-choice]').length).toBe(2)
+  })
+
   it('asks to narrow a top-level project past the ceiling, offering its sub-projects', async () => {
     const board = await loadBoard(network, plan, { scope: 'plan' })
     board.server.force = 'over_ceiling'
