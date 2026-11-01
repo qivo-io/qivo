@@ -35,11 +35,19 @@
      tasks have not reached it; it never looks empty or complete meanwhile.
      While the workspace loads, a subtask it holds whose parent only the
      answer brings counts as missing on the desktop too: its card shows,
-     but without its parent's heading until the parent loads. */
+     but without its parent's heading until the parent loads.
+   - With a text filter, the person's own pending write on a task only the
+     answer brings can take away the word the server found it by, its
+     status or its assignee's name. The Board knows each field the write
+     changes but not the text the row does not send (stillMatches): where
+     it cannot tell, the card stays and the counts wait (`unsure`) until
+     the answer holds the write. */
 
 import { useEffect, useState } from 'react'
 import type { BoardAnswer } from '../../../convex/lib/board'
 import { BOARD_TASKS } from '../../../convex/lib/limits'
+import type { ViewRow } from '../../../convex/lib/viewReads'
+import { matchesAllWords, taskSearchText } from '../../lib/search'
 import { useViewVisibility } from '../../lib/viewVisibility'
 import { STALL } from '../../store/liveParts'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../../store/planner'
@@ -103,6 +111,46 @@ function passes(info: ScopeInfo, filters: IssueFilters, it: IssueVM) {
   return (
     info.subIdSet.has(it.project) && (!info.only || info.only(it)) && P.passesFilters(it, local)
   )
+}
+
+/* The search text of task `key` (convex/lib/search.ts taskSearchText)
+   from the fields a row of the answer sends: without its description and
+   labels. */
+const shownText = (
+  key: string,
+  t: { title: string; status: ViewRow['status']; priority: ViewRow['priority'] },
+  group: boolean,
+  assignee: string | null | undefined,
+) =>
+  taskSearchText({
+    key,
+    title: t.title,
+    description: '',
+    status: t.status,
+    group,
+    priority: t.priority,
+    assigneeName: assignee ? P.user(assignee)?.name : undefined,
+    labelNames: [],
+  })
+
+/** Whether task `it`, which only the answer brings and which the person's
+    own pending writes changed, still matches the text filter `search`:
+    true, or null where the Board cannot tell. `row` is its row in the
+    answer, which the server matched with the whole text, or undefined for
+    a task the answer does not name for the filter (a parent it sends as
+    a heading). A Board write changes the status and the owners only
+    (store/planner.ts VIEW_WRITES), never the description or labels the
+    row does not send, so a word matches where the fields shown now hold
+    it, or where the row's fields did not hold it, since the server found
+    it in that text; a word only the row's changed fields held may or may
+    not be there. */
+function stillMatches(it: IssueVM, row: ViewRow | undefined, search: string): boolean | null {
+  const now = shownText(it.key, it, P.isGroup(it), it.assignee)
+  const then = row && shownText(it.key, row, row.has_subtasks, row.assignee_id)
+  for (const word of search.split(/\s+/).filter(Boolean))
+    if (!matchesAllWords(now, word) && (then === undefined || matchesAllWords(then, word)))
+      return null
+  return true
 }
 
 /* A task's number, from the key it renders (QN-n). */
@@ -229,8 +277,9 @@ export function useBoardView(
   const shownAnswer = answer?.state === 'ok' ? answer : kept
 
   // an ok answer joined to the tasks it brings, in its order: the tasks it
-  // shows, and how many it names that no source can show yet
-  let joined: { tasks: IssueVM[]; missing: number } | null = null
+  // shows, how many it names that no source can show yet, and how many of
+  // the person's own changed tasks it may not match the text filter for
+  let joined: { tasks: IssueVM[]; missing: number; unsure: number } | null = null
   if (shownAnswer) {
     const own = P.ownPaintedTasks()
     const modelOf = (uuid: string) => {
@@ -269,15 +318,22 @@ export function useBoardView(
       for (const row of shownAnswer.parents) if (!own.has(row.id) && !modelOf(row.id)) missing++
     // the person's own pending writes decide for the tasks they changed,
     // each put in its place in the answer's order
+    let unsure = 0
+    const answered = filters.search ? new Map(shownAnswer.rows.map((row) => [row.id, row])) : null
     for (const uuid of own) {
       const it = P.ownOnScreen(slot, uuid)
       if (!it || shown.has(uuid) || !passes(info, filters, it)) continue
+      // a task only the answer brings, which the local check searched by
+      // nothing (passes)
+      if (answered && P.handleOf(uuid) === null) {
+        if (stillMatches(it, answered.get(uuid), filters.search) === null) unsure++
+      }
       shown.add(uuid)
       let at = tasks.length
       while (at > 0 && before(it, tasks[at - 1] as IssueVM)) at--
       tasks.splice(at, 0, it)
     }
-    joined = { tasks, missing }
+    joined = { tasks, missing, unsure }
   }
   const stalled = useStall(
     joined !== null && joined.missing > 0 && P.stillLoading() === null,
@@ -336,11 +392,14 @@ export function useBoardView(
   const tasks = joined?.tasks ?? []
   const cardProjects = new Set(tasks.map((it) => it.project))
   const missing = (joined?.missing ?? 0) > 0
+  // a card the Board cannot tell still matches the text filter stays, and
+  // the counts wait for the answer that holds the write
+  const unsure = (joined?.unsure ?? 0) > 0
   return {
     ...base,
     state: missing ? (stalled ? 'incomplete' : 'loading') : 'ok',
-    counted: !missing,
-    busy: missing && !stalled,
+    counted: !missing && !unsure,
+    busy: (missing && !stalled) || unsure,
     tasks,
     shows: true,
     holds: (head, subIds) =>

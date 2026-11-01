@@ -122,6 +122,18 @@ function heldByOther(snap: Snapshot) {
   })
 }
 
+const wait = (ms: number) => act(async () => new Promise((resolve) => setTimeout(resolve, ms)))
+const count = (status: string) =>
+  document.querySelector(`[data-status-count="${status}"]`)?.textContent
+const busy = () => document.querySelector('[data-board-root]')?.getAttribute('aria-busy') === 'true'
+
+/** Drops the card of task `uuid` on the pooled lane's `status` cell. */
+async function drop(board: Awaited<ReturnType<typeof loadBoard>>, uuid: string, status: string) {
+  await act(async () => board.card(uuid)?.dispatchEvent(dragEvent('dragstart')))
+  await act(async () => cell(status)?.dispatchEvent(dragEvent('dragover')))
+  await act(async () => cell(status)?.dispatchEvent(dragEvent('drop')))
+}
+
 const writes = () =>
   network.mutation.mock.calls
     .filter(([ref]) => getFunctionName(ref) === 'issues:update')
@@ -365,6 +377,48 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     board.server.hold = false
     await board.answer()
     expect(renders).toBeGreaterThan(answered)
+  })
+
+  it('keeps a card moved off the word the search found it by, with its counts waiting', async () => {
+    const board = await farBoard()
+    // found by its status alone
+    await board.search('progress')
+    await wait(300)
+    await board.answer()
+    expect(board.card('far')).not.toBeNull()
+    expect(count('progress')).toBe('1')
+    expect(busy()).toBe(false)
+    // dropped on In review, it may still match by its description, which
+    // the Board does not hold
+    board.server.hold = true
+    await drop(board, 'far', 'review')
+    expect(cell('review')?.contains(board.card('far'))).toBe(true)
+    expect(count('review')).toBe('…')
+    expect(busy()).toBe(true)
+    // the answer that holds the write leaves it out; its paint waits for
+    // the pending write or a 0 ms timer (store/planner.ts owe)
+    board.server.edit = null
+    board.server.hold = false
+    await board.answer()
+    await wait(10)
+    expect(board.card('far')).toBeNull()
+    expect(count('review')).toBe('0')
+    expect(busy()).toBe(false)
+  })
+
+  it('counts a moved card that the search found by text its row does not send', async () => {
+    const board = await farBoard()
+    // no field the answer's row sends holds the word: the server found it
+    // in the description or a label, which a drop does not change
+    await board.search('harness')
+    await wait(300)
+    await board.answer()
+    expect(board.card('far')).not.toBeNull()
+    board.server.hold = true
+    await drop(board, 'far', 'review')
+    expect(cell('review')?.contains(board.card('far'))).toBe(true)
+    expect(count('review')).toBe('1')
+    expect(busy()).toBe(false)
   })
 
   it("opens in the task window from the window's own read", async () => {
