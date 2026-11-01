@@ -994,7 +994,7 @@ describe('real limits', () => {
     )
   }, 300_000)
 
-  it('a task ID search over 10,000 active tasks with both copies pages to its match, never refused', async () => {
+  it('a task ID search over 3,000 active tasks with both copies pages to its match, never refused', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
     // descriptions of about 390 characters, "a few hundred" in the docs
@@ -1018,9 +1018,11 @@ describe('real limits', () => {
           }
         })
     }
-    // the last task's ID, so the search reads every other task's text
-    const key = { limit: 20, search: 'QN-19999' }
-    await plant(10_000, false)
+    // the last task's ID, so the search reads every other task's text, more
+    // than one page's budget holds (the envelope's 50,000 tasks are measured
+    // in convex/tests/activeTaskPages.envelope.ts)
+    const key = { limit: 20, search: 'QN-12999' }
+    await plant(3000, false)
     const first = await restMetrics(t, f, key)
     expect(first.refused).toBeNull()
     // a page that reads its budget of texts ends there and says more follow
@@ -1028,7 +1030,7 @@ describe('real limits', () => {
     expect(first.mib).toBeLessThan(16)
     const agent = { callerId: f.agent.id, access: 'read' as const }
     const pages = await restPages(t, { ...agent, search: key.search, limit: '20' })
-    expect(pages.rows.map((row) => row.key)).toEqual(['QN-19999'])
+    expect(pages.rows.map((row) => row.key)).toEqual(['QN-12999'])
     expect(pages.sizes.length).toBeGreaterThan(1)
   }, 300_000)
 
