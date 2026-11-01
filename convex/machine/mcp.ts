@@ -439,6 +439,7 @@ export const TOOLS: McpTool[] = [
           offset: {
             type: 'integer',
             minimum: 0,
+            maximum: 0,
           },
           cursor: {
             type: 'string',

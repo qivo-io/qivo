@@ -14,7 +14,6 @@ import type { ProfileKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
 import { limitedWhole } from '../lib/limitRules'
 import { cutText, DEFAULT_PAGE_SIZE, LIMITS, type Limit, MIB } from '../lib/limits'
-import { offsetRefusal } from '../lib/listCursor'
 import { readLimitedBody } from '../lib/requestBody'
 import { plainText } from '../model/activity'
 import { REST_AUTH_401, REST_PERSON_AUTH_401 } from './auth'
@@ -180,20 +179,13 @@ export function pageOffset(raw: string | number | undefined): number {
 /** Whether a list that pages with a cursor was sent an `offset` other than
  * 0, from a REST query parameter or an MCP argument. Absent is 0, and so is
  * any text that reads as 0, such as `00`; anything else, text that is no
- * number included, is an offset sent. */
+ * number included, is an offset sent. The task lists refuse such an offset
+ * in lib/core.ts taskListRequest with lib/listCursor.ts offsetRefusal; REST
+ * GET /v1/inbox and MCP list_inbox (t3/limits-machine-inbox) and REST GET
+ * /v1/workload and MCP get_workload (t3/limits-workload-pages) are to do
+ * the same once they page with a cursor. */
 export const offsetSent = (raw: string | number | undefined): boolean =>
   raw !== undefined && numberOf(raw) !== 0
-
-/** Refuses an `offset` other than 0 (offsetSent) on a list of `noun` that
- * pages with a cursor (lib/listCursor.ts), with the sentence that says to
- * pass next_cursor as cursor, on REST and MCP alike. The task lists refuse
- * it in lib/core.ts taskListRequest, after their project check; REST GET
- * /v1/inbox and MCP list_inbox (t3/limits-machine-inbox) and REST GET
- * /v1/workload and MCP get_workload (t3/limits-workload-pages) are to call
- * this once they page with a cursor. */
-export function refuseOffset(raw: string | number | undefined, noun: string): void {
-  if (offsetSent(raw)) throw badRequest(offsetRefusal(noun))
-}
 
 /** A REST request body that may be left out, such as a DELETE's. An empty
  * body reads as {}, and any other body as needJson reads it. */

@@ -1084,11 +1084,12 @@ export function taskUrl(orgSlug: string, num: number): string | null {
 /* How many tasks a single-task read of an active task walks, one by_parent
  * read at a time with the caller's access asked project by project, before
  * it answers that access for the whole organization at once (orgReach) and
- * walks again within what the request has left less TASK_READ_RESERVE, as
- * an archived task's walk does (taskSubtree). The read walks the subtree
+ * goes on from what it read, within what the request has left less
+ * TASK_READ_RESERVE, as an archived task's walk does (taskSubtree). The read walks the subtree
  * once (subtreeIndex) and every group total uses that one index. Index
  * ranges stay far below 4,096, and only a group stored before the rule of
- * one level with more tasks that count under it than this walks again.
+ * one level with more tasks that count under it than this goes on under a
+ * ceiling.
  * Tests lower `reads`. */
 export const SUBTREE_WALK = { reads: 1000 }
 
@@ -1127,7 +1128,10 @@ type Walk = { children: ChildIndex; whole: boolean; rootWhole: boolean }
  * lists nothing else, so each read holds at most LIMITS.subtasks.max tasks however
  * many archived subtasks have gathered. An active root's walk without a
  * `ceiling` stops, as not whole, once a level shows it would pass
- * SUBTREE_WALK reads, so its caller can walk again under one (taskSubtree).
+ * SUBTREE_WALK reads, so its caller can go on under one (taskSubtree).
+ * `known` is the index such a walk read: a task it holds takes its subtasks
+ * from there, with no read, since a walk stops only between levels and so
+ * holds each task's subtasks whole.
  *
  * An archived root's walk needs a `ceiling`, because it can enter the
  * task's whole history, and no walk reads the organization's tasks. It
@@ -1144,11 +1148,12 @@ async function subtreeIndex(
   root: Doc<'issues'>,
   counts: GroupCounter,
   ceiling?: ReadCeiling,
+  known?: ChildIndex,
 ): Promise<Walk> {
   if (ceiling === undefined && root.archived_at !== undefined) {
     throw new Error('an archived task walks its subtree under a ceiling')
   }
-  const index = new Map<string, Doc<'issues'>[]>()
+  const index = new Map<string, readonly Doc<'issues'>[]>()
   // a walk that stops has read the root's own subtasks whole once their
   // range is in the index, unless it stopped inside that range
   const stopped = (): Walk => ({ children: index, whole: false, rootWhole: index.has(root.id) })
@@ -1157,16 +1162,28 @@ async function subtreeIndex(
   let frontier = [root.id]
   let reads = 0
   while (frontier.length > 0) {
-    // a level that cannot be read whole ends the walk before its first read
-    reads += frontier.length
+    // a level that cannot be read whole ends the walk before its first read;
+    // the subtasks an earlier walk read whole (`known`) take no read
+    const unread = frontier.filter((id) => known?.has(id) !== true).length
+    reads += unread
     if (ceiling !== undefined) {
-      if (frontier.length > (await rangesLeft(ctx, ceiling))) return stopped()
+      if (unread > (await rangesLeft(ctx, ceiling))) return stopped()
     } else if (reads > SUBTREE_WALK.reads) {
       // the root's own subtasks are read first, so they are in the index
       return stopped()
     }
     const next: string[] = []
     for (const id of frontier) {
+      const earlier = known?.get(id)
+      if (earlier !== undefined) {
+        index.set(id, earlier)
+        for (const kid of earlier) {
+          if (seen.has(kid.id) || !(await counts(kid))) continue
+          seen.add(kid.id)
+          next.push(kid.id)
+        }
+        continue
+      }
       if (guard !== null && !(await guard.range())) return stopped()
       const kids: Doc<'issues'>[] = []
       const read =
@@ -1206,7 +1223,8 @@ async function subtreeIndex(
  * less TASK_READ_RESERVE, with a counter that reads nothing (`still`, the
  * caller's access answered for the whole organization at once), so no read
  * of it, a write's answer included, passes Convex's limits however large
- * the subtree. When that stops the walk, the index keeps only the root's
+ * the subtree, an active task's walk going on from the first walk's index
+ * (subtreeIndex `known`). When that stops the walk, the index keeps only the root's
  * own subtasks: an active root's from its first walk, all of them, and an
  * archived root's as many as fit, which it reads first. When not even one
  * of those fit, it reads the first, within the reserve, so the read still
@@ -1223,7 +1241,9 @@ async function taskSubtree(
     const first = await subtreeIndex(ctx, root, counts)
     if (first.whole) return { children: first.children, partial: false, more: false }
     const room = roomOf(await ctx.meta.getTransactionMetrics(), TASK_READ_RESERVE)
-    const walk = await subtreeIndex(ctx, root, await still(), room)
+    // the first walk's index holds each task it read whole, so this one
+    // goes on from there rather than read them again
+    const walk = await subtreeIndex(ctx, root, await still(), room, first.children)
     if (walk.whole) return { children: walk.children, partial: false, more: false }
     const kids = first.children.get(root.id) ?? []
     return { children: new Map([[root.id, kids]]), partial: true, more: false }
@@ -2075,14 +2095,17 @@ const COMPLETION_CHECKS = 32
  *
  * It reads within COMPLETION_READS, and answers UNAVAILABLE_COMPLETION once
  * its reads would pass them, so a project's read and its updates never fail
- * on it. A caller who reads the family's top-level project and every live
- * sub-project of it reads the active tasks of the family's live projects
- * (issues by_project_archived), which hold every subtask that decides a
- * group. Any other caller reads only the active tasks of the projects
- * counted, and asks of each task not shown to be a group by those, and not
- * a subtask created under the rule of one level (lib/viewReads.ts
- * withoutSubtasks), whether it has an active subtask in a live project of
- * the family, one range read until one does. A subtask in a project that
+ * on it. It reads the active tasks of the projects counted first (issues
+ * by_project_archived). A caller who reads the family's top-level project
+ * and every live sub-project of it then reads the rest of the family's live
+ * projects, which hold every subtask that decides a group, within what the
+ * checks below would need left over. Any other caller, and one whose family
+ * does not fit that, asks instead of each counted task not shown to be a
+ * group by the tasks read, and not a subtask created under the rule of one
+ * level (lib/viewReads.ts withoutSubtasks), whether it has an active
+ * subtask in a live project of the family, one range read until one does.
+ * So whether a completion is available follows the counted projects' own
+ * tasks, not their siblings'. A subtask in a project that
  * caller cannot read counts there at lib/limits.ts TASK_ROW_MAX_BYTES, so
  * only how many such subtasks it reads before one that counts follows
  * hidden data (lib/machineSubtree.ts). In an update_project mutation the
@@ -2113,7 +2136,6 @@ export async function projectCompletion(
     (p) => p.archived_at === undefined,
   )
   const familyIds = new Set(family.map((p) => p.id))
-  const whole = family.every((p) => readable(p.id))
   const metrics = await ctx.meta.getTransactionMetrics()
   const start = totalsOf(metrics)
   const hard = roomOf(metrics, COMPLETION_RESERVE)
@@ -2124,31 +2146,77 @@ export async function projectCompletion(
   }
   const tally = await readTally(ctx, hard)
   const active: Doc<'issues'>[] = []
-  for (const p of whole ? family : family.filter((f) => scope.has(f.id))) {
-    if (!(await tally.under(ceiling))) return UNAVAILABLE_COMPLETION
-    tally.range()
-    const range = ctx.db
-      .query('issues')
-      .withIndex('by_project_archived', (q) =>
-        q.eq('project_id', p.id).eq('archived_at', undefined),
-      )
-    for await (const task of range) {
-      tally.doc(task)
-      active.push(task)
-      if (!(await tally.under(ceiling))) return UNAVAILABLE_COMPLETION
+  /* reads the active tasks of `projects` into `active` while the reads keep
+   * under `limit`, and answers whether it read them all */
+  const readTasks = async (projects: readonly Doc<'projects'>[], limit: ReadCeiling) => {
+    for (const p of projects) {
+      if (!(await tally.under(limit))) return false
+      tally.range()
+      const range = ctx.db
+        .query('issues')
+        .withIndex('by_project_archived', (q) =>
+          q.eq('project_id', p.id).eq('archived_at', undefined),
+        )
+      for await (const task of range) {
+        tally.doc(task)
+        active.push(task)
+        if (!(await tally.under(limit))) return false
+      }
+    }
+    return true
+  }
+  // the counted projects' own tasks first
+  if (
+    !(await readTasks(
+      family.filter((p) => scope.has(p.id)),
+      ceiling,
+    ))
+  )
+    return UNAVAILABLE_COMPLETION
+  const counted = [...active]
+  // a task whose subtask a read holds is a group without a check
+  const parents = () =>
+    new Set(active.flatMap((task) => (task.parent_id === undefined ? [] : [task.parent_id])))
+  let whole = family.every((p) => readable(p.id))
+  if (whole) {
+    /* The rest of the family holds every subtask that decides a group, and
+     * the caller reads all of it. It is read within what the checks of the
+     * counted tasks would need left over, so a small sub-project of a large
+     * family still counts by checks when the family does not fit. */
+    const known = parents()
+    const unknown = counted.filter((task) => !known.has(task.id) && !withoutSubtasks(task)).length
+    const checks = {
+      ranges: unknown + COMPLETION_CHECKS,
+      documents: unknown,
+      bytes: unknown * TASK_ROW_MAX_BYTES,
+    }
+    const left = tally.left(ceiling)
+    const checksFit =
+      left.ranges > checks.ranges && left.documents > checks.documents && left.bytes > checks.bytes
+    const limit = checksFit
+      ? {
+          ranges: ceiling.ranges - checks.ranges,
+          documents: ceiling.documents - checks.documents,
+          bytes: ceiling.bytes - checks.bytes,
+        }
+      : ceiling
+    if (
+      !(await readTasks(
+        family.filter((p) => !scope.has(p.id)),
+        limit,
+      ))
+    ) {
+      if (!checksFit) return UNAVAILABLE_COMPLETION
+      whole = false
     }
   }
-  const counted = active.filter((task) => scope.has(task.project_id))
   const live = liveIn(cat.byUuid)
   let groups: Set<string>
   if (whole) {
     const isGroup = groupTest(active, live)
     groups = new Set(counted.filter(isGroup).map((task) => task.id))
   } else {
-    // a task whose subtask the read holds is a group without a check
-    groups = new Set(
-      active.flatMap((task) => (task.parent_id === undefined ? [] : [task.parent_id])),
-    )
+    groups = parents()
     const unknown = counted.filter((task) => !groups.has(task.id) && !withoutSubtasks(task))
     for (let at = 0; at < unknown.length; at += COMPLETION_CHECKS) {
       if (!(await tally.under(ceiling))) return UNAVAILABLE_COMPLETION

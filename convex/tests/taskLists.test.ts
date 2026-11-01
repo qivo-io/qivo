@@ -28,6 +28,7 @@ import { ARCHIVED_TOO_WIDE, SUBTREE_WALK, TASK_READ_RESERVE } from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { TEXT_MAX } from '../lib/limits'
+import { getIssue } from '../machine/rest'
 import {
   expectRefusal,
   NOW,
@@ -200,7 +201,7 @@ describe('active task lists read active tasks only', () => {
     })
   })
 
-  it('lists one project’s tasks in an organization with 4,100 active projects, and fails the rest safely', async () => {
+  it('lists one project’s tasks and counts its completion in an organization with 4,100 active projects, and fails the rest safely', async () => {
     const fx = await setup(newT({ transactionLimits: true }))
     // empty sub-projects of TBED, more than one index range each can afford
     await fx.t.run(async (ctx) => {
@@ -248,14 +249,9 @@ describe('active task lists read active tasks only', () => {
       access: 'read',
       ref: 'FW',
     })
-    // the completion reads every live project of FW's family, more than its
-    // budget holds, so it says it is unavailable rather than fail the read
-    expect(project.completion).toEqual({
-      status: 'unavailable',
-      done: null,
-      total: null,
-      percent: null,
-    })
+    // FW's family has more live projects than its budget reads, so the
+    // completion counts FW's own task by a check of its subtasks instead
+    expect(project.completion).toEqual({ status: 'ok', done: 0, total: 1, percent: 0 })
   }, 60_000)
 
   it('ends a page whose parents in an archived project fill its budget early, and the next goes on', async () => {
@@ -478,6 +474,44 @@ describe('a single-task read of a large active group', () => {
     expect(rest.subtasks.map((task) => task.id)).toEqual(subtasks)
     expect(mcp).toMatchObject(whole)
     expect(mcp.subtasks.map((task) => task.id)).toEqual(subtasks)
+  })
+
+  it('goes on from the first walk past SUBTREE_WALK, reading about what one walk reads', async () => {
+    const fx = await setup()
+    // a group of 30 subtasks with 3 of their own each, stored before the
+    // rule of one level
+    const root = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
+    for (let i = 0; i < 30; i++) {
+      const kid = await plantIssue(fx.t, {
+        org_id: fx.org.id,
+        project_id: fx.sub.id,
+        parent_id: root.id,
+        start_week: '2026-03-02',
+        end_week: '2026-03-09',
+      })
+      await plantMany(fx, 3, { project_id: fx.sub.id, parent_id: kid.id, status: 'todo' })
+    }
+    const args = { today: TODAY, callerId: fx.agent.id, access: 'read' as const, ref: root.id }
+    const read = () =>
+      fx.t.query(async (ctx) => {
+        const handler = (
+          getIssue as unknown as {
+            _handler: (ctx: QueryCtx, a: typeof args) => Promise<{ progress: unknown }>
+          }
+        )._handler
+        const out = await handler(ctx, args)
+        return { out, ranges: (await ctx.meta.getTransactionMetrics()).databaseQueries.used }
+      })
+    const one = await read()
+    // the first walk reads the group and its 30 subtasks, then stops before
+    // the 90 below them, which the second walk reads on its own
+    SUBTREE_WALK.reads = 40
+    const two = await read()
+    expect(two.out).toEqual(one.out)
+    expect(two.out.progress).toEqual({ done: 0, total: 90, percent: 0, partial: false })
+    // the caller's access answered at once costs a few ranges; reading the
+    // first walk again would cost 31 more
+    expect(two.ranges - one.ranges).toBeLessThan(15)
   })
 
   it('answers a subtree too large for the request’s room without its facts, listing every subtask', async () => {

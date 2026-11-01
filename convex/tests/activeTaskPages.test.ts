@@ -18,6 +18,7 @@ import {
 import type { Refusal } from '../lib/functions'
 import { listCursorText } from '../lib/listCursor'
 import { namedCursor } from '../lib/namedPages'
+import { ONE_LEVEL_SINCE } from '../lib/viewReads'
 import {
   expectRefusal,
   NOW,
@@ -240,6 +241,8 @@ describe('cursor and offset', () => {
     await refused(restPage(fx.t, { ...base, cursor: scoped }), CURSOR)
     await refused(restPage(fx.t, { ...base, status: 'todo', cursor: plain }), CURSOR)
     await refused(restPage(fx.t, { ...base, priority: 'high', cursor: plain }), CURSOR)
+    await refused(restPage(fx.t, { ...base, assignee: fx.user.id, cursor: plain }), CURSOR)
+    await refused(restPage(fx.t, { ...base, owner: fx.user.id, cursor: plain }), CURSOR)
     // another surface, with the same search
     await refused(
       mcpPage(fx.t, {
@@ -303,6 +306,27 @@ describe('cursor and offset', () => {
 })
 
 describe('the page budget', () => {
+  it('stops a page after looking at ACTIVE_PAGE.tasks tasks, and goes on from there', async () => {
+    const fx = await setup()
+    for (let i = 0; i < 24; i++) {
+      await plantIssue(fx.t, {
+        org_id: fx.org.id,
+        project_id: i % 2 === 0 ? fx.sub.id : fx.sub2.id,
+        created_at: at(i),
+        priority: i % 3 === 0 ? 'high' : 'low',
+      })
+    }
+    const high = (await listOrder(fx, [fx.sub.id, fx.sub2.id])).filter((_, i) => i % 3 === 0)
+    const args = { callerId: fx.agent.id, access: 'read' as const, priority: 'high', limit: '200' }
+    // a filter that leaves out tasks without a read looks at three a page
+    const first = await lowered({ page: { tasks: 3 } }, () => restPage(fx.t, args))
+    expect(ids(first.tasks)).toEqual(high.slice(0, 1))
+    expect(typeof first.next_cursor).toBe('string')
+    const got = await lowered({ page: { tasks: 3 } }, () => restPages(fx.t, args))
+    expect(ids(got.rows)).toEqual(high)
+    expect(got.sizes).toEqual([1, 1, 1, 1, 1, 1, 1, 1])
+  })
+
   it('stops a page early with a cursor and goes on from it with no gap or repeat', async () => {
     const fx = await setup()
     for (let i = 0; i < 40; i++) {
@@ -422,8 +446,9 @@ describe('visibility', () => {
   it("pages the same whatever the caller's hidden projects hold, also where its budget stops them", async () => {
     /* An organization where the agent reads FW, with a parent and subtasks
      * in SKNK, which it cannot read. `heavy` gives those hidden tasks long
-     * titles and adds 300 more hidden tasks with long texts. */
-    const build = async (heavy: boolean) => {
+     * titles and adds 300 more hidden tasks with long texts; `distinct`
+     * gives each of the rows with a hidden parent a parent of its own. */
+    const build = async (heavy: boolean, distinct = false) => {
       const fx = await setup()
       const long = '€'.repeat(255)
       const parent = await plantIssue(fx.t, {
@@ -438,7 +463,20 @@ describe('visibility', () => {
           project_id: fx.sub.id,
           title: `Row ${i}`,
           created_at: at(1 + i),
-          ...(i % 6 === 0 ? { parent_id: parent.id } : {}),
+          ...(i % 6 === 0
+            ? {
+                parent_id: distinct
+                  ? (
+                      await plantIssue(fx.t, {
+                        org_id: fx.org.id,
+                        project_id: fx.hidden.id,
+                        title: `Hidden parent ${i}`,
+                        created_at: at(0),
+                      })
+                    ).id
+                  : parent.id,
+              }
+            : {}),
         })
         // a subtask stored in a project the agent cannot read, as before
         // the family rule
@@ -478,6 +516,44 @@ describe('visibility', () => {
     const heavyPages = await lowered({ page }, () => shape(heavy))
     expect(lightPages.sizes.length).toBeGreaterThan(2)
     expect(heavyPages).toEqual(lightPages)
+    // rows with a hidden parent each answer the same whether those parents
+    // are one task or several; where a page stops can move by a row at its
+    // budget's margin (lib/machineSubtree.ts lists that channel)
+    const distinct = await build(false, true)
+    expect(await shape(distinct)).toEqual(await shape(light))
+    expect((await lowered({ page }, () => shape(distinct))).rows).toEqual(lightPages.rows)
+  })
+})
+
+describe('groups created under the rule of one level', () => {
+  it("answers their rows' group facts without a check of their subtasks", async () => {
+    const fx = await setup()
+    // created after ONE_LEVEL_SINCE, as every task a release from v0.1.98 on
+    // writes, so its subtasks hold no subtasks of their own
+    const later = (i: number) => new Date(Date.parse(ONE_LEVEL_SINCE) + i * 60_000).toISOString()
+    const group = await plantIssue(fx.t, {
+      org_id: fx.org.id,
+      project_id: fx.sub.id,
+      title: 'Group',
+      created_at: later(0),
+    })
+    for (const [i, status] of (['done', 'todo'] as const).entries())
+      await plantIssue(fx.t, {
+        org_id: fx.org.id,
+        project_id: i === 0 ? fx.sub.id : fx.sub2.id,
+        parent_id: group.id,
+        status,
+        start_week: '2026-11-02',
+        end_week: '2026-11-09',
+        created_at: later(1 + i),
+      })
+    const rows = (await restPages(fx.t, { callerId: fx.agent.id, access: 'read' })).rows
+    expect(rows.map((row) => [row.title, row.is_group, row.progress])).toEqual([
+      ['Group', true, { done: 1, total: 2, percent: 50, partial: false }],
+      ['Planted task', false, null],
+      ['Planted task', false, null],
+    ])
+    expect(rows[0]).toMatchObject({ start_week: '2026-11-02', end_week: '2026-11-09' })
   })
 })
 
@@ -526,6 +602,10 @@ describe('delays', () => {
         row.delay,
       ])
     const rows = await read()
+    // the guest reads all six tasks, three of each owner
+    expect(rows.map(([owner]) => owner).sort()).toEqual(
+      [fx.user.id, fx.user.id, fx.user.id, fx.viewer.id, fx.viewer.id, fx.viewer.id].sort(),
+    )
     // the user's tasks come first in the page, so theirs is the load read
     for (const [owner, delay] of rows) {
       if (owner === fx.user.id) expect(delay).not.toEqual(UNAVAILABLE)

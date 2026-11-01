@@ -1179,7 +1179,7 @@ describe('POST /v1/tasks', () => {
       'bad_request',
       'reporter_id must be a profile uuid',
     )
-    expect(await restTasks(t, { callerId: f.agent.id, access: 'read' })).toEqual([])
+    expect((await restPages(t, { callerId: f.agent.id, access: 'read' })).rows).toEqual([])
     expect(await activityFor(t, f.org.id)).toEqual([])
   })
 
@@ -1553,7 +1553,7 @@ describe('POST /v1/tasks', () => {
       'bad_request',
       'unknown fields "parnet", "estimate_hours"; this request takes project, sub_project, parent, title, description, status, priority, assignee_id, reviewer_id, reporter_id, start_week, end_week, due_date, remaining_hours, paused',
     )
-    expect(await restTasks(t, { callerId: f.agent.id, access: 'read' })).toEqual([])
+    expect((await restPages(t, { callerId: f.agent.id, access: 'read' })).rows).toEqual([])
     const out = await post({ project: 'FW', title: 'ok', remaining_hours: 2.34 })
     expect(out.remaining_hours).toBe(2.3)
     expect(typeof out.remaining_set_at).toBe('string')

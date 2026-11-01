@@ -26,6 +26,10 @@
  *   at most LIMITS.subtasks.max a task, which a group check reads whole;
  * - how many subtasks a check of project completion reads in projects that
  *   do not count before one that does (lib/core.ts projectCompletion);
+ * - how many distinct parents the caller cannot read a page's rows have,
+ *   since each is read once for all its rows (subtreeReads `parent`), and
+ *   whether such a parent is gone, which reads a second range and no
+ *   document where an existing one reads one range and one document;
  * - and the real bytes of those documents where they pass the caps, which
  *   only a row stored over them or a hidden task's copy of its text (which
  *   only a rollback writes) can do, at the real-bytes stop (readTally
@@ -98,9 +102,6 @@ export async function readTally(ctx: QueryCtx, hard: ReadTotals) {
       if (size !== undefined) extra += size - real
       since++
     },
-    /** The request's totals as the decisions see them, with the fixed
-     * charges in place of hidden documents' sizes. */
-    charged: (): ReadTotals => ({ ...used, bytes: used.bytes + extra }),
     /** What the reads may still take under `ceiling`, with the fixed
      * charges, and under `hard` in real bytes, on each count. */
     left: (ceiling: ReadTotals): ReadTotals => ({
