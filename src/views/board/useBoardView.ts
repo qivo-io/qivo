@@ -43,7 +43,6 @@ import { BOARD_TASKS } from '../../../convex/lib/limits'
 import { useViewVisibility } from '../../lib/viewVisibility'
 import { STALL } from '../../store/liveParts'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../../store/planner'
-import { usePlannerVersion } from '../../store/usePlannerVersion'
 import { type BoardVariant, boardFilters, useBoardRequest } from './boardArgs'
 
 /** Where the Board stands, as its root's data-board-state names it. */
@@ -159,16 +158,40 @@ function useStall(active: boolean, key: string): boolean {
 /* How many Boards mounted, each one's read owner (P.watchBoard). */
 let boardReaders = 0
 
+/** Renders again on each change the store's `views` section publishes on
+    its own, such as the Board's answer, in a task of React's after the one
+    that brought it, as the Board's own read rendered before the store held
+    it (lib/liveView.ts sets state). A store hook (useSyncExternalStore)
+    would render the whole Board inside the transport's task, after the
+    store took the answer, as one long task. A workspace publish changes
+    `views` too and renders a Board that shows through App's own
+    subscription, so this asks nothing more for it, and a kept Board that
+    hides (components/KeptView.tsx) does not render for the workspace's
+    deliveries. */
+function useViewsNews() {
+  const { views, workspace } = P.updates
+  const [, setSeen] = useState(views.getSnapshot)
+  useEffect(() => {
+    const take = () => {
+      const now = views.getSnapshot()
+      if (now !== workspace.getSnapshot()) setSeen(now)
+    }
+    // what the store published between the render and this effect
+    take()
+    return views.subscribe(take)
+  }, [views, workspace])
+}
+
 /** The read of the Board's answer that view `slot` registers with the
     store (P.watchBoard) for the arguments `key`, while the page shows, with
     Try again, and whether the view shows its cards' delays. Renders again
-    on each change the store's `views` section publishes. */
+    on the store's `views` news (useViewsNews). */
 function useBoardRead(slot: string, key: string | null, delays: boolean) {
   const { visible } = useViewVisibility()
   const [attempt, setAttempt] = useState(0)
   // this mounted Board, which owns the read while it asks
   const [owner] = useState(() => ++boardReaders)
-  usePlannerVersion('views')
+  useViewsNews()
   const ask = visible ? key : null
   useEffect(() => {
     P.watchBoard(slot, ask, attempt, owner, delays)

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { act } from 'react'
+import { act, memo } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ViewRow } from '../../convex/lib/viewReads'
@@ -326,6 +326,45 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     loading.mockReturnValue(null)
     await board.answer()
     expect(state()).toBe('ok')
+  })
+
+  it("renders for its own news, not for the workspace's, as a kept Board that hides", async () => {
+    const board = await loadBoard(network, (snap) => {
+      snap.issues.push(taskRow(snap, 'a', 'todo', 1))
+    })
+    const { useBoardView } = await import('./board/useBoardView')
+    const filters = {
+      mine: false,
+      assignees: [],
+      priority: null,
+      stale: false,
+      focus: false,
+      search: '',
+    }
+    let renders = 0
+    // kept from its parent's renders, as KeptView keeps a hidden page
+    const Probe = memo(function Probe({ scope }: { scope: string }) {
+      const info = board.P.scopeInfo(scope)
+      if (!info) throw new Error('missing the scope')
+      const view = useBoardView(info, filters, 'desktop')
+      renders++
+      return <div data-probe-state={view.state} />
+    })
+    const scope = board.snapshot.projects[0].id
+    await board.renderView(root, () => <Probe scope={scope} />)
+    await board.answer()
+    const answered = renders
+    // another person renames the task: the workspace's delivery alone
+    const a = board.snapshot.issues.find((t) => t.id === 'a')
+    if (!a) throw new Error('no task a')
+    a.title = 'Renamed'
+    board.server.hold = true
+    await board.deliver()
+    expect(renders).toBe(answered)
+    // the Board's answer with it is the Board's own news
+    board.server.hold = false
+    await board.answer()
+    expect(renders).toBeGreaterThan(answered)
   })
 
   it("opens in the task window from the window's own read", async () => {
