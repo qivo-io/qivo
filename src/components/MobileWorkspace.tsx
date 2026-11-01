@@ -546,13 +546,19 @@ function MobileTaskBoard({
   const count = groups.reduce((sum, group) => sum + group.tasks.length, 0)
   // a scope across every project, with none to show (components/NoProjects)
   const noProjects = info.wide && info.metas.length === 0
-  // the list waits while the workspace or the Board's answer still brings tasks
-  const waiting = view.busy || P.stillLoading() !== null
+  // the list waits while the Board's answer, or before it the workspace,
+  // still brings tasks; an answer's rows are all there
+  const waiting = view.busy || (view.state !== 'ok' && P.stillLoading() !== null)
   // Focus stays on a task's row when a change moves it to another section.
   const listRef = useRef<HTMLDivElement>(null)
   const followFocus = useFollowTaskFocus(listRef)
   // App makes its actions again every render; the rows keep one identity
-  const openIssue = useLatest((id: string) => actions.openIssue(id))
+  // a row of a task only the Board's answer brings opens from the window's
+  // own read (P.noteViewTask)
+  const openIssue = useLatest((id: string) => {
+    P.noteViewTask(id)
+    actions.openIssue(id)
+  })
   const shown = groups.filter((group) => group.tasks.length)
 
   /* A list of more than SYNC_LIMIT tasks mounts the rows of its first
@@ -703,9 +709,9 @@ function MobileTaskBoard({
               scheduler={scheduler}
               label={pendingRows}
               // tasks still arriving land among the rows (DeferredList hold),
-              // while the workspace loads in stages; a wait for the Board's answer
-              // holds no slice back
-              hold={P.stillLoading() !== null}
+              // while the store's own result shows during a staged load; the
+              // answer's rows are all there, and a wait for it holds no slice back
+              hold={view.busy && P.stillLoading() !== null}
             />
           </div>
         </section>

@@ -227,10 +227,12 @@ function Note({
   )
 }
 
-/** The note a Board shows above its tasks while some the answer names did
-    not reach the store (state incomplete). The workspace counts as loaded
-    then, so no part of it waits to be asked again: Try again asks only for
-    the Board's answer, and the note says so rather than promise the tasks. */
+/** The note a Board shows above its tasks while its row source did not
+    bring some of the tasks the answer names (state incomplete). The whole
+    answer brings each task's row, so today no Board shows it; a source that
+    brings rows in batches would (views/board/useBoardView.ts). Try again
+    asks only for the Board's answer, and the note says so rather than
+    promise the tasks. */
 export function IncompleteNote({ onRetry }: { onRetry: () => void }) {
   return (
     <div

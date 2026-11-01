@@ -21,7 +21,7 @@ import {
   type FunctionReturnType,
   getFunctionName,
 } from 'convex/server'
-import { ConvexError } from 'convex/values'
+import { ConvexError, type Value } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
@@ -31,6 +31,7 @@ import {
   ORG_DELETING,
   type OrgCreate,
 } from '../../convex/lib/billingAccess'
+import type { BoardAnswer } from '../../convex/lib/board'
 import { asciiEmail, cleanEmail, emailRefusal as storedEmailRefusal } from '../../convex/lib/email'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import type { FieldChange } from '../../convex/lib/functions'
@@ -107,7 +108,7 @@ import {
   DELAY_COLORS,
   DELAY_LABELS,
   DELAY_NEUTRAL,
-  type DELAY_UNKNOWN,
+  DELAY_UNKNOWN,
   type DelayInfo,
   delayBeforeLoads,
 } from '../lib/delay'
@@ -124,7 +125,7 @@ import { loadFailureText } from '../lib/loadFailure'
 import { watchLocalDay } from '../lib/localDay'
 import { pauseSentence } from '../lib/noticeText'
 import { desktopNotify } from '../lib/notify'
-import { openedTaskList } from '../lib/openedTasks'
+import { noteOpenedTask, openedTaskList } from '../lib/openedTasks'
 import { reloadPage } from '../lib/pageHistory'
 import { matchesAllWords, taskSearchText } from '../lib/search'
 import { type OfflineWindow, type SavePause, syncStatus } from '../lib/syncStatus'
@@ -133,6 +134,7 @@ import { byCreation, byNumber, linkViews, type SectionState, shownIds } from '..
 import type { ToastTone } from '../lib/toasts'
 import { type UnconfirmedChange, unconfirmedNote, unconfirmedText } from '../lib/unconfirmedNote'
 import { beginUpdateBlock } from '../lib/updateSafety'
+import { watchVisibility } from '../lib/viewVisibility'
 import { committedByWeek, DEFAULT_PLANNABLE_HOURS, plannableHoursOf } from '../lib/workload'
 import { createEntityLookup } from './entityLookup'
 import {
@@ -151,6 +153,7 @@ import {
   type SideName,
   type SideNews,
 } from './liveParts'
+import { createOwnerLoadCache } from './ownerLoadCache'
 import { createPreferences } from './preferences'
 import { createWorkspaceRows, RowMap, rowCopies } from './rowMap'
 import { keep, keepItems, sameData } from './stable'
@@ -173,6 +176,7 @@ import {
 } from './inboxBulk'
 import type { Row } from './rows'
 import { createPlannerUpdates, type StoreVersion } from './updates'
+import { needsLoad, type ViewDelayCtx, viewDelay } from './viewDelay'
 import {
   type ActivityVM,
   type ArchivedIssueVM,
@@ -210,6 +214,7 @@ import {
   type TeamVM,
   type UserVM,
 } from './viewModels'
+import { createViewRows, type ViewSlot } from './viewRows'
 import { createWorkspaceBase, deepFreeze } from './workspaceBase'
 
 export type { TaskDetailState, TaskDetailVM } from './taskDetail'
@@ -2076,10 +2081,18 @@ const layers = createLayers()
    so a write accepted while this holds, with a delivery since it was sent,
    is already in the newest delivery. */
 let snapshotCurrent = false
-/* Live good deliveries counted since the store started, of the snapshot and
-   of the watched thread. A layer remembers both when it is sent. */
+/* Live good deliveries counted since the store started, of the snapshot, of
+   the watched thread and of the views' reads (viewReads). A layer remembers
+   them when it is sent. */
 let snapshotDeliveries = 0
 let threadDeliveries = 0
+let viewDeliveries = 0
+/** The delivery counters now, which a layer keeps when it is sent. */
+const deliveryCounters = () => ({
+  snapshot: snapshotDeliveries,
+  thread: threadDeliveries,
+  view: viewDeliveries,
+})
 /* Whether the newest thread result was a live good delivery of the watched
    task, as snapshotCurrent is for the snapshot. */
 let threadCurrent = false
@@ -2088,7 +2101,7 @@ let threadCurrent = false
    window's sections, which merge the rows on screen with their answers
    (rebuildSections), but their answers wait with the rest, so one
    transition still renders once. */
-const owed = { workspace: false, thread: false, sections: false }
+const owed = { workspace: false, thread: false, sections: false, view: false }
 let payTimer: ReturnType<typeof setTimeout> | null = null
 let storeEpoch = 0
 let demoDisposed = false
@@ -2104,44 +2117,62 @@ const anchor = <T>(value: T): T => (STRICT_LAYERS ? deepFreeze(structuredClone(v
 /** Rebuilds the rows of `parts` from their anchors and every live layer
     (paintRows), and shows them. A workspace repaint also tells new tasks'
     callers their final handle and ends trouble a recovering delivery held. */
-function repaint(parts: { workspace?: boolean; thread?: boolean; sections?: boolean }) {
+function repaint(parts: {
+  workspace?: boolean
+  thread?: boolean
+  sections?: boolean
+  view?: boolean
+}) {
   if (heldRepaint) {
     heldRepaint.workspace ||= !!parts.workspace
     heldRepaint.thread ||= !!parts.thread
     heldRepaint.sections ||= !!parts.sections
+    heldRepaint.view ||= !!parts.view
     return
   }
   const workspace = !!parts.workspace
   const thread = !!parts.thread
   const sections = !!parts.sections
+  const view = !!parts.view
   if (workspace) owed.workspace = false
   if (thread) owed.thread = false
   if (sections) owed.sections = false
-  if (!owed.workspace && !owed.thread && !owed.sections && payTimer) {
+  if (view) owed.view = false
+  if (!owed.workspace && !owed.thread && !owed.sections && !owed.view && payTimer) {
     clearTimeout(payTimer)
     payTimer = null
   }
-  paintRows(workspace, thread)
+  paintRows(workspace, thread, view)
   if (workspace) {
     if (loadEnds) {
       loadEnds = false
       stillLoading = null
     }
     rebuild()
+    // which tasks the views' rows stand in for follows the workspace
+    const models = reshapeViews()
     moveHandles(lastMoves)
     // a delivery that brings nothing new to the screen, such as a batch's
     // echo of rows a bulk inbox action painted already, renders nothing;
     // rebuild built the sections again too, which the comparison covers
     if (!lastShown || !sameShown(lastShown)) emit()
-    else if (thread) emit('comments')
+    else {
+      if (thread) emit('comments')
+      if (models || view) emit('views')
+    }
     // after the emit: it may send (reapPausedUploads)
     endHeldRecovery()
-  } else if (thread || sections) {
-    if (thread) rebuildComments()
-    // an answer that changes no section, such as the task answer's rerun
-    // after a description save, renders nothing
-    const shown = sections && rebuildSections()
-    if (thread || shown) emit('comments')
+  } else {
+    if (thread || sections) {
+      if (thread) rebuildComments()
+      // an answer that changes no section, such as the task answer's rerun
+      // after a description save, renders nothing
+      const shown = sections && rebuildSections()
+      if (thread || shown) emit('comments')
+    }
+    if (view && reshapeViews()) emit('views')
+    else if (view && viewReadsChanged) emit('views')
+    viewReadsChanged = false
   }
 }
 
@@ -2151,6 +2182,7 @@ let heldRepaint: {
   workspace: boolean
   thread: boolean
   sections: boolean
+  view: boolean
   emit: boolean
 } | null = null
 
@@ -2159,18 +2191,19 @@ let heldRepaint: {
     layer would render the screen once for each. */
 function together(step: () => void) {
   if (heldRepaint) return step()
-  heldRepaint = { workspace: false, thread: false, sections: false, emit: false }
+  heldRepaint = { workspace: false, thread: false, sections: false, view: false, emit: false }
   try {
     step()
   } finally {
     const parts = heldRepaint
     heldRepaint = null
     // a repaint shows the emit's change too, as one render
-    if (parts.workspace || parts.thread || parts.sections)
+    if (parts.workspace || parts.thread || parts.sections || parts.view)
       repaint({
         workspace: parts.workspace || parts.emit,
         thread: parts.thread,
         sections: parts.sections,
+        view: parts.view,
       })
     else if (parts.emit) emit()
   }
@@ -2179,8 +2212,9 @@ function together(step: () => void) {
 /** Builds the rows of the parts named from their anchors and paints every
     live layer over them, in order (layers.ordered), without showing them.
     The workspace rows start again from the server's, with the staged
-    delivery applied (store/rowMap.ts beginRepaint). */
-function paintRows(workspace: boolean, thread: boolean) {
+    delivery applied (store/rowMap.ts beginRepaint), and the views' rows
+    from their reads' answers (store/viewRows.ts). */
+function paintRows(workspace: boolean, thread: boolean, view = false) {
   const painting = workspace && hasSnapshot
   if (painting) {
     workspaceRows.beginRepaint()
@@ -2188,12 +2222,14 @@ function paintRows(workspace: boolean, thread: boolean) {
     countInbox()
   }
   if (thread) buildThreadRows()
+  if (view) viewRows.beginPaint()
   workspaceRows.paint(() => {
     for (const layer of layers.ordered()) {
       // one paint that throws cannot keep every later delivery off the screen
       if (painting && layer.view.workspace) guarded(layer.view.workspace)
       const part = layer.view.thread
       if (thread && part && part.task === watchedComments) guarded(part.paint)
+      if (view && layer.view.view) guarded(layer.view.view)
     }
   })
 }
@@ -2230,8 +2266,210 @@ function owe(part: keyof typeof owed) {
 function pay() {
   if (payTimer) clearTimeout(payTimer)
   payTimer = null
-  if (owed.workspace || owed.thread || owed.sections) repaint({ ...owed })
+  if (owed.workspace || owed.thread || owed.sections || owed.view) repaint({ ...owed })
 }
+
+/* ---- The task rows the open views' answers bring ----
+   The Board registers its read here (P.watchBoard) from an effect, with the
+   arguments on screen, or none while its page or the tab is hidden. The
+   store subscribes, takes each result in the transition that brings it and
+   keeps a view's rows (store/viewRows.ts) while its read stops, until the
+   view asks for other arguments or its page leaves (P.releaseView). The
+   rows' paint waits with the workspace's while a painted write waits
+   (owe), so one transition still renders once. */
+
+const viewRows = createViewRows(isoToWeek)
+
+/** One view's read. */
+type ViewRead = {
+  /** the arguments' key the view asks for, null while it reads nothing */
+  want: string | null
+  /** which mounted view asked last: a leaving page's late cleanup must not
+      stop the read of the page that took its place (P.watchBoard) */
+  owner: number
+  /** what the view's Try again counted when it last asked */
+  attempt: number
+  /** the key of the live subscription, and the way to stop it */
+  live: string | null
+  stop: (() => void) | null
+  /** the last result, for the arguments `key`: a value or an error */
+  held: { key: string; value?: BoardAnswer; error?: unknown } | null
+  /** whether `held` came from the live subscription on the connection the
+      socket holds now (latestConnection) */
+  current: boolean
+  connection: number
+  /** whether the read held a value before, so a wait is a refresh */
+  answered: boolean
+}
+const viewReads = new Map<ViewSlot, ViewRead>()
+/* The socket's newest connection count a view read's handler saw: after a
+   reconnect Convex sends every result again, and none counts as current
+   until it arrived again (store/liveParts.ts). */
+let latestConnection = 0
+/* Whether a view read changed what its view shows outside its rows, such
+   as a failure, so the next view repaint renders it. */
+let viewReadsChanged = false
+
+/** Whether every live view read's newest result is a live delivery on the
+    socket's current connection, so a write accepted now, with a view
+    delivery since it was sent, is held by every view's rows
+    (settleAccepted). */
+function viewsCurrent(): boolean {
+  for (const read of viewReads.values())
+    if (read.live !== null && !(read.current && read.connection === latestConnection)) return false
+  return true
+}
+
+/** Takes view `slot`'s result of its live subscription `token`: its rows
+    become the view's anchor, a live delivery holds every write accepted
+    before it, and the views repaint when the waiting writes allow. */
+function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: string) {
+  let next: ViewRead['held']
+  try {
+    const value = live.read(token) as BoardAnswer | undefined
+    if (value === undefined) return
+    next = { key, value: anchor(value) }
+  } catch (error) {
+    next = { key, error }
+  }
+  read.held = next
+  read.current = true
+  read.connection = latestConnection
+  if (next.value) read.answered = true
+  viewDeliveries++
+  const ok = next.value?.state === 'ok' ? next.value : null
+  if (ok) viewRows.take(slot, [...ok.rows, ...ok.parents])
+  else viewRows.release(slot)
+  // a live delivery holds every write accepted before it, in every live view
+  layers.dropSaved('view')
+  viewReadsChanged = true
+  owe('view')
+}
+
+/** Brings view `slot`'s subscription in line with what it asks for. */
+function syncViewRead(slot: ViewSlot) {
+  const read = viewReads.get(slot)
+  if (!read) return
+  if (read.live !== null && read.live !== read.want) {
+    read.stop?.()
+    read.stop = null
+    read.live = null
+    read.current = false
+  }
+  if (read.want === null || read.live !== null) return
+  const key = read.want
+  const watch = live.watch(api.tasks.board, JSON.parse(key) as Record<string, Value>)
+  read.live = key
+  read.current = false
+  const stopTransitions = live.onTransition(
+    (transition) => {
+      latestConnection = Math.max(latestConnection, transition.connection)
+      if (read.live === key && transition.tokens.has(watch.token))
+        takeViewResult(slot, read, key, watch.token)
+    },
+    { view: true },
+  )
+  read.stop = () => {
+    stopTransitions()
+    watch.stop()
+  }
+  if (watch.joined) takeViewResult(slot, read, key, watch.token)
+}
+
+/** Forgets view `slot`'s rows, its owners' loads and what its read held. */
+function releaseViewRows(slot: ViewSlot) {
+  const read = viewReads.get(slot)
+  if (read) read.held = null
+  ownerLoads.release(slot)
+  if (!viewRows.holds(slot)) return
+  viewRows.release(slot)
+  // no delivery of a released view holds a write over its rows again
+  if (!viewRows.any()) layers.dropSaved('view')
+  viewReadsChanged = true
+  owe('view')
+}
+
+/** What judging a task only a view holds reads from the store
+    (store/viewDelay.ts). */
+const viewDelayCtx: ViewDelayCtx = {
+  load: (org, owner) => ownerLoads.loadOf(org, owner),
+  held: (uuid) => uuidToKey.has(uuid),
+  inView: (uuid) => viewRows.peek(uuid) !== undefined,
+  heldSpans: (owner) => tasks.shownSpans(owner),
+  *viewRows() {
+    for (const [, held] of viewRows.views())
+      for (const row of held.values()) if (!uuidToKey.has(row.id)) yield row
+  },
+  capacity: (id) => {
+    const person = PLANNER.user(id)
+    return (person && plannableHoursOf(person)) || DEFAULT_PLANNABLE_HOURS
+  },
+  projectLive: (id) => !!PLANNER.project(id),
+  orgOf: (id) => rows.profiles.get(id)?.org_id,
+}
+
+/* The delay of each task only a view holds, by uuid, as the last reshape
+   judged it. */
+let viewDelays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
+
+/** Judges the delays of the tasks only the views hold, registers with the
+    owner-load cache the owners whose loads they need, and shapes their
+    models. Answers whether any model changed. */
+function reshapeViews(): boolean {
+  const delays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
+  const views = viewRows.views()
+  for (const [slot, rows] of views) {
+    const needs = new Map<string, { org: string; owner: string; cards: number }>()
+    const read = viewReads.get(slot)
+    for (const row of rows.values()) {
+      if (uuidToKey.has(row.id)) continue
+      if (!delays.has(row.id)) delays.set(row.id, viewDelay(row, viewDelayCtx))
+      // a card whose verdict reads its owner's load registers the owner,
+      // where its project shows delays
+      const owner = taskOwnerId(row, row.has_subtasks)
+      if (
+        !owner ||
+        PLANNER.project(row.project_id)?.trackDelay === false ||
+        !needsLoad(row, viewDelayCtx.capacity)
+      )
+        continue
+      const key = `${row.org_id}:${owner}`
+      const need = needs.get(key) ?? { org: row.org_id, owner, cards: 0 }
+      need.cards++
+      needs.set(key, need)
+    }
+    // a view whose read stops keeps its owners' loads, without reading them
+    ownerLoads.register(slot, [...needs.values()], !!read && read.want !== null)
+  }
+  for (const slot of viewReads.keys()) if (!views.has(slot)) ownerLoads.release(slot)
+  viewDelays = delays
+  const changed = viewRows.reshape((uuid) => uuidToKey.has(uuid), {
+    handleNow: PLANNER.handleNow,
+    extra: (uuid) => JSON.stringify(delays.get(uuid) ?? null),
+  })
+  if (changed) boardLookup = null
+  return changed
+}
+
+/* The tasks a Board looks up by handle (P.boardTasksById): the workspace's
+   own map while no view holds a task it lacks, else both, built once per
+   change of either. */
+let boardLookup: { base: Record<string, IssueVM>; map: Record<string, IssueVM> } | null = null
+
+/* Which person the store's owner-load cache asks as, by organization: a
+   staff seat reads up to CALL_OWNERS owners a call, a guest or Viewer one. */
+const ownerLoads = createOwnerLoadCache({
+  live,
+  staffIn: (org) => {
+    const me = rows.profiles.get(myProfiles.get(org) ?? '')
+    return me?.org_role === 'admin' || me?.org_role === 'user'
+  },
+  changed: () => {
+    viewReadsChanged = true
+    owe('view')
+  },
+  watchVisibility,
+})
 
 /** Paints `view` over the rows on screen, the moment its write is sent, and
     shows the change. A thread part shows only while its task is watched. */
@@ -2240,13 +2478,21 @@ function showPaint(view: View) {
   workspaceRows.paint(() => {
     view.workspace?.()
     thread?.paint()
+    view.view?.()
   })
   if (view.workspace) {
     rebuild()
+    reshapeViews()
     emit()
-  } else if (thread) {
-    rebuildComments()
-    emit('comments')
+  } else {
+    if (thread) {
+      rebuildComments()
+      emit('comments')
+    }
+    if (view.view) {
+      reshapeViews()
+      emit('views')
+    }
   }
 }
 
@@ -2395,7 +2641,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
   const layer = batch ?? layers.open(name, view, o.over)
   // read before the paint, which may drop a hidden parent
   const sentArgs = o.over ? ({ ...args, expected: expectedOf(o.over) } as FunctionArgs<M>) : args
-  layers.send(layer, { snapshot: snapshotDeliveries, thread: threadDeliveries })
+  layers.send(layer, deliveryCounters())
   if (!batch) {
     try {
       showPaint(layer.view)
@@ -2501,16 +2747,26 @@ function settleAccepted(layer: Layer, next: View | null | undefined) {
     !(threadCurrent && watchedComments === view.thread.task && threadDeliveries > layer.seen.thread)
       ? view.thread
       : undefined
-  layers.save(layer, { workspace, thread })
+  // every view read live and current, with a delivery since the send,
+  // holds the write, as the snapshot does (viewsCurrent); with no view rows
+  // left, as after the view closed, it paints nothing and no delivery
+  // would ever end it
+  const viewPart =
+    view.view && viewRows.any() && !(viewsCurrent() && viewDeliveries > layer.seen.view)
+      ? view.view
+      : undefined
+  layers.save(layer, { workspace, thread, view: viewPart })
   if (sent.workspace && !workspace) owed.workspace = true
   if (sent.thread && !thread && sent.thread.task === watchedComments) owed.thread = true
+  if (sent.view && !viewPart) owed.view = true
   // a view keep gave paints now, unless a delivery holds it already
   const now = {
     workspace: !!next && !!workspace,
     thread: !!next && !!thread && thread.task === watchedComments,
+    view: !!next && !!viewPart,
   }
-  if (now.workspace || now.thread) repaint(now)
-  if (!owed.workspace && !owed.thread) return
+  if (now.workspace || now.thread || now.view) repaint(now)
+  if (!owed.workspace && !owed.thread && !owed.view) return
   if (!layers.paintedPending()) pay()
   else payTimer ??= setTimeout(pay, 0)
 }
@@ -2524,8 +2780,9 @@ function settleRefused(layer: Layer) {
     repaint({
       workspace: !!had.workspace || owed.workspace,
       thread: (!!had.thread && had.thread.task === watchedComments) || owed.thread,
+      view: !!had.view || owed.view,
     })
-  } else if ((owed.workspace || owed.thread) && !layers.paintedPending()) pay()
+  } else if ((owed.workspace || owed.thread || owed.view) && !layers.paintedPending()) pay()
 }
 
 /* Test builds only (STRICT_LAYERS): before every emit, the rows on screen
@@ -2545,6 +2802,7 @@ function checkLayers() {
     checkingLayers ||
     owed.workspace ||
     owed.thread ||
+    owed.view ||
     !PLANNER.loaded ||
     !hasSnapshot ||
     base.staging()
@@ -2552,11 +2810,12 @@ function checkLayers() {
     return
   checkingLayers = true
   const saved = workspaceRows.save()
+  const savedViews = viewRows.save()
   const thread = { comments: rows.comments, threadEvents: rows.threadEvents }
   const counters = { hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut }
   try {
     const shown = canonicalRows()
-    paintRows(true, true)
+    paintRows(true, true, true)
     const outside = firstDifference(shown, canonicalRows())
     if (outside) throw new Error(`rows changed outside a layer: ${outside}`)
     const built = canonicalRows(true)
@@ -2566,6 +2825,7 @@ function checkLayers() {
           layer.view.workspace?.()
           const part = layer.view.thread
           if (part && part.task === watchedComments) part.paint()
+          layer.view.view?.()
         }
       }),
     )
@@ -2579,6 +2839,7 @@ function checkLayers() {
     if (changed) throw new Error(`a paint is not safe to run again: ${changed}`)
   } finally {
     workspaceRows.restore(saved)
+    viewRows.restore(savedViews)
     Object.assign(rows, thread)
     ;({ hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut } = counters)
     checkingLayers = false
@@ -2628,6 +2889,7 @@ function canonicalRows(noStamps = false): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [section, value] of Object.entries(rows)) out[section] = JSON.stringify(norm(value))
   out.counters = JSON.stringify([hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut])
+  for (const [slot, value] of viewRows.views()) out[`view:${slot}`] = JSON.stringify(norm(value))
   return out
 }
 
@@ -2674,6 +2936,9 @@ export const __layerProbe = STRICT_LAYERS
       layerCount: () => layers.ordered().length,
       /** How many rows the paints have copied so far (store/rowMap.ts). */
       rowCopies,
+      /** The spans of owner `owner`'s tasks the workspace holds, as the
+          views' delays take them (store/viewDelay.ts heldSpans). */
+      shownSpans: (owner: string) => tasks.shownSpans(owner),
       /** Turns the test-only checks, which rebuild and walk every row,
           off or back on, so a test can count what a step costs. */
       uncheck(off: boolean) {
@@ -2715,7 +2980,7 @@ export const __layerProbe = STRICT_LAYERS
             if (issue) issue.updated_at = new Date().toISOString()
           },
         })
-        layers.send(layer, { snapshot: snapshotDeliveries, thread: threadDeliveries })
+        layers.send(layer, deliveryCounters())
         showPaint(layer.view)
       },
     }
@@ -2726,7 +2991,7 @@ export const __layerProbe = STRICT_LAYERS
     that throws takes its layer away again and passes the throw on. */
 function openUmbrella(name: string, view: View): Layer {
   const layer = layers.open(name, view)
-  layers.send(layer, { snapshot: snapshotDeliveries, thread: threadDeliveries })
+  layers.send(layer, deliveryCounters())
   try {
     showPaint(view)
   } catch (fault) {
@@ -5013,6 +5278,57 @@ function reviewHoursForProject(projectId: string): number {
   return resolveReviewHours(p?.review_hours, parent?.review_hours)
 }
 
+/* The fields updateViewTask writes: the Board's drop and owner picker. */
+const VIEW_WRITES = new Set(['status', 'assignee', 'reviewer'])
+
+/** P.updateIssue on a task only an open view's answer brings
+    (store/viewRows.ts), which the Board's drop and owner picker send: its
+    status, assignee and reviewer, with the roster check the workspace's
+    tasks get. The write paints the views' rows of the task and the
+    workspace's, which skips until the workspace holds the task, so it shows
+    whichever source the screen takes the task from (store/layers.ts View).
+    Its `expected` values are the row on screen. Resolves false for any
+    other field. */
+function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
+  const it = viewRows.byHandle(id)
+  const row = it && viewRows.peek(it.uuid)
+  if (!it || !row) return Promise.resolve(false)
+  if (Object.keys(patch).some((key) => !VIEW_WRITES.has(key))) return Promise.resolve(false)
+  if (refusePausedEdit()) return Promise.resolve(false)
+  for (const holder of [patch.assignee, patch.reviewer]) {
+    const unseen = holder ? PLANNER.unseenAbove(it, holder) : null
+    const project = unseen && PLANNER.project(unseen.project)
+    if (holder && project) {
+      const who = PLANNER.user(holder)?.name || 'This person'
+      toast(
+        `${who} has no access to ${PLANNER.projectLabel(project)}, where a task above ${it.key} is. Give them access or choose someone else.`,
+        'error',
+      )
+      return Promise.resolve(false)
+    }
+  }
+  const wire = mapIssuePatch(patch)
+  const shown: Record<string, unknown> = { ...row }
+  for (const key of Object.keys(wire) as (keyof typeof wire)[])
+    if ((wire[key] ?? null) === (shown[key] ?? null)) delete wire[key]
+  if (!Object.keys(wire).length) return Promise.resolve(true)
+  const paintDb = { ...wire }
+  // a group's status is dormant (updateIssue)
+  if (it.isGroup) delete paintDb.status
+  const at = new Date().toISOString()
+  const uuid = it.uuid
+  const view: View = {
+    view: () => {
+      for (const copy of viewRows.edit(uuid)) stampTaskPatch(copy, paintDb, at)
+    },
+    // skips until the workspace holds the task, then paints it there too
+    workspace: () => patchIssueRow(uuid, paintDb, at),
+  }
+  return send(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }, view, {
+    over: overOf('issues', row, Object.keys(wire)),
+  })
+}
+
 /* Paints the issues.update wire patch `db` on task `uuid` at `at`, with the
    server's touch and stamp rules (updateIssueCore, 0072), worked out from
    the row it paints. The wire carries null-to-clear; the STORED row carries
@@ -5020,7 +5336,28 @@ function reviewHoursForProject(projectId: string): number {
    the way in. Skips a task that is gone. */
 function patchIssueRow(uuid: string, db: IssueWirePatch, at: string) {
   const row = rows.issues.get(uuid)
-  if (!row) return
+  if (row) stampTaskPatch(row, db, at)
+}
+
+/* The task fields issues.update's stamps touch, of a workspace row or a
+   view's answer row (store/viewRows.ts). */
+type PatchedTask = Pick<
+  Row<'issues'>,
+  | 'status'
+  | 'paused'
+  | 'updated_at'
+  | 'done_at'
+  | 'status_at'
+  | 'remaining_hours'
+  | 'remaining_set_at'
+  | 'review_at'
+  | 'reviewer_id'
+  | 'project_id'
+>
+
+/* Paints wire patch `db` on task row `row` at `at` with the server's touch
+   and stamp rules (patchIssueRow). */
+function stampTaskPatch(row: PatchedTask, db: IssueWirePatch, at: string) {
   const prevStatus = row.status
   const before = { status: row.status, reviewer_id: row.reviewer_id, review_at: row.review_at }
   const oldRem = row.remaining_hours == null ? null : Number(row.remaining_hours)
@@ -6123,13 +6460,14 @@ export const PLANNER = {
     uid: string,
     sees = (projectId: string) => PLANNER.canSee(projectId, uid),
   ): IssueVM | null => {
-    const it = typeof x === 'string' ? PLANNER.issueById[x] : x
+    // the parents an open view's answer brings count as the workspace's do
+    const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
     const seen = new Set<string>()
-    for (let up = it?.parent ? PLANNER.issueById[it.parent] : null; up; ) {
+    for (let up = it?.parent ? PLANNER.anyTask(it.parent) : null; up; ) {
       if (seen.has(up.id)) break
       seen.add(up.id)
       if (!sees(up.project)) return up
-      up = up.parent ? PLANNER.issueById[up.parent] : null
+      up = up.parent ? PLANNER.anyTask(up.parent) : null
     }
     return null
   },
@@ -6721,7 +7059,13 @@ export const PLANNER = {
      while tasks still load, since the load of the owners' tasks still to
      come is missing. */
   delayOf: (x: IssueVM | string): DelayInfo | null => {
-    const it = typeof x === 'string' ? PLANNER.issueById[x] : x
+    const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
+    // a task only a view holds is judged from the owner-load cache, which
+    // does not wait for the workspace (store/viewDelay.ts)
+    if (it && viewRows.factsOf(it)) {
+      const verdict = viewDelays.get(it.uuid)
+      return verdict && verdict !== DELAY_UNKNOWN ? verdict : null
+    }
     return (stillLoading === null && it && delayMap.get(it.uuid)) || null
   },
   /** The task window's delay verdict for `it` where it cannot judge one
@@ -6761,7 +7105,7 @@ export const PLANNER = {
     )
   },
   tracksDelay: (x: IssueVM | string): boolean => {
-    const it = typeof x === 'string' ? PLANNER.issueById[x] : x
+    const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
     const p = it && PLANNER.project(it.project)
     return !!p && p.trackDelay !== false
   },
@@ -6791,8 +7135,13 @@ export const PLANNER = {
     return hours
   },
   delayColor: (x: IssueVM | string): string | null => {
-    const it = typeof x === 'string' ? PLANNER.issueById[x] : x
-    if (!it || stillLoading !== null || !PLANNER.tracksDelay(it)) return null
+    const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
+    if (!it || !PLANNER.tracksDelay(it)) return null
+    if (viewRows.factsOf(it)) {
+      const d = PLANNER.delayOf(it)
+      return d ? DELAY_COLORS[d.status] : DELAY_NEUTRAL
+    }
+    if (stillLoading !== null) return null
     const d = delayMap.get(it.uuid)
     return d ? DELAY_COLORS[d.status] : DELAY_NEUTRAL
   },
@@ -6860,7 +7209,135 @@ export const PLANNER = {
       Where a view's own answer and the rows on screen disagree about such
       a task, the rows on screen decide, as the task window's sections do
       (lib/taskSections.ts shows). */
-  ownPaintedTasks: (): ReadonlySet<string> => paintedTaskIds(),
+  ownPaintedTasks: (): ReadonlySet<string> => {
+    const own = paintedTaskIds()
+    for (const uuid of viewRows.paintedTasks()) own.add(uuid)
+    return own
+  },
+  /** Registers view `slot`'s read of the Board's answer (tasks.board) for
+      the arguments `key`, JSON in boardArgs.ts's fixed order, or none with
+      null, as the view's effect runs. The view passes null while its page
+      or the tab is hidden: the read stops and keeps its rows, which show
+      again, as refreshing, when it asks for the same arguments. Other
+      arguments, or a new `attempt` (Try again), drop what it held. `owner`
+      names the mounted view: a leaving page stays mounted, hidden, until
+      the next one painted (components/KeptView.tsx), so the one that asks
+      last owns the read, and another's null asks nothing. */
+  watchBoard: (slot: ViewSlot, key: string | null, attempt = 0, owner = 0) => {
+    let read = viewReads.get(slot)
+    if (read && key === null && read.owner !== owner) return
+    if (!read) {
+      read = {
+        want: null,
+        owner,
+        attempt,
+        live: null,
+        stop: null,
+        held: null,
+        current: false,
+        connection: 0,
+        answered: false,
+      }
+      viewReads.set(slot, read)
+    }
+    if (key !== null && read.owner !== owner) {
+      // another mounted view takes the read over, with its own Try again
+      read.owner = owner
+      read.attempt = attempt
+    }
+    const retry = attempt !== read.attempt
+    read.attempt = attempt
+    if (key !== null && (retry || (read.held !== null && read.held.key !== key))) {
+      read.stop?.()
+      read.stop = null
+      read.live = null
+      read.current = false
+      releaseViewRows(slot)
+    }
+    if (read.want === key && !retry) return
+    read.want = key
+    syncViewRead(slot)
+    // a view whose read stops keeps its owners' loads without reading them
+    ownerLoads.setLive(slot, key !== null)
+  },
+  /** What view `slot`'s read holds: the arguments' key its result answers
+      (null for none), its value or error, whether it is the live
+      subscription's on the current connection, and whether the read held
+      a value before, so a wait is a refresh. */
+  boardRead: (slot: ViewSlot) => {
+    const read = viewReads.get(slot)
+    const held = read?.held ?? null
+    return {
+      key: held?.key ?? null,
+      ...(held && 'value' in held ? { value: held.value } : {}),
+      ...(held && 'error' in held ? { error: held.error } : {}),
+      current:
+        !!read && read.current && read.live === held?.key && read.connection === latestConnection,
+      answered: !!read?.answered,
+    }
+  },
+  /** Forgets view `slot`'s read and rows: its page left. */
+  releaseView: (slot: ViewSlot) => {
+    const read = viewReads.get(slot)
+    if (!read) return
+    read.want = null
+    syncViewRead(slot)
+    releaseViewRows(slot)
+    viewReads.delete(slot)
+  },
+  /** The view model of task `uuid` that view `slot`'s answer brings, when
+      the workspace does not hold the task (store/viewRows.ts). */
+  viewTask: (slot: ViewSlot, uuid: string): IssueVM | undefined => viewRows.model(slot, uuid),
+  /** The task handle `id` names: the workspace's, else one an open view's
+      answer brings. */
+  anyTask: (id: string): IssueVM | undefined => PLANNER.issueById[id] ?? viewRows.byHandle(id),
+  /** The tasks a Board looks its cards' parents up in, by handle: the
+      workspace's, with the tasks only the views hold. The same object
+      while neither changes, so a Board's cell groups stay
+      (lib/boardGroups.ts createCellGrouper). */
+  boardTasksById: (): Record<string, IssueVM> => {
+    const extra = viewRows.handles()
+    if (extra.size === 0) return PLANNER.issueById
+    if (boardLookup?.base !== PLANNER.issueById)
+      boardLookup = {
+        base: PLANNER.issueById,
+        map: { ...Object.fromEntries(extra), ...PLANNER.issueById },
+      }
+    return boardLookup.map
+  },
+  /** Whether task `x`'s delay is unknown: a task only a view holds, in a
+      project that shows delays, whose verdict needs its owner's load, which
+      came back unavailable, failed or past the cap (ownerLoadCache.ts). */
+  delayUnknown: (x: IssueVM | string): boolean => {
+    const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
+    return (
+      !!it &&
+      !!viewRows.factsOf(it) &&
+      PLANNER.tracksDelay(it) &&
+      viewDelays.get(it.uuid) === DELAY_UNKNOWN
+    )
+  },
+  /** Whether task `x`'s card shows a delay band: Slipping, Delayed or Delay
+      unknown (views/kanbanCards.tsx DelayBanner), as the card's height and
+      its hierarchy line read it. */
+  delayBanner: (x: IssueVM | string): boolean => !!PLANNER.delayColor(x) || PLANNER.delayUnknown(x),
+  /** Notes task `id` in the opened-task registry when only a view's answer
+      brings it, so the task window opens it from its own read
+      (lib/openedTasks.ts), as Search does. */
+  noteViewTask: (id: string) => {
+    if (PLANNER.issueById[id]) return
+    const it = viewRows.byHandle(id)
+    const row = it && viewRows.peek(it.uuid)
+    if (!it || !row) return
+    noteOpenedTask({
+      uuid: it.uuid,
+      num: row.num,
+      key: it.key,
+      title: it.title,
+      project: it.project,
+      org: it.org,
+    })
+  },
   /** The handle task `uuid`, number `num` of organization `orgId` opens by
       now: the store's when it holds the task, else the home organization's
       key or another organization's uuid (handleFor). Read when the task
@@ -6944,8 +7421,11 @@ export const PLANNER = {
     return !!it?.paused && !PLANNER.isGroup(it)
   },
   isDone: (x: IssueVM | string): boolean => {
-    const it = typeof x === 'string' ? PLANNER.issueById[x] : x
-    return !!it && isIssueDone(it, PLANNER.issueById)
+    const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
+    if (!it) return false
+    // a task only a view holds: its group facts, as the answer judged them
+    const facts = viewRows.factsOf(it)
+    return facts ? facts.done : isIssueDone(it, PLANNER.issueById)
   },
   /* progress — computed from descendant leaves, never group statuses. A
      group's is unknown while tasks still load, since subtasks may be still
@@ -7142,7 +7622,9 @@ export const PLANNER = {
   ): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
-    if (!row || !uuid || !patch || !Object.keys(patch).length) return Promise.resolve(false)
+    if (!patch || !Object.keys(patch).length) return Promise.resolve(false)
+    // a task only an open view's answer brings (store/viewRows.ts)
+    if (!row || !uuid) return updateViewTask(id, patch)
     if (refusePausedEdit()) return Promise.resolve(false)
     // text the server would refuse is refused before the paint, so a draft
     // is never lost to a refusal
@@ -10752,13 +11234,21 @@ export function disposeDemoStore() {
   stillLoading = null
   loadEnds = false
   layers.clear()
+  for (const read of viewReads.values()) read.stop?.()
+  viewReads.clear()
+  viewRows.clear()
+  viewDelays = new Map()
+  boardLookup = null
+  ownerLoads.clear()
   owed.workspace = false
   owed.thread = false
   owed.sections = false
+  owed.view = false
   if (payTimer) clearTimeout(payTimer)
   payTimer = null
   snapshotDeliveries = 0
   threadDeliveries = 0
+  viewDeliveries = 0
   threadCurrent = false
   preferences.dispose(myProfileSet)
   clearAvatarSources()

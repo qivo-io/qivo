@@ -475,6 +475,16 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     delays: delay as ReadonlyMap<string, DelayInfo>,
     /** Each owner's organization-wide load spans. */
     loads: () => loadByOwner as ReadonlyMap<string, LoadSpan[]>,
+    /** The spans of owner `owner`'s tasks this person is shown, from the
+        rows on screen, pending edits included (fileLoad). */
+    shownSpans(owner: string): LoadSpan[] {
+      const out: LoadSpan[] = []
+      for (const uuid of shownLoadOf.get(owner) ?? []) {
+        const own = shownLoad.get(uuid)
+        if (own) out.push(own.span)
+      }
+      return out
+    },
 
     /** Builds everything from `from`. A task keeps its view model while
         it, its delay and every task above, below and linked to it hold the

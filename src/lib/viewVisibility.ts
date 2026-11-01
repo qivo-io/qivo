@@ -1,9 +1,12 @@
-/* The one gate that pauses a view's live reads (lib/liveView.ts) while the
+/* The one gate that pauses a view's live reads (lib/liveView.ts, and the
+   Board's read the store owns, views/board/useBoardView.ts) while the
    tab or the desktop window is hidden. It follows document.visibilityState,
    not focus. A window people can see keeps updating while another one has
    focus, side by side or on another monitor, and a minimized or hidden one
    pauses (the limits plan's "Hidden tabs and minimized windows"). The
-   workspace's parts, the unread count and notifications do not use it. */
+   workspace's parts, the unread count and notifications do not use it.
+   Views read it through useViewVisibility; the store's owner-load cache
+   (store/ownerLoadCache.ts) through watchVisibility. */
 
 import { useSyncExternalStore } from 'react'
 
@@ -44,4 +47,14 @@ const currentVisibility = () => visibility
 /** The page's visibility, which a view read pauses on. */
 export function useViewVisibility(): Visibility {
   return useSyncExternalStore(subscribeVisibility, currentVisibility, currentVisibility)
+}
+
+/** The gate outside React: calls `listener` with the visibility now, and
+    again each time the page hides or shows. Answers the way to stop. */
+export function watchVisibility(listener: (visibility: Visibility) => void): () => void {
+  const tell = () => listener(visibility)
+  // outside a browser, such as the store's node tests, the page always shows
+  const stop = typeof document === 'undefined' ? () => {} : subscribeVisibility(tell)
+  tell()
+  return stop
 }

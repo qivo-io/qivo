@@ -91,6 +91,7 @@ export function liveOver(client: Client): LiveQueries & {
   batch(step: () => void): void
   hold(orgId: string | null): void
   holdWindow(from: string | null): void
+  reconnect(): void
 } {
   const handlers = new Set<(transition: LiveTransition) => void>()
   // the handlers of views' own reads, which start no generation
@@ -113,6 +114,8 @@ export function liveOver(client: Client): LiveQueries & {
   let stopWhole: (() => void) | null = null
   let at = 0
   let watches = 0
+  // the socket's connection count, which reconnect() moves on
+  let connection = 1
   // a store registers its handler before it watches the root part, so each
   // handler starts a generation, and only the newest one's watches count
   let generation = 0
@@ -132,7 +135,7 @@ export function liveOver(client: Client): LiveQueries & {
     const t = when ? Date.parse(when) : Number.NaN
     // the workspace's delivery time, which a test sets, or the last one
     if (Number.isFinite(t)) at = Math.max(at, t)
-    for (const fn of handlers) fn({ tokens, at, connection: 1 })
+    for (const fn of handlers) fn({ tokens, at, connection })
   }
   /** Brings every workspace part in line with `whole`, answering the tokens
       whose result changed. */
@@ -310,6 +313,13 @@ export function liveOver(client: Client): LiveQueries & {
     holdWindow(from) {
       heldWindow = from
       fire(refresh())
+    },
+    /** Drops the socket and connects again, as Convex does after a network
+        blip: the connection count moves on, and every watched result
+        arrives again in one transition, as it stands now. */
+    reconnect() {
+      connection++
+      fire(new Set(watched.keys()))
     },
     batch(step) {
       batching = new Set()

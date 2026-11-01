@@ -1,7 +1,7 @@
 /* What the Board asks the server (convex/tasks.ts board) for the selection
    and the filter row on screen: one place builds the arguments, in a fixed
    key order, so equal selections share one subscription and their key
-   (useLiveView) and any change asks afresh. */
+   (the store's read, P.watchBoard) and any change asks afresh. */
 
 import { useEffect, useState } from 'react'
 import type { BoardFilters, BoardScope } from '../../../convex/lib/board'

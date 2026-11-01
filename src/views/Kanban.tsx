@@ -618,7 +618,12 @@ function KanbanBoard({
   // the filter row as the Board applies it
   const filters = view.filters
   // App makes its actions again every render; the cards keep one identity
-  const onOpenIssue = useLatest(actions.openIssue)
+  // a card of a task only the Board's answer brings opens from the window's
+  // own read (P.noteViewTask)
+  const onOpenIssue = useLatest((id: string) => {
+    P.noteViewTask(id)
+    actions.openIssue(id)
+  })
   const [dragId, setDragId] = useStateK<string | null>(null)
   useUpdateBlocker(!!dragId)
   // The cell the drag is over. Cells read it themselves, so a dragover
@@ -762,7 +767,8 @@ function KanbanBoard({
   const cellOf = (key: string, items: IssueVM[]): BoardCellCards => ({
     key,
     items,
-    groups: groupCell(key, items, P.issueById),
+    // the tasks only the Board's answer brings head cards too
+    groups: groupCell(key, items, P.boardTasksById()),
   })
   // side-boards: each group its own mini board
   const boards = sideBoards
@@ -988,9 +994,9 @@ function KanbanBoard({
         listRole
         blockSize={BOARD_BLOCK_SIZE}
         // tasks still arriving land among the cards (DeferredList hold),
-        // while the workspace loads in stages; a wait for the Board's answer
-        // holds no slice back
-        hold={P.stillLoading() !== null}
+        // while the store's own result shows during a staged load; the
+        // answer's cards are all there, and a wait for it holds no slice back
+        hold={view.busy && P.stillLoading() !== null}
       />
     )
   }
@@ -1000,7 +1006,7 @@ function KanbanBoard({
      assignee or reviewer, must be able to hold the task; clearing one, or a
      status-only move, needs no roster check. */
   const dropPatchFor = (id: string, statusId: string, { projectIds, owner }: CardDropTarget) => {
-    const task = P.issueById[id]
+    const task = P.anyTask(id)
     if (!task || P.isGroup(task) || !P.canWrite(task.project)) return null
     if (projectIds && !projectIds.includes(task.project)) return null
     const patch = boardDropPatch(task, statusId as IssueVM['status'], owner)
@@ -1110,8 +1116,9 @@ function KanbanBoard({
   // Gated on the CLEARABLE filters: the note's only action is Clear.
   // not while tasks the answer names are missing, which may match
   const noMatches = visible.length === 0 && clearable && view.state !== 'incomplete'
-  // the note waits while the workspace or the answer still brings tasks
-  const waiting = view.busy || P.stillLoading() !== null
+  // the note waits while the answer, or before it the workspace, still
+  // brings tasks; an answer's rows are all there
+  const waiting = view.busy || (view.state !== 'ok' && P.stillLoading() !== null)
   const gridCols = `repeat(${statuses.length}, minmax(${minColumnWidth}px, 1fr))`
 
   // ---- side-boards layout (each group its own mini board) ----------------

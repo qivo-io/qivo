@@ -50,7 +50,7 @@ export function estimateBoardCard(
   cardWidth: number,
 ) {
   return estimateCardHeight(group, cardWidth, {
-    banner: (it) => !!P.delayColor(it),
+    banner: (it) => P.delayBanner(it),
     placed: (it) => !!(it === group.parent ? parentPlaceOf(group, place) : place(it)),
     meta: (it) => metaOf(it, place(it)),
   })
@@ -60,7 +60,9 @@ export function estimateBoardCard(
     (the same objects), its width, the layout `kind` and the store's
     projects stay the same. A Board renders again on every store change and
     sizes every waiting card, so it works out only the cards that changed. A
-    task gets a new object when its title or delay changes; whether it shows
+    task gets a new object when its title or delay changes, a model the
+    Board's answer brings too (store/viewRows.ts), its delay from the
+    owner-load cache, a Delay unknown band included; whether it shows
     a delay banner or a place line also follows its project's delay setting
     and the projects' tree, which change P.projects, and the layout, and its
     due date's width follows the organization's date format. Nothing

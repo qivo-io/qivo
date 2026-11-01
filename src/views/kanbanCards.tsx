@@ -29,8 +29,21 @@ type CardActions = {
  * A neutral band names the state and ends in a block of the roadmap's
  * yellow or red carrying a clock (tokens.css, deviation #312), the band's
  * ::after (styles/glyphs.css), so a card's banner is one element. The Team
- * sync page draws the same banner on its rows. */
+ * sync page draws the same banner on its rows. A task only the Board's
+ * answer brings whose owner's load could not be read gets the same band,
+ * muted, saying Delay unknown (P.delayUnknown), so it never reads as on
+ * track; while that load is on its way it shows nothing. */
 function DelayBanner({ it, id }: { it: IssueVM; id?: string }) {
+  if (P.delayUnknown(it))
+    return (
+      <span
+        id={id}
+        data-delay="unknown"
+        className="delay-banner block w-full bg-[var(--delay-banner)] py-1 pr-10 pl-2.5 text-xs font-semibold tracking-[.05em] text-text-3"
+      >
+        Delay unknown
+      </span>
+    )
   if (!P.delayColor(it)) return null
   const behind = P.delayOf(it)?.status === 'behind'
   return (
@@ -207,7 +220,7 @@ function TaskRow({
   /* The title is the row's name. A screen reader hears the delay, the pause
      and the meta row (priority, hours, place, due date, owner) after it. */
   const ids = useId()
-  const banner = actualIssue && !!P.delayColor(it)
+  const banner = actualIssue && P.delayBanner(it)
   const paused = P.isPaused(it)
   const describedBy = [banner && `${ids}delay`, paused && `${ids}paused`, `${ids}meta`]
     .filter(Boolean)
@@ -363,7 +376,7 @@ function BoardCardView({
                 <div
                   key={it.uuid}
                   data-child-row={it.id}
-                  className={`relative isolate before:pointer-events-none before:absolute before:top-0 before:left-3 before:z-[1] before:w-0.5 before:bg-[var(--board-hierarchy-line)] after:pointer-events-none after:absolute after:left-3 after:z-[1] after:h-px after:w-2 after:bg-[var(--board-hierarchy-line)] ${P.delayColor(it) ? 'after:top-[42px]' : 'after:top-[18px]'} ${index === group.issues.length - 1 ? (P.delayColor(it) ? 'before:h-[42px]' : 'before:h-[18px]') : 'before:bottom-0'} ${index > 0 ? '[&>div>div]:border-t [&>div>div]:border-border' : ''}`}
+                  className={`relative isolate before:pointer-events-none before:absolute before:top-0 before:left-3 before:z-[1] before:w-0.5 before:bg-[var(--board-hierarchy-line)] after:pointer-events-none after:absolute after:left-3 after:z-[1] after:h-px after:w-2 after:bg-[var(--board-hierarchy-line)] ${P.delayBanner(it) ? 'after:top-[42px]' : 'after:top-[18px]'} ${index === group.issues.length - 1 ? (P.delayBanner(it) ? 'before:h-[42px]' : 'before:h-[18px]') : 'before:bottom-0'} ${index > 0 ? '[&>div>div]:border-t [&>div>div]:border-border' : ''}`}
                 >
                   <TaskRow
                     it={it}
@@ -408,9 +421,11 @@ const ownDrag = (props: BoardCardProps) =>
 
 /* A board renders every card again on each store change. A card whose tasks
    are the same objects (P.issues keeps a task's object while it, its delay
-   and its family stay the same), in the same places, with the same context,
-   drag and stale tasks, renders the same, so it skips. Kanban keeps the
-   callbacks' identity. */
+   and its family stay the same, and so does a model the Board's answer
+   brings, store/viewRows.ts, while its row and its delay from the owner-load
+   cache do), in the same places, with the same context, drag and stale
+   tasks, renders the same, so it skips. Kanban keeps the callbacks'
+   identity. */
 const BoardCard = memo(BoardCardView, (before, after) => {
   const a = members(before.group)
   const b = members(after.group)

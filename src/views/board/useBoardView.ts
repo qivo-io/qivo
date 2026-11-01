@@ -1,40 +1,47 @@
 /* What the Board shows, for the desktop Board (views/Kanban.tsx) and the
    phone's task list (components/MobileWorkspace.tsx MobileTaskList): which
    tasks, in which state, from the server's answer for the selection
-   (convex/tasks.ts board) joined to the store's own view models.
+   (convex/tasks.ts board) and the rows it brings.
 
-   - The answer decides which tasks a Board shows. Each one shows as the
-     store's painted view model, found by uuid, so a card follows every
-     edit at once and a drag never snaps back. Answer rows are never put
-     into the store's rows.
+   - The store owns the Board's read (P.watchBoard): each variant registers
+     its arguments from an effect, or none while its page or the tab is
+     hidden (lib/viewVisibility.ts), so a kept page stops its read and reads
+     afresh when it shows again.
+   - The answer decides which tasks a Board shows. Each shows as the
+     workspace's view model where the workspace holds the task, else as the
+     model the store shaped from the answer's row (store/viewRows.ts), so a
+     card shows before the workspace has received its task. Either is
+     painted with the person's pending writes, so a card follows every edit
+     at once and a drag never snaps back.
    - On top of the answer, the app checks each task again against the
      filter row on screen and the selection, so an edit or a new filter
-     hides a card at once. That only narrows. A task the person's own
-     pending writes changed, or a parent they moved a task to or from
-     (P.ownPaintedTasks), shows as the rows on screen say, both ways, as the
-     task window's sections do, so a new task shows at once, a parent whose
-     last subtask left shows as a task, and a refused write takes it away
-     again. Edits by others wait for the answer.
+     hides a card at once. That only narrows. A task shaped from a row has
+     no text or labels, and a group's newest activity is the server's, so
+     for those the text filter and a group's Stale are the answer's alone.
+     A task the person's own pending writes changed, or a parent they moved
+     a task to or from (P.ownPaintedTasks), shows as the rows on screen
+     say, both ways, as the task window's sections do, so a new task shows
+     at once, a parent whose last subtask left shows as a task, and a
+     refused write takes it away again. Edits by others wait for the answer.
    - An answer counts only for the arguments it was sent with. Until the
-     answer for the arguments on screen arrives, the Board shows the store's
-     own result for them (provisionalBoard), marked loading or refreshing,
-     as long as it holds at most BOARD_TASKS cards.
-   - A task the answer names that the store does not hold yet keeps the
-     Board loading, and so does a parent heading the desktop Board shows
-     above its cards. Once the workspace has loaded, it may stay missing for
-     STALL.ms before the Board says that some tasks have not reached it;
-     it never looks empty or complete meanwhile. */
+     answer for the arguments on screen arrives, the Board shows the rows
+     the store kept for those arguments while the read was stopped, marked
+     refreshing, else the store's own result for them (provisionalBoard),
+     marked loading or refreshing, as long as it holds at most BOARD_TASKS
+     cards.
+   - The answer brings a row for each task it names, so a whole answer
+     names no task the Board cannot show. A row source that brings fewer
+     (`missing`) keeps the Board loading, and STALL.ms later says that some
+     tasks have not reached it; it never looks empty or complete meanwhile. */
 
 import { useEffect, useState } from 'react'
-import { api } from '../../../convex/_generated/api'
 import type { BoardAnswer } from '../../../convex/lib/board'
 import { BOARD_TASKS } from '../../../convex/lib/limits'
-import { useLiveView } from '../../lib/liveView'
+import { useViewVisibility } from '../../lib/viewVisibility'
 import { STALL } from '../../store/liveParts'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../../store/planner'
+import { usePlannerVersion } from '../../store/usePlannerVersion'
 import { type BoardVariant, boardFilters, useBoardRequest } from './boardArgs'
-
-const BOARD_QUERY = api.tasks.board
 
 /** Where the Board stands, as its root's data-board-state names it. */
 export type BoardState =
@@ -59,8 +66,9 @@ export type BoardState =
 /** What the Board shows. */
 export type BoardView = {
   state: BoardState
-  /** the tasks the Board shows, groups included, in the store's order;
-      empty where a message replaces the Board */
+  /** the tasks the Board shows, groups included, in the answer's order (by
+      number, then organization and id, the store's order too); empty where
+      a message replaces the Board */
   tasks: IssueVM[]
   /** whether the tasks show; false where a message takes their place */
   shows: boolean
@@ -82,9 +90,32 @@ export type BoardView = {
   retry: () => void
 }
 
-/** Whether a task shows in the Board of `info` with `filters` on screen. */
-const passes = (info: ScopeInfo, filters: IssueFilters, it: IssueVM) =>
-  info.subIdSet.has(it.project) && (!info.only || info.only(it)) && P.passesFilters(it, filters)
+/** Whether a task shows in the Board of `info` with `filters` on screen. A
+    task only the answer brings has no text or labels to search, and a
+    group of it no newest activity of its subtasks, so the answer decides
+    those. */
+function passes(info: ScopeInfo, filters: IssueFilters, it: IssueVM) {
+  const shaped = P.handleOf(it.uuid) === null
+  const local = shaped ? { ...filters, search: '', stale: filters.stale && !it.isGroup } : filters
+  return (
+    info.subIdSet.has(it.project) && (!info.only || info.only(it)) && P.passesFilters(it, local)
+  )
+}
+
+/* A task's number, from the key it renders (QN-n). */
+const numOf = (it: IssueVM) => Number(it.key.slice(it.key.lastIndexOf('-') + 1))
+
+/** Whether `a` comes before `b` in the answer's order: by number, then
+    organization and id (convex/lib/board.ts BoardAnswer). */
+const before = (a: IssueVM, b: IssueVM) =>
+  numOf(a) - numOf(b) || (a.org < b.org ? -1 : a.org > b.org ? 1 : a.uuid < b.uuid ? -1 : 1)
+
+/** The store's view slot each variant's read and rows live under
+    (P.watchBoard, store/viewRows.ts). */
+export const BOARD_SLOTS: Record<BoardVariant, string> = {
+  desktop: 'board:desktop',
+  phone: 'board:phone',
+}
 
 /** The leaves among `tasks`, the cards the desktop Board shows. */
 const cardCount = (tasks: readonly IssueVM[]) => tasks.filter((it) => !P.isGroup(it)).length
@@ -121,6 +152,27 @@ function useStall(active: boolean, key: string): boolean {
   return active && fired === key
 }
 
+/* How many Boards mounted, each one's read owner (P.watchBoard). */
+let boardReaders = 0
+
+/** The read of the Board's answer that view `slot` registers with the
+    store (P.watchBoard) for the arguments `key`, while the page shows, with
+    Try again. Renders again on each change the store's `views` section
+    publishes. */
+function useBoardRead(slot: string, key: string | null) {
+  const { visible } = useViewVisibility()
+  const [attempt, setAttempt] = useState(0)
+  // this mounted Board, which owns the read while it asks
+  const [owner] = useState(() => ++boardReaders)
+  usePlannerVersion('views')
+  const ask = visible ? key : null
+  useEffect(() => {
+    P.watchBoard(slot, ask, attempt, owner)
+    return () => P.watchBoard(slot, null, attempt, owner)
+  }, [slot, ask, attempt, owner])
+  return { ...P.boardRead(slot), retry: () => setAttempt((n) => n + 1) }
+}
+
 /** What the Board of `info` shows with the filter row `filters` (App's
     effFilters on the desktop, the raw row on the phone) in `variant`. */
 export function useBoardView(
@@ -130,38 +182,52 @@ export function useBoardView(
 ): BoardView {
   const filters = boardFilters(info, rawFilters, variant)
   const { want, send } = useBoardRequest(info, filters)
-  const live = useLiveView<BoardAnswer>(BOARD_QUERY, send.kind === 'ask' ? send.key : null)
+  const slot = BOARD_SLOTS[variant]
+  const read = useBoardRead(slot, send.kind === 'ask' ? send.key : null)
   const wantKey = want.kind === 'ask' ? want.key : null
-  const current = wantKey !== null && live.key === wantKey ? live : null
+  // what the read holds for the arguments on screen: its live result, or
+  // the rows it kept while it was stopped
+  const mine = wantKey !== null && read.key === wantKey
+  const current = mine && read.current ? read : null
+  const kept = mine && !read.current && read.value?.state === 'ok' ? read.value : null
   const answer = current?.value ?? null
+  const shownAnswer = answer?.state === 'ok' ? answer : kept
 
-  // an ok answer joined to the store's view models: the tasks it shows, and
-  // how many it names that the store does not hold
+  // an ok answer joined to the tasks it brings, in its order: the tasks it
+  // shows, and how many it names that no source can show yet
   let joined: { tasks: IssueVM[]; missing: number } | null = null
-  if (answer?.state === 'ok') {
+  if (shownAnswer) {
     const own = P.ownPaintedTasks()
-    const shown = new Set<string>()
-    const held = (uuid: string) => {
+    const modelOf = (uuid: string) => {
       const handle = P.handleOf(uuid)
-      return handle === null ? undefined : P.issueById[handle]
+      return handle === null ? P.viewTask(slot, uuid) : P.issueById[handle]
     }
+    const shown = new Set<string>()
+    const tasks: IssueVM[] = []
     let missing = 0
-    for (const row of answer.rows) {
+    for (const row of shownAnswer.rows) {
       if (own.has(row.id)) continue
-      const it = held(row.id)
+      const it = modelOf(row.id)
       if (!it) missing++
-      else if (passes(info, filters, it)) shown.add(it.id)
+      else if (passes(info, filters, it)) {
+        shown.add(it.uuid)
+        tasks.push(it)
+      }
     }
     // the parent headings the desktop Board draws above its cards
     if (variant === 'desktop')
-      for (const row of answer.parents) if (!own.has(row.id) && !held(row.id)) missing++
-    // the person's own pending writes decide for the tasks they changed
+      for (const row of shownAnswer.parents) if (!own.has(row.id) && !modelOf(row.id)) missing++
+    // the person's own pending writes decide for the tasks they changed,
+    // each put in its place in the answer's order
     for (const uuid of own) {
-      const handle = P.handleOf(uuid)
-      const it = handle === null ? undefined : P.issueById[handle]
-      if (it && passes(info, filters, it)) shown.add(it.id)
+      const it = modelOf(uuid)
+      if (!it || shown.has(uuid) || !passes(info, filters, it)) continue
+      shown.add(uuid)
+      let at = tasks.length
+      while (at > 0 && before(it, tasks[at - 1] as IssueVM)) at--
+      tasks.splice(at, 0, it)
     }
-    joined = { tasks: P.issues.filter((it) => shown.has(it.id)), missing }
+    joined = { tasks, missing }
   }
   const stalled = useStall(
     joined !== null && joined.missing > 0 && P.stillLoading() === null,
@@ -173,7 +239,7 @@ export function useBoardView(
     counted: false,
     busy: false,
     answer: null,
-    retry: live.retry,
+    retry: read.retry,
     holds: () => false,
     empty: () => false,
   }
@@ -187,11 +253,27 @@ export function useBoardView(
   if (want.kind === 'choose') return message('choose')
   if (want.kind === 'search_limit') return message('search_limit')
   if (current?.error !== undefined) return message('error')
+  if (answer === null && kept && joined) {
+    // the rows kept for these arguments while the read was stopped, until
+    // the fresh answer arrives
+    const held = new Set(kept.held_projects)
+    const cardProjects = new Set(joined.tasks.map((it) => it.project))
+    return {
+      ...base,
+      state: 'refreshing',
+      busy: true,
+      tasks: joined.tasks,
+      shows: true,
+      holds: (head, subIds) =>
+        held.has(head) || subIds.some((id) => held.has(id) || cardProjects.has(id)),
+      empty: () => kept.rows.length === 0 && P.scopedIssues(info).length === 0,
+    }
+  }
   if (answer === null) {
     const provisional = provisionalBoard(info, filters)
     return {
       ...base,
-      state: live.answered ? 'refreshing' : 'loading',
+      state: read.answered ? 'refreshing' : 'loading',
       busy: true,
       tasks: provisional.shows ? provisional.tasks : [],
       shows: provisional.shows,
@@ -213,6 +295,8 @@ export function useBoardView(
     shows: true,
     holds: (head, subIds) =>
       held.has(head) || subIds.some((id) => held.has(id) || cardProjects.has(id)),
-    empty: () => P.scopedIssues(info).length === 0,
+    // the answer's rows, then, while it names none, the store's tasks of
+    // the selection, which may be still to come while the workspace loads
+    empty: () => answer.rows.length === 0 && P.scopedIssues(info).length === 0,
   }
 }

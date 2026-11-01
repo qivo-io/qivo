@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 
 /* While a large workspace still loads its tasks (store/liveParts.ts), the
-   Board shows the tasks that arrived, but no count and no empty state, which
-   would present part of the answer as all of it. */
+   Board shows every task its answer names, from the answer's rows where the
+   workspace has not brought them yet (store/viewRows.ts), with its counts.
+   Before the answer it shows the tasks that arrived, with no count and no
+   empty state, which would present part of the selection as all of it. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -65,7 +67,7 @@ const count = (status: string) =>
 
 describe('the Board while tasks still load', () => {
   it(
-    'shows the tasks that arrived with no count, and its counts once every task did',
+    'shows every task its answer names, with its counts, before the workspace brings them',
     async () => {
       const board = await loadBoard(network, (snapshot) => {
         snapshot.orgs[0].next_issue_num = 64 * 200
@@ -75,29 +77,33 @@ describe('the Board while tasks still load', () => {
         )
       })
       await board.render(root)
+      expect(board.P.stillLoading()).not.toBeNull()
       expect(board.card('01000000-a')).not.toBeNull()
-      expect(count('progress')).toBe('…')
-      expect(count('todo')).toBe('…')
-      await act(async () => double.live?.holdWindow(null))
+      // b's task window has not arrived; its card is the answer's row
+      expect(board.P.handleOf('fd000000-b')).toBeNull()
       expect(board.card('fd000000-b')).not.toBeNull()
       expect(count('progress')).toBe('1')
+      expect(count('todo')).toBe('1')
+      // the workspace brings it, and the card stays, now the store's own
+      await act(async () => double.live?.holdWindow(null))
+      expect(board.P.handleOf('fd000000-b')).not.toBeNull()
+      expect(board.card('fd000000-b')).not.toBeNull()
       expect(count('todo')).toBe('1')
     },
     BOARD_TEST_TIMEOUT,
   )
 
   it(
-    'says it still loads where no task arrived yet, not that there is none',
+    'says nothing loads where its answer names a task no window brought yet',
     async () => {
       const board = await loadBoard(network, (snapshot) => {
         snapshot.orgs[0].next_issue_num = 64 * 200
         snapshot.issues.push(taskRow(snapshot, 'fd000000-b', 'todo', 1))
       })
       await board.render(root)
-      expect(container.textContent).toContain('Loading tasks…')
-      expect(container.textContent).not.toContain('No tasks yet')
-      await act(async () => double.live?.holdWindow(null))
       expect(board.card('fd000000-b')).not.toBeNull()
+      expect(container.textContent).not.toContain('Loading tasks…')
+      expect(container.textContent).not.toContain('No tasks yet')
     },
     BOARD_TEST_TIMEOUT,
   )
@@ -124,10 +130,10 @@ describe('the Board while tasks still load', () => {
   )
 
   it(
-    'mounts no more cards than its first screen while tasks arrive, then all of them',
+    'mounts its first screen at once and the rest in slices while the workspace loads',
     async () => {
       // more cards than the Board mounts at once (SYNC_LIMIT), all in the
-      // first task window
+      // first task window but one
       const ids = Array.from({ length: 320 }, (_, i) => `01${i.toString(16).padStart(6, '0')}-x`)
       const board = await loadBoard(network, (snapshot) => {
         snapshot.orgs[0].next_issue_num = 64 * 200
@@ -141,11 +147,10 @@ describe('the Board while tasks still load', () => {
       const first = cards()
       expect(first).toBeGreaterThan(0)
       expect(first).toBeLessThan(320)
-      // slices leave the held cell be
-      await act(async () => new Promise((resolve) => setTimeout(resolve, 100)))
-      expect(cards()).toBe(first)
-      await act(async () => double.live?.holdWindow(null))
+      // the answer's cards are all there, so slices do not wait for the
+      // workspace: every card mounts while its last window is held
       await vi.waitFor(() => expect(cards()).toBe(321), { timeout: 10_000 })
+      expect(board.P.stillLoading()).not.toBeNull()
     },
     BOARD_TEST_TIMEOUT,
   )

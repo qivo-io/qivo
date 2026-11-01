@@ -1,6 +1,8 @@
 import type { FunctionReturnType } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import type { api } from '../../../convex/_generated/api'
+import type { BoardAnswer } from '../../../convex/lib/board'
+import type { ViewRow } from '../../../convex/lib/viewReads'
 import type { Workspace } from '../../../convex/lib/workspaceJoin'
 import type { Row } from '../rows'
 
@@ -63,6 +65,11 @@ export type Recipe = {
   /** The write paints only once the server accepts it (a keep), such as
       an upload or a removal the window waits for. */
   paintsOnAccept?: true
+  /** For a write on a task only the Board's answer brings
+      (store/viewRows.ts): the view the runner opens (P.watchBoard), and the
+      Board's answer before the write and, given its arguments, as the
+      server answers after it. */
+  view?: { slot: string; answer: (args?: Record<string, unknown>) => BoardAnswer }
 }
 
 const task = (id: string, num: number, over: Partial<Row<'issues'>> = {}): Row<'issues'> => ({
@@ -278,6 +285,28 @@ const created = (snap: Snapshot, id: string, num: number, over: Partial<Row<'iss
 
 const file = (name: string, type: string) => new File(['bytes'], name, { type })
 
+/** Task task-v (QN-90) of sub-project Work as the Board's answer sends it,
+    which the workspace does not hold, changed by `over`. */
+function viewTask(over: Partial<ViewRow> = {}): ViewRow {
+  const { description: _text, ...fields } = task('task-v', 90)
+  return {
+    ...fields,
+    has_subtasks: false,
+    has_hidden_subtasks: false,
+    has_hidden_parent: false,
+    ...over,
+  }
+}
+
+/** The Board's answer for sub-project Work with task-v alone. */
+const viewAnswer = (over: Partial<ViewRow> = {}): BoardAnswer => ({
+  state: 'ok',
+  rows: [viewTask(over)],
+  parents: [],
+  held_projects: ['work'],
+  projects: ['work'],
+})
+
 export const recipes: Recipe[] = [
   /* --- tasks ---------------------------------------------------------- */
   {
@@ -315,6 +344,29 @@ export const recipes: Recipe[] = [
         remaining_set_at: SERVER,
         updated_at: SERVER,
       }),
+  },
+  {
+    mutation: 'issues:update',
+    mutator: 'updateViewTask',
+    what: "a drop's status on a task only the Board's answer brings",
+    pause: 'P',
+    view: {
+      slot: 'board:desktop',
+      answer: (args) =>
+        viewAnswer(args ? { status: 'progress', status_at: SERVER, updated_at: SERVER } : {}),
+    },
+    act: (P) => P.updateIssue('QN-90', { status: 'progress' }),
+  },
+  {
+    mutation: 'issues:update',
+    mutator: 'updateViewTask',
+    what: "an owner change on a task only the Board's answer brings",
+    pause: 'P',
+    view: {
+      slot: 'board:desktop',
+      answer: (args) => viewAnswer(args ? { assignee_id: PAT, updated_at: SERVER } : {}),
+    },
+    act: (P) => P.updateIssue('QN-90', { assignee: PAT }),
   },
   {
     mutation: 'issues:createParent',
