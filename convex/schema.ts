@@ -1730,12 +1730,15 @@ export default defineSchema({
   // leave its counts alone, then reconciles its active tasks in
   // _creationTime order, while every write reconciles the tasks it writes.
   // Every task write reads it (model/overviewCounts.ts countsKept), so it
-  // changes only when a run starts, starts counting and ends; where the run
-  // got to goes in the backfill's own cursor. Deleted once every task is
-  // reconciled, and with the organization.
+  // changes only when a run starts, is reset, starts counting and ends;
+  // where the run got to goes in the backfill's own cursor, with the run's
+  // `generation`, new at each start and reset, so a position from an
+  // earlier run counts for nothing. Deleted once every task is reconciled,
+  // and with the organization.
   overview_count_runs: defineTable({
     org_id: v.string(),
     counting: v.boolean(),
+    generation: v.string(),
   }).index('by_org', ['org_id']),
 
   // A top-level project with sub-projects archived, restored, moved to

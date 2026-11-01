@@ -21,7 +21,10 @@
  * overview_tasks row holds, so whichever of a step, a write and a regroup
  * comes first, the count is exact however the tasks change while it runs.
  * The _creationTime a run counted through goes in the call's cursor, not
- * in the run row, which every task write reads. The last step deletes the
+ * in the run row, which every task write reads, with the run's generation:
+ * a position counts only in the run, and since the reset, it was counted
+ * in, so a replayed cursor or one a recount overtook counts from the start
+ * (step). The last step deletes the
  * run row and sets overview_counts_at; a regroup started while it counted
  * goes on, and its top-level project answers `counting` until it ends.
  *
@@ -82,6 +85,7 @@ import { internalAction, internalMutation, internalQuery } from '../_generated/s
 import { byId, usedMoreThan } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { audit as writeAudit } from '../model/admin'
+import { newUuid } from '../model/orgs'
 import {
   addCounts,
   countTasks,
@@ -125,10 +129,18 @@ export const RUN = { orgs: 100, ms: 5 * 60_000 }
 const START = Number.MIN_SAFE_INTEGER
 
 /** What one step did: whether the organization is counted, the rows it
- * deleted, the tasks it counted and how many of them moved the counts, and
- * for a count step the _creationTime it counted through, which the next
- * count step goes on after. */
-type Step = { done: boolean; deleted: number; tasks: number; rows: number; through?: number }
+ * deleted, the tasks it counted and how many of them moved the counts, the
+ * generation of the run it worked in, and for a count step the
+ * _creationTime it counted through, which the next count step of that run
+ * goes on after. */
+type Step = {
+  done: boolean
+  deleted: number
+  tasks: number
+  rows: number
+  generation?: string
+  through?: number
+}
 
 /** One page of a dry run: what its tasks add to each row by key
  * (model/overviewCounts.ts countTasks), how many tasks it read and the
@@ -138,26 +150,39 @@ type Checked = { rows: [string, LeafCounts][]; tasks: number; through: number }
 /**
  * One step of the organization's count, in its own transaction: it starts
  * the run, deletes a page of the organization's count, group and regroup
- * rows, or counts one page of the tasks created after `after` (from the
- * start without it), and ends the run once no active task is past where it
- * counted. A run left unfinished goes on where it is, unless `restart`,
- * which sets it back to its reset, as a recount does. A count step that
- * passes COUNT_PAGE.room stops before its next creation time (throughTasks)
- * and answers the one it counted through. An organization deleted
- * meanwhile is done.
+ * rows, or counts one page of the tasks created after `after`, and ends the
+ * run once no active task is past where it counted. A run left unfinished
+ * goes on where it is, unless `restart`, which sets it back to its reset,
+ * as a recount does. Each run, and each reset of one, has a new
+ * `generation`, which every step answers: `after` counts only with the
+ * generation it was counted in, so a position from an earlier run or from
+ * before a reset, such as a replayed cursor's or one a recount overtook,
+ * counts from the start. A count step that passes COUNT_PAGE.room stops
+ * before its next creation time (throughTasks) and answers the one it
+ * counted through. An organization deleted meanwhile is done.
  */
 export const step = internalMutation({
-  args: { org_id: v.string(), restart: v.optional(v.boolean()), after: v.optional(v.number()) },
-  handler: async (ctx, { org_id, restart = false, after = START }): Promise<Step> => {
+  args: {
+    org_id: v.string(),
+    restart: v.optional(v.boolean()),
+    after: v.optional(v.number()),
+    generation: v.optional(v.string()),
+  },
+  handler: async (ctx, { org_id, restart = false, after, generation }): Promise<Step> => {
     const idle = { deleted: 0, tasks: 0, rows: 0 }
     if ((await byId(ctx, 'organizations', org_id)) === null) return { done: true, ...idle }
     let run = await overviewCountRun(ctx.db, org_id)
     if (run === null) {
-      const _id = await ctx.db.insert('overview_count_runs', { org_id, counting: false })
+      const _id = await ctx.db.insert('overview_count_runs', {
+        org_id,
+        counting: false,
+        generation: newUuid(),
+      })
       run = (await ctx.db.get(_id)) as Doc<'overview_count_runs'>
     } else if (restart) {
-      await ctx.db.patch(run._id, { counting: false })
-      run = { ...run, counting: false }
+      const reset = { counting: false, generation: newUuid() }
+      await ctx.db.patch(run._id, reset)
+      run = { ...run, ...reset }
     }
     if (!run.counting) {
       // no regroup starts while the run resets, so those left go now, and
@@ -170,12 +195,14 @@ export const step = internalMutation({
           .take(COUNT_PAGE.rows - deleted)
         for (const row of rows) await ctx.db.delete(row._id)
         deleted += rows.length
-        if (deleted >= COUNT_PAGE.rows) return { done: false, ...idle, deleted }
+        if (deleted >= COUNT_PAGE.rows)
+          return { done: false, ...idle, deleted, generation: run.generation }
       }
       await ctx.db.patch(run._id, { counting: true })
-      return { done: false, ...idle, deleted }
+      return { done: false, ...idle, deleted, generation: run.generation }
     }
-    const page = await taskPage(ctx.db, org_id, after, COUNT_PAGE)
+    const from = after !== undefined && generation === run.generation ? after : START
+    const page = await taskPage(ctx.db, org_id, from, COUNT_PAGE)
     if (page === null) {
       await ctx.db.delete(run._id)
       await stampOverview(ctx.db, org_id, new Date().toISOString())
@@ -190,7 +217,14 @@ export const step = internalMutation({
       },
       () => usedMoreThan(ctx, COUNT_PAGE.room),
     )
-    return { done: false, ...idle, tasks: went, rows, through: page.tasks[went - 1]._creationTime }
+    return {
+      done: false,
+      ...idle,
+      tasks: went,
+      rows,
+      generation: run.generation,
+      through: page.tasks[went - 1]._creationTime,
+    }
   },
 })
 
@@ -350,12 +384,13 @@ export const orphans = internalMutation({
 })
 
 /** Where a call stopped at organization `id`: inside its run, once a step
- * of it committed in that call, with the _creationTime its count steps
- * counted through (`through`, absent before the first count step), or
- * before the organization (`before`), which the next call takes up as if
- * it came to it fresh. */
+ * of it committed in that call, with the generation of that run and the
+ * _creationTime its count steps counted through in it (`through`, absent
+ * before the first count step), or before the organization (`before`),
+ * which the next call takes up as if it came to it fresh. */
 const vInside = v.object({
   id: v.string(),
+  generation: v.optional(v.string()),
   through: v.optional(v.number()),
   before: v.optional(v.boolean()),
 })
@@ -394,7 +429,7 @@ export const audit = internalMutation({
 
 const stepRef = makeFunctionReference<
   'mutation',
-  { org_id: string; restart?: boolean; after?: number },
+  { org_id: string; restart?: boolean; after?: number; generation?: string },
   Step
 >('internal/overviewCountsBackfill:step')
 const storedPageRef = makeFunctionReference<
@@ -603,6 +638,7 @@ export const run = internalAction({
       }
       let restart = recount && !resume
       let after = resume ? from.through : undefined
+      let generation = resume ? from.generation : undefined
       // a call that goes on inside keeps that place should its first step fail
       if (resume) here = from
       for (;;) {
@@ -610,6 +646,7 @@ export const run = internalAction({
           org_id,
           restart,
           ...(after === undefined ? {} : { after }),
+          ...(generation === undefined ? {} : { generation }),
         })
         worked = true
         restart = false
@@ -620,8 +657,17 @@ export const run = internalAction({
           totals.counted++
           return null
         }
+        // a new run, or a reset, starts the count again
+        if (got.generation !== undefined && got.generation !== generation) {
+          generation = got.generation
+          after = undefined
+        }
         if (got.through !== undefined) after = got.through
-        here = { id: org_id, ...(after === undefined ? {} : { through: after }) }
+        here = {
+          id: org_id,
+          ...(generation === undefined ? {} : { generation }),
+          ...(after === undefined ? {} : { through: after }),
+        }
         if (late()) return here
       }
     }

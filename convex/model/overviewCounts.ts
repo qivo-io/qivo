@@ -521,9 +521,11 @@ const regroupStepRef = makeFunctionReference<'mutation', { family_id: string }, 
  * `family` (itself among them when it is one of them) just archived,
  * restored, moved to Deleted items or revealed again, and the parents of
  * those tasks, in the transaction that changed them. A regroup of the same
- * top-level project under way reads them after its own, each project it
- * has not read yet once. An organization whose counts are not kept needs
- * none. A chain that stopped is restarted by overviewRegroup.ts recover.
+ * top-level project under way reads them after its own, once each while
+ * none of its reading has begun: a project whose reading has begun, which
+ * may have reconciled some of its tasks as the project was, gets another
+ * whole pass. An organization whose counts are not kept needs none. A
+ * chain that stopped is restarted by overviewRegroup.ts recover.
  */
 export async function startRegroup(
   ctx: MutationCtx,
@@ -535,7 +537,9 @@ export async function startRegroup(
   const now = new Date().toISOString()
   const row = await overviewRegroupOf(ctx.db, family.id)
   if (row !== null) {
-    const waiting = new Set(row.projects.slice(row.at))
+    // the project at `at` waits too until a step of it committed
+    const begun = row.cursor !== undefined || row.after !== undefined
+    const waiting = new Set(row.projects.slice(row.at + (begun ? 1 : 0)))
     const added = [...new Set(projects)].filter((id) => !waiting.has(id))
     if (added.length > 0) await ctx.db.patch(row._id, { projects: [...row.projects, ...added] })
     return

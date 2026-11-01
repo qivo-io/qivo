@@ -22,18 +22,28 @@ import {
 } from '../model/overviewCounts'
 import type { T } from './helpers.setup'
 
+/** Where a run of the backfill got to: its generation and the creation
+ * time its count steps counted through, as one step answers them. */
+export type CountPosition = { generation?: string; through?: number }
+
+/** One step of the backfill's count of organization `org_id`, going on
+ * from `at`, where the step before got to. */
+export const countStep = (t: T, org_id: string, at: CountPosition = {}) =>
+  t.mutation(internal.internal.overviewCountsBackfill.step, {
+    org_id,
+    ...(at.through === undefined ? {} : { after: at.through }),
+    ...(at.generation === undefined ? {} : { generation: at.generation }),
+  })
+
 /** Counts organization `org_id` with the backfill's own steps, each its
- * own transaction as on a deployment, each count step going on after the
- * creation time the one before counted through, until it is counted. */
+ * own transaction as on a deployment, each going on where the one before
+ * got to, until it is counted. */
 export async function countOrg(t: T, org_id: string): Promise<void> {
-  let after: number | undefined
+  let at: CountPosition = {}
   for (let n = 0; n < 400; n++) {
-    const got = await t.mutation(internal.internal.overviewCountsBackfill.step, {
-      org_id,
-      ...(after === undefined ? {} : { after }),
-    })
+    const got = await countStep(t, org_id, at)
     if (got.done) return
-    if (got.through !== undefined) after = got.through
+    at = got
   }
   throw new Error('the count did not end')
 }

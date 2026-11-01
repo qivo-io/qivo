@@ -49,7 +49,14 @@ import {
   withOrg,
 } from './helpers.setup'
 import { NORTHSTAR, northstarId, plantNorthstar } from './northstar.setup'
-import { countOrg, expectCountsExact, stored, truth } from './overviewCounts.setup'
+import {
+  type CountPosition,
+  countOrg,
+  countStep,
+  expectCountsExact,
+  stored,
+  truth,
+} from './overviewCounts.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import { deleteProject, deleteTask, installTrashTimers, itemFor, runSteps } from './trash.setup'
 
@@ -381,7 +388,7 @@ describe('overview counts', () => {
 
     // a run or a regroup under way
     const run = await t.run((ctx) =>
-      ctx.db.insert('overview_count_runs', { org_id, counting: true }),
+      ctx.db.insert('overview_count_runs', { org_id, counting: true, generation: uuid() }),
     )
     expect(await read()).toBeNull()
     await t.run((ctx) => ctx.db.delete(run))
@@ -564,7 +571,11 @@ describe('overview counts', () => {
       await ctx.db.insert('overview_counts', { ...base, project_id: uuid(), project_at: 1 })
       await ctx.db.insert('overview_counts', { ...base, project_id: f.sub.id, project_at: 1 })
       await ctx.db.insert('overview_tasks', { org_id, task_id: uuid(), task_at: 1, group: true })
-      await ctx.db.insert('overview_count_runs', { org_id: uuid(), counting: true })
+      await ctx.db.insert('overview_count_runs', {
+        org_id: uuid(),
+        counting: true,
+        generation: uuid(),
+      })
     })
     expect(await backfill(t, { dry_run: true })).toMatchObject({ counted: 0, orphans: 4 })
     // a second run leaves the counted organizations alone and takes them
@@ -687,14 +698,10 @@ describe('overview counts', () => {
       )
     // a backfill step between two deletion steps, going on where the one
     // before counted through, as a run meanwhile would
-    let after: number | undefined
+    let at: CountPosition = {}
     for (let n = 0; n < 400 && !(await gone()); n++) {
       await t.mutation(internal.orgRemovals.step, { org_id })
-      const got = await t.mutation(internal.internal.overviewCountsBackfill.step, {
-        org_id,
-        ...(after === undefined ? {} : { after }),
-      })
-      if (got.through !== undefined) after = got.through
+      at = await countStep(t, org_id, at)
     }
     expect(await gone()).toBe(true)
     for (const table of OVERVIEW_TABLES)
@@ -754,11 +761,7 @@ describe('overview counts', () => {
     await w.create({ project_id: f.sub2.id, parent_id: parent.id })
     await w.create({ status: 'progress' })
     Object.assign(COUNT_PAGE, { tasks: 1 })
-    const step = (after?: number) =>
-      t.mutation(internal.internal.overviewCountsBackfill.step, {
-        org_id,
-        ...(after === undefined ? {} : { after }),
-      })
+    const step = (at?: CountPosition) => countStep(t, org_id, at)
     // the reset, then a count step through the parent, which it counts as
     // a group
     expect(await step()).toMatchObject({ done: false, tasks: 0 })
@@ -770,7 +773,7 @@ describe('overview counts', () => {
     expect(await t.run((ctx) => overviewCountRun(ctx.db, org_id))).toEqual(run)
     // the subtask's project archived while the count goes on
     await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
-    for (let n = 0; n < 20 && !got.done; n++) got = await step(got.through)
+    for (let n = 0; n < 20 && !got.done; n++) got = await step(got)
     expect(got.done).toBe(true)
     // the regroup it started stays, and its project reads as counting
     expect(await t.run((ctx) => overviewRegroupOf(ctx.db, f.meta.id))).not.toBeNull()
@@ -814,6 +817,72 @@ describe('overview counts', () => {
     console.log('one count page over 50 archived sub-projects:', took)
     expect(took.ranges).toBeLessThan(1000)
   }, 300_000)
+
+  it('a project changed again while its regroup is partway through it is read again whole', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    await stamp(t, org_id)
+    const w = writers(t, f)
+    // three parents in FW, each with its only subtask in PCB
+    for (let n = 0; n < 3; n++) {
+      const parent = await w.create({ status: 'todo' })
+      await w.create({ project_id: f.sub2.id, parent_id: parent.id })
+    }
+    await expectCountsExact(t, org_id, 'groups through PCB')
+    Object.assign(OVERVIEW_REGROUP, { tasks: 1 })
+    await as(t, f.admin).mutation(api.projects.archive, { org_id, id: f.sub2.id })
+    // one step reads PCB's first page as archived, then PCB is restored
+    // before the next
+    await t.mutation(internal.overviewRegroup.step, { family_id: f.meta.id })
+    expect((await t.run((ctx) => overviewRegroupOf(ctx.db, f.meta.id)))?.cursor).toBeDefined()
+    await as(t, f.admin).mutation(api.projects.unarchive, { org_id, id: f.sub2.id })
+    expect((await t.run((ctx) => overviewRegroupOf(ctx.db, f.meta.id)))?.projects).toEqual([
+      f.sub2.id,
+      f.sub2.id,
+    ])
+    await runSteps(t)
+    await expectCountsExact(t, org_id, 'restored between two steps')
+  })
+
+  it('a replayed continuation and one a recount overtook count the organization from its start', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const w = writers(t, f)
+    for (let n = 0; n < 4; n++) await w.create({ status: 'todo', remaining_hours: n })
+    Object.assign(COUNT_PAGE, { tasks: 1 })
+    Object.assign(RUN, { ms: 0 })
+    /* Calls of run from `cursor` until one stops inside this organization's
+     * count past a count step, and that call's cursor. */
+    const inside = async (args: Omit<RunArgs, 'cursor'>, cursor?: RunArgs['cursor']) => {
+      for (let n = 0; n < 100; n++) {
+        const got: RunAnswer = await backfill(t, { ...args, ...(cursor ? { cursor } : {}) })
+        const at = got.cursor
+        if (at === null) throw new Error('the run ended before it stopped inside')
+        if (at.table === 'organizations' && at.org?.id === org_id && at.org.through !== undefined)
+          return at
+        cursor = at
+      }
+      throw new Error('the run did not stop inside')
+    }
+    // a call that stopped inside the count, and the calls from it to the end
+    const saved = await inside({ dry_run: false })
+    await callsFrom(t, { dry_run: false }, saved)
+    await expectCountsExact(t, org_id, 'counted')
+    // the same continuation again, after the organization is counted
+    await callsFrom(t, { dry_run: false }, saved)
+    await expectCountsExact(t, org_id, 'a replayed continuation')
+
+    // a recount stopped inside the count, a second recount that resets the
+    // run and counts past it, then the first going on, then the second
+    const first = await inside({ dry_run: false, recount: true })
+    const second = await inside({ dry_run: false, recount: true })
+    await callsFrom(t, { dry_run: false, recount: true }, first)
+    await expectCountsExact(t, org_id, 'the overtaken recount ended')
+    await callsFrom(t, { dry_run: false, recount: true }, second)
+    await expectCountsExact(t, org_id, 'the second recount ended')
+  })
 
   it('recovery restarts a regroup whose step stopped', async () => {
     const t = newT()
@@ -925,6 +994,24 @@ async function calls(t: T, args: Omit<RunArgs, 'cursor'>): Promise<RunAnswer[]> 
     got.push(last)
     if (last.cursor === null) return got
     cursor = last.cursor
+  }
+  throw new Error('the run did not end')
+}
+
+/** Every call of a run from `cursor`, each from the cursor the one before
+ * answered, until one answers done. */
+async function callsFrom(
+  t: T,
+  args: Omit<RunArgs, 'cursor'>,
+  cursor: NonNullable<RunArgs['cursor']>,
+): Promise<RunAnswer[]> {
+  const got: RunAnswer[] = []
+  let at: RunArgs['cursor'] = cursor
+  for (let n = 0; n < 100; n++) {
+    const last = await backfill(t, { ...args, cursor: at })
+    got.push(last)
+    if (last.cursor === null) return got
+    at = last.cursor
   }
   throw new Error('the run did not end')
 }
