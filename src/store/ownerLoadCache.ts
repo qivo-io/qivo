@@ -7,20 +7,23 @@
      organization, and releases them when it closes. The cache subscribes
      only to what some view needs while it reads, and stops the rest. A view
      whose read stops, as a kept page that hides, keeps its owners' last
-     answers, which it shows marked as refreshing until it reads again.
+     answers, which its delays read, unmarked, until the calls answer again.
+     The Board's refreshing state covers only the wait for its own answer.
    - A call names one organization. For the person's own staff seat there
      (an admin or user, convex/lib/access.ts isOrgStaff) the owners go into
      calls of at most CALL_OWNERS, each owner in a fixed group by a hash of
      its id, so one new owner changes one call, and a change to one owner's
-     spans sends that call again, not all of them. A guest or Viewer gets one
-     owner a call (the server answers one), and a view gets at most
-     GUEST_CALLS of those, its owners with the most cards first; the others
-     are `capped`.
+     spans sends that call again, not all of them. The groups are the fewest
+     that hold the owners, a power of two, so 1,000 owners make 64 groups,
+     about 64 calls (a group the hash fills past CALL_OWNERS splits in two).
+     A guest or Viewer gets one owner a call (the server answers one), and a
+     view gets at most GUEST_CALLS of those, its owners with the most cards
+     first; the others are `capped`.
    - An owner a call answered `not_read` (its room ran out) is asked again in
      a call of its own owners, which the server always starts reading.
    - The cache follows the hidden-tab gate (lib/viewVisibility.ts): while the
      page is hidden it holds no subscription, and it keeps each owner's last
-     answer, which the views mark as refreshing until the reads answer again.
+     answer, which the views read as it is until the calls answer again.
    - An owner's state is `waiting` until its first answer, then `ok` with its
      spans, `unavailable` (past the reader's bounds), `failed` (the call
      failed) or `capped`. None of them but `ok` is a load: the delay rules

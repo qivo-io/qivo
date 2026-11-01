@@ -268,7 +268,7 @@ describe('the owner-load cache', () => {
     expect(s.cache.loadOf('org', 'p0').state).toBe('ok')
     s.show(true)
     expect(s.calls()).toHaveLength(1)
-    // kept until the fresh answer, which the views mark as refreshing
+    // kept, unmarked, until the fresh answer
     expect(s.cache.loadOf('org', 'p0').state).toBe('ok')
     // a kept page that hides stops reading too, and keeps its owners
     s.cache.setLive('board', false)
