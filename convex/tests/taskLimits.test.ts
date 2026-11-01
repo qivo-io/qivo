@@ -51,6 +51,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { countOrg } from './overviewCounts.setup'
 import { deleteTask, itemFor } from './trash.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
@@ -76,6 +77,8 @@ async function setup(t: T = newT()): Promise<Fx> {
       level: 'user',
     }),
   )
+  // counted as every organization is, so each write keeps its counts
+  await countOrg(t, f.org.id)
   return { t, ...f }
 }
 
@@ -546,6 +549,8 @@ describe('a move that carries archived subtasks', () => {
       fx.org.id,
       kids.map((kid) => kid.id),
     )
+    // the planted rows counted, as a deployment's are
+    await countOrg(fx.t, fx.org.id)
     return kids
   }
 

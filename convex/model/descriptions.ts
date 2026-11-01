@@ -475,16 +475,22 @@ export async function insertTask(
  * it, so it never stops a move, an archive or the nightly archive. Either
  * reads the task's first two rows (firstRows), which a write of the first
  * reads again, unless the caller passes them as `rows`, as a subtree change
- * does to price each patch first (model/issues.ts patchCost). */
+ * does to price each patch first (model/issues.ts patchCost). The overview
+ * counts (model/overviewCounts.ts tallyOverview) move from the task as
+ * stored, which it reads again first, unless `stored` says `issue` is the
+ * task as stored now, read in this transaction and written since only
+ * through these helpers, as a subtree change's rows are: patchCost prices
+ * no second read of them. */
 export async function patchTask(
   db: Writer,
   issue: Doc<'issues'>,
   fields: TaskFields,
   rows?: readonly Doc<'issue_descriptions'>[],
+  o: { stored?: boolean } = {},
 ) {
   // the stored task, which the overview counts move from
   const kept = await countsKept(db, issue.org_id)
-  const stored = kept ? ((await db.get(issue._id)) ?? issue) : issue
+  const stored = kept && o.stored !== true ? ((await db.get(issue._id)) ?? issue) : issue
   const after = { ...issue, ...fields }
   if ('description' in fields) {
     await db.patch('issues', issue._id, { ...fields, description: undefined })
