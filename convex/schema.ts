@@ -308,6 +308,13 @@ const issuesTable = defineTable({
   // ones (teamSync.ts lastComments).
   .index('by_assignee_archived_status', ['assignee_id', 'archived_at', 'status'])
   .index('by_reviewer_archived_status', ['reviewer_id', 'archived_at', 'status'])
+  // The Overview's lists and its overdue and projected figures read a
+  // sub-project's active tasks, paused or not, by due date (lib/overview.ts);
+  // a missing due date sorts before every day, so undated tasks are their
+  // own range.
+  .index('by_project_archived_paused_due', ['project_id', 'archived_at', 'paused', 'due_date'])
+  // The same for the tasks assigned to a person, in My view.
+  .index('by_assignee_archived_paused_due', ['assignee_id', 'archived_at', 'paused', 'due_date'])
   .index('by_created_by_archived', ['created_by', 'archived_at'])
   .index('by_reporter_archived', ['reporter_id', 'archived_at'])
   // main Search's title matches within an organization, narrowed to a
