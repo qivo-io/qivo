@@ -1,7 +1,7 @@
 /* The Overview's counts (schema.ts overview_counts, model/overviewCounts.ts):
  * after every writer, each sub-project's and each owner's rows equal a
- * recount of the tasks, and overview_groups holds exactly the active tasks
- * with an active subtask in a live project. Project archives, restores and
+ * recount of the tasks, and overview_tasks marks as groups exactly the
+ * active tasks with an active subtask in a live project. Project archives, restores and
  * moves to Deleted items reconcile in background steps (overviewRegroup.ts)
  * while the counts answer `counting`; the backfill
  * (internal/overviewCountsBackfill.ts) counts an organization exactly while
@@ -22,6 +22,7 @@ import { wipeWorkStep } from '../model/orgDeletion'
 import { DEFAULT_ARCHIVE_DAYS } from '../model/orgs'
 import {
   addCounts,
+  countsOfRows,
   countsReady,
   countWhole,
   type LeafCounts,
@@ -30,6 +31,7 @@ import {
   OVERVIEW_TABLES,
   overviewCountRun,
   overviewRegroupOf,
+  ownerRows,
   stampOverview,
   subProjectCounts,
 } from '../model/overviewCounts'
@@ -97,7 +99,7 @@ const truth = (t: T, orgId: string) =>
       if (groups.has(task.id) || project === undefined || project.parent_id === undefined) continue
       add(`${project.id}||${task.num % OVERVIEW_SHARDS}`, task)
       const owner = taskOwnerId(task, false)
-      if (owner !== undefined) add(`${project.id}|${owner}|0`, task)
+      if (owner !== undefined) add(`${project.id}|${owner}|${task.num % OVERVIEW_SHARDS}`, task)
     }
     for (const key of Object.keys(rows)) if (isZero(rows[key])) delete rows[key]
     return { rows, groups: [...groups].sort() }
@@ -499,6 +501,38 @@ describe('overview counts', () => {
     await w.archive(task.id)
     expect(logged).toHaveBeenCalledWith('An overview count went below zero', expect.anything())
     expect(await read()).toBeNull()
+  })
+
+  it("a person's leaves split over the shards, and an edit writes only its own shard's rows", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    await stamp(t, org_id)
+    const w = writers(t, f)
+    const create = () => w.create({ status: 'todo', assignee_id: f.user.id, remaining_hours: 1 })
+    const first = await create()
+    for (let i = 0; i < OVERVIEW_SHARDS; i++) await create()
+    await expectExact(t, org_id, 'one person over every shard')
+    const mine = () =>
+      t.run(async (ctx) =>
+        (await ownerRows(ctx.db, f.user.id).collect()).filter((r) => r.project_id === f.sub.id),
+      )
+    const before = await mine()
+    // a row a shard, read in one range, adding up to the person's leaves
+    expect(before.map((r) => r.shard).sort()).toEqual([0, 1, 2, 3])
+    expect(countsOfRows(before, f.sub)?.leaves.todo).toBe(OVERVIEW_SHARDS + 1)
+
+    const edited = (await t.run((ctx) => byId(ctx, 'issues', first.id))) as Doc<'issues'>
+    await w.update(edited.id, { status: 'progress' })
+    const after = await mine()
+    expect(after.map((r) => r._id).sort()).toEqual(before.map((r) => r._id).sort())
+    for (const row of after) {
+      const was = before.find((r) => r._id === row._id) as Doc<'overview_counts'>
+      expect(row.revision > was.revision, `the person's row of shard ${row.shard}`).toBe(
+        row.shard === edited.num % OVERVIEW_SHARDS,
+      )
+    }
+    await expectExact(t, org_id, 'after the edit')
   })
 
   it('a row of an earlier sub-project or task with the same id counts for nothing', async () => {

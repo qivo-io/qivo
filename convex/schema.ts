@@ -1653,14 +1653,14 @@ export default defineSchema({
   // leaves and the remaining hours of the leaves not Done, in whole tenths.
   // A leaf is an active task with no active subtask in a live project
   // (lib/liveTasks.ts countsAsSubtask), whoever reads it, as the app's
-  // P.isGroup decides. A sub-project's rows have no owner_id and split its
-  // leaves over OVERVIEW_SHARDS shards by task number, so concurrent edits
-  // in one sub-project write the same row less often; a person's row
-  // (owner_id, shard 0, not split) holds the leaves they own by the
-  // Reviewer rule (lib/review.ts taskOwnerId), for My view. Every task write moves them in its own
-  // transaction (model/overviewCounts.ts tallyOverview), and background
-  // steps after a project archive, restore or move to Deleted items
-  // (overviewRegroup.ts). `project_at` is the sub-project row's
+  // P.isGroup decides. A sub-project's rows have no owner_id; a person's
+  // rows (owner_id) hold the leaves they own there by the Reviewer rule
+  // (lib/review.ts taskOwnerId), for My view. Both split their leaves over
+  // OVERVIEW_SHARDS shards by task number, so concurrent edits in one
+  // sub-project write the same row less often. Every task write moves them
+  // in its own transaction (model/overviewCounts.ts tallyOverview), and
+  // background steps after a project archive, restore or move to Deleted
+  // items (overviewRegroup.ts). `project_at` is the sub-project row's
   // _creationTime: a row of an earlier project with the same id, which a
   // restore from Deleted items or the marketing demo's reseed can leave,
   // counts for nothing. Readers answer `counting`, never zero, until the
@@ -1699,7 +1699,9 @@ export default defineSchema({
   // the difference, so each can run in any order and a second finds nothing
   // to do. `task_at` is the task row's _creationTime: a row of an earlier
   // task with the same id holds nothing. Deleted when its task leaves the
-  // active tasks.
+  // active tasks, so an organization holds one row per active task. A task
+  // write reads its row (one index range) beside the count rows it moves,
+  // and writes it when the task is new or its slot or group changes.
   overview_tasks: defineTable({
     org_id: v.string(),
     task_id: v.string(),

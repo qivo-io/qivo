@@ -44,6 +44,17 @@
  * an organization's work unset the stamp and delete its counts before its
  * tasks (OVERVIEW_TABLES).
  *
+ * A sub-project's leaves, and each person's leaves in it, are split over
+ * OVERVIEW_SHARDS rows by task number (rowKeysOf), so two concurrent edits
+ * there write the same row about a quarter as often. On a local backend,
+ * two and four writers changing statuses of one person's tasks in one
+ * sub-project in tight loops lost none and at most 1.3% of their calls to
+ * write conflicts after Convex's retries, and of five people's tasks none
+ * and 0.3% (2026-11-01). With one row a person in a sub-project they lost
+ * 5% to 27%. People editing by hand stay far below those rates. If Convex
+ * Insights shows conflicts on overview_counts, the next step is delta rows
+ * that writers insert and never read, which a scheduled step folds in.
+ *
  * A row that would go below zero is a bug. It is written as it is and
  * logged, and the readers answer `counting` for its scope, never a clamped
  * figure. internal/overviewCountsBackfill's dry run finds it, and a
@@ -62,14 +73,8 @@ import { DOCUMENT_MAX_BYTES } from './comments'
 type Reader = QueryCtx['db']
 type Writer = MutationCtx['db']
 
-/** How many rows a sub-project's leaves are split over, by task number, so
- * two concurrent edits in one sub-project write the same row about a
- * quarter as often. A person's row in a sub-project is not split, so every
- * edit of a leaf they own there writes it. On a local backend, two and four
- * writers changing statuses of one person's tasks in tight loops lost 5% to
- * 12% and 12% to 27% of their calls to write conflicts after Convex's
- * retries, and of five people's tasks at most 0.4% and 4% (2026-11-01).
- * People editing by hand stay far below those rates. */
+/** How many rows a sub-project's leaves, and each person's leaves in it,
+ * are split over by task number (see the header on write conflicts). */
 export const OVERVIEW_SHARDS = 4
 
 /** Leaves by stored status, the paused leaves, and the remaining hours of
@@ -180,7 +185,8 @@ export async function countsKept(db: Writer, orgId: string): Promise<boolean> {
 // --- leaves and their rows ---------------------------------------------------------
 
 /** Where one leaf counts: its sub-project's row of its shard and its
- * owner's row there, and what it adds. As overview_tasks stores it. */
+ * owner's row of that shard there, and what it adds. As overview_tasks
+ * stores it. */
 export type Slot = NonNullable<Doc<'overview_tasks'>['slot']>
 
 /** The slot of `task` in `project`, as both are now, or undefined where it
@@ -220,6 +226,13 @@ export function countsOf(slot: Slot): LeafCounts {
  * row) and its shard. */
 export type RowKey = { project_id: string; owner_id: string | undefined; shard: number }
 
+/** The keys of the rows `slot` adds to: its sub-project's row of its shard
+ * and, for a leaf with an owner, the owner's row of the same shard. */
+export function rowKeysOf(slot: Slot): RowKey[] {
+  const key = { project_id: slot.project_id, owner_id: undefined, shard: slot.shard }
+  return slot.owner_id === undefined ? [key] : [key, { ...key, owner_id: slot.owner_id }]
+}
+
 /** The count row with `key`, or null. */
 export const countRow = (db: Reader, key: RowKey) =>
   db
@@ -241,10 +254,7 @@ export class CountMoves {
    * owner's, of organization `orgId`. */
   add(orgId: string, slot: Slot, by: 1 | -1): void {
     const at = { org_id: orgId, project_at: slot.project_at }
-    const key = { project_id: slot.project_id, owner_id: undefined, shard: slot.shard }
-    this.addRow(key, at, countsOf(slot), by)
-    if (slot.owner_id !== undefined)
-      this.addRow({ ...key, owner_id: slot.owner_id, shard: 0 }, at, countsOf(slot), by)
+    for (const key of rowKeysOf(slot)) this.addRow(key, at, countsOf(slot), by)
   }
 
   /** Adds `by` times `counts` to the row with `key` of a sub-project of
@@ -580,10 +590,10 @@ export async function countTasks(
       projects.set(task.project_id, await byId({ db }, 'projects', task.project_id))
     const slot = slotOf(task, projects.get(task.project_id) ?? null, group)
     if (slot === undefined) continue
-    const at = { project_id: slot.project_id, project_at: slot.project_at }
-    const keys = [keyOf({ ...at, owner_id: undefined, shard: slot.shard })]
-    if (slot.owner_id !== undefined) keys.push(keyOf({ ...at, owner_id: slot.owner_id, shard: 0 }))
-    for (const key of keys) rows.set(key, addCounts(rows.get(key) ?? noCounts(), countsOf(slot)))
+    for (const k of rowKeysOf(slot)) {
+      const key = keyOf({ ...k, project_at: slot.project_at })
+      rows.set(key, addCounts(rows.get(key) ?? noCounts(), countsOf(slot)))
+    }
   }
   return { rows, groups }
 }
@@ -631,10 +641,7 @@ export async function countRecords(db: Writer, orgId: string, now: string): Prom
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .collect()) {
     if (slot === undefined) continue
-    const key = { project_id: slot.project_id, owner_id: undefined, shard: slot.shard }
-    const keys: RowKey[] = [key]
-    if (slot.owner_id !== undefined) keys.push({ ...key, owner_id: slot.owner_id, shard: 0 })
-    for (const k of keys) {
+    for (const k of rowKeysOf(slot)) {
       const id = keyOf({ ...k, project_at: slot.project_at })
       const row = moves.get(id) ?? { key: k, project_at: slot.project_at, counts: noCounts() }
       row.counts = addCounts(row.counts, countsOf(slot))
@@ -739,10 +746,11 @@ export async function subProjectCounts(
   return countsOfRows(await subProjectRows(db, project.id), project)
 }
 
-/** Every count row of person `ownerId`, by sub-project, one range. A
- * caller keeps the rows of the sub-projects the person may see and whose
- * counts are whole (countsReady), each of its current generation
- * (countsOfRows), as My view does. */
+/** Every count row of person `ownerId`, by sub-project, up to
+ * OVERVIEW_SHARDS rows each, in one range. A caller keeps the rows of the
+ * sub-projects the person may see and whose counts are whole
+ * (countsReady), each of its current generation (countsOfRows), as My view
+ * does. */
 export const ownerRows = (db: Reader, ownerId: string) =>
   db.query('overview_counts').withIndex('by_owner_project', (q) => q.eq('owner_id', ownerId))
 
