@@ -2158,8 +2158,10 @@ function repaint(parts: {
     if (!lastShown || !sameShown(lastShown)) emit()
     else {
       if (thread) emit('comments')
-      if (models || view) emit('views')
+      if (models || view || viewReadsChanged) emit('views')
     }
+    // either emit showed the views
+    viewReadsChanged = false
     // after the emit: it may send (reapPausedUploads)
     endHeldRecovery()
   } else {
@@ -2449,6 +2451,7 @@ function reshapeViews(): boolean {
   const changed = viewRows.reshape((uuid) => uuidToKey.has(uuid), {
     handleNow: PLANNER.handleNow,
     extra: (uuid) => JSON.stringify(delays.get(uuid) ?? null),
+    grid: PLANNER.gridEpoch,
   })
   if (changed) boardLookup = null
   return changed
@@ -4705,6 +4708,12 @@ function rebuild(now = new Date(), full = false) {
     P.contextVersion = Object.freeze({ revision: P.contextVersion.revision + 1 })
   lastContext = context
   lastContextUsers = P.users
+
+  // the views' delays read the day, and their models' week indexes the
+  // grid (reshapeViews): a rebuild for a new day or a moved grid judges and
+  // shapes them again, which the next emit shows
+  const newDay = gridBefore !== TIMELINE_START.getTime() || todayBefore !== TODAY_ISO
+  if (newDay && viewRows.any() && reshapeViews()) viewReadsChanged = true
 
   // Uploaded pictures prepare shared decoded sources after minting access.
   // A prepared portrait is baked into this snapshot, so fresh mints have to

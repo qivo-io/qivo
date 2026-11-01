@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ViewRow } from '../../convex/lib/viewReads'
-import { TODAY_WEEK, weekToISO } from '../lib/dates'
+import { isoFromDate, TODAY_WEEK, weekToISO } from '../lib/dates'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { BOARD_TEST_TIMEOUT, cell, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
 
@@ -179,6 +179,44 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
       expect(board.card('far')).not.toBeNull()
     } finally {
       Reflect.deleteProperty(document, 'visibilityState')
+    }
+  })
+
+  it('judges its delay again on a new day, with no delivery', async () => {
+    const board = await loadBoard(network, (snap) => {
+      snap.projects[0].track_delay = true
+    })
+    // a task due today, which only the answer brings
+    const due: ViewRow = {
+      ...far(board.snapshot),
+      id: 'due',
+      num: 51,
+      title: 'Task due',
+      status: 'todo',
+      remaining_hours: undefined,
+      start_week: undefined,
+      end_week: undefined,
+      due_date: isoFromDate(new Date()),
+    }
+    board.server.edit = (answer) =>
+      answer.state === 'ok' ? { ...answer, rows: [...answer.rows, due] } : answer
+    await board.render(root)
+    await board.answer()
+    expect(board.card('due')).not.toBeNull()
+    expect(board.card('due')?.querySelector('[data-delay]')).toBeNull()
+    // the next morning, and the window gets the focus back
+    const tomorrow = new Date()
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    tomorrow.setHours(9, 0, 0, 0)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(tomorrow)
+      await act(async () => window.dispatchEvent(new Event('focus')))
+      expect(board.card('due')?.querySelector('[data-delay]')?.getAttribute('data-delay')).toBe(
+        'late',
+      )
+    } finally {
+      vi.useRealTimers()
     }
   })
 

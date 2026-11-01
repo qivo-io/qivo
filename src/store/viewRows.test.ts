@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoardAnswer } from '../../convex/lib/board'
 import type { ViewRow } from '../../convex/lib/viewReads'
 import type { OwnerLoadsJson } from '../../convex/planning'
-import { TODAY_WEEK, weekToISO } from '../lib/dates'
+import { isoToWeek, TODAY_WEEK, weekToISO } from '../lib/dates'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* The task rows a view's answer brings (store/viewRows.ts) on the real
@@ -225,6 +225,35 @@ describe('the rows a view brings', () => {
     store.P.releaseView(SLOT)
     expect(store.P.viewTask(SLOT, 'far')).toBeUndefined()
     expect(store.P.boardRead(SLOT)).toMatchObject({ key: null, answered: false })
+  })
+})
+
+describe('a model shaped from a row', () => {
+  it('is shaped again when its own handle or the week grid moves, and kept otherwise', async () => {
+    const { createViewRows } = await import('./viewRows')
+    const views = createViewRows(isoToWeek)
+    views.take('v', [row('far', 9, { start_week: weekToISO(TODAY_WEEK) })])
+    views.beginPaint()
+    // a standalone task: no parent or subtask whose handle would move with it
+    let handle = 'QN-9'
+    let grid = 1
+    const ctx = () => ({ handleNow: () => handle, grid })
+    views.reshape(() => false, ctx())
+    const first = views.model('v', 'far')
+    expect(first?.id).toBe('QN-9')
+    expect(views.reshape(() => false, ctx())).toBe(false)
+    expect(views.model('v', 'far')).toBe(first)
+    // the home organization moved, so the task opens by its uuid now
+    handle = 'far'
+    expect(views.reshape(() => false, ctx())).toBe(true)
+    const moved = views.model('v', 'far')
+    expect(moved?.id).toBe('far')
+    expect(views.byHandle('far')).toBe(moved)
+    expect(views.byHandle('QN-9')).toBeUndefined()
+    // a re-anchored week grid gives week indexes on the new grid
+    grid = 2
+    expect(views.reshape(() => false, ctx())).toBe(true)
+    expect(views.model('v', 'far')).not.toBe(moved)
   })
 })
 

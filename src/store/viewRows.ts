@@ -12,10 +12,10 @@
    - The rows never enter the workspace's rows, the task index, P.issues or
      P.issueById. A task the workspace holds shows as the workspace's view
      model; the store asks this module only for the others (`unheld`).
-   - A model keeps its object while its row, its parent's handle and its
-     delay hold the same data, so an answer that arrives again renders no
-     card again (views/kanbanCards.tsx BoardCard), as store/workspaceBase.ts
-     keeps a row's object.
+   - A model keeps its object while its row, its own and its parent's
+     handles, its delay and the week grid hold the same data, so an answer
+     that arrives again renders no card again (views/kanbanCards.tsx
+     BoardCard), as store/workspaceBase.ts keeps a row's object.
    - A model is a task view model (shapeIssue) without the text and relation
      rows the answer does not send: no description, labels, links, files or
      follow, and only the subtasks the answer names. A group's Done and
@@ -37,15 +37,25 @@ export type ViewSlot = string
 export type ViewFacts = { done: boolean; partial: boolean }
 
 /** What shaping needs from the store: the handle a task opens by
-    (P.handleNow), and a signature of anything else a model shows that the
-    row does not hold, such as its delay, which renews the model when it
-    changes. */
+    (P.handleNow), which a change of the home organization moves, a
+    signature of anything else a model shows that the row does not hold,
+    such as its delay, and the week grid its week indexes are on
+    (P.gridEpoch). A change of any of them renews the model. */
 export type ViewShapeCtx = {
   handleNow: (uuid: string, orgId: string, num: number) => string
   extra?: (uuid: string) => string
+  grid?: number
 }
 
-type Shaped = { row: ViewRow; parent: string | null; kids: string; extra: string; it: IssueVM }
+type Shaped = {
+  row: ViewRow
+  handle: string
+  parent: string | null
+  kids: string
+  extra: string
+  grid: number | undefined
+  it: IssueVM
+}
 
 /* A week index of an ISO week date, or null. Weeks are what IssueVM's
    start and end hold. */
@@ -92,15 +102,17 @@ export function createViewRows(toWeek: (iso: string) => number) {
     const children = kidRows.map((kid) => ctx.handleNow(kid.id, kid.org_id, kid.num))
     const kids = children.join()
     const extra = ctx.extra?.(row.id) ?? ''
+    const handle = ctx.handleNow(row.id, row.org_id, row.num)
     if (
       was &&
+      was.handle === handle &&
       was.parent === parent &&
       was.kids === kids &&
       was.extra === extra &&
+      was.grid === ctx.grid &&
       (was.row === row || JSON.stringify(was.row) === JSON.stringify(row))
     )
       return was.row === row ? was : { ...was, row }
-    const handle = ctx.handleNow(row.id, row.org_id, row.num)
     const handles = new Map([[row.id, handle]])
     if (parentRow && parent) handles.set(parentRow.id, parent)
     const only = <T>(value: T) => ({ get: (id: string) => (id === row.id ? value : undefined) })
@@ -133,7 +145,7 @@ export function createViewRows(toWeek: (iso: string) => number) {
       done: row.has_subtasks ? !!row.group_done : row.status === 'done',
       partial: row.has_subtasks ? !!row.span?.partial : false,
     })
-    return { row, parent, kids, extra, it }
+    return { row, handle, parent, kids, extra, grid: ctx.grid, it }
   }
 
   return {
