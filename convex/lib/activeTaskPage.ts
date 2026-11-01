@@ -69,9 +69,11 @@ import { ownerSettled, ROW_BYTES } from './viewReads'
  * envelope only, is refused with TASK_LIST_UNREADABLE. Tests lower these
  * and set them back with structuredClone.
  *
- * Measured in convex/tests/activeTaskPagesScale.test.ts, an organization of
- * 2,000 projects, 1,000 people and 50,000 active tasks with real titles and
- * texts, read under Convex's limits. Before the page, a member in 25 teams
+ * Measured in convex/tests/activeTaskPages.envelope.ts, which runs on
+ * demand (its header has the command), an organization of 2,000 projects,
+ * 1,000 people and 50,000 active tasks with real titles and texts, read
+ * under Convex's limits; convex/tests/activeTaskPagesScale.test.ts checks
+ * the same pages in every run with fewer tasks. Before the page, a member in 25 teams
  * that share every sub-project reads 55 ranges, 7,051 documents and
  * 1.77 MiB at ordinary name lengths, and 6.61 MiB with names, project
  * descriptions and titles at the caps in a three-byte script, where their
