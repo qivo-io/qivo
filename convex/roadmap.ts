@@ -17,6 +17,7 @@ import { assertNewRowId, byId, insertUnique, usedMoreThan } from './lib/db'
 import { authedMutation, badRequest, conflict, forbidden, notFound, rule } from './lib/functions'
 import { LIMITS } from './lib/limits'
 import { logActivity } from './model/activity'
+import { patchTaskRow } from './model/descriptions'
 import { changedPrints, DELETES } from './model/expected'
 import {
   assertOwnRemaining,
@@ -575,7 +576,7 @@ async function restoreStep(
     await batch.room()
     const patch: Partial<TaskValues> = {}
     for (const field of change.fields) Object.assign(patch, { [field]: change.before[field] })
-    await ctx.db.patch(before._id, { ...patch, updated_at: now })
+    await patchTaskRow(ctx.db, before, { ...patch, updated_at: now })
   }
   // Each restored row must still hold a valid plan of its own, with a
   // complete week pair and restored hours only on a task without active

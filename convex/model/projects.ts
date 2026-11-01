@@ -56,6 +56,7 @@ import {
 } from './expected'
 import { scheduleArchivedReads } from './messages'
 import { nextProjectNum, tallyRow } from './orgs'
+import { startRegroup } from './overviewCounts'
 import {
   archiveStateOf,
   childRows,
@@ -800,6 +801,8 @@ export async function archiveProjectCore(ctx: MutationCtx, a: TreeChange): Promi
   await patchRows(ctx, reach, { live: false })
   if (a.budget === undefined) await settleFavorites(ctx, budget)
   await scheduleArchivedReads(ctx, { projects: archived })
+  // the parents its tasks no longer make groups (model/overviewCounts.ts)
+  await startRegroup(ctx, parent ?? project, archived)
   await logActivity(ctx, {
     org_id: me.org_id,
     actor_id: me.id,
@@ -899,6 +902,8 @@ export async function unarchiveProjectCore(ctx: MutationCtx, a: TreeChange): Pro
   await patchRows(ctx, reach, { live: true })
   if (a.budget === undefined) await settleFavorites(ctx, budget)
   await ctx.scheduler.runAfter(0, restoredStepRef, { projects: ids, restorer_id: me.id })
+  // the parents its tasks make groups again (model/overviewCounts.ts)
+  await startRegroup(ctx, parent ?? project, ids)
   await logActivity(ctx, {
     org_id: me.org_id,
     actor_id: me.id,

@@ -102,6 +102,7 @@ import {
   firstRows,
   insertTask,
   patchTask,
+  patchTaskRow,
   type TaskFields,
   textsOf,
   withText,
@@ -1126,12 +1127,17 @@ export async function clearParentRemaining(
   if (parent === null) return
   if (parent.remaining_hours === undefined && parent.review_at === undefined) return
   const before = { ...parent }
-  await ctx.db.patch(parent._id, {
-    remaining_hours: undefined,
-    remaining_set_at: undefined,
-    review_at: undefined,
-    updated_at: a.now,
-  })
+  await patchTaskRow(
+    ctx.db,
+    parent,
+    {
+      remaining_hours: undefined,
+      remaining_set_at: undefined,
+      review_at: undefined,
+      updated_at: a.now,
+    },
+    { stored: true },
+  )
   const after = (await ctx.db.get(parent._id)) as Doc<'issues'>
   await notifyIssueUpdate(ctx, { before, after, actor: a.actor, now: a.now, preload: a.preload })
 }
@@ -1154,7 +1160,7 @@ export async function detachChild(
   now: string,
   preload?: NotifyPreload,
 ): Promise<void> {
-  await ctx.db.patch(child._id, { parent_id: undefined, updated_at: now })
+  await patchTaskRow(ctx.db, child, { parent_id: undefined, updated_at: now }, { stored: true })
   const { parent_id: _parentId, ...rest } = child
   const after: Doc<'issues'> = { ...rest, updated_at: now }
   await notifyIssueUpdate(ctx, { before: child, after, actor, now, preload })

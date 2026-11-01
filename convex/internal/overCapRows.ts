@@ -97,7 +97,7 @@ import { cleanEmail } from '../lib/email'
 import { cutText, LIMITS, NAME_MAX, TEXT_MAX, trimMarkdown } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
-import { patchTask, textCopiesOf } from '../model/descriptions'
+import { patchTask, patchTaskRow, textCopiesOf } from '../model/descriptions'
 import { copyNameKey, inlineBudget } from '../model/nameKeys'
 import { patchRows } from '../model/projectNav'
 import { renameProjectTotals } from '../model/storageTotals'
@@ -315,7 +315,7 @@ async function taskPage(
       if (found.patch === null || write === null) continue
       const { remaining_hours, description } = found.patch
       if (typeof remaining_hours === 'number')
-        await write.db.patch('issues', task._id, { remaining_hours })
+        await patchTaskRow(write.db, task, { remaining_hours })
       if (typeof description === 'string' && !differs) describe.push(task._id)
     }
     read += tasks.length

@@ -196,6 +196,12 @@ const APP_OWNED: TableNames[] = [
   'label_counts',
   // a label count the backfill runs, deleted with the organization
   'label_count_runs',
+  // the Overview's counts, their task rows, a count the backfill runs and
+  // a regroup, deleted before the tasks they count
+  'overview_counts',
+  'overview_tasks',
+  'overview_count_runs',
+  'overview_regroups',
   'project_access',
   'project_team_access',
   'milestones',
@@ -371,7 +377,13 @@ describe('public Northstar provisioning and bounded deletion', () => {
         )
     })
     expect(await t.run((ctx) => ctx.db.get(a._id))).toBeNull()
-    for (const table of ['label_counts', 'team_counts', 'label_count_runs'] as const)
+    for (const table of [
+      'label_counts',
+      'team_counts',
+      'label_count_runs',
+      'overview_counts',
+      'overview_tasks',
+    ] as const)
       expect(
         (await t.run((ctx) => ctx.db.query(table).collect())).filter((r) => r.org_id === orgId),
         table,
@@ -502,11 +514,12 @@ describe('public Northstar provisioning and bounded deletion', () => {
     const t = testBackend()
     await makeDemo(t)
     const seed = await ownedSnapshot(t)
-    // Full conversations include their notification and subscription rows.
+    // Full conversations include their notification and subscription rows,
+    // and every active task its Overview task row (model/overviewCounts.ts).
     // These conservative ceilings leave room below Convex's 16,000-document
     // write and 8-MiB write-payload limits; the live seed still verifies the
     // actual transaction, including reads and transient/overwritten writes.
-    expect(Object.values(seed).reduce((sum, table) => sum + table.length, 0)).toBeLessThan(2000)
+    expect(Object.values(seed).reduce((sum, table) => sum + table.length, 0)).toBeLessThan(2200)
     expect(new TextEncoder().encode(JSON.stringify(seed)).byteLength).toBeLessThan(1024 * 1024)
   })
 

@@ -92,6 +92,10 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'label_counts', field: 'label_id', target: 'labels' },
   { table: 'label_counts', field: 'org_id', target: 'organizations' },
   { table: 'label_count_runs', field: 'org_id', target: 'organizations' },
+  { table: 'overview_counts', field: 'org_id', target: 'organizations' },
+  { table: 'overview_tasks', field: 'org_id', target: 'organizations' },
+  { table: 'overview_count_runs', field: 'org_id', target: 'organizations' },
+  { table: 'overview_regroups', field: 'org_id', target: 'organizations' },
   { table: 'issue_labels', field: 'org_id', target: 'organizations' },
   { table: 'issue_labels', field: 'issue_id', target: 'issues' },
   { table: 'issue_labels', field: 'label_id', target: 'labels' },
@@ -326,6 +330,19 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'storage_project_totals.project_id',
   'storage_task_totals.issue_id',
   'storage_task_totals.project_id',
+  // An overview count row names its sub-project and the person whose
+  // leaves it holds, and a task row its task, each by the creation time of
+  // the row it counts for, so a later object with the same id never takes
+  // it; a row of a project gone to Deleted items lasts until its regroup
+  // step or the backfill's orphan sweep deletes it, and a person's row until
+  // their tasks leave it (model/overviewCounts.ts).
+  'overview_counts.project_id',
+  'overview_counts.owner_id',
+  'overview_tasks.task_id',
+  // A regroup names the top-level project whose counts it reconciles, which
+  // a move to Deleted items may have taken; its last step deletes the row
+  // (overviewRegroup.ts).
+  'overview_regroups.family_id',
   // A post log of the comment posting rate outlives its task until its
   // posts stop counting and the hourly sweep deletes it
   // (model/commentLimits.ts), as a task can leave meanwhile.

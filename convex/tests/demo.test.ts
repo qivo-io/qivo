@@ -828,15 +828,18 @@ describe('public demo records and used ids', () => {
       const added = (table: string) => after.rows[table] - before.rows[table]
       expect(added('used_ids')).toBe(1)
       // every row the create added counts, but the used_ids row, a task's
-      // description and comment count rows and a project's reach rows
-      // (model/projectNav.ts), which are part of what they describe, and the
-      // counters' own row (lib/demo.ts demoCounts)
+      // description and comment count rows, a project's reach rows
+      // (model/projectNav.ts) and the Overview's count and task rows
+      // (model/overviewCounts.ts), which are part of what they describe, and
+      // the counters' own row (lib/demo.ts demoCounts)
       const counted =
         Object.keys(after.rows).reduce((sum, table) => sum + added(table), 0) -
         added('used_ids') -
         added('issue_descriptions') -
         added('task_comment_counts') -
         added('project_reach') -
+        added('overview_counts') -
+        added('overview_tasks') -
         added('demo_write_counts')
       expect((after.counts?.insert_count ?? 0) - (before.counts?.insert_count ?? 0)).toBe(counted)
     }
@@ -911,6 +914,8 @@ describe('public demo archive rechecks', () => {
         Object.keys(after.rows).reduce((sum, table) => sum + added(table), 0) -
         added('archive_rechecks') -
         added('message_sweeps') -
+        added('overview_counts') -
+        added('overview_tasks') -
         added('demo_write_counts'),
       rechecks: added('archive_rechecks'),
     }

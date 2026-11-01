@@ -53,6 +53,7 @@ export const AUDIT_ACTION_LABELS = {
   comment_counts_backfill: 'Counted the comments of tasks',
   label_counts_backfill: 'Counted the active tasks of each label',
   team_counts_backfill: 'Counted the members of each team',
+  overview_counts_backfill: 'Counted the Overview figures of each sub-project',
   used_ids_backfill: 'Recorded the ids tasks and projects hold',
   nav_backfill: 'Gave projects their archive states and reach rows',
   panorama_library_image_added: 'Added Unsplash image to the library',

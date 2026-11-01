@@ -705,10 +705,10 @@ describe('label counts', () => {
     const counts = await expectCounted(t, org.id)
     expect(Object.values(counts).some((n) => n > 0)).toBe(true)
     // small steps, with a label count step between two, as a backfill run
-    // meanwhile would take
+    // meanwhile would take; the wipe deletes the Overview's rows too
     let done = false
     let cursor: string | null = null
-    for (let n = 0; n < 200 && !done; n++) {
+    for (let n = 0; n < 300 && !done; n++) {
       done = await t.run((ctx) =>
         wipeWorkStep(
           ctx,

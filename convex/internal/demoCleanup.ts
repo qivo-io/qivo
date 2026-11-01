@@ -29,6 +29,7 @@ import { recipientItems, stateRows, taskItems } from '../model/inboxItems'
 import { deleteLabelCount } from '../model/labelCounts'
 import { jobsOf, partsOf, requestsOf } from '../model/orgExports'
 import { deleteOrgBookkeeping, tallyRow } from '../model/orgs'
+import { OVERVIEW_TABLES, unstampOverview } from '../model/overviewCounts'
 import { favoritesOfOrg } from '../model/projectFavorites'
 import { reachOfOrg } from '../model/projectNav'
 import { uncountFile } from '../model/storageTotals'
@@ -130,8 +131,9 @@ async function storageRows(ctx: MutationCtx, orgId: string, budget: Budget): Pro
   )
 }
 
-/** The label usage counts, so none reads wrong while the tasks they count
- * go over many batches (model/labelCounts.ts), then every task with its
+/** The label usage counts and the overview counts, so none reads wrong
+ * while the tasks they count go over many batches (model/labelCounts.ts,
+ * model/overviewCounts.ts), then every task with its
  * rows, its comment count and post logs among them, then the description
  * rows the tasks leave (model/descriptions.ts), which a visitor's payload
  * limit keeps small, then any storage totals left (storageRows) and any
@@ -144,6 +146,19 @@ async function taskRows(ctx: MutationCtx, orgId: string, budget: Budget): Promis
       .take(n),
   )
   if (!counts) return false
+  // the overview counts, unstamped first so none reads wrong meanwhile
+  // (model/overviewCounts.ts)
+  await unstampOverview(ctx.db, orgId)
+  for (const table of OVERVIEW_TABLES)
+    if (
+      !(await drain(ctx, budget, (n) =>
+        ctx.db
+          .query(table)
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .take(n),
+      ))
+    )
+      return false
   while (budget.left > 0) {
     const issue = await ctx.db
       .query('issues')
@@ -770,6 +785,7 @@ export const purge = internalMutation({
             'comment_rates',
             'label_counts',
             'team_counts',
+            ...OVERVIEW_TABLES,
           ] as const)
             require((await ctx.db
               .query(table)

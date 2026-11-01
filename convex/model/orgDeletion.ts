@@ -60,6 +60,7 @@ import { recipientItems, stateRows, taskItems } from './inboxItems'
 import { deleteLabelCount } from './labelCounts'
 import { jobsOf, partsOf, requestsOf } from './orgExports'
 import { deleteOrgBookkeeping, tallyRow } from './orgs'
+import { OVERVIEW_TABLES, unstampOverview } from './overviewCounts'
 import { favoritesOfOrg, favoritesOfProfile } from './projectFavorites'
 import { grantee, reachOfGrantee, reachOfOrg } from './projectNav'
 import { uncountFile } from './storageTotals'
@@ -131,6 +132,26 @@ const countRows = (
     budget,
     ctx.db.query(table).withIndex('by_org', (q) => q.eq('org_id', orgId)),
   )
+
+/** The organization's overview counts (model/overviewCounts.ts), before
+ * the tasks they count: its readiness stamp first, so they read as
+ * `counting` and no write moves them while the tasks go over many steps,
+ * then its count rows, group rows, backfill run and regroup rows. The
+ * Northstar wipe stamps the organization again once its work is gone
+ * (internal/marketingDemo.ts). */
+async function overviewRows(ctx: MutationCtx, orgId: string, budget: RemovalBudget) {
+  await unstampOverview(ctx.db, orgId)
+  return await inOrder(
+    OVERVIEW_TABLES.map(
+      (table) => () =>
+        drain(
+          ctx,
+          budget,
+          ctx.db.query(table).withIndex('by_org', (q) => q.eq('org_id', orgId)),
+        ),
+    ),
+  )
+}
 
 /** The member counts, then profiles with everything that hangs off them,
  * then their pictures, then any Team sync stamp row left without its
@@ -378,7 +399,8 @@ async function usedIdRows(ctx: MutationCtx, orgId: string, budget: RemovalBudget
   return done
 }
 
-/** The label usage counts (countRows), then tasks with their links,
+/** The label usage counts (countRows) and the overview counts
+ * (overviewRows), then tasks with their links,
  * labels, subscriptions, comments, messages, files, comment counts and post
  * logs, then the description rows they leave (model/descriptions.ts) and
  * any comment count or post log of the organization that names no task,
@@ -386,6 +408,7 @@ async function usedIdRows(ctx: MutationCtx, orgId: string, budget: RemovalBudget
 const taskRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
     () => countRows(ctx, orgId, budget, 'label_counts'),
+    () => overviewRows(ctx, orgId, budget),
     () => liveTasks(ctx, orgId, budget),
     ...(['issue_descriptions', 'task_comment_counts', 'comment_rates'] as const).map(
       (table) => () =>
@@ -733,6 +756,7 @@ async function finish(ctx: MutationCtx, removal: Doc<'org_removals'>): Promise<v
     'comment_rates',
     'label_counts',
     'team_counts',
+    ...OVERVIEW_TABLES,
   ] as const)
     require((await ctx.db
       .query(table)
@@ -845,6 +869,8 @@ export async function deleteOrgStep(
       // teams past their phases, which finish() refuses to leave behind.
       if (!(await countRows(ctx, removal.org_id, budget, 'label_counts'))) break
       if (!(await countRows(ctx, removal.org_id, budget, 'team_counts'))) break
+      // and overview counts a backfill step wrote after the tasks phase
+      if (!(await overviewRows(ctx, removal.org_id, budget))) break
       // Export rows an earlier release left past the activity phase, which
       // knew no export tables, as a deletion that spans a rollback does.
       if (!(await exportRows(ctx, removal.org_id, budget))) break

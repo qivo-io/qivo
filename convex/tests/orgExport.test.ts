@@ -172,6 +172,11 @@ const EXCLUDED_TABLES = [
   'team_counts',
   'label_counts',
   'label_count_runs',
+  // The Overview's counts, which the exported tasks give again.
+  'overview_counts',
+  'overview_tasks',
+  'overview_count_runs',
+  'overview_regroups',
   // Deleted items are not exported: restore an item to include its work.
   'deleted_items',
   'deleted_item_jobs',
