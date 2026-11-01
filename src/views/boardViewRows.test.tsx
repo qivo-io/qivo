@@ -82,17 +82,44 @@ function far(snap: Snapshot): ViewRow {
 }
 
 /** A Board whose project shows delays, one task the workspace holds, and
-    the answer's task `far` the workspace lacks. */
-async function farBoard() {
+    the answer's task `far` the workspace lacks, with `prepare`'s changes. */
+async function farBoard(prepare: (snap: Snapshot) => void = () => {}) {
   const board = await loadBoard(network, (snap) => {
     snap.projects[0].track_delay = true
     snap.issues.push(taskRow(snap, 'a', 'todo', 1))
+    prepare(snap)
   })
   board.server.edit = (answer) =>
     answer.state === 'ok' ? { ...answer, rows: [...answer.rows, far(board.snapshot)] } : answer
   await board.render(root)
   await board.answer()
   return board
+}
+
+/** A second person of the organization. */
+const OTHER = 'other-person'
+
+/** Gives the held task `a` to OTHER, in progress with hours left, planned
+    and due, so its verdict would read OTHER's load if the cache judged it. */
+function heldByOther(snap: Snapshot) {
+  snap.profiles.push({
+    ...snap.profiles[0],
+    id: OTHER,
+    auth_user_id: 'other-account',
+    name: 'Other',
+    initials: 'OT',
+    org_role: 'user',
+  })
+  const a = snap.issues.find((t) => t.id === 'a')
+  if (!a) throw new Error('no task a')
+  Object.assign(a, {
+    assignee_id: OTHER,
+    status: 'progress',
+    remaining_hours: 10,
+    start_week: weekToISO(TODAY_WEEK),
+    end_week: weekToISO(TODAY_WEEK + 1),
+    due_date: weekToISO(TODAY_WEEK + 2),
+  })
 }
 
 const writes = () =>
@@ -102,7 +129,7 @@ const writes = () =>
 
 describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it("shows Delay unknown once its owner's load cannot be read, and sizes its card again", async () => {
-    const board = await farBoard()
+    const board = await farBoard(heldByOther)
     const card = () => board.card('far')
     expect(card()).not.toBeNull()
     expect(board.P.handleOf('far')).toBeNull()
@@ -123,11 +150,13 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(after).not.toBe(model)
     if (!after) throw new Error('no model')
     expect(estimate(group(after), () => null, 280, 'pooled', 'todo')).toBeGreaterThan(before)
-    // and a held task keeps the workspace's own delay: no load is asked for it
+    // and a held task keeps the workspace's own delay: its owner's load is
+    // never asked for, though its verdict would read one
     const asked = network.onUpdate.mock.calls
       .filter(([ref]) => getFunctionName(ref) === 'planning:ownerLoads')
-      .map(([, args]) => (args as { owner_ids: string[] }).owner_ids)
-    expect(asked.every((owners) => owners.length === 1)).toBe(true)
+      .flatMap(([, args]) => (args as { owner_ids: string[] }).owner_ids)
+    expect(asked).toContain(board.snapshot.profiles[0].id)
+    expect(asked).not.toContain(OTHER)
   })
 
   it('drags to another status, painted at once', async () => {
