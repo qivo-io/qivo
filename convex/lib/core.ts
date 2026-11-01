@@ -2078,8 +2078,15 @@ export const COMPLETION_READS: ReadCeiling = { ranges: 2500, documents: 14_000, 
  * Tests lower these. */
 export const COMPLETION_RESERVE: ReadCeiling = { ranges: 1200, documents: 2400, bytes: 4 * MIB }
 
-/* How many tasks a partial reader's completion checks for subtasks at
- * once. */
+/** What the checks of a whole reader's counted tasks may read past
+ * COMPLETION_READS once the rest of their family did not fit it
+ * (projectCompletion), within the request's limits less COMPLETION_RESERVE.
+ * A check reads one range and the task's active subtasks until one in a
+ * live project of the family, so these hold the checks of a sub-project of
+ * a few hundred tasks. Tests lower these. */
+export const COMPLETION_CHECK_READS: ReadCeiling = { ranges: 300, documents: 3000, bytes: MIB }
+
+/* How many tasks a completion checks for subtasks at once. */
 const COMPLETION_CHECKS = 32
 
 /**
@@ -2098,14 +2105,14 @@ const COMPLETION_CHECKS = 32
  * on it. It reads the active tasks of the projects counted first (issues
  * by_project_archived). A caller who reads the family's top-level project
  * and every live sub-project of it then reads the rest of the family's live
- * projects, which hold every subtask that decides a group, within what the
- * checks below would need left over. Any other caller, and one whose family
- * does not fit that, asks instead of each counted task not shown to be a
- * group by the tasks read, and not a subtask created under the rule of one
- * level (lib/viewReads.ts withoutSubtasks), whether it has an active
- * subtask in a live project of the family, one range read until one does.
- * So whether a completion is available follows the counted projects' own
- * tasks, not their siblings'. A subtask in a project that
+ * projects, which hold every subtask that decides a group, within the same
+ * budget. Any other caller, and one whose family does not fit it, asks
+ * instead of each counted task not shown to be a group by the tasks read,
+ * and not a subtask created under the rule of one level (lib/viewReads.ts
+ * withoutSubtasks), whether it has an active subtask in a live project of
+ * the family, one range read until one does; a whole reader's checks read
+ * within COMPLETION_CHECK_READS more. So a family that fits always counts,
+ * and a small sub-project of one that does not counts by its own tasks. A subtask in a project that
  * caller cannot read counts there at lib/limits.ts TASK_ROW_MAX_BYTES, so
  * only how many such subtasks it reads before one that counts follows
  * hidden data (lib/machineSubtree.ts). In an update_project mutation the
@@ -2178,36 +2185,26 @@ export async function projectCompletion(
   const parents = () =>
     new Set(active.flatMap((task) => (task.parent_id === undefined ? [] : [task.parent_id])))
   let whole = family.every((p) => readable(p.id))
+  // where the checks may read to: COMPLETION_READS for a partial reader,
+  // and past it for a whole reader whose family did not fit
+  let checksCeiling = ceiling
   if (whole) {
     /* The rest of the family holds every subtask that decides a group, and
-     * the caller reads all of it. It is read within what the checks of the
-     * counted tasks would need left over, so a small sub-project of a large
-     * family still counts by checks when the family does not fit. */
-    const known = parents()
-    const unknown = counted.filter((task) => !known.has(task.id) && !withoutSubtasks(task)).length
-    const checks = {
-      ranges: unknown + COMPLETION_CHECKS,
-      documents: unknown,
-      bytes: unknown * TASK_ROW_MAX_BYTES,
-    }
-    const left = tally.left(ceiling)
-    const checksFit =
-      left.ranges > checks.ranges && left.documents > checks.documents && left.bytes > checks.bytes
-    const limit = checksFit
-      ? {
-          ranges: ceiling.ranges - checks.ranges,
-          documents: ceiling.documents - checks.documents,
-          bytes: ceiling.bytes - checks.bytes,
-        }
-      : ceiling
+     * the caller reads all of it, within the whole budget. When it does not
+     * fit, the counted tasks' checks get COMPLETION_CHECK_READS more, so a
+     * small sub-project of a large family still counts. */
     if (
       !(await readTasks(
         family.filter((p) => !scope.has(p.id)),
-        limit,
+        ceiling,
       ))
     ) {
-      if (!checksFit) return UNAVAILABLE_COMPLETION
       whole = false
+      checksCeiling = {
+        ranges: Math.min(ceiling.ranges + COMPLETION_CHECK_READS.ranges, hard.ranges),
+        documents: Math.min(ceiling.documents + COMPLETION_CHECK_READS.documents, hard.documents),
+        bytes: Math.min(ceiling.bytes + COMPLETION_CHECK_READS.bytes, hard.bytes),
+      }
     }
   }
   const live = liveIn(cat.byUuid)
@@ -2219,7 +2216,7 @@ export async function projectCompletion(
     groups = parents()
     const unknown = counted.filter((task) => !groups.has(task.id) && !withoutSubtasks(task))
     for (let at = 0; at < unknown.length; at += COMPLETION_CHECKS) {
-      if (!(await tally.under(ceiling))) return UNAVAILABLE_COMPLETION
+      if (!(await tally.under(checksCeiling))) return UNAVAILABLE_COMPLETION
       const step = unknown.slice(at, at + COMPLETION_CHECKS)
       const found = await Promise.all(
         step.map(async (task) => {
@@ -2232,7 +2229,7 @@ export async function projectCompletion(
           for await (const kid of kids) {
             tally.doc(kid, readable(kid.project_id) ? undefined : TASK_ROW_MAX_BYTES)
             if (familyIds.has(kid.project_id)) return true
-            if (!(await tally.under(ceiling))) return null
+            if (!(await tally.under(checksCeiling))) return null
           }
           return false
         }),

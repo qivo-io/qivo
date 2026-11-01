@@ -9,14 +9,30 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { COMPLETION_READS, type CompletionJson, UNAVAILABLE_COMPLETION } from '../lib/core'
+import {
+  COMPLETION_CHECK_READS,
+  COMPLETION_READS,
+  type CompletionJson,
+  UNAVAILABLE_COMPLETION,
+} from '../lib/core'
 import { ONE_LEVEL_SINCE } from '../lib/viewReads'
 import { getProject } from '../machine/rest'
-import { NOW, newT, type OrgFixture, plantIssue, plantSeat, type T, withOrg } from './helpers.setup'
+import {
+  NOW,
+  newT,
+  type OrgFixture,
+  plantIssue,
+  plantProject,
+  plantSeat,
+  type T,
+  withOrg,
+} from './helpers.setup'
 
 const READS = structuredClone(COMPLETION_READS)
+const CHECK_READS = structuredClone(COMPLETION_CHECK_READS)
 afterEach(() => {
   Object.assign(COMPLETION_READS, structuredClone(READS))
+  Object.assign(COMPLETION_CHECK_READS, structuredClone(CHECK_READS))
 })
 
 type Fx = OrgFixture & { t: T; fwOnly: Doc<'profiles'> }
@@ -173,6 +189,35 @@ describe('project completion', () => {
       total: 20,
       percent: 0,
     })
+  })
+
+  it("counts a whole reader's family that fits its budget, however many subtasks its tasks keep in an archived sibling", async () => {
+    const fx = await setup()
+    // FW's 20 tasks each keep six active subtasks in a sibling archived
+    // since, which make no task a group, beside 100 tasks in PCB
+    const shelf = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.meta.id,
+      archived_at: NOW,
+    })
+    for (let i = 0; i < 20; i++) {
+      const parent = await task(fx, { project_id: fx.sub.id })
+      for (let k = 0; k < 6; k++) await task(fx, { project_id: shelf.id, parent_id: parent.id })
+    }
+    for (let i = 0; i < 100; i++) await task(fx, { project_id: fx.sub2.id })
+    // the family's 120 live tasks fit, though the subtasks a check of each
+    // of FW's tasks would read do not fit beside them
+    COMPLETION_READS.documents = 130
+    const fw = { status: 'ok', done: 0, total: 20, percent: 0 }
+    expect(await restCompletion(fx, fx.admin.id, 'FW')).toEqual(fw)
+    expect(await mcpCompletion(fx, fx.agent.id, 'FW')).toEqual(fw)
+    // a family that does not fit counts by checks, which read those 120
+    // subtasks within COMPLETION_CHECK_READS, and past it says unavailable
+    COMPLETION_READS.documents = 60
+    expect(await restCompletion(fx, fx.admin.id, 'FW')).toEqual(fw)
+    COMPLETION_CHECK_READS.documents = 100
+    expect(await restCompletion(fx, fx.admin.id, 'FW')).toEqual(UNAVAILABLE_COMPLETION)
   })
 
   it('counts groups created under the rule of one level the same on both reads', async () => {

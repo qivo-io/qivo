@@ -9,11 +9,17 @@ import '../model/comments'
 import { describe, expect, it } from 'vitest'
 import { ACTIVE_RESERVE } from '../lib/activeTaskPage'
 import { ARCHIVE_RESERVE } from '../lib/archivedTasks'
-import { COMPLETION_RESERVE, TASK_READ_RESERVE } from '../lib/core'
+import { COMPLETION_CHECK_READS, COMPLETION_RESERVE, TASK_READ_RESERVE } from '../lib/core'
 
 describe('the read budgets', () => {
   it('are numbers when model/comments.ts loads first', () => {
-    for (const budget of [ACTIVE_RESERVE, ARCHIVE_RESERVE, COMPLETION_RESERVE, TASK_READ_RESERVE])
+    for (const budget of [
+      ACTIVE_RESERVE,
+      ARCHIVE_RESERVE,
+      COMPLETION_CHECK_READS,
+      COMPLETION_RESERVE,
+      TASK_READ_RESERVE,
+    ])
       for (const value of Object.values(budget)) expect(Number.isFinite(value)).toBe(true)
   })
 })
