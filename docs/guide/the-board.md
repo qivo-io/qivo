@@ -82,10 +82,11 @@ with a reviewer, its portrait picker changes the reviewer and offers
 
 Paused tasks show an amber mark. Delay banners identify slipping or delayed
 tasks ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). A
-muted **Delay unknown** banner marks a task whose delay depends on its
-owner's other work when Qivo could not read that work, so the task never
-looks on track without a check. When the last active subtask leaves a
-parent, it returns to a normal card in its saved status column.
+muted **Delay unknown** banner marks a task your browser has not loaded yet
+whose delay depends on its owner's other work when Qivo could not read that
+work, so such a task never looks on track without a check. When the last
+active subtask leaves a parent, it returns to a normal card in its saved
+status column.
 
 ## Which tasks a Board shows
 
@@ -106,6 +107,8 @@ until it has checked them again.
 Delays on tasks your browser has not loaded yet come from Qivo's server,
 which reads each owner's other work, so they show while a large workspace
 is still loading. The Board shows no banner while that read is on its way.
+Tasks your browser has already loaded show their delay once loading
+finishes.
 
 A Board shows at most 1,000 tasks, subtasks included, across its project
 or sub-project with its filters, or across My view
