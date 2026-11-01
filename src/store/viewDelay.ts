@@ -44,6 +44,9 @@ export type ViewDelayCtx = {
   /** each owner's projection, built once while the rows hold still (one
       reshape of the views), by organization and owner; viewDelay fills it */
   memo?: Map<string, (it: DelayIssue) => DelayInfo | null>
+  /** while `memo` is set, the spans the views' rows file under each owner,
+      by organization and owner, built in one pass over the rows */
+  filed?: Map<string, LoadSpan[]>
 }
 
 /* A week index of an ISO week date, or null. */
@@ -83,6 +86,37 @@ export function needsLoad(row: ViewRow, capacity: (id: string) => number): boole
   )
 }
 
+/** The spans the views' rows file (convex/lib/loadRows.ts loadRowFor), by
+    organization and owner, in one pass over the rows. */
+function filedSpans(ctx: ViewDelayCtx): Map<string, LoadSpan[]> {
+  const out = new Map<string, LoadSpan[]>()
+  const seen = new Set<string>()
+  for (const row of ctx.viewRows()) {
+    if (seen.has(row.id)) continue
+    seen.add(row.id)
+    const filed = loadRowFor(row, {
+      isGroup: row.has_subtasks,
+      projectLive: ctx.projectLive(row.project_id),
+      ownerInOrg: (id) => ctx.orgOf(id) === row.org_id,
+      visible: true,
+      staff: false,
+      meId: '',
+    })
+    if (!filed) continue
+    const key = `${row.org_id}\u0000${filed.owner_id}`
+    const list = out.get(key) ?? []
+    list.push({
+      issueUuid: filed.issue_id,
+      start: isoToWeek(filed.start_week),
+      end: isoToWeek(filed.end_week),
+      remaining: filed.remaining != null ? Number(filed.remaining) : 0,
+      remainingSet: filed.remaining_set_at != null ? tsToWeek(filed.remaining_set_at) : null,
+    })
+    out.set(key, list)
+  }
+  return out
+}
+
 /** Owner `owner` of organization `org`'s load for a view's delays: the
     cache's spans `load` with the spans of the tasks this person's rows hold
     taken from those rows (see the header), in the server's total order. */
@@ -97,27 +131,8 @@ export function viewLoadOf(
     if (!span.issueUuid || (!ctx.held(span.issueUuid) && !ctx.inView(span.issueUuid)))
       spans.push(span)
   spans.push(...ctx.heldSpans(owner))
-  const seen = new Set<string>()
-  for (const row of ctx.viewRows()) {
-    if (row.org_id !== org || seen.has(row.id)) continue
-    seen.add(row.id)
-    const filed = loadRowFor(row, {
-      isGroup: row.has_subtasks,
-      projectLive: ctx.projectLive(row.project_id),
-      ownerInOrg: (id) => ctx.orgOf(id) === org,
-      visible: true,
-      staff: false,
-      meId: '',
-    })
-    if (!filed || filed.owner_id !== owner) continue
-    spans.push({
-      issueUuid: filed.issue_id,
-      start: isoToWeek(filed.start_week),
-      end: isoToWeek(filed.end_week),
-      remaining: filed.remaining != null ? Number(filed.remaining) : 0,
-      remainingSet: filed.remaining_set_at != null ? tsToWeek(filed.remaining_set_at) : null,
-    })
-  }
+  const filed = ctx.memo ? (ctx.filed ??= filedSpans(ctx)) : filedSpans(ctx)
+  spans.push(...(filed.get(`${org}\u0000${owner}`) ?? []))
   return canonicalLoad(spans)
 }
 

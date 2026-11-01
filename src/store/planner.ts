@@ -2420,6 +2420,7 @@ let viewDelays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
 function reshapeViews(): boolean {
   // each owner's load is built once for every card that reads it
   viewDelayCtx.memo = new Map()
+  viewDelayCtx.filed = undefined
   const delays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
   const views = viewRows.views()
   for (const [slot, rows] of views) {
@@ -2448,6 +2449,7 @@ function reshapeViews(): boolean {
   for (const slot of viewReads.keys()) if (!views.has(slot)) ownerLoads.release(slot)
   viewDelays = delays
   viewDelayCtx.memo = undefined
+  viewDelayCtx.filed = undefined
   const changed = viewRows.reshape((uuid) => uuidToKey.has(uuid), {
     handleNow: PLANNER.handleNow,
     extra: (uuid) => JSON.stringify(delays.get(uuid) ?? null),

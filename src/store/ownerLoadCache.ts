@@ -55,7 +55,8 @@ export type OwnerLoadDeps = {
   live: Pick<LiveQueries, 'watch' | 'read' | 'onTransition'>
   /** Whether the person's own seat in organization `org` is staff. */
   staffIn: (org: string) => boolean
-  /** Called after an answer or the cap changed any owner's load. */
+  /** Called once after the answers of one transition, or a change of what
+      the views need, changed any owner's load or the cap. */
   changed: () => void
   /** The hidden-tab gate (lib/viewVisibility.ts watchVisibility). */
   watchVisibility: (listener: (visibility: Visibility) => void) => () => void
@@ -142,14 +143,30 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
   const converted = new Map<string, { kept: Kept; grid: number; load: OwnerLoad }>()
   // the owners past a guest's or Viewer's cap in every view that needs them
   let capped = new Set<string>()
-  // the live calls by key: the call, its watch and its handler's stop
-  const subs = new Map<string, { call: Call; stop: () => void; notRead: string[] | null }>()
+  // the live calls by key: the call, its transport token and stop, and the
+  // owners its last answer did not read
+  const subs = new Map<
+    string,
+    { call: Call; token: string; stop: () => void; notRead: string[] | null }
+  >()
   let visible = true
   // sync() runs again once it ends when an answer it took asks for it
   let syncing = false
   let again = false
+  // whether an owner's load or the cap changed since the views were told
+  // (flush), so one transition or sync tells them once
+  let dirty = false
+  // the one transition handler every call's answers come through
+  let stopTransitions: (() => void) | null = null
 
   const callKey = (call: Call) => `${call.org}\u0000${call.owners.join(',')}`
+
+  /** Tells the views once that loads changed, outside a sync. */
+  function flush() {
+    if (!dirty || syncing) return
+    dirty = false
+    deps.changed()
+  }
 
   /** Takes in call `call`'s result from the transport. Answers whether any
       owner's load changed, and the owners it answered not_read. */
@@ -201,28 +218,38 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
       if (sub?.notRead?.length) watch({ org: call.org, owners: sub.notRead }, keep)
       return
     }
+    listen()
     const args: Record<string, Value> = { org_id: call.org, owner_ids: call.owners }
     const w = deps.live.watch(QUERY, args)
-    const sub = { call, stop: () => {}, notRead: null as string[] | null }
-    const onAnswer = () => {
-      const { changed, notRead } = take(call, w.token)
-      const wasNotRead = sub.notRead?.join() ?? ''
-      sub.notRead = notRead
-      if (notRead.join() !== wasNotRead) sync()
-      if (changed) deps.changed()
-    }
-    const stopTransitions = deps.live.onTransition(
+    const sub = { call, token: w.token, stop: w.stop, notRead: null as string[] | null }
+    subs.set(key, sub)
+    // a result the transport holds already, taken in the sync under way
+    if (w.joined && answered(sub)) again = true
+  }
+
+  /** Takes in `sub`'s result. Answers whether the owners it did not read
+      changed, which the live calls follow (sync). */
+  function answered(sub: { call: Call; token: string; notRead: string[] | null }): boolean {
+    const { changed, notRead } = take(sub.call, sub.token)
+    if (changed) dirty = true
+    const was = sub.notRead?.join() ?? ''
+    sub.notRead = notRead
+    return notRead.join() !== was
+  }
+
+  /** Hears every transition once for all the calls, so the answers one
+      transition brings repaint the views once. */
+  function listen() {
+    stopTransitions ??= deps.live.onTransition(
       (transition) => {
-        if (transition.tokens.has(w.token)) onAnswer()
+        let resync = false
+        for (const sub of [...subs.values()])
+          if (transition.tokens.has(sub.token) && answered(sub)) resync = true
+        if (resync) sync()
+        else flush()
       },
       { view: true },
     )
-    sub.stop = () => {
-      stopTransitions()
-      w.stop()
-    }
-    subs.set(key, sub)
-    if (w.joined) onAnswer()
   }
 
   /** Brings the live calls in line with what the views need now. */
@@ -240,6 +267,7 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
     } finally {
       syncing = false
     }
+    flush()
   }
 
   function syncOnce() {
@@ -292,7 +320,7 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
         converted.delete(key)
         forgot = true
       }
-    if (cappedChanged || forgot) deps.changed()
+    if (cappedChanged || forgot) dirty = true
   }
 
   const stopVisibility = deps.watchVisibility((now) => {
@@ -356,6 +384,9 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
     clear() {
       for (const sub of subs.values()) sub.stop()
       subs.clear()
+      stopTransitions?.()
+      stopTransitions = null
+      dirty = false
       needs.clear()
       loads.clear()
       converted.clear()

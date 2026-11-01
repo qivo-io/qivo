@@ -44,19 +44,30 @@ function setup(staff = true) {
       return () => visibility.delete(listener)
     },
   })
-  const tell = (token: string) => {
-    for (const fn of handlers) fn({ tokens: new Set([token]), at: 0, connection: 1 })
+  const tell = (...tokens: string[]) => {
+    for (const fn of handlers) fn({ tokens: new Set(tokens), at: 0, connection: 1 })
   }
   return {
     cache,
     changes: () => changes,
     calls: () => [...subs].map(([token, sub]) => ({ token, owners: sub.args.owner_ids })),
+    /** How many transition handlers listen. */
+    listeners: () => handlers.size,
     /** Answers call `token` with `answer`. */
     answer(token: string, answer: OwnerLoadsJson) {
       const sub = subs.get(token)
       if (!sub) throw new Error(`no call ${token}`)
       sub.value = answer
       tell(token)
+    },
+    /** Answers several calls in one transition. */
+    answerTogether(answers: [token: string, answer: OwnerLoadsJson][]) {
+      for (const [token, answer] of answers) {
+        const sub = subs.get(token)
+        if (!sub) throw new Error(`no call ${token}`)
+        sub.value = answer
+      }
+      tell(...answers.map(([token]) => token))
     },
     fail(token: string) {
       const sub = subs.get(token)
@@ -101,6 +112,40 @@ describe('the owner-load cache', () => {
     expect(after.filter((c) => before.has(c.token))).toHaveLength(calls.length - 1)
     // and the same owners make the same calls whatever order they come in
     expect(staffCalls('org', ['a', 'b', 'c'])).toEqual(staffCalls('org', ['c', 'a', 'b']))
+  })
+
+  it('tells the views once for all the answers one transition brings', () => {
+    const s = setup(true)
+    s.cache.register('board', needs(60))
+    const calls = s.calls()
+    expect(calls.length).toBeGreaterThan(1)
+    // one handler hears every call
+    expect(s.listeners()).toBe(1)
+    const before = s.changes()
+    s.answerTogether(
+      calls.map((call) => [
+        call.token,
+        {
+          hidden: 'counted',
+          owners: call.owners.map((owner_id) => ({ owner_id, state: 'ok' as const, spans: [] })),
+        },
+      ]),
+    )
+    expect(s.changes()).toBe(before + 1)
+    for (const need of needs(60)) expect(s.cache.loadOf('org', need.owner).state).toBe('ok')
+    // an answer that arrives again unchanged tells nothing
+    s.answerTogether(
+      calls
+        .slice(0, 1)
+        .map((call) => [
+          call.token,
+          {
+            hidden: 'counted',
+            owners: call.owners.map((owner_id) => ({ owner_id, state: 'ok' as const, spans: [] })),
+          },
+        ]),
+    )
+    expect(s.changes()).toBe(before + 1)
   })
 
   it('asks for a guest or Viewer one owner a call, at most GUEST_CALLS, most cards first', () => {
