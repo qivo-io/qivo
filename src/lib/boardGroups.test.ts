@@ -25,7 +25,7 @@ describe('groupBoardAssignees', () => {
       { id: 'c', owner: 'agent' },
       { id: 'd', owner: 'person' },
     ]
-    const lanes = groupBoardAssignees(tasks, tasks, nameOf)
+    const lanes = groupBoardAssignees(tasks, nameOf)
     expect(lanes.map((lane) => [lane.owner, lane.items.map((task) => task.id)])).toEqual([
       ['agent', ['c']],
       ['person', ['a', 'd']],
@@ -43,26 +43,20 @@ describe('groupBoardAssignees', () => {
       task('working', 'progress', 'agent'),
       task('unreviewed', 'review'),
     ]
-    const lanes = groupBoardAssignees(tasks, tasks, nameOf)
+    const lanes = groupBoardAssignees(tasks, nameOf)
     expect(lanes.map((lane) => [lane.key, lane.items.map((item) => item.id)])).toEqual([
       ['assignee:agent', ['reviewed']],
       ['assignee:person', ['working', 'unreviewed']],
     ])
   })
 
-  it('retains scoped lanes emptied by Focus without restoring their filtered tasks', () => {
+  it('makes a lane only for an owner of a card', () => {
     const tasks = [
       { id: 'a', owner: 'person' },
-      { id: 'b', owner: 'agent' },
-      { id: 'c', owner: null },
+      { id: 'b', owner: 'person' },
     ]
-    const lanes = groupBoardAssignees(tasks, [tasks[0]], nameOf)
-    expect(lanes.map((lane) => [lane.owner, lane.items.length])).toEqual([
-      ['agent', 0],
-      ['person', 1],
-      [null, 0],
-    ])
-    expect(groupBoardAssignees([tasks[0]], [tasks[0]], nameOf)).toHaveLength(1)
+    expect(groupBoardAssignees(tasks, nameOf).map((lane) => lane.key)).toEqual(['assignee:person'])
+    expect(groupBoardAssignees([], nameOf)).toEqual([])
   })
 
   it('keeps same-name and historical profiles distinct from each other and Unassigned', () => {
@@ -73,7 +67,7 @@ describe('groupBoardAssignees', () => {
       { id: 'd' },
       { id: 'e', owner: null },
     ]
-    const lanes = groupBoardAssignees(tasks, tasks, nameOf)
+    const lanes = groupBoardAssignees(tasks, nameOf)
     expect(lanes.map((lane) => lane.key)).toEqual([
       'assignee:historical',
       'assignee:other',
@@ -88,7 +82,7 @@ describe('groupBoardAssignees', () => {
     const a = { ...issue('a', { parent: parent.id }), owner: 'person' }
     const b = { ...issue('b', { parent: parent.id }), owner: 'agent' }
     const byId = index([parent, a, b])
-    const lanes = groupBoardAssignees([a, b], [a, b], nameOf)
+    const lanes = groupBoardAssignees([a, b], nameOf)
     const cells = lanes.map((lane) => groupBoardCell<Issue>(lane.items, byId))
     expect(cells.map((cell) => cell[0].parent?.id)).toEqual(['parent', 'parent'])
     expect(cells.map((cell) => cell[0].issues.map((task) => task.id))).toEqual([['b'], ['a']])

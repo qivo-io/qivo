@@ -787,11 +787,11 @@ function KanbanBoard({
   let lanes: Lane[] = sideBoards
     ? []
     : byAssignee
-      ? // a lane for each owner of a card, so Focus alone leaves no lane
-        // empty (convex/lib/board.ts heldLanes)
-        groupBoardAssignees(visible, visible, (id) => P.user(id)?.name || 'Unknown user')
-          .map((lane) => ({ ...lane, proj: null }))
-          .filter((lane) => !(clearable && lane.items.length === 0))
+      ? // a lane for each owner of a card, so no lane is empty
+        groupBoardAssignees(visible, (id) => P.user(id)?.name || 'Unknown user').map((lane) => ({
+          ...lane,
+          proj: null,
+        }))
       : swimlanes
         ? info.groups
             .filter((g) => holdsScoped(g))
