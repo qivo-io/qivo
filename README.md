@@ -146,6 +146,11 @@ applied, so that a query reads only the documents of its own table.
 fails on any convex-test version other than the one it was checked against.
 When an upgrade includes #154, delete that patch as the file says. Otherwise
 check its edits against the new version.
+`scripts/convex-test-action-storage.mjs` likewise gives each file write of an
+action a transaction of its own. Unpatched, convex-test runs it inside any
+other function's open transaction, so two actions that store files at once
+can fail with "Write outside of transaction". Treat it the same way on an
+upgrade.
 
 Do not run full gates concurrently across agents. `npm run test:contract`, demo
 reset/seed commands and browser smoke tools can write to a backend; they are
