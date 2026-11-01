@@ -32,7 +32,10 @@
    - The answer brings a row for each task it names, so a whole answer
      names no task the Board cannot show. A row source that brings fewer
      (`missing`) keeps the Board loading, and STALL.ms later says that some
-     tasks have not reached it; it never looks empty or complete meanwhile. */
+     tasks have not reached it; it never looks empty or complete meanwhile.
+     While the workspace loads, a subtask it holds whose parent only the
+     answer brings counts as missing on the desktop too: its card shows,
+     but without its parent's heading until the parent loads. */
 
 import { useEffect, useState } from 'react'
 import type { BoardAnswer } from '../../../convex/lib/board'
@@ -47,14 +50,15 @@ import { type BoardVariant, boardFilters, useBoardRequest } from './boardArgs'
 export type BoardState =
   /** All projects, where the Board asks to choose a project */
   | 'choose'
-  /** the first answer for this Board is on its way, or it names tasks the
-      store has not received yet */
+  /** the first answer for this Board is on its way, or a task it names has
+      no model to show yet (`missing` in useBoardView) */
   | 'loading'
   /** an earlier answer was for other arguments, a hidden tab or a page shown
       again; the answer for these is on its way */
   | 'refreshing'
   | 'ok'
-  /** some tasks the answer names did not reach the store in time */
+  /** a task the answer names still had no model to show STALL.ms later:
+      the fail-safe that keeps the rest from showing as complete */
   | 'incomplete'
   | 'over_ceiling'
   | 'over_budget'
@@ -213,11 +217,26 @@ export function useBoardView(
     const shown = new Set<string>()
     const tasks: IssueVM[] = []
     let missing = 0
+    // while the workspace loads, a subtask it holds names no parent it does
+    // not hold (store/viewModels.ts), so the desktop Board would file it
+    // without the heading of a parent only the answer brings
+    const loading = variant === 'desktop' && P.stillLoading() !== null
     for (const row of shownAnswer.rows) {
       if (own.has(row.id)) continue
       const it = modelOf(row.id)
-      if (!it) missing++
-      else if (passes(info, filters, it)) {
+      if (!it) {
+        missing++
+        continue
+      }
+      if (
+        loading &&
+        row.parent_id &&
+        P.handleOf(row.id) !== null &&
+        P.handleOf(row.parent_id) === null &&
+        P.viewTask(slot, row.parent_id)
+      )
+        missing++
+      if (passes(info, filters, it)) {
         shown.add(it.uuid)
         tasks.push(it)
       }

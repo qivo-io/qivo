@@ -268,6 +268,37 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(board.P.anyTask(id)?.status).toBe('review')
   })
 
+  it('keeps the Board loading while a loaded subtask waits for a parent only the answer brings', async () => {
+    const board = await loadBoard(network, (snap) => {
+      snap.issues.push({ ...taskRow(snap, 'y', 'todo', 2), parent_id: 'x' })
+    })
+    // its parent x, in a part of the workspace still to come, which the
+    // server names as y's parent and sends among the answer's parents
+    const { description: _text, ...fields } = taskRow(board.snapshot, 'x', 'todo', 1)
+    const parent: ViewRow = { ...fields, has_subtasks: true, group_done: false }
+    board.server.edit = (answer) =>
+      answer.state === 'ok'
+        ? {
+            ...answer,
+            rows: answer.rows.map((row) => (row.id === 'y' ? { ...row, parent_id: 'x' } : row)),
+            parents: [...answer.parents, parent],
+          }
+        : answer
+    const loading = vi.spyOn(board.P, 'stillLoading').mockReturnValue(0.5)
+    await board.render(root)
+    await board.answer()
+    const state = () => document.querySelector<HTMLElement>('[data-board-root]')?.dataset.boardState
+    expect(board.P.handleOf('y')).not.toBeNull()
+    expect(board.P.viewTask('board:desktop', 'x')).toBeDefined()
+    // the card shows, and the Board does not say it is complete
+    expect(board.card('y')).not.toBeNull()
+    expect(state()).toBe('loading')
+    // once the workspace has loaded, it would hold x too
+    loading.mockReturnValue(null)
+    await board.answer()
+    expect(state()).toBe('ok')
+  })
+
   it("opens in the task window from the window's own read", async () => {
     const board = await farBoard()
     const handle = board.P.viewTask('board:desktop', 'far')?.id ?? ''
