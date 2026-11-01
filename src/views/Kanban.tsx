@@ -1334,7 +1334,8 @@ function KanbanBoard({
         </div>
       </div>
       {view.state === 'incomplete' && (
-        <div style={{ padding: `0 ${CANVAS_PAD_X}px var(--panel-gap)` }}>
+        // inset as the canvas below (CANVAS_PAD_X)
+        <div className="px-[20px] pb-[var(--panel-gap)]">
           <IncompleteNote onRetry={view.retry} />
         </div>
       )}
