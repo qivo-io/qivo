@@ -12,8 +12,9 @@
  * name the credential. It uploads, downloads and deletes attachments, one of
  * them at the per-file limit, checks that an upload URL stores one file, checks
  * the text, name, list and request size limits, unknown arguments, comment
- * paging, the archived task lists, task progress, last comment times, delay and
- * project completion, and the live group rule. It fills one task with a
+ * paging, cursor paging of the active and archived task lists, task
+ * progress, last comment times, delay and project completion, and the live
+ * group rule. It fills one task with a
  * little more than a page of comments and of history, pages that history
  * over REST and MCP, and in the browser presses Show earlier comments and
  * Show earlier activity in its task window. It opens the Settings page
@@ -110,6 +111,14 @@ export const FIXTURE_STATUS = 'todo'
  *  window opens with one page of comments, and loads one page of history
  *  once All is chosen. */
 export const THREAD_PAGE = { comments: LIMITS.listComments.max, history: 500, windowHistory: 50 }
+
+/** The sentences REST GET /v1/tasks and MCP list_tasks refuse a page's
+ *  `offset` and `cursor` with, on active and archived lists alike for the
+ *  cursor (convex/lib/listCursor.ts), which the script's tests pin. */
+export const LIST_REFUSALS = {
+  activeOffset: 'offset does not apply to active tasks; pass next_cursor as cursor',
+  cursor: 'cursor must be the next_cursor of an earlier page',
+}
 
 /** Checks that need a condition the run cannot create everywhere, which
  *  report SKIP without it, or FAIL when --require names them. */
@@ -683,12 +692,58 @@ async function readOk(cred, path) {
   }
 }
 
-/** readOk for a route that answers a list. */
+/** readOk for a route that answers a list. Task lists answer pages
+ *  instead (taskPages). */
 async function readList(cred, path) {
   const rows = await readOk(cred, path)
   expect(Array.isArray(rows), `GET ${path.split('?')[0]} answered no list`)
   return rows
 }
+
+/** The most pages a check reads of one task list, so a next_cursor that
+ *  never ends fails the check instead of holding up the run. */
+export const TASK_PAGES_MAX = 200
+
+/**
+ * Every task of one REST or MCP task list, active or archived, read page by
+ * page. `read(cursor)` answers the page after `cursor`, or the first page
+ * for null. Each page must be `{next_cursor, tasks}`, and paging goes on
+ * until next_cursor is null, because a page can hold fewer than `limit`
+ * tasks, or none, while it is set. `what` names the list in a failure.
+ * Fails on any other answer and past TASK_PAGES_MAX pages.
+ */
+export async function taskPages(read, what) {
+  const rows = []
+  let cursor = null
+  for (let n = 0; n < TASK_PAGES_MAX; n++) {
+    const page = await read(cursor)
+    expect(
+      Array.isArray(page?.tasks) &&
+        (page.next_cursor === null || typeof page.next_cursor === 'string'),
+      `${what} answered no {next_cursor, tasks} page`,
+    )
+    rows.push(...page.tasks)
+    if (page.next_cursor === null) return rows
+    cursor = page.next_cursor
+  }
+  fail(`${what} still had a next_cursor after ${TASK_PAGES_MAX} pages`)
+}
+
+/** `path`, a REST task list query, with `cursor` added unless it is null. */
+const withCursor = (path, cursor) =>
+  cursor === null ? path : `${path}&cursor=${encodeURIComponent(cursor)}`
+
+/** Every task the REST task list `path` (`/tasks?…`) holds, each page read
+ *  with restOk. */
+const restTasks = (cred, path) =>
+  taskPages((cursor) => restOk(cred, 'GET', withCursor(path, cursor)), 'GET /v1/tasks')
+
+/** Every task MCP list_tasks holds for `args`. */
+const mcpTasks = (cred, args) =>
+  taskPages(
+    (cursor) => toolOk(cred, 'list_tasks', cursor === null ? args : { ...args, cursor }),
+    'list_tasks',
+  )
 
 /** The MCP schema refusal text for `tool`. */
 const schemaText = (name, issues) =>
@@ -1583,34 +1638,19 @@ async function findTasks(cred, tag) {
     for (const row of rows ?? []) if (hasTag(tag, row.title)) found.set(row.id, row)
   }
   const search = encodeURIComponent(fragment)
-  /** Pages one active list with offset until a page is short. */
-  const readActive = async (scope) => {
-    for (let offset = 0; ; offset += 200) {
-      const page = await readList(
-        cred,
-        `/tasks?${scope}search=${search}&limit=200&offset=${offset}`,
-      )
-      take(page)
-      if (page.length < 200) break
-    }
-  }
-  await readActive('')
+  /** Reads one task list to its end with readOk, so a server failure is
+   *  tried again. */
+  const readAll = async (path) =>
+    take(await taskPages((cursor) => readOk(cred, withCursor(path, cursor)), 'GET /v1/tasks'))
+  await readAll(`/tasks?search=${search}&limit=200`)
   const archivedProjects = await readList(cred, '/projects?archived=true')
-  for (const p of archivedProjects) await readActive(`project=${p.id}&`)
+  for (const p of archivedProjects)
+    await readAll(`/tasks?project=${p.id}&search=${search}&limit=200`)
   const projects = [...(await readList(cred, '/projects')), ...archivedProjects].filter(
     (p) => p.parent_id === null,
   )
-  for (const p of projects) {
-    let cursor = null
-    for (let i = 0; i < 200; i++) {
-      const q = `/tasks?archived=true&project=${p.id}&search=${search}&limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`
-      const page = await readOk(cred, q)
-      expect(Array.isArray(page?.tasks), 'an archived page answered no tasks')
-      take(page.tasks)
-      cursor = page.next_cursor ?? null
-      if (!cursor) break
-    }
-  }
+  for (const p of projects)
+    await readAll(`/tasks?archived=true&project=${p.id}&search=${search}&limit=200`)
   return [...found.values()]
 }
 
@@ -1695,7 +1735,7 @@ async function checkReads(cred) {
       flagsOk(await restOk(cred, 'GET', '/projects'), 'REST')
       const detail = await restOk(cred, 'GET', `/projects/${A.id}`)
       eq(detail.lead_name, run.nora.name, 'project lead')
-      const tasks = await restOk(cred, 'GET', `/tasks?project=${M.id}&limit=200`)
+      const tasks = await restTasks(cred, `/tasks?project=${M.id}&limit=200`)
       expect(
         tasks.some((t) => t.id === run.t0.id),
         'the task list lacks the fixture task',
@@ -1721,7 +1761,7 @@ async function checkReads(cred) {
   await check(`${cred.id}/mcp/reads`, async () => {
     flagsOk(await toolOk(cred, 'list_projects'), 'MCP')
     eq((await toolOk(cred, 'get_project', { project: A.id })).id, A.id, 'get_project')
-    const tasks = await toolOk(cred, 'list_tasks', { project: M.id, limit: 200 })
+    const tasks = await mcpTasks(cred, { project: M.id, limit: 200 })
     expect(
       tasks.some((t) => t.id === run.t0.id),
       'list_tasks lacks the fixture task',
@@ -1805,7 +1845,7 @@ async function restLifecycle(cred, label) {
       archive_reason: reason,
     })
     eq(t.archived, true, 'archived')
-    const active = await restOk(cred, 'GET', `/tasks?project=${run.projects.M.id}&limit=200`)
+    const active = await restTasks(cred, `/tasks?project=${run.projects.M.id}&limit=200`)
     expect(!active.some((r) => r.id === task.id), 'an archived task is in the active list')
     const comments = await restOk(cred, 'GET', `/tasks/${task.key}/comments`)
     const posted = comments.find((c) => c.body === reason)
@@ -1815,7 +1855,7 @@ async function restLifecycle(cred, label) {
   await check(`${id}/restore`, async () => {
     const t = await restOk(cred, 'PATCH', `/tasks/${task.key}`, { archived: false })
     eq(t.archived, false, 'archived after restore')
-    const active = await restOk(cred, 'GET', `/tasks?project=${run.projects.M.id}&limit=200`)
+    const active = await restTasks(cred, `/tasks?project=${run.projects.M.id}&limit=200`)
     expect(
       active.some((r) => r.id === task.id),
       'a restored task is missing from the active list',
@@ -1877,7 +1917,7 @@ async function mcpLifecycle(cred, label) {
   await check(`${id}/archive`, async () => {
     await toolOk(cred, 'update_task', { ref: task.key, archived: true, archive_reason: reason })
     expect((await toolOk(cred, 'get_task', { ref: task.key })).archived_at, 'archived_at is set')
-    const active = await toolOk(cred, 'list_tasks', { project: run.projects.M.id, limit: 200 })
+    const active = await mcpTasks(cred, { project: run.projects.M.id, limit: 200 })
     expect(!active.some((r) => r.id === task.id), 'an archived task is in list_tasks')
     const thread = await toolOk(cred, 'list_comments', { ref: task.key })
     eq(thread.find((c) => c.body === reason)?.author_name, cred.actor, 'archive reason author')
@@ -1946,9 +1986,8 @@ async function checkReadOnly(cred, sentence) {
     eq(t.archived, false, 'archived')
     const comments = await restOk(run.creds.writeToken, 'GET', `/tasks/${t0.key}/comments`)
     expect(!comments.some((c) => c.body.includes('refused comment')), 'a refused comment landed')
-    const tasks = await restOk(
+    const tasks = await restTasks(
       run.creds.writeToken,
-      'GET',
       `/tasks?project=${run.projects.M.id}&limit=200`,
     )
     expect(!tasks.some((x) => x.title === `${run.tag} refused`), 'a refused task was created')
@@ -2486,7 +2525,7 @@ async function textCapChecks() {
     })
     run.created.push(made)
     key = made.key
-    const titled = (await restOk(w, 'GET', `/tasks?project=${A.id}&limit=200`)).filter(
+    const titled = (await restTasks(w, `/tasks?project=${A.id}&limit=200`)).filter(
       (t) => t.title === title,
     )
     eq(titled.length, 1, 'tasks with the cap title (only the one at the limit)')
@@ -2540,7 +2579,7 @@ async function textCapChecks() {
       LIMITS.description.refusal,
       'refusal',
     )
-    const listed = await toolOk(w, 'list_tasks', { project: A.id, limit: 200 })
+    const listed = await mcpTasks(w, { project: A.id, limit: 200 })
     expect(!listed.some((t) => t.title === `${title} MCP`), 'MCP created the over-long task')
   })
   await check('text-caps/mcp/comment', async () => {
@@ -2591,7 +2630,8 @@ async function listLimitChecks() {
         LIMITS.search.refusal,
       )
     const page = await restOk(w, 'GET', `/tasks?project=${M.id}`)
-    expect(page.length <= DEFAULT_PAGE_SIZE, `a default page held ${page.length} tasks`)
+    expect(Array.isArray(page?.tasks), 'an active list answered no {next_cursor, tasks} page')
+    expect(page.tasks.length <= DEFAULT_PAGE_SIZE, `a default page held ${page.tasks.length} tasks`)
   })
   await check('list-limits/mcp', async () => {
     for (const limit of [0, LIMITS.listTasks.max + 1])
@@ -2608,7 +2648,8 @@ async function listLimitChecks() {
         `search, archived ${archived}`,
       )
     const page = await toolOk(w, 'list_tasks', { project: M.id })
-    expect(page.length <= DEFAULT_PAGE_SIZE, `a default page held ${page.length} tasks`)
+    expect(Array.isArray(page?.tasks), 'list_tasks answered no {next_cursor, tasks} page')
+    expect(page.tasks.length <= DEFAULT_PAGE_SIZE, `a default page held ${page.tasks.length} tasks`)
   })
 }
 
@@ -3304,13 +3345,18 @@ async function restoreStandardGrant(id) {
   })
 }
 
-/** Active lists come in creation order over MCP as over REST (#128). */
+/** Active lists come in creation order over MCP as over REST (#128), and
+ *  page with next_cursor alone: small pages, and a limit that changes
+ *  between pages, hold the whole list once in order, an offset other than 0
+ *  is refused, and a cursor opens only for the list it came from. */
 async function listOrderChecks() {
   const w = run.creds.writeToken
   const M = run.projects.M
-  await check('task-lists/creation-order', async () => {
-    const restRows = await restOk(w, 'GET', `/tasks?project=${M.id}&limit=200`)
-    const mcpRows = await toolOk(w, 'list_tasks', { project: M.id, limit: 200 })
+  const list = `/tasks?project=${M.id}`
+  let ids = []
+  const ordered = await check('task-lists/creation-order', async () => {
+    const restRows = await restTasks(w, `/tasks?project=${M.id}&limit=200`)
+    const mcpRows = await mcpTasks(w, { project: M.id, limit: 200 })
     same(
       mcpRows.map((t) => t.id),
       restRows.map((t) => t.id),
@@ -3318,7 +3364,7 @@ async function listOrderChecks() {
     )
     for (let i = 1; i < restRows.length; i++)
       expect(restRows[i - 1].created_at <= restRows[i].created_at, 'rows not oldest first')
-    const ids = restRows.map((t) => t.id)
+    ids = restRows.map((t) => t.id)
     const later = restRows.find(
       (t) => t.project_id === run.projects.A.id && t.created_at > run.tz.created_at,
     )
@@ -3328,13 +3374,112 @@ async function listOrderChecks() {
         ids.indexOf(run.tz.id) < ids.indexOf(later.id),
       'creation order does not cross the sub-projects',
     )
-    const restPage = await restOk(w, 'GET', `/tasks?project=${M.id}&limit=2&offset=1`)
-    same(
-      restPage.map((t) => t.id),
-      ids.slice(1, 3),
-      'offset pages',
-    )
     return `${ids.length} tasks`
+  })
+  if (!ordered) {
+    skip('task-lists/cursor-pages', 'the creation order check failed')
+    skip('task-lists/paging-refusals', 'the creation order check failed')
+    return
+  }
+  await check('task-lists/cursor-pages', async () => {
+    expect(ids.length >= 3, `${M.name} holds ${ids.length} active tasks, too few to page`)
+    // a page holds at most `limit` tasks, and pages of two hold the list once
+    const sizes = []
+    const twos = await taskPages(async (cursor) => {
+      const page = await restOk(w, 'GET', withCursor(`${list}&limit=2`, cursor))
+      sizes.push(page?.tasks?.length)
+      return page
+    }, 'GET /v1/tasks')
+    expect(
+      sizes.every((n) => n <= 2),
+      `pages of two held ${sizes.join(', ')} tasks`,
+    )
+    same(
+      twos.map((t) => t.id),
+      ids,
+      'REST pages of two',
+    )
+    same(
+      (await mcpTasks(w, { project: M.id, limit: 2 })).map((t) => t.id),
+      ids,
+      'list_tasks pages of two',
+    )
+    // a first page of one, then the rest with limit=200 from its cursor
+    const first = await restOk(w, 'GET', `${list}&limit=1`)
+    expect(typeof first?.next_cursor === 'string', 'a page of one ended the list')
+    const rest = await taskPages(
+      (cursor) => restOk(w, 'GET', withCursor(`${list}&limit=200`, cursor ?? first.next_cursor)),
+      'GET /v1/tasks',
+    )
+    same(
+      [...first.tasks, ...rest].map((t) => t.id),
+      ids,
+      'a page of one, then the rest with a larger limit',
+    )
+    return `${ids.length} tasks in ${sizes.length} REST pages of two`
+  })
+  await check('task-lists/paging-refusals', async () => {
+    for (const offset of ['1', '-1', 'abc'])
+      await restRefusal(
+        w,
+        'GET',
+        `${list}&offset=${offset}`,
+        undefined,
+        400,
+        LIST_REFUSALS.activeOffset,
+      )
+    for (const offset of [1, -1])
+      eq(
+        await toolRefusal(w, 'list_tasks', { project: M.id, offset }),
+        LIST_REFUSALS.activeOffset,
+        `list_tasks offset ${offset}`,
+      )
+    const zero = await restOk(w, 'GET', `${list}&limit=1&offset=0`)
+    same(
+      zero.tasks.map((t) => t.id),
+      ids.slice(0, 1),
+      'offset=0, the first page',
+    )
+    same(
+      (await toolOk(w, 'list_tasks', { project: M.id, limit: 1, offset: 0 })).tasks.map(
+        (t) => t.id,
+      ),
+      ids.slice(0, 1),
+      'list_tasks offset 0, the first page',
+    )
+    expect(typeof zero.next_cursor === 'string', 'a page of one ended the list')
+    const cursor = encodeURIComponent(zero.next_cursor)
+    // another filter, another project or the other surface starts a new list
+    await restRefusal(
+      w,
+      'GET',
+      `${list}&limit=1&priority=high&cursor=${cursor}`,
+      undefined,
+      400,
+      LIST_REFUSALS.cursor,
+    )
+    await restRefusal(
+      w,
+      'GET',
+      `/tasks?project=${run.projects.A.id}&limit=1&cursor=${cursor}`,
+      undefined,
+      400,
+      LIST_REFUSALS.cursor,
+    )
+    eq(
+      await toolRefusal(w, 'list_tasks', { project: M.id, limit: 1, cursor: zero.next_cursor }),
+      LIST_REFUSALS.cursor,
+      'a REST cursor on list_tasks',
+    )
+    // the same list named by key takes the cursor of the list named by uuid
+    same(
+      (await restOk(w, 'GET', `/tasks?project=${M.key}&limit=1&cursor=${cursor}`)).tasks.map(
+        (t) => t.id,
+      ),
+      ids.slice(1, 2),
+      'the project named by key',
+    )
+    return 'offset other than 0 refused, cursors kept to their list'
   })
 }
 
@@ -3601,13 +3746,14 @@ async function archiveChecks() {
       400,
       'archived=true needs project, because archived tasks are listed one project at a time',
     )
+    // a cursor of no page, on an active list
     await restRefusal(
       w,
       'GET',
       `/tasks?project=${M.id}&cursor=x`,
       undefined,
       400,
-      'cursor works only with archived=true',
+      LIST_REFUSALS.cursor,
     )
     await restRefusal(
       w,
@@ -3665,8 +3811,8 @@ async function archiveChecks() {
       )
       eq(
         await toolRefusal(w, 'list_tasks', { project: M.id, cursor: 'x' }),
-        'cursor works only with archived: true',
-        'cursor without archived',
+        LIST_REFUSALS.cursor,
+        'an active list with a cursor of no page',
       )
       eq(
         await toolRefusal(w, 'list_tasks', { archived: true, project: M.id, offset: 1 }),
@@ -3696,14 +3842,14 @@ async function archiveChecks() {
       for (const id of archived) expect(seen.includes(id), 'MCP archived pages miss a task')
     })
     await check('task-lists/active-only', async () => {
-      const rows = await restOk(w, 'GET', `/tasks?project=${M.id}&limit=200`)
+      const rows = await restTasks(w, `/tasks?project=${M.id}&limit=200`)
       for (const id of archived)
         expect(!rows.some((t) => t.id === id), 'REST lists an archived task')
       expect(
         rows.every((t) => t.archived === false),
         'an active list holds an archived row',
       )
-      const mcpRows = await toolOk(w, 'list_tasks', { project: M.id, limit: 200 })
+      const mcpRows = await mcpTasks(w, { project: M.id, limit: 200 })
       for (const id of archived)
         expect(!mcpRows.some((t) => t.id === id), 'MCP lists an archived task')
     })
@@ -3740,14 +3886,14 @@ async function archiveChecks() {
           `MCP does not list ${p.name} as archived`,
         )
       }
-      const tasks = await restOk(cred, 'GET', `/tasks?project=${M.id}&limit=200`)
+      const tasks = await restTasks(cred, `/tasks?project=${M.id}&limit=200`)
       expect(
         tasks.some((t) => t.id === run.t0.id),
         'naming the archived project lists its tasks',
       )
       // the run's tag keeps the list to this run's tasks, so t0 cannot be
       // pushed off the page by the organization's other tasks
-      const all = await restOk(cred, 'GET', `/tasks?limit=200&search=${run.tag}`)
+      const all = await restTasks(cred, `/tasks?limit=200&search=${run.tag}`)
       expect(
         !all.some((t) => t.id === run.t0.id),
         'tasks of an archived project are in the default list',
@@ -3770,7 +3916,7 @@ async function archiveChecks() {
       400,
       `${A.key} is archived, so restore it in the app before adding tasks to it`,
     )
-    const tasks = await restOk(w, 'GET', `/tasks?project=${M.id}&limit=200`)
+    const tasks = await restTasks(w, `/tasks?project=${M.id}&limit=200`)
     expect(!tasks.some((t) => t.title === `${run.tag} into archived`), 'the task was created')
   })
 }
@@ -3804,13 +3950,15 @@ export function deleteOutcome(r, surface, attachmentId, taskKey) {
  * project, whose every task the run makes, so each number is known. */
 
 /** `{done, total, percent}` with the rounding REST and MCP use. */
-const completion = (done, total) => ({
+const counts = (done, total) => ({
   done,
   total,
   percent: total === 0 ? 0 : Math.round((done / total) * 100),
 })
+/** A project's `completion` whose tasks were counted, which says `ok`. */
+const completion = (done, total) => ({ status: 'ok', ...counts(done, total) })
 /** A group's `progress`, which adds whether some of it is hidden. */
-const progress = (done, total, partial = false) => ({ ...completion(done, total), partial })
+const progress = (done, total, partial = false) => ({ ...counts(done, total), partial })
 
 /** The first day (YYYY-MM-DD) of the planning week that holds `day`, in an
  *  organization whose weeks start on `weekStart` (0 Sunday to 6 Saturday). */
@@ -3833,8 +3981,8 @@ const todayUtc = () => new Date().toISOString().slice(0, 10)
 /** Reads the REST and MCP task lists of `project` once and answers a
  *  finder for a task's row in each. */
 async function rowsOf(cred, project) {
-  const viaRest = await restOk(cred, 'GET', `/tasks?project=${project.id}&limit=200`)
-  const viaMcp = await toolOk(cred, 'list_tasks', { project: project.id, limit: 200 })
+  const viaRest = await restTasks(cred, `/tasks?project=${project.id}&limit=200`)
+  const viaMcp = await mcpTasks(cred, { project: project.id, limit: 200 })
   return (task) => {
     const r = viaRest.find((t) => t.id === task.id)
     const m = viaMcp.find((t) => t.id === task.id)
@@ -4104,7 +4252,7 @@ async function liveTaskChecks(f) {
   const { N, N1, N2 } = run.projects
   const read = async (t) => restOk(w, 'GET', `/tasks/${t.key}`)
   const inProgress = async () =>
-    (await restOk(w, 'GET', `/tasks?project=${N1.id}&status=progress&limit=200`)).map((t) => t.id)
+    (await restTasks(w, `/tasks?project=${N1.id}&status=progress&limit=200`)).map((t) => t.id)
   await check('live-tasks/active-sibling', async () => {
     const p = await read(f.p)
     eq(p.is_group, true, 'a parent with a subtask in an active sub-project')
