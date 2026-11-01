@@ -56,11 +56,15 @@
 // Board's query (tasks:board), through the one stand-in the jsdom tests use
 // (src/store/boardStandIn.setup.ts): the Board's rules over the workspace
 // held here, with no access or read budget, and the ceiling of 1,000 tasks.
+// So are the owner loads the delays of tasks only the Board's answer brings
+// read (planning:ownerLoads, src/store/ownerLoadsStandIn.setup.ts), from the
+// same workspace, with no bounds.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
+import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
 /* The most rows one bulk inbox batch changes, convex/model/messages.ts
@@ -784,6 +788,10 @@ const read = (name, args = {}) => {
       return searchPage(args)
     case 'tasks:board':
       return boardStandIn(snapshot, args, { force: forcedBoard })
+    // the owner loads the delays of tasks only the Board's answer brings
+    // read (src/store/ownerLoadsStandIn.setup.ts)
+    case 'planning:ownerLoads':
+      return ownerLoadsStandIn(snapshot, args)
     case 'messages:bulkReach':
       // as convex/model/messages.ts readBulkReach does, per seat
       return {
