@@ -73,7 +73,9 @@ import { ownerSettled, ROW_BYTES } from './viewReads'
  * 2,000 projects, 1,000 people and 50,000 active tasks with real titles and
  * texts, read under Convex's limits. Before the page, a member in 25 teams
  * that share every sub-project reads 55 ranges, 7,051 documents and
- * 1.77 MiB at ordinary name lengths. Their page of 200 rows across 2,000
+ * 1.77 MiB at ordinary name lengths, and 6.61 MiB with names, project
+ * descriptions and titles at the caps in a three-byte script, where their
+ * page reads 11.75 MiB in all. Their page of 200 rows across 2,000
  * projects reads 2,659 ranges, 11,458 documents and 4.34 MiB in all, an
  * organization admin's 2,615 ranges, 6,410 documents and 3.43 MiB, and a
  * page of a 199-project family 863 ranges. A search that matches some

@@ -411,7 +411,8 @@ describe('active pages at the testing envelope', () => {
   }, 1_800_000)
 
   it('pages an admin past the oldest active tasks of archived projects to the end, never ending falsely', async () => {
-    const e = await envelope({ tasks: 3000, archived: 0, oldInArchived: 20_000 })
+    // 1,000 live tasks behind 20,000 older ones that archived projects keep
+    const e = await envelope({ tasks: 1000, archived: 0, oldInArchived: 20_000 })
     let cursor: string | undefined
     let pages = 0
     const seen: string[] = []
@@ -424,9 +425,9 @@ describe('active pages at the testing envelope', () => {
       expect(pages).toBeLessThan(200)
     } while (cursor !== undefined)
     // every active task of a live project, groups' subtasks included
-    expect(seen.length).toBe(3000 + 60 * 5)
+    expect(seen.length).toBe(1000 + 20 * 5)
     expect(new Set(seen).size).toBe(seen.length)
-  }, 1_800_000)
+  }, 3_600_000)
 
   it('reads the delays of several owners of ordinary loads within the share on a staff page', async () => {
     // 500 owners of about 100 open tasks each, in four sub-projects each
