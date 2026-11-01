@@ -10,10 +10,11 @@
    - On top of the answer, the app checks each task again against the
      filter row on screen and the selection, so an edit or a new filter
      hides a card at once. That only narrows. A task the person's own
-     pending writes changed (P.ownPaintedTasks) shows as the rows on screen
-     say, both ways, as the task window's sections do, so a new task shows
-     at once and a refused write takes it away again. Edits by others wait
-     for the answer.
+     pending writes changed, or a parent they moved a task to or from
+     (P.ownPaintedTasks), shows as the rows on screen say, both ways, as the
+     task window's sections do, so a new task shows at once, a parent whose
+     last subtask left shows as a task, and a refused write takes it away
+     again. Edits by others wait for the answer.
    - An answer counts only for the arguments it was sent with. Until the
      answer for the arguments on screen arrives, the Board shows the store's
      own result for them (provisionalBoard), marked loading or refreshing,

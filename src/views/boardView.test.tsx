@@ -300,17 +300,49 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     }
   })
 
-  it('names only the tasks a pending write changed, not the rows its paint read', async () => {
+  it('names the tasks a pending write changed and the parents it moved one between, no others', async () => {
     const board = await loadBoard(network, (snap) => {
       three(snap)
-      snap.issues.push(taskRow(snap, 'd', 'todo', 4))
+      snap.issues.push(taskRow(snap, 'd', 'todo', 4), taskRow(snap, 'e', 'todo', 5))
       for (const t of snap.issues) if (t.id === 'a' || t.id === 'b') t.parent_id = 'c'
     })
     await board.render(root)
     const id = (uuid: string) => board.P.issues.find((it) => it.uuid === uuid)?.id ?? ''
-    // the paint reads parent c, a copy that matches its applied row
+    // the paint reads parent c, a copy that matches its applied row; the
+    // move names c all the same, and not its other subtasks
     await act(async () => void board.P.updateIssue(id('d'), { parent: id('c') }))
-    expect([...board.P.ownPaintedTasks()]).toEqual(['d'])
+    expect([...board.P.ownPaintedTasks()].sort()).toEqual(['c', 'd'])
+    // a move from c to e names both
+    await act(async () => void board.P.updateIssue(id('a'), { parent: id('e') }))
+    expect([...board.P.ownPaintedTasks()].sort()).toEqual(['a', 'c', 'd', 'e'])
+  })
+
+  it('shows at once a parent a pending write makes a plain task, and hides one it makes a group', async () => {
+    const board = await loadBoard(network, (snap) => {
+      snap.issues.push(
+        taskRow(snap, 'par', 'backlog', 1),
+        { ...taskRow(snap, 'sub', 'todo', 2), parent_id: 'par' },
+        taskRow(snap, 'lone', 'backlog', 3),
+        taskRow(snap, 'mover', 'todo', 4),
+      )
+    })
+    await board.render(root)
+    // the search finds a task in Backlog, and no group, whose own status
+    // does not count
+    await board.search('Backlog')
+    await wait(300)
+    expect(state()).toBe('ok')
+    expect(board.card('par')).toBeNull()
+    expect(board.card('lone')).not.toBeNull()
+    board.server.hold = true
+    const id = (uuid: string) => board.P.issues.find((it) => it.uuid === uuid)?.id ?? ''
+    // par's last subtask leaves it, a task in Backlog of its own now
+    await act(async () => void board.P.updateIssue(id('sub'), { parent: null }))
+    expect(board.card('par')).not.toBeNull()
+    // lone gains its first subtask, a group now, which the search misses
+    await act(async () => void board.P.updateIssue(id('mover'), { parent: id('lone') }))
+    expect(board.card('lone')).toBeNull()
+    expect(board.card('par')).not.toBeNull()
   })
 
   it('puts the phone note above its sections, with no empty card', async () => {

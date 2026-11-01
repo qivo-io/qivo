@@ -1220,13 +1220,21 @@ const sameRow = (a: object, b: object) => {
 
 /* The uuids of the tasks a live layer changed from the applied rows
    (P.ownPaintedTasks). A paint's overlay also holds copies of rows it only
-   read, which match their applied row and are left out. */
+   read, which match their applied row and are left out. A task a layer
+   created, removed or moved to another parent also names its old and new
+   parent, whose own rows stay as they were but which may become a group or
+   stop being one. */
 function paintedTaskIds(): Set<string> {
   const out = new Set<string>()
   const applied = base.map('issues')
   for (const [uuid, own] of rows.issues.overlay) {
     const was = applied.get(uuid)
-    if (typeof own === 'symbol' ? was !== undefined : !was || !sameRow(own, was)) out.add(uuid)
+    const now = typeof own === 'symbol' ? undefined : own
+    if (now ? was && sameRow(now, was) : was === undefined) continue
+    out.add(uuid)
+    if (was?.parent_id === now?.parent_id) continue
+    if (was?.parent_id) out.add(was.parent_id)
+    if (now?.parent_id) out.add(now.parent_id)
   }
   const labels = workspaceRows.peekList('issueLabels')
   const appliedLabels = base.list('issueLabels')
@@ -6848,9 +6856,10 @@ export const PLANNER = {
   handleOf: (uuid: string): string | null => uuidToKey.get(uuid) ?? null,
   /** The tasks, by uuid, that a live layer of the person's own writes
       changed from the server's applied rows: created, removed, edited or
-      given other labels. Where a view's own answer and the rows on screen
-      disagree about such a task, the rows on screen decide, as the task
-      window's sections do (lib/taskSections.ts shows). */
+      given other labels, and the parents such a task left or joined.
+      Where a view's own answer and the rows on screen disagree about such
+      a task, the rows on screen decide, as the task window's sections do
+      (lib/taskSections.ts shows). */
   ownPaintedTasks: (): ReadonlySet<string> => paintedTaskIds(),
   /** The handle task `uuid`, number `num` of organization `orgId` opens by
       now: the store's when it holds the task, else the home organization's
