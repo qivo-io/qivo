@@ -87,9 +87,11 @@ const writes = new Set(['insert', 'patch', 'replace'])
 const copied = ['description', 'project_id', 'archived_at']
 /* The other task fields the Overview's counts read (model/overviewCounts.ts
  * slotOf, lib/review.ts taskOwnerId, and tallyOverview for the parent),
- * which a patch changes only through patchTask or patchTaskRow. `org_id`
- * and `num`, which slotOf reads too, are immutable (schema.ts), so the
- * check leaves them out. */
+ * which a patch changes only through patchTask or patchTaskRow. The check
+ * leaves out `org_id` and `num`, which slotOf reads too and schema.ts marks
+ * immutable, and `id`, which no writer changes, though the counts key on
+ * it (the task_id of reconcileTask's overview_tasks row, and the
+ * subtasks hasLiveSubtask finds by it). */
 const counted = ['status', 'paused', 'remaining_hours', 'assignee_id', 'reviewer_id', 'parent_id']
 const writerNames = new Set([...writes, ...named.names])
 const convexPackage = /[/\\]node_modules[/\\]convex[/\\]/
