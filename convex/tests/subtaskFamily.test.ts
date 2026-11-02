@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { LIMITS, SUBTASK_WITH_SUBTASKS, TEXT_MAX } from '../lib/limits'
+import { LIMITS, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
 import {
   MOVE_SUBTASK_RULE,
@@ -624,12 +624,12 @@ describe('a move, archive or parent change too large for one transaction', () =>
 
 describe('a parent whose subtasks are too large to count', () => {
   it('refuses with the plain sentence under a real read limit, and changes nothing', async () => {
-    // ten subtasks of about 60 KB, each description TEXT_MAX characters of
-    // three UTF-8 bytes in the task row too, as until the description
-    // backfill's clear, read within a limit of 580 KB: the count asks once
-    // the nine rows before it may hold SUBTREE_ROOM.bytes, and is past the
-    // room by then
-    const t = newT({ transactionLimits: { bytesRead: 580_000 } })
+    // ten subtasks of about 6 KB, each description an ordinary text of 6,000
+    // characters in the task row too, as until the description backfill's
+    // clear, read within a limit of 66 KB with SUBTREE_ROOM.bytes at a
+    // tenth: the count asks once the nine rows before it may hold those
+    // bytes, and is past the room by then
+    const t = newT({ transactionLimits: { bytesRead: 66_000 } })
     const { f } = await scene(t)
     const base = { org_id: f.org.id, project_id: f.sub.id }
     const heavy = await plantIssue(t, base)
@@ -637,15 +637,21 @@ describe('a parent whose subtasks are too large to count', () => {
       await plantCopiedIssue(t, {
         ...base,
         parent_id: heavy.id,
-        description: '中'.repeat(TEXT_MAX),
+        description: 'Check the bracket fit and the cable route before the next build. '.repeat(91),
       })
     const light = await plantIssue(t, base)
     await plantIssue(t, { ...base, parent_id: light.id })
     const other = await plantIssue(t, base)
-    const r = await expectRefusal(appUpdate(t, f, other.id, { parent_id: heavy.id }), 'rule')
-    expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
-    expect(await row(t, other.id)).toEqual(other)
-    await appUpdate(t, f, other.id, { parent_id: light.id })
+    const saved = { ...SUBTREE_ROOM }
+    Object.assign(SUBTREE_ROOM, { bytes: 51_200 })
+    try {
+      const r = await expectRefusal(appUpdate(t, f, other.id, { parent_id: heavy.id }), 'rule')
+      expect(r.data.message).toBe(SUBTREE_TOO_LARGE)
+      expect(await row(t, other.id)).toEqual(other)
+      await appUpdate(t, f, other.id, { parent_id: light.id })
+    } finally {
+      Object.assign(SUBTREE_ROOM, saved)
+    }
     expect((await row(t, other.id)).parent_id).toBe(light.id)
   })
 })
