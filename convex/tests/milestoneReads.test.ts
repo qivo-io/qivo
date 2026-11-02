@@ -20,6 +20,7 @@ import {
   MILESTONE_NAV,
   MILESTONE_READ,
   MILESTONE_READ_TOO_LARGE,
+  MILESTONE_SCOPE,
   type MilestonePosition,
   milestoneProjects,
   readMilestones,
@@ -58,9 +59,11 @@ type Caller = ReturnType<typeof as>
 
 const READ = { ...MILESTONE_READ }
 const NAV = { ...MILESTONE_NAV }
+const SCOPE = { ...MILESTONE_SCOPE }
 afterEach(() => {
   Object.assign(MILESTONE_READ, READ)
   Object.assign(MILESTONE_NAV, NAV)
+  Object.assign(MILESTONE_SCOPE, SCOPE)
 })
 
 /* Stores a milestone directly, as rows stored before the weekly rule were. */
@@ -195,9 +198,9 @@ async function shared(t: T, f: OrgFixture, count: number): Promise<string[]> {
 }
 
 /* `projects` top-level projects, each shared with each of `teams` teams that
- * `f.user` belongs to, with a milestone on the first. Their shares are more
- * than projectLevelsOf reads at once (lib/access.ts OWN_READS.rows), so a
- * check reads each project's shares one by one. */
+ * `f.user` belongs to, with a milestone on the first. A check of fewer
+ * projects than projectLevelsOf's first step (lib/access.ts OWN_READS.steps)
+ * reads each project's shares one by one. */
 async function sharedWithTeams(
   t: T,
   f: OrgFixture,
@@ -1284,11 +1287,18 @@ describe('refusals', () => {
  * seat as the only one, and record what they read as test annotations,
  * which `--reporter=verbose` prints. */
 
+/* The navigation cases below plant parents of 30 sub-projects, as many as
+ * the design size puts under one project, and lower MILESTONE_NAV.children
+ * to 10, so a check looks among the caller's own grants past it as it did
+ * for parents of 600 and 2,100 sub-projects past the real 64. */
+const NAV_CHILDREN = 10
+
 describe('under Convex limits', () => {
-  it('reads one milestone of a parent shown only for navigation to its last of 2,100 sub-projects', async () => {
+  it('reads one milestone of a parent shown only for navigation to its last of 30 sub-projects', async () => {
+    MILESTONE_NAV.children = NAV_CHILDREN
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const { milestones } = await navigationOnly(t, f, f.viewer, 1, 2100)
+    const { milestones } = await navigationOnly(t, f, f.viewer, 1, 30)
     const [row] = milestones
     expect(await as(t, f.viewer).query(api.milestones.get, { id: row.id })).toMatchObject({
       row: rowOf(row),
@@ -1366,19 +1376,22 @@ describe('under Convex limits', () => {
   })
 
   it('refuses a read whose projects are shared with more teams than the request can check', async () => {
-    const t = newT({ transactionLimits: { documentsRead: 1500 } })
+    // the check's share lowered to 64 documents, as 1,500 documents read
+    // were for projects shared with 60 teams each
+    MILESTONE_SCOPE.documents = 64
+    const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const { ids, milestone } = await sharedWithTeams(t, f, 30, 60)
+    const { ids, milestone } = await sharedWithTeams(t, f, 30, 3)
     const user = as(t, f.user)
     const section = { from: MONDAY, side: 'upcoming' as const, limit: 10 }
-    // eight projects' 480 shares fit
+    // eight projects' 24 shares fit
     const eight = await user.query(api.milestones.section, {
       ...section,
       projects: ids.slice(0, 8),
     })
     expect(eight.rows).toEqual([rowOf(milestone)])
-    // thirty projects' 1,800 shares pass the request's 1,500 documents, so
-    // the check stops between two batches and refuses
+    // thirty projects' 90 shares pass the check's 64 documents, so the
+    // check stops between two batches and refuses
     for (const call of [
       user.query(api.milestones.section, { ...section, projects: ids }),
       user.query(api.milestones.between, { projects: ids, from: MONDAY, to: plus(MONDAY, 7) }),
@@ -1388,13 +1401,15 @@ describe('under Convex limits', () => {
     }
   })
 
-  it('shows parents of 600 sub-projects through one grant each', async () => {
-    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+  it('shows parents of 30 sub-projects through one grant each', async () => {
+    MILESTONE_NAV.children = NAV_CHILDREN
+    const t = newT({ transactionLimits: { documentsRead: 200 } })
     const f = await withOrg(t)
-    const { ids, milestones } = await navigationOnly(t, f, f.guest, 5, 600)
+    const { ids, milestones } = await navigationOnly(t, f, f.guest, 5, 30)
     const guest = as(t, f.guest)
-    // five parents hold 3,000 sub-projects, past the request's 2,500
-    // documents, so the check looks among the guest's own grants instead
+    // five parents hold 150 sub-projects, past MILESTONE_NAV.children each,
+    // so the check looks among the guest's own grants instead, within 200
+    // documents
     const five = await guest.query(api.milestones.section, {
       from: MONDAY,
       side: 'upcoming',
@@ -1408,10 +1423,11 @@ describe('under Convex limits', () => {
     })
   })
 
-  it('shows a parent of one sub-project to a person with 3,000 grants', async () => {
-    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+  it('shows a parent of one sub-project to a person with 200 grants', async () => {
+    // reading every grant and its project would pass 150 documents
+    const t = newT({ transactionLimits: { documentsRead: 150 } })
     const f = await withOrg(t)
-    await grantsOn(t, f, f.guest, 3000)
+    await grantsOn(t, f, f.guest, 200)
     const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 1)
     const guest = as(t, f.guest)
     // the check asks the one sub-project, not every grant of the guest
@@ -1428,13 +1444,16 @@ describe('under Convex limits', () => {
     })
   })
 
-  it('shows a parent of 100 sub-projects to a guest whose old team is shared on 2,000 projects', async () => {
-    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+  it('shows a parent of 30 sub-projects to a guest whose old team is shared on 50 projects', async () => {
+    MILESTONE_NAV.children = NAV_CHILDREN
+    // the read takes about 40 documents, and the team's 50 shares would
+    // pass 60
+    const t = newT({ transactionLimits: { documentsRead: 60 } })
     const f = await withOrg(t)
     // a membership left from before guests lost team access; the team's
     // shares can never reach the guest, so the check does not read them
-    await teamOn(t, f, f.guest, 2000)
-    const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 100)
+    await teamOn(t, f, f.guest, 50)
+    const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 30)
     const guest = as(t, f.guest)
     expect(
       await guest.query(api.milestones.section, {
@@ -1449,11 +1468,12 @@ describe('under Convex limits', () => {
     })
   })
 
-  it('refuses when a parent of 600 sub-projects meets a person with 3,000 grants', async () => {
-    const t = newT({ transactionLimits: { documentsRead: 2500 } })
+  it('refuses when a parent of 30 sub-projects meets a person with 200 grants', async () => {
+    MILESTONE_NAV.children = NAV_CHILDREN
+    const t = newT({ transactionLimits: { documentsRead: 150 } })
     const f = await withOrg(t)
-    await grantsOn(t, f, f.guest, 3000)
-    const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 600)
+    await grantsOn(t, f, f.guest, 200)
+    const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 30)
     const guest = as(t, f.guest)
     // neither the sub-projects asked one by one nor the guest's own grants
     // fit, so both reads refuse instead of passing the request's limits
@@ -1475,13 +1495,18 @@ describe('under Convex limits', () => {
     for (const e of [many, one]) expect(e.data.reason).toBe(MILESTONE_READ_TOO_LARGE)
   })
 
+  /* MILESTONE_READ's documents at an eighth, so that 3 and 5 milestones a
+   * project and 2 and 4 dense projects fall on either side of it as 30 and
+   * 45, and 20 and 35, did of the real 8,000 */
+  const EIGHTH = READ.documents / 8
+
   it.for([
-    { per: 30, completes: true },
-    { per: 45, completes: false },
+    { per: 3, completes: true },
+    { per: 5, completes: false },
   ])(
     'searches $per milestones in each of 200 projects for a name none has',
-    { timeout: 120_000 },
     async ({ per, completes }, { annotate }) => {
+      MILESTONE_READ.documents = EIGHTH
       const t = newT({ transactionLimits: true })
       const f = await withOrg(t)
       const projects = await shared(t, f, 200)
@@ -1531,12 +1556,12 @@ describe('under Convex limits', () => {
   )
 
   it.for([
-    { dense: 20, completes: true },
-    { dense: 35, completes: false },
+    { dense: 2, completes: true },
+    { dense: 4, completes: false },
   ])(
     'reads 260 weeks of 200 projects with a milestone every week in $dense of them',
-    { timeout: 120_000 },
     async ({ dense, completes }, { annotate }) => {
+      MILESTONE_READ.documents = EIGHTH
       const t = newT({ transactionLimits: true })
       const f = await withOrg(t)
       const projects = await shared(t, f, 200)
