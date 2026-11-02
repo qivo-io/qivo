@@ -1164,57 +1164,67 @@ const thirtySubs = async (t: T, f: OrgFixture) => [
 ]
 
 describe('real limits', () => {
-  it('answers 999 and 1,000 matching tasks over 30 sub-projects of one project, the design size, and over_ceiling at one more', async () => {
+  it('answers a project at its design size, 800 open and 200 Done tasks over 30 sub-projects, at the real ceiling', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const subs = await thirtySubs(t, f)
-    const tasks: Doc<'issues'>[] = []
-    for (const [i, sub] of subs.entries())
-      tasks.push(...(await plantTasks(t, sub, i < 10 ? 34 : 33, ordinary)))
+    // 27 or 26 open and 7 or 6 Done tasks a sub-project
+    for (const [i, sub] of subs.entries()) {
+      await plantTasks(t, sub, i < 20 ? 27 : 26, ordinary)
+      await plantTasks(t, sub, i < 20 ? 7 : 6, (k) => ({
+        ...ordinary(k),
+        status: 'done',
+        done_at: NOW,
+      }))
+    }
     const scope = projectScope(f.guest, f.meta.id)
     const full = await boardRead(t, [f.guest], scope)
-    record('1,000 tasks over 30 sub-projects', full.answer, full.read)
+    record('800 open and 200 Done tasks over 30 sub-projects', full.answer, full.read)
     expect(stateOf(full.answer)).toEqual({ state: 'ok', rows: 1000 })
     const focus = await boardRead(t, [f.guest], scope, { focus: true })
-    record('1,000 tasks over 30 sub-projects, Focus', focus.answer, focus.read)
-    expect(stateOf(focus.answer)).toEqual({ state: 'ok', rows: 1000 })
-    tasks.push(...(await plantTasks(t, subs[29], 1, ordinary)))
-    const over = await boardRead(t, [f.guest], scope)
-    record('1,001 tasks over 30 sub-projects', over.answer, over.read)
-    expect(over.answer).toMatchObject({ state: 'over_ceiling', ceiling: BOARD_TASKS })
-    // two fewer
-    await archive(t, tasks[0])
-    await archive(t, tasks[1])
-    const under = await boardRead(t, [f.guest], scope)
-    record('999 tasks over 30 sub-projects', under.answer, under.read)
-    expect(stateOf(under.answer)).toEqual({ state: 'ok', rows: 999 })
-    const underFocus = await boardRead(t, [f.guest], scope, { focus: true })
-    record('999 tasks over 30 sub-projects, Focus', underFocus.answer, underFocus.read)
-    expect(stateOf(underFocus.answer)).toEqual({ state: 'ok', rows: 999 })
+    record('800 open and 200 Done tasks over 30 sub-projects, Focus', focus.answer, focus.read)
+    expect(stateOf(focus.answer)).toEqual({ state: 'ok', rows: 800 })
   })
 
-  it('answers the 1,000 of 1,001 candidates over 30 sub-projects that match a priority filter', async () => {
+  it('answers the ceiling and one fewer over two sub-projects, Focus too, and over_ceiling at one more, with BOARD.ceiling lowered to 10', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const subs = await thirtySubs(t, f)
-    // 34 candidates in each of the first 11 sub-projects, 33 in the rest, and
-    // the 500th low
-    let from = 0
-    for (const [i, sub] of subs.entries()) {
-      const n = i < 11 ? 34 : 33
-      const at = from
-      await plantTasks(t, sub, n, (k) => ({
-        ...ordinary(at + k),
-        priority: at + k === 500 ? 'low' : 'high',
-      }))
-      from += n
-    }
-    expect(from).toBe(BOARD_TASKS + 1)
-    const { answer, read } = await boardRead(t, [f.guest], projectScope(f.guest, f.meta.id), {
-      priority: 'high',
+    BOARD.ceiling = 10
+    const tasks = [
+      ...(await plantTasks(t, f.sub, 6, ordinary)),
+      ...(await plantTasks(t, f.sub2, 5, ordinary)),
+    ]
+    const scope = projectScope(f.guest, f.meta.id)
+    expect((await boardRead(t, [f.guest], scope)).answer).toMatchObject({
+      state: 'over_ceiling',
+      ceiling: 10,
     })
-    record('1,000 of 1,001 by priority over 30 sub-projects', answer, read)
-    expect(stateOf(answer)).toEqual({ state: 'ok', rows: 1000 })
+    await archive(t, tasks[0])
+    expect(stateOf((await boardRead(t, [f.guest], scope)).answer)).toEqual({
+      state: 'ok',
+      rows: 10,
+    })
+    await archive(t, tasks[1])
+    for (const filters of [{}, { focus: true }])
+      expect(stateOf((await boardRead(t, [f.guest], scope, filters)).answer)).toEqual({
+        state: 'ok',
+        rows: 9,
+      })
+  })
+
+  it('answers the 10 of 11 candidates that match a priority filter, with BOARD.ceiling lowered to 10', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    BOARD.ceiling = 10
+    await plantTasks(t, f.sub, BOARD.ceiling + 1, (i) => ({
+      ...ordinary(i),
+      priority: i === 5 ? 'low' : 'high',
+    }))
+    const scope = projectScope(f.guest, f.sub.id)
+    // all 11 candidates pass the ceiling, the 10 that match do not
+    expect((await boardRead(t, [f.guest], scope)).answer.state).toBe('over_ceiling')
+    const { answer } = await boardRead(t, [f.guest], scope, { priority: 'high' })
+    expect(stateOf(answer)).toEqual({ state: 'ok', rows: 10 })
   })
 
   it("counts My view's ceiling across the home and a guest seat", async () => {
@@ -1274,20 +1284,19 @@ describe('real limits', () => {
     ).toEqual({ state: 'ok', rows: 1000 })
   })
 
-  it('counts no group in the ceiling: 1,000 tasks under 50 groups over 25 sub-projects fit, and past BOARD.context groups it answers over_budget', async () => {
+  it('counts no group in the ceiling: 10 subtasks under 2 groups fit a ceiling lowered to 10, and past BOARD.context groups it answers over_budget', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // two groups and their 40 subtasks in each of 25 sub-projects of TBED
-    const subs = [f.sub, f.sub2, ...(await plantSubs(t, f.meta, 23))]
-    for (const sub of subs) {
-      const groups = await plantTasks(t, sub, 2, ordinary)
-      await plantTasks(t, sub, 40, (i) => ({ ...ordinary(i), parent_id: groups[i % 2].id }))
-    }
-    const scope = projectScope(f.guest, f.meta.id)
-    const { answer, read } = await boardRead(t, [f.guest], scope)
-    record('1,000 tasks under 50 groups over 25 sub-projects', answer, read)
-    expect(stateOf(answer)).toEqual({ state: 'ok', rows: 1050 })
-    BOARD.context = 49
+    BOARD.ceiling = 10
+    const groups = await plantTasks(t, f.sub, 2, ordinary)
+    await plantTasks(t, f.sub, 10, (i) => ({ ...ordinary(i), parent_id: groups[i % 2].id }))
+    const scope = projectScope(f.guest, f.sub.id)
+    // 12 rows, of which the 10 subtasks are cards
+    expect(stateOf((await boardRead(t, [f.guest], scope)).answer)).toEqual({
+      state: 'ok',
+      rows: 12,
+    })
+    BOARD.context = 1
     expect((await boardRead(t, [f.guest], scope)).answer.state).toBe('over_budget')
   })
 

@@ -89,11 +89,8 @@ import {
  * backend, with rows the app's own writers made, read the bytes the tests
  * of that day measured, then at the text caps, to within 1 percent.
  *
- * - 1,000 tasks over 30 sub-projects of one project, the design size
- *   under one project: 1,093, 1,062 and 0.57, under Focus 1,123; 1,001
- *   stop at the ceiling after about as much.
- * - 1,000 tasks under 50 groups over 25 sub-projects: 1,128, 2,102 and
- *   1.22.
+ * - A project at its design size, 800 open and 200 Done tasks over its 30
+ *   sub-projects: 1,093, 1,062 and 0.57, under Focus 923, 862 and 0.46.
  * - My view of 600 and 400 tasks in two seats over four sub-projects:
  *   1,039, 1,023 and 0.60.
  * - The largest My view the ceiling allows, 1,000 of the person's subtasks
