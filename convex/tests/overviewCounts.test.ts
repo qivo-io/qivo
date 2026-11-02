@@ -275,7 +275,7 @@ describe('overview counts', () => {
     expect((await t.run((ctx) => byId(ctx, 'issues', over.id)))?.remaining_hours).toBe(99_999.9)
     await exact('the over-cap repair')
     await assertNoDanglingRefs(t, 'overview counts')
-  }, 120_000)
+  })
 
   it("an access removal's handover moves many tasks' owners in one transaction", async () => {
     const t = newT()
@@ -710,7 +710,7 @@ describe('overview counts', () => {
         table,
       ).toEqual([])
     await assertNoDanglingRefs(t, 'organization deletion')
-  }, 120_000)
+  })
 
   it('a parent whose only subtask leaves with its project is read again, whatever lands first', async () => {
     const t = newT()
@@ -783,14 +783,14 @@ describe('overview counts', () => {
     await expectCountsExact(t, org_id, 'counted, then regrouped')
   })
 
-  it('a count page whose subtasks sit in 50 archived sub-projects stays inside the limits', async () => {
+  it('a count page whose subtasks fill their project in 7 archived sub-projects stays inside the limits', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const org_id = f.org.id
-    // 100 parents created together, each with a subtask in each of 50
-    // archived sibling sub-projects: 5,100 active tasks
+    // 100 parents created together, each with a subtask in each of 7
+    // archived sibling sub-projects: the project's 800 open tasks
     const parents = await plantTasks(t, f.sub, 100)
-    for (let n = 0; n < 50; n++) {
+    for (let n = 0; n < 7; n++) {
       const sibling = await plantProject(t, {
         org_id,
         type: 'project',
@@ -801,7 +801,7 @@ describe('overview counts', () => {
     }
     const dry = await backfill(t, { dry_run: true })
     expect(dry).toMatchObject({ unchecked: 0, unsettled: 0 })
-    expect(dry.to_count).toContainEqual({ org_id, tasks: 5100, rows: expect.any(Number) })
+    expect(dry.to_count).toContainEqual({ org_id, tasks: 800, rows: expect.any(Number) })
     await countOrg(t, org_id)
     // the parents count as leaves, as their subtasks are in archived projects
     expect((await t.run((ctx) => subProjectCounts(ctx.db, f.sub)))?.leaves.todo).toBe(100)
@@ -814,9 +814,11 @@ describe('overview counts', () => {
       const m = await ctx.meta.getTransactionMetrics()
       return { ranges: m.databaseQueries.used, documents: m.documentsRead.used }
     })
-    console.log('one count page over 50 archived sub-projects:', took)
-    expect(took.ranges).toBeLessThan(1000)
-  }, 300_000)
+    // 373 ranges and 1,040 documents when measured; reading each
+    // subtask's project, not each project once, would take about 700 more
+    console.log('one count page over 7 archived sub-projects:', took)
+    expect(took.ranges).toBeLessThan(500)
+  })
 
   it('a project changed again while its regroup is partway through it is read again whole', async () => {
     const t = newT()
