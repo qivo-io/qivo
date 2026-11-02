@@ -688,8 +688,8 @@ describe('a removal of many people', () => {
   it(`takes access from ${LIMITS.removalHolders.max} people with open tasks inside one transaction's limits, the costliest way`, async () => {
     const { t, f, state } = await manyHolders(LIMITS.removalHolders.max)
     // each holder's teams read one at a time, as in an organization with
-    // more than LEVELS_READ memberships, and a Viewer grant each: five index
-    // ranges a holder
+    // more than LEVELS_READ.max memberships, and a Viewer grant each: five
+    // index ranges a holder
     const before = LEVELS_READ.max
     LEVELS_READ.max = 0
     try {
