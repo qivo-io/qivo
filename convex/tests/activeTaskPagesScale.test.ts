@@ -10,13 +10,17 @@
  *
  * A page's reads follow the projects it merges and the rows it answers,
  * not how many tasks the organization holds, as the case of 1,000 and
- * 10,000 tasks shows, so these organizations hold a few thousand tasks. */
+ * 10,000 tasks shows, a search that matches nothing included, so these
+ * organizations hold a few thousand tasks. One more case pages a search
+ * for one task to its end at everyday sizes, under a lowered
+ * ACTIVE_PAGE.tasks, raising no figure. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
+import type { Doc } from '../_generated/dataModel'
 import { plantIssue, plantProject } from './helpers.setup'
-import { type Figures, pageOrg, readBefore, readPage, record } from './pageOrg.setup'
-import { lowered } from './taskPages.setup'
+import { type Figures, type PageOrg, pageOrg, readBefore, readPage, record } from './pageOrg.setup'
+import { lowered, mcpPages, restPages } from './taskPages.setup'
 
 /* The figures of a page inside Convex's limits on every count. */
 const inside = (f: Figures) => {
@@ -204,6 +208,31 @@ describe('active pages at the design size', () => {
     expect(
       Math.abs(l.figures.documents - lBefore.documents - (s.figures.documents - sBefore.documents)),
     ).toBeLessThan(150)
+    // a search that matches nothing reads the text of every task it looks
+    // at, here 300 a page, and reads the same in both
+    const look = { page: { ...noDelays.page, tasks: 300 } }
+    const rare = (o: PageOrg) =>
+      lowered(look, () => readPage(o.t, { callerId: o.member.id, limit: '50', search: 'quokka' }))
+    const sRare = await rare(small)
+    const lRare = await rare(large)
+    record('a search no task matches, 300 tasks looked at, of 1,000 tasks', sRare.figures)
+    record(
+      'a search no task matches, 300 tasks looked at, of 10,000 tasks and 5,000 archived',
+      lRare.figures,
+    )
+    for (const p of [sRare, lRare]) {
+      expect(p.figures.rows).toBe(0)
+      expect(p.figures.next).toBe(true)
+    }
+    // the same tolerances as the plain page above
+    expect(
+      Math.abs(lRare.figures.ranges - lBefore.ranges - (sRare.figures.ranges - sBefore.ranges)),
+    ).toBeLessThan(30)
+    expect(
+      Math.abs(
+        lRare.figures.documents - lBefore.documents - (sRare.figures.documents - sBefore.documents),
+      ),
+    ).toBeLessThan(150)
   })
 
   it('pages an admin past the oldest active tasks of an archived sub-project to the end, reading none of them', async () => {
@@ -271,5 +300,44 @@ describe('active pages at the design size', () => {
     // several owners fit the share, and the rest say unavailable
     expect(judged.length).toBeGreaterThan(20)
     expect(unavailable.length).toBeGreaterThan(0)
+  })
+})
+
+/* The member's last active task in list order, created_at then number, and
+ * how many active tasks they read. */
+async function lastInOrder(e: PageOrg) {
+  const readable = new Set(e.readable.map((p) => p.id))
+  const tasks = await e.t.run((ctx) =>
+    ctx.db
+      .query('issues')
+      .withIndex('by_org_archived', (q) => q.eq('org_id', e.org.id).eq('archived_at', undefined))
+      .collect(),
+  )
+  const mine = tasks
+    .filter((task) => readable.has(task.project_id))
+    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.num - b.num)
+  return { last: mine[mine.length - 1] as Doc<'issues'>, count: mine.length }
+}
+
+describe('a rare search past one page', () => {
+  it("pages a search for the last task's key across every project to its end, each page before it empty with a cursor, on REST and MCP", async () => {
+    // everyday sizes, 660 active tasks over 20 sub-projects, groups whose
+    // subtasks share their parent's created_at; a page that looks at 150
+    // tasks stops there, as a real one stops at its budget
+    const e = await pageOrg({ tops: 7, subs: 20, people: 20, tasks: 600, archived: 0 })
+    const { last, count } = await lastInOrder(e)
+    expect(count).toBe(600 + 12 * 5)
+    const look = 150
+    const pages = Math.ceil(count / look)
+    const who = { callerId: e.member.id, access: 'read' as const, search: `QN-${last.num}` }
+    await lowered({ page: { tasks: look } }, async () => {
+      const rest = await restPages(e.t, { ...who, limit: '50' })
+      const mcp = await mcpPages(e.t, { ...who, limit: 50 })
+      for (const got of [rest, mcp]) {
+        expect(got.sizes).toEqual([...Array<number>(pages - 1).fill(0), 1])
+        expect(got.cursors).toHaveLength(pages - 1)
+        expect(got.rows.map((row) => row.id)).toEqual([last.id])
+      }
+    })
   })
 })
