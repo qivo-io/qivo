@@ -185,9 +185,9 @@ function spansByOwner(rows: readonly OrgLoadRow[], grid: WeekGrid) {
  * look at the metrics while it asks about one sub-project and its top-level
  * project (past those it holds STEP_READS too): the row it read last, up to
  * Convex's document size limit, and the single-row reads of the caller's
- * access that no price counts, within the testing envelope the caller's
- * membership in each team that shares the two projects (at most 50, 25 a
- * project) and the rows of the caller's teams among them (at most 25), each
+ * access that no price counts, within the design size the caller's
+ * membership in each team that shares the two projects (at most 10, 5 a
+ * project) and the rows of the caller's teams among them (at most 5), each
  * a range and a document. A small single read takes 29 ranges and 16
  * documents in all (convex/tests/taskDelay.test.ts reads the owner's
  * Done-free load under a limit of 250 documents). Tests lower these. */
