@@ -1,12 +1,14 @@
 /* The tasks the app opened that the workspace may not hold, by the task's
    uuid: a task main Search opened (panels/Palette.tsx openTaskResult),
-   which Search finds on the server, and a task a task window opened from
-   its Parent, Subtasks or Linked tasks that the workspace does not hold
-   (panels/IssueDetail.tsx MiniIssueRow), as while a large workspace still
-   loads, and a task a window shows that the workspace does not hold, from
-   its own read or as what became of it, so another window on its handle
-   finds it too, as the Inbox pane's pop-out. A task Search found may also
-   be archived, deleted or moved out of sight since the search. The task window (panels/IssueDetail.tsx) knows
+   which Search finds on the server, a task a Board card or list row opened
+   that only the Board's answer brings (store/planner.ts P.noteViewTask), a
+   task a task window opened from its Parent, Subtasks or Linked tasks that
+   the workspace does not hold (panels/IssueDetail.tsx MiniIssueRow), as
+   while a large workspace still loads, and a task a window shows that the
+   workspace does not hold, from its own read or as what became of it, so
+   another window on its handle finds it too, as the Inbox pane's pop-out.
+   A task Search found may also be archived, deleted or moved out of sight
+   since the search. The task window (panels/IssueDetail.tsx) knows
    such a task's uuid and organization from here, and shows it from its own
    read (store/planner.ts P.taskDetail), or what became of it (TaskGone);
    the address names the task's organization and key (lib/router.ts
@@ -39,7 +41,8 @@ export const OPENED_MAX = 64
 
 const opened = new Map<string, OpenedTask>()
 
-/** Notes `task`, which Search or a task window opens, as the newest one. */
+/** Notes `task`, which Search, a Board card or row, or a task window opens,
+    as the newest one. */
 export function noteOpenedTask(task: OpenedTask): void {
   opened.delete(task.uuid)
   opened.set(task.uuid, task)

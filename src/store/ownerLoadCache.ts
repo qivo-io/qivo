@@ -15,10 +15,10 @@
      its id, so one new owner changes one call, and a change to one owner's
      spans sends that call again, not all of them. The groups are the fewest
      that hold the owners, a power of two, so 1,000 owners make 64 groups,
-     about 64 calls (a group the hash fills past CALL_OWNERS splits in two).
-     A guest or Viewer gets one owner a call (the server answers one), and a
-     view gets at most GUEST_CALLS of those, its owners with the most cards
-     first; the others are `capped`.
+     about 64 calls (a group the hash fills past CALL_OWNERS is cut into
+     calls of at most CALL_OWNERS each). A guest or Viewer gets one owner a
+     call (the server answers one), and a view gets at most GUEST_CALLS of
+     those, its owners with the most cards first; the others are `capped`.
    - An owner a call answered `not_read` (its room ran out) is asked again in
      a call of its own owners, which the server always starts reading.
    - The cache follows the hidden-tab gate (lib/viewVisibility.ts): while the
@@ -92,7 +92,8 @@ export function staffCalls(org: string, owners: readonly string[]): Call[] {
   const out: string[][] = Array.from({ length: groups }, () => [])
   for (const owner of [...owners].sort())
     (out[fnv(owner.toLowerCase()) % groups] as string[]).push(owner)
-  // a hash can fill a group past CALL_OWNERS; such a group splits in two
+  // a hash can fill a group past CALL_OWNERS; such a group is cut into calls
+  // of at most CALL_OWNERS each
   const calls: Call[] = []
   for (const group of out) {
     for (let i = 0; i < group.length; i += CALL_OWNERS)
