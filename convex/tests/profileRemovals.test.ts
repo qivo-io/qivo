@@ -38,6 +38,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { countOrg } from './overviewCounts.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
 declare class Blob {
@@ -301,6 +302,8 @@ describe('the removal transaction under real limits', () => {
           updated_at: NOW,
         })
     })
+    // counted as every organization is, so each clear keeps its counts
+    await countOrg(t, f.org.id)
     const held = () =>
       t.run(async (ctx) => {
         const count = { assignee_id: 0, created_by: 0, reporter_id: 0 }

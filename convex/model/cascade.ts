@@ -20,12 +20,13 @@ import { rechecksOfOrg } from './archiveRechecks'
 import { hasPendingCheckout } from './billing'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
-import type { TaskPatch } from './descriptions'
+import { patchTaskRow, type TaskPatch } from './descriptions'
 import { eraseFile, releaseFile } from './fileHolds'
 import { recipientItems, stateRows } from './inboxItems'
 import { deleteSweepRow } from './messages'
 import { jobsOf, partsOf, requestsOf } from './orgExports'
 import { deleteOrgBookkeeping } from './orgs'
+import { OVERVIEW_TABLES } from './overviewCounts'
 import { favoritesOfOrg, favoritesOfProfile } from './projectFavorites'
 import { grantee, reachOfGrantee, reachOfOrg } from './projectNav'
 import { deleteStamp } from './syncStamps'
@@ -149,8 +150,10 @@ export function heldTasks(ctx: QueryCtx, holder: TaskHolder, profileId: string, 
 }
 
 /** Clears `holder` on `task` with the SQL SET NULL's touch (updated_at =
- * `now`) and emits task.updated. It posts no inbox message. The task is not
- * read again, because its new state is `task` with the patch applied. */
+ * `now`) and emits task.updated. It posts no inbox message. The event takes
+ * the new state as `task` with the patch applied; the overview counts move
+ * from the task as stored (model/descriptions.ts patchTaskRow), as a
+ * removal can clear a task's assignee and then its reviewer. */
 export async function clearHolder(
   ctx: MutationCtx,
   task: Doc<'issues'>,
@@ -159,7 +162,7 @@ export async function clearHolder(
 ): Promise<void> {
   const patch: TaskPatch = { updated_at: now }
   patch[holder] = undefined
-  await ctx.db.patch(task._id, patch)
+  await patchTaskRow(ctx.db, task, patch)
   await emitTaskEvent(ctx, {
     name: 'task.updated',
     issue: { ...task, ...patch },
@@ -680,8 +683,9 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
     await ctx.db.delete(t._id)
   }
 
-  // the label and team counts, and any left without their label or team
-  for (const table of ['label_counts', 'team_counts'] as const)
+  // the label, team and overview counts, and any left without their label,
+  // team or task (model/overviewCounts.ts)
+  for (const table of ['label_counts', 'team_counts', ...OVERVIEW_TABLES] as const)
     for (const row of await ctx.db
       .query(table)
       .withIndex('by_org', (q) => q.eq('org_id', org.id))

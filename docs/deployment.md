@@ -75,7 +75,9 @@ Website, docs and app changes all ship the same way.
    owner's approval for each run, as the backfill's header says. Deployments
    never run it on their own. The release that adds the comment limits needs
    `internal/commentCountsBackfill` right after it deploys, on staging, the
-   demo and production (see Recovery and compatibility).
+   demo and production (see Recovery and compatibility), and the release
+   that adds the Overview's counts needs `internal/overviewCountsBackfill`
+   the same way.
 
 A release can also be created by hand in the GitHub interface. It must target
 a main commit that already passed staging, or production refuses it. That
@@ -902,6 +904,35 @@ transaction marks its `profile_removals` row with `counted_org_id` until its
 background steps finish, which takes seconds. Releases before the one that
 added that field do not accept it, so a rollback past it fails to deploy
 while such a removal runs; wait for it to finish, or roll forward.
+
+Each sub-project has `overview_counts` rows with its leaf tasks by status,
+its paused leaves and the remaining hours of its leaves not Done, beside a
+row for each person with leaves in it, and each active task an
+`overview_tasks` row with what those rows hold for it
+(`convex/model/overviewCounts.ts`). No reader uses them yet. Every task
+write keeps them, background steps keep them after a project is archived,
+restored, moved to Deleted items or restored from there, and organizations
+created since the release that added them are counted from their creation.
+An organization stored before has no counts until the one-time
+`internal/overviewCountsBackfill` counts it, and the readers answer that its
+counts are not ready, never zero. Run it on every hosted deployment once it
+serves that release, as the module's header says. Read the dry run first,
+then run it, calling again with the answered `cursor` until it answers
+`done`. A dry run lists the organizations a run would count, any stored row
+that the tasks do not give or that went below zero, any count or regroup
+under way, and the rows left without their organization, project or task.
+`"recount": true` mends the differing rows.
+
+Earlier releases do not accept the `org_ready` field `overview_counts_at`,
+and every new organization and every counted one holds it, so the release
+that added the counts is a rollback floor for the backend as soon as it
+deploys (see Rollback and hotfixes). Roll forward instead. An earlier
+release would also move none of these counts. If counts drift for another
+reason, a dry run lists them as differing: run the backfill with
+`"recount": true`, calling again with each answered `cursor` until it
+answers `done`. A recount deletes each organization's rows and counts its
+tasks again, and the readers answer that its counts are not ready until it
+ends.
 
 Every inbox item, a person's messages about one task, has an `inbox_items`
 row that every message write keeps in step, and each person an

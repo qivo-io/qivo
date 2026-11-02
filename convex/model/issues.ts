@@ -102,6 +102,7 @@ import {
   firstRows,
   insertTask,
   patchTask,
+  patchTaskRow,
   type TaskFields,
   textsOf,
   withText,
@@ -1126,12 +1127,17 @@ export async function clearParentRemaining(
   if (parent === null) return
   if (parent.remaining_hours === undefined && parent.review_at === undefined) return
   const before = { ...parent }
-  await ctx.db.patch(parent._id, {
-    remaining_hours: undefined,
-    remaining_set_at: undefined,
-    review_at: undefined,
-    updated_at: a.now,
-  })
+  await patchTaskRow(
+    ctx.db,
+    parent,
+    {
+      remaining_hours: undefined,
+      remaining_set_at: undefined,
+      review_at: undefined,
+      updated_at: a.now,
+    },
+    { stored: true },
+  )
   const after = (await ctx.db.get(parent._id)) as Doc<'issues'>
   await notifyIssueUpdate(ctx, { before, after, actor: a.actor, now: a.now, preload: a.preload })
 }
@@ -1154,7 +1160,7 @@ export async function detachChild(
   now: string,
   preload?: NotifyPreload,
 ): Promise<void> {
-  await ctx.db.patch(child._id, { parent_id: undefined, updated_at: now })
+  await patchTaskRow(ctx.db, child, { parent_id: undefined, updated_at: now }, { stored: true })
   const { parent_id: _parentId, ...rest } = child
   const after: Doc<'issues'> = { ...rest, updated_at: now }
   await notifyIssueUpdate(ctx, { before: child, after, actor, now, preload })
@@ -2307,7 +2313,9 @@ export async function moveIssueCore(
   // one task, as a single task's update does
   if (rootRows !== undefined)
     await assertStepRoom(ctx, patchCost(issue, rootRows), MOVE_TOO_LARGE, answer)
-  await patchTask(ctx.db, issue, w, rootRows)
+  // the task and the subtasks it carries were read in this transaction, as
+  // their rows were for patchCost, which prices no second read of them
+  await patchTask(ctx.db, issue, w, rootRows, { stored: rootRows !== undefined })
   const after = (await ctx.db.get(issue._id)) as Doc<'issues'>
   // the stored-byte totals follow the task and every subtask it carries, at
   // one totals row each, however many files they hold
@@ -2319,7 +2327,7 @@ export async function moveIssueCore(
     // lands is built from the patch rather than read again, which would
     // read every carried subtask a second time
     const moved = { project_id, updated_at: now, ...movedStamps(row, now) }
-    await patchTask(ctx.db, row, moved, rows)
+    await patchTask(ctx.db, row, moved, rows, { stored: true })
     const landed: Doc<'issues'> = { ...row, ...moved }
     if (landed.status_at === undefined) delete landed.status_at
     await emitTaskEvent(ctx, { name: 'task.updated', issue: landed, before: row, actor: me, now })

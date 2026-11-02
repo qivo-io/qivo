@@ -46,6 +46,7 @@ import {
   setCounters,
   tallyRows,
 } from './orgs'
+import { countWhole } from './overviewCounts'
 import { insertShare, syncLeads } from './projectNav'
 import { cleanProjectName, projectDescription } from './projects'
 import { deleteStamp, writeStamp } from './syncStamps'
@@ -75,7 +76,10 @@ export function demoMonday(now: number): string {
 /** One part of the Northstar work: the organization, teams, people,
  * projects and labels; tasks `from` to `to` (data order); the links, short
  * histories and milestones; comments `from` to `to` (NORTHSTAR_COMMENTS
- * order); or the archived tasks' marks. Each part reads what earlier parts
+ * order); the archived tasks' marks; or the Overview's counts of every
+ * active task as it is then, which the steps before write while the
+ * organization is not counted, made in one transaction and stamped
+ * (model/overviewCounts.ts countWhole). Each part reads what earlier parts
  * wrote, so they run in NORTHSTAR_STEPS order. */
 export type NorthstarStep =
   | { kind: 'setup' }
@@ -83,6 +87,7 @@ export type NorthstarStep =
   | { kind: 'history' }
   | { kind: 'comments'; from: number; to: number }
   | { kind: 'archive' }
+  | { kind: 'counts' }
 
 /** The tasks and the comments one step writes at most. Measured on the
  * dataset, a task step of 15 wrote at most 93 documents and a comment step
@@ -137,6 +142,7 @@ export const NORTHSTAR_STEPS: readonly NorthstarStep[] = [
     (range): NorthstarStep => ({ kind: 'comments', ...range }),
   ),
   { kind: 'archive' },
+  { kind: 'counts' },
 ]
 
 /** What every Northstar step writes for: the organization and its
@@ -705,6 +711,12 @@ async function writeStep(
     await tallyComments(ctx, inserted)
     return
   }
+  if (step.kind === 'counts') {
+    // every task as it is now, people's writes between the steps included,
+    // and from no row, as a seed counted again
+    await countWhole(ctx.db, org.id, now)
+    return
+  }
   // The archived tasks' labels, links and follows carry the mark the archive
   // steps leave (model/archiveMarks.ts), as in an organization in use.
   await readTasks(data.issues.map((i) => i.key))
@@ -726,6 +738,10 @@ async function writeStep(
  * most 513 ranges and 724 documents and wrote at most 441. Comment counts
  * (model/commentLimits.ts) and the notices' inbox items
  * (model/inboxItems.ts), kept once per call, take the work to seven calls.
+ * The Overview's counts of every task as it is then, made and stamped in
+ * one transaction once every task is written (model/overviewCounts.ts
+ * countWhole), take an eighth, which in convex-test read 163 ranges and
+ * 221 documents and wrote 195.
  * The used_ids row each seeded task and project reads and writes (lib/db.ts
  * insertUsed) adds a range and a write to each, 51 to the first call and 54
  * to the second, which write the projects and tasks, so each call reads at
@@ -742,7 +758,7 @@ async function writeStep(
  * 1.5 and 0.4 to 1.4 of the calls those costs come from. A call with fewer
  * ranges stays inside 332 ms too, as a document past those costs about
  * 0.13 ms read and 0.06 ms written (the slopes over the hosted steps). */
-export const PUBLIC_DEMO_CALL_SIZES: readonly number[] = [4, 5, 6, 4, 4, 4, 4]
+export const PUBLIC_DEMO_CALL_SIZES: readonly number[] = [4, 5, 6, 4, 4, 4, 4, 1]
 
 /** `steps` in calls of `sizes` steps each, in order, then each step past
  * them in a call of its own: a dataset that grows adds bounded calls
@@ -814,13 +830,19 @@ async function createPublicDemoOrg(
     byId(ctx, 'organizations', orgId),
   ])
   require(existing === null, rule('Demo organization already exists'))
-  const docId = await insertOrgRows(ctx, {
-    id: orgId,
-    name: cleanOrgName(MARKETING_DEMO.organization.name),
-    slug,
-    ...newOrgDefaults(now),
-    max_attachment_mb: 5,
-  })
+  // counted by the last step (NorthstarStep 'counts')
+  const docId = await insertOrgRows(
+    ctx,
+    {
+      id: orgId,
+      name: cleanOrgName(MARKETING_DEMO.organization.name),
+      slug,
+      ...newOrgDefaults(now),
+      max_attachment_mb: 5,
+    },
+    undefined,
+    { countLater: true },
+  )
   const org = await ctx.db.get(docId)
   require(org !== null, rule('Demo organization could not be created'))
   for (const person of MARKETING_DEMO.people)

@@ -24,9 +24,11 @@ import {
   PUBLIC_DEMO_STEPS,
   stepCalls,
 } from '../model/demoSeed'
+import { countsReady } from '../model/overviewCounts'
 import schema from '../schema'
 import { expectRefusal, newT, type T, uuid, workspaceOf } from './helpers.setup'
 import { NORTHSTAR, plantNorthstar } from './northstar.setup'
+import { expectCountsExact } from './overviewCounts.setup'
 import { forgetUsedId } from './trash.setup'
 
 const componentModules = import.meta.glob('../betterAuth/**/*.ts')
@@ -828,15 +830,18 @@ describe('public demo records and used ids', () => {
       const added = (table: string) => after.rows[table] - before.rows[table]
       expect(added('used_ids')).toBe(1)
       // every row the create added counts, but the used_ids row, a task's
-      // description and comment count rows and a project's reach rows
-      // (model/projectNav.ts), which are part of what they describe, and the
-      // counters' own row (lib/demo.ts demoCounts)
+      // description and comment count rows, a project's reach rows
+      // (model/projectNav.ts) and the Overview's count and task rows
+      // (model/overviewCounts.ts), which are part of what they describe, and
+      // the counters' own row (lib/demo.ts demoCounts)
       const counted =
         Object.keys(after.rows).reduce((sum, table) => sum + added(table), 0) -
         added('used_ids') -
         added('issue_descriptions') -
         added('task_comment_counts') -
         added('project_reach') -
+        added('overview_counts') -
+        added('overview_tasks') -
         added('demo_write_counts')
       expect((after.counts?.insert_count ?? 0) - (before.counts?.insert_count ?? 0)).toBe(counted)
     }
@@ -911,6 +916,8 @@ describe('public demo archive rechecks', () => {
         Object.keys(after.rows).reduce((sum, table) => sum + added(table), 0) -
         added('archive_rechecks') -
         added('message_sweeps') -
+        added('overview_counts') -
+        added('overview_tasks') -
         added('demo_write_counts'),
       rechecks: added('archive_rechecks'),
     }
@@ -1042,6 +1049,17 @@ describe('public demo provisioning steps', () => {
     expect(org).toMatchObject({ id: answers.at(-1)?.orgId, max_attachment_mb: 5 })
     const tasks = await limited.run((ctx) => ctx.db.query('issues').collect())
     expect(tasks).toHaveLength(MARKETING_DEMO.issues.length)
+    // its last call counts the Overview's figures and stamps them ready
+    const metas = await limited.run((ctx) =>
+      ctx.db
+        .query('projects')
+        .filter((q) => q.eq(q.field('type'), 'meta'))
+        .collect(),
+    )
+    expect(metas.length).toBeGreaterThan(0)
+    for (const meta of metas)
+      expect(await limited.run((ctx) => countsReady(ctx.db, meta.org_id, meta.id))).toBe(true)
+    await expectCountsExact(limited, org?.id ?? '', 'the public demo')
   })
 
   it('gives the public demo the notices and follows of a seed that asks person by person', async () => {

@@ -54,6 +54,7 @@ import {
   tallyTaskLabels,
 } from './labelCounts'
 import { readyRow } from './nameKeys'
+import { overviewCountRun } from './overviewCounts'
 import { assertProfileExpected } from './people'
 import { deleteOrgTotals, startOrgTotals } from './storageTotals'
 import { countingOrg, countMemberRemoved, insertTeamCount } from './teamCounts'
@@ -328,14 +329,19 @@ export async function setCounters(
 /** Inserts an organization with its org_counters row, its live counts at
  * zero, its org_ready row, ready from its creation because every writer
  * gives its rows their name keys (model/nameKeys.ts), its projects their
- * archive state and its access its reach rows (model/projectNav.ts), and its
+ * archive state, its access its reach rows (model/projectNav.ts) and its
+ * tasks their overview counts (model/overviewCounts.ts), and its
  * stored-byte totals at zero (model/storageTotals.ts). Every path that
  * creates an organization uses it; `counters` lets a fixture start
- * numbering past rows it plants, which it tallies (tallyRow). */
+ * numbering past rows it plants, which it tallies (tallyRow). `countLater`
+ * leaves the overview counts unstamped for a seed that writes many tasks a
+ * call and counts them once at its end (model/overviewCounts.ts
+ * countWhole), so its creates move no count meanwhile. */
 export async function insertOrgRows(
   ctx: MutationCtx,
   row: WithoutSystemFields<Doc<'organizations'>>,
   counters: OrgCounters = { next_issue_num: 0, next_project_num: 0 },
+  o: { countLater?: boolean } = {},
 ): Promise<Id<'organizations'>> {
   const id = await ctx.db.insert('organizations', row)
   await ctx.db.insert('org_counters', {
@@ -348,6 +354,7 @@ export async function insertOrgRows(
     org_id: row.id,
     name_keys_at: row.created_at,
     nav_at: row.created_at,
+    ...(o.countLater === true ? {} : { overview_counts_at: row.created_at }),
   })
   await startOrgTotals(ctx, row.id)
   return id
@@ -468,7 +475,7 @@ export function tallyRow(
 
 /** Deletes the organization's org_counters and org_ready rows, its
  * stored-byte totals row (model/storageTotals.ts) and its running label
- * count (label_count_runs), if any. Every organization delete
+ * and overview counts (label_count_runs, overview_count_runs), if any. Every organization delete
  * (model/cascade.ts deleteOrgDeep, the last step of model/orgDeletion.ts,
  * the demo purge) calls it before it deletes the organization row. */
 export async function deleteOrgBookkeeping(ctx: MutationCtx, orgId: string): Promise<void> {
@@ -479,6 +486,8 @@ export async function deleteOrgBookkeeping(ctx: MutationCtx, orgId: string): Pro
   await deleteOrgTotals(ctx, orgId)
   const run = await labelCountRun(ctx, orgId)
   if (run !== null) await ctx.db.delete(run._id)
+  const overview = await overviewCountRun(ctx.db, orgId)
+  if (overview !== null) await ctx.db.delete(overview._id)
 }
 
 /* ------------------------------------------------------------------ defaults

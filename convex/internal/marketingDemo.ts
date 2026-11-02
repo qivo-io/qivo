@@ -327,12 +327,13 @@ export const provision = internalMutation({
       })
       authIds[p.key] = user._id
     }
-    await insertOrgRows(ctx, {
-      id: orgId,
-      name: MARKETING_DEMO.organization.name,
-      slug: KEY,
-      ...newOrgDefaults(now),
-    })
+    // counted by the seed's last step (model/demoSeed.ts NorthstarStep)
+    await insertOrgRows(
+      ctx,
+      { id: orgId, name: MARKETING_DEMO.organization.name, slug: KEY, ...newOrgDefaults(now) },
+      undefined,
+      { countLater: true },
+    )
     for (const p of MARKETING_DEMO.people)
       await ctx.db.insert(
         'profiles',
@@ -406,9 +407,11 @@ export const restoreSeat = internalMutation({
 /* Clears one bounded batch of WORK (model/orgDeletion.ts wipeWorkStep),
  * deliberately preserving login/profile UUIDs and portraits. Manual demo
  * tasks, files, comments, inbox entries and view preferences are removed
- * too, and last the used_ids rows of its task and project ids, so the seed
- * can write them again. Once nothing is left it rewinds the counters, and
- * it returns whether it got there. A Northstar copy grown by manual or
+ * too, with the overview counts, which the wipe leaves unstamped for the
+ * seed's last step to count (model/overviewCounts.ts countWhole), and last
+ * the used_ids rows of its task and project ids, so the seed can write them
+ * again. Once nothing is left it rewinds the counters, and it returns
+ * whether it got there. A Northstar copy grown by manual or
  * contract-test work takes several calls, so apply's wipe says whether to
  * call it again. */
 async function clearWork(

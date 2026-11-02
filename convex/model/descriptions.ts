@@ -49,7 +49,13 @@
  *
  * In a public demo a description row spends none of the visitor's record
  * limit (lib/demo.ts uncountedWriter), because it is part of its task,
- * which counts once. */
+ * which counts once.
+ *
+ * Every insert of a task and every patch of a task row also moves the
+ * Overview's counts in the same transaction (model/overviewCounts.ts
+ * tallyOverview): insertTask and patchTask here, and patchTaskRow for a
+ * patch of fields that leave the description, project and archived state
+ * alone (TaskPatch), which every other writer of a task row goes through. */
 
 import type { TransactionMetrics, WithoutSystemFields } from 'convex/server'
 import { type ConvexError, getDocumentSize } from 'convex/values'
@@ -62,6 +68,7 @@ import { insertUnique, insertUsed } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { Refusal } from '../lib/functions'
 import { DOCUMENT_MAX_BYTES } from './comments'
+import { countsKept, tallyOverview } from './overviewCounts'
 
 type Reader = QueryCtx['db']
 type Writer = MutationCtx['db']
@@ -446,6 +453,12 @@ export async function insertTask(
         ? await insertUsed(db, 'issues', task, claim.server)
         : await insertUnique({ db }, 'issues', 'by_uuid', { id: task.id }, task, claim)
   await putDescription(db, task, description ?? '')
+  // a task with a new id has no subtask yet; one written back may have
+  if (await countsKept(db, task.org_id)) {
+    const inserted = await db.get(_id)
+    if (inserted !== null)
+      await tallyOverview(db, [[null, inserted]], { fresh: claim !== 'restore' })
+  }
   return _id
 }
 
@@ -462,24 +475,57 @@ export async function insertTask(
  * it, so it never stops a move, an archive or the nightly archive. Either
  * reads the task's first two rows (firstRows), which a write of the first
  * reads again, unless the caller passes them as `rows`, as a subtree change
- * does to price each patch first (model/issues.ts patchCost). */
+ * does to price each patch first (model/issues.ts patchCost). The overview
+ * counts (model/overviewCounts.ts tallyOverview) move from the task as
+ * stored, which it reads again first, unless `stored` says `issue` is the
+ * task as stored now, read in this transaction and written since only
+ * through these helpers, as a subtree change's rows are: patchCost prices
+ * no second read of them. */
 export async function patchTask(
   db: Writer,
   issue: Doc<'issues'>,
   fields: TaskFields,
   rows?: readonly Doc<'issue_descriptions'>[],
+  o: { stored?: boolean } = {},
 ) {
+  // the stored task, which the overview counts move from
+  const kept = await countsKept(db, issue.org_id)
+  const stored = kept && o.stored !== true ? ((await db.get(issue._id)) ?? issue) : issue
   const after = { ...issue, ...fields }
   if ('description' in fields) {
     await db.patch('issues', issue._id, { ...fields, description: undefined })
     await putDescription(db, after, fields.description ?? '')
-    return
+  } else {
+    await db.patch('issues', issue._id, fields)
+    if ('project_id' in fields || 'archived_at' in fields) {
+      const read = rows ?? (await firstRows(db, issue.id))
+      const [row] = read
+      if (row !== undefined) await putDescription(db, after, shownText(read, issue), row)
+    }
   }
-  await db.patch('issues', issue._id, fields)
-  if (!('project_id' in fields) && !('archived_at' in fields)) return
-  const read = rows ?? (await firstRows(db, issue.id))
-  const [row] = read
-  if (row !== undefined) await putDescription(db, after, shownText(read, issue), row)
+  if (kept) await tallyOverview(db, [[stored, { ...stored, ...fields }]])
+}
+
+/** Patches task row `task` with `patch`, fields that leave its
+ * description, project and archived state alone, and moves the overview
+ * counts (model/overviewCounts.ts tallyOverview) from the task as stored,
+ * which it reads first, so a caller holding an older copy moves them
+ * right. `stored` says `task` is the task as stored now, read in this
+ * transaction and written since only through these helpers, so it is not
+ * read again. Every writer of such fields patches through it or patchTask.
+ * Answers the task as patched. */
+export async function patchTaskRow(
+  db: Writer,
+  task: Doc<'issues'>,
+  patch: TaskPatch,
+  o: { stored?: boolean } = {},
+): Promise<Doc<'issues'>> {
+  const kept = await countsKept(db, task.org_id)
+  const stored = o.stored === true || !kept ? task : ((await db.get(task._id)) ?? task)
+  await db.patch('issues', task._id, patch)
+  const after = { ...stored, ...patch }
+  if (kept) await tallyOverview(db, [[stored, after]])
+  return after
 }
 
 /** The text readers show for task `task` (shownRow) from its first two

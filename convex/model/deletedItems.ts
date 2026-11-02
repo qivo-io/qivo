@@ -138,7 +138,7 @@ import { recheckParent, recheckProject, waitsForChildren } from './archiveRechec
 import { beginCount, type CommentWrite, deleteCommentRows, tallyComments } from './commentLimits'
 import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleImageReap } from './descriptionImages'
-import { dropDescription, insertTask, withDescription } from './descriptions'
+import { dropDescription, insertTask, patchTaskRow, withDescription } from './descriptions'
 import { releaseFile } from './fileHolds'
 import { taskItems } from './inboxItems'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
@@ -151,6 +151,7 @@ import {
   scheduleArchivedReads,
 } from './messages'
 import { newUuid, tallyRow } from './orgs'
+import { countsKept, startRegroup, tallyOverview } from './overviewCounts'
 import { favoritesOn } from './projectFavorites'
 import {
   archiveStateOf,
@@ -521,17 +522,22 @@ const tooLarge = (item: Pick<Item, 'id' | 'org_id'>, live: LiveRow, ownerId: str
  * is the live task a relation row belongs to when the caller holds it, so
  * the label count need not read the task again for each of its rows;
  * without it the task is read, which finds none for the stored tasks most
- * callers move rows of. A task's description row is its caller's
- * (dropTaskDescription). */
+ * callers move rows of. A task leaves the Overview's counts as stored
+ * (model/overviewCounts.ts tallyOverview), which it reads first. A task's
+ * description row is its caller's (dropTaskDescription). */
 async function deleteLive(
   ctx: MutationCtx,
   live: LiveRow,
   txn?: Txn,
   task?: Doc<'issues'>,
 ): Promise<void> {
+  const counted = live.table === 'issues' && (await countsKept(ctx.db, live.doc.org_id))
+  const stored = counted ? await ctx.db.get(live.doc._id) : null
   await ctx.db.delete(live.doc._id)
-  if (live.table === 'issues') await tallyRow(ctx, live.table, live.doc, null)
-  else if (live.table === 'projects') await tallyRow(ctx, live.table, live.doc, null)
+  if (live.table === 'issues') {
+    await tallyRow(ctx, live.table, live.doc, null)
+    if (counted) await tallyOverview(ctx.db, [[stored ?? live.doc, null]])
+  } else if (live.table === 'projects') await tallyRow(ctx, live.table, live.doc, null)
   else if (live.table === 'issue_labels') await tallyAssignment(ctx, live.doc, -1, task)
   else if (live.table !== 'comments') return
   else if (txn !== undefined) txn.comments.push([live.doc, -1])
@@ -3043,6 +3049,10 @@ async function revealProjects(run: Run): Promise<void> {
     run.budget.rows -= 1
     run.budget.bytes -= estimateDocumentBytes(row)
   }
+  // their tasks, written back while the projects were hidden, count again,
+  // and so do the parents they make groups (model/overviewCounts.ts)
+  const family = parent ?? top
+  if (family !== null) await startRegroup(run.ctx, family, [...written.keys()])
   // Once every project is in, the reach rows of each stored lead follow the
   // lead the reveal wrote, which a role change since restore_access can
   // have dropped or brought back (cleanProject). They read the projects
@@ -3640,7 +3650,7 @@ async function attachParent(
   if (kept === 'later') return false
   if (kept !== undefined) {
     const fields = { parent_id: kept.id, updated_at: run.now }
-    await run.ctx.db.patch(task._id, fields)
+    await patchTaskRow(run.ctx.db, task, fields)
     step.tasks.set(task.id, { ...task, ...fields })
     if (kept.grouped) step.grouped.add(kept.id)
   }
@@ -4803,5 +4813,12 @@ export async function moveProjectToTrash(
     charge(budget, p)
   }
   await startJob(ctx, item, { phase: 'move_edges', tally }, budget)
+  // the parents its tasks no longer make groups, as their projects are
+  // gone, and the counts nobody reads again (model/overviewCounts.ts)
+  await startRegroup(
+    ctx,
+    parent ?? project,
+    doomed.map((p) => p.id),
+  )
   return item
 }

@@ -1134,10 +1134,15 @@ export default defineSchema({
   // project_reach rows (internal/navBackfill.ts); a reader in name order
   // needs both (model/projectNav.ts navReady), and main Search's project
   // names wait for nav_at alone (model/projectNav.ts reachReady).
+  // `overview_counts_at` says from when every task write keeps the
+  // organization's overview_counts (internal/overviewCountsBackfill.ts);
+  // the counts' readers answer `counting` while it is absent
+  // (model/overviewCounts.ts countsReady).
   org_ready: defineTable({
     org_id: v.string(),
     name_keys_at: v.optional(v.string()),
     nav_at: v.optional(v.string()),
+    overview_counts_at: v.optional(v.string()),
   }).index('by_org', ['org_id']),
 
   // An organization export job (orgExport.ts, model/orgExports.ts): the
@@ -1642,6 +1647,126 @@ export default defineSchema({
     counting: v.boolean(),
     through: v.number(),
   }).index('by_org', ['org_id']),
+
+  // The Overview's stored-fact figures (model/overviewCounts.ts): of the
+  // active tasks of one sub-project, the leaves by status, the paused
+  // leaves and the remaining hours of the leaves not Done, in whole tenths.
+  // A leaf is an active task with no active subtask in a live project,
+  // whoever reads it, which for a task in a live project is
+  // lib/liveTasks.ts countsAsSubtask's rule, as the app's P.isGroup decides;
+  // an archived sub-project's rows wait for a restore's regroup and give no
+  // figure meanwhile. A sub-project's rows have no owner_id; a person's
+  // rows (owner_id) hold the leaves they own there by the Reviewer rule
+  // (lib/review.ts taskOwnerId), for My view. Both split their leaves over
+  // OVERVIEW_SHARDS shards by task number, so concurrent edits in one
+  // sub-project write the same row less often. Every task write moves them
+  // in its own transaction (model/overviewCounts.ts tallyOverview), and
+  // background steps after a project archive, restore or move to Deleted
+  // items (overviewRegroup.ts). `project_at` is the sub-project row's
+  // _creationTime: a row of an earlier project with the same id, which a
+  // restore from Deleted items or the marketing demo's reseed can leave,
+  // counts for nothing. Readers answer `counting`, never zero, until the
+  // organization's org_ready overview_counts_at is set, while
+  // internal/overviewCountsBackfill counts it (overview_count_runs), while
+  // the top-level project has an overview_regroups row, or where a row went
+  // negative, which no write may leave. `revision` goes up with every
+  // write, so a dry run sees a change that ends where it began.
+  overview_counts: defineTable({
+    org_id: v.string(),
+    project_id: v.string(),
+    project_at: v.number(),
+    owner_id: v.optional(v.string()),
+    shard: v.number(),
+    leaves: v.object({
+      backlog: v.number(),
+      todo: v.number(),
+      progress: v.number(),
+      review: v.number(),
+      done: v.number(),
+    }),
+    paused: v.number(),
+    left_tenths: v.number(),
+    revision: v.number(),
+  })
+    .index('by_project_owner_shard', ['project_id', 'owner_id', 'shard'])
+    .index('by_owner_project', ['owner_id', 'project_id'])
+    .index('by_org', ['org_id']),
+
+  // What the overview counts hold for each active task of a counted
+  // organization (model/overviewCounts.ts): whether they take it as a group
+  // (an active subtask in a live project), and the leaf it adds to its
+  // sub-project's and its owner's rows (`slot`), absent where it adds none:
+  // a group, or a task outside any sub-project. Every write, background step
+  // and backfill step reconciles a task with this row, moving the counts by
+  // the difference, so each can run in any order and a second finds nothing
+  // to do. `task_at` is the task row's _creationTime: a row of an earlier
+  // task with the same id holds nothing. Deleted when its task leaves the
+  // active tasks, so an organization holds one row per active task. A task
+  // write reads its row (one index range) beside the count rows it moves,
+  // and writes it when the task is new or its slot or group changes.
+  overview_tasks: defineTable({
+    org_id: v.string(),
+    task_id: v.string(),
+    task_at: v.number(),
+    group: v.boolean(),
+    slot: v.optional(
+      v.object({
+        project_id: v.string(),
+        project_at: v.number(),
+        owner_id: v.optional(v.string()),
+        shard: v.number(),
+        status: vIssueStatus,
+        paused: v.boolean(),
+        left_tenths: v.number(),
+      }),
+    ),
+  })
+    .index('by_task', ['task_id'])
+    .index('by_org', ['org_id']),
+
+  // An organization whose overview counts internal/overviewCountsBackfill
+  // is counting: it first deletes the organization's overview_counts,
+  // overview_tasks and overview_regroups (`counting` false), while writes
+  // leave its counts alone, then reconciles its active tasks in
+  // _creationTime order, while every write reconciles the tasks it writes.
+  // Every task write reads it (model/overviewCounts.ts countsKept), so it
+  // changes only when a run starts, is reset, starts counting and ends;
+  // where the run got to goes in the backfill's own cursor, with the run's
+  // `generation`, new at each start and reset, so a position from an
+  // earlier run counts for nothing. Deleted once every task is reconciled,
+  // and with the organization.
+  overview_count_runs: defineTable({
+    org_id: v.string(),
+    counting: v.boolean(),
+    generation: v.string(),
+  }).index('by_org', ['org_id']),
+
+  // A top-level project with sub-projects archived, restored, moved to
+  // Deleted items or back, whose overview counts background steps reconcile
+  // (overviewRegroup.ts): a project's liveness decides whether its tasks
+  // make their parents groups, in any sub-project of the same top-level
+  // project, and a project's presence whether its tasks count at all.
+  // `projects` holds the projects whose tasks, and their parents, a step
+  // reconciles, read in order from `at`, a page at a time from `cursor`,
+  // and within a page past `after`, the creation time of the last task a
+  // step finished and the ids of those finished at that time. The counts of
+  // the top-level project's sub-projects answer `counting` while it exists.
+  // `progress_at` is the last committed step, which recovery restarts a
+  // stalled chain from (overviewRegroup.ts recover), and `scheduled_id` the
+  // next step.
+  overview_regroups: defineTable({
+    org_id: v.string(),
+    family_id: v.string(),
+    projects: v.array(v.string()),
+    at: v.number(),
+    cursor: v.optional(v.string()),
+    after: v.optional(v.object({ time: v.number(), ids: v.array(v.string()) })),
+    progress_at: v.string(),
+    scheduled_id: v.optional(v.id('_scheduled_functions')),
+  })
+    .index('by_family', ['family_id'])
+    .index('by_org', ['org_id'])
+    .index('by_progress', ['progress_at']),
 
   issue_labels: issueLabelsTable,
 

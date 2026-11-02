@@ -49,6 +49,7 @@ import {
 } from './model/cascade'
 import { estimateDocumentBytes } from './model/demoMetrics'
 import { recipientItems, stateRows } from './model/inboxItems'
+import { ownerRows } from './model/overviewCounts'
 import { countingOrgOf } from './model/teamCounts'
 
 /** A row whose last step committed longer ago than this is restarted. */
@@ -142,13 +143,21 @@ const PHASE_EDGES: Record<Exclude<RemovalPhase, 'finish'>, Edge[]> = {
     },
   ],
   // open tasks the removal transaction left, archived tasks, and any task
-  // restored before this step reached it
-  tasks: TASK_HOLDERS.map((holder) =>
+  // restored before this step reached it; then the person's Overview count
+  // rows, which hold nothing once no task names them
+  // (model/overviewCounts.ts)
+  tasks: [
+    ...TASK_HOLDERS.map((holder) =>
+      edge({
+        range: (ctx, profileId) => heldTasks(ctx, holder, profileId, false),
+        clear: (ctx, task: Doc<'issues'>, now) => clearHolder(ctx, task, holder, now),
+      }),
+    ),
     edge({
-      range: (ctx, profileId) => heldTasks(ctx, holder, profileId, false),
-      clear: (ctx, task: Doc<'issues'>, now) => clearHolder(ctx, task, holder, now),
+      range: (ctx, profileId) => ownerRows(ctx.db, profileId),
+      clear: (ctx, row) => ctx.db.delete(row._id),
     }),
-  ),
+  ],
   // rows older than the newest 500 the removal transaction cleared
   activity: [
     edge({
