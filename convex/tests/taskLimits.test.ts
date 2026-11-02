@@ -24,7 +24,7 @@ import { LIMITS, linksFull, MIB, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from
 import { ARCHIVED_DETACH, STALLED_MS } from '../model/deletedItems'
 import { DROPPED_IMAGES_MAX, DROPPED_KEEP_MS, IMAGE_NOT_ATTACHED } from '../model/descriptionImages'
 import { insertTask, patchTask } from '../model/descriptions'
-import { MOVE_TOO_LARGE, PARENT_DELETED_SINCE } from '../model/issues'
+import { MOVE_TOO_LARGE, PARENT_DELETED_SINCE, SUBTREE_TOO_LARGE } from '../model/issues'
 import { INLINE_TRIMS, ITEM_UNREAD_CAP, notifyCommentInsert } from '../model/messages'
 import {
   as,
@@ -682,6 +682,23 @@ describe('a move that carries archived subtasks', () => {
       project_id: fx.sub.id,
     })
     for (const t of family) expect((await row(fx.t, t.id)).project_id).toBe(fx.sub.id)
+  })
+})
+
+describe("a large family's refusals", () => {
+  it('are the sentences the public docs quote', () => {
+    const docs = import.meta.glob(['../../docs/rest-api.md', '../../docs/mcp.md'], {
+      eager: true,
+      query: '?raw',
+      import: 'default',
+    }) as Record<string, string>
+    expect(Object.keys(docs)).toHaveLength(2)
+    for (const [path, text] of Object.entries(docs)) {
+      // a wrapped line reads as one space
+      const prose = text.replace(/\s+/g, ' ')
+      for (const sentence of [LIMITS.moveSubtree.refusal, MOVE_TOO_LARGE, SUBTREE_TOO_LARGE])
+        expect(prose, path).toContain(sentence)
+    }
   })
 })
 

@@ -1416,12 +1416,12 @@ from this task first, or move it within its project.`). A move whose task and su
 too large for one request is a `400` with `this task and its subtasks are
 too large to move to another project in one request; remove some subtasks
 from this task first, restoring archived ones to do so, or move it within
-its project`, such as one with more than about 120 subtasks, archived ones
-included, whose descriptions hold 20,000 characters of a script that takes
-three bytes a character, such as Japanese. Until the deployment's operator
-has run the one-time description clear, about half as many are enough: more
-than about 60, or about 50 active ones, because the answer reads the active
-ones again. Any other change whose task and subtasks are too
+its project`. A task with 200 subtasks, archived ones included, moves in
+one request when their titles and descriptions are of ordinary length.
+Long descriptions on many of them can make a smaller family too large. A
+REST move reaches that point sooner than the same move through MCP or the
+app, because its answer reads the active subtasks again. Any other
+change whose task and subtasks are too
 large for one request, such as an archive, a new parent or a restore, is a
 `400` with `this task and its subtasks are too large to change in one
 request; detach some subtasks first`. Each moved subtask
