@@ -520,19 +520,22 @@ describe('a move that carries archived subtasks', () => {
   }
 
   /* Plants `active` and `archived` subtasks of `parent` with ordinary text,
-   * an 80-character title and a one-line description. The task rows hold the
-   * copy of the text earlier releases wrote, as every deployment's do until
-   * the description backfill's clear; convex/tests/descriptions.test.ts
-   * measures the capacities with the longest descriptions. */
+   * an 80-character title and `description`, one line unless given. The
+   * task rows hold the copy of the text the releases before the third
+   * wrote, which a rollback to the second release writes again until the
+   * next clear, so each read of a task row reads the text too;
+   * convex/tests/descriptions.test.ts checks long descriptions under a
+   * lowered read limit. */
   const plantFamily = async (
     fx: Fx,
     parent: Doc<'issues'>,
     count: { active: number; archived: number },
+    // the default keeps the calibrated rooms of the two refusal cases below
+    description = 'Compare the new dates with the plan and flag any step that slips past the review.',
   ) => {
     const text = {
       title: 'Check the revised supplier dates against the bring-up plan for the second board',
-      description:
-        'Compare the new dates with the plan and flag any step that slips past the review.',
+      description,
     }
     const kids = [
       ...(await plantSubtasks(fx, parent, count.archived, { ...text, archived_at: NOW })),
@@ -565,19 +568,50 @@ describe('a move that carries archived subtasks', () => {
       body: JSON.stringify({ project: dest.id }),
     })
 
-  it(`moves ${LIMITS.moveSubtree.max} subtasks over REST within the real limits, and answers in full`, async () => {
+  /* A description of about 390 characters, the measured average
+   * (descriptionReaders.test.ts ORDINARY_TEXT). */
+  const ORDINARY = 'Check the bracket fit and the cable route before the next build. '
+    .repeat(6)
+    .trim()
+
+  it(`moves ${LIMITS.moveSubtree.max} subtasks of ordinary text through REST, MCP and the app within the real limits, and REST answers in full`, async () => {
     const fx = await setup(newT({ transactionLimits: true }))
     const parent = await task(fx, { title: 'Long family' })
-    const kids = await plantFamily(fx, parent, {
-      active: LIMITS.subtasks.max,
-      archived: LIMITS.moveSubtree.max - LIMITS.subtasks.max,
-    })
+    const kids = await plantFamily(
+      fx,
+      parent,
+      { active: LIMITS.subtasks.max, archived: LIMITS.moveSubtree.max - LIMITS.subtasks.max },
+      ORDINARY,
+    )
     const dest = await elsewhere(fx)
+    const family = [parent, ...kids]
+    const allIn = async (projectId: string) => {
+      for (const t of family) expect((await row(fx.t, t.id)).project_id).toBe(projectId)
+    }
+    // REST, whose answer reads the active subtasks again
     const answer = await restMove(fx, parent, dest)
     expect(answer.project_id).toBe(dest.id)
     // an active task's answer lists its active subtasks
     expect(answer.subtasks).toHaveLength(LIMITS.subtasks.max)
-    for (const kid of kids) expect((await row(fx.t, kid.id)).project_id).toBe(dest.id)
+    await allIn(dest.id)
+    // MCP carries them back
+    const mcp = JSON.parse(
+      await fx.t.mutation(internal.machine.mcp.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: key(parent),
+        project: fx.sub.id,
+      }),
+    ) as { id: string; updated: string[] }
+    expect(mcp).toMatchObject({ id: parent.id, updated: ['project_id'] })
+    await allIn(fx.sub.id)
+    // the app's move takes them across again
+    await as(fx.t, fx.admin).mutation(api.issues.move, {
+      org_id: fx.org.id,
+      id: parent.id,
+      project_id: dest.id,
+    })
+    await allIn(dest.id)
   })
 
   it('refuses a move too large for one transaction with what to do, on every surface, and changes nothing', async () => {
