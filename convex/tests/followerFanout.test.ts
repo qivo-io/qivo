@@ -1,8 +1,8 @@
 /* The follower notices of a comment or a change (model/messages.ts
  * FOLLOWER_FANOUT). The first followers hear in the writing transaction and
- * background steps tell the rest, so a task followed by thousands of people
- * before the follower cap stays inside Convex's limits, and every follower
- * reads the same line either way. */
+ * background steps tell the rest, so a task followed by every person of an
+ * organization before the follower cap stays inside Convex's limits, and
+ * every follower reads the same line either way. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
@@ -85,19 +85,21 @@ const comment = (t: T, f: OrgFixture, task: Doc<'issues'>, body: string) =>
   })
 
 describe('the follower notices of a task followed before the cap', () => {
-  it('tell 2,000 followers of a comment, the first in the comment and the rest in steps, within the limits', async () => {
+  it("tell an organization's 1,000 people of a comment, the first in the comment and the rest in steps, within the limits", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    const followers = await plantFollowers(t, f, task, 2000)
-    // told in the comment, this passed 4,096 index ranges
+    // with the fixture's five people, an organization of 1,000
+    const followers = await plantFollowers(t, f, task, 995)
+    // at the real budgets, the first FOLLOWER_FANOUT.inline hear in the
+    // comment and steps of FOLLOWER_FANOUT.step tell the rest
     await comment(t, f, task, 'The supplier confirmed the dates.')
     expect(await told(t, task)).toHaveLength(FOLLOWER_FANOUT.inline)
     await t.finishAllScheduledFunctions(vi.runAllTimers)
     const all = await told(t, task)
     expect(all.map(([id]) => id).sort()).toEqual([...followers].sort())
     expect(new Set(all.map(([, detail]) => detail))).toEqual(new Set(['New comment']))
-  }, 120_000)
+  })
 
   it('tell no one more once the task is deleted', async () => {
     Object.assign(FOLLOWER_FANOUT, { inline: 2, step: 2 })
@@ -157,7 +159,7 @@ describe('a step whose followers hold many snoozed rows', () => {
     const detached = rows.filter((m) => m.detail === 'Detached from its parent')
     expect(detached.map((m) => m.recipient_id).sort()).toEqual([...followers].sort())
     expect(rows.filter((m) => m.snoozed_until !== undefined)).toEqual([])
-  }, 120_000)
+  })
 })
 
 /* 50 snoozed rows about `task` in the item of each of `followers`, each a
@@ -206,7 +208,7 @@ describe('a comment whose followers hold many snoozed rows', () => {
     const notices = rows.filter((m) => m.detail === 'New comment')
     expect(notices.map((m) => m.recipient_id).sort()).toEqual([...followers].sort())
     expect(rows.filter((m) => m.snoozed_until !== undefined)).toEqual([])
-  }, 120_000)
+  })
 
   it('tells 100 mentioned people the same way, the first in the comment and the rest in steps', async () => {
     const t = newT({ transactionLimits: { documentsWritten: 4096 } })
@@ -232,7 +234,7 @@ describe('a comment whose followers hold many snoozed rows', () => {
     expect(all.map(([id]) => id).sort()).toEqual([...people].sort())
     // each follows the task now, and none heard the comment twice
     expect((await told(t, task)).filter(([, d]) => d === 'New comment')).toEqual([])
-  }, 120_000)
+  })
 })
 
 describe('notices a step posts after their author was removed', () => {
