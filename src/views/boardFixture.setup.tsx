@@ -31,9 +31,9 @@ type Window = (opened: string | null, close: () => void, open: (id: string) => v
 
 const AT = '2026-09-14T08:00:00.000Z'
 
-/** A test's budget on the Board: booting the store and drawing the Board
-    with a task window takes about three seconds alone, and more on a busy
-    shared machine than the default five allow. */
+/** A test's budget on the Board, below vitest.config.mts's 60 s default.
+    On 2 November 2026 the Board cases that use it took 1.6 s at most each
+    under a shard's load on a Boat sandbox. */
 export const BOARD_TEST_TIMEOUT = 20_000
 
 /** A task row in the fixture's one project, owned by its one person. */

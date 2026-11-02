@@ -110,8 +110,9 @@ import {
  * stored before it gets a check of each such subtask, which a legacy nested
  * group may be, a range each, and the largest Board's My view, whose
  * fixture data predates the rule, comes within 510 of the 3,600 ranges.
- * Ranges would run out at about 1,150 cards under as many parents; the
- * ceiling comes before.
+ * At the 3.1 ranges a card that My view of the largest Board reads, ranges
+ * would run out at about 1,150 cards under as many parents; the ceiling
+ * comes before.
  *
  * Bytes stop a selection whose tasks a filter must read whole: the search,
  * the people filter, Priority and Stale read every task of the selection's
