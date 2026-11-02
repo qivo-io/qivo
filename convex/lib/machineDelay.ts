@@ -355,7 +355,7 @@ export type PageDelayRow = { issue: Doc<'issues'>; project: Doc<'projects'>; gro
  * date, as a single read is. So the rows of a person with very much open
  * work can say unavailable on every page while the single read judges them,
  * which is the agreed rule for figures that depend on people's workloads
- * (limits plan, "Testing and review envelope", owner, 2026-11-01).
+ * (limits plan, "Design size", owner, 2026-11-01).
  */
 export async function pageForecaster(
   ctx: QueryCtx,

@@ -25,7 +25,7 @@ import { accessFlags, asMachineCaller, loadCatalogue, TEXT_TASK_READS } from '..
 import { newWindowKey } from '../lib/db'
 import { descriptionForm, printOf } from '../lib/fieldPrints'
 import { type IdWindow, piecesAfter } from '../lib/idWindows'
-import { LIMITS, MIB } from '../lib/limits'
+import { MIB } from '../lib/limits'
 import type { OrgExportPage, OrgExportRow, OrgExportSection } from '../lib/orgExport'
 import type { EventOwner } from '../lib/taskEvents'
 import { PAGE, readTasks } from '../lib/workspaceParts'
@@ -852,7 +852,6 @@ const restMetrics = (t: T, f: OrgFixture, o: { limit: number; search?: string })
     return { refused, more, ...(await used(ctx)) }
   })
 
-/** A text of `chars` characters of a three-byte script, ending in `word`. */
 /** An active page's budget lowered to `documents` for its rows, past the
  * fixture's own reads, so 300 tasks with ordinary text pass a page as
  * thousands pass the real budget (lib/activeTaskPage.ts ACTIVE_PAGE). */
@@ -860,7 +859,8 @@ const smallPage = (documents: number) => ({
   page: { documents: documents + 8, delays: { ...ACTIVE_PAGE.delays, documents: 8 } },
 })
 
-const wide = (chars: number, word = '') => `${'中'.repeat(chars - word.length)}${word}`
+/** An ordinary description of about 390 characters, the measured average. */
+const ORDINARY_TEXT = 'Check the bracket fit and the cable route before the next build. '.repeat(6)
 
 describe('real limits', () => {
   it('a window of 200 tasks whose rows are near 900 KB overflows, and the cut that fits answers, past PAGE.hard by one row at most', async () => {
@@ -935,72 +935,97 @@ describe('real limits', () => {
     expect(metrics.mib).toBeLessThan(16)
   })
 
-  it('a window of 200 tasks with both copies at the cap in a three-byte script answers or splits within PAGE.hard', async () => {
+  it('a window of 200 tasks with both copies answers or splits within a lowered PAGE.hard', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const text = wide(LIMITS.description.max)
+    // both copies of an ordinary text, about 240 KB in all, under parts'
+    // bytes lowered to 32 and 64 KiB, as 200 at the cap in a three-byte
+    // script, 24 MB, passed the real 4 and 8 MiB
+    const text = ORDINARY_TEXT
     await plantMany(
       t,
       f,
       200,
       () => text,
       () => text,
-      50,
+      200,
     )
-    const queue: IdWindow[] = [whole]
-    const shown = new Set<string>()
-    const states: string[] = []
-    let most = 0
-    while (queue.length > 0) {
-      const w = queue.shift() as IdWindow
-      const { answer, metrics } = await t.run(async (ctx) => ({
-        answer: await readTasks(ctx, f.admin, w),
-        metrics: await used(ctx),
-      }))
-      states.push(answer.state)
-      most = Math.max(most, metrics.mib)
-      if (answer.state === 'ok') {
-        for (const row of answer.issues) {
-          expect(row.description).toBe(text)
-          shown.add(row.id)
+    const budgets = structuredClone({ soft: PAGE.soft, hard: PAGE.hard })
+    Object.assign(PAGE.soft, { bytes: 32 * 1024 })
+    Object.assign(PAGE.hard, { bytes: 64 * 1024 })
+    try {
+      const queue: IdWindow[] = [whole]
+      const shown = new Set<string>()
+      const states: string[] = []
+      let most = 0
+      while (queue.length > 0) {
+        const w = queue.shift() as IdWindow
+        const { answer, bytes } = await t.run(async (ctx) => ({
+          answer: await readTasks(ctx, f.admin, w),
+          bytes: (await ctx.meta.getTransactionMetrics()).bytesRead.used,
+        }))
+        states.push(answer.state)
+        most = Math.max(most, bytes)
+        if (answer.state === 'ok') {
+          for (const row of answer.issues) {
+            expect(row.description).toBe(text)
+            shown.add(row.id)
+          }
+          if (answer.split === true) states.push('split')
+          continue
         }
-        if (answer.split === true) states.push('split')
-        continue
+        expect(answer.state).toBe('overflow')
+        queue.push(...(piecesAfter(w, answer) ?? []))
       }
-      expect(answer.state).toBe('overflow')
-      queue.push(...(piecesAfter(w, answer) ?? []))
+      console.info('a window of 200 ordinary tasks under lowered parts', { states, most })
+      expect(shown.size).toBe(200)
+      expect(states).toContain('ok')
+      expect(states).toContain('overflow')
+      expect(most).toBeLessThanOrEqual(PAGE.hard.bytes)
+    } finally {
+      Object.assign(PAGE.soft, budgets.soft)
+      Object.assign(PAGE.hard, budgets.hard)
     }
-    expect(shown.size).toBe(200)
-    expect(states).toContain('ok')
-    expect(most).toBeLessThanOrEqual(PAGE.hard.bytes / MIB)
   })
 
-  it('a REST page of 200 tasks at the cap ends early with a cursor, pages on to every task, and holds more once the copies are cleared', async () => {
+  it('a REST page of 200 tasks with both copies ends early with a cursor under a lowered page budget, pages on to every task, and holds more once the copies are cleared', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    const text = wide(LIMITS.description.max)
+    // both copies of an ordinary text, about 240 KB in all, under a page of
+    // about 128 KiB for its rows, as 200 at the cap in a three-byte script
+    // passed the real 3.5 MiB
+    const text = ORDINARY_TEXT
     await plantMany(
       t,
       f,
       200,
       () => text,
       () => text,
-      50,
+      200,
     )
     const agent = { callerId: f.agent.id, access: 'read' as const }
-    const pages = await restPages(t, { ...agent, limit: '200' })
-    expect(pages.sizes[0]).toBeGreaterThan(0)
-    expect(pages.sizes[0]).toBeLessThan(200)
-    expect(pages.rows).toHaveLength(200)
-    expect(pages.rows.map((row) => row.description)).toEqual(Array(200).fill(text))
-    // as the third release leaves the task rows, a page reads half as much
-    // for each task, so it holds more of them
-    await clearTaskText(t, f.org.id)
-    const cleared = await restPage(t, { ...agent, limit: '200' })
-    expect(cleared.tasks.length).toBeGreaterThan(pages.sizes[0])
-    expect(cleared.tasks.map((row) => row.description)).toEqual(
-      Array(cleared.tasks.length).fill(text),
-    )
+    const small = {
+      page: { bytes: 136 * 1024, delays: { ...ACTIVE_PAGE.delays, bytes: 8 * 1024 } },
+    }
+    await lowered(small, async () => {
+      const pages = await restPages(t, { ...agent, limit: '200' })
+      expect(pages.sizes[0]).toBeGreaterThan(0)
+      expect(pages.sizes[0]).toBeLessThan(200)
+      expect(pages.rows).toHaveLength(200)
+      expect(pages.rows.map((row) => row.description)).toEqual(Array(200).fill(text))
+      // as the third release leaves the task rows, a page reads less for
+      // each task, so it holds more of them
+      await clearTaskText(t, f.org.id)
+      const cleared = await restPage(t, { ...agent, limit: '200' })
+      console.info('a REST page of 200 ordinary tasks under a lowered budget', {
+        sizes: pages.sizes,
+        cleared: cleared.tasks.length,
+      })
+      expect(cleared.tasks.length).toBeGreaterThan(pages.sizes[0])
+      expect(cleared.tasks.map((row) => row.description)).toEqual(
+        Array(cleared.tasks.length).fill(text),
+      )
+    })
   })
 
   it('a task ID search over 300 active tasks with both copies pages to its match past a lowered page budget, never refused', async () => {

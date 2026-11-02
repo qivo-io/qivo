@@ -196,10 +196,14 @@ describe('a tasks window', () => {
   })
 
   it('reads within the real limits where one read of the organization could not', async () => {
-    // 1,500 open tasks with 12,000 characters of ordinary text each hold
-    // about 18 MB, past what one transaction may read. They lie 300 in each
-    // of five sub-projects, the design size for one, and at most 600 in
-    // one project.
+    // 1,500 open tasks with descriptions of 12,000 characters each hold
+    // about 18 MB, past what one transaction may read. The texts are that
+    // long, not ordinary, because a part's text step reserves a fixed two
+    // documents at Convex's 1 MiB size limit a text (model/descriptions.ts
+    // textsLeft, TEXT_DOCUMENTS * DOCUMENT_MAX_BYTES), which a test cannot
+    // lower, so under a lowered read limit no text would fit. They lie 300
+    // in each of five sub-projects, the design size for one, and at most
+    // 600 in one project.
     const t = newT(REAL_LIMITS)
     const f = await withOrg(t)
     const description = LONG.repeat(2).slice(0, 12_000)
