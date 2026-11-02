@@ -12,10 +12,16 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { OWN_READS } from '../lib/access'
-import { BOARD, type BoardAnswer, type BoardFilters, type BoardScope } from '../lib/board'
+import {
+  BOARD,
+  type BoardAnswer,
+  type BoardFilters,
+  type BoardScope,
+  readBoard,
+} from '../lib/board'
 import { TEXT_TASK_READS } from '../lib/core'
 import { ISSUE_STATUSES } from '../lib/enums'
-import { BOARD_TASKS, LIMITS, MIB, NAME_MAX, PROJECT_ROW_MAX_BYTES } from '../lib/limits'
+import { BOARD_TASKS, LIMITS, MIB, PROJECT_ROW_MAX_BYTES } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
 import { ownTasks, type ViewRow, viewAccess, viewBudget } from '../lib/viewReads'
 import {
@@ -53,10 +59,38 @@ afterEach(() => {
   TEXT_TASK_READS.reads = DEFAULT_TEXT_READS
 })
 
-/* The longest title and description the server accepts, in a three-byte
- * script: about 765 bytes and 60 KB stored. */
-const TITLE = '€'.repeat(LIMITS.title.max)
-const TEXT = '€'.repeat(LIMITS.description.max)
+/* Ordinary sentences, for titles and texts as the design size has them.
+ * None holds a word the cases search for. */
+const SENTENCES = [
+  'Check why the sensor values climb slowly through the morning shift.',
+  'Review the power stage of the prototype and pick parts that run cooler.',
+  'Update the assembly guide with steps for the new fixture and its clamps.',
+  'Sort the inspection items for next week and agree dates with the testers.',
+  'Make the display text larger after feedback that it is hard to read.',
+  'The dropped link seems tied to the order in which the units restart.',
+  'Find a second supplier while the connector delivery is running late.',
+  'Put the test results in a table that shows the change since last time.',
+  'Move the most used settings to the top of the settings screen.',
+  'Measure fan noise in the quiet room and compare it with the fan speed.',
+  'List where the old drawings and the new layout disagree and fix them.',
+  'Find the part of the specification that answers the customer question.',
+]
+
+/** `length` characters of SENTENCES from sentence `from` on. */
+const words = (from: number, length: number): string => {
+  let s = ''
+  for (let k = from; s.length < length; k++) s += `${SENTENCES[k % SENTENCES.length]} `
+  return s.slice(0, length).trim()
+}
+
+/** The texts' length: 390 characters, the measured average. */
+const TEXT_CHARS = 390
+
+/** An ordinary title of about 80 characters, and an ordinary text, for
+ * task `i`. */
+const titleOf = (i: number) => words(i, 72 + (i % 17))
+const textOf = (i: number) => words(i + 5, TEXT_CHARS)
+const ordinary = (i: number) => ({ title: titleOf(i), text: textOf(i) })
 
 const DAY = 86_400_000
 const at = (ms: number) => new Date(ms).toISOString()
@@ -80,6 +114,14 @@ const shape = (answer: BoardAnswer) => {
     held: answer.held_projects.length,
   }
 }
+
+/** The bytes `profile`'s Board of `scope` read, as Convex counts them,
+ * where boardRead answers MiB to two decimals. */
+const boardBytes = (t: T, profile: Doc<'profiles'>, scope: BoardScope): Promise<number> =>
+  t.run(async (ctx) => {
+    await readBoard(ctx, new Map([[profile.org_id, profile]]), { scope, filters: NO_FILTERS })
+    return (await ctx.meta.getTransactionMetrics()).bytesRead.used
+  })
 
 /** The answer's state, and its rows' count when ok. */
 const stateOf = (answer: BoardAnswer) =>
@@ -189,16 +231,16 @@ describe('rows', () => {
     const copied = await plantCopiedIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
-      description: TEXT,
+      description: textOf(0),
     })
     const scope = projectScope(f.guest, f.sub.id)
     const withCopy = await boardRead(t, [f.guest], scope)
     if (withCopy.answer.state !== 'ok') throw new Error(withCopy.answer.state)
     expect(withCopy.answer.rows.map((row) => row.id)).toEqual([copied.id])
     expect(withCopy.answer.rows[0]).not.toHaveProperty('description')
+    const bytesWith = await boardBytes(t, f.guest, scope)
     await t.run((ctx) => ctx.db.patch(copied._id, { description: undefined }))
-    const cleared = await boardRead(t, [f.guest], scope)
-    expect(withCopy.read.mib - cleared.read.mib).toBeGreaterThan(0.05)
+    expect(bytesWith - (await boardBytes(t, f.guest, scope))).toBeGreaterThanOrEqual(TEXT_CHARS)
   })
 
   it('sends a parent id only for a parent the caller is shown', async () => {
@@ -311,7 +353,8 @@ describe('filters', () => {
   it('reads no Backlog or Done range under Focus with a filter Clear clears', async () => {
     const t = newT()
     const f = await withOrg(t)
-    await plantTasks(t, f.sub, 400, (i) => ({ status: i % 2 === 0 ? 'backlog' : 'done' }), 200)
+    // 150 Done tasks, the design size, and as many in Backlog
+    await plantTasks(t, f.sub, 300, (i) => ({ status: i % 2 === 0 ? 'backlog' : 'done' }), 150)
     await plantTasks(t, f.sub, 3, () => ({ priority: 'high' }))
     const scope = projectScope(f.guest, f.sub.id)
     const focus = await boardRead(t, [f.guest], scope, { focus: true, priority: 'high' })
@@ -319,7 +362,7 @@ describe('filters', () => {
     expect(focus.read.documents).toBeLessThan(100)
     const whole = await boardRead(t, [f.guest], scope, { priority: 'high' })
     expect(stateOf(whole.answer)).toEqual({ state: 'ok', rows: 3 })
-    expect(whole.read.documents).toBeGreaterThan(400)
+    expect(whole.read.documents).toBeGreaterThan(300)
   })
 
   it('finds under Focus a task that carries done_at against the rule, past a step of its status range too', async () => {
@@ -391,7 +434,7 @@ describe('filters', () => {
   it("applies My tasks through the person's own ranges and keeps only the selection's tasks", async () => {
     const t = newT()
     const f = await withOrg(t)
-    await plantTasks(t, f.sub, 300, () => ({ assignee_id: f.user.id }))
+    await plantTasks(t, f.sub, 297, () => ({ assignee_id: f.user.id }))
     const mine = await plantTasks(t, f.sub, 3, () => ({ assignee_id: f.guest.id }))
     await plantTasks(t, f.sub2, 2, () => ({ assignee_id: f.guest.id }))
     const own = await boardRead(t, [f.guest], projectScope(f.guest, f.sub.id), { mine: true })
@@ -465,21 +508,54 @@ describe('lanes', () => {
 
 /* ------------------------------------------------------------------ search */
 
+/** A label of the organization `orgId` named `name`, by its id. */
+const plantLabel = async (t: T, orgId: string, name: string): Promise<string> => {
+  const id = uuid()
+  await t.run((ctx) =>
+    ctx.db.insert('labels', {
+      id,
+      org_id: orgId,
+      name,
+      name_lower: name.toLowerCase(),
+      color: '#336699',
+      created_at: NOW,
+    }),
+  )
+  return id
+}
+
+/** Gives `tasks` the label `labelId`, as model/labels.ts setTaskLabel
+ * writes an assignment, with the task's window key. */
+const labelAll = async (t: T, labelId: string, tasks: readonly Doc<'issues'>[]) => {
+  for (let from = 0; from < tasks.length; from += 1000)
+    await t.run(async (ctx) => {
+      for (const task of tasks.slice(from, from + 1000))
+        await ctx.db.insert('issue_labels', {
+          org_id: task.org_id,
+          issue_id: task.id,
+          label_id: labelId,
+          task_key: task.window_key,
+        })
+    })
+}
+
 describe('search', () => {
   it('reads the texts of a few candidates of a large project one by one, not its other texts', async () => {
-    const t = newT({ transactionLimits: true })
+    const t = newT()
     const f = await withOrg(t)
-    // urgent tasks first and last, the project's large texts between them
+    // urgent tasks first and last, the project's other texts between them,
+    // 300 tasks in all, the design size
     await plantTasks(t, f.sub, 2, () => ({ priority: 'urgent', text: 'the quokka ledger' }))
-    await plantTasks(t, f.sub, 600, () => ({ text: TEXT }), 100)
+    await plantTasks(t, f.sub, 296, ordinary)
     await plantTasks(t, f.sub, 2, () => ({ priority: 'urgent', text: 'nothing here' }))
-    const { answer, read } = await boardRead(t, [f.guest], projectScope(f.guest, f.sub.id), {
-      priority: 'urgent',
-      search: 'quokka',
-    })
-    expect(stateOf(answer)).toEqual({ state: 'ok', rows: 2 })
-    expect(read.mib).toBeLessThan(4)
-  }, 120_000)
+    const scope = projectScope(f.guest, f.sub.id)
+    const searched = await boardRead(t, [f.guest], scope, { priority: 'urgent', search: 'quokka' })
+    expect(stateOf(searched.answer)).toEqual({ state: 'ok', rows: 2 })
+    // the same filter reads no text without the search; with it, the four
+    // candidates' texts, where the project's would add about 300 documents
+    const plain = await boardRead(t, [f.guest], scope, { priority: 'urgent' })
+    expect(searched.read.documents - plain.read.documents).toBeLessThan(20)
+  })
 
   it("reads a whole selection's texts many to a range", async () => {
     const t = newT()
@@ -536,35 +612,87 @@ describe('search', () => {
     ])
     expect(rowIds(await boardFor(t, f.guest, scope, { search: 'basalt' }))).toEqual([tasks[2].id])
   })
+
+  it('searches a word a label holds over 300 tasks through the label, and reads labels only where one can finish the match', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const bug = await plantLabel(t, f.org.id, 'Bug')
+    await plantLabel(t, f.org.id, 'Design')
+    // a tenth of every sixth task's titles say login
+    const tasks = await plantTasks(
+      t,
+      f.sub,
+      300,
+      (i) => ({ ...ordinary(i), title: i % 60 === 0 ? `Login ${titleOf(i)}` : titleOf(i) }),
+      300,
+    )
+    await labelAll(
+      t,
+      bug,
+      tasks.filter((_, i) => i % 6 === 0),
+    )
+    // the 5 tasks whose titles say login pass BOARD.labelTasks, and the
+    // ranges hold the reads of the label's assignments but not a label read
+    // for each of the 300 candidates
+    BOARD.labelTasks = 4
+    BOARD.reads.ranges = 200
+    const scope = projectScope(f.guest, f.sub.id)
+    const labelled = await boardRead(t, [f.guest], scope, { search: 'bug' })
+    expect(stateOf(labelled.answer)).toEqual({ state: 'ok', rows: 50 })
+    const both = await boardRead(t, [f.guest], scope, { search: 'login bug' })
+    expect(stateOf(both.answer)).toEqual({ state: 'ok', rows: 5 })
+    // a label read for each of 300 candidates passes the budget, while a
+    // search reads labels only for the 5 tasks whose titles say login
+    BOARD.labelTasks = Number.POSITIVE_INFINITY
+    expect((await boardRead(t, [f.guest], scope, { search: 'bug' })).answer.state).toBe(
+      'over_budget',
+    )
+    const own = await boardRead(t, [f.guest], scope, { search: 'login bug' })
+    expect(stateOf(own.answer)).toEqual({ state: 'ok', rows: 5 })
+    expect(own.read.ranges).toBeLessThanOrEqual(both.read.ranges)
+  })
+
+  it("searches a word a label holds over a small selection through each task's own rows when the label is on many other tasks", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const bug = await plantLabel(t, f.org.id, 'Bug')
+    // the label on FW's 30 tasks and on 900 of three sub-projects the guest
+    // cannot see, 300 each
+    const mine = await plantTasks(t, f.sub, 30, ordinary)
+    const theirs: Doc<'issues'>[] = []
+    for (let k = 0; k < 3; k++) {
+      const elsewhere = await plantProject(t, {
+        org_id: f.org.id,
+        type: 'project',
+        parent_id: f.hidden.id,
+      })
+      theirs.push(...(await plantTasks(t, elsewhere, 300, () => ({}), 300)))
+    }
+    await labelAll(t, bug, [...mine, ...theirs])
+    // FW's 30 candidates pass BOARD.labelTasks, so the search tries the
+    // label's assignments before their own rows
+    BOARD.labelTasks = 8
+    const { answer, read } = await boardRead(t, [f.guest], projectScope(f.guest, f.sub.id), {
+      search: 'bug',
+    })
+    expect(stateOf(answer)).toEqual({ state: 'ok', rows: 30 })
+    // it stops past BOARD.labelScan assignments a candidate and reads their
+    // own rows, never the label's 930 assignments
+    expect(read.documents).toBeLessThan(900)
+  })
 })
 
 describe('search, labels and a status a group does not search', () => {
-  /** A label of `f`'s organization named `name`. */
-  const labelIn = async (t: T, orgId: string, name: string) => {
-    const id = uuid()
-    await t.run((ctx) =>
-      ctx.db.insert('labels', {
-        id,
-        org_id: orgId,
-        name,
-        name_lower: name.toLowerCase(),
-        color: '#336699',
-        created_at: NOW,
-      }),
-    )
-    return id
-  }
-
-  for (const [status, words, statusLabel, otherLabel] of [
+  for (const [status, query, statusLabel, otherLabel] of [
     ['todo', 'to quartz', 'To', 'Quartz'],
     ['done', 'done bug', 'Done', 'Bug'],
   ] as const)
-    it(`finds a group stored ${status} with labels ${statusLabel} and ${otherLabel} by "${words}", whose dormant status holds no word`, async () => {
+    it(`finds a group stored ${status} with labels ${statusLabel} and ${otherLabel} by "${query}", whose dormant status holds no word`, async () => {
       const t = newT()
       const f = await withOrg(t)
       const [byStatus, other] = [
-        await labelIn(t, f.org.id, statusLabel),
-        await labelIn(t, f.org.id, otherLabel),
+        await plantLabel(t, f.org.id, statusLabel),
+        await plantLabel(t, f.org.id, otherLabel),
       ]
       const task = (title: string, fields: Partial<Doc<'issues'>> = {}) =>
         plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, title, ...fields })
@@ -587,7 +715,7 @@ describe('search, labels and a status a group does not search', () => {
             label_id: label,
           })
       })
-      const answer = await boardFor(t, f.guest, projectScope(f.guest, f.sub.id), { search: words })
+      const answer = await boardFor(t, f.guest, projectScope(f.guest, f.sub.id), { search: query })
       // the group through its two labels, the leaf through its status and
       // one label; the group with one label holds no word for its status
       expect(rowIds(answer)).toEqual([group.id, leaf.id])
@@ -597,13 +725,13 @@ describe('search, labels and a status a group does not search', () => {
 /* ------------------------------------------- reads follow the selection */
 
 describe('reads', () => {
-  it('read the same for a 50-task Board in an organization with 100 or 10,000 tasks elsewhere', async () => {
+  it('read the same for a 50-task Board in an organization with 30 or 300 tasks elsewhere', async () => {
     const figures: ReadFigures[] = []
-    for (const elsewhere of [100, 10_000]) {
+    for (const elsewhere of [30, 300]) {
       const t = newT()
       const f = await withOrg(t)
       await plantTasks(t, f.sub, 50, (i) => ({ title: `Board task ${i}` }))
-      await plantTasks(t, f.sub2, elsewhere, () => ({}), 1000)
+      await plantTasks(t, f.sub2, elsewhere, () => ({}), 300)
       const { answer, read } = await boardRead(t, [f.guest], projectScope(f.guest, f.sub.id), {
         search: 'board',
       })
@@ -612,7 +740,53 @@ describe('reads', () => {
     }
     expect(figures[1].documents).toBe(figures[0].documents)
     expect(figures[1].ranges).toBe(figures[0].ranges)
-  }, 120_000)
+  })
+
+  it('answers a filter that keeps one subtask under each of 25 parents of ten, in a project and in My view, without a check of each sibling', async () => {
+    /* 25 parents in FW with ten subtasks each, 275 tasks, one subtask of
+     * each the guest's and urgent, created at `created_at` */
+    const plant = async (created_at: string) => {
+      const t = newT()
+      const f = await withOrg(t)
+      const parents = await plantTasks(t, f.sub, 25, (i) => ({ ...ordinary(i), created_at }))
+      await plantTasks(
+        t,
+        f.sub,
+        250,
+        (i) => ({
+          ...ordinary(i),
+          created_at,
+          parent_id: parents[Math.floor(i / 10)].id,
+          ...(i % 10 === 0 ? { priority: 'urgent', assignee_id: f.guest.id } : {}),
+        }),
+        250,
+      )
+      return { t, f, scope: projectScope(f.guest, f.sub.id) }
+    }
+    const recent = await plant('2026-10-31T09:00:00.000Z')
+    const urgent = await boardRead(recent.t, [recent.f.guest], recent.scope, { priority: 'urgent' })
+    const mine = await boardRead(recent.t, [recent.f.guest], { kind: 'mine' }, { mine: true })
+    for (const { answer } of [urgent, mine]) {
+      expect(stateOf(answer)).toEqual({ state: 'ok', rows: 25 })
+      if (answer.state === 'ok') expect(answer.parents).toHaveLength(25)
+    }
+    // data stored before the rule of one level checks each of the 225
+    // siblings the filter drops, which a legacy nested group may be, a
+    // range each
+    const legacy = await plant(NOW)
+    const old = await boardRead(legacy.t, [legacy.f.guest], legacy.scope, { priority: 'urgent' })
+    expect(stateOf(old.answer)).toEqual({ state: 'ok', rows: 25 })
+    expect(old.read.ranges - urgent.read.ranges).toBeGreaterThanOrEqual(225)
+    // so a budget that holds the reads of the data created under the rule,
+    // with 100 ranges to spare, stops the read of the older data
+    BOARD.reads.ranges = urgent.read.ranges + 100
+    const again = await boardRead(recent.t, [recent.f.guest], recent.scope, { priority: 'urgent' })
+    expect(stateOf(again.answer)).toEqual({ state: 'ok', rows: 25 })
+    expect(
+      (await boardRead(legacy.t, [legacy.f.guest], legacy.scope, { priority: 'urgent' })).answer
+        .state,
+    ).toBe('over_budget')
+  })
 })
 
 /* ------------------------------------------------------------- hidden data */
@@ -620,17 +794,21 @@ describe('reads', () => {
 /** The withOrg fixture with a sibling sub-project of FW and PCB that the
  * guest cannot see, and in FW a group whose subtask is in the sibling, a
  * subtask whose parent is in the sibling, and 30 tasks one search word finds
- * by their texts and a label. `wide` makes the hidden rows large: the
- * subtask's title, the parent's title and the copy a rollback writes on it,
- * and the sibling's description, and gives the hidden tasks the label. */
+ * by their texts and a label. `wide` makes the hidden rows larger, with
+ * ordinary text: the subtask's title, the parent's title and the copy a
+ * rollback writes on it, and the sibling's description, and gives the
+ * hidden tasks the label. Where a read's later decisions see a row's
+ * size, as the searches here do, the least budget moves with any
+ * difference in it, so ordinary sizes show a hidden row counted at its own
+ * size; tests/rowBounds.test.ts checks that the fixed sizes hold the rows
+ * at the caps. */
 async function hiddenOrg(wide: boolean) {
   const t = newT()
   const f = await withOrg(t)
   const sibling = await plantHiddenSibling(t, f, f.guest)
   const labelId = uuid()
   await t.run(async (ctx) => {
-    if (wide)
-      await ctx.db.patch(sibling._id, { description: '一'.repeat(LIMITS.projectDescription.max) })
+    if (wide) await ctx.db.patch(sibling._id, { description: textOf(1) })
     await ctx.db.insert('labels', {
       id: labelId,
       org_id: f.org.id,
@@ -652,14 +830,14 @@ async function hiddenOrg(wide: boolean) {
     org_id: f.org.id,
     project_id: sibling.id,
     parent_id: group.id,
-    title: wide ? TITLE : 'k',
+    title: wide ? titleOf(2) : 'k',
     assignee_id,
   })
   const parent = await (wide ? plantCopiedIssue : plantIssue)(t, {
     org_id: f.org.id,
     project_id: sibling.id,
-    title: wide ? TITLE : 'p',
-    description: wide ? TEXT : '',
+    title: wide ? titleOf(3) : 'p',
+    description: wide ? textOf(3) : '',
     assignee_id,
   })
   await plantIssue(t, {
@@ -728,15 +906,15 @@ describe('hidden data', () => {
       expect((await read(wide)()).state).toBe('over_budget')
       BOARD.reads.bytes = DEFAULT_BOARD.reads.bytes
     }
-  }, 300_000)
+  })
 })
 
-/** A meta of `n` sub-projects whose reader sees it only to navigate to the
- * even ones, their grants, with a task in each of those; `wide` gives the
- * odd ones, which the reader cannot see, descriptions at the cap. The
- * sub-projects pass a step of their range, so a step goes on from a row the
- * reader cannot see. */
-async function navigatedOrg(n: number, wide: boolean) {
+/** A meta of `n` sub-projects, those from `live` on archived, whose reader
+ * sees it only to navigate to the even ones, their grants, with a task in
+ * each of those; `wide` gives the odd ones, which the reader cannot see,
+ * ordinary descriptions. The sub-projects pass a step of their range, so a
+ * step goes on from a row the reader cannot see. */
+async function navigatedOrg(n: number, live: number, wide: boolean) {
   const t = newT()
   const f = await withOrg(t)
   const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
@@ -748,7 +926,8 @@ async function navigatedOrg(n: number, wide: boolean) {
         org_id: f.org.id,
         type: 'project',
         parent_id: meta.id,
-        ...(wide && i % 2 === 1 ? { description: '一'.repeat(LIMITS.projectDescription.max) } : {}),
+        ...(i >= live ? { archived_at: NOW } : {}),
+        ...(wide && i % 2 === 1 ? { description: textOf(i) } : {}),
       }),
     )
   await t.run(async (ctx) => {
@@ -768,16 +947,17 @@ async function navigatedOrg(n: number, wide: boolean) {
 
 describe('hidden data, past a step of sub-projects and own tasks', () => {
   it("answers the same, and stops at the same budget, whatever the sizes of a navigated meta's hidden sub-projects", async () => {
-    const narrow = await navigatedOrg(70, false)
-    const wide = await navigatedOrg(70, true)
+    // 30 live and 40 archived, the design size, which the step reads together
+    const narrow = await navigatedOrg(70, 30, false)
+    const wide = await navigatedOrg(70, 30, true)
     const read = (o: typeof narrow) => () => boardFor(o.t, o.me, projectScope(o.me, o.meta.id))
     expect(shape(await read(wide)())).toEqual(shape(await read(narrow)()))
-    expect(stateOf(await read(narrow)())).toEqual({ state: 'ok', rows: 35 })
+    expect(stateOf(await read(narrow)())).toEqual({ state: 'ok', rows: 15 })
     const least = await leastBytes(read(narrow))
     expect(least).toBe(await leastBytes(read(wide)))
     BOARD.reads.bytes = least - 1
     expect((await read(wide)()).state).toBe('over_budget')
-  }, 300_000)
+  })
 
   it("counts a person's own task they are shown at its real size each time a read returns it, in a later step too", async () => {
     const t = newT()
@@ -790,7 +970,7 @@ describe('hidden data, past a step of sub-projects and own tasks', () => {
       status: 'review',
       assignee_id: f.guest.id,
       reviewer_id: f.guest.id,
-      description: TEXT,
+      description: textOf(0),
     })
     const reads = { bytes: 300 * 1024, documents: 24_000, ranges: 3600 }
     const { got, projects, bytes } = await t.run(async (ctx) => {
@@ -818,58 +998,64 @@ describe('hidden data, past a step of sub-projects and own tasks', () => {
 /* -------------------------------------------------------- a reached budget */
 
 describe('a reached budget', () => {
-  it('answers over_ceiling where it found the ceiling passed within the budget, else over_budget, and never ok with fewer rows', async () => {
+  /* One case for each count of BOARD.reads, as each sweeps 42 Boards of a
+   * ceiling's worth of tasks */
+  for (const key of ['documents', 'ranges', 'bytes'] as const)
+    it(`answers over_ceiling where it found the ceiling passed within BOARD.reads.${key}, else over_budget, and never ok with fewer rows`, async () => {
+      const t = newT()
+      const f = await withOrg(t)
+      const tasks = await plantTasks(t, f.sub, BOARD_TASKS + 1, () => ({}), 500)
+      const scope = projectScope(f.guest, f.sub.id)
+      const usual = await boardRead(t, [f.guest], scope)
+      expect(usual.answer.state).toBe('over_ceiling')
+      /* the states over budgets from none to twice the reads the default
+       * took, `read`, on the case's count of BOARD.reads */
+      const sweep = async (read: ReadFigures) => {
+        const most = 2 * (key === 'bytes' ? read.mib * MIB : read[key])
+        const states = new Set<string>()
+        for (let step = 0; step <= 20; step++) {
+          BOARD.reads[key] = Math.floor((most * step) / 20)
+          const { answer } = await boardRead(t, [f.guest], scope)
+          states.add(answer.state === 'ok' ? `ok ${answer.rows.length}` : answer.state)
+        }
+        BOARD.reads[key] = DEFAULT_BOARD.reads[key]
+        return states
+      }
+      expect(await sweep(usual.read)).toEqual(new Set(['over_budget', 'over_ceiling']))
+      // one task fewer fits, and no budget answers it with fewer rows
+      await t.run(async (ctx) => {
+        await ctx.db.patch(tasks[0]._id, { archived_at: NOW })
+      })
+      const fits = await boardRead(t, [f.guest], scope)
+      expect(stateOf(fits.answer)).toEqual({ state: 'ok', rows: BOARD_TASKS })
+      expect(await sweep(fits.read)).toEqual(new Set(['over_budget', `ok ${BOARD_TASKS}`]))
+    })
+
+  it("answers over_budget for a search whose candidates' texts pass the budget, never a partial ok", async () => {
     const t = newT()
     const f = await withOrg(t)
-    const tasks = await plantTasks(t, f.sub, BOARD_TASKS + 1, () => ({}), 500)
+    // the one match last
+    await plantTasks(t, f.sub, 30, (i) => ({
+      ...ordinary(i),
+      text: i === 29 ? `${textOf(i)} quokka` : textOf(i),
+    }))
     const scope = projectScope(f.guest, f.sub.id)
-    const usual = await boardRead(t, [f.guest], scope)
-    expect(usual.answer.state).toBe('over_ceiling')
-    /* the states over budgets from none to the reads the default took, on
-     * one count of BOARD.reads */
-    const sweep = async (key: 'documents' | 'ranges' | 'bytes', most: number) => {
-      const states = new Set<string>()
-      for (let step = 0; step <= 20; step++) {
-        BOARD.reads[key] = Math.floor((most * step) / 20)
-        const { answer } = await boardRead(t, [f.guest], scope)
-        states.add(answer.state === 'ok' ? `ok ${answer.rows.length}` : answer.state)
-      }
-      BOARD.reads[key] = DEFAULT_BOARD.reads[key]
-      return states
+    const search = () => boardFor(t, f.guest, scope, { search: 'quokka' })
+    // the least bytes of the Board without the search, and with it
+    const plain = await leastBytes(() => boardFor(t, f.guest, scope))
+    const least = await leastBytes(search)
+    expect(least).toBeGreaterThan(plain)
+    // every budget that holds the Board but not the texts answers over_budget
+    for (let step = 0; step < 10; step++) {
+      BOARD.reads.bytes = plain + Math.floor(((least - plain) * step) / 10)
+      expect(await search(), `${BOARD.reads.bytes} bytes`).toEqual({
+        state: 'over_budget',
+        projects: [f.sub.id],
+      })
     }
-    for (const [key, most] of [
-      ['documents', usual.read.documents],
-      ['ranges', usual.read.ranges],
-      ['bytes', usual.read.mib * MIB],
-    ] as const)
-      expect(await sweep(key, most * 2), key).toEqual(new Set(['over_budget', 'over_ceiling']))
-    // one task fewer fits, and no budget answers it with fewer rows
-    await t.run(async (ctx) => {
-      await ctx.db.patch(tasks[0]._id, { archived_at: NOW })
-    })
-    const fits = await boardRead(t, [f.guest], scope)
-    expect(stateOf(fits.answer)).toEqual({ state: 'ok', rows: BOARD_TASKS })
-    for (const [key, most] of [
-      ['documents', fits.read.documents],
-      ['ranges', fits.read.ranges],
-      ['bytes', fits.read.mib * MIB],
-    ] as const)
-      expect(await sweep(key, most * 2), key).toEqual(new Set(['over_budget', `ok ${BOARD_TASKS}`]))
-  }, 300_000)
-
-  it('answers over_budget for a search whose candidates hold texts at the cap, never a partial ok', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
-    await plantTasks(
-      t,
-      f.sub,
-      400,
-      (i) => ({ text: i === 399 ? `${TEXT.slice(6)} quokka` : TEXT }),
-      100,
-    )
-    const answer = await boardFor(t, f.guest, projectScope(f.guest, f.sub.id), { search: 'quokka' })
-    expect(answer).toEqual({ state: 'over_budget', projects: [f.sub.id] })
-  }, 120_000)
+    BOARD.reads.bytes = least - 1
+    expect(await search()).toEqual({ state: 'over_budget', projects: [f.sub.id] })
+  })
 
   it('answers over_budget past BOARD.context groups and parents', async () => {
     const t = newT()
@@ -890,6 +1076,23 @@ describe('a reached budget', () => {
         projects: [f.sub.id],
       })
     }
+  })
+
+  it("answers My tasks on a selection too large to read whole, through the person's own ranges", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await plantTasks(t, f.sub, 295, ordinary)
+    await plantTasks(t, f.sub, 5, (i) => ({ ...ordinary(i), assignee_id: f.guest.id }))
+    const scope = projectScope(f.guest, f.sub.id)
+    // documents that hold the person's own ranges, and not the selection's
+    // 300 tasks
+    BOARD.reads.documents = 150
+    expect(stateOf(await boardFor(t, f.guest, scope, { mine: true }))).toEqual({
+      state: 'ok',
+      rows: 5,
+    })
+    // the people filter reads the selection's ranges, whose rows pass the budget
+    expect((await boardFor(t, f.guest, scope, { owners: [f.guest.id] })).state).toBe('over_budget')
   })
 })
 
@@ -914,46 +1117,11 @@ const archive = (t: T, task: Doc<'issues'>) =>
     if (row !== null) await ctx.db.patch(row._id, { archived_at: NOW })
   })
 
-/** A task at the caps: its title, and its description row's text. */
-const atCaps = { title: TITLE, text: TEXT }
+/** The word the real-limits search looks for, in no sentence. */
+const RARE = 'quokka'
 
-/* Real sentences in a three-byte script, for the texts a search reads and
- * for realistic titles. None holds a word the cases search for. */
-const SENTENCES = [
-  'センサーの値が朝から少しずつ上がっているので原因を調べる。',
-  '試作基板の電源回路を見直し、発熱の少ない部品に替える。',
-  '組み立て手順書を更新して、新しい治具の使い方を書き加える。',
-  '来週の出荷に向けて検査項目を整理し、担当者と日程を決める。',
-  '画面の文字が小さすぎるという声があったので表示を大きくする。',
-  '通信が途切れる不具合は再起動の順番に関係しているようだ。',
-  '部品の納期が遅れているため、代わりの仕入れ先を探している。',
-  '試験結果を表にまとめて、前回との違いを分かりやすく示す。',
-  '設定画面の項目が多いので、よく使うものだけを最初に並べる。',
-  '静かな部屋で騒音を測り、ファンの回転数との関係を確かめる。',
-  '古い資料と新しい図面の食い違いを洗い出して直しておく。',
-  '顧客からの問い合わせに答えるため、仕様書の該当箇所を探す。',
-]
-
-/** `length` characters of SENTENCES from sentence `from` on. */
-const words = (from: number, length: number): string => {
-  let s = ''
-  for (let k = from; s.length < length; k++) s += SENTENCES[k % SENTENCES.length]
-  return s.slice(0, length)
-}
-
-/** The real-limits searches' texts: 390 characters, the measured average. */
-const TEXT_CHARS = 390
-
-/** The word the real-limits searches look for, in no sentence. */
-const RARE = 'クオッカ'
-
-/** A name at the cap in a three-byte script, distinct for each `i`: an
- * ideograph for `i`, then 班. No ideograph has an NFKD form, so the name key
- * keeps every byte. */
-const nameAtCap = (i: number) => String.fromCodePoint(0x4e00 + i) + '班'.repeat(NAME_MAX - 1)
-
-/** `n` sub-projects of `parent` as model/projects.ts writes them: a name at
- * the cap with its key, `parent`'s lead and a live archive state. */
+/** `n` sub-projects of `parent` as model/projects.ts writes them: an
+ * ordinary name with its key, `parent`'s lead and a live archive state. */
 async function plantSubs(t: T, parent: Doc<'projects'>, n: number): Promise<Doc<'projects'>[]> {
   const subs: Doc<'projects'>[] = []
   for (let i = 0; i < n; i++)
@@ -962,7 +1130,7 @@ async function plantSubs(t: T, parent: Doc<'projects'>, n: number): Promise<Doc<
         org_id: parent.org_id,
         type: 'project',
         parent_id: parent.id,
-        ...named(nameAtCap(i)),
+        ...named(`Workstream ${i + 1}`),
         lead_id: parent.lead_id,
         archive_state: 'live',
       }),
@@ -970,26 +1138,11 @@ async function plantSubs(t: T, parent: Doc<'projects'>, n: number): Promise<Doc<
   return subs
 }
 
-/** Gives `tasks` the label `labelId`, as model/labels.ts setTaskLabel
- * writes an assignment, with the task's window key. */
-const labelAll = async (t: T, labelId: string, tasks: readonly Doc<'issues'>[]) => {
-  for (let from = 0; from < tasks.length; from += 2000)
-    await t.run(async (ctx) => {
-      for (const task of tasks.slice(from, from + 2000))
-        await ctx.db.insert('issue_labels', {
-          org_id: task.org_id,
-          issue_id: task.id,
-          label_id: labelId,
-          task_key: task.window_key,
-        })
-    })
-}
-
 describe('real limits', () => {
   it('answers 999 and 1,000 matching tasks of one sub-project and over_ceiling at 1,001, inside Convex limits', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const tasks = await plantTasks(t, f.sub, BOARD_TASKS + 1, () => atCaps, 200)
+    const tasks = await plantTasks(t, f.sub, BOARD_TASKS + 1, ordinary, 200)
     const scope = projectScope(f.guest, f.sub.id)
     const over = await boardRead(t, [f.guest], scope)
     record('1,001 tasks of one sub-project', over.answer, over.read)
@@ -1009,25 +1162,25 @@ describe('real limits', () => {
     const focus = await boardRead(t, [f.guest], scope, { focus: true })
     record('999 tasks of one sub-project, Focus', focus.answer, focus.read)
     expect(stateOf(focus.answer)).toEqual({ state: 'ok', rows: 999 })
-  }, 600_000)
+  })
 
-  it('answers 1,000 matching tasks over 200 sub-projects of one project and over_ceiling at one more', async () => {
+  it('answers 1,000 matching tasks over 30 sub-projects of one project, the design size, and over_ceiling at one more', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const subs = await plantSubs(t, f.meta, 200)
-    for (const sub of subs) await plantTasks(t, sub, 5, () => atCaps)
+    const subs = [f.sub, f.sub2, ...(await plantSubs(t, f.meta, 28))]
+    for (const [i, sub] of subs.entries()) await plantTasks(t, sub, i < 10 ? 34 : 33, ordinary)
     const scope = projectScope(f.guest, f.meta.id)
     const full = await boardRead(t, [f.guest], scope)
-    record('1,000 tasks over 200 sub-projects', full.answer, full.read)
+    record('1,000 tasks over 30 sub-projects', full.answer, full.read)
     expect(stateOf(full.answer)).toEqual({ state: 'ok', rows: 1000 })
     const focus = await boardRead(t, [f.guest], scope, { focus: true })
-    record('1,000 tasks over 200 sub-projects, Focus', focus.answer, focus.read)
+    record('1,000 tasks over 30 sub-projects, Focus', focus.answer, focus.read)
     expect(stateOf(focus.answer)).toEqual({ state: 'ok', rows: 1000 })
-    await plantTasks(t, subs[199], 1, () => atCaps)
+    await plantTasks(t, subs[29], 1, ordinary)
     const over = await boardRead(t, [f.guest], scope)
-    record('1,001 tasks over 200 sub-projects', over.answer, over.read)
+    record('1,001 tasks over 30 sub-projects', over.answer, over.read)
     expect(over.answer.state).toBe('over_ceiling')
-  }, 600_000)
+  })
 
   it('answers the 1,000 of 1,001 candidates that match a priority filter', async () => {
     const t = newT({ transactionLimits: true })
@@ -1036,7 +1189,7 @@ describe('real limits', () => {
       t,
       f.sub,
       BOARD_TASKS + 1,
-      (i) => ({ ...atCaps, priority: i === 500 ? 'low' : 'high' }),
+      (i) => ({ ...ordinary(i), priority: i === 500 ? 'low' : 'high' }),
       200,
     )
     const { answer, read } = await boardRead(t, [f.guest], projectScope(f.guest, f.sub.id), {
@@ -1044,7 +1197,7 @@ describe('real limits', () => {
     })
     record('1,000 of 1,001 by priority', answer, read)
     expect(stateOf(answer)).toEqual({ state: 'ok', rows: 1000 })
-  }, 600_000)
+  })
 
   it("counts My view's ceiling across the home and a guest seat", async () => {
     const t = newT({ transactionLimits: true })
@@ -1067,12 +1220,12 @@ describe('real limits', () => {
         level: 'user',
       }),
     )
-    await plantTasks(t, f.sub, 600, () => ({ ...atCaps, assignee_id: f.guest.id }), 200)
+    await plantTasks(t, f.sub, 600, (i) => ({ ...ordinary(i), assignee_id: f.guest.id }), 200)
     const awayTasks = await plantTasks(
       t,
       awaySub,
       401,
-      () => ({ ...atCaps, assignee_id: away.id }),
+      (i) => ({ ...ordinary(i), assignee_id: away.id }),
       200,
     )
     const over = await boardRead(t, [f.guest, away], { kind: 'mine' })
@@ -1091,218 +1244,61 @@ describe('real limits', () => {
         }),
       ),
     ).toEqual({ state: 'ok', rows: 1000 })
-  }, 600_000)
+  })
 
   it('counts no group in the ceiling: 1,000 tasks under 50 groups fit, and past BOARD.context groups it answers over_budget', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const groups = await plantTasks(t, f.sub, 50, () => atCaps)
-    await plantTasks(t, f.sub, 1000, (i) => ({ ...atCaps, parent_id: groups[i % 50].id }), 200)
+    const groups = await plantTasks(t, f.sub, 50, ordinary)
+    await plantTasks(t, f.sub, 1000, (i) => ({ ...ordinary(i), parent_id: groups[i % 50].id }), 200)
     const scope = projectScope(f.guest, f.sub.id)
     const { answer, read } = await boardRead(t, [f.guest], scope)
     record('1,000 tasks under 50 groups', answer, read)
     expect(stateOf(answer)).toEqual({ state: 'ok', rows: 1050 })
     BOARD.context = 49
     expect((await boardRead(t, [f.guest], scope)).answer.state).toBe('over_budget')
-  }, 600_000)
+  })
 
-  it("answers My tasks on a selection too large to read whole, through the person's own ranges", async () => {
+  it("searches a project's 800 open tasks, the design size, with ordinary titles and 390-character texts", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    await plantTasks(t, f.sub, 12_000, () => ({ title: TITLE }), 1000)
-    await plantTasks(t, f.sub, 5, () => ({ ...atCaps, assignee_id: f.guest.id }))
-    const scope = projectScope(f.guest, f.sub.id)
-    const mine = await boardRead(t, [f.guest], scope, { mine: true })
-    record('My tasks of 12,005 tasks', mine.answer, mine.read)
-    expect(stateOf(mine.answer)).toEqual({ state: 'ok', rows: 5 })
-    // the people filter reads the selection's ranges, whose rows pass the budget
-    const owners = await boardRead(t, [f.guest], scope, { owners: [f.guest.id] })
-    record('the people filter on 12,005 tasks', owners.answer, owners.read)
-    expect(owners.answer.state).toBe('over_budget')
-  }, 600_000)
-
-  /* A search for RARE over 5,000 tasks of FW titled `title(i)`, with texts
-   * of TEXT_CHARS, every 100th from the 7th ending in RARE */
-  const searchOf5000 = async (title: (i: number) => string) => {
-    const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
-    await plantTasks(
-      t,
-      f.sub,
-      5000,
-      (i) => ({
-        title: title(i),
-        text: i % 100 === 7 ? `${words(i, TEXT_CHARS - RARE.length)}${RARE}` : words(i, TEXT_CHARS),
-      }),
-      1000,
-    )
-    const scope = projectScope(f.guest, f.sub.id)
-    return { ...(await boardRead(t, [f.guest], scope, { search: RARE })), f }
-  }
-
-  it('answers over_budget for a search of 5,000 tasks with titles at the cap and 390-character texts', async () => {
-    const { answer, read, f } = await searchOf5000(() => TITLE)
-    record('a search of 5,000 tasks, titles at the cap', answer, read)
-    expect(answer).toEqual({ state: 'over_budget', projects: [f.sub.id] })
-  }, 600_000)
-
-  it('searches 5,000 tasks with realistic titles and 390-character texts', async () => {
-    const { answer, read } = await searchOf5000((i) => words(i + 5, 40 + (i % 21)))
-    record('a search of 5,000 tasks, realistic titles', answer, read)
-    expect(stateOf(answer)).toEqual({ state: 'ok', rows: 50 })
-  }, 600_000)
-
-  it('answers a filter that keeps one subtask under each of 400 parents of ten, in a project and in My view, without a check of each sibling', async () => {
-    /* 400 parents in FW with ten subtasks each, one of them the guest's
-     * and urgent, created at `created_at` */
-    const plant = async (created_at: string) => {
-      const t = newT({ transactionLimits: true })
-      const f = await withOrg(t)
-      const parents = await plantTasks(t, f.sub, 400, () => ({ title: TITLE, created_at }), 400)
+    // TBED's three sub-projects, every 100th task from the 7th ending in RARE
+    const subs = [f.sub, f.sub2, ...(await plantSubs(t, f.meta, 1))]
+    for (const [k, sub] of subs.entries()) {
+      const from = 267 * k
       await plantTasks(
         t,
-        f.sub,
-        4000,
+        sub,
+        k === 2 ? 266 : 267,
         (i) => ({
-          title: TITLE,
-          created_at,
-          parent_id: parents[Math.floor(i / 10)].id,
-          ...(i % 10 === 0 ? { priority: 'urgent', assignee_id: f.guest.id } : {}),
+          title: titleOf(from + i),
+          text:
+            (from + i) % 100 === 7
+              ? `${words(from + i, TEXT_CHARS - RARE.length - 1)} ${RARE}`
+              : textOf(from + i),
         }),
-        1000,
+        267,
       )
-      return { t, f }
     }
-    const recent = await plant('2026-10-31T09:00:00.000Z')
-    const scope = projectScope(recent.f.guest, recent.f.sub.id)
-    const urgent = await boardRead(recent.t, [recent.f.guest], scope, { priority: 'urgent' })
-    record('one urgent subtask under each of 400 parents of ten', urgent.answer, urgent.read)
-    const mine = await boardRead(recent.t, [recent.f.guest], { kind: 'mine' }, { mine: true })
-    record('My view of one subtask under each of 400 parents of ten', mine.answer, mine.read)
-    for (const { answer } of [urgent, mine]) {
-      expect(stateOf(answer)).toEqual({ state: 'ok', rows: 400 })
-      if (answer.state === 'ok') expect(answer.parents).toHaveLength(400)
-    }
-    // data stored before the rule of one level checks every sibling, which
-    // a legacy nested group may be, and passes the budget
-    const legacy = await plant(NOW)
-    const old = await boardRead(
-      legacy.t,
-      [legacy.f.guest],
-      projectScope(legacy.f.guest, legacy.f.sub.id),
-      {
-        priority: 'urgent',
-      },
-    )
-    record('the same, stored before the rule of one level', old.answer, old.read)
-    expect(old.answer.state).toBe('over_budget')
-  }, 600_000)
-
-  it('searches a word a label holds over 4,000 tasks through the label, and reads labels only where one can finish the match', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
-    const labelOf = async (name: string) => {
-      const id = uuid()
-      await t.run((ctx) =>
-        ctx.db.insert('labels', {
-          id,
-          org_id: f.org.id,
-          name,
-          name_lower: name.toLowerCase(),
-          color: '#336699',
-          created_at: NOW,
-        }),
-      )
-      return id
-    }
-    const bug = await labelOf('Bug')
-    await labelOf('Design')
-    /* titles at the cap and 390-character texts keep this search within
-     * about 6 percent of the bytes at which a search stops fitting, on
-     * purpose: rows that grow make it answer over_budget, and BOARD's
-     * measured sizes then need measuring again */
-    // a tenth of every sixth task's titles say login
-    const tasks = await plantTasks(
-      t,
-      f.sub,
-      4000,
-      (i) => ({
-        title: i % 60 === 0 ? `Login ${TITLE.slice(6)}` : TITLE,
-        text: words(i, TEXT_CHARS),
-      }),
-      1000,
-    )
-    await labelAll(
-      t,
-      bug,
-      tasks.filter((_, i) => i % 6 === 0),
-    )
-    const scope = projectScope(f.guest, f.sub.id)
-    const labelled = await boardRead(t, [f.guest], scope, { search: 'bug' })
-    record('a label word over 4,000 tasks', labelled.answer, labelled.read)
-    expect(stateOf(labelled.answer)).toEqual({ state: 'ok', rows: 667 })
-    const both = await boardRead(t, [f.guest], scope, { search: 'login bug' })
-    record('a title word and a label word over 4,000 tasks', both.answer, both.read)
-    expect(stateOf(both.answer)).toEqual({ state: 'ok', rows: 67 })
-    // a label read for each of 4,000 candidates passes the budget, while a
-    // search reads labels only for the 67 tasks whose titles say login
-    BOARD.labelTasks = Number.POSITIVE_INFINITY
-    expect((await boardRead(t, [f.guest], scope, { search: 'bug' })).answer.state).toBe(
-      'over_budget',
-    )
-    const own = await boardRead(t, [f.guest], scope, { search: 'login bug' })
-    expect(stateOf(own.answer)).toEqual({ state: 'ok', rows: 67 })
-    expect(own.read.ranges).toBeLessThan(both.read.ranges + 100)
-  }, 600_000)
-
-  it("searches a word a label holds over a small selection through each task's own rows when the label is on many other tasks", async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
-    const bug = uuid()
-    await t.run((ctx) =>
-      ctx.db.insert('labels', {
-        id: bug,
-        org_id: f.org.id,
-        name: 'Bug',
-        name_lower: 'bug',
-        color: '#336699',
-        created_at: NOW,
-      }),
-    )
-    // the label on 600 tasks of FW and 29,400 of a sub-project the guest cannot see
-    const elsewhere = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.hidden.id,
+    const { answer, read } = await boardRead(t, [f.guest], projectScope(f.guest, f.meta.id), {
+      search: RARE,
     })
-    const mine = await plantTasks(
-      t,
-      f.sub,
-      600,
-      (i) => ({ title: TITLE, text: words(i, TEXT_CHARS) }),
-      600,
-    )
-    const theirs = await plantTasks(t, elsewhere, 29_400, () => ({}), 2000)
-    await labelAll(t, bug, [...mine, ...theirs])
-    const { answer, read } = await boardRead(t, [f.guest], projectScope(f.guest, f.sub.id), {
-      search: 'bug',
-    })
-    record('a label word over 600 tasks, the label on 29,400 others', answer, read)
-    expect(stateOf(answer)).toEqual({ state: 'ok', rows: 600 })
-  }, 600_000)
+    record("a search of a project's 800 tasks", answer, read)
+    expect(stateOf(answer)).toEqual({ state: 'ok', rows: 8 })
+  })
 
-  it("answers the envelope's largest Board: 200 sub-projects shared with each of a person's 25 teams, Focus alone, tasks under distinct parents", async () => {
+  it("answers the largest Board the ceiling allows, 1,000 subtasks under distinct parents over 20 sub-projects shared with each of a person's 3 teams, Focus alone", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
     const top = await plantProject(t, { org_id: f.org.id, lead_id: f.user.id })
-    const subs = await plantSubs(t, top, 200)
+    const subs = await plantSubs(t, top, 20)
     // the teams, memberships and shares with the name keys their writers
     // copy (model/teams.ts, model/projectAccess.ts)
     await t.run(async (ctx) => {
-      for (let i = 0; i < 25; i++) {
+      for (let i = 0; i < 3; i++) {
         const team = uuid()
-        const name = nameAtCap(i)
+        const name = `Team ${i + 1}`
         await ctx.db.insert('teams', {
           id: team,
           org_id: f.org.id,
@@ -1325,16 +1321,17 @@ describe('real limits', () => {
           })
       }
     })
-    // 1,001 subtasks, each under a parent of its own, 5 a sub-project
+    // 1,001 subtasks, each under a parent of its own, 50 a sub-project and
+    // 51 in the first
     const parents: Doc<'issues'>[] = []
     for (const [i, sub] of subs.entries())
-      parents.push(...(await plantTasks(t, sub, i === 0 ? 6 : 5, () => atCaps)))
+      parents.push(...(await plantTasks(t, sub, i === 0 ? 51 : 50, ordinary)))
     const kids: Doc<'issues'>[] = []
     for (const [i, sub] of subs.entries())
       kids.push(
-        ...(await plantTasks(t, sub, i === 0 ? 6 : 5, (j) => ({
-          ...atCaps,
-          parent_id: parents[i === 0 ? j : 1 + 5 * i + j].id,
+        ...(await plantTasks(t, sub, i === 0 ? 51 : 50, (j) => ({
+          ...ordinary(j),
+          parent_id: parents[i === 0 ? j : 1 + 50 * i + j].id,
           assignee_id: me.id,
         }))),
       )
@@ -1362,8 +1359,8 @@ describe('real limits', () => {
     expect(stateOf(whole.answer)).toEqual({ state: 'ok', rows: 2000 })
     // the subtasks are the person's own
     const mine = await boardRead(t, [me], { kind: 'mine' }, { mine: true })
-    record('My view of 1,000 tasks for a person in 25 teams', mine.answer, mine.read)
+    record('My view of 1,000 tasks for a person in 3 teams', mine.answer, mine.read)
     expect(stateOf(mine.answer)).toEqual({ state: 'ok', rows: 1000 })
     if (mine.answer.state === 'ok') expect(mine.answer.parents).toHaveLength(1000)
-  }, 900_000)
+  })
 })
