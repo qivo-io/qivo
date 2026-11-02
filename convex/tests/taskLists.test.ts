@@ -24,10 +24,9 @@ import {
   cursorAfter,
   parseArchiveCursor,
 } from '../lib/archivedTasks'
-import { ARCHIVED_TOO_WIDE, SUBTREE_WALK, TASK_READ_RESERVE } from '../lib/core'
+import { ARCHIVED_TOO_WIDE, COMPLETION_READS, SUBTREE_WALK, TASK_READ_RESERVE } from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import { TEXT_MAX } from '../lib/limits'
 import { getIssue } from '../machine/rest'
 import {
   expectRefusal,
@@ -201,11 +200,12 @@ describe('active task lists read active tasks only', () => {
     })
   })
 
-  it('lists one project’s tasks and counts its completion in an organization with 4,100 active projects, and fails the rest safely', async () => {
+  it('lists one project’s tasks and counts its completion past the ranges a page and a completion read, and fails the rest safely', async () => {
     const fx = await setup(newT({ transactionLimits: true }))
-    // empty sub-projects of TBED, more than one index range each can afford
+    // empty sub-projects of TBED, 30 with FW and PCB, the most one project
+    // holds at the design size
     await fx.t.run(async (ctx) => {
-      for (let i = 0; i < 4100; i++) {
+      for (let i = 0; i < 28; i++) {
         await ctx.db.insert('projects', {
           id: uuid(),
           org_id: fx.org.id,
@@ -222,37 +222,50 @@ describe('active task lists read active tasks only', () => {
       }
     })
     const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    // more projects than a page opens side by side, past the testing
-    // envelope, is refused with the sentence that says to name a project
-    await refused(
-      restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }),
-      'bad_request',
-      TASK_LIST_UNREADABLE,
-    )
-    const rest = await restPage(fx.t, {
-      callerId: fx.agent.id,
-      access: 'read',
-      project: 'FW',
-      limit: '1',
-    })
-    expect(rest).toEqual({ next_cursor: null, tasks: [expect.objectContaining({ id: task.id })] })
-    const mcp = await mcpPage(fx.t, {
-      callerId: fx.agent.id,
-      access: 'read',
-      project: 'FW',
-      limit: 1,
-    })
-    expect(mcp.tasks.map((row) => row.id)).toEqual([task.id])
-    expect(mcp.next_cursor).toBeNull()
-    const project = await fx.t.query(internal.machine.rest.getProject, {
-      callerId: fx.agent.id,
-      access: 'read',
-      ref: 'FW',
-    })
-    // FW's family has more live projects than its budget reads, so the
-    // completion counts FW's own task by a check of its subtasks instead
-    expect(project.completion).toEqual({ status: 'ok', done: 0, total: 1, percent: 0 })
-  }, 60_000)
+    // a page's rows and a completion lowered to about ten ranges, fewer than
+    // the family's projects, as thousands of projects pass the real ones
+    const completion = structuredClone(COMPLETION_READS)
+    Object.assign(COMPLETION_READS, { ranges: 10 })
+    try {
+      await lowered({ page: { ranges: ACTIVE_PAGE.delays.ranges + 10 } }, async () => {
+        // more projects than a page opens side by side is refused with the
+        // sentence that says to name a project
+        await refused(
+          restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }),
+          'bad_request',
+          TASK_LIST_UNREADABLE,
+        )
+        const rest = await restPage(fx.t, {
+          callerId: fx.agent.id,
+          access: 'read',
+          project: 'FW',
+          limit: '1',
+        })
+        expect(rest).toEqual({
+          next_cursor: null,
+          tasks: [expect.objectContaining({ id: task.id })],
+        })
+        const mcp = await mcpPage(fx.t, {
+          callerId: fx.agent.id,
+          access: 'read',
+          project: 'FW',
+          limit: 1,
+        })
+        expect(mcp.tasks.map((row) => row.id)).toEqual([task.id])
+        expect(mcp.next_cursor).toBeNull()
+        const project = await fx.t.query(internal.machine.rest.getProject, {
+          callerId: fx.agent.id,
+          access: 'read',
+          ref: 'FW',
+        })
+        // FW's family has more live projects than its budget reads, so the
+        // completion counts FW's own task by a check of its subtasks instead
+        expect(project.completion).toEqual({ status: 'ok', done: 0, total: 1, percent: 0 })
+      })
+    } finally {
+      Object.assign(COMPLETION_READS, completion)
+    }
+  })
 
   it('ends a page whose parents in an archived project fill its budget early, and the next goes on', async () => {
     const fx = await setup(newT({ transactionLimits: { documentsRead: 120 } }))
@@ -1140,8 +1153,8 @@ describe('archived task lists page one project with a cursor', () => {
   })
 
   it('refuses a scope too wide to open project by project, which only an admin reads whole', async () => {
-    const fx = await setup(newT({ transactionLimits: { bytesRead: 400 << 10 } }))
-    ARCHIVE_RESERVE.bytes = 64 << 10
+    const fx = await setup(newT({ transactionLimits: { bytesRead: 100 << 10 } }))
+    ARCHIVE_RESERVE.bytes = 16 << 10
     const subs = [fx.sub.id, fx.sub2.id]
     for (let i = 0; i < 10; i++) {
       const sub = await plantProject(fx.t, {
@@ -1152,7 +1165,7 @@ describe('archived task lists page one project with a cursor', () => {
       })
       subs.push(sub.id)
     }
-    // one 40 KB task per sub-project, 480 KB in all, a day apart, its text
+    // one 10 KB task per sub-project, 120 KB in all, a day apart, its text
     // in the task row too, as until the description backfill's clear
     const tasks = []
     for (const [i, project_id] of subs.entries()) {
@@ -1161,7 +1174,7 @@ describe('archived task lists page one project with a cursor', () => {
           org_id: fx.org.id,
           project_id,
           archived_at: day(10 + i),
-          description: 'x'.repeat(40_000),
+          description: 'x'.repeat(10_000),
         }),
       )
     }
@@ -1169,7 +1182,7 @@ describe('archived task lists page one project with a cursor', () => {
     for (let i = 0; i < 3; i++) {
       await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.hidden.id, archived_at: day(11) })
     }
-    // the whole page fits seven of the 40 KB tasks side by side, not twelve,
+    // the whole page fits seven of the 10 KB tasks side by side, not twelve,
     // so the agent, who may not read the organization's archive, is refused
     for (const surface of ['rest', 'mcp'] as const)
       await refused(
@@ -1385,8 +1398,10 @@ describe('archived task lists page one project with a cursor', () => {
 
 describe('a single-task read of an archived group', () => {
   const reserve = { ...TASK_READ_RESERVE }
+  const walk = SUBTREE_WALK.reads
   afterEach(() => {
     Object.assign(TASK_READ_RESERVE, reserve)
+    SUBTREE_WALK.reads = walk
   })
 
   /* REST GET /v1/tasks/{ref} and MCP get_task of `ref` as the agent. */
@@ -1400,23 +1415,21 @@ describe('a single-task read of an archived group', () => {
     return { rest, mcp }
   }
 
-  it('walks more subtasks than SUBTREE_WALK in an organization whose archive passes 16 MiB', async () => {
-    const fx = await setup(newT({ transactionLimits: true }))
-    // 1,700 archived tasks of 10 KB elsewhere, written a few hundred at a time
-    for (let i = 0; i < 5; i++) {
-      await plantMany(fx, 340, {
-        project_id: fx.sub2.id,
-        archived_at: day(1),
-        description: 'x'.repeat(10_000),
-      })
-    }
+  it('walks more subtasks than SUBTREE_WALK in an organization whose archive passes what a request may read', async () => {
+    const fx = await setup(newT({ transactionLimits: { documentsRead: 400 } }))
+    SUBTREE_WALK.reads = 2
+    Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
+    // 500 archived tasks elsewhere, more documents than the request may read
+    await plantMany(fx, 500, { project_id: fx.sub2.id, archived_at: day(1) })
     const group = await plantIssue(fx.t, {
       org_id: fx.org.id,
       project_id: fx.sub.id,
       archived_at: day(9),
       title: 'Group',
     })
-    const kids = await plantMany(fx, 1200, {
+    // twelve subtasks take the walk past its two reads, where an active
+    // group's read turns to the organization's active tasks
+    const kids = await plantMany(fx, 12, {
       project_id: fx.sub.id,
       archived_at: day(9),
       parent_id: group.id,
@@ -1430,15 +1443,13 @@ describe('a single-task read of an archived group', () => {
       is_group: true,
       start_week: '2026-03-02',
       end_week: '2026-03-09',
-      progress: { done: 0, total: 1200, percent: 0, partial: false },
-      group_remaining_hours: 1200,
+      progress: { done: 0, total: 12, percent: 0, partial: false },
+      group_remaining_hours: 12,
     })
     expect(rest.subtasks.map((t) => t.id)).toEqual(kids)
-    expect(mcp).toMatchObject({ is_group: true, group_remaining_hours: 1200 })
-    expect((mcp.subtasks as unknown[]).length).toBe(1200)
-    // The archive must pass 16 MiB, so the fixture cannot shrink; planting it
-    // takes longer than the default timeout on a busy machine.
-  }, 60_000)
+    expect(mcp).toMatchObject({ is_group: true, group_remaining_hours: 12 })
+    expect((mcp.subtasks as unknown[]).length).toBe(12)
+  })
 
   it('lists the subtasks of a group too large to walk, without its plan weeks, progress or hours', async () => {
     const fx = await setup(newT({ transactionLimits: { documentsRead: 400 } }))
@@ -1576,8 +1587,8 @@ describe('a single-task read of an archived group', () => {
     expect(rest.subtasks).toHaveLength(100)
   })
 
-  it('reads a group whose subtasks span 150 sub-projects without checking each one alone', async () => {
-    const fx = await setup(newT({ transactionLimits: { databaseQueries: 400 } }))
+  it('reads a group whose subtasks span 30 sub-projects without checking each one alone', async () => {
+    const fx = await setup(newT({ transactionLimits: { databaseQueries: 100 } }))
     Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
     const group = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -1585,25 +1596,27 @@ describe('a single-task read of an archived group', () => {
       archived_at: day(9),
       title: 'Group',
     })
-    // one archived subtask in each of 150 sub-projects of TBED, which the
+    // one archived subtask in each of TBED's 30 sub-projects, FW, PCB and
+    // 28 more, the most one project holds at the design size, which the
     // agent reads through its grant on TBED
     const kids = await fx.t.run(async (ctx) => {
       const ids: string[] = []
-      for (let i = 0; i < 150; i++) {
-        const project_id = uuid()
-        await ctx.db.insert('projects', {
-          id: project_id,
-          org_id: fx.org.id,
-          type: 'project',
-          parent_id: fx.meta.id,
-          key: `W${i}`,
-          name: `Wide ${i}`,
-          description: '',
-          sort_order: 500 + i,
-          num: 500 + i,
-          track_delay: false,
-          created_at: NOW,
-        })
+      for (let i = 0; i < 30; i++) {
+        const project_id = i === 0 ? fx.sub.id : i === 1 ? fx.sub2.id : uuid()
+        if (i > 1)
+          await ctx.db.insert('projects', {
+            id: project_id,
+            org_id: fx.org.id,
+            type: 'project',
+            parent_id: fx.meta.id,
+            key: `W${i}`,
+            name: `Wide ${i}`,
+            description: '',
+            sort_order: 500 + i,
+            num: 500 + i,
+            track_delay: false,
+            created_at: NOW,
+          })
         const id = uuid()
         await ctx.db.insert('issues', {
           id,
@@ -1627,10 +1640,10 @@ describe('a single-task read of an archived group', () => {
     const { rest, mcp } = await reads(fx, group.id)
     expect(rest).toMatchObject({
       is_group: true,
-      progress: { done: 150, total: 150, percent: 100, partial: false },
+      progress: { done: 30, total: 30, percent: 100, partial: false },
     })
     expect(new Set(rest.subtasks.map((t) => t.id))).toEqual(new Set(kids))
-    expect((mcp.subtasks as unknown[]).length).toBe(150)
+    expect((mcp.subtasks as unknown[]).length).toBe(30)
   })
 
   it('lists the first subtasks of a group whose own subtasks do not fit, and says there are more', async () => {
@@ -1704,25 +1717,27 @@ describe('a single-task read of an archived group', () => {
     expect(one.subtasks.map((t) => t.id)).toEqual(only)
   })
 
-  it('reads and archives a group of hundreds of long subtasks within the real limits', async () => {
-    const fx = await setup(newT({ transactionLimits: true }))
+  it('reads and archives a group whose long subtasks pass what a request may read', async () => {
+    // a request may read 3 MiB, room for the archive's patch of each active
+    // subtask, which needs two rows at Convex's document size limit, and
+    // the walk keeps 1 MiB of it back for the reads after it
+    const fx = await setup(newT({ transactionLimits: { bytesRead: 3 << 20 } }))
+    TASK_READ_RESERVE.bytes = 1 << 20
     const group = await plantIssue(fx.t, {
       org_id: fx.org.id,
       project_id: fx.sub.id,
       title: 'Long group',
     })
-    // 100 active and 200 archived subtasks with the longest descriptions,
-    // about 60 KB each and 18 MB in all, written a hundred at a time
-    const long = 'あ'.repeat(TEXT_MAX)
-    await plantMany(fx, 100, { project_id: fx.sub.id, parent_id: group.id, description: long })
-    for (let i = 0; i < 2; i++) {
-      await plantMany(fx, 100, {
-        project_id: fx.sub.id,
-        parent_id: group.id,
-        archived_at: day(9),
-        description: long,
-      })
-    }
+    // 30 active and 300 archived subtasks of 10 KB, 3.3 MB in all, more
+    // than the request may read
+    const long = 'x'.repeat(10_000)
+    await plantMany(fx, 30, { project_id: fx.sub.id, parent_id: group.id, description: long })
+    await plantMany(fx, 300, {
+      project_id: fx.sub.id,
+      parent_id: group.id,
+      archived_at: day(9),
+      description: long,
+    })
     const answer = await fx.t.mutation(internal.machine.rest.updateIssue, {
       callerId: fx.agent.id,
       access: 'write',
@@ -1740,7 +1755,7 @@ describe('a single-task read of an archived group', () => {
         has_more_subtasks: true,
         progress: { total: 0, partial: true },
       })
-      expect((read.subtasks as unknown[]).length).toBeLessThan(300)
+      expect((read.subtasks as unknown[]).length).toBeLessThan(330)
     }
-  }, 120_000)
+  })
 })
