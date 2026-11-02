@@ -405,10 +405,11 @@ type Need = 'group' | 'name' | 'text' | 'labels'
  * read once; its text; and the names of its labels that hold a piece of the
  * search. Only the tasks that match get their group check, so a search over
  * thousands of tasks does not read a range each for them. Texts come before
- * labels, the reverse of lib/core.ts searchedTexts, because a Board reads a
- * task's labels through its own rows, a range a task, where many texts come
- * many to a range; lib/archivedTasks.ts archivedTaskMatcher reads them in
- * the same order.
+ * labels, the reverse of the REST and MCP active lists' search
+ * (lib/activeTaskPage.ts searchRule), because a Board reads a task's labels
+ * through its own rows, a range a task, where many texts come many to a
+ * range; lib/archivedTasks.ts archivedTaskMatcher reads them in the same
+ * order.
  */
 function boardRead(
   ctx: QueryCtx,
