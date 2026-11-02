@@ -369,7 +369,7 @@ describe('Northstar', () => {
         )
     }
     expect(held).toBeGreaterThan(0)
-  }, 600_000)
+  })
 })
 
 // ----------------------------------------------------------- access shapes
@@ -529,7 +529,7 @@ async function compareShape(
 describe('access shapes', () => {
   it('answers what the store derives for the admin', async () => {
     expect(await compareShape(null, 'admin')).toBeGreaterThan(0)
-  }, 120_000)
+  })
 
   for (const role of ['user', 'guest', 'viewer'] as const)
     it(`answers what the store derives for a ${role} in every shape`, async () => {
@@ -537,7 +537,7 @@ describe('access shapes', () => {
       for (const shape of SHAPES) if ((await compareShape(shape, role)) > 0) showing++
       // a guest takes no team shares, so fewer shapes show them anything
       expect(showing).toBeGreaterThan(SHAPES.length / 3)
-    }, 900_000)
+    })
 })
 
 // ------------------------------------------------- the rules that must hold
@@ -561,13 +561,13 @@ describe('rules a drift would break', () => {
   it("differs from a rule that counts a group's own pause", async () => {
     const { scoped, counts } = await adminCase()
     expect(scoped.filter((it) => it.paused).length).not.toBe(counts.paused)
-  }, 120_000)
+  })
 
   it("differs from a rule that takes a group's done state from its stored status", async () => {
     const { P, scoped, summary } = await adminCase()
     const drifted = scoped.filter((it) => it.status !== 'done' && it.due && it.due < P.TODAY_ISO)
     expect(summary.overdue).not.toEqual({ state: 'ok', count: drifted.length })
-  }, 120_000)
+  })
 
   it('places an instant in the last hour of a fall-back week in that week', async () => {
     const t = newT()
@@ -607,7 +607,7 @@ describe('rules a drift would break', () => {
     if (local.state !== 'ok' || drifted.state !== 'ok')
       throw new Error(JSON.stringify([local, drifted]))
     expect(drifted.projected).not.toEqual(local.projected)
-  }, 120_000)
+  })
 
   it('differs from a server that places remaining_set_at in its UTC week', async () => {
     const { t, f, P, scope } = await adminCase()
@@ -615,5 +615,5 @@ describe('rules a drift would break', () => {
     const utc = await as(t, f.admin).query(api.overview.risk, { scope, ...utcDays(P) })
     if (local.state !== 'ok' || utc.state !== 'ok') throw new Error(JSON.stringify([local, utc]))
     expect(utc.projected).not.toEqual(local.projected)
-  }, 120_000)
+  })
 })
