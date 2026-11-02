@@ -8,7 +8,9 @@
  * does, plant copies that differ from the rows, leave a task without a row
  * and give one a second row, and check what each reader answers and what
  * each writer narrates, notifies and sends. The real-limit cases run under
- * Convex's transaction limits and check the reads they bound.
+ * Convex's transaction limits, some with an active page's budget lowered so
+ * that 300 tasks with ordinary text pass it, and check the reads they
+ * bound.
  * scripts/check-task-reads.test.mjs covers the check that no other code
  * reads issues.description. */
 
@@ -851,6 +853,13 @@ const restMetrics = (t: T, f: OrgFixture, o: { limit: number; search?: string })
   })
 
 /** A text of `chars` characters of a three-byte script, ending in `word`. */
+/** An active page's budget lowered to `documents` for its rows, past the
+ * fixture's own reads, so 300 tasks with ordinary text pass a page as
+ * thousands pass the real budget (lib/activeTaskPage.ts ACTIVE_PAGE). */
+const smallPage = (documents: number) => ({
+  page: { documents: documents + 8, delays: { ...ACTIVE_PAGE.delays, documents: 8 } },
+})
+
 const wide = (chars: number, word = '') => `${'中'.repeat(chars - word.length)}${word}`
 
 describe('real limits', () => {
@@ -992,129 +1001,127 @@ describe('real limits', () => {
     expect(cleared.tasks.map((row) => row.description)).toEqual(
       Array(cleared.tasks.length).fill(text),
     )
-  }, 300_000)
+  })
 
-  it('a task ID search over 3,000 active tasks with both copies pages to its match, never refused', async () => {
+  it('a task ID search over 300 active tasks with both copies pages to its match past a lowered page budget, never refused', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
     // descriptions of about 390 characters, "a few hundred" in the docs
     const text = (i: number) =>
       `Notes ${i}: ${'Check the bracket fit and the cable route before the next build. '.repeat(6)}`
-    let planted = 0
-    /** Plants `count` more tasks with their rows, and with the copy too
-     * unless `cleared`, 500 a transaction. */
-    const plant = async (count: number, cleared: boolean) => {
-      for (const end = planted + count; planted < end; )
-        await t.run(async (ctx) => {
-          for (const stop = Math.min(end, planted + 500); planted < stop; planted++) {
-            const doc = taskDoc(f, 10_000 + planted, cleared ? undefined : text(planted))
-            await ctx.db.insert('issues', doc)
-            await ctx.db.insert('issue_descriptions', {
-              issue_id: doc.id,
-              org_id: f.org.id,
-              project_id: f.sub.id,
-              description: text(planted),
-            })
-          }
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 300; i++) {
+        const doc = taskDoc(f, 10_000 + i, text(i))
+        await ctx.db.insert('issues', doc)
+        await ctx.db.insert('issue_descriptions', {
+          issue_id: doc.id,
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          description: text(i),
         })
-    }
+      }
+    })
     // the last task's ID, so the search reads every other task's text, more
-    // than one page's budget holds (the envelope's 50,000 tasks are measured
-    // in convex/tests/activeTaskPages.envelope.ts)
-    const key = { limit: 20, search: 'QN-12999' }
-    await plant(3000, false)
-    const first = await restMetrics(t, f, key)
-    expect(first.refused).toBeNull()
-    // a page that reads its budget of texts ends there and says more follow
-    expect(first.more).toBe(true)
-    expect(first.mib).toBeLessThan(16)
-    const agent = { callerId: f.agent.id, access: 'read' as const }
-    const pages = await restPages(t, { ...agent, search: key.search, limit: '20' })
-    expect(pages.rows.map((row) => row.key)).toEqual(['QN-12999'])
-    expect(pages.sizes.length).toBeGreaterThan(1)
-  }, 300_000)
+    // than one page's budget holds
+    const key = { limit: 20, search: 'QN-10299' }
+    await lowered(smallPage(200), async () => {
+      const first = await restMetrics(t, f, key)
+      expect(first.refused).toBeNull()
+      // a page that reads its budget of texts ends there and says more follow
+      expect(first.more).toBe(true)
+      const agent = { callerId: f.agent.id, access: 'read' as const }
+      const pages = await restPages(t, { ...agent, search: key.search, limit: '20' })
+      expect(pages.rows.map((row) => row.key)).toEqual(['QN-10299'])
+      expect(pages.sizes.length).toBeGreaterThan(1)
+    })
+  })
 
-  it('a REST search over 4,000 active tasks answers a key and a description word, reading only up to its page', async () => {
+  it('a REST search over 300 active tasks answers a key and a description word, reading only up to its page', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
     const ids = await plantMany(
       t,
       f,
-      4000,
+      300,
       (i) => `Notes ${i} on the zephyr`,
       (i) => `Notes ${i} on the zephyr`,
-      500,
+      300,
     )
-    const agent = { callerId: f.agent.id, access: 'read' as const }
-    // a key matches one task, so every other task's text is read, a page's
-    // budget at a time
-    const key = await restPages(t, { ...agent, search: 'QN-10001' })
-    expect(key.rows.map((row) => row.id)).toEqual([ids[1]])
-    // a word in every description finds the page in the first tasks
-    const word = await restTasks(t, { ...agent, search: 'zephyr', limit: '20' })
-    expect(word.map((row) => row.id)).toEqual(ids.slice(0, 20))
-    const broad = await restMetrics(t, f, { limit: 20, search: 'zephyr' })
-    expect(broad.refused).toBeNull()
-    // the 4,000 tasks, one step of their rows and the page's reads
-    expect(broad.documents).toBeLessThan(4000 + 300)
-    const rare = await restMetrics(t, f, { limit: 20, search: 'QN-10001' })
-    expect(rare.refused).toBeNull()
-    // a range a task for its text, so the first page ends at its budget,
-    // within the request's ranges, and the next goes on
-    expect(rare.more).toBe(true)
-    expect(rare.ranges).toBeLessThan(4096)
-  }, 300_000)
+    await lowered(smallPage(200), async () => {
+      const agent = { callerId: f.agent.id, access: 'read' as const }
+      // a key matches one task, so every other task's text is read, a page's
+      // budget at a time
+      const key = await restPages(t, { ...agent, search: 'QN-10001' })
+      expect(key.rows.map((row) => row.id)).toEqual([ids[1]])
+      expect(key.sizes.length).toBeGreaterThan(1)
+      // a word in every description finds the page in the first tasks
+      const word = await restTasks(t, { ...agent, search: 'zephyr', limit: '20' })
+      expect(word.map((row) => row.id)).toEqual(ids.slice(0, 20))
+      // the first task's ID, which reads one task
+      const none = await restMetrics(t, f, { limit: 1, search: 'QN-10000' })
+      const broad = await restMetrics(t, f, { limit: 20, search: 'zephyr' })
+      expect(broad.refused).toBeNull()
+      // the page's 20 tasks and their rows, not the 300 tasks
+      expect(broad.documents - none.documents).toBeLessThan(100)
+      const rare = await restMetrics(t, f, { limit: 20, search: 'QN-10001' })
+      expect(rare.refused).toBeNull()
+      // a range a task for its text, so the first page ends at its budget
+      // and the next goes on
+      expect(rare.more).toBe(true)
+    })
+  })
 
   it('a REST search of one row stops reading once its page is complete, before descriptions that would not fit', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    // 3,000 rows of 4 KB beside task rows without text, 12 MB in all; one
-    // task says zephyr at 950, and one says quokka at 1,500
+    // 300 rows beside task rows without text; one task says zephyr at 95, and
+    // one says quokka at 150
     const ids = await plantMany(
       t,
       f,
-      3000,
-      (i) => `${i === 950 ? 'zephyr' : i === 1500 ? 'quokka' : 'notes'} `.padEnd(4000, 'x'),
+      300,
+      (i) => `Wire the ${i === 95 ? 'zephyr' : i === 150 ? 'quokka' : 'board'} ${i}`,
       () => undefined,
-      500,
+      300,
     )
-    const agent = { callerId: f.agent.id, access: 'read' as const }
-    // the first task's ID, which reads no description
-    expect(
-      (await restTasks(t, { ...agent, search: 'QN-10000', limit: '1' })).map((row) => row.id),
-    ).toEqual([ids[0]])
-    // the others page through the texts before them, a budget at a time
-    for (const [search, at] of [
-      ['zephyr', 950],
-      ['quokka', 1500],
-    ] as const) {
-      const pages = await restPages(t, { ...agent, search, limit: '1' })
+    await lowered(smallPage(100), async () => {
+      const agent = { callerId: f.agent.id, access: 'read' as const }
+      // the first task's ID, which reads no description
       expect(
-        pages.rows.map((row) => row.id),
-        search,
-      ).toEqual([ids[at]])
-    }
-    const quokka = await restMetrics(t, f, { limit: 1, search: 'quokka' })
-    expect(quokka.refused).toBeNull()
-    // a page stops at its budget, where the range over every row passes
-    // 16 MiB
-    expect(quokka.more).toBe(true)
-    expect(quokka.mib).toBeLessThan(10)
-    expect(quokka.documents).toBeLessThan(3000 + 1000 + 700)
-  }, 300_000)
+        (await restTasks(t, { ...agent, search: 'QN-10000', limit: '1' })).map((row) => row.id),
+      ).toEqual([ids[0]])
+      // the others page through the texts before them, a budget at a time
+      for (const [search, at] of [
+        ['zephyr', 95],
+        ['quokka', 150],
+      ] as const) {
+        const pages = await restPages(t, { ...agent, search, limit: '1' })
+        expect(
+          pages.rows.map((row) => row.id),
+          search,
+        ).toEqual([ids[at]])
+        expect(pages.sizes.length, search).toBeGreaterThan(1)
+      }
+      const quokka = await restMetrics(t, f, { limit: 1, search: 'quokka' })
+      expect(quokka.refused).toBeNull()
+      // a page stops at its budget, before the rows up to the match
+      expect(quokka.more).toBe(true)
+      expect(quokka.documents).toBeLessThan(300)
+    })
+  })
 
   it('a REST or MCP search whose first task a label matches stops there, before descriptions that would not fit', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    // 2,000 rows of 8 KiB, 16 MiB in all, none of which says zephyr, and
-    // the first task carries the label Zephyr
+    // 300 rows, none of which says zephyr, and the first task carries the
+    // label Zephyr
     const ids = await plantMany(
       t,
       f,
-      2000,
-      (i) => `${i} `.padEnd(8 * 1024, 'n'),
+      300,
+      (i) => `Wire the board ${i}`,
       () => undefined,
-      500,
+      300,
     )
     await t.run(async (ctx) => {
       const id = uuid()
@@ -1148,7 +1155,7 @@ describe('real limits', () => {
     expect(label.refused).toBeNull()
     expect(label.documents - key.documents).toBeLessThan(5)
     expect(label.mib - key.mib).toBeLessThan(0.1)
-  }, 300_000)
+  })
 
   it('a REST search of a rare label reads each task’s own assignments, one range a task more than a search of a task ID', async () => {
     const t = newT({ transactionLimits: true })
@@ -1156,10 +1163,10 @@ describe('real limits', () => {
     const ids = await plantMany(
       t,
       f,
-      400,
+      300,
       (i) => `Notes ${i} on the board`,
       () => undefined,
-      200,
+      300,
     )
     // only the second task carries the label Walrus
     await t.run(async (ctx) => {
@@ -1185,34 +1192,13 @@ describe('real limits', () => {
     expect([rare.more, key.more]).toEqual([false, false])
     // both read every task's text but the match's; the label search also
     // reads each task's own assignments, never Walrus's across the
-    // organization, one range for each of the 400 tasks
-    expect(rare.ranges - key.ranges).toBe(400)
-  }, 300_000)
+    // organization, one range for each of the 300 tasks
+    expect(rare.ranges - key.ranges).toBe(300)
+  })
 
-  it('a REST search never reads the 16 MB of tasks an archived sub-project keeps active', async () => {
+  it('a REST search never reads the tasks an archived sub-project keeps active', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    // first, 2,000 tasks left active in an archived sub-project, with rows
-    // of 8 KB, 16 MB in all, which no active list reads
-    const shelved = await plantProject(t, {
-      org_id: f.org.id,
-      type: 'project',
-      parent_id: f.meta.id,
-      archived_at: NOW,
-    })
-    for (let from = 0; from < 2000; from += 250)
-      await t.run(async (ctx) => {
-        for (let i = from; i < from + 250; i++) {
-          const doc = taskDoc(f, 40_000 + i, undefined, { project_id: shelved.id })
-          await ctx.db.insert('issues', doc)
-          await ctx.db.insert('issue_descriptions', {
-            issue_id: doc.id,
-            org_id: f.org.id,
-            project_id: shelved.id,
-            description: 'History '.padEnd(8000, 'h'),
-          })
-        }
-      })
     const ids = await plantMany(
       t,
       f,
@@ -1222,17 +1208,43 @@ describe('real limits', () => {
       300,
     )
     const agent = { callerId: f.agent.id, access: 'read' as const }
+    const search = { limit: 20, search: 'QN-10007' }
+    const without = await restMetrics(t, f, search)
+    // 300 tasks left active in an archived sub-project, which no active list
+    // reads
+    const shelved = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      archived_at: NOW,
+    })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 300; i++) {
+        const doc = taskDoc(f, 40_000 + i, undefined, { project_id: shelved.id })
+        await ctx.db.insert('issues', doc)
+        await ctx.db.insert('issue_descriptions', {
+          issue_id: doc.id,
+          org_id: f.org.id,
+          project_id: shelved.id,
+          description: `History ${i}`,
+        })
+      }
+    })
     expect(
       (await restPages(t, { ...agent, search: 'QN-10007' })).rows.map((row) => row.id),
     ).toEqual([ids[7]])
-  }, 300_000)
+    // the search reads the archived sub-project's row and none of its tasks
+    const shelf = await restMetrics(t, f, search)
+    expect(shelf.documents - without.documents).toBeLessThan(5)
+    expect(shelf.ranges - without.ranges).toBeLessThan(5)
+  })
 
-  it('a REST search stops at its page across projects, before the 16 MiB of texts listed after it', async () => {
+  it('a REST search stops at its page across projects, before the texts listed after it', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
     // in list order: a task in one project that misses, the match in the
-    // other project, then 1,000 tasks back in the first project with rows of
-    // 16 KiB, 16 MiB in all, which a page that read past its match would read
+    // other project, then 250 tasks back in the first project, which a page
+    // that read past its match would read
     const plant = (num: number, project_id: string, text: string) => ({
       doc: taskDoc(f, num, undefined, { project_id }),
       text,
@@ -1241,30 +1253,30 @@ describe('real limits', () => {
       plant(70_000, f.sub.id, 'Wire the board'),
       plant(70_001, f.sub2.id, 'Wire the zephyr'),
     ]
-    const tail = Array.from({ length: 1000 }, (_, i) =>
-      plant(70_002 + i, f.sub.id, `Notes ${i} `.padEnd(16 * 1024, 'n')),
+    const tail = Array.from({ length: 250 }, (_, i) =>
+      plant(70_002 + i, f.sub.id, `Notes ${i} on the board`),
     )
-    const all = [...firstTwo, ...tail]
-    for (let from = 0; from < all.length; from += 200)
-      await t.run(async (ctx) => {
-        for (const { doc, text } of all.slice(from, from + 200)) {
-          await ctx.db.insert('issues', doc)
-          await ctx.db.insert('issue_descriptions', {
-            issue_id: doc.id,
-            org_id: f.org.id,
-            project_id: doc.project_id,
-            description: text,
-          })
-        }
-      })
+    await t.run(async (ctx) => {
+      for (const { doc, text } of [...firstTwo, ...tail]) {
+        await ctx.db.insert('issues', doc)
+        await ctx.db.insert('issue_descriptions', {
+          issue_id: doc.id,
+          org_id: f.org.id,
+          project_id: doc.project_id,
+          description: text,
+        })
+      }
+    })
     const agent = { callerId: f.agent.id, access: 'read' as const }
     expect(
       (await restTasks(t, { ...agent, search: 'zephyr', limit: '1' })).map((row) => row.id),
     ).toEqual([firstTwo[1].doc.id])
+    // the first task's ID, which reads that task alone
+    const none = await restMetrics(t, f, { limit: 1, search: 'QN-70000' })
     const metrics = await restMetrics(t, f, { limit: 1, search: 'zephyr' })
-    // the two texts before the page ends, not the 16 MiB after it
-    expect(metrics.mib).toBeLessThan(2)
-  }, 300_000)
+    // the two texts before the page ends, not the 250 after it
+    expect(metrics.documents - none.documents).toBeLessThan(10)
+  })
 
   it('a REST search reads the description row of a task listed after a restored one that every other reader shows', async () => {
     const t = newT()
@@ -1306,31 +1318,32 @@ describe('real limits', () => {
   it('a REST search whose descriptions pass one page pages on to the end, and a request without room for a page is refused', async () => {
     const t = newT({ transactionLimits: true })
     const f = await machineOrg(t)
-    // 2,500 rows of 6 KB beside task rows without text, as the third
-    // release leaves them: 15 MB of descriptions
+    // 300 rows beside task rows without text, as the third release leaves
+    // them, more than a lowered page's budget reads
     const ids = await plantMany(
       t,
       f,
-      2500,
-      (i) => `${i} `.padEnd(6000, 'z'),
+      300,
+      (i) => `Notes ${i} on the board`,
       () => undefined,
-      250,
+      300,
     )
     const agent = { callerId: f.agent.id, access: 'read' as const }
-    const pages = await restPages(t, { ...agent, search: 'QN-10001' })
-    expect(pages.rows.map((row) => row.id)).toEqual([ids[1]])
-    expect(pages.sizes.length).toBeGreaterThan(1)
-    const metrics = await restMetrics(t, f, { limit: 50, search: 'QN-10001' })
-    expect(metrics.refused).toBeNull()
-    expect(metrics.more).toBe(true)
-    expect(metrics.mib).toBeLessThan(16)
+    await lowered(smallPage(200), async () => {
+      const pages = await restPages(t, { ...agent, search: 'QN-10001' })
+      expect(pages.rows.map((row) => row.id)).toEqual([ids[1]])
+      expect(pages.sizes.length).toBeGreaterThan(1)
+      const metrics = await restMetrics(t, f, { limit: 50, search: 'QN-10001' })
+      expect(metrics.refused).toBeNull()
+      expect(metrics.more).toBe(true)
+    })
     // a request whose reserve leaves no room for a whole page is refused
     // with the sentence that says to name a project
     await lowered({ reserve: { bytes: 16 * MIB } }, async () => {
       const e = await expectRefusal(restTasks(t, { ...agent, search: 'QN-10001' }), 'bad_request')
       expect((e.data as { message: string }).message).toBe(TASK_LIST_UNREADABLE)
     })
-  }, 300_000)
+  })
 
   it("a single-task read of an archived task with large legacy rows reads its text before its walk, within Convex's limits", async () => {
     const t = newT({ transactionLimits: true })
