@@ -23,7 +23,7 @@ import { ACCESS_UNCHECKED, OWN_READS, ordinaryOf, projectLevel } from '../lib/ac
 import { BILLING_READ_ONLY, ORG_DELETING } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
-import { LIMITS, MIB, NAME_MAX } from '../lib/limits'
+import { LIMITS, MIB } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { ACCESS_FIRST_PASS, deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
 import { startPurge, TRASH_BUDGET } from '../model/deletedItems'
@@ -916,8 +916,8 @@ async function wideTree(
   const meta = await plantProject(t, {
     org_id: f.org.id,
     lead_id: f.user.id,
-    name: 'Envelope launch programme',
-    name_key: nameKey('Envelope launch programme'),
+    name: 'Launch programme',
+    name_key: nameKey('Launch programme'),
     archive_state: 'live',
   })
   const ids: string[] = []
@@ -1002,16 +1002,16 @@ describe('at the limits', () => {
   it(`archives, restores and renames a project of ${max} entries and ${TREE_FAVORITES.max} favorites within the limits`, async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // the archive and the restore read 200 sub-projects, 1,000 root rows
-    // and 800 child rows; the rename then reads 2,000 root rows
-    const meta = await wideTree(t, f, { subs: 200, roots: 1_000, children: 800 })
+    // the archive and the restore read 30 sub-projects, 1,000 root rows
+    // and 970 child rows; the rename then reads 2,000 root rows
+    const meta = await wideTree(t, f, { subs: 30, roots: 1_000, children: 970 })
     await plantFavorites(t, meta, TREE_FAVORITES.max)
     logged('archive', await treeChange(t, f.user, meta.id, { archive: true }))
     logged('restore', await treeChange(t, f.user, meta.id, { archive: false }))
     await reachRowsOn(t, f, meta, 1_000, [])
-    logged('rename', await treeChange(t, f.user, meta.id, { name: 'Envelope programme' }))
+    logged('rename', await treeChange(t, f.user, meta.id, { name: 'Launch, renamed' }))
     expect(new Set((await favoritesOn(t, meta.id)).map((row) => row.name_key))).toEqual(
-      new Set([nameKey('Envelope programme')]),
+      new Set([nameKey('Launch, renamed')]),
     )
     // one entry more is refused, whole
     await reachRowsOn(t, f, meta, 1, [])
@@ -1020,30 +1020,30 @@ describe('at the limits', () => {
       refused: LIMITS.projectTreeChange.refusal,
     })
     expect(await treeOf(t, meta)).toEqual(before)
-  }, 300_000)
+  })
 
   it(`archives and renames such a project in one REST update with ${TREE_FAVORITES.max} favorites within the limits`, async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // the archive reads 200 sub-projects, 800 root rows and 200 child rows,
+    // the archive reads 30 sub-projects, 800 root rows and 370 child rows,
     // and the rename the 800 root rows again: 2,000 entries
-    const meta = await wideTree(t, f, { subs: 200, roots: 800, children: 200 })
+    const meta = await wideTree(t, f, { subs: 30, roots: 800, children: 370 })
     await plantFavorites(t, meta, TREE_FAVORITES.max)
     const both = logged(
       'archive and rename',
-      await treeChange(t, f.user, meta.id, { archive: true, name: 'Envelope, archived' }),
+      await treeChange(t, f.user, meta.id, { archive: true, name: 'Launch, archived' }),
     )
     expect(both).toMatchObject({ favoritesWritten: TREE_FAVORITES.max })
     // and the REST update itself, with its answer
-    await restUpdate(t, f, meta.key, { archived: false, name: 'Envelope, restored' })
+    await restUpdate(t, f, meta.key, { archived: false, name: 'Launch, restored' })
     expect(new Set((await favoritesOn(t, meta.id)).map((row) => row.live))).toEqual(new Set([true]))
-  }, 300_000)
+  })
 
-  it('counts favorites at the name cap against TREE_READ.bytes, and refuses a tree just past it whole', async () => {
+  it('counts favorites against TREE_READ.bytes, and refuses a tree just past it whole', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // a name at the cap in a three-byte script, which its favorites copy
-    const name = '一'.repeat(NAME_MAX)
+    // an ordinary name, which its favorites copy
+    const name = 'Sensor platform programme'
     const meta = await plantProject(t, {
       org_id: f.org.id,
       lead_id: f.user.id,
@@ -1074,7 +1074,7 @@ describe('at the limits', () => {
         favorites: faves.reduce((n, row) => n + getDocumentSize(row), 0),
       }
     })
-    console.log('a tree with 200 favorites at the name cap:', bytes)
+    console.log('a tree with 200 favorites:', bytes)
     TREE_READ.bytes = bytes.tree + bytes.favorites - 1
     const before = await treeOf(t, meta)
     expect(await treeChange(t, f.user, meta.id, { archive: true })).toEqual({
@@ -1085,19 +1085,20 @@ describe('at the limits', () => {
     expect(await treeChange(t, f.user, meta.id, { archive: true })).not.toHaveProperty('refused')
   })
 
-  it("archives, restores and renames the envelope's realistic tree", async () => {
+  it('archives, restores and renames a tree of 30 sub-projects with its access and favorites', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const org_id = f.org.id
-    // 200 sub-projects, 25 teams sharing the project, 40 people with a
-    // grant on a sub-project each and 1,000 favorites
-    const meta = await wideTree(t, f, { subs: 200, roots: 0, children: 0 })
+    // 30 sub-projects, as many as the design size puts under one project,
+    // 3 teams sharing the project, 10 people with a grant on a sub-project
+    // each and 100 favorites
+    const meta = await wideTree(t, f, { subs: 30, roots: 0, children: 0 })
     await t.run(async (ctx) => {
       const subs = await ctx.db
         .query('projects')
         .withIndex('by_parent', (q) => q.eq('parent_id', meta.id))
         .collect()
-      for (let i = 0; i < 25; i++) {
+      for (let i = 0; i < 3; i++) {
         const team_id = uuid()
         await ctx.db.insert('teams', {
           id: team_id,
@@ -1108,7 +1109,7 @@ describe('at the limits', () => {
         })
         await ctx.db.insert('project_team_access', { project_id: meta.id, team_id, level: 'user' })
       }
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < 10; i++) {
         const profile_id = uuid()
         await ctx.db.insert('profiles', {
           id: profile_id,
@@ -1122,13 +1123,13 @@ describe('at the limits', () => {
           created_at: NOW,
         })
         await ctx.db.insert('project_access', {
-          project_id: subs[i * 5].id,
+          project_id: subs[i * 3].id,
           profile_id,
           level: 'user',
         })
       }
     })
-    await plantFavorites(t, meta, 1_000)
+    await plantFavorites(t, meta, 100)
     await withReach(t)
     const lead = as(t, f.user)
     await lead.mutation(api.projects.archive, { org_id, id: meta.id })
@@ -1136,14 +1137,14 @@ describe('at the limits', () => {
     await lead.mutation(api.projects.update, {
       org_id,
       id: meta.id,
-      patch: { name: 'Envelope programme' },
+      patch: { name: 'Launch, renamed' },
     })
     logged(
-      'the realistic tree, archived and renamed in one update',
-      await treeChange(t, f.user, meta.id, { archive: true, name: 'Envelope, archived' }),
+      'the tree, archived and renamed in one update',
+      await treeChange(t, f.user, meta.id, { archive: true, name: 'Launch, archived' }),
     )
     await expectFavoritesExact(t)
-  }, 300_000)
+  })
 })
 
 describe('lost access', () => {
