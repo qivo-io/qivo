@@ -126,10 +126,11 @@ export type PageOrg = OrgFixture & {
  * withOrg adds two live top-level projects, two live sub-projects and six
  * people. */
 export type PageOrgSizes = {
-  /** live top-level projects, at least 2 when `subs` passes `family` */
+  /** live top-level projects, at least 1 with any sub-project and at least
+   * 2 when `subs` passes `family` */
   tops: number
   /** live sub-projects, `family` under the first top-level project and the
-   * rest spread over the others */
+   * rest spread over the others, at least 1 with any task */
   subs: number
   /** sub-projects under the first top-level project, 3 by default */
   family?: number
@@ -141,7 +142,8 @@ export type PageOrgSizes = {
    * share whole top-level projects in turn, from the first, until they
    * hold that many. Every live one by default. */
   memberSubs?: number
-  /** the member's teams, 3 by default */
+  /** the member's teams, 3 by default, at least 1 when they share a
+   * project */
   teams?: number
   /** teams the member is not in that share each top-level project the
    * member's teams share too, none by default, so a project is shared with
@@ -158,7 +160,8 @@ export type PageOrgSizes = {
   /** archived tasks beside them, which no page reads */
   archived: number
   /** the people who own the tasks, 50 by default, each owning every 50th
-   * task; given, each owns the tasks of a few sub-projects */
+   * task; given, each owns the tasks of a few sub-projects. At least 1
+   * with any active task. */
   owners?: number
 }
 
@@ -191,6 +194,41 @@ const subDoc = (orgId: string, lead: string, top: Doc<'projects'>, i: number) =>
     : { archive_state: 'under' as const, archived_at: top.archived_at }),
 })
 
+/* Throws a sentence naming the constraint of PageOrgSizes that `o` breaks,
+ * before pageOrg plants anything, in place of the TypeError a missing
+ * project, owner or team would raise later. `family` is o.family or its
+ * default. */
+function assertSizes(o: PageOrgSizes, family: number): void {
+  if (o.subs > family && o.tops < 2)
+    throw new Error(
+      `pageOrg needs tops of at least 2 when subs (${o.subs}) passes family (${family}), because the sub-projects past the family go under the other top-level projects`,
+    )
+  if (o.subs > 0 && o.tops < 1)
+    throw new Error(
+      `pageOrg needs tops of at least 1 when subs is ${o.subs}, because the sub-projects go under the first top-level project`,
+    )
+  if ((o.archivedSubs ?? 0) > 0 && (o.archivedTops ?? 0) < 1)
+    throw new Error(
+      `pageOrg needs archivedTops of at least 1 when archivedSubs is ${o.archivedSubs}, because the archived sub-projects go under the archived top-level projects`,
+    )
+  if (o.tasks + o.archived > 0 && o.subs < 1)
+    throw new Error(
+      'pageOrg needs subs of at least 1 when tasks or archived is above 0, because the tasks go in its live sub-projects',
+    )
+  if (o.tasks > 0 && (o.owners ?? 50) < 1)
+    throw new Error(
+      `pageOrg needs owners of at least 1 when tasks is ${o.tasks}, because every active task has an owner`,
+    )
+  const shared =
+    o.oneTeam === true
+      ? o.tops + (o.archivedTops ?? 0) > 0
+      : o.tops > 0 && (o.memberSubs ?? o.subs) > 0
+  if (shared && (o.teams ?? 3) < 1)
+    throw new Error(
+      "pageOrg needs teams of at least 1, because the member's teams share the projects the member reads",
+    )
+}
+
 /**
  * An organization at `o`'s sizes: the live top-level projects and their
  * sub-projects, the archived ones, `member` in teams that share top-level
@@ -200,10 +238,13 @@ const subDoc = (orgId: string, lead: string, top: Doc<'projects'>, i: number) =>
  * and owned by `owners` people in projects that track delay, with archived
  * tasks beside them. No project_reach rows: a
  * list takes the caller's access from their grants and team shares
- * (lib/core.ts accessFlags), so active pages never read them.
+ * (lib/core.ts accessFlags), so active pages never read them. Sizes that
+ * PageOrgSizes rules out throw a sentence naming the constraint before
+ * anything is planted (assertSizes).
  */
 export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
   const family = o.family ?? 3
+  assertSizes(o, family)
   const t = newT({ transactionLimits: true })
   const f = await withOrg(t)
   const tops: Doc<'projects'>[] = []
