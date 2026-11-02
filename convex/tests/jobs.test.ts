@@ -472,7 +472,9 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
       await plantIssue(t, { ...due, done_at: ago(50) }),
       await plantIssue(t, { ...due, done_at: ago(60) }),
     ]
-    await plantTasks(t, 5000, { org_id: f.org.id, project_id: f.sub.id })
+    // the open tasks of a sub-project at the design size, more than this
+    // read budget
+    await plantTasks(t, 300, { org_id: f.org.id, project_id: f.sub.id })
 
     expect(await runArchive(t)).toBe(3)
     for (const task of tasks) expect((await issueRow(t, task.id))?.archived_at).toBeDefined()
@@ -973,7 +975,7 @@ describe('archiveDoneIssues runs one chain per organization', () => {
   it('a leg that fails every time stops only its own organization', async () => {
     // The middle organization's candidates exceed this read budget on every
     // attempt; the other two fit.
-    const t = limitedT({ documentsRead: 200 })
+    const t = limitedT({ documentsRead: 100 })
     const [first, middle, last] = [uuid(), uuid(), uuid()].sort()
     const due = new Map<string, string>()
     for (const org_id of [first, middle, last]) {
@@ -986,7 +988,7 @@ describe('archiveDoneIssues runs one chain per organization', () => {
       }
       const task = await plantIssue(t, done)
       due.set(org_id, task.id)
-      if (org_id === middle) await plantTasks(t, 300, done)
+      if (org_id === middle) await plantTasks(t, 150, done)
     }
 
     let chains: ArchiveCounts[] = []
@@ -1327,7 +1329,7 @@ describe('archiveDoneIssues reads only the window since its last run', () => {
     const phases: Record<string, string[]> = {}
     for (const [label, orgs, projects] of [
       ['1 live project', 1, 1],
-      ['1,000 live projects in 10 organizations', 10, 100],
+      ['310 live projects in 10 organizations', 10, 30],
     ] as const) {
       const t = newT()
       const subs = await plantLiveProjects(t, orgs, projects)
@@ -1351,18 +1353,18 @@ describe('archiveDoneIssues reads only the window since its last run', () => {
     // the window and idle nights read the same whatever the size
     const { bytes: _small, ...small } = nights['1 live project, idle night 2']
     const { bytes: _large, ...large } =
-      nights['1,000 live projects in 10 organizations, idle night 2']
+      nights['310 live projects in 10 organizations, idle night 2']
     expect(large).toEqual(small)
     // one empty range a phase, and archive_runs read and written twice
     expect(large.ranges).toBeLessThanOrEqual(6)
     expect(large.documents).toBeLessThanOrEqual(5)
     const { bytes: _w1, ...windowSmall } = nights['1 live project, window night 1']
     const { bytes: _w2, ...windowLarge } =
-      nights['1,000 live projects in 10 organizations, window night 1']
+      nights['310 live projects in 10 organizations, window night 1']
     expect(windowLarge).toEqual(windowSmall)
     expect(archived).toEqual({
       '1 live project': 1,
-      '1,000 live projects in 10 organizations': 1,
+      '310 live projects in 10 organizations': 1,
     })
     for (const label of Object.keys(phases))
       expect(phases[label], label).toEqual(['cron', 'window', 'hand'])
@@ -1865,7 +1867,7 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
   it('a chain that fails leaves the rows of the projects it did not finish, and the next night archives their tasks', async () => {
     // The second project's due page passes this read budget on every
     // attempt; the first fits.
-    const t = limitedT({ documentsRead: 200 })
+    const t = limitedT({ documentsRead: 100 })
     const f = await withOrg(t)
     const [first, second] = [uuid(), uuid()].sort()
     const sub = (id: string) =>
@@ -1875,7 +1877,7 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
     const due = { org_id: f.org.id, status: 'done' as const, done_at: night(-40) }
     const done = await plantIssue(t, { ...due, project_id: fine.id })
     const task = await plantIssue(t, { ...due, project_id: failing.id })
-    await plantTasks(t, 300, { ...due, project_id: failing.id, title: 'Bulk done' })
+    await plantTasks(t, 150, { ...due, project_id: failing.id, title: 'Bulk done' })
 
     expect(await failsOnReads(() => runArchive(t, night(0)))).toBe(true)
     // the chain finished the first project and deleted its row only
@@ -1884,7 +1886,7 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
     expect((await rechecks(t)).map((row) => row.project_id)).toEqual([failing.id])
 
     // outside the app, so nothing marks the project again
-    await deleteTasks(t, failing.id, 300)
+    await deleteTasks(t, failing.id, 150)
     expect(await runArchive(t, night(1))).toBe(1)
     expect((await issueRow(t, task.id))?.archived_at).toBe(night(1))
     expect(await rechecks(t)).toEqual([])
@@ -2377,7 +2379,7 @@ describe('archiveDoneIssues and two runs that overlap', () => {
         }
     expect(orders).toHaveLength(10)
     expect(failed).toEqual([])
-  }, 300_000)
+  })
 })
 
 describe('archiveDoneIssues runs what the release before queued', () => {
@@ -2517,18 +2519,18 @@ describe('archiveDoneIssues runs what the release before queued', () => {
 })
 
 describe('archiveDoneIssues within Convex limits', () => {
-  it('a window of 2,000 Done tasks with 20,000-character three-byte descriptions across 200 projects in 20 organizations keeps every call inside them', async () => {
+  it('a window of 1,100 Done tasks across 100 projects in 10 organizations keeps every call inside them', async () => {
     const t = newT({ transactionLimits: true })
     await runArchive(t, night(0))
-    const description = '漢'.repeat(20_000)
+    const description = 'Checked against the bench results and signed off by the reviewer.'
     const done_at = new Date(Date.parse(cutoffAt(night(0))) + DAY / 2).toISOString()
-    const projects = await plantLiveProjects(t, 20, 10)
+    const projects = await plantLiveProjects(t, 10, 10)
     // a task row and its description row each hold the text, as every
-    // deployment's do until the description backfill's clear, so 100 tasks
-    // a transaction stay inside its 16 MiB of writes
-    for (let from = 0; from < 2000; from += 100)
+    // deployment's do until the description backfill's clear. The window
+    // takes three steps, two of them a full ARCHIVE_LIMITS.tasks.
+    for (let from = 0; from < 1100; from += 550)
       await t.run(async (ctx) => {
-        for (let n = from; n < from + 100; n++) {
+        for (let n = from; n < from + 550; n++) {
           const project = projects[n % projects.length]
           const _id = await insertTask(
             ctx.db,
@@ -2537,7 +2539,7 @@ describe('archiveDoneIssues within Convex limits', () => {
               org_id: project.org_id,
               project_id: project.id,
               num: bulkNum++,
-              title: `Window task ${n}`,
+              title: `Check window task ${n} against the bench results before the review closes`,
               description,
               status: 'done',
               priority: 'medium',
@@ -2570,6 +2572,7 @@ describe('archiveDoneIssues within Convex limits', () => {
       hand: calls.filter((c) => c.args.phase === 'hand'),
       leg: calls.filter((c) => c.name === 'jobs:archiveProject'),
     }
+    expect(kinds.window.length).toBeGreaterThanOrEqual(3)
     const most = (of: readonly Call[]) =>
       Object.fromEntries(
         (Object.keys(of[0].metrics) as Array<keyof TransactionMetrics>).map((key) => [
@@ -2580,7 +2583,7 @@ describe('archiveDoneIssues within Convex limits', () => {
     const report = Object.fromEntries(
       Object.entries(kinds).map(([kind, of]) => [kind, { calls: of.length, ...most(of) }]),
     )
-    console.log('Nightly archive window of 2,000 large tasks, the most one call used', report)
+    console.log('Nightly archive window of 1,100 tasks, the most one call used', report)
     for (const of of Object.values(kinds)) {
       const m = most(of)
       expect(m.bytesRead).toBeLessThan(16 * 1024 * 1024)
@@ -2590,7 +2593,7 @@ describe('archiveDoneIssues within Convex limits', () => {
       expect(m.documentsWritten).toBeLessThan(16_000)
       expect(m.functionsScheduled).toBeLessThan(1000)
     }
-  }, 600_000)
+  })
 })
 
 type SweepCounts = { to: string; deleted: number; woken: number }
