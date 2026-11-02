@@ -84,17 +84,24 @@ const LONG =
     92,
   )
 
-/* The parts' byte budgets at an eighth, and the rows they read at once
- * between two checks, which those budgets hold, for the cases that plant
- * LONG descriptions where they planted descriptions at the cap in a
- * three-byte script against the real budgets. */
-const SCALED_BYTES = () => {
-  PAGE.soft.bytes = DEFAULT_PAGE.soft.bytes / 8
-  PAGE.hard.bytes = DEFAULT_PAGE.hard.bytes / 8
-  PAGE.textReserve.bytes = DEFAULT_PAGE.textReserve.bytes / 8
-  PAGE.batch = DEFAULT_PAGE.batch / 8
-  PAGE.kids = 3
-  PAGE.inboxCheck = DEFAULT_PAGE.inboxCheck / 8
+/* A description of ordinary length, 390 characters (as
+ * descriptionReaders.test.ts ORDINARY_TEXT). */
+const ORDINARY = 'Check the bracket fit and the cable route before the next build. '.repeat(6)
+
+/* The parts' byte budgets at a `factor`th, and the rows they read at once
+ * between two checks, which those budgets hold, at least one. The cases
+ * that plant LONG descriptions take an eighth, the default, where they
+ * planted descriptions at the cap in a three-byte script against the real
+ * budgets. A step of kidsOf reads about PAGE.kids² task bodies, so kids
+ * goes down by the square root of `factor`. */
+const SCALED_BYTES = (factor = 8) => {
+  const rows = (n: number) => Math.max(1, Math.round(n))
+  PAGE.soft.bytes = DEFAULT_PAGE.soft.bytes / factor
+  PAGE.hard.bytes = DEFAULT_PAGE.hard.bytes / factor
+  PAGE.textReserve.bytes = DEFAULT_PAGE.textReserve.bytes / factor
+  PAGE.batch = rows(DEFAULT_PAGE.batch / factor)
+  PAGE.kids = rows(DEFAULT_PAGE.kids / Math.sqrt(factor))
+  PAGE.inboxCheck = rows(DEFAULT_PAGE.inboxCheck / factor)
 }
 
 /* Plants `n` active tasks with fields `extra`, in writes of 50. */
@@ -200,16 +207,16 @@ describe('a tasks window', () => {
 
   it("reads within a transaction's read limit where one read of the organization could not", async () => {
     // 300 open tasks in Firmware, the design size for one sub-project, with
-    // descriptions of about 8 KB of ordinary text in their description rows,
-    // hold about 2.5 MB, past a read limit lowered to 2 MiB, an eighth of
-    // Convex's 16 MiB. The parts' byte budgets (SCALED_BYTES) and the bytes
-    // a text step charges each text (model/descriptions.ts TEXT_READ) go to
-    // an eighth with it.
+    // ORDINARY descriptions in their description rows, hold about 280 KiB,
+    // more than twice a read limit lowered to 128 KiB, a 128th of Convex's
+    // 16 MiB. The parts' byte budgets (SCALED_BYTES) and the bytes a text
+    // step charges each text (model/descriptions.ts TEXT_READ) go to a
+    // 128th with it.
     const t = newT({
-      transactionLimits: { ...REAL_LIMITS.transactionLimits, bytesRead: 2 * 1024 * 1024 },
+      transactionLimits: { ...REAL_LIMITS.transactionLimits, bytesRead: 128 * 1024 },
     })
-    SCALED_BYTES()
-    TEXT_READ.bytes = DEFAULT_TEXT_READ.bytes / 8
+    SCALED_BYTES(128)
+    TEXT_READ.bytes = DEFAULT_TEXT_READ.bytes / 128
     const f = await withOrg(t)
     const planted: string[] = []
     // in writes of 100
@@ -226,7 +233,7 @@ describe('a tasks window', () => {
               project_id: f.sub.id,
               num: i + 1,
               title: `Task ${i}`,
-              description: LONG,
+              description: ORDINARY,
               status: 'todo',
               priority: 'medium',
               paused: false,
@@ -250,7 +257,7 @@ describe('a tasks window', () => {
     ).rejects.toThrow(/Read too much data/)
     const snap = await workspaceOf(as(t, f.admin))
     expect(snap?.issues.map((i) => i.id).sort()).toEqual(planted.sort())
-    expect(snap?.issues.every((i) => i.description === LONG)).toBe(true)
+    expect(snap?.issues.every((i) => i.description === ORDINARY)).toBe(true)
   })
 })
 
