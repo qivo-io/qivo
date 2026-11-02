@@ -1528,14 +1528,17 @@ describe("the copies at Convex's limits", () => {
     expect(archive.data.message).toBe(SUBTREE_TOO_LARGE)
     expect(await snapshot(t)).toEqual(before)
     // a smaller one moves and archives, with its rows
-    console.info(
-      'with both copies, 30 subtasks of LONG move',
-      await measured(
-        t,
-        (ctx, issue) => moveIssueCore(ctx, { ...core(f, issue), project_id: away.id }),
-        small.id,
-      ),
+    const smallMove = await measured(
+      t,
+      (ctx, issue) => moveIssueCore(ctx, { ...core(f, issue), project_id: away.id }),
+      small.id,
     )
+    console.info('with both copies, 30 subtasks of LONG move', smallMove)
+    // the move read each subtask's task row and its row, both holding LONG,
+    // twice: four times LONG a subtask, where one read of each is two
+    const longBytes = new TextEncoder().encode(LONG).length
+    expect(smallMove.bytesRead).toBeGreaterThan(4 * 30 * longBytes)
+    expect(smallMove.bytesRead).toBeLessThan(5 * 30 * longBytes)
     await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: small.id })
     const moved = await t.run((ctx) =>
       ctx.db
