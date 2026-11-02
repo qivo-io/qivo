@@ -889,7 +889,7 @@ describe('real limits', () => {
     expect(answer.issues.length).toBeGreaterThan(0)
     for (const row of answer.issues) expect(row.description).toBe(text)
     expect(metrics.mib).toBeLessThanOrEqual(PAGE.hard.bytes / MIB + 1)
-  }, 300_000)
+  })
 
   it('the narrowest window answers a parent whose subtasks are legacy rows near 1 MiB, its text one row past PAGE.hard at most', async () => {
     const t = newT({ transactionLimits: true })
@@ -924,7 +924,7 @@ describe('real limits', () => {
     ])
     expect(metrics.mib).toBeGreaterThan(7)
     expect(metrics.mib).toBeLessThan(16)
-  }, 300_000)
+  })
 
   it('a window of 200 tasks with both copies at the cap in a three-byte script answers or splits within PAGE.hard', async () => {
     const t = newT({ transactionLimits: true })
@@ -964,7 +964,7 @@ describe('real limits', () => {
     expect(shown.size).toBe(200)
     expect(states).toContain('ok')
     expect(most).toBeLessThanOrEqual(PAGE.hard.bytes / MIB)
-  }, 300_000)
+  })
 
   it('a REST page of 200 tasks at the cap ends early with a cursor, pages on to every task, and holds more once the copies are cleared', async () => {
     const t = newT({ transactionLimits: true })
@@ -1380,7 +1380,7 @@ describe('real limits', () => {
     })
     expect(got.description).toBe(big('d'))
     expect(got.parent_id).toBe(ids.parent)
-  }, 300_000)
+  })
 
   it('an active page and an export page count two description rows a task', async () => {
     const t = newT({ transactionLimits: true })
@@ -1429,7 +1429,7 @@ describe('real limits', () => {
     }
     for (const [i, id] of ids.entries())
       expect(rows.find((row) => row.id === id)?.description).toBe(shown(i))
-  }, 300_000)
+  })
 
   it('a task with many rows reads two of them at most, within the limits', async () => {
     const t = newT({ transactionLimits: true })
@@ -1460,7 +1460,7 @@ describe('real limits', () => {
     })
     // neither of the first two rows holds the copies, so the first
     expect(got.description).toBe('0 '.padEnd(900 * 1024, 'r'))
-  }, 300_000)
+  })
 
   it('an export issues page with description rows near 1 MiB stays within the limits and goes on', async () => {
     const t = newT({ transactionLimits: true })
@@ -1482,5 +1482,5 @@ describe('real limits', () => {
     expect(pages).toBeGreaterThan(2)
     for (const [i, id] of ids.entries())
       expect(rows.find((row) => row.id === id)?.description).toBe(text(i))
-  }, 300_000)
+  })
 })
