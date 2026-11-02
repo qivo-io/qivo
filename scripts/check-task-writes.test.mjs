@@ -167,7 +167,11 @@ const refused = [
     "this patch can change a task's status, pause",
   ],
   [
-    "export const hand = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch(id, { reviewer_id: 'p', remaining_hours: 2 })",
+    "export const hand = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch(id, { reviewer_id: 'p' })",
+    "this patch can change a task's status, pause",
+  ],
+  [
+    "export const estimate = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch(id, { remaining_hours: 2 })",
     "this patch can change a task's status, pause",
   ],
   [
