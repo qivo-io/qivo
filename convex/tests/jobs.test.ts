@@ -988,7 +988,7 @@ describe('archiveDoneIssues runs one chain per organization', () => {
       }
       const task = await plantIssue(t, done)
       due.set(org_id, task.id)
-      if (org_id === middle) await plantTasks(t, 150, done)
+      if (org_id === middle) await plantTasks(t, 149, done)
     }
 
     let chains: ArchiveCounts[] = []
@@ -1877,7 +1877,7 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
     const due = { org_id: f.org.id, status: 'done' as const, done_at: night(-40) }
     const done = await plantIssue(t, { ...due, project_id: fine.id })
     const task = await plantIssue(t, { ...due, project_id: failing.id })
-    await plantTasks(t, 150, { ...due, project_id: failing.id, title: 'Bulk done' })
+    await plantTasks(t, 149, { ...due, project_id: failing.id, title: 'Bulk done' })
 
     expect(await failsOnReads(() => runArchive(t, night(0)))).toBe(true)
     // the chain finished the first project and deleted its row only
@@ -1886,7 +1886,7 @@ describe('archiveDoneIssues keeps a row for every project it did not finish', ()
     expect((await rechecks(t)).map((row) => row.project_id)).toEqual([failing.id])
 
     // outside the app, so nothing marks the project again
-    await deleteTasks(t, failing.id, 150)
+    await deleteTasks(t, failing.id, 149)
     expect(await runArchive(t, night(1))).toBe(1)
     expect((await issueRow(t, task.id))?.archived_at).toBe(night(1))
     expect(await rechecks(t)).toEqual([])

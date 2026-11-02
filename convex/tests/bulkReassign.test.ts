@@ -804,11 +804,12 @@ describe('a removal of many people', () => {
   })
 
   it("refuses before a team's shares read past the index ranges left", async () => {
-    // 50 shared live projects cost two ranges each to reach and 150 archived
-    // ones one each, 250 in all, past a limit of 200
+    // 49 shared live projects beside TBED, the team's 50, cost two ranges
+    // each to reach and 150 archived ones one each, 250 in all, past a
+    // limit of 200
     const { t, f, state } = await manyHolders(5, { transactionLimits: { databaseQueries: 200 } })
     await t.run(async (ctx) => {
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 199; i++) {
         const id = uuid()
         await ctx.db.insert('projects', {
           id,
@@ -821,7 +822,7 @@ describe('a removal of many people', () => {
           num: 100 + i,
           track_delay: false,
           created_at: NOW,
-          ...(i < 50 ? {} : { archived_at: NOW }),
+          ...(i < 49 ? {} : { archived_at: NOW }),
         })
         await ctx.db.insert('project_team_access', {
           project_id: id,

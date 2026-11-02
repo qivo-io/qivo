@@ -1423,11 +1423,13 @@ describe('under Convex limits', () => {
     })
   })
 
-  it('shows a parent of one sub-project to a person with 200 grants', async () => {
-    // reading every grant and its project would pass 150 documents
+  it("shows a parent of one sub-project to a person with grants on 198 of the organization's 200 top-level projects", async () => {
+    // reading every grant and its project would pass 150 documents; the
+    // 197 granted projects, the parent below, TBED and SKNK are the
+    // organization's 200 top-level projects
     const t = newT({ transactionLimits: { documentsRead: 150 } })
     const f = await withOrg(t)
-    await grantsOn(t, f, f.guest, 200)
+    await grantsOn(t, f, f.guest, 197)
     const { ids, milestones } = await navigationOnly(t, f, f.guest, 1, 1)
     const guest = as(t, f.guest)
     // the check asks the one sub-project, not every grant of the guest
@@ -1495,21 +1497,22 @@ describe('under Convex limits', () => {
     for (const e of [many, one]) expect(e.data.reason).toBe(MILESTONE_READ_TOO_LARGE)
   })
 
-  /* MILESTONE_READ's documents at an eighth, so that 3 and 5 milestones a
+  /* MILESTONE_READ's documents at an eighth, scaled to the 198 projects
+   * these cases plant beside TBED and SKNK, so that 3 and 5 milestones a
    * project and 2 and 4 dense projects fall on either side of it as 30 and
-   * 45, and 20 and 35, did of the real 8,000 */
-  const EIGHTH = READ.documents / 8
+   * 45, and 20 and 35, did of the real 8,000 over 200 */
+  const EIGHTH = (READ.documents / 8) * (198 / 200)
 
   it.for([
     { per: 3, completes: true },
     { per: 5, completes: false },
   ])(
-    'searches $per milestones in each of 200 projects for a name none has',
+    "searches $per milestones in each of 198 projects, with TBED and SKNK the organization's 200, for a name none has",
     async ({ per, completes }, { annotate }) => {
       MILESTONE_READ.documents = EIGHTH
       const t = newT({ transactionLimits: true })
       const f = await withOrg(t)
-      const projects = await shared(t, f, 200)
+      const projects = await shared(t, f, 198)
       const rows = await plantMany(
         t,
         projects.flatMap((project, p) =>
@@ -1536,7 +1539,7 @@ describe('under Convex limits', () => {
       expect(inline.read.documents).toBeLessThanOrEqual(MILESTONE_READ.documents + 1)
       expect(inline.looks).toBeLessThanOrEqual(8)
       await annotate(
-        `search over 200 projects x ${per}: stopped ${inline.answer.stopped}; the read ${JSON.stringify(inline.read)} with ${inline.looks} looks, the transaction ${JSON.stringify(inline.total)}; a milestone is ${getDocumentSize(rows[0])} bytes`,
+        `search over 198 projects x ${per}: stopped ${inline.answer.stopped}; the read ${JSON.stringify(inline.read)} with ${inline.looks} looks, the transaction ${JSON.stringify(inline.total)}; a milestone is ${getDocumentSize(rows[0])} bytes`,
       )
       // the first batch without search
       const first = await measured(t, f.user, projects, {
@@ -1550,7 +1553,7 @@ describe('under Convex limits', () => {
       expect(first.answer.stopped).toBeNull()
       expect(first.looks).toBeLessThanOrEqual(8)
       await annotate(
-        `first upcoming batch of 25 over 200 projects x ${per}: the read ${JSON.stringify(first.read)} with ${first.looks} looks, the transaction ${JSON.stringify(first.total)}`,
+        `first upcoming batch of 25 over 198 projects x ${per}: the read ${JSON.stringify(first.read)} with ${first.looks} looks, the transaction ${JSON.stringify(first.total)}`,
       )
     },
   )
@@ -1559,12 +1562,12 @@ describe('under Convex limits', () => {
     { dense: 2, completes: true },
     { dense: 4, completes: false },
   ])(
-    'reads 260 weeks of 200 projects with a milestone every week in $dense of them',
+    "reads 260 weeks of 198 projects, with TBED and SKNK the organization's 200, with a milestone every week in $dense of them",
     async ({ dense, completes }, { annotate }) => {
       MILESTONE_READ.documents = EIGHTH
       const t = newT({ transactionLimits: true })
       const f = await withOrg(t)
-      const projects = await shared(t, f, 200)
+      const projects = await shared(t, f, 198)
       const rows = await plantMany(
         t,
         projects.slice(0, dense).flatMap((project, p) =>
@@ -1590,7 +1593,7 @@ describe('under Convex limits', () => {
       expect(inline.read.documents).toBeLessThanOrEqual(MILESTONE_READ.documents + 1)
       expect(inline.looks).toBeLessThanOrEqual(8)
       await annotate(
-        `260 weeks over 200 projects, ${dense} dense: stopped ${inline.answer.stopped}, ${range.rows.length} rows; the read ${JSON.stringify(inline.read)} with ${inline.looks} looks, the transaction ${JSON.stringify(inline.total)}`,
+        `260 weeks over 198 projects, ${dense} dense: stopped ${inline.answer.stopped}, ${range.rows.length} rows; the read ${JSON.stringify(inline.read)} with ${inline.looks} looks, the transaction ${JSON.stringify(inline.total)}`,
       )
     },
   )

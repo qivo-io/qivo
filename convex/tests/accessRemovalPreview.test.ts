@@ -1203,8 +1203,8 @@ describe("the removal preview inside Convex's limits", () => {
     expect(results['member preview']).toMatchObject({ state: 'ok', people: 1, tasks: 2 })
   })
 
-  it('previews a team deletion and a member removal of 1,000 members, 30 of them holding an open task', async () => {
-    await previewCrowd(1000, 1, 30)
+  it("previews a team deletion and a member removal of 995 members, with withOrg's five the organization's 1,000, 30 of them holding an open task", async () => {
+    await previewCrowd(995, 1, 30)
   })
 
   it("bounds Keep's changers when many people can still change many projects", async () => {
@@ -1316,8 +1316,8 @@ describe("the removal preview inside Convex's limits", () => {
   })
 
   /* withOrg with a second team, Platform, beside Hardware, which shares
-   * TBED; Mia, a member of Hardware, holds one task in Firmware beside 300
-   * open tasks of ordinary text, under a limit of ROOM_BYTES on the bytes
+   * TBED; Mia, a member of Hardware, holds one task in Firmware beside 299
+   * open tasks of ordinary text, the sub-project's 300, under a limit of ROOM_BYTES on the bytes
    * one transaction reads, which those tasks pass as 320 descriptions at the
    * cap passed the 16 MiB a deployment allows. The scan for held work checks
    * its room every 10 tasks (model/projectAccess.ts TASK_GUARD_ROWS), so the
@@ -1353,7 +1353,8 @@ describe("the removal preview inside Convex's limits", () => {
         2,
       )
     await t.run(async (ctx) => {
-      for (let i = 0; i < 300; i++)
+      // 299 beside Mia's, FW's 300 open tasks
+      for (let i = 0; i < 299; i++)
         await ctx.db.insert('issues', {
           id: uuid(),
           org_id: f.org.id,

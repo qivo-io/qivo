@@ -3906,7 +3906,7 @@ describe('the storage files bill', () => {
 })
 
 /* `n` more sub-projects of `meta`, each with `rows` milestones and a User
- * grant for each of `people`. */
+ * grant for each of `people`, the last `archived` of them archived. */
 const plantSubProjects = async (
   t: T,
   f: OrgFixture,
@@ -3914,6 +3914,7 @@ const plantSubProjects = async (
   n: number,
   rows = 0,
   people: string[] = [],
+  archived = 0,
 ) => {
   for (let from = 0; from < n; from += 50)
     await t.run(async (ctx) => {
@@ -3931,6 +3932,7 @@ const plantSubProjects = async (
           num: 1000 + i,
           track_delay: false,
           created_at: NOW,
+          ...(i >= n - archived ? { archived_at: NOW, archive_state: 'listed' as const } : {}),
         })
         for (let m = 0; m < rows; m++)
           await ctx.db.insert('milestones', {
@@ -3969,35 +3971,45 @@ const treeRows = (t: T, meta: string, table: 'milestones' | 'project_access') =>
     return { projects: ids.length, rows: n }
   })
 
-describe('a project item at the sub-project cap', () => {
-  it(`refuses to delete a project with more than ${LIMITS.projectDeleteSubProjects.max} sub-projects`, async () => {
+describe('a project item and the sub-project cap', () => {
+  it('refuses to delete a project with more sub-projects than LIMITS.projectDeleteSubProjects, here lowered to 1', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // the fixture's project has two sub-projects
-    await plantSubProjects(t, f, f.meta.id, LIMITS.projectDeleteSubProjects.max - 1)
-    await expectRefusal(
-      deleteProject(t, f, f.meta.id),
-      'rule',
-      new RegExp(`^${LIMITS.projectDeleteSubProjects.refusal.replace(/[.,]/g, '\\$&')}$`),
-    )
-    expect(await liveProject(t, f.meta.id)).not.toBeNull()
-    // one sub-project fewer, and the project goes
-    await deleteProject(t, f, f.sub2.id)
-    await deleteProject(t, f, f.meta.id)
+    // the fixture's project has two sub-projects, one past the lowered cap
+    const cap = LIMITS.projectDeleteSubProjects.max
+    Object.assign(LIMITS.projectDeleteSubProjects, { max: 1 })
+    try {
+      await expectRefusal(
+        deleteProject(t, f, f.meta.id),
+        'rule',
+        new RegExp(`^${LIMITS.projectDeleteSubProjects.refusal.replace(/[.,]/g, '\\$&')}$`),
+      )
+      expect(await liveProject(t, f.meta.id)).not.toBeNull()
+      // one sub-project fewer, and the project goes
+      await deleteProject(t, f, f.sub2.id)
+      await deleteProject(t, f, f.meta.id)
+    } finally {
+      Object.assign(LIMITS.projectDeleteSubProjects, { max: cap })
+    }
     expect(await liveProject(t, f.meta.id)).toBeNull()
   })
 
-  it('deletes and restores the project with 2,000 milestones and grants within the limits', async () => {
+  it('deletes and restores a project of 30 live and 40 archived sub-projects with their milestones and grants within the limits', async () => {
     // convex-test counts no range for a write, which reads its row first,
-    // so the writes stand in for those ranges
-    const t = newT({ transactionLimits: { documentsWritten: 4096 } })
+    // so the writes stand in for those ranges; 700, where the tree's 71
+    // projects and their 340 milestones and 347 grants pass it, as the
+    // largest tree the cap allows passed 4,096 (the delete's steps need
+    // more than 600)
+    const t = newT({ transactionLimits: { documentsWritten: 700 } })
     const f = await withOrg(t)
     const people = await plantPeople(t, f, 5)
-    await plantSubProjects(t, f, f.meta.id, LIMITS.projectDeleteSubProjects.max - 2, 5, people)
+    // beside FW and PCB, 28 live and 40 archived, each with 5 milestones and
+    // a grant for each of the 5 people
+    await plantSubProjects(t, f, f.meta.id, 68, 5, people, 40)
     const milestones = await treeRows(t, f.meta.id, 'milestones')
     const grants = await treeRows(t, f.meta.id, 'project_access')
-    expect(milestones).toEqual({ projects: LIMITS.projectDeleteSubProjects.max + 1, rows: 990 })
-    expect(grants.rows).toBe(990 + 5 + 2)
+    expect(milestones).toEqual({ projects: 71, rows: 340 })
+    expect(grants.rows).toBe(340 + 5 + 2)
 
     // storing every project, milestone and grant at once passed the limit
     await deleteProject(t, f, f.meta.id)
@@ -4198,7 +4210,9 @@ describe('a project item at the sub-project cap', () => {
   })
 
   it('restores many project items without tasks, each reveal within the limits', async () => {
-    const t = newT({ transactionLimits: { documentsWritten: 700 } })
+    // trees of 30 sub-projects, the design size under one project, whose
+    // single reveals need about 100 documents written
+    const t = newT({ transactionLimits: { documentsWritten: 120 } })
     const f = await withOrg(t)
     const metas: string[] = []
     for (let i = 0; i < 2; i++) {
@@ -4208,15 +4222,15 @@ describe('a project item at the sub-project cap', () => {
         name: `Big ${i}`,
         lead_id: f.user.id,
       })
-      await plantSubProjects(t, f, meta.id, LIMITS.projectDeleteSubProjects.max - 1)
+      await plantSubProjects(t, f, meta.id, 30)
       await deleteProject(t, f, meta.id)
       metas.push(meta.id)
     }
     await runSteps(t)
     const items = await Promise.all(metas.map((id) => itemFor(t, id)))
 
-    // every reveal in one restore wrote 400 projects and deleted their rows,
-    // past the 700 documents written allowed here
+    // every reveal in one restore wrote 62 projects and deleted their rows,
+    // past the 120 documents written allowed here
     const result = await restore(
       t,
       f.user,
@@ -4224,9 +4238,6 @@ describe('a project item at the sub-project cap', () => {
     )
     expect(result.restored.sort()).toEqual(items.map((item) => item.id).sort())
     await runSteps(t)
-    for (const meta of metas)
-      expect((await treeRows(t, meta, 'milestones')).projects).toBe(
-        LIMITS.projectDeleteSubProjects.max,
-      )
+    for (const meta of metas) expect((await treeRows(t, meta, 'milestones')).projects).toBe(31)
   })
 })

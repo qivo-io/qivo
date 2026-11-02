@@ -998,8 +998,9 @@ describe('the reads follow the owner’s open work, not the organization', () =>
     for (const caller of callers) before.push(await measure(caller))
     // 30 sub-projects, 3 under each of 10 more top-level projects, 300
     // tasks of other people in them, 300 archived and 100 Done tasks of
-    // the owner, and 50 teams none of the callers is in, each sharing 2 of
-    // the new sub-projects
+    // the owner, and 49 teams none of the callers is in, which with
+    // withOrg's Hardware make the organization's 50, each sharing 2 of the
+    // new sub-projects
     const tops: Doc<'projects'>[] = []
     for (let i = 0; i < 10; i++) tops.push(await plantProject(fx.t, { org_id: fx.org.id }))
     const subs: Doc<'projects'>[] = []
@@ -1012,7 +1013,7 @@ describe('the reads follow the owner’s open work, not the organization', () =>
         }),
       )
     await fx.t.run(async (ctx) => {
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < 49; i++) {
         const team = uuid()
         await ctx.db.insert('teams', {
           id: team,

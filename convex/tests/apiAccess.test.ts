@@ -1147,27 +1147,29 @@ describe('apiAccess.page at the design size', () => {
   it('pages an organization of 1,000 people within half of each limit', async () => {
     const t = newT({ transactionLimits: HALF })
     const f = await withOrg(t)
-    await crowd(t, f, 1000)
+    // with withOrg's five, the organization's 1,000
+    await crowd(t, f, 995)
     lowered()
     const first = await ready(page(t, f))
     expect(first.rows.length).toBe(25)
     expect(first.stopped).toBe(false)
     const listed = await everyRow(t, f)
-    expect(listed.length).toBe(1000)
-    expect(new Set(listed.map((r) => r.id)).size).toBe(1000)
+    expect(listed.length).toBe(995)
+    expect(new Set(listed.map((r) => r.id)).size).toBe(995)
   })
 
   it('stops a search that matches nothing after its candidates, and the cursors reach the true end', async () => {
     const t = newT({ transactionLimits: HALF })
     const f = await withOrg(t)
-    // the one match sorts last, so every page before it reads only misses
-    await crowd(t, f, 1000, (i) => (i === 950 ? 'Zebra needle' : `Token ${i}`))
+    // the one match sorts last, so every page before it reads only misses;
+    // with withOrg's five, the organization's 1,000
+    await crowd(t, f, 995, (i) => (i === 950 ? 'Zebra needle' : `Token ${i}`))
     lowered()
     const first = await ready(page(t, f, { search: 'needle' }))
     expect(first).toMatchObject({ rows: [], stopped: true })
     expect(first.next).not.toBeNull()
     const pages = await walk(t, f, { search: 'needle' })
-    expect(pages.length).toBe(Math.ceil(1000 / API_ACCESS_SCAN.candidates))
+    expect(pages.length).toBe(Math.ceil(995 / API_ACCESS_SCAN.candidates))
     expect(pages.slice(0, -1).every((shown) => shown.stopped)).toBe(true)
     expect(pages.flatMap((shown) => shown.rows).map((r) => r.name)).toEqual(['Zebra needle'])
     expect(pages.at(-1)).toMatchObject({ next: null, stopped: false })

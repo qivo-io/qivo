@@ -1581,26 +1581,26 @@ describe('real limits', () => {
       bytes: DEFAULT_READ.bytes / 5,
     })
 
-  it('reads 1,000 grants a batch at a time, and a search for the last few in one call or with a cursor that resumes', async () => {
+  it("reads the grants of 995 people, with withOrg's five the organization's 1,000, a batch at a time, and a search for the last few in one call or with a cursor that resumes", async () => {
     lowered()
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     await keyOrg(t, f.org.id)
     const project = await meta(t, f)
-    await plantPeople(t, f, [...names('Person ', 997), 'Zeta one', 'Zeta two', 'Zeta three'], {
+    await plantPeople(t, f, [...names('Person ', 992), 'Zeta one', 'Zeta two', 'Zeta three'], {
       project,
     })
     const first = await measured(t, (ctx) =>
       projectUsersOf(ctx, f.admin, { project_id: project.id }),
     )
-    console.log('users, first batch of 1,000 grants', first.read)
+    console.log('users, first batch of 995 grants', first.read)
     expect(ready(first.out).rows).toHaveLength(LIST_BATCH)
     expect(first.read.ranges).toBeLessThan(60)
     expect(first.read.documents).toBeLessThan(80)
     const search = await measuredWalk(t, (ctx, after) =>
       projectUsersOf(ctx, f.admin, { project_id: project.id, search: 'zeta', after }),
     )
-    console.log('users, a search for the last 3 of 1,000 grants, per call', search)
+    console.log('users, a search for the last 3 of 995 grants, per call', search)
     expect(search.reduce((n, c) => n + c.rows, 0)).toBe(3)
     for (const call of search) {
       expect(call.documents).toBeLessThanOrEqual(NAMED_READ.documents + 64)
@@ -1612,7 +1612,7 @@ describe('real limits', () => {
     )
   })
 
-  it('offers choices among 1,000 people and 20 teams on a project with 400 grants', async () => {
+  it('offers choices among 1,000 people and 20 teams on a project with 400 grants and 5 team shares', async () => {
     lowered()
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
@@ -1633,7 +1633,8 @@ describe('real limits', () => {
       }
     })
     // the 400 people granted come first in name order
-    await plantPeople(t, f, names('Person ', 1000), { project, granted: (i) => i < 400 })
+    // with withOrg's five, the organization's 1,000
+    await plantPeople(t, f, names('Person ', 995), { project, granted: (i) => i < 400 })
     const ask = (ctx: QueryCtx, a: { search?: string; after?: string } = {}) =>
       candidatesOf(ctx, f.admin, { project_id: project.id, ...a })
     const plain = await measured(t, (ctx) => ask(ctx))
@@ -1646,9 +1647,10 @@ describe('real limits', () => {
       people.slice(0, 3),
       `${people.length} calls`,
     )
-    // every team shared: the first batch walks 20 shares and 400 grants
+    // five teams shared, the design size for one project, and the other 15
+    // left as choices: the first batch walks 5 shares and 400 grants
     await t.run(async (ctx) => {
-      for (const one of teams)
+      for (const one of teams.slice(0, 5))
         await ctx.db.insert('project_team_access', {
           project_id: project.id,
           team_id: one.id,
@@ -1657,7 +1659,7 @@ describe('real limits', () => {
         })
     })
     const shared = await measured(t, (ctx) => ask(ctx))
-    console.log('candidates, first batch, every team shared', shared.read, {
+    console.log('candidates, first batch, five teams shared', shared.read, {
       rows: ready(shared.out).rows.length,
       stopped: ready(shared.out).stopped,
     })
@@ -1675,15 +1677,15 @@ describe('real limits', () => {
     )
   })
 
-  it('offers leads past 1,000 inactive people', async () => {
+  it("offers leads past 995 inactive people, the organization's 1,000 with withOrg's five", async () => {
     lowered()
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     await keyOrg(t, f.org.id)
     // inactive people that sort before every active one
-    await plantPeople(t, f, names('Aaa inactive ', 1000), { active: false })
+    await plantPeople(t, f, names('Aaa inactive ', 995), { active: false })
     const calls = await measuredWalk(t, (ctx, after) => leadCandidatesOf(ctx, f.admin, { after }))
-    console.log('leadCandidates past 1,000 inactive people, per call', calls)
+    console.log('leadCandidates past 995 inactive people, per call', calls)
     expect(calls.reduce((n, c) => n + c.rows, 0)).toBe(3) // admin, Relay, user
     for (const call of calls) {
       expect(call.documents).toBeLessThanOrEqual(NAMED_READ.documents + 64)

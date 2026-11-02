@@ -756,20 +756,20 @@ const accessRows = (t: T, profileId: string) =>
   })
 
 describe('access rows past the first pass', () => {
-  it('removes a person holding 134 memberships, grants and tokens within limits lowered to a sixteenth', async () => {
+  it('removes a person holding 132 memberships, grants and tokens within limits lowered to a sixteenth', async () => {
     // convex-test counts no range for a delete, which reads its row first,
     // so the writes stand in for those ranges. The first pass and the
     // steps' budget are at a sixteenth, and the limit on documents written
-    // holds them but not all 134 rows at once, as 4,096 held them but not
+    // holds them but not all 132 rows at once, as 4,096 held them but not
     // 4,500 rows.
     const t = newT({ transactionLimits: { documentsWritten: 100 } })
     ACCESS_FIRST_PASS.rows = DEFAULT_FIRST_PASS.rows / 16
     REMOVAL_BUDGET.rows = DEFAULT_BUDGET.rows / 16
     const f = await withOrg(t)
     const user = f.user.id
-    // 100 tokens, 3 more teams beside the fixture's and grants on 30
-    // sub-projects, as many as the design size puts under one project,
-    // planted in transactions under the lowered limit
+    // 100 tokens, 3 more teams beside the fixture's and grants on 28
+    // sub-projects, which with FW and PCB make the 30 the design size puts
+    // under one project, planted in transactions under the lowered limit
     await t.run(async (ctx) => {
       for (let i = 0; i < 3; i++) {
         const team = uuid()
@@ -782,7 +782,7 @@ describe('access rows past the first pass', () => {
         })
         await ctx.db.insert('team_members', { team_id: team, profile_id: user, is_leader: false })
       }
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < 28; i++) {
         const project = uuid()
         await ctx.db.insert('projects', {
           id: project,
@@ -825,7 +825,7 @@ describe('access rows past the first pass', () => {
       agent_keys: 0,
       mcp_tokens: 100 - ACCESS_FIRST_PASS.rows,
       team_members: 4,
-      project_access: 30,
+      project_access: 28,
       user_prefs: 0,
     })
     await t.finishAllScheduledFunctions(vi.runAllTimers)

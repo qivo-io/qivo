@@ -547,10 +547,11 @@ describe('issues.archivedPage', () => {
   it('reads only the profiles of the tasks a search judges, and each task’s labels past the scan', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // 1,000 people and 150 labels, past a scan lowered to 100
+    // 995 people, with withOrg's five the organization's 1,000, and 150
+    // labels, past a scan lowered to 100
     const people = await t.run(async (ctx) => {
       const ids: string[] = []
-      for (let i = 0; i < 1000; i++) {
+      for (let i = 0; i < 995; i++) {
         const id = uuid()
         ids.push(id)
         await ctx.db.insert('profiles', {
@@ -1707,9 +1708,10 @@ describe('issues.archivedPage', () => {
   it('answers an All projects search of 1,500 archived tasks inside Convex’s limits', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // 1,000 people and 1,100 labels, past ARCHIVE_LABELS.scan
+    // 995 people, with withOrg's five the organization's 1,000, and 1,100
+    // labels, past ARCHIVE_LABELS.scan
     await t.run(async (ctx) => {
-      for (let i = 0; i < 1000; i++)
+      for (let i = 0; i < 995; i++)
         await ctx.db.insert('profiles', {
           id: uuid(),
           org_id: f.org.id,

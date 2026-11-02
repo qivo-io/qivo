@@ -795,6 +795,7 @@ describe('main Search across seats', () => {
     // with the default ranges and with read caps across a band tight enough
     // that some cap sits beside any threshold a read could cross, and with
     // few enough documents that the hidden rows below can spend a seat's
+    // whole document share (SEAT_SHARE.documents)
     const modes = [1, DEFAULT_SEARCH.projects].flatMap((projects) => [
       { projects, ranges: DEFAULT_SEARCH.ranges },
       ...Array.from({ length: 16 }, (_, i) => ({ projects, ranges: 180 + 9 * i })),
@@ -1919,19 +1920,19 @@ describe('the project results of main Search', () => {
     const f = await withOrg(t)
     const member = await plantMember(t, f)
     // under each top-level project the 30 live and 40 archived sub-projects
-    // of one project at the design size, more than the reads below allow a
-    // walk of them
-    const family = (parent_id: string) =>
-      plantProjects(t, f.org.id, 70, (i) => ({
+    // of one project at the design size, the granted one among the seen
+    // project's 30, more than the reads below allow a walk of them
+    const family = (parent_id: string, live = 30) =>
+      plantProjects(t, f.org.id, live + 40, (i) => ({
         parent_id,
-        ...(i < 30 ? {} : { archived_at: NOW }),
+        ...(i < live ? {} : { archived_at: NOW }),
       }))
     const hiddenTop = await plantProject(t, { org_id: f.org.id, name: 'Zephyr hidden' })
     await family(hiddenTop.id)
     const seenTop = await plantProject(t, { org_id: f.org.id, name: 'Zephyr seen' })
     const granted = await subOf(t, f, seenTop)
     await grant(t, granted, member)
-    await family(seenTop.id)
+    await family(seenTop.id, 29)
     await withReach(t)
     // the member's whole organization
     MAIN_SEARCH.projects = 0
@@ -2318,17 +2319,17 @@ describe('the project results of main Search', () => {
 })
 
 describe('project results at Convex’s limits', () => {
-  it('answers inside the limits among 600 projects named the text, some near 1 MiB', async () => {
+  it('answers inside the limits among 598 projects named the text, some near 1 MiB', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const member = await plantMember(t, f)
-    // 100 top-level projects and the 500 sub-projects of the design size,
-    // about five under each top-level project
+    // 100 top-level projects and 498 sub-projects, about five under each,
+    // which with withOrg's FW and PCB make the 500 of the design size
     const tops = await plantProjects(t, f.org.id, 100, (i) => ({
       type: 'meta',
       name: `Zephyr ${i}`,
     }))
-    await plantProjects(t, f.org.id, 492, (i) => ({
+    await plantProjects(t, f.org.id, 490, (i) => ({
       parent_id: tops[i % tops.length],
       name: `Zephyr part ${i}`,
     }))
@@ -2361,7 +2362,7 @@ describe('project results at Convex’s limits', () => {
     for (const who of [f.admin, member]) {
       const run = await searchRun(t, [who], { text: 'zephyr' })
       console.log(
-        '600 projects named the text',
+        '598 projects named the text',
         who.name,
         run.read,
         run.searches,
