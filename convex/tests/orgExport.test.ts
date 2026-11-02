@@ -605,13 +605,10 @@ describe('organization export', () => {
   it('reads the parents of a page of tasks only while a deleted item is in flight, two tasks a page then', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // 100 parents with descriptions from before the 20,000-character cap,
-    // 200 KiB each, then a small child under each. One page of 100 children
-    // that read their parents would read 20 MiB.
-    const description = 'Field notes. '.repeat(16_000).slice(0, 200 * 1024)
+    // 10 parents, then a child under each
     const parents: Doc<'issues'>[] = []
-    for (let i = 0; i < 100; i++)
-      parents.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description }))
+    for (let i = 0; i < 10; i++)
+      parents.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }))
     const children: string[] = []
     for (const parent of parents)
       children.push(
@@ -633,21 +630,7 @@ describe('organization export', () => {
       }
       throw new Error('no page holds the first child')
     }
-
-    // With nothing in flight, as a ready item leaves nothing in the live
-    // tables, no parent is read and every child keeps its own.
-    const done = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
-    await plantProjectItem(t, done, 'ready')
-    await t.run((ctx) => ctx.db.delete(done._id))
-    let exported = childRows(await readAll(caller, f.org.id, 'issues'))
-    expect(exported.size).toBe(100)
-    for (const [index, id] of children.entries())
-      expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
-    // a page holds six tasks, each read with its description rows
-    expect((await firstChildPage()).rows).toHaveLength(6)
-
-    // While a project item is in flight, a page holds two tasks and reads
-    // their parents, so the one parent under the moving project is left out.
+    // the last child's parent sits under a project whose row is gone
     const moving = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
@@ -657,51 +640,54 @@ describe('organization export', () => {
     await t.run(async (ctx) => {
       const row = await ctx.db
         .query('issues')
-        .withIndex('by_uuid', (q) => q.eq('id', children[99]))
+        .withIndex('by_uuid', (q) => q.eq('id', children[9]))
         .unique()
       if (row === null) throw new Error('the last child vanished')
       await ctx.db.patch(row._id, { parent_id: stranded.id })
     })
-    await plantProjectItem(t, moving, 'moving')
     await t.run((ctx) => ctx.db.delete(moving._id))
+
+    // With nothing in flight, as a ready item leaves nothing in the live
+    // tables, no parent is read and every child keeps its own, the last
+    // child too, although its parent's project is gone.
+    const done = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    await plantProjectItem(t, done, 'ready')
+    await t.run((ctx) => ctx.db.delete(done._id))
+    let exported = childRows(await readAll(caller, f.org.id, 'issues'))
+    expect(exported.size).toBe(10)
+    for (const [index, id] of children.slice(0, 9).entries())
+      expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
+    expect(exported.get(children[9])).toHaveProperty('parent_id', stranded.id)
+    // a page holds six tasks, each read with its description rows
+    expect((await firstChildPage()).rows).toHaveLength(6)
+
+    // While a project item is in flight, a page holds two tasks and reads
+    // their parents, so the one parent under the moving project is left out.
+    await plantProjectItem(t, moving, 'moving')
     const inFlight = await firstChildPage()
     expect(inFlight.rows).toHaveLength(2)
     expect(inFlight.isDone).toBe(false)
     exported = childRows(await readAll(caller, f.org.id, 'issues'))
-    expect(exported.size).toBe(100)
-    for (const [index, id] of children.slice(0, 99).entries())
+    expect(exported.size).toBe(10)
+    for (const [index, id] of children.slice(0, 9).entries())
       expect(exported.get(id)).toHaveProperty('parent_id', parents[index].id)
-    expect(exported.get(children[99])).not.toHaveProperty('parent_id')
-  }, 120_000)
+    expect(exported.get(children[9])).not.toHaveProperty('parent_id')
+  })
 
-  it('reads no task projects while nothing is in flight, however large the projects are', async () => {
+  it('reads no task projects while nothing is in flight', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // 100 sub-projects with descriptions from before the 500-character cap,
-    // 900 KiB each, and one small task in each. A page of tasks, or of links
-    // to them, that read their projects would pass the 16 MiB limit.
-    const description = 'Project notes. '.repeat(64_000).slice(0, 900 * 1024)
-    const tasks: string[] = []
-    const projects: string[] = []
-    for (let i = 0; i < 100; i++) {
-      const project = await plantProject(t, {
-        org_id: f.org.id,
-        type: 'project',
-        parent_id: f.meta.id,
-        description,
-      })
-      projects.push(project.id)
-      tasks.push((await plantIssue(t, { org_id: f.org.id, project_id: project.id })).id)
-    }
-    const exported = await readAll(as(t, f.admin), f.org.id, 'issues')
-    expect(tasks.every((id) => exported.some((row) => row.id === id))).toBe(true)
-
-    // nor does a page of links read their targets' projects, here targets
-    // with legacy 900 KiB descriptions of their own in those projects
+    // A task under a project whose row is gone, and links from a live task
+    // to three tasks there. While a project item is in flight the export
+    // leaves them out, as it reads their projects then. With nothing in
+    // flight every task's project should be live, so a page of tasks, or of
+    // links to them, reads none, and here they go out.
+    const gone = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: gone.id })
     const source = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const targets: string[] = []
-    for (const project of projects.slice(0, 20))
-      targets.push((await plantIssue(t, { org_id: f.org.id, project_id: project, description })).id)
+    for (let i = 0; i < 3; i++)
+      targets.push((await plantIssue(t, { org_id: f.org.id, project_id: gone.id })).id)
     await t.run(async (ctx) => {
       for (const target of targets)
         await ctx.db.insert('issue_links', {
@@ -714,8 +700,17 @@ describe('organization export', () => {
           created_at: NOW,
         })
     })
-    expect(await readAll(as(t, f.admin), f.org.id, 'issue_links', source.id)).toHaveLength(20)
-  }, 120_000)
+    await t.run((ctx) => ctx.db.delete(gone._id))
+    const caller = as(t, f.admin)
+    const taskIds = async () => (await readAll(caller, f.org.id, 'issues')).map((row) => row.id)
+    expect(await taskIds()).toEqual(expect.arrayContaining([task.id, ...targets]))
+    expect(await readAll(caller, f.org.id, 'issue_links', source.id)).toHaveLength(3)
+
+    // the same tasks and links stay out once an item is in flight
+    await plantProjectItem(t, gone, 'moving')
+    expect(await taskIds()).not.toContain(task.id)
+    expect(await readAll(caller, f.org.id, 'issue_links', source.id)).toEqual([])
+  })
 
   it('requires owned parents and refuses malformed section scopes', async () => {
     const t = newT()

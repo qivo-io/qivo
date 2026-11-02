@@ -637,7 +637,7 @@ describe('the removal preview and the write it previews', () => {
     const capped = { allowed: false, refusal: LIMITS.removalHolders.refusal }
     expect(p.keep).toMatchObject(capped)
     expect(p.reassign).toEqual(capped)
-  }, 120_000)
+  })
 
   it('previews nothing to remove once the access is gone', async () => {
     const b = await base()
@@ -1051,11 +1051,12 @@ describe('what the removal preview refuses', () => {
 
 describe("the removal preview inside Convex's limits", () => {
   /* withOrg under the deployment's limits with `members` more members of
-   * Hardware, which shares TBED at User beside a second team, Platform. Each
-   * member holds `each` open tasks in Firmware, every fifth one In Review
-   * with the next member reviewing it, and each task has three followers,
-   * as tests/bulkReassign.test.ts measured. Emil is the first member. */
-  async function crowd(members: number, each: number) {
+   * Hardware, which shares TBED at User beside a second team, Platform. The
+   * first `holders` members hold `each` open tasks in Firmware, every fifth
+   * one In Review with the next member reviewing it, and each task has
+   * three followers, as tests/bulkReassign.test.ts measured. Emil is the
+   * first member. */
+  async function crowd(members: number, each: number, holders = members) {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const ids: string[] = []
@@ -1099,9 +1100,9 @@ describe("the removal preview inside Convex's limits", () => {
         }
       })
     }
-    for (let from = 0; from < members; from += 100) {
+    for (let from = 0; from < holders; from += 100) {
       await t.run(async (ctx) => {
-        for (let i = from; i < Math.min(members, from + 100); i++)
+        for (let i = from; i < Math.min(holders, from + 100); i++)
           for (let k = 0; k < each; k++) {
             const n = i * each + k
             const reviewing = n % 5 === 1
@@ -1155,8 +1156,8 @@ describe("the removal preview inside Convex's limits", () => {
 
   /* Previews deleting Hardware and removing Emil from it, then runs the
    * writes, and logs what each read. */
-  async function previewCrowd(members: number, each: number) {
-    const { t, f, emil } = await crowd(members, each)
+  async function previewCrowd(members: number, each: number, holders = members) {
+    const { t, f, emil } = await crowd(members, each, holders)
     const deletion = { kind: 'delete_team', team_id: f.team.id } as const
     const member = { kind: 'team_member', team_id: f.team.id, user_id: emil } as const
     const results: Record<string, unknown> = {}
@@ -1192,7 +1193,7 @@ describe("the removal preview inside Convex's limits", () => {
       ),
     )
     results['delete keep write'] = kept
-    console.info(`${members} members holding ${members * each} tasks`, results)
+    console.info(`${members} members holding ${holders * each} tasks`, results)
     return results
   }
 
@@ -1200,17 +1201,17 @@ describe("the removal preview inside Convex's limits", () => {
     const results = await previewCrowd(95, 2)
     expect(results['delete preview']).toMatchObject({ state: 'ok', people: 95, tasks: 190 })
     expect(results['member preview']).toMatchObject({ state: 'ok', people: 1, tasks: 2 })
-  }, 120_000)
+  })
 
-  it('previews a team deletion and a member removal of 1,000 members holding 2,000 open tasks', async () => {
-    await previewCrowd(1000, 2)
-  }, 300_000)
+  it("previews a team deletion and a member removal of 995 members, with withOrg's five the organization's 1,000, 30 of them holding an open task", async () => {
+    await previewCrowd(995, 1, 30)
+  })
 
   it("bounds Keep's changers when many people can still change many projects", async () => {
-    // Team Wide shares two top-level projects of 500 sub-projects each. Each
+    // Team Wide shares two top-level projects of 30 sub-projects each. Each
     // of its 200 members keeps User on one of them through a grant of their
     // own and holds a task in the other. Without a bound, the answer named
-    // 501 projects for each of them, 100,200 project rows and about 20 MB.
+    // 31 projects for each of them, 6,200 project rows.
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const wide = uuid()
@@ -1244,11 +1245,11 @@ describe("the removal preview inside Convex's limits", () => {
     })
     for (const [m, parent_id] of metas.entries())
       await t.run(async (ctx) => {
-        for (let i = 0; i < 500; i++) {
+        for (let i = 0; i < 30; i++) {
           const id = uuid()
           await ctx.db.insert(
             'projects',
-            project(id, 1000 + m * 500 + i, { type: 'project', parent_id }),
+            project(id, 1000 + m * 30 + i, { type: 'project', parent_id }),
           )
           if (i === 0) firstSubs.push(id)
         }
@@ -1295,16 +1296,16 @@ describe("the removal preview inside Convex's limits", () => {
     const p = await previewOk(t, f.admin, change)
     expect(p.people).toHaveLength(200)
     expect(p.keep.targets).toEqual(metas)
-    // every one of them still changes a parent and its 500 sub-projects
+    // every one of them still changes a parent and its 30 sub-projects
     expect(p.keep.changers).toHaveLength(200)
     for (const c of p.keep.changers) {
       expect(c.projects).toHaveLength(PREVIEW.changerProjects)
-      expect(c.projects.length + c.more).toBe(501)
+      expect(c.projects.length + c.more).toBe(31)
     }
     // the parents and the first sub-projects of each, once
     expect(p.projects).toHaveLength(2 + 2 * (PREVIEW.changerProjects - 1))
     const m = await measured(t, (ctx) => previewRemoval(ctx, f.admin, change))
-    console.info("Keep's changers over 2 x 501 projects", {
+    console.info("Keep's changers over 2 x 31 projects", {
       answer_bytes: getConvexSize(m.answer as RemovalPreview),
       ranges: m.ranges,
       documents: m.documents,
@@ -1312,15 +1313,19 @@ describe("the removal preview inside Convex's limits", () => {
     })
     // its people and changers, about 360 bytes for each of the 200
     expect(getConvexSize(m.answer as RemovalPreview)).toBeLessThan(128 * 1024)
-  }, 120_000)
+  })
 
-  /* withOrg under the deployment's limits, with a second team, Platform,
-   * beside Hardware, which shares TBED; Mia, a member of Hardware, holds
-   * one task in Firmware beside 320 open tasks with descriptions at the cap
-   * in a three-byte script, about 60 KB each and 19 MB in all, past the
-   * 16 MiB one request reads. */
+  /* withOrg with a second team, Platform, beside Hardware, which shares
+   * TBED; Mia, a member of Hardware, holds one task in Firmware beside 299
+   * open tasks of ordinary text, the sub-project's 300, under a limit of ROOM_BYTES on the bytes
+   * one transaction reads, which those tasks pass as 320 descriptions at the
+   * cap passed the 16 MiB a deployment allows. The scan for held work checks
+   * its room every 10 tasks (model/projectAccess.ts TASK_GUARD_ROWS), so the
+   * limit holds 10 tasks past the 95% the removal keeps, and about 200 tasks
+   * reach that share. */
+  const ROOM_BYTES = 144 * 1024
   async function pastTheRoom() {
-    const t = newT({ transactionLimits: true })
+    const t = newT({ transactionLimits: { bytesRead: ROOM_BYTES } })
     const f = await withOrg(t)
     const mia = await plantSeat(t, { org_id: f.org.id, name: 'Mia', accepted_at: NOW })
     await t.run(async (ctx) => {
@@ -1343,25 +1348,28 @@ describe("the removal preview inside Convex's limits", () => {
       })
     })
     await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, assignee_id: mia.id })
-    const description = '€'.repeat(LIMITS.description.max)
-    for (let from = 0; from < 320; from += 80)
-      await t.run(async (ctx) => {
-        for (let i = from; i < from + 80; i++)
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id: f.sub.id,
-            num: 5000 + i,
-            title: `Long ${i}`,
-            description,
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            assignee_id: f.user.id,
-            created_at: NOW,
-            updated_at: NOW,
-          })
-      })
+    const description =
+      'Check the sensor calibration on the new boards, compare it with the last batch and note any drift above the tolerance. '.repeat(
+        2,
+      )
+    await t.run(async (ctx) => {
+      // 299 beside Mia's, FW's 300 open tasks
+      for (let i = 0; i < 299; i++)
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          num: 5000 + i,
+          title: `Calibration check ${i}`,
+          description,
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          assignee_id: f.user.id,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+    })
     return { t, f, mia }
   }
 
@@ -1383,7 +1391,7 @@ describe("the removal preview inside Convex's limits", () => {
       'rule',
     )
     expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
-  }, 120_000)
+  })
 
   it('answers too_large for a team deletion past the room, which still deletes the team when it leaves the tasks', async () => {
     // a deletion that leaves the tasks reads none of them
@@ -1396,11 +1404,11 @@ describe("the removal preview inside Convex's limits", () => {
       on_held_tasks: 'leave',
     })
     expect(await preview(t, f.admin, change)).toEqual({ state: 'unavailable' })
-  }, 120_000)
+  })
 
   it('refuses a team deletion that keeps people as Viewers where the preview allowed it, when the deletes fill the room', async () => {
     // Hardware, beside Platform, shares TBED; Mia, a member, holds one task,
-    // and 2,000 more memberships name people who no longer exist. The
+    // and 1,000 more memberships name people who no longer exist. The
     // write also deletes those memberships before it reads sight again,
     // which the preview never does.
     const plant = async (limits: Parameters<typeof newT>[0]) => {
@@ -1411,7 +1419,7 @@ describe("the removal preview inside Convex's limits", () => {
       await b.join(b.f.team.id, mia)
       await b.task(b.f.sub, { assignee_id: mia.id })
       await b.t.run(async (ctx) => {
-        for (let i = 0; i < 2000; i++)
+        for (let i = 0; i < 1000; i++)
           await ctx.db.insert('team_members', {
             team_id: b.f.team.id,
             profile_id: uuid(),
@@ -1422,11 +1430,23 @@ describe("the removal preview inside Convex's limits", () => {
     }
     const m = await plant({ transactionLimits: true })
     const read = await measured(m.t, (ctx) => previewRemoval(ctx, m.f.admin, m.change))
-    const wrote = await measured(m.t, (ctx) =>
-      deleteTeamCore(ctx, { me: m.f.admin, team: m.f.team, held: 'keep_as_viewer', now: NOW }).then(
-        () => 'deleted',
-      ),
-    )
+    // the documents the write had read at each look at its metrics, which
+    // the room checks make
+    const looks: number[] = []
+    const wrote = await measured(m.t, (ctx) => {
+      const metrics = ctx.meta.getTransactionMetrics.bind(ctx.meta)
+      ctx.meta.getTransactionMetrics = async () => {
+        const got = await metrics()
+        looks.push(got.documentsRead.used)
+        return got
+      }
+      return deleteTeamCore(ctx, {
+        me: m.f.admin,
+        team: m.f.team,
+        held: 'keep_as_viewer',
+        now: NOW,
+      }).then(() => 'deleted')
+    })
     expect(wrote.answer).toBe('deleted')
     const used = ({ ranges, documents, bytes }: Omit<typeof wrote, 'answer'>) => ({
       ranges,
@@ -1437,9 +1457,12 @@ describe("the removal preview inside Convex's limits", () => {
       preview: used(read),
       write: used(wrote),
     })
-    expect(wrote.documents).toBeGreaterThan(read.documents + 1500)
-    // a limit whose room the preview's reads stay inside and the write's pass
-    const documentsRead = Math.ceil((read.documents + wrote.documents) / 2 / REASSIGN_ROOM)
+    expect(wrote.documents).toBeGreaterThan(read.documents + 750)
+    // a limit whose room the preview's reads stay inside and the write's
+    // pass at a room check, as the write checks it every 500 memberships
+    const past = looks.find((used) => used > read.documents + 50)
+    expect(past).toBeDefined()
+    const documentsRead = Math.ceil(past! / REASSIGN_ROOM) - 1
     const s = await plant({ transactionLimits: { documentsRead } })
     expect((await previewOk(s.t, s.f.admin, s.change)).keep).toMatchObject({ allowed: true })
     const e = await expectRefusal(
@@ -1451,5 +1474,5 @@ describe("the removal preview inside Convex's limits", () => {
       'rule',
     )
     expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
-  }, 120_000)
+  })
 })

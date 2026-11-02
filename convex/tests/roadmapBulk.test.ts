@@ -162,7 +162,7 @@ describe('roadmap saves and undo of many tasks', () => {
       count: 0,
     })
     expect(await startWeeks(fx)).toEqual(fx.tasks.map(() => null))
-  }, 120_000)
+  })
 
   it('saves tasks whose followers once filled the transaction, and tells them in steps', async () => {
     // Under a limit of 1,500 index ranges, telling 60 tasks' 20 followers
@@ -172,7 +172,7 @@ describe('roadmap saves and undo of many tasks', () => {
     expect(await startWeeks(fx)).toEqual(fx.tasks.map(() => '2026-01-05'))
     await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await messageCount(fx)).toBe(60 * 20)
-  }, 120_000)
+  })
 
   it('refuses a save too large for one transaction, and changes nothing', async () => {
     // Under a limit of 400 index ranges, a save of 60 tasks passes it
@@ -183,7 +183,7 @@ describe('roadmap saves and undo of many tasks', () => {
     expect(await startWeeks(fx)).toEqual(fx.tasks.map(() => null))
     await fx.t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await messageCount(fx)).toBe(0)
-  }, 120_000)
+  })
 
   it('refuses an undo of the whole visit too large for one transaction, and keeps its history', async () => {
     // Without the room check, this undo passes a limit of 800 index ranges
@@ -213,7 +213,7 @@ describe('roadmap saves and undo of many tasks', () => {
         await as(fx.t, fx.user).mutation(api.roadmap.undo, { session_id, all: false }),
       ).toEqual({ count })
     expect(await startWeeks(fx)).toEqual(fx.tasks.map(() => null))
-  }, 240_000)
+  })
 
   it("checks the room before each webhook subscription's sight check", async () => {
     const fx = await planted(1, 0)

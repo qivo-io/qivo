@@ -20,13 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import {
-  LIMITS,
-  linksFull,
-  PARENT_IS_SUBTASK,
-  SUBTASK_WITH_SUBTASKS,
-  TEXT_MAX,
-} from '../lib/limits'
+import { LIMITS, linksFull, MIB, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import { ARCHIVED_DETACH, STALLED_MS } from '../model/deletedItems'
 import { DROPPED_IMAGES_MAX, DROPPED_KEEP_MS, IMAGE_NOT_ATTACHED } from '../model/descriptionImages'
 import { insertTask, patchTask } from '../model/descriptions'
@@ -525,25 +519,25 @@ describe('a move that carries archived subtasks', () => {
     return await plantProject(fx.t, { org_id: fx.org.id, type: 'project', parent_id: other.id })
   }
 
-  /* Plants `active` and `archived` subtasks of `parent` with the longest
-   * title and description, about 60 KB each and as much again in their
-   * description rows, at most fifty per write. The task rows hold the copy
-   * of the text earlier releases wrote, as every deployment's do until the
-   * description backfill's clear; convex/tests/descriptions.test.ts
-   * measures the capacities once it has cleared them. */
-  const plantLong = async (
+  /* Plants `active` and `archived` subtasks of `parent` with ordinary text,
+   * an 80-character title and a one-line description. The task rows hold the
+   * copy of the text earlier releases wrote, as every deployment's do until
+   * the description backfill's clear; convex/tests/descriptions.test.ts
+   * measures the capacities with the longest descriptions. */
+  const plantFamily = async (
     fx: Fx,
     parent: Doc<'issues'>,
     count: { active: number; archived: number },
   ) => {
-    const long = { description: 'あ'.repeat(TEXT_MAX), title: 'あ'.repeat(LIMITS.title.max) }
-    const kids: Doc<'issues'>[] = []
-    for (const [n, over] of [
-      [count.archived, { archived_at: NOW }],
-      [count.active, {}],
-    ] as const)
-      for (let left = n; left > 0; left -= 50)
-        kids.push(...(await plantSubtasks(fx, parent, Math.min(50, left), { ...long, ...over })))
+    const text = {
+      title: 'Check the revised supplier dates against the bring-up plan for the second board',
+      description:
+        'Compare the new dates with the plan and flag any step that slips past the review.',
+    }
+    const kids = [
+      ...(await plantSubtasks(fx, parent, count.archived, { ...text, archived_at: NOW })),
+      ...(await plantSubtasks(fx, parent, count.active, text)),
+    ]
     await copyTaskTexts(
       fx.t,
       fx.org.id,
@@ -553,6 +547,13 @@ describe('a move that carries archived subtasks', () => {
     await countOrg(fx.t, fx.org.id)
     return kids
   }
+
+  /* A test deployment whose transactions may read 2 MiB and `room` bytes.
+   * A move reads each description row only while two rows at Convex's
+   * document size limit, and what its answer reads again, still fit
+   * (model/issues.ts rowsForPatch), so it is refused once it has read about
+   * `room`, less what its answer reads. */
+  const roomFor = (room: number) => newT({ transactionLimits: { bytesRead: 2 * MIB + room } })
 
   /* A REST move of `parent` to `dest`. */
   const restMove = (fx: Fx, parent: Doc<'issues'>, dest: Doc<'projects'>) =>
@@ -564,24 +565,29 @@ describe('a move that carries archived subtasks', () => {
       body: JSON.stringify({ project: dest.id }),
     })
 
-  it('moves fifty subtasks with the longest descriptions over REST within the real limits, and answers in full', async () => {
+  it(`moves ${LIMITS.moveSubtree.max} subtasks over REST within the real limits, and answers in full`, async () => {
     const fx = await setup(newT({ transactionLimits: true }))
     const parent = await task(fx, { title: 'Long family' })
-    const kids = await plantLong(fx, parent, { active: 25, archived: 25 })
+    const kids = await plantFamily(fx, parent, {
+      active: LIMITS.subtasks.max,
+      archived: LIMITS.moveSubtree.max - LIMITS.subtasks.max,
+    })
     const dest = await elsewhere(fx)
     const answer = await restMove(fx, parent, dest)
     expect(answer.project_id).toBe(dest.id)
     // an active task's answer lists its active subtasks
-    expect(answer.subtasks).toHaveLength(25)
+    expect(answer.subtasks).toHaveLength(LIMITS.subtasks.max)
     for (const kid of kids) expect((await row(fx.t, kid.id)).project_id).toBe(dest.id)
-  }, 120_000)
+  })
 
-  it('refuses a move of a hundred such subtasks, which reads each one and its row twice, and changes nothing', async () => {
-    const fx = await setup(newT({ transactionLimits: true }))
+  it('refuses a move too large for one transaction with what to do, on every surface, and changes nothing', async () => {
+    // fifty active and fifty archived subtasks read more than 90 KiB before
+    // their patches, past the 48 KiB left here; a task alone reads less
+    // than 10 KiB
+    const fx = await setup(roomFor(48 * 1024))
     const parent = await task(fx, { title: 'Long family' })
-    const kids = await plantLong(fx, parent, { active: 50, archived: 50 })
+    const kids = await plantFamily(fx, parent, { active: 50, archived: 50 })
     const dest = await elsewhere(fx)
-    await refused(restMove(fx, parent, dest), 'rule', MOVE_TOO_LARGE)
     await refused(
       as(fx.t, fx.admin).mutation(api.issues.move, {
         org_id: fx.org.id,
@@ -591,15 +597,35 @@ describe('a move that carries archived subtasks', () => {
       'rule',
       MOVE_TOO_LARGE,
     )
+    await refused(restMove(fx, parent, dest), 'rule', MOVE_TOO_LARGE)
+    await refused(
+      fx.t.mutation(internal.machine.mcp.updateIssue, {
+        callerId: fx.agent.id,
+        access: 'write',
+        ref: key(parent),
+        project: dest.id,
+      }),
+      'rule',
+      MOVE_TOO_LARGE,
+    )
     for (const t of [parent, ...kids]) expect((await row(fx.t, t.id)).project_id).toBe(fx.sub.id)
-  }, 120_000)
+    // a task without subtasks moves under the same limit
+    const lone = await task(fx, { title: 'Lone task' })
+    await as(fx.t, fx.admin).mutation(api.issues.move, {
+      org_id: fx.org.id,
+      id: lone.id,
+      project_id: dest.id,
+    })
+    expect((await row(fx.t, lone.id)).project_id).toBe(dest.id)
+  })
 
   it('refuses a REST move whose answer could not read its active subtasks again, which MCP and the app move', async () => {
-    const fx = await setup(newT({ transactionLimits: true }))
+    // the move of the most active subtasks reads about 90 KiB before their
+    // patches, which fits the 120 KiB left here, but REST's answer reads
+    // them again (lib/core.ts taskOut), about 55 KiB more
+    const fx = await setup(roomFor(120 * 1024))
     const parent = await task(fx, { title: 'Long family' })
-    // the move fits, but REST's answer reads the 58 active subtasks again
-    // (lib/core.ts taskOut), past Convex's 16 MiB of reads
-    const kids = await plantLong(fx, parent, { active: 58, archived: 0 })
+    const kids = await plantFamily(fx, parent, { active: LIMITS.subtasks.max, archived: 0 })
     const dest = await elsewhere(fx)
     const family = [parent, ...kids]
     await refused(restMove(fx, parent, dest), 'rule', MOVE_TOO_LARGE)
@@ -622,50 +648,7 @@ describe('a move that carries archived subtasks', () => {
       project_id: fx.sub.id,
     })
     for (const t of family) expect((await row(fx.t, t.id)).project_id).toBe(fx.sub.id)
-  }, 120_000)
-
-  it(`refuses a move of ${LIMITS.moveSubtree.max} such subtasks with what to do, on every surface`, async () => {
-    const fx = await setup(newT({ transactionLimits: true }))
-    const parent = await task(fx, { title: 'Longer family' })
-    const kids = await plantLong(fx, parent, {
-      active: LIMITS.moveSubtree.max / 2,
-      archived: LIMITS.moveSubtree.max / 2,
-    })
-    const dest = await elsewhere(fx)
-    await refused(
-      as(fx.t, fx.admin).mutation(api.issues.move, {
-        org_id: fx.org.id,
-        id: parent.id,
-        project_id: dest.id,
-      }),
-      'rule',
-      MOVE_TOO_LARGE,
-    )
-    await refused(
-      fx.t.mutation(internal.machine.rest.updateIssue, {
-        callerId: fx.agent.id,
-        access: 'write',
-        keyName: 'limits',
-        ref: key(parent),
-        body: JSON.stringify({ project: dest.id }),
-      }),
-      'rule',
-      MOVE_TOO_LARGE,
-    )
-    await refused(
-      fx.t.mutation(internal.machine.mcp.updateIssue, {
-        callerId: fx.agent.id,
-        access: 'write',
-        ref: key(parent),
-        project: dest.id,
-      }),
-      'rule',
-      MOVE_TOO_LARGE,
-    )
-    for (const t of [parent, kids[0], kids[LIMITS.moveSubtree.max - 1]]) {
-      expect((await row(fx.t, t.id)).project_id).toBe(fx.sub.id)
-    }
-  }, 120_000)
+  })
 })
 
 describe('deleting a task with archived subtasks', () => {
@@ -691,15 +674,16 @@ describe('deleting a task with archived subtasks', () => {
 
   it('resumes a step that failed halfway with a smaller page', async () => {
     Object.assign(ARCHIVED_DETACH, { page: 4, room: 0.99 })
-    // each subtask's description takes about 60 KB in its task row too, as
-    // until the description backfill's clear, so four detaches pass the
-    // write limit and the step fails after its third
-    const fx = await setup(newT({ transactionLimits: { bytesWritten: 200_000 } }))
+    // each subtask's description of 5,000 characters is written again in
+    // its task row too, as until the description backfill's clear, so a
+    // page of four detaches passes this lowered write limit and the step
+    // fails; the delete itself fits
+    const fx = await setup(newT({ transactionLimits: { bytesWritten: 12 * 1024 } }))
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const parent = await task(fx, { title: 'Long subtasks' })
     const kids: Doc<'issues'>[] = []
-    const description = 'あ'.repeat(TEXT_MAX)
+    const description = 'Compare the new dates with the plan. '.repeat(140).slice(0, 5_000)
     for (let i = 0; i < 5; i++) {
       const [kid] = await plantSubtasks(fx, parent, 1, { archived_at: NOW, description })
       await fx.t.run((ctx) => ctx.db.patch(kid._id, { description }))
@@ -1438,13 +1422,15 @@ describe('the follower limit', () => {
     )
   })
 
-  it('lists followers and candidates for a lead in an organization of thousands', async () => {
-    // one sight check per person passed 4,096 index ranges here
-    const fx = await setup(newT({ transactionLimits: true }))
+  it('lists followers and candidates for a lead in an organization of 1,000 people', async () => {
+    // a sight check for each person, about two index ranges each, would
+    // pass this lowered limit; the roster reads every level at once
+    // (lib/access.ts projectLevelsForProfiles), a few ranges in all
+    const fx = await setup(newT({ transactionLimits: { databaseQueries: 500 } }))
     const issue = await task(fx)
     const crowd = await plantFollowers(fx, issue, LIMITS.followers.max)
-    // 4,500 more people, 1,200 of them in a team that shares TBED, more
-    // than a bulk sight check reads in full (lib/access.ts SIGHT_READ)
+    // with the fixture's five people and the followers, 895 more make
+    // 1,000, 300 of them in a team that shares TBED
     const team = await fx.t.run(async (ctx) => {
       const team = uuid()
       await ctx.db.insert('teams', {
@@ -1460,7 +1446,7 @@ describe('the follower limit', () => {
         level: 'viewer',
       })
       const members: string[] = []
-      for (let i = 0; i < 4500; i++) {
+      for (let i = 0; i < 895; i++) {
         const id = uuid()
         await ctx.db.insert('profiles', {
           id,
@@ -1473,7 +1459,7 @@ describe('the follower limit', () => {
           kind: 'person',
           created_at: NOW,
         })
-        if (i < 1200) {
+        if (i < 300) {
           await ctx.db.insert('team_members', { team_id: team, profile_id: id, is_leader: false })
           members.push(id)
         }
@@ -1487,7 +1473,7 @@ describe('the follower limit', () => {
     expect(roster.canManage).toBe(true)
     expect(roster.subscribers).toHaveLength(LIMITS.followers.max)
     expect(roster.subscribers).toEqual(expect.arrayContaining(crowd.map((p) => p.id)))
-    // people who see TBED, the team's 1,200 included, and none of the 3,300
+    // people who see TBED, the team's 300 included, and none of the 595
     // who do not
     expect(roster.candidates).toEqual(expect.arrayContaining([fx.user.id, fx.agent.id, ...team]))
     expect(roster.candidates.length).toBeLessThan(team.length + 10)

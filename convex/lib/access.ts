@@ -1712,11 +1712,13 @@ async function sameOrgTeamMembers(ctx: QueryCtx, teamId: string, orgId: string):
  * costs one range and a document a share.
  *
  * So a led project or a grant costs a document, and a membership a document
- * and two ranges (its team and its team's shares). A person with 2,000
- * viewer grants and no proof reads 2,000 rows, about 350 KB in three ranges,
- * and gets false, and one more grant gets null from `rows`. Memberships
- * reach the 1,500 ranges first, after about 750, and a team's shares the
- * 6,000 documents. The task label picker runs the check and then a walk of
+ * and two ranges (its team and its team's shares). As measured on 28
+ * October 2026, past the design size, a person with 2,000 viewer grants and
+ * no proof reads 2,000 rows, about 350 KB in three ranges, and gets false,
+ * and one more grant gets null from `rows`; memberships reach the 1,500
+ * ranges first, after about 750, and a team's shares the 6,000 documents.
+ * convex/tests/labelReads.test.ts now reaches `rows` and `ranges` with
+ * those lowered. The task label picker runs the check and then a walk of
  * NAMED_READ (lib/namedPages.ts), so the two read at most 1,500 + 2,000
  * ranges, 6,000 + 8,000 documents and 4 + 4 MiB, inside Convex's 4,096
  * ranges, 32,000 documents and 16 MiB with room for the call's other reads

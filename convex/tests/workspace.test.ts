@@ -75,9 +75,24 @@ const REAL_LIMITS = {
   transactionLimits: { bytesRead: 16 * 1024 * 1024, documentsRead: 32_000, databaseQueries: 4096 },
 }
 
-/* The largest description the server accepts, of 3-byte characters: about
- * 60 KB stored. */
-const LARGEST = '€'.repeat(20_000)
+/* A description of about 8 KB of ordinary text. */
+const LONG =
+  'Check the sensor calibration on the new boards and note any drift above the tolerance. '.repeat(
+    92,
+  )
+
+/* The parts' byte budgets at an eighth, and the rows they read at once
+ * between two checks, which those budgets hold, for the cases that plant
+ * LONG descriptions where they planted descriptions at the cap in a
+ * three-byte script against the real budgets. */
+const SCALED_BYTES = () => {
+  PAGE.soft.bytes = DEFAULT_PAGE.soft.bytes / 8
+  PAGE.hard.bytes = DEFAULT_PAGE.hard.bytes / 8
+  PAGE.textReserve.bytes = DEFAULT_PAGE.textReserve.bytes / 8
+  PAGE.batch = DEFAULT_PAGE.batch / 8
+  PAGE.kids = 3
+  PAGE.inboxCheck = DEFAULT_PAGE.inboxCheck / 8
+}
 
 /* Plants `n` active tasks with fields `extra`, in writes of 50. */
 async function plantMany(
@@ -181,26 +196,35 @@ describe('a tasks window', () => {
   })
 
   it('reads within the real limits where one read of the organization could not', async () => {
-    // 1,500 tasks with 12,000 characters of description each hold about 17
-    // MiB, past what one transaction may read.
-    const t = newT({
-      transactionLimits: {
-        bytesRead: 16 * 1024 * 1024,
-        documentsRead: 32_000,
-        databaseQueries: 4096,
-      },
-    })
+    // 1,500 open tasks with descriptions of 12,000 characters each hold
+    // about 18 MB, past what one transaction may read. The texts are that
+    // long, not ordinary, because a part's text step reserves a fixed two
+    // documents at Convex's 1 MiB size limit a text (model/descriptions.ts
+    // textsLeft, TEXT_DOCUMENTS * DOCUMENT_MAX_BYTES), which a test cannot
+    // lower, so under a lowered read limit no text would fit. They lie 300
+    // in each of five sub-projects, the design size for one, and at most
+    // 600 in one project.
+    const t = newT(REAL_LIMITS)
     const f = await withOrg(t)
-    const description = 'x'.repeat(12_000)
-    // in three writes, each inside the limit on what one may write
-    for (let batch = 0; batch < 3; batch++)
+    const description = LONG.repeat(2).slice(0, 12_000)
+    const subs = [f.sub.id, f.sub2.id]
+    for (const name of ['Sensors', 'Rigs']) {
+      const meta = await plantProject(t, { org_id: f.org.id, name })
+      for (let n = 0; n < (name === 'Sensors' ? 2 : 1); n++)
+        subs.push(
+          (await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: meta.id })).id,
+        )
+    }
+    // a write of 300 a sub-project, each inside the limit on what one may
+    // write
+    for (const [s, project_id] of subs.entries())
       await t.run(async (ctx) => {
-        for (let i = batch * 500; i < (batch + 1) * 500; i++)
+        for (let i = s * 300; i < (s + 1) * 300; i++)
           await ctx.db.insert('issues', {
             id: uuid(),
             window_key: newWindowKey(),
             org_id: f.org.id,
-            project_id: f.sub.id,
+            project_id,
             num: i + 1,
             title: `Task ${i}`,
             description,
@@ -314,34 +338,43 @@ describe('reads a window cannot bound by its rows', () => {
     }
   })
 
-  it('refuses with a sentence a window whose subtasks would pass the real limits', async () => {
+  it('refuses with a sentence a window whose subtasks would pass its budget', async () => {
     const t = newT(REAL_LIMITS)
+    SCALED_BYTES()
     const f = await withOrg(t)
-    // three parents in the narrowest window, with 100 subtasks each of
-    // about 60 KB: about 18 MB of subtasks, which no cut can part
+    // three parents in the narrowest window, with 99 subtasks each of
+    // about 8 KB: 300 tasks, the design size for one sub-project, and about
+    // 2.4 MB of subtasks, which no cut can part under an eighth of the
+    // parts' budgets, as 300 subtasks of about 60 KB could not under them
     const parents = await plantMany(t, 3, () => ({
       window_key: 'a0000000',
       org_id: f.org.id,
       project_id: f.sub.id,
     }))
-    await plantMany(t, 300, (i) => ({
+    await plantMany(t, 297, (i) => ({
       org_id: f.org.id,
       project_id: f.sub.id,
       parent_id: parents[i % 3].id,
-      description: LARGEST,
+      description: LONG,
     }))
     const w = narrowestOf('a0000000').holds
     const answer = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...w })
     expect(answer).toMatchObject({ state: 'refused', message: expect.stringMatching(/^One part/) })
-  }, 120_000)
+    // the real budgets hold them
+    Object.assign(PAGE, structuredClone(DEFAULT_PAGE))
+    const real = await as(t, f.admin).query(api.workspace.tasks, { org_id: f.org.id, ...w })
+    expect(real).toMatchObject({ state: 'ok' })
+  })
 
-  it('reads tasks shared with many teams within the real limits', async () => {
+  it('reads tasks shared with more teams than it reads at once within the real limits', async () => {
     const t = newT(REAL_LIMITS)
     const f = await withOrg(t)
-    // 25 projects shared with the same 100 teams, the viewer in one
+    // 25 projects shared with the same 5 teams, the viewer in one, past an
+    // OWN_READS.projectShares lowered to 4, as 100 teams passed the real 64
+    OWN_READS.projectShares = 4
     const teams = await t.run(async (ctx) => {
       const ids: string[] = []
-      for (let i = 0; i < 100; i++) {
+      for (let i = 0; i < 5; i++) {
         const id = uuid()
         await ctx.db.insert('teams', {
           id,
@@ -353,7 +386,7 @@ describe('reads a window cannot bound by its rows', () => {
         ids.push(id)
       }
       await ctx.db.insert('team_members', {
-        team_id: ids[99],
+        team_id: ids[4],
         profile_id: f.viewer.id,
         is_leader: false,
       })
@@ -386,17 +419,20 @@ describe('reads a window cannot bound by its rows', () => {
     const shown = new Set(snap?.projects.map((p) => p.id))
     expect(shared.filter((id) => shown.has(id))).toHaveLength(25)
     expect(snap?.issues.map((i) => i.id)).toContain(task.id)
-  }, 120_000)
+  })
 
-  it('cuts an inbox whose tasks would pass the real limits, and says so', async () => {
+  it('cuts an inbox whose tasks would pass its budget, and says so', async () => {
     const t = newT(REAL_LIMITS)
+    SCALED_BYTES()
     const f = await withOrg(t)
-    // 900 archived tasks of about 60 KB each, about 52 MiB, each named by
-    // an unread message, older than one about a task the person is shown
-    const archived = await plantMany(t, 900, () => ({
+    // 300 archived tasks of about 8 KB each, about 2.4 MB, each named by an
+    // unread message, older than one about a task the person is shown, past
+    // an eighth of the inbox's budgets as 900 tasks of about 60 KB were
+    // past them
+    const archived = await plantMany(t, 300, () => ({
       org_id: f.org.id,
       project_id: f.sub.id,
-      description: LARGEST,
+      description: LONG,
       archived_at: NOW,
     }))
     for (let from = 0; from < archived.length; from += 300)
@@ -419,7 +455,11 @@ describe('reads a window cannot bound by its rows', () => {
     if (answer.state !== 'ok') throw new Error(answer.state)
     expect(answer.unread.map((m) => m.issue_id)).toEqual([shown.id])
     expect(answer).toMatchObject({ truncated: true, unreadTruncated: true })
-  }, 120_000)
+    // the real budgets read them all
+    Object.assign(PAGE, structuredClone(DEFAULT_PAGE))
+    const real = await as(t, f.admin).query(api.workspace.inbox, { org_id: f.org.id })
+    expect(real).toMatchObject({ truncated: false })
+  })
 })
 
 describe('windows', () => {
@@ -983,16 +1023,11 @@ describe('answers Convex need not re-send', () => {
 })
 
 describe('many projects', () => {
-  it('a part reads only the projects its rows name, and a parent of 3,000 sub-projects shows for navigation within the real limits', async () => {
-    const t = newT({
-      transactionLimits: {
-        bytesRead: 16 * 1024 * 1024,
-        documentsRead: 32_000,
-        databaseQueries: 4096,
-      },
-    })
+  it('a part reads only the projects its rows name, and a parent of 30 sub-projects shows for navigation within the real limits', async () => {
+    const t = newT(REAL_LIMITS)
     const f = await withOrg(t)
-    // a parent the viewer reaches only through one of its 3,000 sub-projects
+    // a parent the viewer reaches only through the last of its 30
+    // sub-projects, as many as the design size puts under one project
     const parent = uuid()
     const subs = await t.run(async (ctx) => {
       const row = (n: number, parent_id?: string) => ({
@@ -1011,21 +1046,21 @@ describe('many projects', () => {
       })
       await ctx.db.insert('projects', row(0))
       const ids: string[] = []
-      for (let n = 1; n <= 3000; n++)
+      for (let n = 1; n <= 30; n++)
         ids.push((await ctx.db.get(await ctx.db.insert('projects', row(n, parent))))!.id)
       await ctx.db.insert('project_access', {
-        project_id: ids[2999],
+        project_id: ids[29],
         profile_id: f.viewer.id,
         level: 'viewer',
       })
-      await patchCounters(ctx, f.org.id, { next_project_num: 4001 })
+      await patchCounters(ctx, f.org.id, { next_project_num: 1031 })
       return ids
     })
-    const task = await plantIssue(t, { org_id: f.org.id, project_id: subs[2999] })
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: subs[29] })
     const snap = await workspaceOf(as(t, f.viewer))
     const shown = new Set(snap?.projects.map((p) => p.id))
     expect(shown.has(parent)).toBe(true)
-    expect(shown.has(subs[2999])).toBe(true)
+    expect(shown.has(subs[29])).toBe(true)
     expect(subs.filter((id) => shown.has(id))).toHaveLength(1)
     expect(snap?.issues.map((i) => i.id)).toContain(task.id)
     // the task's window reads its task and project, not the organization's
@@ -1036,7 +1071,7 @@ describe('many projects', () => {
       return (await ctx.meta.getTransactionMetrics()).documentsRead.used
     })
     expect(read).toBeLessThan(30)
-  }, 120_000)
+  })
 
   it('shows a task exactly where the person sees its project, for every kind of grant, however their own rows are read', async () => {
     const shownProjects = {
@@ -1340,8 +1375,9 @@ describe('the projects and people parts', () => {
         profile_id: f.viewer.id,
         level: 'viewer',
       })
-      // 60 more teams of the person, whose shares navigation reads
-      for (let i = 0; i < 60; i++) {
+      // 4 more teams of the person, 5 in all, the design size, whose shares
+      // navigation reads
+      for (let i = 0; i < 4; i++) {
         const id = uuid()
         await ctx.db.insert('teams', {
           id,
@@ -1357,9 +1393,12 @@ describe('the projects and people parts', () => {
         })
       }
     })
-    PAGE.soft.ranges = 40
-    // the organization's teams read at once, and each team by its own read
-    for (const manyTeams of [DEFAULT_OWN_READS.manyTeams, Number.POSITIVE_INFINITY]) {
+    // above the window's own 9 ranges and below them with the reads of the
+    // person's 5 teams, as 40 was with 60 teams
+    PAGE.soft.ranges = 10
+    // the organization's teams read at once, from a manyTeams lowered below
+    // the person's 5 teams, and each team by its own read
+    for (const manyTeams of [2, Number.POSITIVE_INFINITY]) {
       OWN_READS.manyTeams = manyTeams
       const answer = await as(t, f.viewer).query(api.workspace.projects, {
         org_id: f.org.id,
@@ -1563,9 +1602,11 @@ describe('a check of the caller access that a bound stops', () => {
     const t = newT()
     const f = await withOrg(t)
     const me = await plantTeamMember(t, f)
-    // eight more sub-projects of TBED, each shared with 65 teams that are
-    // not the member's, and more than OWN_READS.rows shares of the member's
-    // team elsewhere, so each sub-project's team is asked by itself
+    // eight more sub-projects of TBED, each shared with 5 teams that are
+    // not the member's, past an OWN_READS.projectShares lowered to 4, and
+    // more than a lowered OWN_READS.rows shares of the member's team
+    // elsewhere, so each sub-project's team is asked by itself
+    Object.assign(OWN_READS, { projectShares: 4, rows: 10 })
     const wide: Doc<'projects'>[] = []
     for (let n = 0; n < 8; n++)
       wide.push(await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }))
@@ -1601,7 +1642,7 @@ describe('a check of the caller access that a bound stops', () => {
     expect([...shown].sort()).toEqual([f.meta.id, f.sub.id].sort())
   })
 
-  it('shows a parent of 3,000 sub-projects for navigation from reach rows, reading a few documents', async () => {
+  it('shows a parent of 30 sub-projects for navigation from reach rows, reading a few documents', async () => {
     const t = newT(REAL_LIMITS)
     const f = await withOrg(t)
     const parent = uuid()
@@ -1622,31 +1663,35 @@ describe('a check of the caller access that a bound stops', () => {
       })
       await ctx.db.insert('projects', row(0))
       const ids: string[] = []
-      for (let n = 1; n <= 3000; n++)
+      for (let n = 1; n <= 30; n++)
         ids.push((await ctx.db.get(await ctx.db.insert('projects', row(n, parent))))!.id)
       await ctx.db.insert('project_access', {
-        project_id: ids[2999],
+        project_id: ids[29],
         profile_id: f.viewer.id,
         level: 'viewer',
       })
-      await patchCounters(ctx, f.org.id, { next_project_num: 4001 })
+      await patchCounters(ctx, f.org.id, { next_project_num: 1031 })
       return ids
     })
     await withReach(t)
     const snap = await workspaceOf(as(t, f.viewer))
     const shown = new Set(snap?.projects.map((p) => p.id))
     expect(shown.has(parent)).toBe(true)
-    expect(subs.filter((id) => shown.has(id))).toEqual([subs[2999]])
-    // the readiness row, the viewer's root row, the child row and its project
+    expect(subs.filter((id) => shown.has(id))).toEqual([subs[29]])
+    // the readiness row, the viewer's root row, the child row and its
+    // project, fewer than the parent's 30 sub-projects
     const read = await t.run(async (ctx) => {
       const levels = projectLevelsOf(ctx, f.viewer)
       expect(await levels.level(parent)).toBe('viewer')
       return (await ctx.meta.getTransactionMetrics()).documentsRead.used
     })
     expect(read).toBeLessThan(15)
-  }, 240_000)
+  })
 
   it("refuses the projects part of a person in more teams than the legacy path reads, or whose teams' shares it cannot read, where a parent shows only for navigation", async () => {
+    // bounds lowered so that people in up to 5 teams, the design size,
+    // pass them, as people in 129 and 257 teams passed the real ones
+    Object.assign(OWN_READS, { navTeams: 2, teams: 4, rows: 20, navRows: 20 })
     const t = newT(REAL_LIMITS)
     const f = await withOrg(t)
     // a person per case, each with a team that shares FW, so TBED shows
@@ -1695,5 +1740,5 @@ describe('a check of the caller access that a bound stops', () => {
       if (part.state === 'ok')
         expect(part.projects.map((p) => p.key).sort(), JSON.stringify(c)).toEqual(['FW', 'TBED'])
     }
-  }, 240_000)
+  })
 })

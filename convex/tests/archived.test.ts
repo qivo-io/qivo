@@ -122,6 +122,10 @@ const archiveOrder = (t: T, orgId: string, projectIds: string[]) =>
 /* Task numbers for plantMany, clear of plantIssue's. */
 let bulkNum = 200_000
 
+/* A sentence of ordinary text, which descriptions repeat to a length. */
+const ORDINARY =
+  'Check the sensor calibration on the new boards and note any drift above the tolerance. '
+
 /* `count` archived tasks in one transaction, without reading anything. */
 const plantMany = (
   t: T,
@@ -543,16 +547,17 @@ describe('issues.archivedPage', () => {
   it('reads only the profiles of the tasks a search judges, and each task’s labels past the scan', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // 3,000 people and 150 labels, past a scan lowered to 100
+    // 995 people, with withOrg's five the organization's 1,000, and 150
+    // labels, past a scan lowered to 100
     const people = await t.run(async (ctx) => {
       const ids: string[] = []
-      for (let i = 0; i < 3000; i++) {
+      for (let i = 0; i < 995; i++) {
         const id = uuid()
         ids.push(id)
         await ctx.db.insert('profiles', {
           id,
           org_id: f.org.id,
-          name: i === 2900 ? 'Quentin Marsh' : `Person ${i}`,
+          name: i === 870 ? 'Quentin Marsh' : `Person ${i}`,
           initials: 'PP',
           color: '#7a7ad0',
           org_role: 'user',
@@ -583,7 +588,7 @@ describe('issues.archivedPage', () => {
     const ids = await plantMany(t, f, 30, (i) => ({
       project_id: f.sub.id,
       archived_at: day(1 + i),
-      assignee_id: people[i * 100],
+      assignee_id: people[i * 30],
     }))
     await t.run(async (ctx) => {
       for (const [i, issue_id] of ids.entries())
@@ -718,7 +723,7 @@ describe('issues.archivedPage', () => {
     const missing = await pageOf(t, f.admin, { ...allOf(f.org.id), search: 'hardwarez' })
     expect(missing.rows).toHaveLength(0)
     expect(missing.next_cursor).not.toBeNull()
-  }, 120_000)
+  })
 
   it('keeps paging in order while tasks are archived and restored', async () => {
     for (const scopeFor of [
@@ -1459,13 +1464,14 @@ describe('issues.archivedPage', () => {
     expect(await pageOf(t, member, allOf(f.org.id))).toEqual(TOO_WIDE)
   })
 
-  it('refuses a scope whose projects’ newest tasks at the longest text do not fit one page side by side', async () => {
+  it('refuses a scope whose projects’ newest tasks with long text do not fit one page side by side', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // 199 more sub-projects of TBED, 200 projects with TBED itself, the most a page merges
+    // 28 more sub-projects of TBED, 30 in all, as many as the design size
+    // puts under one project
     const subs = [f.sub.id, f.sub2.id]
     await t.run(async (ctx) => {
-      for (let i = 0; i < 197; i++) {
+      for (let i = 0; i < 28; i++) {
         const id = uuid()
         subs.push(id)
         await ctx.db.insert('projects', {
@@ -1483,11 +1489,14 @@ describe('issues.archivedPage', () => {
         })
       }
     })
-    // each holds one archived task at the description cap in a three-byte
-    // script, on its description row and in the copy on its task row that
-    // earlier releases wrote, as every deployment holds them until the
-    // description backfill's clear
-    const text = '漢'.repeat(LIMITS.description.max)
+    // each holds one archived task with a description of 2,000 characters,
+    // on its description row and in the copy on its task row that earlier
+    // releases wrote, as every deployment holds them until the description
+    // backfill's clear; the page's bytes are lowered to 48 KiB, which those
+    // copies pass as 200 descriptions at the cap in a three-byte script
+    // passed the real 8 MiB
+    const text = ORDINARY.repeat(25).slice(0, 2_000)
+    ARCHIVE_PAGE.bytes = 48 * 1024
     const tasks: string[] = []
     for (let batch = 0; batch < subs.length; batch += 25) {
       await t.run(async (ctx) => {
@@ -1540,15 +1549,16 @@ describe('issues.archivedPage', () => {
     expect(cleared.bytes).toBeLessThan(2 << 20)
     await copyTaskTexts(t, f.org.id, tasks)
     const full = await measured()
-    // 200 newest tasks of about 61 KB pass the page's 8 MiB, so the page is refused
+    // 30 newest tasks of about 2.3 KB pass the page's 48 KiB, so the page
+    // is refused
     expect(full.tooWide).toBe(true)
     expect(full.bytes).toBeLessThan(16 << 20)
-    // with 120 of them archived it opens them side by side and lists
-    await unarchive(t, tasks.slice(120))
+    // with 18 of them archived it opens them side by side and lists
+    await unarchive(t, tasks.slice(18))
     const fits = await measured()
     console.info('archived projects side by side', { cleared, full, fits })
-    expect(fits).toMatchObject({ rows: 25, tooWide: false })
-  }, 300_000)
+    expect(fits).toMatchObject({ rows: 18, tooWide: false })
+  })
 
   it('answers each organization of a login with two seats through its seat there', async () => {
     const t = newT()
@@ -1695,12 +1705,13 @@ describe('issues.archivedPage', () => {
     expect(await pageOf(t, f.admin, repeated)).toEqual({ rows: [], next_cursor: null, scanned: 0 })
   })
 
-  it('answers an All projects search of 2,500 long archived tasks inside Convex’s limits', async () => {
+  it('answers an All projects search of 1,500 archived tasks inside Convex’s limits', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // 3,000 people and 1,500 labels, past ARCHIVE_LABELS.scan
+    // 995 people, with withOrg's five the organization's 1,000, and 1,100
+    // labels, past ARCHIVE_LABELS.scan
     await t.run(async (ctx) => {
-      for (let i = 0; i < 3000; i++)
+      for (let i = 0; i < 995; i++)
         await ctx.db.insert('profiles', {
           id: uuid(),
           org_id: f.org.id,
@@ -1715,7 +1726,7 @@ describe('issues.archivedPage', () => {
     })
     const labelIds = await t.run(async (ctx) => {
       const ids: string[] = []
-      for (let i = 0; i < 1500; i++) {
+      for (let i = 0; i < ARCHIVE_LABELS.scan + 100; i++) {
         const id = uuid()
         ids.push(id)
         await ctx.db.insert('labels', {
@@ -1729,10 +1740,10 @@ describe('issues.archivedPage', () => {
       }
       return ids
     })
-    // descriptions at the 20,000-character cap in a three-byte script, on
-    // the task row and on its description row, as release 2 stores them
-    const text = '漢'.repeat(LIMITS.description.max)
-    for (let batch = 0; batch < 50; batch++) {
+    // descriptions of ordinary text, on the task row and on its
+    // description row, as release 2 stores them
+    const text = ORDINARY.repeat(12).slice(0, 1_000)
+    for (let batch = 0; batch < 30; batch++) {
       await t.run(async (ctx) => {
         for (let i = 0; i < 50; i++) {
           const n = batch * 50 + i
@@ -1800,7 +1811,7 @@ describe('issues.archivedPage', () => {
     const page = await pageOf(t, f.admin, { ...allOf(f.org.id), search: 'nothing matches this' })
     expect(page.rows).toEqual([])
     expect(page.next_cursor).not.toBeNull()
-  }, 300_000)
+  })
 })
 
 describe('a check of the caller access that a bound stops', () => {
@@ -1837,13 +1848,17 @@ describe('a check of the caller access that a bound stops', () => {
     expect(await page()).toEqual(usual)
   })
 
-  it("refuses a scope of 200 sub-projects each shared with more teams than it reads, inside Convex's limits", async () => {
+  it("refuses a scope of 30 sub-projects each shared with more teams than it reads, inside Convex's limits", async () => {
+    // a project shared with 5 teams, the design size, passes projectShares;
+    // the team's 41 shares pass rows; and the 30 sub-projects, one team read
+    // each, pass teamReads
+    Object.assign(OWN_READS, { projectShares: 4, rows: 10, teamReads: 20 })
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
     const meta = await plantProject(t, { org_id: f.org.id, name: 'Wide family' })
     const subs: Doc<'projects'>[] = []
-    for (let n = 0; n < ARCHIVED_SCOPE.subProjects; n++)
+    for (let n = 0; n < 30; n++)
       subs.push(await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: meta.id }))
     const others = await t.run(async (ctx) => {
       const ids: string[] = []
@@ -1860,7 +1875,7 @@ describe('a check of the caller access that a bound stops', () => {
       }
       return ids
     })
-    // the member's team shares every sub-project, with 64 other teams, and
+    // the member's team shares every sub-project, with 4 other teams, and
     // more than OWN_READS.rows projects elsewhere
     await t.run(async (ctx) => {
       await ctx.db.insert('team_members', {
@@ -1875,16 +1890,15 @@ describe('a check of the caller access that a bound stops', () => {
           level: 'viewer',
         })
     })
-    for (let at = 0; at < subs.length; at += 20)
-      await t.run(async (ctx) => {
-        for (const sub of subs.slice(at, at + 20))
-          for (const team_id of [f.team.id, ...others])
-            await ctx.db.insert('project_team_access', {
-              project_id: sub.id,
-              team_id,
-              level: 'user',
-            })
-      })
+    await t.run(async (ctx) => {
+      for (const sub of subs)
+        for (const team_id of [f.team.id, ...others])
+          await ctx.db.insert('project_team_access', {
+            project_id: sub.id,
+            team_id,
+            level: 'user',
+          })
+    })
     await plantIssue(t, { org_id: f.org.id, project_id: subs[0].id, archived_at: NOW })
     // the team's reach rows, as planReach writes them, and the stamps
     await t.run(async (ctx) => {
@@ -1906,5 +1920,5 @@ describe('a check of the caller access that a bound stops', () => {
     })
     const refused = await expectRefusal(pageOf(t, me, scopeOf(f.org.id, meta.id)), 'rule')
     expect(refused.data.reason).toBe(ACCESS_UNCHECKED)
-  }, 240_000)
+  })
 })

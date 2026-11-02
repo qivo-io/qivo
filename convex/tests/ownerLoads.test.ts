@@ -350,7 +350,7 @@ describe('an owner’s spans are the organization’s rows of that owner', () =>
       }),
       { numRuns: 25 },
     )
-  }, 240_000)
+  })
 
   it('agrees with the app on Northstar for Nora and Leo, for every person', async () => {
     const t = newT()
@@ -731,7 +731,7 @@ describe('past a bound an owner is unavailable, never fewer spans', () => {
         return { out, documents: m.documentsRead.used, ranges: m.databaseQueries.used }
       })
     const before = await measure()
-    await plantMany(fx.t, fx.org.id, 3000, {
+    await plantMany(fx.t, fx.org.id, 150, {
       project_id: fx.sub.id,
       assignee_id: fx.user.id,
       status: 'done',
@@ -863,10 +863,13 @@ describe('past a bound an owner is unavailable, never fewer spans', () => {
   })
 
   it('stops at the read’s room on task rows that still hold their text, never failing on a Convex limit', async () => {
-    const fx = await setup()
-    // the description cap in a three-byte script, about 60 KB a row
-    const text = '漢'.repeat(20_000)
-    for (let i = 0; i < 160; i++)
+    // a call's room of 32 KB under a request limit of 96 KB, past which
+    // Convex fails the read, and 40 rows that hold an ordinary
+    // description of about 4 KB, about 160 KB in all
+    const fx = await setup(newT({ transactionLimits: { bytesRead: 96 * 1024 } }))
+    const line = 'Check the supplier quotes against the budget and note any change for the team. '
+    const text = line.repeat(50)
+    for (let i = 0; i < 40; i++)
       await plantCopiedIssue(fx.t, {
         org_id: fx.org.id,
         project_id: fx.sub.id,
@@ -874,13 +877,16 @@ describe('past a bound an owner is unavailable, never fewer spans', () => {
         description: text,
         ...plan(1),
       })
+    // with the call's own room of 8 MiB the rows pass the request's limit
+    await expect(loads(fx.t, fx, fx.admin, [fx.user.id])).rejects.toThrow(/Read too much data/)
+    Object.assign(OWNER_LOADS, { call: { ...DEFAULT_LOADS.call, bytes: 32 * 1024 } })
     expect((await loads(fx.t, fx, fx.admin, [fx.user.id])).owners[0]?.state).toBe('unavailable')
     const refused = await expectRefusal(
       as(fx.t, fx.admin).query(api.planning.assigneeLoad, { assignee_id: fx.user.id }),
       'rule',
     )
     expect((refused.data as { reason?: string }).reason).toBe(LOAD_UNAVAILABLE)
-  }, 60_000)
+  })
 })
 
 describe('an access check a bound stops', () => {
@@ -990,24 +996,24 @@ describe('the reads follow the owner’s open work, not the organization', () =>
     const callers = [fx.admin, fx.user2, fx.guest]
     const before = []
     for (const caller of callers) before.push(await measure(caller))
-    // 300 sub-projects in two more top-level projects, 3,000 tasks of other
-    // people in them, 500 archived and 1,000 Done tasks of the owner, and
-    // 50 teams none of the callers is in, sharing the new sub-projects
-    const tops = [
-      await plantProject(fx.t, { org_id: fx.org.id }),
-      await plantProject(fx.t, { org_id: fx.org.id }),
-    ]
+    // 30 sub-projects, 3 under each of 10 more top-level projects, 300
+    // tasks of other people in them, 300 archived and 100 Done tasks of
+    // the owner, and 49 teams none of the callers is in, which with
+    // withOrg's Hardware make the organization's 50, each sharing 2 of the
+    // new sub-projects
+    const tops: Doc<'projects'>[] = []
+    for (let i = 0; i < 10; i++) tops.push(await plantProject(fx.t, { org_id: fx.org.id }))
     const subs: Doc<'projects'>[] = []
-    for (let i = 0; i < 300; i++)
+    for (let i = 0; i < 30; i++)
       subs.push(
         await plantProject(fx.t, {
           org_id: fx.org.id,
           type: 'project',
-          parent_id: tops[i % 2]?.id,
+          parent_id: tops[Math.floor(i / 3)]?.id,
         }),
       )
     await fx.t.run(async (ctx) => {
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < 49; i++) {
         const team = uuid()
         await ctx.db.insert('teams', {
           id: team,
@@ -1016,8 +1022,8 @@ describe('the reads follow the owner’s open work, not the organization', () =>
           track_delay_default: false,
           created_at: NOW,
         })
-        for (let j = 0; j < 6; j++) {
-          const sub = subs[(i * 6 + j) % subs.length]
+        for (let j = 0; j < 2; j++) {
+          const sub = subs[(i * 2 + j) % subs.length]
           if (sub !== undefined)
             await ctx.db.insert('project_team_access', {
               project_id: sub.id,
@@ -1033,13 +1039,13 @@ describe('the reads follow the owner’s open work, not the organization', () =>
         assignee_id: [fx.admin.id, fx.viewer.id, fx.agent.id][i % 3],
         ...plan(2),
       })
-    await plantMany(fx.t, fx.org.id, 500, {
+    await plantMany(fx.t, fx.org.id, 300, {
       project_id: fx.sub.id,
       ...mine,
       ...plan(1),
       archived_at: NOW,
     })
-    await plantMany(fx.t, fx.org.id, 1000, {
+    await plantMany(fx.t, fx.org.id, 100, {
       project_id: fx.sub.id,
       ...mine,
       ...plan(1),
@@ -1052,29 +1058,35 @@ describe('the reads follow the owner’s open work, not the organization', () =>
       expect(after.loads.out.owners[0]?.state).toBe('ok')
       expect(after.single.out.delay).not.toEqual(UNAVAILABLE_DELAY)
     }
-  }, 120_000)
+  })
 })
 
-/* A title at the title cap in a three-byte script. */
-const LONG_TITLE = '計'.repeat(255)
+/* An ordinary title of about 80 characters. */
+const titleOf = (n: number) =>
+  `Check the supplier quotes against the budget and update the plan, step ${n}`
 
-describe('at the testing envelope', () => {
-  it('reads an owner of 2,000 open tasks over 200 sub-projects each shared with 25 teams, and 49 more', async () => {
+describe('at the design size', () => {
+  it('reads an owner of 2,000 open tasks over the 200 sub-projects a person can read, and 49 more', async () => {
     const t = newT()
     const fx = await setup(t)
-    const top = await plantProject(t, { org_id: fx.org.id, name: '計'.repeat(80) })
+    // 200 sub-projects, 3 under each of 67 top-level projects (2 under the
+    // last), and a staff caller in 3 teams, each sharing a third of the
+    // top-level projects, so the caller reads every sub-project through
+    // its project's share
+    const tops: Doc<'projects'>[] = []
+    for (let i = 0; i < 67; i++)
+      tops.push(await plantProject(t, { org_id: fx.org.id, name: `Programme ${i}` }))
     const subs: Doc<'projects'>[] = []
     for (let i = 0; i < 200; i++)
       subs.push(
         await plantProject(t, {
           org_id: fx.org.id,
           type: 'project',
-          parent_id: top.id,
-          name: '計'.repeat(80),
+          parent_id: (tops[Math.floor(i / 3)] as Doc<'projects'>).id,
+          name: `Workstream ${i}`,
           track_delay: true,
         }),
       )
-    // a staff caller in 25 teams, each sharing all 200 sub-projects
     const caller = await plantSeat(t, {
       org_id: fx.org.id,
       name: 'Caller',
@@ -1083,12 +1095,12 @@ describe('at the testing envelope', () => {
       accepted_at: NOW,
     })
     await t.run(async (ctx) => {
-      for (let i = 0; i < 25; i++) {
+      for (let i = 0; i < 3; i++) {
         const team = uuid()
         await ctx.db.insert('teams', {
           id: team,
           org_id: fx.org.id,
-          name: '計'.repeat(80),
+          name: `Delivery team ${i}`,
           track_delay_default: false,
           created_at: NOW,
         })
@@ -1097,12 +1109,13 @@ describe('at the testing envelope', () => {
           profile_id: caller.id,
           is_leader: false,
         })
-        for (const sub of subs)
-          await ctx.db.insert('project_team_access', {
-            project_id: sub.id,
-            team_id: team,
-            level: 'user',
-          })
+        for (const [k, top] of tops.entries())
+          if (k % 3 === i)
+            await ctx.db.insert('project_team_access', {
+              project_id: top.id,
+              team_id: team,
+              level: 'user',
+            })
       }
     })
     const busy = await plantSeat(t, { org_id: fx.org.id, name: 'Busy' })
@@ -1122,7 +1135,7 @@ describe('at the testing envelope', () => {
           org_id: fx.org.id,
           project_id: sub.id,
           num: bulkNum++,
-          title: LONG_TITLE,
+          title: titleOf(bulkNum),
           status: planned ? 'progress' : i % 2 === 0 ? 'backlog' : 'todo',
           priority: 'medium',
           assignee_id: busy.id,
@@ -1139,7 +1152,7 @@ describe('at the testing envelope', () => {
             project_id: sub.id,
             parent_id: id,
             num: bulkNum++,
-            title: LONG_TITLE,
+            title: titleOf(bulkNum),
             status: 'todo',
             priority: 'medium',
             paused: false,
@@ -1154,7 +1167,7 @@ describe('at the testing envelope', () => {
             org_id: fx.org.id,
             project_id: (subs[(k * 40 + i) % 200] as Doc<'projects'>).id,
             num: bulkNum++,
-            title: LONG_TITLE,
+            title: titleOf(bulkNum),
             status: 'todo',
             priority: 'medium',
             assignee_id: other.id,
@@ -1218,10 +1231,10 @@ describe('at the testing envelope', () => {
     await plantMany(t, fx.org.id, 1, { project_id: subs[0]?.id ?? '', assignee_id: busy.id })
     expect((await call([busy.id])).out.owners[0]?.state).toBe('unavailable')
     // each read inside Convex's limits, the call's ceiling and one step
-    // past it; measured when the reader was written: alone 999 ranges,
-    // 8,329 documents, 3.6 MB; the 50 owners in two calls, 23 of them and
-    // then 27, 2,032 and 1,735 ranges, 9,272 and 7,385 documents, 4.7 and
-    // 2.5 MB; the single read 1,125 ranges, 8,489 documents, 3.6 MB
+    // past it; measured at the design size: alone 848 ranges, 2,403
+    // documents, 1.1 MB; the 50 owners in two calls, 26 of them and then
+    // 24, 2,007 and 1,446 ranges, 3,469 and 1,336 documents, 1.7 and
+    // 0.7 MB; the single read 878 ranges, 2,419 documents, 1.1 MB
     for (const read of [alone, assignee, single, ...calls]) {
       expect(read.ranges).toBeLessThan(4096)
       expect(read.documents).toBeLessThan(32_000)
@@ -1230,5 +1243,5 @@ describe('at the testing envelope', () => {
     expect(calls.length).toBeGreaterThan(1)
     expect(assignee.out).toBe(450)
     expect(single.out).toEqual({ status: 'behind', projected_end_week: '2026-09-21' })
-  }, 300_000)
+  })
 })

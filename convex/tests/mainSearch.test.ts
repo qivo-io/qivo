@@ -226,6 +226,10 @@ function seeded(seed: number): () => number {
   }
 }
 
+/** Ordinary text `length` characters long, one sentence repeated. */
+const prose = (length: number) =>
+  'Check the bench rig and log the readings. '.repeat(Math.ceil(length / 42)).slice(0, length)
+
 /** A task in `project` of the fixture's organization. */
 const task = (
   t: T,
@@ -546,6 +550,11 @@ describe('seats', () => {
     const t = newT()
     const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
     MAIN_SEARCH.projects = 1
+    // seven seats searched whole, each with an allowance of about a dozen
+    // documents, fewer than the hidden matches below read in its
+    // organization, which together pass the whole budget
+    MAIN_SEARCH.documents = 104
+    SEAT_SHARE.documents = 8
     const seats: Doc<'profiles'>[] = []
     const orgs: string[] = []
     for (let i = 0; i < 7; i++) {
@@ -556,13 +565,17 @@ describe('seats', () => {
     }
     const without = await searchRun(t, seats, { text: 'gearbox' })
     // hidden matches in the first six organizations in seat order, with
-    // descriptions at LIMITS.description in a three-byte script, in the task
-    // rows too, as until the description backfill's clear
-    const long = `${'中'.repeat(LIMITS.description.max - 8)} gearbox`
+    // their text in the task rows too, as until the description backfill's
+    // clear
     for (const org of [...orgs].sort().slice(0, 6)) {
       const root = await plantProject(t, { org_id: org })
       const hidden = await plantProject(t, { org_id: org, type: 'project', parent_id: root.id })
-      await plantMany(t, 24, () => ({ org_id: org, project_id: hidden.id, description: long }), 8)
+      await plantMany(
+        t,
+        24,
+        (i) => ({ org_id: org, project_id: hidden.id, description: `${prose(300 + i)} gearbox` }),
+        8,
+      )
       await copyTaskTexts(t, org)
     }
     const withHidden = await searchRun(t, seats, { text: 'gearbox' })
@@ -634,6 +647,11 @@ describe('main Search across seats', () => {
     const t = newT()
     const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
     MAIN_SEARCH.projects = 1
+    // byte budgets that put the threshold of the allocation before fixed
+    // allowances, which gave each seat SEAT_SHARE and STEP from what the
+    // number lookups left, inside the sweep below
+    MAIN_SEARCH.bytes = 6_424 << 10
+    SEAT_SHARE.bytes = 8 << 10
     const built = await broadSeats(t, login, 4)
     const seats = built.map((b) => b.seat)
     const nums = Array.from({ length: 11 }, (_, i) => 901 + i)
@@ -646,24 +664,24 @@ describe('main Search across seats', () => {
         title: `Gearbox ${nums.join(' ')}`,
         num: 50,
       })
-    // in the first organization, numbered tasks the guest sees, whose
-    // descriptions at LIMITS.description fill the reads before the old
-    // allocation to its threshold, and one numbered task they cannot see
+    // in the first organization, numbered tasks the guest sees and one
+    // numbered task they cannot see
     const [{ org, sub }] = built
     for (const [i, num] of nums.slice(0, -1).entries())
       await plantIssue(t, {
         org_id: org,
         project_id: sub.id,
         num,
-        description: i === 0 ? '' : '中'.repeat(LIMITS.description.max - 10),
+        description: i === 0 ? '' : prose(2_000),
       })
     const root = await plantProject(t, { org_id: org })
     const hidden = await plantProject(t, { org_id: org, type: 'project', parent_id: root.id })
     const secret = await plantIssue(t, { org_id: org, project_id: hidden.id, num: nums[10] })
-    // its text grows 600 bytes at a time across the old threshold
+    // its text grows 2 KB at a time, in its task row and its description
+    // row, up to LIMITS.description, across the old threshold
     const pages: MainSearchPage[] = []
-    for (let chars = 6_000; chars <= 8_600; chars += 200) {
-      await setText(t, secret, '中'.repeat(chars))
+    for (let chars = 0; chars <= LIMITS.description.max; chars += 1_000) {
+      await setText(t, secret, prose(chars))
       pages.push((await searchRun(t, seats, { text })).page)
     }
     for (const page of pages) expect(page).toEqual(pages[0])
@@ -697,7 +715,7 @@ describe('main Search across seats', () => {
     }
     const absent = await answer()
     // the last number now names a task in a project none of them sees,
-    // with a description at LIMITS.description in a three-byte script
+    // with a description at LIMITS.description
     const [first] = [...orgs].sort()
     const root = await plantProject(t, { org_id: first })
     const hidden = await plantProject(t, { org_id: first, type: 'project', parent_id: root.id })
@@ -705,7 +723,7 @@ describe('main Search across seats', () => {
       org_id: first,
       project_id: hidden.id,
       num: nums[5],
-      description: '中'.repeat(LIMITS.description.max),
+      description: prose(LIMITS.description.max),
     })
     expect(await answer()).toEqual(absent)
     expect(absent).toEqual({ rows: [], coverage: COMPLETE, more: false })
@@ -774,12 +792,16 @@ describe('main Search across seats', () => {
       await plantIssue(t, { org_id: org, project_id: sub.id, title: 'Gearbox', num: 7 })
     const laterOrgs = new Set(later.map((b) => b.org))
     // each seat searches its organization whole, or project by project,
-    // with the default budget and with read caps across a band tight enough
-    // that some cap sits beside any threshold a read could cross
+    // with the default ranges and with read caps across a band tight enough
+    // that some cap sits beside any threshold a read could cross, and with
+    // few enough documents that the hidden rows below can spend a seat's
+    // whole document share (SEAT_SHARE.documents)
     const modes = [1, DEFAULT_SEARCH.projects].flatMap((projects) => [
       { projects, ranges: DEFAULT_SEARCH.ranges },
       ...Array.from({ length: 16 }, (_, i) => ({ projects, ranges: 180 + 9 * i })),
     ])
+    MAIN_SEARCH.documents = 120
+    SEAT_SHARE.documents = 8
     const answer = async ({ projects, ranges }: (typeof modes)[number]) => {
       MAIN_SEARCH.projects = projects
       MAIN_SEARCH.ranges = ranges
@@ -795,14 +817,14 @@ describe('main Search across seats', () => {
     for (const mode of modes) base.push(await answer(mode))
     for (const seed of [1, 2, 3, 4, 5]) {
       // hidden matches and hidden numbered tasks in the earlier
-      // organizations, with descriptions within LIMITS.description
+      // organizations, with descriptions of ordinary lengths
       const random = seeded(seed * 7919)
       const made: Doc<'projects'>[] = []
       for (const { org } of earlier) {
         const root = await plantProject(t, { org_id: org })
         const hidden = await plantProject(t, { org_id: org, type: 'project', parent_id: root.id })
         made.push(root, hidden)
-        const size = () => '中'.repeat(Math.floor(random() * (LIMITS.description.max - 20)))
+        const size = () => prose(Math.floor(random() * 400))
         await plantMany(t, Math.floor(random() * 30), () => ({
           org_id: org,
           project_id: hidden.id,
@@ -1360,37 +1382,41 @@ describe('the coverage of main Search', () => {
 })
 
 describe('main Search at Convex’s limits', () => {
-  it('stops with reads, inside the limits, among 600 matches with the largest descriptions', async () => {
+  it('answers a full page inside the limits among the 300 open tasks of a sub-project, and stops with reads among them under a lowered budget', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     await withReach(t)
-    const long = '中'.repeat(LIMITS.description.max - 8)
-    await plantMany(
-      t,
-      300,
-      (i) => ({ org_id: f.org.id, project_id: f.sub.id, title: `Gearbox ${i}`, description: long }),
-      10,
-    )
-    await plantMany(
-      t,
-      300,
-      (i) => ({
-        org_id: f.org.id,
-        project_id: f.sub2.id,
-        num: 60_000 + i,
-        description: `${long} gearbox`,
-      }),
-      10,
-    )
+    // the open tasks of FW, half matching by title and half by description
+    const notes = prose(400)
+    await plantMany(t, 150, (i) => ({
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: `Gearbox ${i}`,
+      description: notes,
+    }))
+    await plantMany(t, 150, (i) => ({
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      num: 60_000 + i,
+      description: `${notes} gearbox`,
+    }))
     // with the text in the task rows too, as until the description
     // backfill's clear, which reads the most
     await copyTaskTexts(t, f.org.id)
     for (const who of [f.admin, f.guest]) {
       const run = await searchRun(t, [who], { text: 'gearbox' })
-      console.log('600 large matches', who.name, run.read, run.searches, run.page.rows.length)
-      expect(run.page.coverage).toEqual(stopped('reads'))
+      console.log('300 matches', who.name, run.read, run.searches, run.page.rows.length)
+      expect(run.page.coverage).toEqual(COMPLETE)
       expect(run.page.rows).toHaveLength(MAIN_SEARCH.rows)
+      expect(run.page.next_cursor).not.toBeNull()
       expect(run.read.bytes).toBeLessThan(16 << 20)
+      // and under a document budget that stops the reads among them, a full
+      // page all the same
+      MAIN_SEARCH.documents = 120
+      const capped = await searchRun(t, [who], { text: 'gearbox' })
+      expect(capped.page.coverage).toEqual(stopped('reads'))
+      expect(capped.page.rows).toHaveLength(MAIN_SEARCH.rows)
+      MAIN_SEARCH.documents = DEFAULT_SEARCH.documents
     }
   })
 
@@ -1789,7 +1815,7 @@ describe('the project results of main Search', () => {
         .flatMap((shape) => [`${shape} as user`, `${shape} as viewer`])
         .sort(),
     )
-  }, 300_000)
+  })
 
   it('narrows project results as it narrows tasks', async () => {
     const t = newT()
@@ -1893,12 +1919,20 @@ describe('the project results of main Search', () => {
     const t = newT()
     const f = await withOrg(t)
     const member = await plantMember(t, f)
+    // under each top-level project the 30 live and 40 archived sub-projects
+    // of one project at the design size, the granted one among the seen
+    // project's 30, more than the reads below allow a walk of them
+    const family = (parent_id: string, live = 30) =>
+      plantProjects(t, f.org.id, live + 40, (i) => ({
+        parent_id,
+        ...(i < live ? {} : { archived_at: NOW }),
+      }))
     const hiddenTop = await plantProject(t, { org_id: f.org.id, name: 'Zephyr hidden' })
-    await plantProjects(t, f.org.id, 300, () => ({ parent_id: hiddenTop.id }))
+    await family(hiddenTop.id)
     const seenTop = await plantProject(t, { org_id: f.org.id, name: 'Zephyr seen' })
     const granted = await subOf(t, f, seenTop)
     await grant(t, granted, member)
-    await plantProjects(t, f.org.id, 300, () => ({ parent_id: seenTop.id }))
+    await family(seenTop.id, 29)
     await withReach(t)
     // the member's whole organization
     MAIN_SEARCH.projects = 0
@@ -2147,9 +2181,10 @@ describe('the project results of main Search', () => {
   it("keeps the task sources of eight seats whose name checks would spend each seat's reads", async () => {
     const t = newT()
     const [login] = await plantLogins(t, [{ name: 'Broad', email: 'broad@testbed.test' }])
-    // in each of eight organizations a guest granted 65 sub-projects under
-    // distinct parents, more than one listing holds, so each seat is
+    // in each of eight organizations a guest granted 20 sub-projects under
+    // distinct parents, more than one listing holds here, so each seat is
     // searched whole and its name candidates each cost a few access reads
+    MAIN_SEARCH.listing = 16
     const seats: Doc<'profiles'>[] = []
     const titled: string[] = []
     for (let i = 0; i < 8; i++) {
@@ -2161,8 +2196,8 @@ describe('the project results of main Search', () => {
         accepted_at: NOW,
       })
       seats.push(seat)
-      const tops = await plantProjects(t, org, 65, (k) => ({ type: 'meta', name: `Zephyr ${k}` }))
-      const subs = await plantProjects(t, org, 65, (k) => ({
+      const tops = await plantProjects(t, org, 20, (k) => ({ type: 'meta', name: `Zephyr ${k}` }))
+      const subs = await plantProjects(t, org, 20, (k) => ({
         parent_id: tops[k],
         name: `Zephyr part ${k}`,
       }))
@@ -2173,6 +2208,9 @@ describe('the project results of main Search', () => {
       titled.push((await plantIssue(t, { org_id: org, project_id: subs[0], title: 'Zephyr' })).id)
     }
     await withReach(t)
+    // a budget whose part for each seat the name checks would spend whole,
+    // were they not held to their own part of it
+    MAIN_SEARCH.ranges = 500
     const run = await searchRun(t, seats, { text: 'zephyr' })
     // every seat's title match, ranked first as its title is the text
     expect(taskIds(run.page).sort()).toEqual([...titled].sort())
@@ -2182,7 +2220,7 @@ describe('the project results of main Search', () => {
     expect(projectIds(run.page).length).toBeGreaterThan(0)
     expect(run.page.coverage).toEqual(stopped('projects', 8, 8))
     expect(run.searches).toBe(24)
-  }, 120_000)
+  })
 
   it("reads names only within what the seat's number lookups left of its allowance", async () => {
     const t = newT()
@@ -2208,11 +2246,12 @@ describe('the project results of main Search', () => {
     const t = newT()
     const f = await withOrg(t)
     const member = await plantMember(t, f)
-    // twenty teams, the first sharing a top-level project with 40
-    // sub-projects, and a grant on TBED, so the member is searched whole
+    // five teams, the first sharing a top-level project with 30
+    // sub-projects, and a grant on TBED, more projects than a lowered
+    // MAIN_SEARCH.projects, so the member is searched whole
     const teams = await t.run(async (ctx) => {
       const ids: string[] = []
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 5; i++) {
         const id = uuid()
         await ctx.db.insert('teams', {
           id,
@@ -2231,7 +2270,7 @@ describe('the project results of main Search', () => {
       return ids
     })
     const shared = await plantProject(t, { org_id: f.org.id, name: 'Shared work' })
-    const subs = await plantProjects(t, f.org.id, 40, () => ({ parent_id: shared.id }))
+    const subs = await plantProjects(t, f.org.id, 30, () => ({ parent_id: shared.id }))
     await t.run((ctx) =>
       ctx.db.insert('project_team_access', {
         team_id: teams[0],
@@ -2245,8 +2284,11 @@ describe('the project results of main Search', () => {
     const titled = await plantIssue(t, { org_id: f.org.id, project_id: subs[0], title: 'Zephyr' })
     await withReach(t)
     // their two root rows pass the bound, so each candidate is checked by
-    // itself, with the seat's own child rows alone
+    // itself, with the seat's own child rows alone, within reads that a check
+    // of each candidate over its six grantees would spend
     PROJECT_SIGHT.roots = 1
+    MAIN_SEARCH.projects = 16
+    MAIN_SEARCH.ranges = 400
     const run = await searchRun(t, [member], { text: 'zephyr' })
     expect(taskIds(run.page)).toEqual([titled.id])
     expect(projectIds(run.page)).toEqual([])
@@ -2277,15 +2319,17 @@ describe('the project results of main Search', () => {
 })
 
 describe('project results at Convex’s limits', () => {
-  it('answers inside the limits among 600 projects named the text, some near 1 MiB', async () => {
+  it('answers inside the limits among 598 projects named the text, some near 1 MiB', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const member = await plantMember(t, f)
-    const tops = await plantProjects(t, f.org.id, 40, (i) => ({
+    // 100 top-level projects and 498 sub-projects, about five under each,
+    // which with withOrg's FW and PCB make the 500 of the design size
+    const tops = await plantProjects(t, f.org.id, 100, (i) => ({
       type: 'meta',
       name: `Zephyr ${i}`,
     }))
-    await plantProjects(t, f.org.id, 552, (i) => ({
+    await plantProjects(t, f.org.id, 490, (i) => ({
       parent_id: tops[i % tops.length],
       name: `Zephyr part ${i}`,
     }))
@@ -2298,15 +2342,16 @@ describe('project results at Convex’s limits', () => {
       (i) => ({ parent_id: tops[i], name: `Zephyr large ${i}`, description: 'x'.repeat(900_000) }),
       1,
     )
-    // the member's team shares five top-level projects, about 70
-    // sub-projects, so their organization is searched whole
+    // the member's team shares eleven top-level projects, five of them
+    // above a large row, with their sub-projects more than
+    // MAIN_SEARCH.projects, so their organization is searched whole
     await t.run(async (ctx) => {
       await ctx.db.insert('team_members', {
         team_id: f.team.id,
         profile_id: member.id,
         is_leader: false,
       })
-      for (const project_id of tops.slice(0, 5))
+      for (const project_id of tops.slice(3, 14))
         await ctx.db.insert('project_team_access', {
           team_id: f.team.id,
           project_id,
@@ -2317,7 +2362,7 @@ describe('project results at Convex’s limits', () => {
     for (const who of [f.admin, member]) {
       const run = await searchRun(t, [who], { text: 'zephyr' })
       console.log(
-        '600 projects named the text',
+        '598 projects named the text',
         who.name,
         run.read,
         run.searches,
@@ -2333,7 +2378,7 @@ describe('project results at Convex’s limits', () => {
         )
       else expect(run.page.coverage).toEqual(stopped('projects'))
     }
-  }, 120_000)
+  })
 
   it('searches a guest, a wide member and an admin of a few hundred projects within the limits', async () => {
     const t = newT({ transactionLimits: true })
@@ -2384,7 +2429,7 @@ describe('project results at Convex’s limits', () => {
       expect(run.page.rows).toHaveLength(MAIN_SEARCH.rows)
       expect(run.read.bytes).toBeLessThan(16 << 20)
     }
-  }, 120_000)
+  })
 })
 
 describe('the search_title index', () => {
@@ -2515,7 +2560,8 @@ describe('a check of the caller access that a bound stops', () => {
       })
     })
     // a sub-project of TBED the member's team does not share, shared with
-    // 65 other teams, past OWN_READS.projectShares
+    // five other teams, past a lowered OWN_READS.projectShares
+    OWN_READS.projectShares = 4
     const elsewhere = await subOf(t, f, f.meta)
     const first = await task(t, f, f.sub, 'Zephyr first')
     // its description row says FW, and its task row moved to `elsewhere`,
@@ -2544,8 +2590,8 @@ describe('a check of the caller access that a bound stops', () => {
     expect(stopped.coverage).toMatchObject({ complete: false, stopped: 'reads' })
   })
 
-  it("checks a person's results in up to 128 teams, searched whole as before these bounds, and leaves out what it cannot check past them", async () => {
-    for (const many of [100, 129]) {
+  it("checks a person's results in as many teams as searchReads reads, searched whole, and leaves out what it cannot check past them", async () => {
+    for (const many of [4, 5]) {
       const t = newT()
       const f = await withOrg(t)
       const member = await plantMember(t, f)
@@ -2561,8 +2607,9 @@ describe('a check of the caller access that a bound stops', () => {
               created_at: NOW,
             })
           await ctx.db.insert('team_members', { team_id, profile_id: member.id, is_leader: false })
-          // ten of them share FW, more than searchReads asks one by one
-          if (i < 10)
+          // three of them share FW, more than searchReads asks one by one
+          // under the bounds below
+          if (i < 3)
             await ctx.db.insert('project_team_access', {
               project_id: f.sub.id,
               team_id,
@@ -2572,11 +2619,18 @@ describe('a check of the caller access that a bound stops', () => {
       })
       const found = await task(t, f, f.sub, 'Zephyr fix')
       await withReach(t)
+      // a membership bound that four teams fill, read whole once the shares
+      // on FW name more teams than searchReads asks one by one, and a
+      // listing that four teams pass
+      Object.assign(OWN_READS, { members: 4, lookups: 1 })
+      MAIN_SEARCH.listing = 3
       const { page } = await searchRun(t, [member], { text: 'zephyr' })
       // more teams than MAIN_SEARCH.listing reads make a seat searched
       // whole, which never reports complete coverage
       expect(page.coverage.complete, `${many} teams`).toBe(false)
-      expect(ids(page), `${many} teams`).toEqual(many <= 128 ? [found.id] : [])
+      expect(ids(page), `${many} teams`).toEqual(many <= OWN_READS.members ? [found.id] : [])
+      Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+      MAIN_SEARCH.listing = DEFAULT_SEARCH.listing
     }
   })
 })

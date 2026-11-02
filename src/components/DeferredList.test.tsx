@@ -80,9 +80,7 @@ function random(seed: number) {
 }
 
 describe('DeferredList', () => {
-  it('renders every item once, in order, and keeps mounted nodes through random changes', {
-    timeout: 180_000,
-  }, async () => {
+  it('renders every item once, in order, and keeps mounted nodes through random changes', async () => {
     for (let seed = 1; seed <= 12; seed++) {
       const pick = random(seed)
       let next = 0

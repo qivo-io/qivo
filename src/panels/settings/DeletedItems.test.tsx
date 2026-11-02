@@ -224,17 +224,15 @@ async function load(role: Role = 'admin', setup?: (snapshot: Snapshot) => void) 
 }
 
 /* The first import of the store and the page compiles them, which takes
-   seconds on a loaded machine, past a test's 5 s budget, and a test that runs
-   out leaves its act() open, which breaks every test after it. Loading them
-   once here waits for that before any test starts; each test then only runs
-   them again after resetModules. That and booting the store take a test up
-   to about 3 s at a load average of 20, so each test gets 20 s. */
+   seconds on a loaded machine. Loading them once here waits for that before
+   any test starts, so the first test does not spend its time on it; each
+   test then only runs them again after resetModules. A test that runs out
+   leaves its act() open, which breaks every test after it. */
 beforeAll(async () => {
   await import('../../store/planner')
   await import('../../store/usePlannerVersion')
   await import('./DeletedItems')
-}, 120_000)
-vi.setConfig({ testTimeout: 20_000 })
+})
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)

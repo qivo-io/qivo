@@ -1,8 +1,8 @@
 /* Fixtures and reads for the Overview's tests (overview.test.ts): rows as
- * the app's writers make them, with titles and names at the caps in a
- * three-byte script, the envelope's shared sub-projects, the client's day
- * and weeks, and a read of one Overview query inside one transaction with
- * what it took, as Convex counts it.
+ * the app's writers make them, with ordinary titles and names, projects a
+ * reader's teams share, the client's day and weeks, and a read of one
+ * Overview query inside one transaction with what it took, as Convex counts
+ * it.
  *
  * Named *.setup.ts: two dots in the basename is the Convex CLI's skip rule
  * (see helpers.setup.ts). */
@@ -11,7 +11,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import type { IssueStatus } from '../lib/enums'
-import { LIMITS, MIB } from '../lib/limits'
+import { MIB } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { plantTasks } from './board.setup'
 import { NOW, plantProject, plantSeat, type T, uuid } from './helpers.setup'
@@ -23,8 +23,9 @@ export const DAY = '2026-11-02'
  * ONE_LEVEL_SINCE): helpers.setup.ts NOW. */
 export const BEFORE_RULE = NOW
 
-/** The longest title the server accepts, in a three-byte script. */
-export const TITLE = '€'.repeat(LIMITS.title.max)
+/** An ordinary title of about 80 characters. */
+export const TITLE =
+  'Replace the fan controller on the bench rig and log the readings for the review'
 
 /** `day` moved by `days`, as an ISO day. */
 export const shift = (day: string, days: number) =>
@@ -134,64 +135,72 @@ export async function plantPeople(t: T, orgId: string, n: number): Promise<Doc<'
   return out
 }
 
-/* A name at the cap in a three-byte script, distinct for each `i`, as
- * board.test.ts plants its envelope's names. */
-const nameAtCap = (i: number) => String.fromCodePoint(0x4e00 + i) + '班'.repeat(79)
-
 /* A row's name with its copy of the name key. */
 const named = (name: string) => ({ name, name_key: nameKey(name) })
 
-/** A top-level project of `orgId` with `subs` sub-projects at the name cap
- * that track delay, and `me` in 25 teams that each share every one of
- * them, as the envelope's largest Board plants them (board.test.ts). */
+/** `tops` top-level projects of `orgId`, each with `subs` sub-projects
+ * that track delay, and `me` in three teams that share the top-level
+ * projects in turn, so `me` reads every sub-project through its project's
+ * share. */
 export async function plantShared(
   t: T,
   orgId: string,
   lead: Doc<'profiles'>,
   me: Doc<'profiles'>,
-  subs: number,
-): Promise<{ top: Doc<'projects'>; subs: Doc<'projects'>[] }> {
-  const top = await plantProject(t, { org_id: orgId, lead_id: lead.id, ...named(nameAtCap(500)) })
+  o: { tops: number; subs: number },
+): Promise<{ tops: Doc<'projects'>[]; subs: Doc<'projects'>[] }> {
+  const tops: Doc<'projects'>[] = []
   const planted: Doc<'projects'>[] = []
-  for (let i = 0; i < subs; i++)
-    planted.push(
-      await plantProject(t, {
-        org_id: orgId,
-        type: 'project',
-        parent_id: top.id,
-        ...named(nameAtCap(i)),
-        lead_id: lead.id,
-        track_delay: true,
-        archive_state: 'live',
-      }),
-    )
+  for (let i = 0; i < o.tops; i++) {
+    const top = await plantProject(t, {
+      org_id: orgId,
+      lead_id: lead.id,
+      ...named(`Programme ${i}`),
+    })
+    tops.push(top)
+    for (let k = 0; k < o.subs; k++)
+      planted.push(
+        await plantProject(t, {
+          org_id: orgId,
+          type: 'project',
+          parent_id: top.id,
+          ...named(`Workstream ${i}-${k}`),
+          lead_id: lead.id,
+          track_delay: true,
+          archive_state: 'live',
+        }),
+      )
+  }
   await t.run(async (ctx) => {
-    for (let i = 0; i < 25; i++) {
-      const team = uuid()
-      const name = nameAtCap(1000 + i)
+    const teams: { id: string; name: string }[] = []
+    for (let i = 0; i < 3; i++) {
+      const team = { id: uuid(), name: `Team ${i}` }
+      teams.push(team)
       await ctx.db.insert('teams', {
-        id: team,
+        id: team.id,
         org_id: orgId,
-        ...named(name),
+        ...named(team.name),
         track_delay_default: true,
         created_at: BEFORE_RULE,
       })
       await ctx.db.insert('team_members', {
-        team_id: team,
+        team_id: team.id,
         profile_id: me.id,
         is_leader: false,
         name_key: nameKey(me.name),
       })
-      for (const sub of planted)
-        await ctx.db.insert('project_team_access', {
-          project_id: sub.id,
-          team_id: team,
-          level: 'user',
-          name_key: nameKey(name),
-        })
+    }
+    for (const [i, top] of tops.entries()) {
+      const team = teams[i % teams.length] as { id: string; name: string }
+      await ctx.db.insert('project_team_access', {
+        project_id: top.id,
+        team_id: team.id,
+        level: 'user',
+        name_key: nameKey(team.name),
+      })
     }
   })
-  return { top, subs: planted }
+  return { tops, subs: planted }
 }
 
 /** What one read took, as Convex counts a transaction's reads. */

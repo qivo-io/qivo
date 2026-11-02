@@ -16,6 +16,7 @@ import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { crc32 } from '../lib/crc32'
 import type { DeletedItemState } from '../lib/enums'
+import { TEXT_MAX } from '../lib/limits'
 import {
   archiveRow,
   exportName,
@@ -31,7 +32,7 @@ import {
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { checkStoredFiles } from '../model/demoUploads'
 import { deleteOrgStep, wipeWorkStep } from '../model/orgDeletion'
-import { PAGE_BYTES, readBatch } from '../model/orgExportRead'
+import { PAGE_BYTES, PAGE_SIZE, readBatch } from '../model/orgExportRead'
 import {
   ARCHIVE_TTL_MS,
   AUTHORITY_READS,
@@ -935,7 +936,7 @@ describe('organization export job', () => {
     const expected = await pagedRows(t, f.admin, f.org.id)
     for (const [name, rows] of Object.entries(expected))
       expect(archive.tables[name], name).toEqual(rows)
-  }, 120_000)
+  })
 
   it('refuses members who are not admins, other organizations and an organization being deleted', async () => {
     const t = newT()
@@ -1178,47 +1179,62 @@ describe('organization export job', () => {
       state: 'ready',
       archive: { parts: EXPORT_LIMITS.parts + 2 },
     })
-  }, 300_000)
+  })
 
-  it('splits large texts across parts by bytes within every query limit', async () => {
+  it('splits texts across parts by their UTF-8 bytes within every query limit', async () => {
+    // parts of a lowered size, so ordinary comments fill several, as long
+    // texts fill parts of PART_RAW_BYTES
+    EXPORT_LIMITS.part = 64 * 1024
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // three bytes a character in UTF-8, at the 20,000-character cap
-    const text = (seed: number) =>
-      Array.from({ length: 20_000 }, (_, i) =>
-        String.fromCharCode(0x4e00 + ((seed + i) % 20_000)),
-      ).join('')
+    // `length` characters of three bytes each in UTF-8
+    const text = (seed: number, length: number) =>
+      String.fromCharCode(...Array.from({ length }, (_, i) => 0x4e00 + ((seed + i) % 20_000)))
     const described = await plantIssue(t, {
       org_id: f.org.id,
       project_id: f.sub.id,
-      description: text(1),
+      description: text(1, TEXT_MAX),
     })
-    const busy = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    for (let batch = 0; batch < 10; batch++)
-      await t.run(async (ctx) => {
-        for (let i = 0; i < 100; i++)
+    // five tasks of 200 comments of 80 characters each: a task holds more
+    // than PAGE_SIZE, so each read answers one page of its comments
+    const busy: Doc<'issues'>[] = []
+    for (let k = 0; k < 5; k++)
+      busy.push(await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }))
+    await t.run(async (ctx) => {
+      for (const [k, task] of busy.entries())
+        for (let i = 0; i < 200; i++)
           await ctx.db.insert('comments', {
             id: uuid(),
-            issue_id: busy.id,
-            body: text(batch * 100 + i),
+            issue_id: task.id,
+            body: text(k * 200 + i, 80),
             created_at: NOW,
           })
-      })
+    })
     const exportId = await exportAs(t, f.admin, f.org.id)
     expect(await jobOf(t, exportId)).toMatchObject({ state: 'ready' })
     const parts = await partsOf(t, exportId)
     const commentParts = parts.filter((part) => part.entry.startsWith('data/comments/'))
-    // about 60 MB of comments, in parts of PART_RAW_BYTES and less than one
-    // answer more
-    expect(commentParts.length).toBeGreaterThanOrEqual(10)
-    for (const part of commentParts) expect(part.raw_bytes).toBeLessThan(6 * 1024 * 1024)
-    expect(commentParts.reduce((sum, part) => sum + part.records, 0)).toBe(1000)
     const archive = await archiveOf(t, exportId)
-    expect(archive.tables.tasks.find((row) => row.id === described.id)?.description).toBe(text(1))
-    expect(archive.tables.comments.map((row) => row.body)).toEqual(
-      Array.from({ length: 1000 }, (_, i) => text(i)),
+    // about 380 KB of comments, in parts of EXPORT_LIMITS.part bytes and at
+    // most one answer more with the array's brackets, which a count of
+    // characters instead of bytes would pass
+    const encoder = new TextEncoder()
+    const rowBytes = Math.max(
+      ...archive.tables.comments.map((row) => encoder.encode(`,\n${JSON.stringify(row)}`).length),
     )
-  }, 300_000)
+    const most = EXPORT_LIMITS.part + PAGE_SIZE * rowBytes + '[\n\n]\n'.length
+    expect(commentParts.length).toBeGreaterThanOrEqual(5)
+    for (const part of commentParts.slice(0, -1))
+      expect(part.raw_bytes).toBeGreaterThanOrEqual(EXPORT_LIMITS.part)
+    for (const part of commentParts) expect(part.raw_bytes).toBeLessThanOrEqual(most)
+    expect(commentParts.reduce((sum, part) => sum + part.records, 0)).toBe(1000)
+    expect(archive.tables.tasks.find((row) => row.id === described.id)?.description).toBe(
+      text(1, TEXT_MAX),
+    )
+    expect(archive.tables.comments.map((row) => row.body)).toEqual(
+      Array.from({ length: 1000 }, (_, i) => text(i, 80)),
+    )
+  })
 
   it('keeps each read of tasks with texts near 1 MiB under the limits, its answer at six texts at most', async () => {
     const t = newT({ transactionLimits: true })
@@ -1254,7 +1270,7 @@ describe('organization export job', () => {
       part.entry.startsWith('data/tasks/'),
     )
     expect(tasks.reduce((sum, part) => sum + part.records, 0)).toBe(9)
-  }, 300_000)
+  })
 
   it('reads the children of many parents in one query, paging a parent whose children do not fit', async () => {
     const t = newT({ transactionLimits: true })

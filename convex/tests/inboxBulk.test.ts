@@ -4,14 +4,14 @@
  * all read has nothing, one batch or more to do, on the ranges the batches
  * walk, and answers the cutoff a first Mark all as read batch would choose.
  * One batch at INBOX_BATCH stays below a quarter of every Convex limit in
- * the worst cases, with messages as long as the writers make them. */
+ * the worst cases, with change notices that carry every fragment at once
+ * in ordinary text. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { byId, newWindowKey } from '../lib/db'
-import { LIMITS, NAME_MAX } from '../lib/limits'
 import { insertTask } from '../model/descriptions'
 import { itemEdits } from '../model/inboxItems'
 import {
@@ -187,33 +187,34 @@ describe('bulkReach', () => {
 
 /* --------------------------------------------------------- batch size */
 
-/** A text of `n` characters in a three-byte script, the most bytes a
- * character-counted field holds (a four-byte character counts as two). */
-const wide = (n: number) => '界'.repeat(n)
+/** An ordinary title of about 80 characters. */
+const TITLE = 'Replace the fan controller on the bench rig and log the readings for the review'
 
-/** The longest detail a change notice can carry: every fragment
- * model/messages.ts notifyIssueUpdate writes at once, each name and title
- * at its longest in a three-byte script. An upper bound, as one change
- * writes fewer fragments. */
-const LONGEST_DETAIL = [
+/** An ordinary person's or project's name. */
+const NAME = 'Margarethe Lindqvist'
+
+/** The fullest detail a change notice can carry: every fragment
+ * model/messages.ts notifyIssueUpdate writes at once, with ordinary names
+ * and titles. An upper bound, as one change writes fewer fragments. */
+const FULLEST_DETAIL = [
   'Status: In progress → In review',
   'Priority: Urgent → Medium',
-  `Title: “${wide(LIMITS.title.max)}” → “${wide(LIMITS.title.max)}”`,
+  `Title: “${TITLE}” → “${TITLE}”`,
   'Description updated',
   'Due: 30 Sep → 31 Dec',
   'Schedule: 30 Sep – 31 Dec → 30 Nov – 31 Dec',
   'Remaining: 1000 h → 2000 h',
   'Paused',
-  `Moved to ${wide(NAME_MAX)}`,
+  `Moved to ${NAME}`,
   'Attached under a task in another sub-project',
-  `Assigned to ${wide(NAME_MAX)}`,
-  `Reviewer set to ${wide(NAME_MAX)}`,
+  `Assigned to ${NAME}`,
+  `Reviewer set to ${NAME}`,
 ].join('. ')
 
-/** The fixture's admin's inbox: `items` tasks with the longest title, each
+/** The fixture's admin's inbox: `items` tasks with an ordinary title, each
  * with `unread` unread messages and then `read` read ones, the newest, as
  * an item keeps them (model/messages.ts pruneReadMessages), every message
- * with the longest detail. Its inbox_items rows are complete and exact. */
+ * with the fullest detail. Its inbox_items rows are complete and exact. */
 async function plantInbox(
   t: T,
   f: OrgFixture,
@@ -253,14 +254,14 @@ async function plantItem(
     })
 }
 
-/* A task with the longest title, numbered `num`. */
+/* A task with an ordinary title, numbered `num`. */
 async function plantTask(ctx: MutationCtx, f: OrgFixture, num: number) {
   const task = {
     id: uuid(),
     org_id: f.org.id,
     project_id: f.sub.id,
     num,
-    title: wide(LIMITS.title.max),
+    title: TITLE,
     description: '',
     status: 'todo' as const,
     priority: 'medium' as const,
@@ -273,7 +274,7 @@ async function plantTask(ctx: MutationCtx, f: OrgFixture, num: number) {
   return task
 }
 
-/* One message to the fixture's admin about `task` with the longest detail,
+/* One message to the fixture's admin about `task` with the fullest detail,
  * read or unread, at `minute`, with the wake stamp of its item at minute
  * `woke` (a wake stamps every message of an item alike); `fresh` for the
  * first message of its item. */
@@ -292,7 +293,7 @@ async function plantLong(
       issue_id: task.id,
       issue_title: task.title,
       kind: 'change',
-      detail: LONGEST_DETAIL,
+      detail: FULLEST_DETAIL,
       created_at: at(m.minute),
       // a woken item's stamp and the item cap's count, which an unread
       // message can carry too
@@ -377,7 +378,7 @@ const markBatch = async (ctx: MutationCtx, me: Doc<'profiles'>) =>
 const removeBatch = async (ctx: MutationCtx, me: Doc<'profiles'>) =>
   (await removeReadMessages(ctx, me)).removed.length
 
-describe('one batch at INBOX_BATCH', { timeout: 120_000 }, () => {
+describe('one batch at INBOX_BATCH', () => {
   it('stays below a quarter of every limit in its worst case, an older unread message in each item', async () => {
     const t = newT()
     const f = await withOrg(t)

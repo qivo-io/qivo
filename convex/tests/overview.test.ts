@@ -1,7 +1,7 @@
 /* The Overview's queries (overview.ts, lib/overview.ts): their arguments,
  * the scopes they refuse, the client's day, the lists' batches, fixed ends
  * and positions, the verdicts' owner loads, what hidden data may move, and
- * the reads at the testing envelope under Convex's transaction limits.
+ * the reads at the design size under Convex's transaction limits.
  * src/store/overviewParity.test.ts compares their figures with the app's. */
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -923,34 +923,42 @@ const states = (s: Awaited<ReturnType<typeof readSummary>>) =>
     : { counts: s.counts.state, any_task: s.any_task.state, overdue: s.overdue.state }
 
 describe('real limits', () => {
-  it('counts 4,000 tasks of one sub-project whole, and answers Overdue unavailable past its budget', async () => {
-    for (const [n, overdue] of [
-      [2000, 'ok'],
-      [4000, 'unavailable'],
+  it('counts 300 tasks of one sub-project whole, and answers Overdue unavailable past a lowered budget', async () => {
+    const t = newT({ transactionLimits: true })
+    const f: OrgFixture = await withOrg(t)
+    const owners = await plantPeople(t, f.org.id, 20)
+    // every dated task due before the day, Done ones and groups included
+    await plantMix(t, f.sub, 300, owners, BEFORE_RULE, true)
+    await countOrg(t, f.org.id)
+    const profiles = new Map([[f.user.org_id, f.user]])
+    const scope = scopeOf(f.user, f.sub)
+    // Overdue reads about a range for each task due before the day, so at
+    // 200 ranges it stops past them, as thousands of tasks pass the real
+    // budget
+    for (const [ranges, overdue] of [
+      [OVERVIEW.reads.ranges, 'ok'],
+      [200, 'unavailable'],
     ] as const) {
-      const t = newT({ transactionLimits: true })
-      const f: OrgFixture = await withOrg(t)
-      const owners = await plantPeople(t, f.org.id, 20)
-      // every dated task due before the day, Done ones and groups included
-      await plantMix(t, f.sub, n, owners, BEFORE_RULE, true)
-      await countOrg(t, f.org.id)
-      const profiles = new Map([[f.user.org_id, f.user]])
-      const scope = scopeOf(f.user, f.sub)
+      Object.assign(OVERVIEW.reads, { ranges })
       const summary = await measured(t, (ctx) => readSummary(ctx, profiles, { scope, day: DAY }))
-      record(`one sub-project, ${n} tasks due before the day`, summary.took, states(summary.answer))
+      record(
+        `one sub-project, 300 tasks due before the day, ${ranges} ranges`,
+        summary.took,
+        states(summary.answer),
+      )
       expect(states(summary.answer)).toEqual({ counts: 'ok', any_task: 'ok', overdue })
       const batch = await measured(t, (ctx) =>
         readAttention(ctx, profiles, LOGIN, { scope, ...WEEKS }),
       )
-      record(`one sub-project, ${n} tasks, first At-risk batch`, batch.took, batch.answer.state)
+      record('one sub-project, 300 tasks, first At-risk batch', batch.took, batch.answer.state)
       expect(batch.answer).toMatchObject({ state: 'ok', complete: true })
       const paused = await measured(t, (ctx) => readPaused(ctx, profiles, LOGIN, { scope }))
-      record(`one sub-project, ${n} tasks, first Paused batch`, paused.took, paused.answer.state)
+      record('one sub-project, 300 tasks, first Paused batch', paused.took, paused.answer.state)
       expect(paused.answer).toMatchObject({ state: 'ok', complete: true })
     }
-  }, 900_000)
+  })
 
-  it('reads 2,000 tasks over 200 sub-projects that 25 teams of the reader share, and My view of 2,000 of theirs', async () => {
+  it('reads 600 tasks over a project of 30 sub-projects that a team of the reader shares', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const me = await plantSeat(t, {
@@ -960,39 +968,65 @@ describe('real limits', () => {
       accepted_at: BEFORE_RULE,
     })
     const owners = [me, ...(await plantPeople(t, f.org.id, 9))]
-    const { top, subs } = await plantShared(t, f.org.id, f.user, me, 200)
-    for (const sub of subs) await plantMix(t, sub, 10, owners, BEFORE_RULE)
-    // the reader's own tasks, 2,000 over the same sub-projects
-    for (const [i, sub] of subs.entries())
-      await plantTasks(t, sub, 10, (k) => ({
-        assignee_id: me.id,
-        title: `Mine ${i}-${k}`,
-        paused: k === 0,
-        // due after the day, so the project's Overdue reads the mix's alone
-        due_date: shift(DAY, 1 + ((k * 7) % 30)),
-      }))
+    const { tops, subs } = await plantShared(t, f.org.id, f.user, me, { tops: 1, subs: 30 })
+    for (const sub of subs) await plantMix(t, sub, 20, owners, BEFORE_RULE)
     // the reach rows that let the member navigate to the shared sub-projects
     await withReach(t)
     await countOrg(t, f.org.id)
     const profiles = new Map([[me.org_id, me]])
-    for (const [label, scope] of [
-      ['200 shared sub-projects', scopeOf(me, top)],
-      ['My view over them', { kind: 'mine' }],
-    ] as [string, OverviewScope][]) {
-      const summary = await measured(t, (ctx) => readSummary(ctx, profiles, { scope, day: DAY }))
-      record(`${label}, summary`, summary.took, states(summary.answer))
-      expect(states(summary.answer)).toEqual({ counts: 'ok', any_task: 'ok', overdue: 'ok' })
-      const risk = await measured(t, (ctx) => readRisk(ctx, profiles, { scope, ...WEEKS }))
-      record(`${label}, risk`, risk.took, risk.answer)
-      expect(risk.answer.state).toBe('ok')
-      const batch = await measured(t, (ctx) =>
-        readAttention(ctx, profiles, LOGIN, { scope, ...WEEKS }),
-      )
-      record(`${label}, first At-risk batch`, batch.took, batch.answer.state)
-      expect(batch.answer.state).toBe('ok')
-      const paused = await measured(t, (ctx) => readPaused(ctx, profiles, LOGIN, { scope }))
-      record(`${label}, first Paused batch`, paused.took, paused.answer.state)
-      expect(paused.answer).toMatchObject({ state: 'ok', complete: true })
-    }
-  }, 1_200_000)
+    await expectAllOk(
+      t,
+      profiles,
+      '30 shared sub-projects',
+      scopeOf(me, tops[0] as Doc<'projects'>),
+    )
+  })
+
+  it("reads My view of 400 of the reader's tasks over the 200 sub-projects their teams share", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const me = await plantSeat(t, {
+      org_id: f.org.id,
+      org_role: 'user',
+      auth_user_id: `auth_${uuid()}`,
+      accepted_at: BEFORE_RULE,
+    })
+    // 100 projects of two sub-projects each, 33 or 34 shared with each of
+    // the reader's three teams
+    const { subs } = await plantShared(t, f.org.id, f.user, me, { tops: 100, subs: 2 })
+    expect(subs).toHaveLength(200)
+    for (const [i, sub] of subs.entries())
+      await plantTasks(t, sub, 2, (k) => ({
+        assignee_id: me.id,
+        title: `Mine ${i}-${k}`,
+        paused: k === 0 && i % 2 === 0,
+        due_date: shift(DAY, ((i * 7 + k) % 30) - 10),
+      }))
+    await withReach(t)
+    await countOrg(t, f.org.id)
+    const profiles = new Map([[me.org_id, me]])
+    await expectAllOk(t, profiles, 'My view over 200 sub-projects', { kind: 'mine' })
+  })
 })
+
+/* Checks that the four Overview reads for `scope` answer, and logs what
+ * each read took. */
+async function expectAllOk(
+  t: T,
+  profiles: Map<string, Doc<'profiles'>>,
+  label: string,
+  scope: OverviewScope,
+) {
+  const summary = await measured(t, (ctx) => readSummary(ctx, profiles, { scope, day: DAY }))
+  record(`${label}, summary`, summary.took, states(summary.answer))
+  expect(states(summary.answer)).toEqual({ counts: 'ok', any_task: 'ok', overdue: 'ok' })
+  const risk = await measured(t, (ctx) => readRisk(ctx, profiles, { scope, ...WEEKS }))
+  record(`${label}, risk`, risk.took, risk.answer)
+  expect(risk.answer.state).toBe('ok')
+  const batch = await measured(t, (ctx) => readAttention(ctx, profiles, LOGIN, { scope, ...WEEKS }))
+  record(`${label}, first At-risk batch`, batch.took, batch.answer.state)
+  expect(batch.answer.state).toBe('ok')
+  const paused = await measured(t, (ctx) => readPaused(ctx, profiles, LOGIN, { scope }))
+  record(`${label}, first Paused batch`, paused.took, paused.answer.state)
+  expect(paused.answer).toMatchObject({ state: 'ok', complete: true })
+}

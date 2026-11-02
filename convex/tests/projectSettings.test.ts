@@ -5,8 +5,9 @@
  * shape and role and against the write itself in a covering set; the Users
  * and Teams lists and the two pickers in name order a batch at a time, with
  * search, cursors, readiness and the rows they leave out; and the invite
- * form's lookup. The last suite runs the reads at scale under Convex's
- * transaction limits and logs what each call read. */
+ * form's lookup. The last suite runs the reads at the design size under
+ * Convex's transaction limits, with NAMED_READ at a fifth, and logs what
+ * each call read. */
 
 import { ConvexError, compareValues } from 'convex/values'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -494,8 +495,9 @@ describe('projectSettings.get', () => {
         return { answer, documents: m.documentsRead.used, ranges: m.databaseQueries.used }
       })
     const before = await reads()
+    // as many open tasks as the design size puts in one sub-project
     await t.run(async (ctx) => {
-      for (let i = 0; i < 500; i++)
+      for (let i = 0; i < 300; i++)
         await insertTask(
           ctx.db,
           {
@@ -611,7 +613,7 @@ describe('rights', () => {
     // the shapes reach every right both ways
     for (const right of RIGHTS)
       expect([...(seen.get(right) ?? [])].sort(), right).toEqual([false, true])
-  }, 120_000)
+  })
 
   /* The writes of each right. Each runs in a fresh build, and whether it
    * goes through must be what get answered. */
@@ -1570,25 +1572,35 @@ async function measuredWalk<B extends { state: string }>(
 }
 
 describe('real limits', () => {
-  it('reads 5,000 grants a batch at a time, and a search for the last few in one call or with a cursor that resumes', async () => {
+  /* NAMED_READ at a fifth, as the design size's 1,000 people are a fifth
+   * of the 5,000 these cases planted against the real one */
+  const lowered = () =>
+    Object.assign(NAMED_READ, {
+      ranges: DEFAULT_READ.ranges / 5,
+      documents: DEFAULT_READ.documents / 5,
+      bytes: DEFAULT_READ.bytes / 5,
+    })
+
+  it("reads the grants of 995 people, with withOrg's five the organization's 1,000, a batch at a time, and a search for the last few in one call or with a cursor that resumes", async () => {
+    lowered()
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     await keyOrg(t, f.org.id)
     const project = await meta(t, f)
-    await plantPeople(t, f, [...names('Person ', 4997), 'Zeta one', 'Zeta two', 'Zeta three'], {
+    await plantPeople(t, f, [...names('Person ', 992), 'Zeta one', 'Zeta two', 'Zeta three'], {
       project,
     })
     const first = await measured(t, (ctx) =>
       projectUsersOf(ctx, f.admin, { project_id: project.id }),
     )
-    console.log('users, first batch of 5,000 grants', first.read)
+    console.log('users, first batch of 995 grants', first.read)
     expect(ready(first.out).rows).toHaveLength(LIST_BATCH)
     expect(first.read.ranges).toBeLessThan(60)
     expect(first.read.documents).toBeLessThan(80)
     const search = await measuredWalk(t, (ctx, after) =>
       projectUsersOf(ctx, f.admin, { project_id: project.id, search: 'zeta', after }),
     )
-    console.log('users, a search for the last 3 of 5,000 grants, per call', search)
+    console.log('users, a search for the last 3 of 995 grants, per call', search)
     expect(search.reduce((n, c) => n + c.rows, 0)).toBe(3)
     for (const call of search) {
       expect(call.documents).toBeLessThanOrEqual(NAMED_READ.documents + 64)
@@ -1598,16 +1610,17 @@ describe('real limits', () => {
     expect(ready(await read.users(t, f.admin, project.id, { search: 'zeta' })).rows.length).toBe(
       search[0].rows,
     )
-  }, 120_000)
+  })
 
-  it('offers choices among 5,000 people and 300 teams on a project with 2,000 grants', async () => {
+  it('offers choices among 1,000 people and 20 teams on a project with 400 grants and 5 team shares', async () => {
+    lowered()
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     await keyOrg(t, f.org.id)
     const project = await meta(t, f, f.admin)
     const teams: Doc<'teams'>[] = []
     await t.run(async (ctx) => {
-      for (const name of names('Team ', 300)) {
+      for (const name of names('Team ', 20)) {
         const _id = await ctx.db.insert('teams', {
           id: uuid(),
           org_id: f.org.id,
@@ -1619,8 +1632,9 @@ describe('real limits', () => {
         teams.push((await ctx.db.get(_id)) as Doc<'teams'>)
       }
     })
-    // the 2,000 people granted come first in name order
-    await plantPeople(t, f, names('Person ', 5000), { project, granted: (i) => i < 2000 })
+    // the 400 people granted come first in name order
+    // with withOrg's five, the organization's 1,000
+    await plantPeople(t, f, names('Person ', 995), { project, granted: (i) => i < 400 })
     const ask = (ctx: QueryCtx, a: { search?: string; after?: string } = {}) =>
       candidatesOf(ctx, f.admin, { project_id: project.id, ...a })
     const plain = await measured(t, (ctx) => ask(ctx))
@@ -1633,9 +1647,10 @@ describe('real limits', () => {
       people.slice(0, 3),
       `${people.length} calls`,
     )
-    // every team shared: the first batch walks 300 shares and 2,000 grants
+    // five teams shared, the design size for one project, and the other 15
+    // left as choices: the first batch walks 5 shares and 400 grants
     await t.run(async (ctx) => {
-      for (const one of teams)
+      for (const one of teams.slice(0, 5))
         await ctx.db.insert('project_team_access', {
           project_id: project.id,
           team_id: one.id,
@@ -1644,7 +1659,7 @@ describe('real limits', () => {
         })
     })
     const shared = await measured(t, (ctx) => ask(ctx))
-    console.log('candidates, first batch, every team shared', shared.read, {
+    console.log('candidates, first batch, five teams shared', shared.read, {
       rows: ready(shared.out).rows.length,
       stopped: ready(shared.out).stopped,
     })
@@ -1660,34 +1675,36 @@ describe('real limits', () => {
     expect(ready(await read.candidates(t, f.admin, { project_id: project.id })).rows.length).toBe(
       ready(shared.out).rows.length,
     )
-  }, 120_000)
+  })
 
-  it('offers leads past 5,000 inactive people', async () => {
+  it("offers leads past 995 inactive people, the organization's 1,000 with withOrg's five", async () => {
+    lowered()
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     await keyOrg(t, f.org.id)
     // inactive people that sort before every active one
-    await plantPeople(t, f, names('Aaa inactive ', 5000), { active: false })
+    await plantPeople(t, f, names('Aaa inactive ', 995), { active: false })
     const calls = await measuredWalk(t, (ctx, after) => leadCandidatesOf(ctx, f.admin, { after }))
-    console.log('leadCandidates past 5,000 inactive people, per call', calls)
+    console.log('leadCandidates past 995 inactive people, per call', calls)
     expect(calls.reduce((n, c) => n + c.rows, 0)).toBe(3) // admin, Relay, user
     for (const call of calls) {
       expect(call.documents).toBeLessThanOrEqual(NAMED_READ.documents + 64)
       expect(call.bytes).toBeLessThan(NAMED_READ.bytes + 64 * 1024)
     }
-  }, 120_000)
+  })
 
-  /** A top-level project led by the fixture's user with 300 sub-projects,
-   * each shared with six teams the caller is not in, and a caller whose only
-   * grant is on the last, so the project shows to them for navigation only. */
+  /** A top-level project led by the fixture's user with 30 sub-projects,
+   * each shared with three teams the caller is not in, and a caller whose
+   * only grant is on the last, so the project shows to them for navigation
+   * only. */
   async function farParent(t: T, f: OrgFixture) {
     await keyOrg(t, f.org.id)
     const top = await meta(t, f, f.user)
     const me = await seat(t, f, 'Far member')
     const crews: Doc<'teams'>[] = []
-    for (const name of names('Crew ', 6)) crews.push(await team(t, f.org.id, name))
+    for (const name of names('Crew ', 3)) crews.push(await team(t, f.org.id, name))
     await t.run(async (ctx) => {
-      for (let i = 0; i < 300; i++) {
+      for (let i = 0; i < 30; i++) {
         const id = uuid()
         await ctx.db.insert('projects', {
           id,
@@ -1711,7 +1728,7 @@ describe('real limits', () => {
             level: 'user',
             name_key: crew.name_key,
           })
-        if (i === 299)
+        if (i === 29)
           await ctx.db.insert('project_access', {
             project_id: id,
             profile_id: me.id,
@@ -1723,7 +1740,7 @@ describe('real limits', () => {
     return { top, me }
   }
 
-  it('reads the settings of a parent shown only for navigation, whose 300 sub-projects carry six team shares each, within the limits', async () => {
+  it('reads the settings of a parent shown only for navigation, whose 30 sub-projects carry three team shares each, within a lowered limit', async () => {
     // the reference: canSeeProject's walk, without limits
     const free = newT()
     const plain = await withOrg(free)
@@ -1734,11 +1751,13 @@ describe('real limits', () => {
         await projectLevel(ctx, reference.me, reference.top),
       ]),
     ).toEqual([true, 'viewer'])
-    const t = newT({ transactionLimits: true })
+    // a 32nd of Convex's 4,096 index ranges, as 300 sub-projects with six
+    // shares each passed the real limit
+    const t = newT({ transactionLimits: { databaseQueries: 4_096 / 32 } })
     const f = await withOrg(t)
     const { top, me } = await farParent(t, f)
     // the walk reads each sub-project's shares, their teams and memberships,
-    // past Convex's 4,096 index ranges
+    // past the lowered limit
     await expect(t.run((ctx) => canSeeProject(ctx, me, top))).rejects.toThrow(
       /Too many index ranges/,
     )
@@ -1746,7 +1765,7 @@ describe('real limits', () => {
       projectSettingsOf(ctx, new Map([[f.org.id, me]]), top.id),
     )
     console.log(
-      'get, a parent shown for navigation, 300 sub-projects with six shares each',
+      'get, a parent shown for navigation, 30 sub-projects with three shares each',
       got.read,
     )
     expect(got.out).toMatchObject({ state: 'ok', level: 'viewer', can_edit: false })
@@ -1766,7 +1785,7 @@ describe('real limits', () => {
       state: 'refused',
       message: LEAD_ACCESS_NEEDED,
     })
-  }, 120_000)
+  })
 })
 
 describe('a check of the caller access that a bound stops', () => {

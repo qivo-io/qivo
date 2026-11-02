@@ -887,7 +887,7 @@ describe('the backfill', () => {
     await run({ dry_run: false, recount: true })
     expect(await countOf(fx.t, wrong.id)).toBe(2)
     expect(await run({ dry_run: true })).toMatchObject({ counted: 0, differing: 0 })
-  }, 60_000)
+  })
 })
 
 describe('over HTTP', () => {
@@ -1002,13 +1002,16 @@ describe('starting a count after a refusal', () => {
 
   /* A caller that retries a minute after each refusal, as the refusal
    * asks, with the recovery every ten minutes, for 30 minutes, on a thread
-   * of comments near 900 KB under `bytesRead`. Answers the task's row once
-   * the count is exact, stuck or the half hour is over. */
-  async function retryHalfHour(bytesRead: number) {
+   * of 200 comments of 2,000 characters, about 2 KiB each, under a lowered
+   * limit of 192 KiB read in one transaction. Answers the task's row once
+   * the count is exact, stuck or the half hour is over, and its count after
+   * the first step. */
+  async function retryHalfHour() {
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    const fx = await setup(newT({ transactionLimits: { bytesRead } }))
+    const fx = await setup(newT({ transactionLimits: { bytesRead: 192 * 1024 } }))
     const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    for (let i = 0; i < 10; i++) await plantComments(fx, 1, { task, body: 'x'.repeat(900_000) })
+    // in writes of 25, each of which reads its comments back
+    for (let i = 0; i < 8; i++) await plantComments(fx, 25, { task, body: 'x'.repeat(2_000) })
     const begin = () =>
       as(fx.t, fx.user).mutation(api.comments.countThread, {
         org_id: fx.org.id,
@@ -1016,32 +1019,38 @@ describe('starting a count after a refusal', () => {
       })
     await begin()
     await runSteps(fx.t)
+    const first = await countOf(fx.t, task.id)
     for (let minute = 1; minute <= 30; minute++) {
       vi.setSystemTime(START + minute * 60_000)
       await begin()
       if (minute % 10 === 0) await fx.t.mutation(internal.commentLimits.recover, {})
       await runSteps(fx.t)
       const row = await counter(fx.t, task.id)
-      if (row?.counted === undefined || row.stuck === true) return { row, minute }
+      if (row?.counted === undefined || row.stuck === true) return { row, minute, first }
     }
-    return { row: await counter(fx.t, task.id), minute: 30 }
+    return { row: await counter(fx.t, task.id), minute: 30, first }
   }
 
   it('finishes a count whose step fails at full budget, however often a caller restarts it', async () => {
-    // a full step reads eight of the comments, more than 4 MiB; half reads four
-    const { row, minute } = await retryHalfHour(4 * 1024 * 1024)
-    expect(row?.count).toBe(10)
+    // a full step of 100 comments reads the last of each part of seven
+    // again, about 115 of them and 250 KiB; half reads about 70, 150 KiB
+    Object.assign(COUNT_BUDGET.step, { rows: 100 })
+    const { row, minute, first } = await retryHalfHour()
+    // the first step, at full budget, failed and counted nothing
+    expect(first).toBe(0)
+    expect(row?.count).toBe(200)
     expect(row?.counted).toBeUndefined()
     expect(row?.stuck).toBeUndefined()
     expect(minute).toBeLessThan(10)
-  }, 120_000)
+  })
 
   it('marks a count whose step always fails stuck, however often a caller restarts it', async () => {
-    // even the smallest step reads two of the comments, more than 1 MiB
-    const { row, minute } = await retryHalfHour(1024 * 1024)
+    // even the smallest step reads up to its 256 KiB, a sixteenth of
+    // COUNT_BUDGET.step.bytes, past the limit
+    const { row, minute } = await retryHalfHour()
     expect(row).toMatchObject({ stuck: true, count: 0 })
     expect(minute).toBe(10)
-  }, 120_000)
+  })
 
   it('starts the count after a REST or MCP write refused while it counts, and passes others on', async () => {
     const calls: { name: string; args: unknown }[] = []
@@ -1146,13 +1155,14 @@ describe('the backfill, call by call', () => {
 
   it('records the call that failed with its cursor, after the counts it committed', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    // a step that reads past 3 MiB fails
-    const fx = await setup(newT({ transactionLimits: { bytesRead: 3 * 1024 * 1024 } }))
+    // a step that reads past a lowered 192 KiB fails, as one over the 200
+    // comments of about 2 KiB each does
+    const fx = await setup(newT({ transactionLimits: { bytesRead: 192 * 1024 } }))
     const small = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     const large = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
     await plantComments(fx, 2, { task: small })
-    for (let i = 0; i < 5; i++)
-      await plantComments(fx, 1, { task: large, body: 'x'.repeat(900_000) })
+    for (let i = 0; i < 8; i++)
+      await plantComments(fx, 25, { task: large, body: 'x'.repeat(2_000) })
     await expect(
       fx.t.action(internal.internal.commentCountsBackfill.run, { dry_run: false }),
     ).rejects.toThrow()

@@ -2119,7 +2119,7 @@ const COMPLETION_CHECKS = 32
  * read conflicts only with writes to the family's tasks.
  *
  * It is the interim reader: completion counts stored facts, which the
- * limits plan wants complete at any size inside the testing envelope, so
+ * limits plan wants complete at any size inside the design size, so
  * the counts every task writer keeps (t3/limits-overview-counts) are to
  * replace it, and with them its unavailable answer. Keep it the one reader
  * of REST and MCP completion until then.

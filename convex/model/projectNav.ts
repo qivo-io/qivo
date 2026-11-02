@@ -493,14 +493,14 @@ const TREE_QUERIES = 8
 /** The favorites rows the tree changes of one mutation may read and write
  * (TreeBudget `favorites`): one for each seat that starred a top-level
  * project they rename, archive or restore. 1,000 is the most people the
- * testing envelope gives an organization, agents and invitations included,
+ * design size gives an organization, agents and invitations included,
  * which cannot star. Convex reads each row again by id to write it, so
  * with LIMITS.projectTreeChange.max entries a change reads about 3,000 rows
  * by id, inside the 4,096 index ranges one transaction may read (measured
  * in tests/projectFavorites.test.ts, "at the limits"). A REST or MCP update
  * that archives or restores a project and renames it reads and writes each
  * favorite once (settleFavorites). Not in LIMITS, as only an organization
- * past the envelope meets it. A mutable object, so tests can lower it. */
+ * past the design size meets it. A mutable object, so tests can lower it. */
 export const TREE_FAVORITES = { max: 1_000 }
 
 /** The refusal of a tree change past TREE_FAVORITES.max. Separate changes

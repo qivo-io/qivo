@@ -77,21 +77,23 @@ import { relationRow, type TaskRow, taskFields } from './workspaceParts'
  * the project and on its top-level project, about 1.3 MiB more at the
  * caps, and past those the caller's own rows, which count as shared.
  * Besides that, its worst case is the cap, 1 MiB past it and the shared
- * reads (OWN_READS states them): at most 266 ranges and 7,098 documents,
- * up to about 1.2 MiB of the organization's teams, which counts JSON, and
- * the person's own rows, a few hundred bytes each at ordinary name
- * lengths. A task's project is a sub-project, so the window navigates only
- * for a task an earlier version stored on a top-level project. With few of
- * those rows a task reads at most about 10 MiB and its links about 15.2 to
- * 15.5 MiB, under Convex's 16 MiB; a person with thousands of those rows
- * near the name caps can still make a read of links pass it. The shared
- * reads and the instance's own (at most 193 ranges and 705 documents)
- * count past `ranges` and `documents` too, under 4,096 and 32,000. At
- * the 20,000-character description cap in a three-byte script, 100
- * subtasks read about 6.1 MB, and fit in `bytes` with the task, its text
- * and its parent. A linked group also reads its first counting subtask
- * (groupsOf), so 100 linked groups at the cap read about 12.2 MB, which
- * `linkBytes` holds.
+ * reads (OWN_READS states them). Measured on 29 October 2026 at the text
+ * and name caps, past the design size, and not since
+ * (convex/tests/taskWindow.test.ts now checks these budgets with ordinary
+ * text): at most 266 ranges and 7,098 documents, up to about 1.2 MiB of the
+ * organization's teams, which counts JSON, and the person's own rows, a few
+ * hundred bytes each at ordinary name lengths. A task's project is a sub-
+ * project, so the window navigates only for a task an earlier version
+ * stored on a top-level project. With few of those rows a task reads at
+ * most about 10 MiB and its links about 15.2 to 15.5 MiB, under Convex's 16
+ * MiB; a person with thousands of those rows near the name caps can still
+ * make a read of links pass it. The shared reads and the instance's own (at
+ * most 193 ranges and 705 documents) count past `ranges` and `documents`
+ * too, under 4,096 and 32,000. On the same day, at the 20,000-character
+ * description cap in a three-byte script, 100 subtasks read about 6.1 MB,
+ * and fit in `bytes` with the task, its text and its parent. A linked group
+ * also reads its first counting subtask (groupsOf), so 100 linked groups at
+ * the cap read about 12.2 MB, which `linkBytes` holds.
  *
  * `attachments` stops the attachment read: three times
  * LIMITS.attachments.max, for the counted rows, the description images a

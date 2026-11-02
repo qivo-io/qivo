@@ -139,27 +139,27 @@ import { canonicalLoad, DEFAULT_PLANNABLE_HOURS, type LoadSpan, plannableHoursOf
  * access rows included (lib/viewReads.ts viewBudget), the same as the
  * Board's (lib/board.ts BOARD.reads), keeping 4 MiB, 8,000 documents and 496
  * index ranges under Convex's limits for what one step reads past the
- * guard's last look. Measured under convex-test's transaction limits with
- * rows as the app writes them, titles and names at the cap in a three-byte
- * script, data from before the rule of one level (tests/overview.test.ts,
+ * guard's last look. Measured on 2 November 2026 under convex-test's
+ * transaction limits with rows as the app writes them, ordinary titles and
+ * names, data from before the rule of one level (tests/overview.test.ts,
  * real limits), in ranges, documents and MiB:
  *
- * - One sub-project of 2,000 tasks, every dated one due before the day,
- *   Done ones and groups included: the summary 2,060, 2,433 and 3.26, whole.
- *   At 4,000 its Overdue stops at 3,600 ranges (4,063 documents, 5.41 MiB)
- *   and answers unavailable, while its counts stay whole; Overdue costs
- *   about one range for each task due before the day, so it answers whole
- *   up to about 3,400 of them in one sub-project (computed from these). A
- *   first At-risk batch
- *   reads 116, 156 and 0.2 there, a first Paused batch 58, 98 and 0.12.
- * - 2,000 tasks over 200 sub-projects, each shared with each of the
- *   reader's 25 teams: the summary 2,478, 8,689 and 5.0, the projection
- *   2,876, 8,489 and 3.99, a first At-risk batch 715, 7,368 and 3.89, a
- *   first Paused batch 691, 6,688 and 2.98, the selection's access reads
- *   about 6,300 of those documents.
- * - My view of 2,000 of the reader's own tasks over those sub-projects: the
- *   summary 1,529, 8,096 and 4.24, the projection 2,572, 8,345 and 3.73, a
- *   first batch of either list 121 ranges.
+ * - One sub-project of 300 tasks, every dated one due before the day,
+ *   Done ones and groups included: the summary 316, 371 and 0.25, whole.
+ *   With `reads.ranges` lowered to 200 its Overdue stops there and answers
+ *   unavailable, while its counts stay whole; Overdue costs about one
+ *   range for each task due before the day. A first At-risk batch reads
+ *   41, 49 and 0.03 there, a first Paused batch 27, 30 and 0.02. On 1
+ *   November 2026, at the text caps, 4,000 such tasks stopped Overdue at
+ *   the 3,600 ranges and 2,000 answered whole, past the design size.
+ * - 600 tasks over a project of 30 sub-projects that a team of the reader
+ *   shares: the summary 549, 605 and 0.36, the projection 217, 125 and
+ *   0.08, a first At-risk batch 166, 352 and 0.23, a first Paused batch
+ *   158, 140 and 0.08.
+ * - My view of 400 of the reader's own tasks over the 200 sub-projects
+ *   their three teams share: the summary 529, 967 and 0.37, the projection
+ *   581, 625 and 0.26, a first At-risk batch 113 ranges and a first Paused
+ *   batch 126.
  *
  * `batch` is how many rows a list batch holds, the page's Load more step,
  * and `split` how many a batch with a fixed end may hold before it answers

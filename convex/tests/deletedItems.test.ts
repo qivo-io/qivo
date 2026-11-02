@@ -386,8 +386,11 @@ describe('moving a task to Deleted items', () => {
   it('moves a task too large to store with a long thread within the limits, and restores it cut to the caps', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     // convex-test counts no range for a delete, which reads its row first,
-    // so the writes stand in for those ranges
-    const t = newT({ transactionLimits: { documentsWritten: 4096 } })
+    // so the writes stand in for those ranges. That limit and a step's rows
+    // are both lowered, so a thread of 500 is longer than one transaction
+    // may delete, as a thread past 4,096 is on a backend.
+    const t = newT({ transactionLimits: { documentsWritten: 400 } })
+    TRASH_BUDGET.rows = 100
     const f = await withOrg(t)
     const org_id = f.org.id
     const huge = await plantIssue(t, {
@@ -398,9 +401,9 @@ describe('moving a task to Deleted items', () => {
       description: `${'x'.repeat(TEXT_MAX - 1)}😀${'x'.repeat(STORED_ROW_MAX_BYTES)}`,
     })
     // a thread longer than one transaction may delete
-    for (let from = 0; from < 4500; from += 1500)
+    for (let from = 0; from < 500; from += 250)
       await t.run(async (ctx) => {
-        for (let i = from; i < from + 1500; i++)
+        for (let i = from; i < from + 250; i++)
           await ctx.db.insert('comments', {
             id: uuid(),
             issue_id: huge.id,
@@ -420,7 +423,7 @@ describe('moving a task to Deleted items', () => {
     expect(stored?.title).toBe('😀'.repeat(127))
     expect(stored?.description).toBe('x'.repeat(TEXT_MAX - 1))
     expect((await storedRows(t, item.id)).filter((row) => row.table === 'comments')).toHaveLength(
-      4500,
+      500,
     )
     // it keeps its history, with the 'deleted' row
     expect(await historyOf(t, huge.id)).toHaveLength(4)
@@ -431,16 +434,19 @@ describe('moving a task to Deleted items', () => {
       title: '😀'.repeat(127),
       description: 'x'.repeat(TEXT_MAX - 1),
     })
-  }, 120_000)
+  })
 
   it("leaves the subtasks' rows to steps once the tasks it read have spent the delete's bytes", async () => {
-    // Convex's limits, so the delete must read no description row, because
-    // each of the 100 is as large as its task and its delete reads it again
-    const t = newT({ transactionLimits: true })
+    // a read limit lowered with the step's bytes, so the delete must read no
+    // description row, because each of the 100 is as large as its task and
+    // its delete reads it again
+    const t = newT({ transactionLimits: { bytesRead: 700 * 1024 } })
+    TRASH_BUDGET.bytes = 300 * 1024
     const f = await withOrg(t)
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    // 100 subtasks of 20,000 three-byte characters pass the 4 MiB a step reads
-    const ids = await plantChildren(t, root, f.sub.id, LIMITS.subtasks.max, '中'.repeat(TEXT_MAX))
+    // 100 subtasks of about 2 KB pass the bytes the delete's own call reads
+    const description = 'Spec line. '.repeat(180)
+    const ids = await plantChildren(t, root, f.sub.id, LIMITS.subtasks.max, description)
     const notes = await t.run(async (ctx) => {
       const out: string[] = []
       for (const issue_id of ids) {
@@ -460,8 +466,8 @@ describe('moving a task to Deleted items', () => {
     expect((await itemFor(t, root.id)).state).toBe('ready')
     for (const id of notes) expect(await commentStored(t, id)).toBe(true)
     expect(await rows()).toEqual([])
-    expect((await storedIssue(t, ids[0]))?.description).toBe('中'.repeat(TEXT_MAX))
-  }, 120_000)
+    expect((await storedIssue(t, ids[0]))?.description).toBe(description)
+  })
 
   it('deletes the history a job of the release before still names in purge_history', async () => {
     const t = newT()
@@ -566,8 +572,8 @@ describe('moving a task to Deleted items', () => {
  * detaches tell their followers from steps. convex-test does not count the
  * index range a backend reads to delete a row, so these suites hold each
  * transaction to 4,096 writes instead, which every delete also spends.
- * Two followers per task keep convex-test fast; LIMITS.followers.max per task was
- * checked on a local backend. */
+ * One or two followers per task keep convex-test fast; LIMITS.followers.max
+ * per task was checked on a local backend. */
 describe('a task delete at the caps', () => {
   const TX_LIMITS = { documentsWritten: 4096 }
 
@@ -697,14 +703,16 @@ describe('a task delete at the caps', () => {
     await runSteps(t)
     expect(await itemFor(t, root.id)).toMatchObject({ state: 'ready' })
     expect(await messagesAbout(t, doomed)).toBe(0)
-  }, 120_000)
+  })
 
   it.each(['rest', 'mcp'] as const)(
-    'deletes the same parent alone over %s, and the detached subtasks tell their followers from steps',
+    'deletes a parent at LIMITS.subtasks.max alone over %s, and the detached subtasks tell their followers from steps',
     async (surface) => {
       const t = newT({ transactionLimits: TX_LIMITS })
       const f = await withOrg(t)
-      const { root, kids } = await plantFamily(t, f, await plantPeople(t, f, 2))
+      // the guest alone follows each task, because this case reads only the
+      // guest's rows, and a second follower's full items made it slow
+      const { root, kids } = await plantFamily(t, f, await plantPeople(t, f, 1))
       const credential = await plantCredential(t, f.user, 'mcp_tokens', 'Laptop script')
       const args = { callerId: f.user.id, access: 'write' as const, credential, ref: root.id }
 
@@ -716,9 +724,11 @@ describe('a task delete at the caps', () => {
       const guestRows = () => messagesFor(t, f.guest.id)
       const detached = (rows: Doc<'messages'>[], id: string) =>
         rows.filter((m) => m.issue_id === id && m.detail === 'Detached from its parent')
+      // no step has run yet, so one read of the guest's rows serves every kid
+      const before = await guestRows()
       for (const kid of kids) {
         expect((await liveTask(t, kid.id))?.parent_id).toBeUndefined()
-        expect(detached(await guestRows(), kid.id)).toEqual([])
+        expect(detached(before, kid.id)).toEqual([])
       }
 
       await runSteps(t)
@@ -732,7 +742,6 @@ describe('a task delete at the caps', () => {
         expect(unread.length).toBeLessThanOrEqual(ITEM_UNREAD_CAP)
       }
     },
-    300_000,
   )
 
   it('deletes a single task whose LIMITS.followers.max followers each hold a full item, in steps', async () => {
@@ -748,7 +757,8 @@ describe('a task delete at the caps', () => {
     await runSteps(t)
     expect(await itemFor(t, task.id)).toMatchObject({ state: 'ready' })
     expect(await messagesAbout(t, [task.id])).toBe(0)
-  }, 120_000)
+  })
+
   it("goes back to the drain when the finish check finds a task item's message left", async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const t = newT()
@@ -990,7 +1000,7 @@ describe('moving a project to Deleted items', () => {
     )
     expect(notices.map((m) => m.detail)).toEqual(['Detached from its parent'])
     await assertNoDanglingRefs(t, 'after a project moved in steps')
-  }, 120_000)
+  })
 
   it('stops a step on its range budget, which every read it makes spends', async () => {
     // each bare task costs one row but about eight index ranges to move
@@ -1037,26 +1047,30 @@ describe('moving a project to Deleted items', () => {
     expect(await itemFor(t, f.sub2.id)).toMatchObject({ state: 'ready', counts: { tasks: 60 } })
   })
 
-  it('moves a task with 1,000 subtasks of 20,000 characters in its own project within the real limits', async () => {
-    // the subtasks hold about 20 MB, more than one transaction may read, so
-    // the move must find the parent's child outside without reading them
+  it('moves a task with LIMITS.subtasks.max subtasks in its own project within the real limits', async () => {
+    // Convex's limits and the real budgets, for a parent at the cap with one
+    // child outside. The next case shows under a lowered read limit that the
+    // move finds that child without reading the children inside.
     const t = newT({ transactionLimits: true })
     chargeFilteredReads()
     const f = await withOrg(t)
     const org_id = f.org.id
     const parent = await plantIssue(t, { org_id, project_id: f.sub2.id })
-    const description = 'Spec line. '.repeat(2_000).slice(0, TEXT_MAX)
-    const subtasks = await plantChildren(t, parent, f.sub2.id, 1_000, description)
+    const description = 'Check the sensor reading against the bench value and note any drift.'
+    const subtasks = await plantChildren(t, parent, f.sub2.id, LIMITS.subtasks.max, description)
     // planted last, so a scan of the children in index order reaches it last
     const outside = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
 
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
 
-    expect(await itemFor(t, f.sub2.id)).toMatchObject({ state: 'ready', counts: { tasks: 1_001 } })
+    expect(await itemFor(t, f.sub2.id)).toMatchObject({
+      state: 'ready',
+      counts: { tasks: LIMITS.subtasks.max + 1 },
+    })
     expect((await liveTask(t, outside.id))?.parent_id).toBeUndefined()
-    expect((await storedIssue(t, subtasks[999]))?.parent_id).toBe(parent.id)
-  }, 300_000)
+    expect((await storedIssue(t, subtasks[subtasks.length - 1]))?.parent_id).toBe(parent.id)
+  })
 
   it('finds a child outside without reading the children inside, and scans the tasks over steps', async () => {
     // the old scan read every child inside, 60 of 16 KB and more than the
@@ -1547,12 +1561,13 @@ describe('purging', () => {
     await assertNoOrphanHistory(t, 'after a purge cleared 1,200 rows')
   })
 
-  it('purges a project item that 20,000 items in other states name, in bounded steps within the real limits', async () => {
+  it('purges a project item that 600 items in other states name, in bounded steps within a lowered read limit', async () => {
     // each names Firmware by project_id and Testbed platform by
-    // parent_project_id, so a purge that passed over them read 40,000
-    // items in one step, past the 32,000 documents and 16 MiB one
-    // transaction may read, and every retry failed
-    const t = newT({ transactionLimits: true })
+    // parent_project_id, so a purge that passed over them read 1,200 items
+    // in one step, past the 800 documents this lowered limit lets one
+    // transaction read, as 20,000 such items made a step read past Convex's
+    // 32,000
+    const t = newT({ transactionLimits: { documentsRead: 800 } })
     chargeFilteredReads()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -1561,7 +1576,7 @@ describe('purging', () => {
     const earlyItem = await itemFor(t, early.id)
     await deleteProject(t, f, f.sub2.id)
     const subItem = await itemFor(t, f.sub2.id)
-    await plantBusyItems(t, f, 20_000)
+    await plantBusyItems(t, f, 600)
     await deleteProject(t, f, f.meta.id)
     await runSteps(t)
     const item = await itemFor(t, f.meta.id)
@@ -1581,10 +1596,10 @@ describe('purging', () => {
     await runSteps(t)
     // the items that need it are purged with it, and the others stay
     for (const gone of [item, earlyItem, subItem]) expect(await itemById(t, gone.id)).toBeNull()
-    expect(await busyCount(t, f, 'moving')).toBe(6667)
-    expect(await busyCount(t, f, 'restoring')).toBe(6667)
-    expect(await busyCount(t, f, 'purging')).toBe(6666)
-  }, 300_000)
+    expect(await busyCount(t, f, 'moving')).toBe(200)
+    expect(await busyCount(t, f, 'restoring')).toBe(200)
+    expect(await busyCount(t, f, 'purging')).toBe(200)
+  })
 
   it('expires ready items after 30 days in bounded batches that chain', async () => {
     const t = newT()
@@ -1888,7 +1903,7 @@ describe('recovery', () => {
     expect(seen).not.toContain(1 / 4)
     expect((await itemFor(t, f.sub2.id)).state).toBe('ready')
     expect(await storedTasks(t, item.id)).toHaveLength(tasks.length)
-  }, 60_000)
+  })
 
   it('does nothing for an item that is gone, and leaves a deleting demo organization alone', async () => {
     const t = newT()
@@ -2113,15 +2128,19 @@ describe('organization teardown', () => {
     expect(await fileState(t, elsewhere.file)).toBe('kept')
   })
 
-  it('purgeOrg stops on bytes, so stored rows of about 900 KB go in several calls within the real limits', async () => {
+  it('purgeOrg stops on bytes, so large stored rows go in several calls within a lowered read limit', async () => {
     vi.stubEnv('QIVO_ENVIRONMENT', 'staging')
     vi.stubEnv('SITE_URL', 'https://preview.qivo.io')
-    const t = newT({ transactionLimits: true })
+    // the read limit and both byte budgets at a 64th of Convex's 16 MiB and
+    // the real 4 MiB, so comments of 14 KB stand in for rows of almost 1 MiB
+    const t = newT({ transactionLimits: { bytesRead: 256 * 1024 } })
+    Object.assign(PURGE_ORG, { bytes: 64 * 1024 })
+    Object.assign(TRASH_BUDGET, { bytes: 64 * 1024 })
     const f = await withOrg(t)
     const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    // 24 comments of about 900 KB, over 20 MiB together: a batch of 256
-    // rows would read them all
-    const body = 'Field note. '.repeat(75_000)
+    // 24 comments of about 14 KB, more than the limit together: a batch of
+    // 256 rows would read them all
+    const body = 'Field note. '.repeat(1_200)
     for (let i = 0; i < 24; i++) await comment(t, task, body)
     await deleteTask(t, f, task.id)
     await runSteps(t)
@@ -2140,7 +2159,7 @@ describe('organization teardown', () => {
     }
     expect(calls).toBeGreaterThan(3)
     expect(await trashOf(t, f.org.id)).toEqual({ items: [], rows: [], tasks: [] })
-  }, 60_000)
+  })
 
   it("purgeTasks deletes a drive's own tasks for good, and nothing else", async () => {
     vi.stubEnv('QIVO_ENVIRONMENT', 'development')

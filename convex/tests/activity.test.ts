@@ -232,7 +232,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     await t.finishAllScheduledFunctions(() => vi.runAllTimers())
     expect(await stored(t, f.org.id, 'task-a')).toHaveLength(3)
     expect(await activityFor(t, f.org.id)).toHaveLength(2_003)
-  }, 180_000)
+  })
 
   it('a write past 500 rows stores one document, reads none and schedules nothing', async () => {
     const t = newT()
@@ -320,7 +320,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
       await t.mutation(internal.profileRemovals.step, { profile_id: f.agent.id })
     expect(await rowsWhere((row) => row.actor_id === f.agent.id)).toEqual([])
     await assertNoDanglingRefs(t, 'after a project purge and a profile removal')
-  }, 180_000)
+  })
 
   it('pages a task’s whole history, newest first, however many rows other tasks have', async () => {
     const t = newT()
@@ -602,7 +602,7 @@ describe('per-subject history, kept whole and read a page at a time', () => {
     const left = await t.run((ctx) => ctx.db.query('issues').collect())
     expect(left.map((row) => row.id).sort()).toEqual([...archived].sort())
     expect(left.every((row) => row.parent_id === undefined)).toBe(true)
-  }, 120_000)
+  })
 })
 
 describe('atomicity — a refused write leaves zero rows', () => {

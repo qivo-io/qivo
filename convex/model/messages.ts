@@ -1059,24 +1059,26 @@ export async function removeMessages(
 }
 
 /* How many rows one bulk inbox write changes at most. The caller repeats
- * while hasMore is true. Measured in convex/tests/inboxBulk.test.ts, with
- * every message as long as a change notice can be (the longest title and
- * names in a three-byte script, about 3.9 KB), so that one batch stays
- * below a quarter of each of Convex's transaction limits. The worst case is
- * Mark all as read on one older unread message in each of INBOX_BATCH
- * items that also hold a newer unread message outside the batch and a
- * newest read one: the batch reads each marked message four times (the
- * range, its patch, the prune's read and its delete), the newer unread
- * message the prune seeks and the read one, about 23.6 KB a marked message,
- * so 177 is the most that fits. One run at 160 measured, in bytes read,
- * documents read, index ranges, documents written and bytes written:
- *   - that worst case: 3.77 MB, 1,284, 484, 480 and 0.68 MB, 90% of a
- *     quarter of the 16 MiB read limit;
- *   - one unread message in each item, its newest read: 3.17 MB, 1,123,
- *     484, 480 and 0.68 MB;
- *   - items of 51 messages: 2.43 MB, 655, 16, 324 and 0.61 MB;
- *   - Remove all read of each item's newest message: 1.96 MB, 802, 483,
+ * while hasMore is true. The worst case is Mark all as read on one older
+ * unread message in each of INBOX_BATCH items that also hold a newer
+ * unread message outside the batch and a newest read one: the batch reads
+ * each marked message four times (the range, its patch, the prune's read
+ * and its delete), the newer unread message the prune seeks and the read
+ * one. On 28 October 2026 the batch was sized with every message as long
+ * as a change notice can be, the longest title and names in a three-byte
+ * script, about 3.9 KB, past the design size: about 23.6 KB a marked
+ * message, so 177 fit below a quarter of the 16 MiB read limit, and 160
+ * read 3.77 MB in that worst case. convex/tests/inboxBulk.test.ts now
+ * measures one run at 160 with notices that carry every fragment in
+ * ordinary text, in bytes read, documents read, index ranges, documents
+ * written and bytes written:
+ *   - that worst case: 1.16 MB, 1,284, 484, 480 and 0.25 MB;
+ *   - one unread message in each item, its newest read: 0.99 MB, 1,123,
+ *     484, 480 and 0.25 MB;
+ *   - items of 51 messages: 0.68 MB, 655, 16, 324 and 0.17 MB;
+ *   - Remove all read of each item's newest message: 0.66 MB, 802, 483,
  *     320 and 0.08 MB.
+ * Each stays below a quarter of each of Convex's transaction limits.
  * These are convex-test's counts, which count the document a patch or a
  * delete reads; a hosted deployment was not measured. */
 export const INBOX_BATCH = 160

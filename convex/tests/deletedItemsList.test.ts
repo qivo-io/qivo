@@ -3,9 +3,9 @@
  * login and project each item for that seat; restore and purge answer per
  * item behind the same fence; projects.removalSummary feeds the Archive or
  * delete window; issues.archive can keep the subtasks. Fake timers keep
- * steps from running until a test releases them, and LIST, REMOVAL_COUNT
- * and TRASH_BUDGET are lowered where a test needs many rows or an
- * unfinished item. */
+ * steps from running until a test releases them, and LIST, MATCHES,
+ * REMOVAL_COUNT and TRASH_BUDGET are lowered where a test needs many rows,
+ * a spent budget or an unfinished item. */
 /// <reference types="vite/client" />
 
 import type { WithoutSystemFields } from 'convex/server'
@@ -49,9 +49,11 @@ import {
 
 installTrashTimers()
 const DEFAULT_LIST = { ...LIST }
+const DEFAULT_MATCHES = { ...MATCHES }
 const DEFAULT_REMOVAL = { ...REMOVAL_COUNT }
 afterEach(() => {
   Object.assign(LIST, DEFAULT_LIST)
+  Object.assign(MATCHES, DEFAULT_MATCHES)
   Object.assign(REMOVAL_COUNT, DEFAULT_REMOVAL)
 })
 
@@ -285,12 +287,35 @@ const listMetrics = (t: T, who: Doc<'profiles'>) =>
     return await ctx.meta.getTransactionMetrics()
   })
 
-/** Expects a call to read less than three quarters of what Convex allows
- * one query (16 MiB, 32,000 documents and 4,096 index ranges). */
+/** An eighth of what Convex allows one query (16 MiB, 32,000 documents
+ * and 4,096 index ranges), for newT's transactionLimits. */
+const EIGHTH = { bytesRead: 2 * 1024 * 1024, documentsRead: 4000, databaseQueries: 512 }
+
+/** Lowers LIST's cap and budgets and MATCHES.scan to an eighth, as EIGHTH
+ * lowers Convex's limits, so a case spends the budgets and would pass the
+ * limits with an eighth of the data. afterEach restores them. What a call
+ * reads past its last check (a seat's sight, the last row's reads and the
+ * login's) stays the same size, so it must fit an eighth of the reserve
+ * the real budgets leave below the real limits. */
+function listAtAnEighth(): void {
+  const eighth = ({ bytes, rows, ranges }: typeof LIST.call) => ({
+    bytes: bytes / 8,
+    rows: rows / 8,
+    ranges: ranges / 8,
+  })
+  Object.assign(LIST, {
+    cap: DEFAULT_LIST.cap / 8,
+    call: eighth(DEFAULT_LIST.call),
+    find: eighth(DEFAULT_LIST.find),
+  })
+  MATCHES.scan = DEFAULT_MATCHES.scan / 8
+}
+
+/** Expects a call to read less than three quarters of each EIGHTH limit. */
 function expectWellInside(metrics: Awaited<ReturnType<typeof listMetrics>>) {
-  expect(metrics.bytesRead.used).toBeLessThan(12 * 1024 * 1024)
-  expect(metrics.documentsRead.used).toBeLessThan(24_000)
-  expect(metrics.databaseQueries.used).toBeLessThan(3072)
+  expect(metrics.bytesRead.used).toBeLessThan(EIGHTH.bytesRead * 0.75)
+  expect(metrics.documentsRead.used).toBeLessThan(EIGHTH.documentsRead * 0.75)
+  expect(metrics.databaseQueries.used).toBeLessThan(EIGHTH.databaseQueries * 0.75)
 }
 
 describe('who sees an item (design 6.1)', () => {
@@ -888,27 +913,29 @@ describe('the list (design 6.2)', () => {
   })
 
   it('stops before the document limit when the subtasks in led projects name few items', async () => {
-    const t = newT({ transactionLimits: true })
+    const t = newT({ transactionLimits: EIGHTH })
+    listAtAnEighth()
     const f = await withOrg(t)
     const omar = await person(t, f.org.id, 'Omar')
     const sites = Array.from({ length: 8 }, (_, i) => ({ name: `Site ${i}`, lead: omar }))
     const { top, subs } = await tree(t, f, 'Operations', undefined, sites)
-    // Each site holds 4,200 subtasks of three task items rooted in Firmware.
-    // The repeated rows name few items, so no range reaches LIST.cap items,
-    // and the eight ranges hold 33,600 rows, past Convex's 32,000 documents.
+    // Each site holds 540 subtasks of six task items rooted in Firmware, 90
+    // each. The repeated rows name few items, so no range reaches LIST.cap
+    // items, and the eight ranges hold 4,320 rows, past the lowered limit of
+    // 4,000 documents.
     for (const [index, sub] of subs.entries())
       await t.run(async (ctx) => {
-        for (let k = 0; k < 3; k++) {
+        for (let k = 0; k < 6; k++) {
           const item = plantedItem(f, f.sub, {
             name: 'Survey the north gate',
             path: [top.name, f.sub.name],
-            projects: [entryOf(f.sub), entryOf(sub, 1400)],
-            counts: { tasks: 1401, archived_tasks: 0, subtasks: 1400, sub_projects: 0 },
-            deleted_at: new Date(START + index * 3 + k).toISOString(),
+            projects: [entryOf(f.sub), entryOf(sub, 90)],
+            counts: { tasks: 91, archived_tasks: 0, subtasks: 90, sub_projects: 0 },
+            deleted_at: new Date(START + index * 6 + k).toISOString(),
             deleted_by: f.admin.id,
           })
           await ctx.db.insert('deleted_items', item)
-          for (let n = 0; n < 1400; n++)
+          for (let n = 0; n < 90; n++)
             await ctx.db.insert('deleted_tasks', {
               org_id: f.org.id,
               item_id: item.id,
@@ -927,16 +954,17 @@ describe('the list (design 6.2)', () => {
     expect(listed.items.length).toBeGreaterThan(0)
     // the whole call, its sight and rows included, stays well inside them
     expectWellInside(await listMetrics(t, omar))
-  }, 120_000)
+  })
 
-  it('stops before 16 MiB when the projects a lead leads hold many long delete reasons', async () => {
-    const t = newT({ transactionLimits: true })
+  it('stops before the byte limit when the projects a lead leads hold many long delete reasons', async () => {
+    const t = newT({ transactionLimits: EIGHTH })
+    listAtAnEighth()
     const f = await withOrg(t)
     const omar = await person(t, f.org.id, 'Omar')
     const sites = Array.from({ length: 7 }, (_, i) => ({ name: `Site ${i}`, lead: omar }))
     const { top, subs } = await tree(t, f, 'Operations', undefined, sites)
-    // LIST.cap + 1 task items per site, each with a 500-character reason,
-    // so the seven ranges hold over 18 MiB of rows
+    // LIST.cap + 1 task items per site, 251, each with a 500-character
+    // reason, so the seven ranges hold over 2 MiB of rows, the lowered limit
     const reason = 'Duplicate of the survey at the north gate. '.repeat(12).slice(0, 500)
     for (const [index, sub] of subs.entries())
       await t.run(async (ctx) => {
@@ -955,33 +983,34 @@ describe('the list (design 6.2)', () => {
 
     const listed = await list(t, omar)
     expect(listed).toMatchObject({ capped: true })
-    // the 6 MiB that finding items may read hold the items of the first
+    // the 0.75 MiB that finding items may read hold the items of the first
     // sites it reads, more than one organization lists, and none of the
     // last site's
     expect(listed.items).toHaveLength(LIST.cap)
     expect(listed.items.map((row) => row.path[1])).not.toContain(subs[6].name)
     // the whole call, its sight and rows included, stays well inside them
     expectWellInside(await listMetrics(t, omar))
-  }, 120_000)
+  })
 
   it('lists the newest rows instead of failing when a lead deleted many small projects', async () => {
-    const t = newT({ transactionLimits: true })
+    const t = newT({ transactionLimits: EIGHTH })
     chargeFilteredReads()
+    listAtAnEighth()
     const f = await withOrg(t)
     const lena = await person(t, f.org.id, 'Lena')
-    // 1,400 projects Lena led and deleted herself. Finding them reads two
+    // 175 projects Lena led and deleted herself. Finding them reads two
     // ranges, but her row for each reads its stored projects and her
     // stored grants, and here the rows stored without a grantee, 3 ranges,
-    // so rows for all of them would read 4,200 ranges, past Convex's 4,096.
-    const ids = await plantLedProjects(t, lena, 1400)
+    // so rows for all of them would read 525 ranges, past the lowered 512.
+    const ids = await plantLedProjects(t, lena, 175)
 
     const listed = await list(t, lena)
     expect(listed.capped).toBe(true)
-    expect(listed.items.length).toBeGreaterThan(500)
+    expect(listed.items.length).toBeGreaterThan(60)
     expect(listed.items.map((row) => row.id)).toEqual(ids.slice(0, listed.items.length))
     // the whole call, its sight and rows included, stays well inside them
     expectWellInside(await listMetrics(t, lena))
-  }, 120_000)
+  })
 
   it('builds rows newest first while the call lasts, and says when it ran out', async () => {
     const t = newT()
@@ -1350,15 +1379,16 @@ describe('searching for deleted tasks', () => {
   })
 
   it('answers instead of failing when many project items it cannot show match in many seats', async () => {
-    const t = newT({ transactionLimits: true })
+    const t = newT({ transactionLimits: EIGHTH })
     chargeFilteredReads()
+    listAtAnEighth()
     const f = await withOrg(t)
     const lena = await person(t, f.org.id, 'Lena')
-    // Lena has a seat in five organizations. In each, 256 small project
-    // items deleted by someone else, which she cannot see, hold a task the
-    // search finds. Telling that she cannot see an item reads it and its
-    // stored projects, grants and shares, 4 ranges, so the search would
-    // read over 5,120 ranges, past Convex's 4,096.
+    // Lena has a seat in five organizations. In each, MATCHES.scan (32)
+    // small project items deleted by someone else, which she cannot see,
+    // hold a task the search finds. Telling that she cannot see an item
+    // reads it and its stored projects, grants and shares, 4 ranges, so the
+    // search would read over 640 ranges, past the lowered 512.
     const seats = [lena]
     for (let n = 1; n < 5; n++) {
       const org = await t.run(async (ctx) => {
@@ -1391,7 +1421,7 @@ describe('searching for deleted tasks', () => {
         return await ctx.meta.getTransactionMetrics()
       }),
     )
-  }, 120_000)
+  })
 
   it('answers the matches it judged before the call spent its budget', async () => {
     const t = newT()
@@ -1578,13 +1608,16 @@ describe('projects.removalSummary', () => {
   })
 
   it('stops counting before long task descriptions pass the read limit', async () => {
-    const t = newT({ transactionLimits: true })
+    // REMOVAL_COUNT.bytes and Convex's 16 MiB read limit lowered alike to
+    // a 32nd: 256 KiB and 512 KiB
+    const t = newT({ transactionLimits: { bytesRead: 512 * 1024 } })
+    REMOVAL_COUNT.bytes = DEFAULT_REMOVAL.bytes / 32
     const f = await withOrg(t)
-    // 1,000 tasks at the 20,000-character description cap pass 16 MiB,
+    // 30 tasks at the 20,000-character description cap pass 512 KiB,
     // their text in the task rows too, as until the description backfill's
     // clear
     const description = 'Measured on site. '.repeat(1112).slice(0, 20_000)
-    for (let i = 0; i < 1000; i++)
+    for (let i = 0; i < 30; i++)
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description })
     await copyTaskTexts(t, f.org.id)
 
@@ -1594,7 +1627,7 @@ describe('projects.removalSummary', () => {
     })
     expect(summary.more).toBe(true)
     expect(summary.tasks).toBeGreaterThan(0)
-    expect(summary.tasks).toBeLessThan(1000)
+    expect(summary.tasks).toBeLessThan(30)
     expect(summary.sub_projects).toMatchObject([
       { id: f.sub.id, tasks: summary.tasks, more: true },
       { id: f.sub2.id, tasks: 0, more: true },
@@ -1670,8 +1703,8 @@ describe('archiving a task and keeping its subtasks (design 9)', () => {
 
 describe('a project item while it moves', () => {
   it("reads the viewer's grants and team shares once for the whole list", async () => {
-    // the lead is in 20 teams that share 50 other projects each, 1,000
-    // shares the list's sight reads, and their own project is moving
+    // the lead is in 3 teams that each share the same 50 other projects,
+    // 150 shares the list's sight reads, and their own project is moving
     const t = newT()
     const f = await withOrg(t)
     await t.run(async (ctx) => {
@@ -1692,7 +1725,7 @@ describe('a project item while it moves', () => {
           created_at: NOW,
         })
       }
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 3; i++) {
         const team_id = crypto.randomUUID()
         await ctx.db.insert('teams', {
           id: team_id,
@@ -1710,7 +1743,8 @@ describe('a project item while it moves', () => {
     await deleteProject(t, f.user, f.meta.id)
     expect((await itemFor(t, f.meta.id)).state).toBe('moving')
     expect(await idsOf(t, f.user)).toContain((await itemFor(t, f.meta.id)).id)
+    // about 80 documents besides the shares, and 150 more for a second read
     const metrics = await listMetrics(t, f.user)
-    expect(metrics.documentsRead.used).toBeLessThan(1600)
+    expect(metrics.documentsRead.used).toBeLessThan(300)
   })
 })

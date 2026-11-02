@@ -42,6 +42,12 @@ import {
 import { withReach } from './projectReach.setup'
 
 const ACCESS: CredentialAccess[] = ['read', 'write']
+/* Without reach rows (the legacy path) and with them (navigation from
+ * reach rows once nav_at holds). */
+const PATHS = [
+  ['without reach rows', false],
+  ['from reach rows', true],
+] as const
 const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 afterEach(() => {
   Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
@@ -241,159 +247,180 @@ describe('accessFlags', () => {
     }
   }, 60_000)
 
-  it('answers project by project as projectLevel, with and without navigation, for every role, kind and grant shape', async () => {
+  /* Every grant shape, role and kind asked project by project on one path,
+   * against projectLevel. */
+  async function levelsInTurn(reach: boolean) {
     const seen = new Set<string>()
     for (const [name, plant] of SHAPES) {
-      // without reach rows (the legacy path) and with them (navigation from
-      // reach rows once nav_at holds)
-      for (const reach of [false, true]) {
-        const t = newT()
-        const f = await withOrg(t)
-        const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
-        await t.run((ctx) => plant(ctx, f, subject))
-        if (reach) await withReach(t)
-        await t.run(async (ctx) => {
-          const projects = await ctx.db.query('projects').collect()
-          for (const org_role of ORG_ROLES) {
-            for (const kind of PROFILE_KINDS) {
-              for (const me of [{ ...subject, org_role, kind }, f.viewer, f.guest, f.otherAdmin]) {
-                // project by project, the person's own rows read from the first
-                // project on, and own rows too many to read at once, the
-                // projects asked in both orders; then each rung below a
-                // refusal: one child row a parent, the reach path handed to
-                // the legacy path past its teams or its root rows, a project's
-                // shares past projectShares answered from the person's own
-                // rows or team by team, and memberships from all of them
-                for (const own of [
-                  DEFAULT_OWN_READS,
-                  {
-                    ...DEFAULT_OWN_READS,
-                    steps: [1, 2],
-                    manyTeams: 1,
-                  },
-                  {
-                    ...DEFAULT_OWN_READS,
-                    steps: [1],
-                    lookups: 0,
-                    rows: 0,
-                    manyTeams: 1,
-                    orgTeams: 0,
-                    bytes: 0,
-                  },
-                  { ...DEFAULT_OWN_READS, children: 1 },
-                  { ...DEFAULT_OWN_READS, children: 0 },
-                  { ...DEFAULT_OWN_READS, navTeams: 0 },
-                  { ...DEFAULT_OWN_READS, roots: 0 },
-                  { ...DEFAULT_OWN_READS, projectShares: 0 },
-                  { ...DEFAULT_OWN_READS, projectShares: 0, rows: 0 },
-                  { ...DEFAULT_OWN_READS, lookups: 0 },
-                ]) {
-                  Object.assign(OWN_READS, structuredClone(own))
-                  const asked = (order: readonly Doc<'projects'>[]) =>
-                    order.flatMap((p) => [true, false].map((navigation) => ({ p, navigation })))
-                  const expectSame = async (
-                    { p, navigation }: { p: Doc<'projects'>; navigation: boolean },
-                    level: string | null,
-                    how: string,
-                  ) => {
-                    expect(
-                      level,
-                      `${name}: ${me.name} as ${me.org_role} ${me.kind} on ${p.key}, navigation ${navigation}, ${reach ? 'reach rows' : 'legacy'}, own reads ${JSON.stringify(own)}, ${how}`,
-                    ).toBe(await projectLevel(ctx, me, p, navigation))
-                    seen.add(String(level))
-                  }
-                  for (const order of [projects, [...projects].reverse()]) {
-                    const levels = projectLevelsOf(ctx, me)
-                    for (const one of asked(order))
-                      await expectSame(one, await levels.level(one.p.id, one.navigation), 'in turn')
-                  }
-                  // all at once, as a part asks a batch
-                  const levels = projectLevelsOf(ctx, me)
-                  const all = asked(projects)
-                  const answers = await Promise.all(
-                    all.map(({ p, navigation }) => levels.level(p.id, navigation)),
-                  )
-                  for (const [i, one] of all.entries()) await expectSame(one, answers[i], 'at once')
-                }
-                Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+      const t = newT()
+      const f = await withOrg(t)
+      const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+      await t.run((ctx) => plant(ctx, f, subject))
+      if (reach) await withReach(t)
+      await t.run(async (ctx) => {
+        const projects = await ctx.db.query('projects').collect()
+        for (const org_role of ORG_ROLES) {
+          for (const kind of PROFILE_KINDS) {
+            for (const me of [{ ...subject, org_role, kind }, f.viewer, f.guest, f.otherAdmin]) {
+              // projectLevel's answers, read once for every bound below
+              const reference = new Map<string, Promise<string | null>>()
+              const expected = (p: Doc<'projects'>, navigation: boolean) => {
+                const key = `${p.id}:${navigation}`
+                if (!reference.has(key)) reference.set(key, projectLevel(ctx, me, p, navigation))
+                return reference.get(key)!
               }
+              // project by project, the person's own rows read from the first
+              // project on, and own rows too many to read at once, the
+              // projects asked in both orders; then each rung below a
+              // refusal: one child row a parent, the reach path handed to
+              // the legacy path past its teams or its root rows, a project's
+              // shares past projectShares answered from the person's own
+              // rows or team by team, and memberships from all of them
+              for (const own of [
+                DEFAULT_OWN_READS,
+                {
+                  ...DEFAULT_OWN_READS,
+                  steps: [1, 2],
+                  manyTeams: 1,
+                },
+                {
+                  ...DEFAULT_OWN_READS,
+                  steps: [1],
+                  lookups: 0,
+                  rows: 0,
+                  manyTeams: 1,
+                  orgTeams: 0,
+                  bytes: 0,
+                },
+                { ...DEFAULT_OWN_READS, children: 1 },
+                { ...DEFAULT_OWN_READS, children: 0 },
+                { ...DEFAULT_OWN_READS, navTeams: 0 },
+                { ...DEFAULT_OWN_READS, roots: 0 },
+                { ...DEFAULT_OWN_READS, projectShares: 0 },
+                { ...DEFAULT_OWN_READS, projectShares: 0, rows: 0 },
+                { ...DEFAULT_OWN_READS, lookups: 0 },
+              ]) {
+                Object.assign(OWN_READS, structuredClone(own))
+                const asked = (order: readonly Doc<'projects'>[]) =>
+                  order.flatMap((p) => [true, false].map((navigation) => ({ p, navigation })))
+                const expectSame = async (
+                  { p, navigation }: { p: Doc<'projects'>; navigation: boolean },
+                  level: string | null,
+                  how: string,
+                ) => {
+                  expect(
+                    level,
+                    `${name}: ${me.name} as ${me.org_role} ${me.kind} on ${p.key}, navigation ${navigation}, ${reach ? 'reach rows' : 'legacy'}, own reads ${JSON.stringify(own)}, ${how}`,
+                  ).toBe(await expected(p, navigation))
+                  seen.add(String(level))
+                }
+                for (const order of [projects, [...projects].reverse()]) {
+                  const levels = projectLevelsOf(ctx, me)
+                  for (const one of asked(order))
+                    await expectSame(one, await levels.level(one.p.id, one.navigation), 'in turn')
+                }
+                // all at once, as a part asks a batch
+                const levels = projectLevelsOf(ctx, me)
+                const all = asked(projects)
+                const answers = await Promise.all(
+                  all.map(({ p, navigation }) => levels.level(p.id, navigation)),
+                )
+                for (const [i, one] of all.entries()) await expectSame(one, answers[i], 'at once')
+              }
+              Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
             }
           }
-        })
-      }
+        }
+      })
     }
     // the shapes reach every answer, the parent shown for navigation included
     expect([...seen].sort()).toEqual(['lead', 'null', 'user', 'viewer'])
-  }, 240_000)
+  }
+  it.each(PATHS)(
+    'answers project by project as projectLevel, with and without navigation, for every role, kind and grant shape, %s',
+    (_, reach) => levelsInTurn(reach),
+  )
 
-  it('answers as projectLevel or refuses, never otherwise, under bounds that stop its checks, for every role, kind and grant shape on both paths', async () => {
+  /* Every grant shape, role and kind on one path under bounds that stop
+   * its checks, against projectLevel, canSeeProject and canAccessProject. */
+  async function levelsUnderBounds(reach: boolean) {
     const seen = new Set<string>()
     for (const [name, plant] of SHAPES) {
-      for (const reach of [false, true]) {
-        const t = newT()
-        const f = await withOrg(t)
-        const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
-        await t.run((ctx) => plant(ctx, f, subject))
-        if (reach) await withReach(t)
-        await t.run(async (ctx) => {
-          const projects = await ctx.db.query('projects').collect()
-          for (const org_role of ORG_ROLES) {
-            for (const kind of PROFILE_KINDS) {
-              for (const me of [{ ...subject, org_role, kind }, f.viewer, f.guest, f.otherAdmin]) {
-                // each stops a different read: navigation's own rows and
-                // child rows, the shares of one project, memberships, a
-                // parent's sub-projects, root rows, teams
-                for (const own of [
-                  { navRows: 0, children: 0 },
-                  { projectShares: 0, rows: 0, teamReads: 0 },
-                  { members: 0, lookups: 0 },
-                  { subProjects: 0 },
-                  { roots: 0, navRows: 0 },
-                  { teams: 0, navTeams: 0 },
-                ]) {
-                  Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS), own)
-                  const how = `${name}: ${me.name} as ${me.org_role} ${me.kind}, ${reach ? 'reach rows' : 'legacy'}, ${JSON.stringify(own)}`
-                  const settle = <V>(p: Promise<V>) =>
-                    p.then(
-                      (value): V | 'refused' => value,
-                      (e: unknown) => {
-                        if (isAccessUnchecked(e)) return 'refused' as const
-                        throw e
-                      },
-                    )
-                  const levels = projectLevelsOf(ctx, me)
-                  const access = accessOf(ctx, me)
-                  for (const p of projects) {
-                    for (const navigation of [true, false]) {
-                      const got = await settle(levels.level(p.id, navigation))
-                      seen.add(String(got))
-                      if (got !== 'refused')
-                        expect(got, `${how} on ${p.key}, navigation ${navigation}`).toBe(
-                          await projectLevel(ctx, me, p, navigation),
-                        )
-                    }
-                    const visible = await settle(access.visible(p.id))
-                    if (visible !== 'refused')
-                      expect(visible, `${how}, visible ${p.key}`).toBe(
-                        await canSeeProject(ctx, me, p),
-                      )
-                    const accessible = await settle(access.accessible(p.id))
-                    if (accessible !== 'refused')
-                      expect(accessible, `${how}, accessible ${p.key}`).toBe(
-                        await canAccessProject(ctx, me, p),
+      const t = newT()
+      const f = await withOrg(t)
+      const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+      await t.run((ctx) => plant(ctx, f, subject))
+      if (reach) await withReach(t)
+      await t.run(async (ctx) => {
+        const projects = await ctx.db.query('projects').collect()
+        for (const org_role of ORG_ROLES) {
+          for (const kind of PROFILE_KINDS) {
+            for (const me of [{ ...subject, org_role, kind }, f.viewer, f.guest, f.otherAdmin]) {
+              // the per-project answers, read once for every bound below
+              const reference = new Map<string, Promise<unknown>>()
+              const once = <V>(key: string, read: () => Promise<V>): Promise<V> => {
+                if (!reference.has(key)) reference.set(key, read())
+                return reference.get(key) as Promise<V>
+              }
+              // each stops a different read: navigation's own rows and
+              // child rows, the shares of one project, memberships, a
+              // parent's sub-projects, root rows, teams
+              for (const own of [
+                { navRows: 0, children: 0 },
+                { projectShares: 0, rows: 0, teamReads: 0 },
+                { members: 0, lookups: 0 },
+                { subProjects: 0 },
+                { roots: 0, navRows: 0 },
+                { teams: 0, navTeams: 0 },
+              ]) {
+                Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS), own)
+                const how = `${name}: ${me.name} as ${me.org_role} ${me.kind}, ${reach ? 'reach rows' : 'legacy'}, ${JSON.stringify(own)}`
+                const settle = <V>(p: Promise<V>) =>
+                  p.then(
+                    (value): V | 'refused' => value,
+                    (e: unknown) => {
+                      if (isAccessUnchecked(e)) return 'refused' as const
+                      throw e
+                    },
+                  )
+                const levels = projectLevelsOf(ctx, me)
+                const access = accessOf(ctx, me)
+                for (const p of projects) {
+                  for (const navigation of [true, false]) {
+                    const got = await settle(levels.level(p.id, navigation))
+                    seen.add(String(got))
+                    if (got !== 'refused')
+                      expect(got, `${how} on ${p.key}, navigation ${navigation}`).toBe(
+                        await once(`level:${p.id}:${navigation}`, () =>
+                          projectLevel(ctx, me, p, navigation),
+                        ),
                       )
                   }
+                  const visible = await settle(access.visible(p.id))
+                  if (visible !== 'refused')
+                    expect(visible, `${how}, visible ${p.key}`).toBe(
+                      await once(`visible:${p.id}`, () => canSeeProject(ctx, me, p)),
+                    )
+                  const accessible = await settle(access.accessible(p.id))
+                  if (accessible !== 'refused')
+                    expect(accessible, `${how}, accessible ${p.key}`).toBe(
+                      await once(`accessible:${p.id}`, () => canAccessProject(ctx, me, p)),
+                    )
                 }
-                Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
               }
+              Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
             }
           }
-        })
-      }
+        }
+      })
     }
     // the bounds refused some checks and let others answer
     expect([...seen].sort()).toEqual(['lead', 'null', 'refused', 'user', 'viewer'])
-  }, 300_000)
+  }
+  it.each(PATHS)(
+    'answers as projectLevel or refuses, never otherwise, under bounds that stop its checks, for every role, kind and grant shape, %s',
+    (_, reach) => levelsUnderBounds(reach),
+  )
 
   it('answers null for a missing parent or a cycle where projectLevel refuses, and reads only the projects asked about', async () => {
     const t = newT()
@@ -781,19 +808,24 @@ describe('accessFlags', () => {
     }
   })
 
-  it("stays within Convex's 4,096 index ranges for a writer among 1,654 projects, where the per-project walk did not", async () => {
+  it("stays within Convex's 4,096 index ranges for a writer among 1,643 projects, where the per-project walk did not", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // 150 parents with ten sub-projects each. The agent holds User on the
-    // last sub-project of each, so each parent shows only for navigation,
-    // which the per-project walk finds after reading every sibling's grants.
+    // 149 parents with ten sub-projects each, 992 of them archived, which
+    // with withOrg's projects make 151 top-level projects and 500 live and
+    // 992 archived sub-projects, within the design size's catalogue of
+    // 2,000. The agent holds User on the last sub-project of each, which
+    // stays live, so each parent shows only for navigation, which the
+    // per-project walk finds after reading every sibling's grants.
     // convex-test counts every query, while a deployment counts a range the
     // function already read once, which is about three ranges per project
     // for this walk (measured on a local backend). This organization passes
     // 4,096 either way.
+    const parents = 149
+    let archive = 992
     const granted = await t.run(async (ctx) => {
       const ids: string[] = []
-      const row = (n: number, key: string, parent_id?: string) => ({
+      const row = (n: number, key: string, parent_id?: string, archived = false) => ({
         id: uuid(),
         org_id: f.org.id,
         type: parent_id === undefined ? ('meta' as const) : ('project' as const),
@@ -805,12 +837,15 @@ describe('accessFlags', () => {
         num: n,
         track_delay: false,
         created_at: NOW,
+        ...(archived ? { archived_at: NOW } : {}),
       })
-      for (let m = 0; m < 150; m++) {
+      for (let m = 0; m < parents; m++) {
         const parent = row(100 + m, `P${m}`)
         await ctx.db.insert('projects', parent)
         for (let s = 0; s < 10; s++) {
-          const sub = row(1000 + m * 10 + s, `Q${m * 10 + s}`, parent.id)
+          const archived = s < 9 && archive > 0
+          if (archived) archive -= 1
+          const sub = row(1000 + m * 10 + s, `Q${m * 10 + s}`, parent.id, archived)
           await ctx.db.insert('projects', sub)
           if (s === 9) {
             await ctx.db.insert('project_access', {
@@ -831,10 +866,10 @@ describe('accessFlags', () => {
     ).rejects.toThrow(/Too many index ranges read/)
     const ranges = await t.run(async (ctx) => {
       const cat = await loadCatalogue(ctx, f.agent)
-      expect(cat.projects).toHaveLength(1654)
+      expect(cat.projects).toHaveLength(1643)
       const flags = [...(await accessFlags(ctx, f.agent, cat, 'write')).values()]
-      expect(flags.filter((flag) => flag.read)).toHaveLength(300)
-      expect(flags.filter((flag) => flag.write)).toHaveLength(150)
+      expect(flags.filter((flag) => flag.read)).toHaveLength(2 * parents)
+      expect(flags.filter((flag) => flag.write)).toHaveLength(parents)
       return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
     })
     // the catalogue, the agent's grants and its team memberships
@@ -843,7 +878,7 @@ describe('accessFlags', () => {
       callerId: f.agent.id,
       access: 'write',
     })
-    expect(rest).toHaveLength(300)
+    expect(rest).toHaveLength(2 * parents)
     expect(
       rest
         .filter((p) => p.access.write)
@@ -853,6 +888,6 @@ describe('accessFlags', () => {
     const mcp: { access: AccessFlag }[] = JSON.parse(
       await t.query(internal.machine.mcp.listProjects, { callerId: f.agent.id, access: 'write' }),
     )
-    expect(mcp.filter((p) => p.access.read)).toHaveLength(300)
+    expect(mcp.filter((p) => p.access.read)).toHaveLength(2 * parents)
   })
 })

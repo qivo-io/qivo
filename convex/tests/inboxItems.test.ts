@@ -432,15 +432,18 @@ describe('every message write keeps the items exact', () => {
     expect(await drift(t)).toEqual([])
   })
 
-  it('an archive read step over 500 tasks of 500 people stays inside the real limits', async () => {
+  it('an archive read step over 450 active tasks of 450 people stays inside the real limits', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     // one unread message each, on a task each: a row, a task and an item, a
-    // recipient's state and sweep row for every row the step marks
+    // recipient's state and sweep row for every row the step marks. The walk
+    // reads the sub-project's active tasks, so they are its 300 open and 150
+    // Done tasks of the design size, more than the ARCHIVED_READ_BATCH rows
+    // one step marks.
     const list: Doc<'issues'>[] = []
-    for (let i = 0; i < 500; i += 100)
+    for (let i = 0; i < 450; i += 150)
       await t.run(async (ctx) => {
-        for (let j = i; j < i + 100; j++) {
+        for (let j = i; j < i + 150; j++) {
           const id = uuid()
           await ctx.db.insert('profiles', {
             id,
@@ -461,7 +464,8 @@ describe('every message write keeps the items exact', () => {
             num: 10_000 + j,
             title: `Task ${j}`,
             description: '',
-            status: 'todo',
+            status: j < 300 ? 'todo' : 'done',
+            ...(j < 300 ? {} : { done_at: NOW }),
             priority: 'medium',
             paused: false,
             created_at: NOW,
@@ -492,7 +496,7 @@ describe('every message write keeps the items exact', () => {
     expect(
       (await t.run((ctx) => ctx.db.query('inbox_items').collect())).filter((i) => i.unread),
     ).toEqual([])
-  }, 120_000)
+  })
 
   it('a nightly wake leg over hundreds of people stays inside the real limits', async () => {
     // about 2,100 ranges a leg (jobs.ts SWEEP_LIMITS.wakeItems)
@@ -558,7 +562,7 @@ describe('every message write keeps the items exact', () => {
       (await t.run((ctx) => ctx.db.query('inbox_items').collect())).filter((i) => i.snoozed),
     ).toEqual([])
     expect(await drift(t)).toEqual([])
-  }, 120_000)
+  })
 
   it('an archive read step over a list of 500 tasks stays inside the real limits', async () => {
     const t = newT({ transactionLimits: true })
@@ -631,7 +635,7 @@ describe('every message write keeps the items exact', () => {
       (await t.run((ctx) => ctx.db.query('inbox_items').collect())).filter((i) => i.unread),
     ).toEqual([])
     expect(await drift(t)).toEqual([])
-  }, 120_000)
+  })
 
   it('the retention sweep deletes read rows, the newest included, and the items follow', async () => {
     const t = newT()

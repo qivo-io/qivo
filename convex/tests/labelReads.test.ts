@@ -5,8 +5,8 @@
  * stop a batch without a false end, batches kept live between cursors,
  * usage counts that are never a false zero, exact name lookups, the label
  * write rule read from the caller's own rows, and the refusals. The last
- * suite runs the reads at 20,000 labels under Convex's transaction limits
- * and logs what each call read. */
+ * suite runs the reads under Convex's transaction limits, each within its
+ * budget, and logs what each call read. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
@@ -24,7 +24,7 @@ import { archiveCursorText } from '../lib/archivedTasks'
 import { ORG_DELETING } from '../lib/billingAccess'
 import { LEVEL_RANK, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { BY_IDS_MAX, LIMITS, LIST_BATCH } from '../lib/limits'
-import { NAMED_READ } from '../lib/namedPages'
+import { NAMED_READ, NAMED_RESERVE } from '../lib/namedPages'
 import { sha256hex } from '../machine/auth'
 import {
   LABEL_RIGHTS_UNCHECKED,
@@ -604,7 +604,7 @@ describe('canWriteOrgLabels', () => {
     const answers = [...seen].map((s) => s.endsWith('true'))
     expect(answers).toContain(true)
     expect(answers).toContain(false)
-  }, 120_000)
+  })
 
   it('equals the old rule for every Northstar person', async () => {
     const t = newT()
@@ -897,18 +897,25 @@ async function measured<R>(
   })
 }
 
+/** Convex's limits on what one transaction reads. */
+const CONVEX_READS = { ranges: 4096, documents: 32_000, bytes: 16 << 20 }
+
 describe('real limits', () => {
-  it('reads 20,000 labels inside the limits of one transaction a call', async () => {
+  it("reads labels within each call's budget, and a picker's check and walk fit one transaction", async () => {
+    // the check and the walk after it, at their default budgets, with the
+    // reserve every walk keeps back, leave room in one transaction
+    for (const count of ['ranges', 'documents', 'bytes'] as const)
+      expect(
+        DEFAULT_WRITE_READ[count] + DEFAULT_READ[count] + NAMED_RESERVE[count],
+        count,
+      ).toBeLessThan(CONVEX_READS[count])
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const total = 20_000
-    for (let from = 0; from < total; from += 2000) {
-      await t.run(async (ctx) => {
-        for (let i = from; i < from + 2000; i++) {
-          await insertLabel(ctx, f.org.id, `Label ${String(i).padStart(5, '0')} hardware`)
-        }
-      })
-    }
+    await plantLabels(
+      t,
+      f.org.id,
+      names('Label ', 200).map((name) => `${name} hardware`),
+    )
     // a first batch without search
     const first = await measured(t, (ctx) => settingsLabels(ctx, f.admin, {}))
     console.log('settingsPage first batch', first.read)
@@ -918,7 +925,9 @@ describe('real limits', () => {
     expect(first.read.bytes).toBeLessThan(40_000)
     expect((await settings(t, f.admin, f.org.id)).rows).toHaveLength(LIST_BATCH)
 
-    // a search that matches nothing stops with a cursor and reaches the end
+    // a search that matches nothing stops with a cursor, here after about
+    // 50 labels a call, and reaches the end
+    NAMED_READ.documents = 60
     let after: string | undefined
     const calls: (Read & { stopped: boolean })[] = []
     for (;;) {
@@ -942,79 +951,65 @@ describe('real limits', () => {
       expect(call.bytes).toBeLessThan(NAMED_READ.bytes)
     }
 
-    // the picker's first batch for staff with 2,000 viewer grants and no proof
+    // the picker's first batch for staff with viewer grants on 700
+    // sub-projects, the 200 live and 500 archived one person can read, and
+    // no proof, under the default row cap
     const person = await staffSeat(t, f, 'Viewer of many')
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 2000; i++) {
-        await ctx.db.insert('project_access', {
-          project_id: uuid(),
-          profile_id: person.id,
-          level: 'viewer',
-        })
-      }
-    })
-    const check = await measured(t, (ctx) => canWriteOrgLabels(ctx, person))
-    console.log('canWriteOrgLabels over 2,000 viewer grants', check)
-    expect(check.out).toBe(false)
-    expect((await picker(t, person, f.org.id)).can_create).toBe(false)
-    await t.run((ctx) =>
+    const grant = (ctx: MutationCtx) =>
       ctx.db.insert('project_access', {
         project_id: uuid(),
         profile_id: person.id,
         level: 'viewer',
-      }),
-    )
+      })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 700; i++) await grant(ctx)
+    })
+    const check = await measured(t, (ctx) => canWriteOrgLabels(ctx, person))
+    console.log('canWriteOrgLabels over 700 viewer grants', check)
+    expect(check.out).toBe(false)
+    expect((await picker(t, person, f.org.id)).can_create).toBe(false)
+    // a row cap the grants fill, and one grant more
+    LABEL_WRITE_READ.rows = 700
+    expect(await t.run((ctx) => canWriteOrgLabels(ctx, person))).toBe(false)
+    await t.run(grant)
     const past = await measured(t, (ctx) => canWriteOrgLabels(ctx, person))
-    console.log('canWriteOrgLabels over 2,001 viewer grants', past)
+    console.log('canWriteOrgLabels over 701 viewer grants', past)
     expect(past.out).toBeNull()
     const pickerBatch = await picker(t, person, f.org.id)
     expect(pickerBatch).toMatchObject({ can_create: null })
     expect(pickerBatch.rows).toHaveLength(LIST_BATCH)
+    LABEL_WRITE_READ.rows = DEFAULT_WRITE_READ.rows
 
-    // staff in about LABEL_WRITE_READ.rows teams, each sharing a sub-project
-    // as User, which costs three ranges a membership and proves nothing: the
-    // check stops at its own ceiling, and a picker search that reads the
-    // walk's whole share after it still answers inside the limits
+    // staff in five teams, each sharing a sub-project as User, which costs
+    // two or three ranges a membership and proves nothing, under a ceiling
+    // that stops the check at the third: the check stops at its own
+    // ceiling, and a picker search after it reads within the walk's own
+    // share
     const member = await staffSeat(t, f, 'Member of many')
-    await plantTeams(t, f, member, 2000, f.sub.id)
+    await plantTeams(t, f, member, 5, f.sub.id)
+    LABEL_WRITE_READ.ranges = 8
     const alone = await measured(t, (ctx) => canWriteOrgLabels(ctx, member))
     const both = await measured(t, (ctx) => pickerLabels(ctx, member, { search: 'nomatch' }))
-    console.log('canWriteOrgLabels over 2,000 shared teams', alone.read)
+    console.log('canWriteOrgLabels over 5 shared teams', alone.read)
     console.log('labels.picker searching after it', both.read)
     expect(alone.out).toBeNull()
     expect(alone.read.ranges).toBeLessThanOrEqual(LABEL_WRITE_READ.ranges + 4)
     expect(both.out).toMatchObject({ can_create: null, rows: [], stopped: true })
-    expect(both.read.ranges).toBeLessThan(4096 - 16)
+    expect(both.read.documents - alone.read.documents).toBeLessThanOrEqual(
+      NAMED_READ.documents + 16,
+    )
     const searched = await picker(t, member, f.org.id, { search: 'nomatch' })
     expect(searched).toMatchObject({ can_create: null, rows: [], stopped: true })
-  }, 300_000)
+  })
 
-  it('finds User through Design after an All staff team shared on 2,100 sub-projects', async () => {
+  it('finds User through Design after an All staff team shared on 200 sub-projects, live and archived', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const me = await staffSeat(t, f, 'All staff, then Design')
-    const subs: string[] = []
-    for (let from = 0; from < 2100; from += 700) {
-      await t.run(async (ctx) => {
-        for (let i = from; i < from + 700; i++) {
-          const id = uuid()
-          await ctx.db.insert('projects', {
-            id,
-            org_id: f.org.id,
-            type: 'project',
-            parent_id: f.meta.id,
-            key: `S${i}`,
-            name: `Sub-project ${i}`,
-            description: '',
-            sort_order: i,
-            num: 100 + i,
-            track_delay: false,
-            created_at: NOW,
-          })
-          subs.push(id)
-        }
-      })
-    }
+    // the 50 live and 150 archived projects one team is shared with, more
+    // than LABEL_WRITE_READ.lookups, so the check reads the top-level
+    // projects once
+    const subs = await plantSubProjects(t, f, 200, 50)
     const allStaff = uuid()
     await t.run(async (ctx) => {
       await ctx.db.insert('teams', {
@@ -1035,24 +1030,41 @@ describe('real limits', () => {
     })
     await plantTeams(t, f, me, 1, f.hidden.id)
     const check = await measured(t, (ctx) => canWriteOrgLabels(ctx, me))
-    console.log('canWriteOrgLabels through Design after 2,100 All staff shares', check)
+    console.log('canWriteOrgLabels through Design after 200 All staff shares', check)
     expect(check.out).toBe(true)
     expect((await picker(t, me, f.org.id)).can_create).toBe(true)
-  }, 300_000)
+  })
 
   it("reads the caller's rights once in a REST or MCP create whose proof takes most of the request", async () => {
-    const t = newT({ transactionLimits: true })
+    const t = newT({ transactionLimits: { databaseQueries: CREATE_RANGES } })
     const f = await withOrg(t)
-    // a proof past 1,050 shared teams, two ranges each (the team and its
-    // shares), more than half of Convex's 4,096, under a ceiling that lets
-    // one check read them
-    LABEL_WRITE_READ.ranges = 3000
-    await plantTeams(t, f, f.agent, 1050, f.sub.id)
+    // a proof through a second team, after an All staff team shared on the
+    // 200 sub-projects one team is shared with, which costs a range for each
+    // of the first LABEL_WRITE_READ.lookups projects: more than half of the
+    // ranges this test's transactions may read
+    const subs = await plantSubProjects(t, f, 200, 50)
+    await t.run(async (ctx) => {
+      const team = uuid()
+      await ctx.db.insert('teams', {
+        id: team,
+        org_id: f.org.id,
+        name: 'All staff',
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('team_members', {
+        team_id: team,
+        profile_id: f.agent.id,
+        is_leader: false,
+      })
+      for (const project_id of subs)
+        await ctx.db.insert('project_team_access', { project_id, team_id: team, level: 'user' })
+    })
     await plantTeams(t, f, f.agent, 1, f.meta.id)
     const proof = await measured(t, (ctx) => canWriteOrgLabels(ctx, f.agent))
-    console.log('canWriteOrgLabels past 1,050 shared teams', proof)
+    console.log('canWriteOrgLabels through Design after 200 All staff shares', proof)
     expect(proof.out).toBe(true)
-    expect(proof.read.ranges).toBeGreaterThan(2100)
+    expect(proof.read.ranges).toBeGreaterThan(CREATE_RANGES / 2)
     const SECRET = `qva_${'labelone'.repeat(6)}`
     const key_hash = await sha256hex(SECRET)
     await t.run((ctx) =>
@@ -1078,8 +1090,57 @@ describe('real limits', () => {
       ).map((label) => label.name),
     )
     expect(names.sort()).toEqual(['Once', 'Twice'])
-  }, 300_000)
+  })
 })
+
+/** The index ranges a transaction may read in the REST and MCP create case:
+ * room for one proof of its 72 ranges, with the 16 the check keeps back
+ * (lib/namedPages.ts NAMED_RESERVE) and the few the request reads besides,
+ * and not for two proofs. */
+const CREATE_RANGES = 136
+
+/** `n` sub-projects of the fixture's organization, three under each of new
+ * top-level metas, the first `live` of them live and the rest archived, by
+ * id. */
+async function plantSubProjects(t: T, f: OrgFixture, n: number, live: number) {
+  return await t.run(async (ctx) => {
+    const ids: string[] = []
+    let parent = ''
+    for (let i = 0; i < n; i++) {
+      const row = (
+        id: string,
+        extra: { type?: 'meta'; key?: string; name?: string; num?: number } & (
+          | { parent_id: string; archived_at?: string }
+          | { parent_id?: undefined }
+        ),
+      ) =>
+        ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'project',
+          key: `S${i}`,
+          name: `Sub-project ${i}`,
+          description: '',
+          sort_order: i,
+          num: 100 + i,
+          track_delay: false,
+          created_at: NOW,
+          ...extra,
+        })
+      if (i % 3 === 0) {
+        parent = uuid()
+        await row(parent, { type: 'meta', key: `M${i}`, name: `Meta ${i}`, num: 1000 + i })
+      }
+      const id = uuid()
+      await row(id, {
+        parent_id: parent,
+        ...(i < live ? {} : { archived_at: NOW }),
+      })
+      ids.push(id)
+    }
+    return ids
+  })
+}
 
 /** `n` teams of the fixture's organization that `me` belongs to, each
  * sharing the project `projectId` with User access. */

@@ -114,9 +114,11 @@ import {
  * (taskPage). Each task's check reads its subtasks until one is in a live
  * project, usually one range, but every one of them where none is, up to
  * LIMITS.subtasks rows and the rows' projects; a page asks about each
- * project once, so a page of 100 tasks whose 5,000 subtasks sit in 50
- * archived sub-projects read 416 ranges and 5,383 documents in convex-test
- * (tests/overviewCounts.test.ts). A task then
+ * project once, so a page of 100 tasks whose 700 subtasks sit in 7
+ * archived sub-projects reads 373 ranges and 1,040 documents in
+ * convex-test (tests/overviewCounts.test.ts, 2 November 2026), and on 1
+ * November 2026 one whose 5,000 subtasks sat in 50, past the design size,
+ * read 416 ranges and 5,383 documents. A task then
  * reads and writes at most four count rows and one group row. `room` stops
  * a page whose subtasks are many and large. Tests lower them. */
 export const COUNT_PAGE = { tasks: 100, rows: 500, bytes: 4 * MIB, listed: 100, room: 0.5 }

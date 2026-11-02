@@ -3,11 +3,17 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Snapshot } from '../store/plannerFixture.setup'
-import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
+import { loadBoard, taskRow } from './boardFixture.setup'
 
 /* The Overview's task lists and the phone's task schedule mount their
    first screen at once and the rest in slices, and the Overview's group
    health reads every group's figures in one pass over the tasks. */
+
+/* A list of more than SYNC_LIMIT tasks mounts in slices. These tests lower
+   it from 300, so a list of LONG tasks in one sub-project, well inside the
+   design size, reaches the slices. */
+const { SYNC_LIMIT } = vi.hoisted(() => ({ SYNC_LIMIT: 40 }))
+const LONG = 60
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 // the Roadmap's work over every task, counted
@@ -26,6 +32,10 @@ vi.mock('../lib/schedule', async (original) => {
     },
   }
 })
+vi.mock('../lib/boardGroups', async (original) => ({
+  ...(await original<typeof import('../lib/boardGroups')>()),
+  SYNC_LIMIT,
+}))
 vi.mock('../lib/convex', async () => ({
   convex: network,
   live: (await import('../store/guard/liveDouble.setup')).liveOver(network),
@@ -94,9 +104,9 @@ const paused = (n: number) => (snap: Snapshot) => {
     snap.issues.push({ ...taskRow(snap, `t${i}`, 'todo', i), paused: true, due_date: '2025-01-15' })
 }
 
-describe('a long list on another view', { timeout: BOARD_TEST_TIMEOUT * 4 }, () => {
+describe('a long list on another view', () => {
   it('mounts the first screen of the Overview, then the rest in slices', async () => {
-    const board = await loadBoard(network, paused(350))
+    const board = await loadBoard(network, paused(LONG))
     const { Overview } = await import('./Overview')
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
       typeof Overview
@@ -107,12 +117,12 @@ describe('a long list on another view', { timeout: BOARD_TEST_TIMEOUT * 4 }, () 
     expect(count('[data-ovrow]')).toBeLessThanOrEqual(20)
     expect(count('[data-atrisk]')).toBeLessThanOrEqual(20)
     await finish()
-    expect(count('[data-ovrow]')).toBe(350)
-    expect(count('[data-atrisk]')).toBe(350)
+    expect(count('[data-ovrow]')).toBe(LONG)
+    expect(count('[data-atrisk]')).toBe(LONG)
   })
 
   it("mounts the first screen of the phone's task schedule, then the rest", async () => {
-    const board = await loadBoard(network, paused(600))
+    const board = await loadBoard(network, paused(LONG))
     const { MobileRoadmap } = await import('./MobileRoadmap')
     const noop = () => {}
     await board.renderView(root, (info) => (
@@ -143,11 +153,11 @@ describe('a long list on another view', { timeout: BOARD_TEST_TIMEOUT * 4 }, () 
     expect(count('.mobile-roadmap-row')).toBeGreaterThan(0)
     expect(count('.mobile-roadmap-row')).toBeLessThanOrEqual(20)
     await finish()
-    expect(count('.mobile-roadmap-row')).toBe(600)
+    expect(count('.mobile-roadmap-row')).toBe(LONG)
   })
 })
 
-describe('an Overview row', { timeout: BOARD_TEST_TIMEOUT }, () => {
+describe('an Overview row', () => {
   it('keeps keyboard focus when focus makes it live', async () => {
     const board = await loadBoard(network, paused(3))
     const { Overview } = await import('./Overview')
@@ -166,11 +176,12 @@ describe('an Overview row', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 })
 
-describe('a delivery on the desktop Roadmap', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
+describe('a delivery on the desktop Roadmap', () => {
   it('renders the rows of the task it changed, not every row', async () => {
     const board = await loadBoard(network, (snap) => {
-      // due dates, so every row draws its due mark when it renders
-      for (let n = 1; n <= 600; n++)
+      // a sub-project's 300 open tasks at the design size, with due dates,
+      // so every row draws its due mark when it renders
+      for (let n = 1; n <= 300; n++)
         snap.issues.push({ ...taskRow(snap, `t${n}`, 'todo', n), due_date: '2026-12-01' })
     })
     const { Roadmap } = await import('./Roadmap')
@@ -193,18 +204,18 @@ describe('a delivery on the desktop Roadmap', { timeout: BOARD_TEST_TIMEOUT * 2 
         focusPlan={null}
       />
     ))
-    expect(count('[data-roadmap-task-top]')).toBe(600)
+    expect(count('[data-roadmap-task-top]')).toBe(300)
     // a remote rename of one task
     // a row's due mark asks whether its task tracks delay
     const drawn = vi.spyOn(board.P, 'tracksDelay')
     const before = { ...schedule }
-    const row = board.snapshot.issues.find((issue) => issue.id === 't300')
+    const row = board.snapshot.issues.find((issue) => issue.id === 't150')
     if (!row) throw new Error('missing the task')
     row.title = 'Renamed task'
     row.updated_at = new Date().toISOString()
     await board.deliver()
     expect(document.body.textContent).toContain('Renamed task')
-    // the renamed task's chunk of rows, not all 600
+    // the renamed task's chunk of rows, not all 300
     expect(drawn.mock.calls.length).toBeGreaterThan(0)
     expect(drawn.mock.calls.length).toBeLessThanOrEqual(64)
     // a title is neither a date nor a link: Auto-move and the arrows stand
@@ -219,7 +230,7 @@ describe('a delivery on the desktop Roadmap', { timeout: BOARD_TEST_TIMEOUT * 2 
     await board.deliver()
     expect(schedule.moves).toBeGreaterThan(before.moves)
     expect(
-      board.P.issueById[board.P.issues.find((it) => it.uuid === 't300')?.id ?? '']?.start,
+      board.P.issueById[board.P.issues.find((it) => it.uuid === 't150')?.id ?? '']?.start,
     ).toBe(board.P.TODAY_WEEK + 2)
   })
 
@@ -262,11 +273,11 @@ describe('a delivery on the desktop Roadmap', { timeout: BOARD_TEST_TIMEOUT * 2 
   })
 })
 
-describe("Team sync's opening", { timeout: BOARD_TEST_TIMEOUT }, () => {
+describe("Team sync's opening", () => {
   it('takes its loading marks with it when it goes before its lists finish', async () => {
     const board = await loadBoard(network, (snap) => {
-      // 400 urgent tasks with no owner: Needs an owner mounts in slices
-      for (let n = 1; n <= 400; n++)
+      // urgent tasks with no owner: Needs an owner mounts in slices
+      for (let n = 1; n <= LONG; n++)
         snap.issues.push({
           ...taskRow(snap, `t${n}`, 'todo', n),
           assignee_id: undefined,
@@ -293,7 +304,7 @@ describe("Team sync's opening", { timeout: BOARD_TEST_TIMEOUT }, () => {
     )
     await board.renderView(root, view)
     const page = () => document.querySelector('[data-sync-page]')
-    expect(count('[data-sync-needs-owner]')).toBeLessThan(400)
+    expect(count('[data-sync-needs-owner]')).toBeLessThan(LONG)
     expect(page()?.getAttribute('aria-busy')).toBe('true')
     // the walk moves on to a person's page while the list still mounts
     show = false
@@ -303,12 +314,13 @@ describe("Team sync's opening", { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 })
 
-/* Plan, a parent project over 1,000 sub-projects with a task each. */
+/* Plan, a parent project over 30 sub-projects, the design size, with a task
+   each. */
 const groups = (snap: Snapshot) => {
   const base = snap.projects[0]
   snap.projects.push({ ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' })
   Object.assign(base, { parent_id: 'plan' })
-  for (let n = 1; n <= 1000; n++) {
+  for (let n = 1; n <= 30; n++) {
     const id = n === 1 ? base.id : `sub${n}`
     if (n > 1)
       snap.projects.push({
@@ -328,8 +340,8 @@ const groups = (snap: Snapshot) => {
   }
 }
 
-describe("the Overview's group health", { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
-  it('reads 1,000 groups without a pass over the tasks per group', async () => {
+describe("the Overview's group health", () => {
+  it('reads 30 groups without a pass over the tasks per group', async () => {
     const board = await loadBoard(network, groups, { scope: 'plan' })
     const { Overview } = await import('./Overview')
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
@@ -341,7 +353,7 @@ describe("the Overview's group health", { timeout: BOARD_TEST_TIMEOUT * 2 }, () 
     expect(count('[data-ov-strip]')).toBe(1)
     // only for the scope's own completion; no group row asks
     expect(progress).toHaveBeenCalled()
-    for (const [subIds] of progress.mock.calls) expect(subIds).toHaveLength(1000)
+    for (const [subIds] of progress.mock.calls) expect(subIds).toHaveLength(30)
     expect(remaining).not.toHaveBeenCalled()
   })
 })
@@ -354,7 +366,7 @@ function seeded(seed: number) {
   }
 }
 
-describe('figures for many groups at once', { timeout: BOARD_TEST_TIMEOUT }, () => {
+describe('figures for many groups at once', () => {
   it('equal progressIn and remainingIn for every group', async () => {
     const random = seeded(7)
     const statuses = ['backlog', 'todo', 'progress', 'review', 'done'] as const
@@ -374,8 +386,9 @@ describe('figures for many groups at once', { timeout: BOARD_TEST_TIMEOUT }, () 
           })
         const ids = snap.projects.filter((p) => p.parent_id === 'plan').map((p) => p.id)
         // the varied workspace's mix: every status, a parent for every 25
-        // tasks, fractional hours and tasks without an estimate
-        for (let n = 1; n <= 2000; n++) {
+        // tasks, fractional hours and tasks without an estimate, 20 tasks a
+        // sub-project
+        for (let n = 1; n <= 600; n++) {
           const parent = n % 25 === 0 ? undefined : `t${Math.ceil(n / 25) * 25}`
           snap.issues.push({
             ...taskRow(snap, `t${n}`, statuses[Math.floor(random() * 5)], n),

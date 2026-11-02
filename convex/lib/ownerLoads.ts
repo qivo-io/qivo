@@ -49,7 +49,7 @@ import { taskOwnerId } from './review'
  *   range each, once the fence and the caller's sight have left them.
  * - `projects`: the most live projects of one owner's scheduled tasks
  *   whose access the read asks about, each one question. That is the
- *   envelope's 200 sub-projects under one project.
+ *   design size's 200 live sub-projects one person can read.
  * - `spans`: the most load spans one planning.ownerLoads answer carries. A
  *   span is about 130 bytes of JSON, so an answer stays under about 650 KB
  *   however many owners it holds, and one owner holds at most `checks`.
@@ -64,16 +64,16 @@ import { taskOwnerId } from './review'
  * questions read past the price it gave each question (QUESTION). Past
  * `call` come the shared reads (OWN_READS states them): at most 266 ranges
  * and 7,098 documents, or 521 ranges for a person in 129 to 256 teams, past
- * the testing envelope; up to about 1.2 MiB of the organization's teams,
+ * the design size; up to about 1.2 MiB of the organization's teams,
  * which counts JSON; and the person's own rows (grants, memberships,
  * shares), a few hundred bytes each at ordinary name lengths and up to
  * about 3 KB at the name caps. Beside its questions the access instance
  * reads single rows too, at most 193 ranges and 705 documents. At most
  * 2,714 ranges and 23,803 documents in all, so a call stays inside
  * Convex's 4,096 ranges and 32,000 documents; and inside its 16 MiB for a
- * person in the envelope's 25 teams, whose own rows at ordinary name
- * lengths add a few MB to `call`'s 8 MiB. A person with thousands of
- * those rows near the name caps can still make a call pass 16 MiB.
+ * person in the design size's 5 teams, whose own rows at ordinary name
+ * lengths add at most a few MB to `call`'s 8 MiB. A person with thousands
+ * of those rows near the name caps can still make a call pass 16 MiB.
  *
  * A lone owner reads 1 range for the profile, 5 for the open tasks, 1 for
  * each project its scheduled tasks name, at most 6 for each live one asked
@@ -84,12 +84,13 @@ import { taskOwnerId } from './review'
  * `projects` and `checks` an owner reads about 1,600 ranges, inside
  * `call`; the prices' worst case, 2,406, is past it, and `call` then makes
  * the owner unavailable rather than failing. Measured in
- * convex/tests/ownerLoads.test.ts ("at the testing envelope"), an owner of
- * 2,000 open tasks at the title cap, 500 of them planned over 200
- * sub-projects that each 25 teams share, read by a staff member of those
- * teams, takes 999 ranges, 8,329 documents and 3.6 MB; 50 such owners take
- * two calls, of 23 owners (2,032 ranges, 9,272 documents, 4.7 MB) and of
- * the other 27. Tests lower these. */
+ * convex/tests/ownerLoads.test.ts ("at the design size"), an owner of
+ * 2,000 open tasks with ordinary titles, 500 of them planned over 200
+ * sub-projects, read by a staff member who reads them all through the
+ * shares of 3 teams on their top-level projects, takes 848 ranges, 2,403
+ * documents and 1.1 MB; 50 owners, the other 49 with 40 planned tasks
+ * each, take two calls, of 26 owners (2,007 ranges, 3,469 documents,
+ * 1.7 MB) and of the other 24. Tests lower these. */
 export const OWNER_LOADS = {
   owners: 50,
   open: 2000,
@@ -122,10 +123,10 @@ export type OwnedLoad =
  * or all their memberships and the organization's teams once it has asked
  * about more teams than OWN_READS.lookups one by one. The reader sets it
  * once it asks about a second project besides a top-level one, as the team
- * shares of two sub-projects can name that many teams within the testing
- * envelope (25 a project), or about a top-level project, whose question
- * may read the caller's reach rows for navigation. Those reads count as
- * shared, which `call` leaves out and the request's limits do not. */
+ * shares of two sub-projects can name that many teams past the design size,
+ * which allows 5 a project, or about a top-level project, whose question may read the
+ * caller's reach rows for navigation. Those reads count as shared, which
+ * `call` leaves out and the request's limits do not. */
 export type ReadRoom = (m: TransactionMetrics, shared: ReadCeiling, wide: boolean) => ReadCeiling
 
 /** The room of a call that reads nothing else of size first, as

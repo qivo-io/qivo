@@ -2185,10 +2185,15 @@ describe('the task window history pages', () => {
 
 describe('the task window history near the read limits', () => {
   it("stops looking up named tasks before Convex's limits and leaves their rows out", async () => {
-    const big = newT({ transactionLimits: true })
+    // a limit of 256 KiB on the bytes a transaction reads, which 40 tasks of
+    // about 8 KB pass as 40 tasks of 500 KB passed the real 16 MiB
+    const big = newT({ transactionLimits: { bytesRead: 256 * 1024 } })
     const g = await withOrg(big)
     const task = await plantIssue(big, { org_id: g.org.id, project_id: g.sub.id })
-    // 40 tasks of about 500 KB each, more than one read may hold, 20 to a write
+    const description = 'Notes from the review of the board layout and the open questions. '.repeat(
+      120,
+    )
+    // 40 tasks of about 8 KB each, more than one read may hold, 20 to a write
     const named: Doc<'issues'>[] = []
     for (let from = 0; from < 40; from += 20)
       named.push(
@@ -2201,7 +2206,7 @@ describe('the task window history near the read limits', () => {
               project_id: g.sub2.id,
               num: 5_000 + i,
               title: `Long ${i}`,
-              description: 'd'.repeat(500_000),
+              description,
               status: 'todo',
               priority: 'medium',
               paused: false,
@@ -2306,7 +2311,7 @@ describe('the task window history near the read limits', () => {
       ref: task.id,
     })
     expect(admin.map((row) => row.id)).toEqual(rows.map((row) => row.id))
-  }, 120_000)
+  })
 })
 
 describe('the status stamp in the snapshot', () => {
