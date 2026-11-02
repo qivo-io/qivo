@@ -5,16 +5,24 @@
  * (see helpers.setup.ts). */
 
 import { byId } from '../lib/db'
-import { NOW, newT, uuid, withOrg } from './helpers.setup'
+import { NOW, newT, plantProject, uuid, withOrg } from './helpers.setup'
+
+/** The most open tasks manyHolders puts in one sub-project, the design
+ * size's open tasks per sub-project. */
+const TASKS_PER_SUB = 300
 
 /** withOrg with `n` more members of Hardware, which shares TBED at User,
- * each assigned to one open task in Firmware, beside a second team,
- * Platform. Under `limits` the deployment's limits apply. `admin` is the
+ * each assigned to one open task, beside a second team, Platform. The
+ * tasks fill Firmware with TASKS_PER_SUB and then further sub-projects of
+ * TBED. Under `limits` the deployment's limits apply. `admin` is the
  * organization admin as REST and MCP calls name a caller, and `state` reads
  * Hardware's share on TBED, the Viewer grants on TBED and Hardware itself. */
 export async function manyHolders(n: number, limits: Parameters<typeof newT>[0] = {}) {
   const t = newT({ transactionLimits: true, ...limits })
   const f = await withOrg(t)
+  const subs = [f.sub]
+  while (subs.length * TASKS_PER_SUB < n)
+    subs.push(await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }))
   for (let from = 0; from < n; from += 100) {
     await t.run(async (ctx) => {
       if (from === 0) {
@@ -54,7 +62,7 @@ export async function manyHolders(n: number, limits: Parameters<typeof newT>[0] 
         await ctx.db.insert('issues', {
           id: uuid(),
           org_id: f.org.id,
-          project_id: f.sub.id,
+          project_id: subs[Math.floor(i / TASKS_PER_SUB)].id,
           num: 2000 + i,
           title: `Task ${i}`,
           description: '',
