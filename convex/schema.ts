@@ -69,17 +69,20 @@ import { vEventFilters, vEventName, vEventOwner } from './lib/taskEvents'
 import { vUsageCounts, vUsageMetric } from './lib/usage'
 
 /* `task_archived` on a task's relation rows (links, label assignments, follows
- * and attachments) marks a row that the label search of REST and MCP
- * (lib/core.ts activeLabelNames) skips by index. Only a background step sets
- * it, for a task it finds archived in its own transaction, and that step also
- * sets the task's `relations_marked`. After a restore, other steps clear the
- * marks, and only the one that finds none left while the task is active
- * unsets the flag (model/archiveMarks.ts). Every marked row therefore belongs
- * to a task with relations_marked, a link through at least one end, and the
- * search reads such a task through its own assignments. A row written after
- * the archive, or before marks existed, stays unmarked, and readers filter it
- * as before. Every other reader, the app's workspace parts and billing's
- * storage totals included, sees marked rows like any other. */
+ * and attachments) marks a row that two readers skip by index: the Board's
+ * search (lib/board.ts boardSearch) where it reads a label's assignments
+ * (issue_labels by_label), and the app's windows (lib/workspaceParts.ts
+ * readTasks). Only a background step sets it, for a task it finds archived
+ * in its own transaction, and that step also sets the task's
+ * `relations_marked`. After a restore, other steps clear the marks, and only
+ * the one that finds none left while the task is active unsets the flag
+ * (model/archiveMarks.ts). Every marked row therefore belongs to a task with
+ * relations_marked, a link through at least one end, and both readers read
+ * such a task through its own rows. A row written after the archive, or
+ * before marks existed, stays unmarked, and readers filter it as before.
+ * Every other reader, the label search of REST and MCP (lib/activeTaskPage.ts
+ * searchRule) and billing's storage totals included, sees marked rows like
+ * any other. */
 const taskArchived = v.optional(v.literal(true))
 
 /* `task_key` on a task's relation rows (label assignments, attachments,
@@ -361,7 +364,8 @@ const issueLabelsTable = defineTable({
   // the app's windows: the unmarked rows of a range of window keys
   .index('by_org_task_archived_key', ['org_id', 'task_archived', 'task_key'])
   .index('by_issue', ['issue_id'])
-  // a label's assignments; REST and MCP search read only its unmarked ones
+  // a label's assignments; the Board's search reads only its unmarked ones
+  // (lib/board.ts boardSearch)
   .index('by_label', ['label_id', 'task_archived'])
   .index('by_issue_label', ['issue_id', 'label_id'])
 

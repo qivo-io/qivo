@@ -41,7 +41,7 @@ import type { Refusal } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
 import { type BulkUpdate, holderKey, type IssuePatch, updateIssueCore } from '../model/issues'
 import { FOLLOWER_FANOUT, newNotifyPreload } from '../model/messages'
-import { REMOVAL_FULL, reassignTooLarge } from '../model/projectAccess'
+import { REASSIGN_ROOM, REMOVAL_FULL, reassignTooLarge } from '../model/projectAccess'
 import {
   as,
   expectRefusal,
@@ -688,8 +688,8 @@ describe('a removal of many people', () => {
   it(`takes access from ${LIMITS.removalHolders.max} people with open tasks inside one transaction's limits, the costliest way`, async () => {
     const { t, f, state } = await manyHolders(LIMITS.removalHolders.max)
     // each holder's teams read one at a time, as in an organization with
-    // more than LEVELS_READ memberships, and a Viewer grant each: five index
-    // ranges a holder
+    // more than LEVELS_READ.max memberships, and a Viewer grant each: five
+    // index ranges a holder
     const before = LEVELS_READ.max
     LEVELS_READ.max = 0
     try {
@@ -844,41 +844,62 @@ describe('a removal of many people', () => {
   })
 
   it("refuses before one team's memberships read past the documents left", async () => {
-    // under a limit of 12,000 documents the removal keeps 600 in reserve, and
-    // a third team's 12,000 memberships would pass it in one read
-    const { t, f, admin, state } = await manyHolders(30, {
-      transactionLimits: { documentsRead: 12_000 },
-    })
-    await t.run(async (ctx) => {
-      const id = uuid()
-      await ctx.db.insert('teams', {
-        id,
-        org_id: f.org.id,
-        name: 'Crowd',
-        track_delay_default: false,
-        created_at: NOW,
+    // A third team, Crowd, holds 1,000 memberships, the people figure, that
+    // name people who no longer exist. The limit is what the same removal
+    // reads while Crowd holds none, and 500 documents more, so the 5% the
+    // removal keeps holds at least the 25 rows it reads between two room
+    // checks here (LEVELS_READ.guardRows), and Crowd's memberships pass the
+    // limit in one read.
+    const crowd = (t: T, orgId: string, members: number) =>
+      t.run(async (ctx) => {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: orgId,
+          name: 'Crowd',
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        for (let i = 0; i < members; i++)
+          await ctx.db.insert('team_members', { team_id: id, profile_id: uuid(), is_leader: false })
       })
-      for (let i = 0; i < 12_000; i++)
-        await ctx.db.insert('team_members', { team_id: id, profile_id: uuid(), is_leader: false })
+    const removal = (h: Awaited<ReturnType<typeof manyHolders>>) => ({
+      ...h.admin,
+      keyName: null,
+      ref: 'TBED',
+      subject: h.f.team.id,
+      body: '',
     })
-    const before = LEVELS_READ.max
-    LEVELS_READ.max = 20_000
+    const base = await manyHolders(30)
+    await crowd(base.t, base.f.org.id, 0)
+    const baseline = await base.t.run(async (ctx) => {
+      const left = await ctx.runMutation(
+        internal.machine.projects.restRemoveTeamAccess,
+        removal(base),
+      )
+      return {
+        stranded: left.stranded.length,
+        documents: (await ctx.meta.getTransactionMetrics()).documentsRead.used,
+      }
+    })
+    expect(baseline.stranded).toBe(30)
+    const documentsRead = baseline.documents + 500
+    // without Crowd's memberships the removal stays inside the room
+    expect(baseline.documents).toBeLessThanOrEqual(REASSIGN_ROOM * documentsRead)
+    const h = await manyHolders(30, { transactionLimits: { documentsRead } })
+    await crowd(h.t, h.f.org.id, 1000)
+    const before = { ...LEVELS_READ }
+    LEVELS_READ.guardRows = 25
     try {
       const e = await expectRefusal(
-        t.mutation(internal.machine.projects.restRemoveTeamAccess, {
-          ...admin,
-          keyName: null,
-          ref: 'TBED',
-          subject: f.team.id,
-          body: '',
-        }),
+        h.t.mutation(internal.machine.projects.restRemoveTeamAccess, removal(h)),
         'rule',
       )
       expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
     } finally {
-      LEVELS_READ.max = before
+      Object.assign(LEVELS_READ, before)
     }
-    expect((await state()).share).toMatchObject({ level: 'user' })
+    expect(await h.state()).toMatchObject({ share: { level: 'user' }, viewers: 0 })
   })
 })
 

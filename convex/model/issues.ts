@@ -2040,17 +2040,21 @@ export const MOVE_SUBTREE_HOLDER_RULE =
  * subtasks and as many archived. Each carried subtask is read twice, once by
  * the move and once by its write, and so is its description row, read to
  * price its patch (rowsForPatch) and again by its own write
- * (model/descriptions.ts patchTask). Once internal/descriptionsBackfill's
- * clear has taken the text off the task rows, about 120 subtasks with
- * descriptions at TEXT_MAX of three-byte characters fit in one request, so
- * LIMITS.subtasks.max active ones always do, in a REST move too, whose
- * answer reads them again, and LIMITS.moveSubtree.max fit with ASCII text at
- * TEXT_MAX. While the task rows still hold a copy of the text, before the
- * clear or after a rollback to the second release of the description move,
- * about 60 fit, and about 50 active ones in a REST move. Descriptions stored
- * before the caps, near Convex's document size limit, fit 7 a family once
- * cleared and 3 with the copy. A larger family is refused with
- * MOVE_TOO_LARGE. */
+ * (model/descriptions.ts patchTask). A REST move also keeps room for its
+ * answer, which reads the active subtasks again
+ * (MachineMove.answerReadsSubtasks). LIMITS.moveSubtree.max subtasks whose
+ * titles and descriptions are of ordinary length move in one request
+ * through the app, REST and MCP (convex/tests/taskLimits.test.ts). What a
+ * move reads follows the bytes of its rows, so long descriptions, or the
+ * same text in a script that takes three bytes a character, make a smaller
+ * family too large. A task row that holds a copy of its text, which a
+ * rollback to the second release of the description move writes again
+ * until the next clear, is read with that copy each time, so a family of
+ * long descriptions reads about twice as much
+ * (convex/tests/descriptions.test.ts, under a lowered read limit). A family
+ * too large for one request, descriptions stored before the caps near
+ * Convex's document size limit included, is refused with MOVE_TOO_LARGE
+ * and changes nothing. */
 
 /* Per-call cache from a project id to its top-level project id, null for a
  * missing project. */

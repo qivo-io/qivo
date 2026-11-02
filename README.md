@@ -101,14 +101,18 @@ and of the module rules in `scripts/convex-api-modules.mjs`.
 The backend check then runs `scripts/check-task-writes.mjs`. Task
 descriptions are kept in `issue_descriptions` beside the task rows, each row
 with copies of its task's project and archived state, and only
-`convex/model/descriptions.ts` writes the two together. The check reads
-every database `insert`, `patch` and `replace` and every call of
-`insertUnique` with TypeScript's checker, also through a renamed import,
-a destructured method or `db['patch']`. It fails on a task insert or
-replace, a task patch whose fields may hold a description, a project or an
-archived state, and a write to `issue_descriptions` anywhere else, and on a
-write whose table it cannot read from its type outside the two generic
-writers it allows.
+`convex/model/descriptions.ts` writes the two together. Its task writers
+also move the Overview's counts, so a direct patch of a field the counts
+read would leave them wrong. The check reads every database `insert`,
+`patch` and `replace` and every call of `insertUnique` and `insertUsed`
+with TypeScript's checker, also through a renamed import, a destructured method or
+`db['patch']`. It fails on a task insert or replace, a task patch whose
+fields may hold a description, a project or an archived state, and a write
+to `issue_descriptions` anywhere else. It also fails on a direct task patch
+whose fields may hold a status, pause, remaining hours, assignee, reviewer
+or parent, which must go through `patchTaskRow` or `patchTask`, and on a
+write whose table it cannot read from its type outside the three generic
+writers it allows (`insertUnique`, `insertUsed` and `demoWriter`).
 Then `scripts/check-task-reads.mjs` fails on a read of
 `issues.description` outside `convex/model/descriptions.ts` and the
 descriptions backfill: a property or element read, or a destructuring that

@@ -51,11 +51,14 @@
  * limit (lib/demo.ts uncountedWriter), because it is part of its task,
  * which counts once.
  *
- * Every insert of a task and every patch of a task row also moves the
- * Overview's counts in the same transaction (model/overviewCounts.ts
- * tallyOverview): insertTask and patchTask here, and patchTaskRow for a
- * patch of fields that leave the description, project and archived state
- * alone (TaskPatch), which every other writer of a task row goes through. */
+ * Every insert of a task, and every patch of a task row that may change
+ * what the Overview's counts read, also moves those counts in the same
+ * transaction (model/overviewCounts.ts tallyOverview): insertTask and
+ * patchTask here, and patchTaskRow for a patch of fields that leave the
+ * description, project and archived state alone (TaskPatch). Every other
+ * writer of a task's status, pause, remaining hours, assignee, reviewer or
+ * parent goes through patchTask or patchTaskRow, and
+ * scripts/check-task-writes.mjs fails on another patch of those fields. */
 
 import type { TransactionMetrics, WithoutSystemFields } from 'convex/server'
 import { type ConvexError, getDocumentSize } from 'convex/values'
@@ -67,6 +70,7 @@ import type { ReadCeiling } from '../lib/archivedTasks'
 import { insertUnique, insertUsed } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { Refusal } from '../lib/functions'
+import { MIB } from '../lib/limits'
 import { DOCUMENT_MAX_BYTES } from './comments'
 import { countsKept, tallyOverview } from './overviewCounts'
 
@@ -88,10 +92,10 @@ type TextOwner = Owner & Pick<Doc<'issues'>, 'description'>
  * a rollback left the first row's copies stale beside a second row; then
  * this is the row the active range of the task's project holds too
  * (projectTextReader), so every reader takes the same one. It reads two rows at
- * most, so TEXT_DOCUMENTS is a true bound. A task with three or more rows,
- * which repeated rollbacks leave and internal/descriptionsBackfill reports
- * as a duplicate, may read differently there when only a later row holds
- * the copies. */
+ * most, so TEXT_READ.documents is a true bound. A task with three or more
+ * rows, which repeated rollbacks leave and internal/descriptionsBackfill
+ * reports as a duplicate, may read differently there when only a later row
+ * holds the copies. */
 async function shownRow(db: Reader, task: Owner): Promise<Doc<'issue_descriptions'> | null> {
   return shownOf(await firstRows(db, task.id), task)
 }
@@ -156,17 +160,24 @@ export async function withText(db: Reader, task: Doc<'issues'>): Promise<TaskWit
   return { ...task, description: await descriptionOf(db, task) }
 }
 
-/* The documents one task's text can read at Convex's document size limit:
- * its first row and, when that row's copies are stale, the next (shownRow). */
-const TEXT_DOCUMENTS = 2
+/** What descriptionsOf charges one task's text besides its index range.
+ * `documents` is its first row and, when that row's copies are stale, the
+ * next (shownRow), and `bytes` is both at Convex's 1 MiB document size
+ * limit (model/comments.ts DOCUMENT_MAX_BYTES). The bytes are written with
+ * lib/limits.ts MIB, a module without imports, because model/comments.ts
+ * imports this module through model/issues.ts, so a value taken from it
+ * while this module loads is unset when model/comments.ts loads first, and
+ * the charge would be NaN (tests/budgetModules.test.ts). Tests lower
+ * `bytes` with the transaction's read limit. */
+export const TEXT_READ = { documents: 2, bytes: 2 * MIB }
 
-/* How many tasks' texts, each one index range and TEXT_DOCUMENTS documents
- * at Convex's document size limit, the reads left under `limit` can hold. */
+/* How many tasks' texts, each one index range and TEXT_READ, the reads left
+ * under `limit` can hold. */
 const textsLeft = (m: TransactionMetrics, limit: ReadCeiling): number =>
   Math.min(
     limit.ranges - m.databaseQueries.used,
-    Math.floor((limit.documents - m.documentsRead.used) / TEXT_DOCUMENTS),
-    Math.floor((limit.bytes - m.bytesRead.used) / (TEXT_DOCUMENTS * DOCUMENT_MAX_BYTES)),
+    Math.floor((limit.documents - m.documentsRead.used) / TEXT_READ.documents),
+    Math.floor((limit.bytes - m.bytesRead.used) / TEXT_READ.bytes),
   )
 
 /** The texts of `tasks` (descriptionOf) by task id, or null when `room` ran
@@ -174,14 +185,14 @@ const textsLeft = (m: TransactionMetrics, limit: ReadCeiling): number =>
  * totals the reads keep to (ctx.meta.getTransactionMetrics), every document
  * a caller read before counted. It reads a few texts at a time, never more
  * than the ranges, documents and bytes left under `room` could hold with
- * each text at TEXT_DOCUMENTS of Convex's document size limit, and none
- * once the reads have passed `room`. By default `steps` is `room`, so the
- * reads never pass it. A caller whose budget a step may pass, as a
- * workspace part's may, gives Convex's own limits less a reserve as
- * `steps`: while the reads are under `room` a step then reads at least one
- * text, never more than the reads left under `steps` could hold, so the
- * reads pass `room` by one task's text at most and never pass `steps`. Each
- * caller keeps its own answer once the room runs out: a cut window, a
+ * each text charged TEXT_READ, two documents at Convex's document size
+ * limit, and none once the reads have passed `room`. By default `steps` is
+ * `room`, so the reads never pass it. A caller whose budget a step may
+ * pass, as a workspace part's may, gives Convex's own limits less a reserve
+ * as `steps`: while the reads are under `room` a step then reads at least
+ * one text, never more than the reads left under `steps` could hold, so the
+ * reads pass `room` by one task's text at most and never pass `steps`.
+ * Each caller keeps its own answer once the room runs out: a cut window, a
  * refusal or a shorter page. */
 export async function descriptionsOf(
   ctx: QueryCtx,
@@ -379,7 +390,8 @@ export const textsOf = (
 export type TaskFields = Partial<WithoutSystemFields<Doc<'issues'>>>
 
 /** The fields of a task row a write sets that never changes its
- * description, project or archived state, so it may patch the row itself. */
+ * description, project or archived state, so patchTaskRow patches the row
+ * without its description row. */
 export type TaskPatch = Omit<TaskFields, 'description' | 'project_id' | 'archived_at'>
 
 /** The task a description row belongs to, with the fields the row copies. */
@@ -523,8 +535,9 @@ export async function patchTask(
  * which it reads first, so a caller holding an older copy moves them
  * right. `stored` says `task` is the task as stored now, read in this
  * transaction and written since only through these helpers, so it is not
- * read again. Every writer of such fields patches through it or patchTask.
- * Answers the task as patched. */
+ * read again. Every writer of a task's status, pause, remaining hours,
+ * assignee, reviewer or parent patches through it or patchTask
+ * (scripts/check-task-writes.mjs). Answers the task as patched. */
 export async function patchTaskRow(
   db: Writer,
   task: Doc<'issues'>,

@@ -13,8 +13,8 @@
  * (lib/workingSet.ts), and a task a legacy writer stored on a top-level
  * project is in none.
  *
- * Every figure the counts hold is whole at any size inside the testing
- * envelope: leaves by status (Completion, In progress, In review, the
+ * Every figure the counts hold is whole at any size inside the design
+ * size: leaves by status (Completion, In progress, In review, the
  * status distribution), paused leaves and Left. Figures that follow the day
  * or the reader are read from the tasks within OVERVIEW.reads, and a figure
  * whose reads do not fit answers `unavailable`, never a smaller number. So

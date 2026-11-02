@@ -480,7 +480,7 @@ must press **Resend confirmation email**. An app from before demos were
 prepared in steps expects one `demo.ensureMine` call to prepare a whole demo,
 but later backends prepare a part of it a call, so after such a rollback a
 new demo visitor sees "Your demo is still being prepared" and must press
-**Retry** once for each call after the first, 4 times with the current demo
+**Retry** once for each call after the first, 7 times with the current demo
 data.
 
 The app before v0.1.18 reads an activity list that the snapshot no longer
@@ -921,10 +921,12 @@ Each sub-project has `overview_counts` rows with its leaf tasks by status,
 its paused leaves and the remaining hours of its leaves not Done, beside a
 row for each person with leaves in it, and each active task an
 `overview_tasks` row with what those rows hold for it
-(`convex/model/overviewCounts.ts`). No reader uses them yet. Every task
-write keeps them, background steps keep them after a project is archived,
-restored, moved to Deleted items or restored from there, and organizations
-created since the release that added them are counted from their creation.
+(`convex/model/overviewCounts.ts`). The Overview's server queries
+(`convex/overview.ts`) read the `overview_counts` rows, though nothing in
+the app calls those queries yet. Every task write keeps them, background steps keep them after
+a project is archived, restored, moved to Deleted items or restored from
+there, and organizations created since the release that added them are
+counted from their creation.
 An organization stored before has no counts until the one-time
 `internal/overviewCountsBackfill` counts it, and the readers answer that its
 counts are not ready, never zero. Run it on every hosted deployment once it

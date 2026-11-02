@@ -2005,11 +2005,10 @@ first, or move it within its project.`). A move whose task and subtasks are
 too large for one call is refused with `this task and its subtasks are too
 large to move to another project in one request; remove some subtasks from
 this task first, restoring archived ones to do so, or move it within its
-project`, such as one with more than about 120 subtasks, archived ones
-included, whose descriptions hold 20,000 characters of a script that takes
-three bytes a character, such as Japanese. Until the deployment's operator
-has run the one-time description clear, about half as many are enough,
-more than about 60. Any other change whose task and subtasks are too
+project`. A task with 200 subtasks, archived ones included, moves in one
+call when their titles and descriptions are of ordinary length. Long
+descriptions on many of them can make a smaller family too large. Any
+other change whose task and subtasks are too
 large for one call, such as an archive, a new parent or a restore, is
 refused with `this task and its subtasks are too large to change in one
 request; detach some subtasks first`. Each moved subtask sends `task.updated`, but only the task
