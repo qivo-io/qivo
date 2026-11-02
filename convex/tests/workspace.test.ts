@@ -22,6 +22,7 @@ import {
   windowCount,
 } from '../lib/idWindows'
 import { PAGE, readInbox, readProjects, readTasks } from '../lib/workspaceParts'
+import { descriptionOf, insertTask, TEXT_READ } from '../model/descriptions'
 import {
   as,
   expectRefusal,
@@ -43,9 +44,11 @@ import { withReach } from './projectReach.setup'
 
 const DEFAULT_PAGE = structuredClone(PAGE)
 const DEFAULT_OWN_READS = structuredClone(OWN_READS)
+const DEFAULT_TEXT_READ = structuredClone(TEXT_READ)
 afterEach(() => {
   Object.assign(PAGE, structuredClone(DEFAULT_PAGE))
   Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+  Object.assign(TEXT_READ, DEFAULT_TEXT_READ)
   vi.restoreAllMocks()
 })
 
@@ -195,48 +198,59 @@ describe('a tasks window', () => {
     expect(answer).toEqual({ state: 'overflow' })
   })
 
-  it('reads within the real limits where one read of the organization could not', async () => {
-    // 1,500 open tasks with descriptions of 12,000 characters each hold
-    // about 18 MB, past what one transaction may read. The texts are that
-    // long, not ordinary, because a part's text step reserves a fixed two
-    // documents at Convex's 1 MiB size limit a text (model/descriptions.ts
-    // textsLeft, TEXT_DOCUMENTS * DOCUMENT_MAX_BYTES), which a test cannot
-    // lower, so under a lowered read limit no text would fit. They lie 300
-    // in each of five sub-projects, the design size for one, and at most
-    // 600 in one project.
-    const t = newT(REAL_LIMITS)
+  it("reads within a transaction's read limit where one read of the organization could not", async () => {
+    // 300 open tasks in Firmware, the design size for one sub-project, with
+    // descriptions of about 8 KB of ordinary text in their description rows,
+    // hold about 2.5 MB, past a read limit lowered to 2 MiB, an eighth of
+    // Convex's 16 MiB. The parts' byte budgets (SCALED_BYTES) and the bytes
+    // a text step charges each text (model/descriptions.ts TEXT_READ) go to
+    // an eighth with it.
+    const t = newT({
+      transactionLimits: { ...REAL_LIMITS.transactionLimits, bytesRead: 2 * 1024 * 1024 },
+    })
+    SCALED_BYTES()
+    TEXT_READ.bytes = DEFAULT_TEXT_READ.bytes / 8
     const f = await withOrg(t)
-    const description = LONG.repeat(2).slice(0, 12_000)
-    const subs = [f.sub.id, f.sub2.id]
-    for (const name of ['Sensors', 'Rigs']) {
-      const meta = await plantProject(t, { org_id: f.org.id, name })
-      for (let n = 0; n < (name === 'Sensors' ? 2 : 1); n++)
-        subs.push(
-          (await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: meta.id })).id,
-        )
-    }
-    // a write of 300 a sub-project, each inside the limit on what one may
-    // write
-    for (const [s, project_id] of subs.entries())
+    const planted: string[] = []
+    // in writes of 100
+    for (let from = 0; from < 300; from += 100)
       await t.run(async (ctx) => {
-        for (let i = s * 300; i < (s + 1) * 300; i++)
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            window_key: newWindowKey(),
-            org_id: f.org.id,
-            project_id,
-            num: i + 1,
-            title: `Task ${i}`,
-            description,
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-          })
+        for (let i = from; i < from + 100; i++) {
+          const id = uuid()
+          await insertTask(
+            ctx.db,
+            {
+              id,
+              window_key: newWindowKey(),
+              org_id: f.org.id,
+              project_id: f.sub.id,
+              num: i + 1,
+              title: `Task ${i}`,
+              description: LONG,
+              status: 'todo',
+              priority: 'medium',
+              paused: false,
+              created_at: NOW,
+              updated_at: NOW,
+            },
+            'restore',
+          )
+          planted.push(id)
+        }
       })
+    // one read of the organization's tasks with their texts passes the limit
+    await expect(
+      t.run(async (ctx) => {
+        const tasks = await ctx.db
+          .query('issues')
+          .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+          .collect()
+        for (const task of tasks) await descriptionOf(ctx.db, task)
+      }),
+    ).rejects.toThrow(/Read too much data/)
     const snap = await workspaceOf(as(t, f.admin))
-    expect(snap?.issues).toHaveLength(1500)
+    expect(snap?.issues.map((i) => i.id).sort()).toEqual(planted.sort())
+    expect(snap?.issues.every((i) => i.description === LONG)).toBe(true)
   })
 })
 
