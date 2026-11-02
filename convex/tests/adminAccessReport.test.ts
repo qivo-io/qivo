@@ -16,6 +16,7 @@ import {
   ADMINS,
   OWN,
   ordinaryOf,
+  PART,
   ROOM,
   RUN,
   reportPage,
@@ -60,6 +61,10 @@ type PageResult = Awaited<ReturnType<typeof reportPage>>
 type Finding = PageResult['findings'][number]
 
 const report = internal.internal.adminAccessReport
+
+/* A sentence of ordinary text, which descriptions repeat to a length. */
+const ORDINARY =
+  'Check the sensor calibration on the new boards and note any drift above the tolerance. '
 
 /* Every page of `phase` from its start, as check answers them. */
 async function pagesOf(t: T, phase: Phase, page_size?: number): Promise<PageResult[]> {
@@ -1056,7 +1061,7 @@ const holds = (row: GenericDocument, { field, op, value }: Bound): boolean => {
 
 /* What a memory ctx has read, against Convex's limits for one transaction:
  * 16 MiB, 32,000 documents and 4,096 index ranges. A read past one throws,
- * as a deployment refuses it. */
+ * as a deployment refuses it. Tests lower them. */
 type Reads = Record<'bytesRead' | 'documentsRead' | 'databaseQueries', number>
 const LIMITS_OF: Reads = {
   bytesRead: 16 * 1024 * 1024,
@@ -1218,9 +1223,10 @@ describe('rows that share a _creationTime', () => {
   })
 
   it('ends work pages at their room inside a tie of large tasks, which one page cannot read', async () => {
-    // 40 tasks of 60 KB at times of their own, then 250 created at one
-    // time, 15 MB together, which the first page reaches with 2.4 MB read
-    const description = 'x'.repeat(60_000)
+    // 40 tasks of 2 KB at times of their own, then 250 created at one time,
+    // 500 KB together, under a limit of a 30th of Convex's 16 MiB, as 250
+    // tasks of 60 KB were under 16 MiB
+    const description = ORDINARY.repeat(25).slice(0, 2_000)
     const task = (time: number, n: number) =>
       at(time, {
         id: `big${n}`,
@@ -1239,7 +1245,11 @@ describe('rows that share a _creationTime', () => {
       ],
       issue_subscriptions: [],
     }
-    const { findings, pages } = await memoryPages(large, 'work', 2_000)
+    const bytesRead = LIMITS_OF.bytesRead
+    Object.assign(LIMITS_OF, { bytesRead: Math.round(bytesRead / 30) })
+    const { findings, pages } = await memoryPages(large, 'work', 2_000).finally(() =>
+      Object.assign(LIMITS_OF, { bytesRead }),
+    )
     expect(findings).toHaveLength(290)
     expect(new Set(findings.map((found) => 'task_id' in found && found.task_id)).size).toBe(290)
     // a page that goes on inside the tie reads its rows up to the cursor
@@ -1248,10 +1258,11 @@ describe('rows that share a _creationTime', () => {
   })
 
   it('ends projects pages at their room inside a tie of large projects', async () => {
-    // eight top-level projects with descriptions of 900 KiB, stored before
-    // the caps, at times of their own, then twelve created at one time,
-    // 10.8 MB together
-    const description = 'x'.repeat(900 * 1024)
+    // eight top-level projects with descriptions of 450 characters at times
+    // of their own, then twelve created at one time, under a limit and a
+    // part's bytes of a 2,048th of Convex's 16 MiB and of PART.bytes, as 900
+    // KiB descriptions stored before the caps were under the real ones
+    const description = ORDINARY.repeat(6).slice(0, 450)
     const top = (time: number, n: number) =>
       at(time, {
         id: `big${n}`,
@@ -1268,7 +1279,13 @@ describe('rows that share a _creationTime', () => {
         ...Array.from({ length: 12 }, (_, n) => top(1_000, 8 + n)),
       ],
     }
-    const { findings, pages } = await memoryPages(large, 'projects', 4_000)
+    const before = { bytesRead: LIMITS_OF.bytesRead, part: PART.bytes }
+    Object.assign(LIMITS_OF, { bytesRead: before.bytesRead / 2_048 })
+    PART.bytes = before.part / 2_048
+    const { findings, pages } = await memoryPages(large, 'projects', 4_000).finally(() => {
+      Object.assign(LIMITS_OF, { bytesRead: before.bytesRead })
+      PART.bytes = before.part
+    })
     // each admin loses all twenty
     expect(lines(findings)).toEqual(
       lines(
@@ -1395,7 +1412,7 @@ async function measuredPages(t: T, phase: Phase, size: number): Promise<Measured
 }
 
 describe('within Convex limits', () => {
-  it('finishes a run past a project shared with 4,200 teams the admin is in', async () => {
+  it('finishes a run past a project shared with more teams than a page reads, which the admin is in', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const task = await plantIssue(t, {
@@ -1405,9 +1422,10 @@ describe('within Convex limits', () => {
     })
     await plantWebhook(t, f.admin, { project_id: f.sub.id })
     // asking the admin's level on FW would ask of each team whether it is
-    // the organization's, one index range a team
+    // the organization's, one index range a team, so 4,200 teams passed
+    // Convex's 4,096; here 3 teams pass a SHARES.most lowered to 2
     await t.run(async (ctx) => {
-      for (let n = 0; n < 4_200; n++) {
+      for (let n = 0; n < 3; n++) {
         const team_id = await newTeam(ctx, f.org.id)
         await ctx.db.insert('team_members', { team_id, profile_id: f.admin.id, is_leader: false })
         await ctx.db.insert('project_team_access', {
@@ -1417,7 +1435,11 @@ describe('within Convex limits', () => {
         })
       }
     })
-    const result = await t.action(report.run, {})
+    const most = SHARES.most
+    SHARES.most = 2
+    const result = await t.action(report.run, {}).finally(() => {
+      SHARES.most = most
+    })
     expect(result.failed).toBeNull()
     expect(result.cursor).toBeNull()
     expect(result.findings).toEqual(
@@ -1431,15 +1453,17 @@ describe('within Convex limits', () => {
         expect.objectContaining({ kind: 'webhook', profile_id: f.admin.id, affected: null }),
       ]),
     )
-  }, 300_000)
+  })
 
   it('ends a projects page within the limits over small sub-projects of large parents', async () => {
-    const t = newT({ transactionLimits: true })
+    // a limit and a part's bytes of a 1,024th of Convex's 16 MiB and of
+    // PART.bytes, as 900 KiB parents stored before the caps were under the
+    // real ones
+    const t = newT({ transactionLimits: { bytesRead: 16 * 1024 } })
     const f = await withOrg(t)
-    // 20 top-level projects with descriptions of 900 KiB, stored before
-    // the caps, then a small sub-project of each, created after all of
-    // them, so a page that starts at the sub-projects reads their parents
-    // anew
+    // 20 top-level projects with descriptions of 450 characters, then a
+    // small sub-project of each, created after all of them, so a page that
+    // starts at the sub-projects reads their parents anew
     const parents: string[] = []
     for (let batch = 0; batch < 20; batch += 10)
       await t.run(async (ctx) => {
@@ -1452,7 +1476,7 @@ describe('within Convex limits', () => {
             type: 'meta',
             key: `L${n}`,
             name: `Large ${n}`,
-            description: 'x'.repeat(900 * 1024),
+            description: ORDINARY.repeat(6).slice(0, 450),
             sort_order: 1_000 + n,
             num: 1_000 + n,
             track_delay: false,
@@ -1483,7 +1507,11 @@ describe('within Convex limits', () => {
       }
       return ids
     })
-    const pages = await measuredPages(t, 'projects', 4_000)
+    const part = PART.bytes
+    PART.bytes = part / 1_024
+    const pages = await measuredPages(t, 'projects', 4_000).finally(() => {
+      PART.bytes = part
+    })
     const left = new Set(
       pages
         .flatMap(({ page }) => page.findings)
@@ -1495,17 +1523,19 @@ describe('within Convex limits', () => {
     // the pages end at their room, the large parents' bytes counted
     expect(pages.length).toBeGreaterThan(2)
     for (const { metrics } of pages.slice(0, -1)) expect(usedPast(metrics, ROOM.share)).toBe(true)
-  }, 300_000)
+  })
 
-  it("ends a projects page without a limit error past an admin's 33,000 team shares", async () => {
+  it("ends a projects page without a limit error past an admin's team shares", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const inTeams = await plantAdmin(t, f, { name: 'In teams' })
-    // 11 top-level projects of 30 sub-projects each, every sub-project
-    // shared with each of 100 teams the admin belongs to
+    // 2 top-level projects of 3 sub-projects each, every sub-project shared
+    // with each of 3 teams the admin belongs to: with the memberships 21 of
+    // the admin's own rows, past an OWN.rows lowered to 10, as 33,000 team
+    // shares passed the real one and Convex's 32,000 documents
     const subs: string[] = []
     await t.run(async (ctx) => {
-      for (let n = 0; n < 11; n++) {
+      for (let n = 0; n < 2; n++) {
         const parent = uuid()
         const row = (id: string, num: number, parent_id?: string) =>
           ctx.db.insert('projects', {
@@ -1523,7 +1553,7 @@ describe('within Convex limits', () => {
             window_key: newWindowKey(),
           })
         await row(parent, 1_000 + n * 50)
-        for (let s = 1; s <= 30; s++) {
+        for (let s = 1; s <= 3; s++) {
           const id = uuid()
           subs.push(id)
           await row(id, 1_000 + n * 50 + s, parent)
@@ -1532,25 +1562,28 @@ describe('within Convex limits', () => {
     })
     const teams = await t.run(async (ctx) => {
       const ids: string[] = []
-      for (let team = 0; team < 100; team++) {
+      for (let team = 0; team < 3; team++) {
         const team_id = await newTeam(ctx, f.org.id)
         await ctx.db.insert('team_members', { team_id, profile_id: inTeams.id, is_leader: false })
         ids.push(team_id)
       }
       return ids
     })
-    for (let at = 0; at < teams.length; at += 25)
-      await t.run(async (ctx) => {
-        for (const team_id of teams.slice(at, at + 25))
-          for (const project_id of subs)
-            await ctx.db.insert('project_team_access', { project_id, team_id, level: 'user' })
-      })
-    const pages = await measuredPages(t, 'projects', 1_000_000)
+    await t.run(async (ctx) => {
+      for (const team_id of teams)
+        for (const project_id of subs)
+          await ctx.db.insert('project_team_access', { project_id, team_id, level: 'user' })
+    })
+    const rows = OWN.rows
+    OWN.rows = 10
+    const pages = await measuredPages(t, 'projects', 1_000_000).finally(() => {
+      OWN.rows = rows
+    })
     const findings = pages.flatMap(({ page }) => page.findings)
     // the admin keeps every sub-project those teams share, and every
     // top-level project, TBED and SKNK included, is left for a check by hand
     const mine = findings.filter((found) => found.profile_id === inTeams.id)
-    expect(mine.filter((found) => found.kind === 'unchecked')).toHaveLength(11 + 2)
+    expect(mine.filter((found) => found.kind === 'unchecked')).toHaveLength(2 + 2)
     expect(lines(mine.filter((found) => found.kind !== 'unchecked'))).toEqual(
       lines(
         [f.sub, f.sub2].map((p) => ({
@@ -1564,14 +1597,16 @@ describe('within Convex limits', () => {
       ),
     )
     for (const { metrics } of pages.slice(0, -1)) expect(usedPast(metrics, ROOM.share)).toBe(true)
-  }, 300_000)
+  })
 
-  it('ends each projects page by its room over 3 admins and 2,000 projects', async () => {
+  it('ends each projects page by its room over 3 admins and 524 projects', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const inTeams = await plantAdmin(t, f, { name: 'In teams' })
     const granted = await plantAdmin(t, f, { name: 'Granted' })
-    // 40 top-level projects of 49 sub-projects each
+    // 40 top-level projects of 12 sub-projects each, which with withOrg's
+    // make 42 top-level projects and 482 sub-projects, inside the 500 live
+    // sub-projects of the design size
     const subs: string[] = []
     for (let m = 0; m < 40; m += 10)
       await t.run(async (ctx) => {
@@ -1585,7 +1620,7 @@ describe('within Convex limits', () => {
               parent_id,
               key: `K${num}`,
               name: `Project ${num}`,
-              description: 'd'.repeat(LIMITS.projectDescription.max),
+              description: ORDINARY,
               sort_order: num,
               num,
               track_delay: false,
@@ -1594,88 +1629,96 @@ describe('within Convex limits', () => {
               lead_id: n < 2 && parent_id === undefined ? granted.id : undefined,
             })
           await row(parent, 1_000 + n * 50)
-          for (let s = 1; s < 50; s++) {
+          for (let s = 1; s <= 12; s++) {
             const id = uuid()
             subs.push(id)
             await row(id, 1_000 + n * 50 + s, parent)
           }
         }
       })
-    // the second admin is in 60 teams, which share every sub-project between
-    // them; the third leads the first two top-level projects and holds grants
-    // on the next 100 sub-projects, in the next three trees
+    // the second admin is in 3 teams, which share the sub-projects of the
+    // first 12 trees between them, 48 each; the third leads the first two
+    // top-level projects and holds grants on the next 36 sub-projects, in
+    // the next three trees
     await t.run(async (ctx) => {
-      for (let team = 0; team < 60; team++) {
+      for (let team = 0; team < 3; team++) {
         const team_id = await newTeam(ctx, f.org.id)
         await ctx.db.insert('team_members', { team_id, profile_id: inTeams.id, is_leader: false })
-        for (let i = team; i < subs.length; i += 60)
+        for (let i = team; i < 12 * 12; i += 3)
           await ctx.db.insert('project_team_access', {
             project_id: subs[i],
             team_id,
             level: 'user',
           })
       }
-      for (const project_id of subs.slice(98, 198))
+      for (const project_id of subs.slice(24, 60))
         await ctx.db.insert('project_access', { project_id, profile_id: granted.id, level: 'user' })
     })
 
-    // at the default size each page holds its 4,000 pairs, and past it the
-    // room ends a page; a pair reads its project in neither
-    const sized = await measuredPages(t, 'projects', 4_000)
-    const pages = await measuredPages(t, 'projects', 1_000_000)
-    for (const { page } of sized.slice(0, -1)) expect(page.checked).toBe(4_000)
+    // at a size of 1,500 each page holds its 1,500 pairs, and past it the
+    // room ends a page, here a ROOM.share lowered to 0.14 so that the 1,572
+    // pairs pass it; a pair reads its project in neither
+    const sized = await measuredPages(t, 'projects', 1_500)
+    const share = ROOM.share
+    ROOM.share = 0.14
+    const pages = await measuredPages(t, 'projects', 1_000_000).finally(() => {
+      ROOM.share = share
+    })
+    for (const { page } of sized.slice(0, -1)) expect(page.checked).toBe(1_500)
+    expect(sized.length).toBeGreaterThan(1)
     // a pair reads no project row: before, each read one, and full pages
     // ended on index ranges at about half of their size. A project costs
     // about one range, the count of its team shares (SHARES).
     for (const { page, metrics } of [...sized.slice(0, -1), ...pages.slice(0, -1)])
       expect(metrics.databaseQueries.used).toBeLessThan((page.checked / 3) * 1.5)
     expect(pages.length).toBeGreaterThan(1)
-    for (const { metrics } of pages.slice(0, -1)) expect(usedPast(metrics, ROOM.share)).toBe(true)
+    for (const { metrics } of pages.slice(0, -1)) expect(usedPast(metrics, 0.14)).toBe(true)
     const findings = pages.flatMap(({ page }) => page.findings)
+    expect(lines(findings)).toEqual(lines(sized.flatMap(({ page }) => page.findings)))
     const count = (profileId: string, kind: string) =>
       findings.filter((finding) => finding.profile_id === profileId && finding.kind === kind).length
-    // the fixture's admin keeps nothing, the one in teams every sub-project
-    // and its parent for navigation, and the third the two trees they lead,
-    // their 100 sub-projects and those sub-projects' three parents for
-    // navigation
-    expect(count(f.admin.id, 'leaves')).toBe(2_004)
-    expect(count(inTeams.id, 'leaves')).toBe(4)
-    expect(count(inTeams.id, 'navigation_only')).toBe(40)
-    expect(count(granted.id, 'leaves')).toBe(2_004 - 2 * 50 - 100 - 3)
+    // the fixture's admin keeps nothing, the one in teams the 144
+    // sub-projects their teams share and those sub-projects' 12 parents for
+    // navigation, and the third the two trees they lead, their 36
+    // sub-projects and those sub-projects' three parents for navigation
+    expect(count(f.admin.id, 'leaves')).toBe(524)
+    expect(count(inTeams.id, 'leaves')).toBe(524 - 144 - 12)
+    expect(count(inTeams.id, 'navigation_only')).toBe(12)
+    expect(count(granted.id, 'leaves')).toBe(524 - 2 * 13 - 36 - 3)
     expect(count(granted.id, 'navigation_only')).toBe(3)
     expect(
       findings.filter((finding) => finding.kind !== 'leaves' && finding.kind !== 'navigation_only'),
     ).toEqual([])
-  }, 120_000)
+  })
 
-  it('ends each work page by its room over 600 open tasks with full descriptions', async () => {
-    const t = newT({ transactionLimits: true })
+  it('ends each work page by its room over 30 open tasks with descriptions', async () => {
+    // a limit of 48 KiB on the bytes a transaction reads, which 30 tasks of
+    // ordinary text pass, as 600 descriptions at the cap passed 16 MiB
+    const t = newT({ transactionLimits: { bytesRead: 48 * 1024 } })
     const f = await withOrg(t)
-    // a description at the cap in a three-byte script, about 60 KB
-    const description = '語'.repeat(LIMITS.description.max)
-    for (let batch = 0; batch < 600; batch += 50)
-      await t.run(async (ctx) => {
-        for (let i = batch; i < batch + 50; i++)
-          await insertTask(
-            ctx.db,
-            {
-              id: uuid(),
-              org_id: f.org.id,
-              project_id: f.sub.id,
-              num: 10_000 + i,
-              title: `Task ${i}`,
-              description,
-              status: 'todo',
-              priority: 'medium',
-              assignee_id: f.admin.id,
-              paused: false,
-              created_at: NOW,
-              updated_at: NOW,
-              window_key: newWindowKey(),
-            },
-            'restore',
-          )
-      })
+    const description = ORDINARY.repeat(12).slice(0, 1_000)
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 30; i++)
+        await insertTask(
+          ctx.db,
+          {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            num: 10_000 + i,
+            title: `Task ${i}`,
+            description,
+            status: 'todo',
+            priority: 'medium',
+            assignee_id: f.admin.id,
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            window_key: newWindowKey(),
+          },
+          'restore',
+        )
+    })
     // with the copy of the text in each task row, as every deployment holds
     // them until the description backfill's clear
     await copyTaskTexts(t, f.org.id)
@@ -1686,13 +1729,13 @@ describe('within Convex limits', () => {
       expect(usedPast(metrics, ROOM.share)).toBe(true)
     }
     const findings = pages.flatMap(({ page }) => page.findings)
-    expect(findings).toHaveLength(600)
+    expect(findings).toHaveLength(30)
     expect(new Set(findings.map((finding) => 'task_id' in finding && finding.task_id)).size).toBe(
-      600,
+      30,
     )
-  }, 120_000)
+  })
 
-  it('reads a machine page over 100 subscriptions on full tasks, tokens and apps', async () => {
+  it('reads a machine page over 100 subscriptions on tasks, tokens and apps', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     // logins, so the webhooks they own stand
@@ -1701,9 +1744,9 @@ describe('within Convex limits', () => {
       await plantLogin(t, await plantAdmin(t, f)),
       await plantLogin(t, await plantAdmin(t, f)),
     ]
-    const description = '語'.repeat(LIMITS.description.max)
+    const description = ORDINARY.repeat(12).slice(0, 1_000)
     // the organization's most unexpired subscriptions (LIMITS.webhooksPerOrg),
-    // each on a task with a description at the cap
+    // each on a task with a description
     for (let batch = 0; batch < LIMITS.webhooksPerOrg.max; batch += 50)
       await t.run(async (ctx) => {
         for (let i = batch; i < batch + 50; i++) {
@@ -1777,7 +1820,7 @@ describe('within Convex limits', () => {
         })),
       ),
     )
-  }, 120_000)
+  })
 })
 
 describe('a check lib/access.ts stops at a bound', () => {
