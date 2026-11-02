@@ -1260,13 +1260,17 @@ function undatedSource(ctx: QueryCtx, key: DueKey, paused: boolean): Source {
     floor: LOWEST(true, ''),
     read: async (after, n) => {
       const from = after?.undated ? after.at : undefined
+      const returned: Doc<'issues'>[] = []
+      // a take that only found rows at or before `after`'s creation time
+      // and id reads further, each take's rows counted
       for (let take = n + (from === undefined ? 0 : TIES); ; take *= 2) {
         const got = await range.open(from).take(take)
+        returned.push(...got)
         const past = got.filter((t) => pastPos(t, after))
         if (got.length === take && past.length === 0) continue
         return {
           rows: past.slice(0, n),
-          returned: got,
+          returned,
           done: got.length < take && past.length <= n,
         }
       }
