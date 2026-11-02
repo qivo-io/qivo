@@ -1313,12 +1313,14 @@ export async function accessRowsOf(
   return { grants, shares: perTeam.flat() }
 }
 
-/** How many membership rows projectLevelsForPeople reads from the
- * organization's teams before it reads each person's memberships alone
- * instead, so memberships of people it does not ask about cannot fill the
- * transaction. 4,000 is an eighth of Convex's 32,000 documents. Tests lower
- * it. */
-export const LEVELS_READ = { max: 4000 }
+/** The bounds of projectLevelsForPeople's reads. `max` is how many
+ * membership rows it reads from the organization's teams before it reads
+ * each person's memberships alone instead, so memberships of people it does
+ * not ask about cannot fill the transaction; 4,000 is an eighth of Convex's
+ * 32,000 documents. `guardRows` is how many rows it reads between two runs
+ * of its guard, well under the 5% of Convex's 32,000 documents a removal
+ * keeps (model/projectAccess.ts REASSIGN_ROOM). Tests lower both. */
+export const LEVELS_READ = { max: 4000, guardRows: 500 }
 
 /** The rows an access removal takes away, which projectLevelsForPeople
  * leaves out to answer sight as it will be once they are gone, without the
@@ -1335,15 +1337,15 @@ export type RemovedAccess = {
  * every project of one organization. Each person costs one index range for
  * their own grants. Their teams come from every membership of the
  * organization's teams, one range a team, when there are more people than
- * teams and those memberships are at most LEVELS_READ rows, and otherwise
- * from one range a person. Each team's shares are read once for everyone.
- * Removing a large team's access asked each member alone, about four ranges
- * before the change and four after, and passed Convex's 4,096. `guard`, when
- * given, runs before each read and after every GUARD_ROWS rows of it, so a
- * caller can stop before the reads fill the transaction
- * (model/projectAccess.ts removeAndSettle). `without` names rows to leave
- * out as if they were deleted, and changes nothing for a person of another
- * organization, who sees none of `projects` anyway. */
+ * teams and those memberships are at most LEVELS_READ.max rows, and
+ * otherwise from one range a person. Each team's shares are read once for
+ * everyone. Removing a large team's access asked each member alone, about
+ * four ranges before the change and four after, and passed Convex's 4,096.
+ * `guard`, when given, runs before each read and after every
+ * LEVELS_READ.guardRows rows of it, so a caller can stop before the reads
+ * fill the transaction (model/projectAccess.ts removeAndSettle). `without`
+ * names rows to leave out as if they were deleted, and changes nothing for
+ * a person of another organization, who sees none of `projects` anyway. */
 export async function projectLevelsForPeople(
   ctx: QueryCtx,
   people: readonly Doc<'profiles'>[],
@@ -1415,25 +1417,20 @@ export async function projectLevelsForPeople(
   return out
 }
 
-/* How many rows projectLevelsForPeople reads between two runs of its guard:
- * well under the 5% of Convex's 32,000 documents a removal keeps
- * (model/projectAccess.ts REASSIGN_ROOM). */
-const GUARD_ROWS = 500
-
 /* Every row of `rows`, running `guard` before the first and after every
- * GUARD_ROWS more. */
+ * LEVELS_READ.guardRows more. */
 async function guardedRows<T>(rows: AsyncIterable<T>, guard: () => Promise<void>): Promise<T[]> {
   const out: T[] = []
   await guard()
   for await (const row of rows) {
     out.push(row)
-    if (out.length % GUARD_ROWS === 0) await guard()
+    if (out.length % LEVELS_READ.guardRows === 0) await guard()
   }
   return out
 }
 
 /* The ids of the teams among `teams` each of `people` belongs to, from every
- * membership of those teams, or null once that passes LEVELS_READ rows. */
+ * membership of those teams, or null once that passes LEVELS_READ.max rows. */
 async function teamsOfPeople(
   ctx: QueryCtx,
   people: readonly Doc<'profiles'>[],
@@ -1450,7 +1447,7 @@ async function teamsOfPeople(
       .withIndex('by_team', (q) => q.eq('team_id', team.id))
     for await (const { profile_id } of memberships) {
       if (++rows > LEVELS_READ.max) return null
-      if (rows % GUARD_ROWS === 0) await guard()
+      if (rows % LEVELS_READ.guardRows === 0) await guard()
       if (ids.has(profile_id)) out.set(profile_id, [...(out.get(profile_id) ?? []), team.id])
     }
   }
