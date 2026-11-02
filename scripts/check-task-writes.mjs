@@ -1,12 +1,18 @@
 /* Fails when code in convex/ writes a task row, a task description or a
  * task's project or archived state anywhere but
- * convex/model/descriptions.ts, or inserts a task or project without the
- * used_ids row of its id. Task descriptions are kept in issue_descriptions
- * beside the task rows (schema.ts), each row with copies of its task's
- * project and archived state, and that file writes both in one
- * transaction, so the copies stay equal. Every id a task or project takes
- * is recorded in used_ids (schema.ts) in the transaction that inserts it,
- * and only lib/db.ts writes those rows, through insertUnique and
+ * convex/model/descriptions.ts, patches a task field the Overview's counts
+ * read without that file's writers, or inserts a task or project without
+ * the used_ids row of its id. Task descriptions are kept in
+ * issue_descriptions beside the task rows (schema.ts), each row with copies
+ * of its task's project and archived state, and that file writes both in
+ * one transaction, so the copies stay equal. The Overview's counts
+ * (model/overviewCounts.ts) follow a task write only in that file's
+ * insertTask, patchTask and patchTaskRow and in model/deletedItems.ts
+ * deleteLive, so a direct patch of a task's status, pause, remaining hours,
+ * assignee, reviewer or parent would leave them wrong until a dry run of
+ * internal/overviewCountsBackfill finds it. Every id a task or project
+ * takes is recorded in used_ids (schema.ts) in the transaction that inserts
+ * it, and only lib/db.ts writes those rows, through insertUnique and
  * insertUsed, so no new task or project takes an id once used. It reads
  * every write through Convex's database writer (`insert`, `patch` and
  * `replace`) and every call of lib/db.ts insertUnique and insertUsed with
@@ -17,8 +23,13 @@
  *   (patchTask),
  * - patches a row that may be a task with fields that may hold its
  *   description, project or archived state, a `description`, `project_id`
- *   or `archived_at` property or an index signature (patchTask; a write
- *   that changes none of them types its fields as TaskPatch),
+ *   or `archived_at` property or an index signature (patchTask),
+ * - patches a row that may be a task with fields that may change what the
+ *   Overview's counts read, a `status`, `paused`, `remaining_hours`,
+ *   `assignee_id`, `reviewer_id` or `parent_id` property or an index
+ *   signature (patchTaskRow, whose fields are TaskPatch, or patchTask; a
+ *   write that changes none of these fields and none of those above may
+ *   patch the row itself),
  * - writes issue_descriptions,
  * - inserts or replaces a row that may be a task or project through
  *   Convex's writer, model/descriptions.ts and lib/db.ts included, where
@@ -72,6 +83,10 @@ const named = { file: 'lib/db.ts', names: new Set(['insertUnique', 'insertUsed']
 const writes = new Set(['insert', 'patch', 'replace'])
 /* The task fields a description row holds or copies. */
 const copied = ['description', 'project_id', 'archived_at']
+/* The other task fields the Overview's counts read (model/overviewCounts.ts
+ * slotOf, lib/review.ts taskOwnerId, and tallyOverview for the parent),
+ * which a patch changes only through patchTask or patchTaskRow. */
+const counted = ['status', 'paused', 'remaining_hours', 'assignee_id', 'reviewer_id', 'parent_id']
 const writerNames = new Set([...writes, ...named.names])
 const convexPackage = /[/\\]node_modules[/\\]convex[/\\]/
 const skipped = /[/\\](?:node_modules|_generated|tests)[/\\]/
@@ -190,16 +205,17 @@ try {
     if (table) return tablesOf(checker.getTypeOfSymbol(table))
     return ['*']
   }
-  /** Whether fields of `type` may hold a description, a project or an
-   * archived state. */
-  const mayCopy = (type) =>
+  /** Whether fields of `type` may hold one of the task fields `names`: a
+   * property of that name or an index signature, in any member of a union,
+   * or a type the check cannot read. */
+  const mayHold = (type, names) =>
     !type ||
     type.isTypeParameter() ||
     type.isErrorType() ||
     (type.isUnionType()
-      ? type.getTypes().some(mayCopy)
+      ? type.getTypes().some((member) => mayHold(member, names))
       : (type.flags & TypeFlags.Any) !== 0 ||
-        copied.some((field) => checker.getPropertyOfType(type, field) !== undefined) ||
+        names.some((field) => checker.getPropertyOfType(type, field) !== undefined) ||
         checker.getIndexInfosOfType(type).length > 0)
 
   for (const file of program.getSourceFileNames()) {
@@ -286,10 +302,17 @@ try {
         failures.push(
           `${at(call)} - this replaces a task row without its description row. Use ${owner} patchTask.`,
         )
-      else if (mayCopy(fields && checker.getTypeAtLocation(fields)))
-        failures.push(
-          `${at(call)} - this patch can change a task's description, project or archived state without its description row. Use ${owner} patchTask, or type fields that leave them alone as TaskPatch.`,
-        )
+      else {
+        const type = fields && checker.getTypeAtLocation(fields)
+        if (mayHold(type, copied))
+          failures.push(
+            `${at(call)} - this patch can change a task's description, project or archived state without its description row. Use ${owner} patchTask, or patchTaskRow for fields typed TaskPatch, which leave them alone.`,
+          )
+        else if (mayHold(type, counted))
+          failures.push(
+            `${at(call)} - this patch can change a task's status, pause, remaining hours, assignee, reviewer or parent without the Overview's counts. Use ${owner} patchTaskRow or patchTask.`,
+          )
+      }
     }
   }
   if (ownerKey === undefined && allWrites > 0)
@@ -315,7 +338,7 @@ await closeTypeScriptAPI(api)
 if (failures.length) {
   console.error(failures.join('\n'))
   console.error(
-    `\nTask rows and their description rows, which copy the task's project and archived state, are written together, by ${owner} (schema.ts issue_descriptions), and every task and project with the used_ids row of its id, by ${usedOwner} (schema.ts used_ids).`,
+    `\nTask rows and their description rows, which copy the task's project and archived state, are written together, by ${owner} (schema.ts issue_descriptions), every patch of a task field the Overview's counts read goes through its patchTask or patchTaskRow (model/overviewCounts.ts), and every task and project is written with the used_ids row of its id, by ${usedOwner} (schema.ts used_ids).`,
   )
   process.exit(1)
 }

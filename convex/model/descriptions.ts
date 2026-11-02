@@ -51,11 +51,14 @@
  * limit (lib/demo.ts uncountedWriter), because it is part of its task,
  * which counts once.
  *
- * Every insert of a task and every patch of a task row also moves the
- * Overview's counts in the same transaction (model/overviewCounts.ts
- * tallyOverview): insertTask and patchTask here, and patchTaskRow for a
- * patch of fields that leave the description, project and archived state
- * alone (TaskPatch), which every other writer of a task row goes through. */
+ * Every insert of a task, and every patch of a task row that may change
+ * what the Overview's counts read, also moves those counts in the same
+ * transaction (model/overviewCounts.ts tallyOverview): insertTask and
+ * patchTask here, and patchTaskRow for a patch of fields that leave the
+ * description, project and archived state alone (TaskPatch). Every other
+ * writer of a task's status, pause, remaining hours, assignee, reviewer or
+ * parent goes through patchTask or patchTaskRow, and
+ * scripts/check-task-writes.mjs fails on another patch of those fields. */
 
 import type { TransactionMetrics, WithoutSystemFields } from 'convex/server'
 import { type ConvexError, getDocumentSize } from 'convex/values'
@@ -387,7 +390,8 @@ export const textsOf = (
 export type TaskFields = Partial<WithoutSystemFields<Doc<'issues'>>>
 
 /** The fields of a task row a write sets that never changes its
- * description, project or archived state, so it may patch the row itself. */
+ * description, project or archived state, so patchTaskRow patches the row
+ * without its description row. */
 export type TaskPatch = Omit<TaskFields, 'description' | 'project_id' | 'archived_at'>
 
 /** The task a description row belongs to, with the fields the row copies. */

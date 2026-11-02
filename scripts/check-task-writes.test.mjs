@@ -40,16 +40,17 @@ function check(files) {
 }
 
 /* A schema with tasks, their descriptions, projects, the ids both held and
- * a table without them that has fields of the same names. */
+ * a table without them that has fields of the same names, the description
+ * copies and a status among them. */
 const schema = `import { defineSchema, defineTable, type DataModelFromSchemaDefinition, type GenericMutationCtx } from 'convex/server'
 import type { GenericId } from 'convex/values'
 import { v } from 'convex/values'
 const schema = defineSchema({
-  issues: defineTable({ id: v.string(), org_id: v.string(), project_id: v.string(), title: v.string(), description: v.optional(v.string()), archived_at: v.optional(v.string()) }),
+  issues: defineTable({ id: v.string(), org_id: v.string(), project_id: v.string(), title: v.string(), description: v.optional(v.string()), archived_at: v.optional(v.string()), status: v.string(), paused: v.boolean(), remaining_hours: v.optional(v.number()), assignee_id: v.optional(v.string()), reviewer_id: v.optional(v.string()), parent_id: v.optional(v.string()) }),
   issue_descriptions: defineTable({ issue_id: v.string(), org_id: v.string(), description: v.string(), project_id: v.optional(v.string()), archived_at: v.optional(v.string()) }),
   projects: defineTable({ id: v.string(), org_id: v.string(), name: v.string() }),
   used_ids: defineTable({ table: v.string(), row_id: v.string(), org_id: v.string() }),
-  comments: defineTable({ body: v.string(), description: v.optional(v.string()), project_id: v.optional(v.string()), archived_at: v.optional(v.string()) }),
+  comments: defineTable({ body: v.string(), description: v.optional(v.string()), project_id: v.optional(v.string()), archived_at: v.optional(v.string()), status: v.optional(v.string()) }),
 })
 export default schema
 export type DataModel = DataModelFromSchemaDefinition<typeof schema>
@@ -95,7 +96,8 @@ export const patchTask = (ctx: Ctx, id: Id<'issues'>, fields: Partial<Task>) => 
 
 const good = `${imports}
 export const title = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch(id, { title: 'Plan' })
-export const fields = (ctx: Ctx, id: Id<'issues'>, w: Omit<Partial<Task>, 'description' | 'project_id' | 'archived_at'>) => ctx.db.patch('issues', id, w)
+export const fields = (ctx: Ctx, id: Id<'issues'>, w: Omit<Partial<Task>, 'description' | 'project_id' | 'archived_at' | 'status' | 'paused' | 'remaining_hours' | 'assignee_id' | 'reviewer_id' | 'parent_id'>) => ctx.db.patch('issues', id, w)
+export const close = (ctx: Ctx, id: Id<'comments'>) => ctx.db.patch(id, { status: 'closed' })
 export const comment = (ctx: Ctx) => ctx.db.insert('comments', { body: 'Hi', description: 'not a task' })
 export const edit = (ctx: Ctx, id: Id<'comments'>) => ctx.db.patch(id, { description: 'not a task' })
 export const shelve = (ctx: Ctx, id: Id<'comments'>) => ctx.db.patch(id, { project_id: 'p', archived_at: 'now' })
@@ -155,6 +157,30 @@ const refused = [
   [
     "export const keepsText = (ctx: Ctx, id: Id<'issues'>, w: Omit<Partial<Task>, 'description'>) => ctx.db.patch('issues', id, w)",
     "this patch can change a task's description, project or archived state",
+  ],
+  [
+    "export const finish = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch(id, { status: 'done' })",
+    "this patch can change a task's status, pause, remaining hours, assignee, reviewer or parent",
+  ],
+  [
+    "export const hold = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch('issues', id, { paused: true, title: 'Hold' })",
+    "this patch can change a task's status, pause",
+  ],
+  [
+    "export const hand = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch(id, { reviewer_id: 'p', remaining_hours: 2 })",
+    "this patch can change a task's status, pause",
+  ],
+  [
+    "export const detach = (ctx: Ctx, id: Id<'issues'>) => ctx.db.patch(id, { parent_id: undefined })",
+    "this patch can change a task's status, pause",
+  ],
+  [
+    "export const rowFields = (ctx: Ctx, id: Id<'issues'>, w: Omit<Partial<Task>, 'description' | 'project_id' | 'archived_at'>) => ctx.db.patch('issues', id, w)",
+    "this patch can change a task's status, pause",
+  ],
+  [
+    "export const assign = (ctx: Ctx, id: Id<'issues'> | Id<'comments'>, w: { assignee_id: string } | { body: string }) => ctx.db.patch(id, w)",
+    "this patch can change a task's status, pause",
   ],
   [
     "export const row = (ctx: Ctx) => ctx.db.insert('issue_descriptions', { issue_id: 'a', org_id: 'b', description: '' })",
@@ -220,7 +246,7 @@ const refused = [
 ]
 
 describe('the task write check', { timeout: 60_000 }, () => {
-  it('fails on each write of a task row, description, project or archived state outside model/descriptions.ts, and passes the rest', () => {
+  it("fails on each write of a task row, description, project or archived state outside model/descriptions.ts, and each patch of a field the Overview's counts read, and passes the rest", () => {
     const bad = `${imports}\n${refused.map(([line]) => line).join('\n')}\n`
     const { status, output } = check({
       'schema.ts': schema,
