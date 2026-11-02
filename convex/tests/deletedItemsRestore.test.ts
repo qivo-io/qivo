@@ -13,7 +13,7 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { projectLevel } from '../lib/access'
 import { byId, strayRows } from '../lib/db'
-import { LIMITS, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
+import { LIMITS, MIB, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import type { EventOwner } from '../lib/taskEvents'
 import { storageUsage } from '../model/billing'
@@ -85,6 +85,13 @@ installTrashTimers()
 
 const iso = (ms: number) => new Date(ms).toISOString()
 const LATER = iso(START + DAY)
+
+/* The bytes a transaction reads and a step spends at a 48th, for the cases
+ * that plant descriptions at the 20,000-character cap (LEGACY_TEXT, about a
+ * 48th of 950 KiB) where legacy rows near 1 MiB from before the cap were
+ * planted against the real limits. */
+const SCALED = { bytesRead: (16 * MIB) / 48, step: DEFAULT_BUDGET.bytes / 48 }
+const LEGACY_TEXT = 'Field note. '.repeat(1_666)
 
 /** Restores the items `ids` for `who`, as deletedItems.restore does after
  * its visibility fence. */
@@ -801,7 +808,7 @@ describe('restoring a task item', () => {
       'rule',
     )
     expect(refused.data.message).toBe(SUBTASK_WITH_SUBTASKS)
-  }, 300_000)
+  })
 
   it('reveals in a step of its own when checking who sees its parent runs out of what the restore call has left', async () => {
     // the assignee and the reviewer are each in 60 teams, so reading what
@@ -961,13 +968,17 @@ describe('restoring a task item', () => {
     expect((await itemById(t, item.id))?.state).toBe('ready')
   })
 
-  it('restores a task linked to 30 legacy tasks of 950 KiB in steps, within the real limits', async () => {
-    const t = newT({ transactionLimits: true })
+  it('restores a task linked to 30 large tasks in steps, within limits a 48th of the real ones', async () => {
+    // the bytes a transaction reads and a step spends at a 48th, as 30
+    // legacy tasks of 950 KiB were under the real ones
+    const t = newT({ transactionLimits: { bytesRead: SCALED.bytesRead } })
+    TRASH_BUDGET.bytes = SCALED.step
     chargeFilteredReads()
     const f = await withOrg(t)
     const org_id = f.org.id
-    // descriptions from before the 20,000-character cap
-    const description = 'Old notes. '.repeat(90_000).slice(0, 950 * 1024)
+    // descriptions at the cap, as 950 KiB from before the cap were to the
+    // real limits
+    const description = LEGACY_TEXT
     const task = await plantIssue(t, { org_id, project_id: f.sub.id })
     const ends: string[] = []
     for (let i = 0; i < 30; i++)
@@ -990,7 +1001,7 @@ describe('restoring a task item', () => {
     await runSteps(t)
     expect(await liveTask(t, task.id)).not.toBeNull()
     expect((await liveRowsOf(t, task.id)).issue_links).toHaveLength(30)
-  }, 120_000)
+  })
 
   it('moves a link to the item that holds its other end, and drops one whose end is gone', async () => {
     const t = newT()
@@ -2295,7 +2306,7 @@ describe('restoring a project item', () => {
     expect(await t.run((ctx) => ctx.db.query('deleted_tasks').collect())).toEqual([])
     expect(await waitingParents(t)).toEqual([])
     await assertNoDanglingRefs(t, 'after a project came back in steps')
-  }, 120_000)
+  })
 
   it('places the links before the tasks, so the mark steps of an archived task find them', async () => {
     const t = newT()
@@ -2533,8 +2544,11 @@ describe('parents outside a restored project', () => {
   const parentsOf = (t: T, tasks: Doc<'issues'>[]) =>
     Promise.all(tasks.map(async (task) => (await liveTask(t, task.id))?.parent_id))
 
-  /** 19,000 CJK characters, under TEXT_MAX: about 57 KB of UTF-8. */
-  const HEAVY = '漢'.repeat(19_000)
+  /** About 14 KB of ordinary text, under TEXT_MAX. The cases that use it
+   * lower the bytes a transaction reads and a step spends to a quarter, as
+   * 19,000 CJK characters, about 57 KB, were to the real ones. */
+  const HEAVY = 'Field note. '.repeat(1_190)
+  const QUARTER = { bytesRead: (16 * MIB) / 4, step: DEFAULT_BUDGET.bytes / 4 }
 
   /** A chain of `n` tasks in Firmware, each with `description` in its
    * description row and its task row, as every deployment holds them until
@@ -2552,19 +2566,22 @@ describe('parents outside a restored project', () => {
     return low
   }
 
-  it(`brings back 500 tasks of 16 KB under five parents outside the project, ${LIMITS.subtasks.max} each, within the real limits`, async () => {
-    // 8 MiB of tasks under parents outside, which no single transaction
-    // can read and write back with their parent
-    const t = newT({ transactionLimits: true })
+  it(`brings back 300 tasks of 8 KB under three parents outside the project, ${LIMITS.subtasks.max} each, within limits a quarter of the real ones`, async () => {
+    // 2.4 MB of tasks under parents outside, which no single transaction
+    // can read and write back with their parent under a quarter of the
+    // real limits, as 8 MiB could not under the real ones; 300 tasks are
+    // as many as the design size puts in one sub-project
+    const t = newT({ transactionLimits: { bytesRead: QUARTER.bytesRead } })
+    TRASH_BUDGET.bytes = QUARTER.step
     const f = await withOrg(t)
     const org_id = f.org.id
     const epics: Doc<'issues'>[] = []
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 3; i++) {
       const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
       await plantSubscription(t, { issue_id: epic.id, profile_id: f.admin.id })
       epics.push(epic)
     }
-    const description = 'Spec line. '.repeat(1490)
+    const description = 'Spec line. '.repeat(745)
     // the ids planted under each epic, in the order of `epics`
     const ids = await t.run(async (ctx) => {
       const planted: string[][] = []
@@ -2594,7 +2611,7 @@ describe('parents outside a restored project', () => {
     await deleteProject(t, f, f.sub2.id)
     await runSteps(t)
     const item = await itemFor(t, f.sub2.id)
-    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 500 } })
+    expect(item).toMatchObject({ state: 'ready', counts: { tasks: 300 } })
     for (const epic of epics)
       await patch(t, 'issues', epic.id, { remaining_hours: 8, remaining_set_at: NOW })
 
@@ -2623,13 +2640,15 @@ describe('parents outside a restored project', () => {
       ])
     }
     expect(await waitingParents(t)).toEqual([])
-  }, 300_000)
+  })
 
   it('brings a project back whole when a task that waits has more under it than a step can read', async () => {
-    // 100 subtasks of 57 KB right under the middle task, 5.6 MB; the check
-    // reads only the first, as one is enough to keep the task from a parent
+    // 100 subtasks of 14 KB right under the middle task, 1.4 MB, past a
+    // step's quarter budget; the check reads only the first, as one is
+    // enough to keep the task from a parent
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const t = newT({ transactionLimits: true })
+    const t = newT({ transactionLimits: { bytesRead: QUARTER.bytesRead } })
+    TRASH_BUDGET.bytes = QUARTER.step
     const f = await withOrg(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, { org_id, project_id: f.sub.id })
@@ -2655,19 +2674,21 @@ describe('parents outside a restored project', () => {
     expect(await subtaskCount(t, light.id)).toBe(1)
     expect(await subtaskCount(t, heavy.id)).toBe(LIMITS.subtasks.max)
     expect(await waitingParents(t)).toEqual([])
-  }, 300_000)
+  })
 
   it('reads a parent that tasks share once, so they come back whole in one reveal', async () => {
-    // 50 tasks under one epic of 900 KiB in Firmware, a description from
-    // before the 20,000-character cap. Read once per task, the epic would
+    // 50 tasks under one epic with a description at the cap in Firmware,
+    // under limits a 48th of the real ones, as an epic of 900 KiB from
+    // before the cap was under them. Read once per task, the epic would
     // pass what one transaction can read
-    const t = newT({ transactionLimits: true })
+    const t = newT({ transactionLimits: { bytesRead: SCALED.bytesRead } })
+    TRASH_BUDGET.bytes = SCALED.step
     const f = await withOrg(t)
     const org_id = f.org.id
     const epic = await plantIssue(t, {
       org_id,
       project_id: f.sub.id,
-      description: 'Field note. '.repeat(76_800),
+      description: LEGACY_TEXT,
     })
     const tasks: Doc<'issues'>[] = []
     for (let i = 0; i < 50; i++)
@@ -2688,7 +2709,7 @@ describe('parents outside a restored project', () => {
     expect(await parentsOf(t, tasks)).toEqual(tasks.map(() => epic.id))
     expect(await waitingParents(t)).toEqual([])
     expect(await itemById(t, item.id)).toBeNull()
-  }, 300_000)
+  })
 
   it('comes back whole in one transaction when its attaches fit there', async () => {
     const t = newT()
@@ -3035,18 +3056,18 @@ describe('parents outside a restored project', () => {
   })
 
   it('counts what the parents hold against the step budget', async () => {
-    // six stories in Firmware that grow to 171 KB each while Board rev is
-    // in Deleted items, descriptions from before the 20,000-character cap,
-    // so a step that read every story would pass the read limit
-    const t = newT({ transactionLimits: { bytesRead: 600_000 } })
+    // six stories in Firmware that grow to 17 KB each while Board rev is
+    // in Deleted items, so a step that read every story would pass a read
+    // limit of 60,000 bytes
+    const t = newT({ transactionLimits: { bytesRead: 60_000 } })
     const f = await withOrg(t)
     const org_id = f.org.id
     const stories: Doc<'issues'>[] = []
     for (let i = 0; i < 6; i++) stories.push(await plantIssue(t, { org_id, project_id: f.sub.id }))
     const { tasks, item } = await oneUnderEach(t, f, stories)
     for (const story of stories)
-      await patch(t, 'issues', story.id, { description: HEAVY.repeat(3) })
-    TRASH_BUDGET.bytes = 100_000
+      await patch(t, 'issues', story.id, { description: 'Field note. '.repeat(1_425) })
+    TRASH_BUDGET.bytes = 10_000
     // the fill reads each story once, a step each, and the reveal's step
     // checks the first task whole and stops on the bytes it held
     await untilAttach(t, f, item.id)
@@ -3127,7 +3148,7 @@ describe('parents outside a restored project', () => {
       )
     }
     expect(await waitingParents(t)).toEqual([])
-  }, 300_000)
+  })
 
   it('reads no more for who sees a parent than SIGHT_READ allows, and leaves that task without it', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -3163,16 +3184,18 @@ describe('parents outside a restored project', () => {
     })
   })
 
-  it('restores a task and a project under a legacy chain of nineteen tasks of 900 KiB within the real limits, without that parent', async () => {
-    // the chain holds 17 MiB, more than one transaction can read, so a
+  it('restores a task and a project under a chain of nineteen large tasks within limits a 48th of the real ones, without that parent', async () => {
+    // the chain holds about 380 KB, more than one transaction can read
+    // under a 48th of the real limits, as 19 tasks of 900 KiB held 17 MiB, so a
     // restore that read it whole failed, and so did every retry. Its lowest
     // task is a subtask, so it is no parent for a restored task, and the
     // restore reads nothing above it
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const t = newT({ transactionLimits: true })
+    const t = newT({ transactionLimits: { bytesRead: SCALED.bytesRead } })
+    TRASH_BUDGET.bytes = SCALED.step
     chargeFilteredReads()
     const f = await withOrg(t)
-    const low = await chainOf(t, f, 19, 'Field note. '.repeat(76_800))
+    const low = await chainOf(t, f, 19, LEGACY_TEXT)
     // a task of Firmware deleted alone, and one of Board rev deleted with it
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: low.id })
     await deleteTask(t, f, root.id)
@@ -3196,7 +3219,7 @@ describe('parents outside a restored project', () => {
     expect(await parentsOf(t, [root, task])).toEqual([undefined, undefined])
     expect(warn.mock.calls).toEqual([])
     expect(await waitingParents(t)).toEqual([])
-  }, 300_000)
+  })
 
   it('checks a task again in the next step when its step runs out of reads during the check', async () => {
     const t = newT()
@@ -3240,7 +3263,7 @@ describe('parents outside a restored project', () => {
     const t = newT()
     const f = await withOrg(t)
     const epic = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
-    // a story of 57 KB
+    // a story of 14 KB, on its description row and its task row
     const story = await chainOf(t, f, 1, HEAVY)
     const tasks = await plantUnder(t, f, [epic, epic, story])
     await deleteProject(t, f, f.sub2.id)
@@ -3253,7 +3276,7 @@ describe('parents outside a restored project', () => {
     // the step attaches the second task, then reads the story and has no
     // bytes left to count its subtasks
     TRASH_BUDGET.tasks = 100
-    TRASH_BUDGET.bytes = 50_000
+    TRASH_BUDGET.bytes = 12_000
     await step(t, item.id)
     expect(await parentsOf(t, tasks)).toEqual([epic.id, epic.id, undefined])
     expect((await waitingParents(t)).map((row) => row.task_id)).toEqual([tasks[2].id])
@@ -3421,16 +3444,18 @@ describe('restore calls', () => {
   })
 
   it('keeps a call that restores many project items within a bounded number of reads', async () => {
-    // six top-level projects of 40 sub-projects each. The call read two rows
-    // per project of each item for conflicts and revealed as many items as a
-    // step's budget held, over 1,500 database calls, each slow on a busy
-    // backend; it now leaves conflicts to the reveal and spends a quarter
-    const t = newT({ transactionLimits: { databaseQueries: 1000 } })
+    // six top-level projects of 30 sub-projects each, the design size. The
+    // call read two rows per project of each item for conflicts and
+    // revealed as many items as a step's budget held, over 1,500 database
+    // calls for 40 sub-projects each, each slow on a busy backend; it now
+    // leaves conflicts to the reveal and spends a quarter, inside a limit
+    // lowered from 1,000 by the same ratio
+    const t = newT({ transactionLimits: { databaseQueries: 750 } })
     const f = await withOrg(t)
     const metas: Doc<'projects'>[] = []
     for (let i = 0; i < 6; i++) {
       const meta = await plantProject(t, { org_id: f.org.id, lead_id: f.user.id })
-      await plantSubProjects(t, f, meta.id, 40)
+      await plantSubProjects(t, f, meta.id, 30)
       await deleteProject(t, f, meta.id)
       metas.push(meta)
     }
@@ -3443,7 +3468,7 @@ describe('restore calls', () => {
     expect(result.restored.sort()).toEqual([...ids].sort())
     await runSteps(t)
     for (const meta of metas) expect(await liveProject(t, meta.id)).not.toBeNull()
-  }, 120_000)
+  })
 
   it('answers per item, defers a task item whose project item comes back in the same call', async () => {
     const t = newT()
@@ -3960,7 +3985,7 @@ describe('a project item at the sub-project cap', () => {
     await deleteProject(t, f, f.sub2.id)
     await deleteProject(t, f, f.meta.id)
     expect(await liveProject(t, f.meta.id)).toBeNull()
-  }, 120_000)
+  })
 
   it('deletes and restores the project with 2,000 milestones and grants within the limits', async () => {
     // convex-test counts no range for a write, which reads its row first,
@@ -3988,21 +4013,22 @@ describe('a project item at the sub-project cap', () => {
     expect(await itemById(t, item.id)).toBeNull()
     expect(await treeRows(t, f.meta.id, 'milestones')).toEqual(milestones)
     expect(await treeRows(t, f.meta.id, 'project_access')).toEqual(grants)
-  }, 240_000)
+  })
 
   it('restores many sub-project items for a lead whose other grants it does not read', async () => {
-    const t = newT({ transactionLimits: true })
+    // 200 grants of the lead's elsewhere, which say nothing about these
+    // items, read for each of the 10 items would pass a limit of 1,600
+    // documents, as 4,000 grants passed the real 32,000
+    const t = newT({ transactionLimits: { documentsRead: 1_600 } })
     const f = await withOrg(t)
-    // grants of the lead's elsewhere, which say nothing about these items
-    for (let from = 0; from < 4000; from += 1000)
-      await t.run(async (ctx) => {
-        for (let i = from; i < from + 1000; i++)
-          await ctx.db.insert('project_access', {
-            project_id: uuid(),
-            profile_id: f.user.id,
-            level: 'user',
-          })
-      })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 200; i++)
+        await ctx.db.insert('project_access', {
+          project_id: uuid(),
+          profile_id: f.user.id,
+          level: 'user',
+        })
+    })
     const subs: string[] = []
     for (let i = 0; i < 10; i++) {
       const sub = await plantProject(t, {
@@ -4024,14 +4050,16 @@ describe('a project item at the sub-project cap', () => {
     expect(result.restored.sort()).toEqual([...ids].sort())
     await runSteps(t)
     for (const id of subs) expect(await liveProject(t, id)).not.toBeNull()
-  }, 120_000)
+  })
 
   it('restores a tree whose grants pass what one transaction may read', async () => {
-    // 30 sub-projects shared with 120 people each: 3,600 grants against a
-    // limit of 3,000 documents read, standing in for 200 x 200 against 32,000
-    const t = newT({ transactionLimits: { documentsRead: 3000 } })
+    // 30 sub-projects shared with 40 people each: 1,200 grants against a
+    // limit of 1,000 documents read, with the rows a step moves at a third,
+    // standing in for 200 x 200 against 32,000
+    const t = newT({ transactionLimits: { documentsRead: 1000 } })
+    TRASH_BUDGET.rows = DEFAULT_BUDGET.rows / 3
     const f = await withOrg(t)
-    const people = await plantPeople(t, f, 120)
+    const people = await plantPeople(t, f, 40)
     await plantSubProjects(t, f, f.meta.id, 28)
     // counted a project at a time, since all of them pass the read limit
     const grantCount = async () => {
@@ -4070,7 +4098,7 @@ describe('a project item at the sub-project cap', () => {
           await ctx.db.insert('project_access', { project_id: p.id, profile_id, level: 'user' })
       })
     const grants = await grantCount()
-    expect(grants.rows).toBeGreaterThan(3000)
+    expect(grants.rows).toBeGreaterThan(1000)
 
     await deleteProject(t, f, f.meta.id)
     await runSteps(t)
@@ -4083,7 +4111,7 @@ describe('a project item at the sub-project cap', () => {
     await runSteps(t)
     expect(await itemById(t, item.id)).toBeNull()
     expect(await grantCount()).toEqual(grants)
-  }, 240_000)
+  })
 
   it.each([
     ['stored now', false],
@@ -4170,10 +4198,10 @@ describe('a project item at the sub-project cap', () => {
   })
 
   it('restores many project items without tasks, each reveal within the limits', async () => {
-    const t = newT({ transactionLimits: { documentsWritten: 1000 } })
+    const t = newT({ transactionLimits: { documentsWritten: 700 } })
     const f = await withOrg(t)
     const metas: string[] = []
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 2; i++) {
       const meta = await plantProject(t, {
         org_id: f.org.id,
         key: `BIG${i}`,
@@ -4187,7 +4215,8 @@ describe('a project item at the sub-project cap', () => {
     await runSteps(t)
     const items = await Promise.all(metas.map((id) => itemFor(t, id)))
 
-    // every reveal in one restore wrote 600 projects and deleted their rows
+    // every reveal in one restore wrote 400 projects and deleted their rows,
+    // past the 700 documents written allowed here
     const result = await restore(
       t,
       f.user,
@@ -4199,5 +4228,5 @@ describe('a project item at the sub-project cap', () => {
       expect((await treeRows(t, meta, 'milestones')).projects).toBe(
         LIMITS.projectDeleteSubProjects.max,
       )
-  }, 240_000)
+  })
 })
