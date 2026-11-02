@@ -622,7 +622,7 @@ describe('Northstar', () => {
         expect(found.get('Stale')).toBeLessThan(found.get('no filter') ?? 0)
       }
     }
-  }, 600_000)
+  })
 })
 
 // ----------------------------------------------------------- access shapes
@@ -812,7 +812,7 @@ describe('access shapes', () => {
         if (((await compareShape(shape, role)).get('no filter') ?? 0) > 0) showing++
       // a guest takes no team shares, so fewer shapes show them anything
       expect(showing).toBeGreaterThan(SHAPES.length / 3)
-    }, 600_000)
+    })
 })
 
 describe("delays where tasks compete for their owner's hours", () => {
