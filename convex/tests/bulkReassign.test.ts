@@ -293,7 +293,8 @@ describe('reassigning the tasks of an access removal', () => {
 
   it("keeps 600 members of a deleted team as Viewers inside one transaction's limits", async () => {
     // asked one at a time, each member's sight cost four index ranges before
-    // the deletion and four after, 4,800 in all
+    // the deletion and four after, 4,800 in all. Each holds one open task,
+    // 300 in each of TBED's two sub-projects.
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const members: string[] = []
@@ -336,7 +337,7 @@ describe('reassigning the tasks of an access removal', () => {
           await ctx.db.insert('issues', {
             id: uuid(),
             org_id: f.org.id,
-            project_id: f.sub.id,
+            project_id: i % 2 === 0 ? f.sub.id : f.sub2.id,
             num: 2000 + i,
             title: `Task ${i}`,
             description: '',
@@ -365,7 +366,7 @@ describe('reassigning the tasks of an access removal', () => {
       ).filter((g) => g.level === 'viewer' && members.includes(g.profile_id)),
     )
     expect(viewers).toHaveLength(600)
-  }, 60_000)
+  })
 
   it('removes a team grant past many grants that concern none of its holders', async () => {
     // 3,000 grants of other people on 30 other projects: the holders' sight
@@ -466,7 +467,7 @@ describe('reassigning the tasks of an access removal', () => {
         .unique(),
     )
     expect(grant).toBeNull()
-  }, 60_000)
+  })
 
   it('refuses a project grant removal above the cap too, keeping the grant', async () => {
     const fx = await crowded(LIMITS.reassign.max + 1)
@@ -604,12 +605,17 @@ describe('reassigning the tasks of an access removal', () => {
   })
 
   it('hands over a task whose followers see it through one of many teams', async () => {
-    // With 50 more teams sharing TBED, checking each follower's sight on its
-    // own read every share, about 100 index ranges each, so the 41 followers
-    // of one task passed the limit. The project's shares are now read once.
-    const fx = await crowded(1, { followers: 40 })
+    // TBED is shared with five teams, Hardware, Platform and three more.
+    // Checking each follower's sight on its own once read every share, two
+    // index ranges each, so the 41 followers of one task would need about
+    // 400 more than the 330 or so the background step reads now, past a
+    // limit of 450. The project's shares are now read once.
+    const fx = await crowded(1, {
+      followers: 40,
+      t: newT({ transactionLimits: { databaseQueries: 450 } }),
+    })
     await fx.t.run(async (ctx) => {
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < 3; i++) {
         const id = uuid()
         await ctx.db.insert('teams', {
           id,
@@ -697,7 +703,7 @@ describe('a removal of many people', () => {
       LEVELS_READ.max = before
     }
     expect(await state()).toMatchObject({ share: null, viewers: LIMITS.removalHolders.max })
-  }, 120_000)
+  })
 
   it(`refuses to settle the tasks of ${LIMITS.removalHolders.max + 1} people in the app, REST and MCP, and changes nothing, but leaves them`, async () => {
     const { t, f, admin, state } = await manyHolders(LIMITS.removalHolders.max + 1)
@@ -738,7 +744,7 @@ describe('a removal of many people', () => {
     })
     expect(left.stranded).toHaveLength(LIMITS.removalHolders.max + 1)
     expect((await state()).share).toBeNull()
-  }, 120_000)
+  })
 
   it('refuses fewer people whose sight would fill the transaction, before a read passes the limit', async () => {
     // 200 holders cost about 400 index ranges to work out who loses sight,
@@ -758,31 +764,31 @@ describe('a removal of many people', () => {
     )
     expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
     expect((await state()).share).toMatchObject({ level: 'user' })
-  }, 60_000)
+  })
 
   it('refuses before the scan for held tasks reads past the documents left', async () => {
-    // 2,500 open tasks nobody in the team holds, under a limit of 2,000 documents
+    // 300 open tasks in Board rev that nobody in the team holds, under a
+    // limit of 250 documents
     const { t, f, admin, state } = await manyHolders(5, {
-      transactionLimits: { documentsRead: 2000 },
+      transactionLimits: { documentsRead: 250 },
     })
-    for (let from = 0; from < 2500; from += 500)
-      await t.run(async (ctx) => {
-        for (let i = from; i < from + 500; i++)
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id: f.sub2.id,
-            num: 9000 + i,
-            title: `Other ${i}`,
-            description: '',
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            assignee_id: f.viewer.id,
-            created_at: NOW,
-            updated_at: NOW,
-          })
-      })
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 300; i++)
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: f.org.id,
+          project_id: f.sub2.id,
+          num: 9000 + i,
+          title: `Other ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          assignee_id: f.viewer.id,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+    })
     const e = await expectRefusal(
       t.mutation(internal.machine.projects.restRemoveTeamAccess, {
         ...admin,
@@ -795,13 +801,14 @@ describe('a removal of many people', () => {
     )
     expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
     expect((await state()).share).toMatchObject({ level: 'user' })
-  }, 60_000)
+  })
 
   it("refuses before a team's shares read past the index ranges left", async () => {
-    // 300 shared projects cost two ranges each to reach, past a limit of 500
-    const { t, f, state } = await manyHolders(5, { transactionLimits: { databaseQueries: 500 } })
+    // 50 shared live projects cost two ranges each to reach and 150 archived
+    // ones one each, 250 in all, past a limit of 200
+    const { t, f, state } = await manyHolders(5, { transactionLimits: { databaseQueries: 200 } })
     await t.run(async (ctx) => {
-      for (let i = 0; i < 300; i++) {
+      for (let i = 0; i < 200; i++) {
         const id = uuid()
         await ctx.db.insert('projects', {
           id,
@@ -814,6 +821,7 @@ describe('a removal of many people', () => {
           num: 100 + i,
           track_delay: false,
           created_at: NOW,
+          ...(i < 50 ? {} : { archived_at: NOW }),
         })
         await ctx.db.insert('project_team_access', {
           project_id: id,
@@ -832,7 +840,7 @@ describe('a removal of many people', () => {
     )
     expect((e.data as Refusal).message).toBe(REMOVAL_FULL)
     expect((await state()).team).not.toBeNull()
-  }, 60_000)
+  })
 
   it("refuses before one team's memberships read past the documents left", async () => {
     // under a limit of 12,000 documents the removal keeps 600 in reserve, and
@@ -870,7 +878,7 @@ describe('a removal of many people', () => {
       LEVELS_READ.max = before
     }
     expect((await state()).share).toMatchObject({ level: 'user' })
-  }, 120_000)
+  })
 })
 
 describe('working out sight for a removal', () => {
@@ -1079,5 +1087,5 @@ describe('deleting a task with many subtasks', () => {
           .sort(),
       )
     })
-  }, 120_000)
+  })
 })
