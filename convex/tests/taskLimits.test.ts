@@ -520,10 +520,12 @@ describe('a move that carries archived subtasks', () => {
   }
 
   /* Plants `active` and `archived` subtasks of `parent` with ordinary text,
-   * an 80-character title and `description`, one line unless given. The
-   * task rows hold the copy of the text the releases before the third
-   * wrote, which a rollback to the second release writes again until the
-   * next clear, so each read of a task row reads the text too;
+   * an 80-character title and `description`, one line unless given. Every
+   * task row holds the copy of the text the releases before the third
+   * wrote, the heaviest case, so each read of a task row reads the text
+   * too. The copy lasts where the clear has not run, and a rollback to the
+   * second release writes it again on each task it creates or whose
+   * description it edits, until the next clear.
    * convex/tests/descriptions.test.ts checks long descriptions under a
    * lowered read limit. */
   const plantFamily = async (

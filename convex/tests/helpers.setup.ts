@@ -912,9 +912,10 @@ export const taskWithText = (t: T, id: string): Promise<TaskWithText | null> =>
  * before the third wrote, equal to its first description row's text,
  * reading and patching ten tasks a transaction in creation order. That
  * state lasts where the clear has not run, and a rollback to the second
- * release brings it back until the next clear, so a test that measures it
- * or needs the copy plants it here. Answers how many tasks it gave a
- * copy. */
+ * release writes the copy again on each task it creates or whose
+ * description it edits, until the next clear. A test that measures that
+ * state or needs the copy plants it here, and a copy on every task is the
+ * heaviest case. Answers how many tasks it gave a copy. */
 export async function copyTaskTexts(t: T, orgId: string, ids?: readonly string[]): Promise<number> {
   let copied = 0
   for (let after = 0; ; ) {
