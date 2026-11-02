@@ -797,13 +797,19 @@ describe('reads', () => {
  * guest cannot see, and in FW a group whose subtask is in the sibling, a
  * subtask whose parent is in the sibling, and 30 tasks one search word finds
  * by their texts and a label. `wide` makes the hidden rows larger, with
- * ordinary text: the subtask's title, the parent's title and the copy a
- * rollback writes on it, and the sibling's description, and gives the
- * hidden tasks the label. Where a read's later decisions see a row's
- * size, as the searches here do, the least budget moves with any
- * difference in it, so ordinary sizes show a hidden row counted at its own
- * size; tests/rowBounds.test.ts checks that the fixed sizes hold the rows
- * at the caps. */
+ * ordinary text: the subtask's and the parent's titles and texts, each with
+ * the copy a rollback writes on its row, and the sibling's description, and
+ * gives the hidden tasks the label. A hidden row counted at its own size
+ * moves the least budget only where the read takes it before its last
+ * decision that keeps the most room: a search's text read, which keeps
+ * room for a text at Convex's document limit, or without a search a
+ * question about whether the reader sees a project (lib/viewReads.ts
+ * PROJECT_ASK). Each variant of the case names the hidden reads it places
+ * before that decision. A search reads labels after its texts, and an
+ * assignment's size does not follow its task, so the hidden tasks' label
+ * moves no budget; it tests that the answer does not follow a hidden
+ * task's labels. tests/rowBounds.test.ts checks that the fixed sizes hold
+ * the rows at the caps. */
 async function hiddenOrg(wide: boolean) {
   const t = newT()
   const f = await withOrg(t)
@@ -828,11 +834,12 @@ async function hiddenOrg(wide: boolean) {
     title: 'Quartz group',
     assignee_id,
   })
-  const kid = await plantIssue(t, {
+  const kid = await (wide ? plantCopiedIssue : plantIssue)(t, {
     org_id: f.org.id,
     project_id: sibling.id,
     parent_id: group.id,
     title: wide ? titleOf(2) : 'k',
+    description: wide ? textOf(2) : '',
     assignee_id,
   })
   const parent = await (wide ? plantCopiedIssue : plantIssue)(t, {
@@ -885,9 +892,21 @@ describe('hidden data', () => {
     const narrow = await hiddenOrg(false)
     const wide = await hiddenOrg(true)
     for (const [scope, filters] of [
+      // the sibling's row, which the selection reads with FW and PCB
+      // before it asks whether the guest sees them
       ['TBED', {}],
+      // the sibling's row as the selection reads it, the group's hidden
+      // subtask and the text rows, before the last check of room for a text
       ['TBED', { search: 'quartz' }],
+      // the group's hidden subtask, the sibling's row as the access reads
+      // it and the text rows, before the last check of room for a text
       ['FW', { search: 'quartz' }],
+      // the group's hidden subtask, the hidden parent read by id and the
+      // sibling's row, before the access first asks whether the guest sees
+      // the sibling. A search reads the parent only after its texts.
+      ['FW', {}],
+      // the guest's own tasks in the sibling and the sibling's row as the
+      // access reads it, before the check of room for a text
       ['My view', { search: 'under' }],
     ] as [string, Partial<BoardFilters>][]) {
       const read = (o: typeof narrow) => () =>
