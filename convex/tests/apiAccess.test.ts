@@ -1099,13 +1099,24 @@ describe('API access across organizations', () => {
   })
 })
 
-describe('apiAccess.page at scale', () => {
-  /* 2,100 people with one personal token each: the old whole-list query
-     read two index ranges a person, about 4,200, past Convex's 4,096. */
+describe('apiAccess.page at the design size', () => {
+  /* The scan at an eighth of its bounds, as Convex's limits at an eighth
+     would set it: 50 candidates and half of 512 index ranges, 4,000
+     documents and 2 MiB. */
+  const EIGHTH = { candidates: 50, read: { ranges: 256, documents: 2_000, bytes: MIB } }
+  const lowered = () => {
+    API_ACCESS_SCAN.candidates = EIGHTH.candidates
+    Object.assign(API_ACCESS_SCAN.read, EIGHTH.read)
+  }
+
+  /* `count` people with one personal token each: the old whole-list query
+     read two index ranges a person, about 2,000 for the design size's
+     1,000 people, past the eighth of Convex's 4,096 these cases read
+     within, as 2,100 people passed the real limit. */
   async function crowd(t: T, f: Admin, count: number, token = (i: number) => `Token ${i}`) {
-    for (let from = 0; from < count; from += 500)
+    for (let from = 0; from < count; from += 100)
       await t.run(async (ctx) => {
-        for (let i = from; i < Math.min(count, from + 500); i++) {
+        for (let i = from; i < Math.min(count, from + 100); i++) {
           const id = uuid()
           await ctx.db.insert('profiles', {
             id,
@@ -1124,48 +1135,52 @@ describe('apiAccess.page at scale', () => {
       })
   }
 
-  /* Convex's limits less half: a page that passed API_ACCESS_SCAN.read by
-     more than a row's own reads would throw. */
+  /* The eighth of Convex's limits less half: a page that passed the
+     lowered API_ACCESS_SCAN.read by more than a row's own reads would
+     throw. */
   const HALF = {
-    databaseQueries: API_ACCESS_SCAN.read.ranges + 32,
-    documentsRead: API_ACCESS_SCAN.read.documents + 64,
-    bytesRead: API_ACCESS_SCAN.read.bytes + 4 * MIB,
+    databaseQueries: EIGHTH.read.ranges + 32,
+    documentsRead: EIGHTH.read.documents + 64,
+    bytesRead: EIGHTH.read.bytes + 4 * MIB,
   }
 
-  it('pages an organization of 2,100 people within half of each limit', async () => {
+  it('pages an organization of 1,000 people within half of each limit', async () => {
     const t = newT({ transactionLimits: HALF })
     const f = await withOrg(t)
-    await crowd(t, f, 2100)
+    await crowd(t, f, 1000)
+    lowered()
     const first = await ready(page(t, f))
     expect(first.rows.length).toBe(25)
     expect(first.stopped).toBe(false)
     const listed = await everyRow(t, f)
-    expect(listed.length).toBe(2100)
-    expect(new Set(listed.map((r) => r.id)).size).toBe(2100)
-  }, 120_000)
+    expect(listed.length).toBe(1000)
+    expect(new Set(listed.map((r) => r.id)).size).toBe(1000)
+  })
 
   it('stops a search that matches nothing after its candidates, and the cursors reach the true end', async () => {
     const t = newT({ transactionLimits: HALF })
     const f = await withOrg(t)
     // the one match sorts last, so every page before it reads only misses
-    await crowd(t, f, 2100, (i) => (i === 2050 ? 'Zebra needle' : `Token ${i}`))
+    await crowd(t, f, 1000, (i) => (i === 950 ? 'Zebra needle' : `Token ${i}`))
+    lowered()
     const first = await ready(page(t, f, { search: 'needle' }))
     expect(first).toMatchObject({ rows: [], stopped: true })
     expect(first.next).not.toBeNull()
     const pages = await walk(t, f, { search: 'needle' })
-    expect(pages.length).toBe(Math.ceil(2100 / API_ACCESS_SCAN.candidates))
+    expect(pages.length).toBe(Math.ceil(1000 / API_ACCESS_SCAN.candidates))
     expect(pages.slice(0, -1).every((shown) => shown.stopped)).toBe(true)
     expect(pages.flatMap((shown) => shown.rows).map((r) => r.name)).toEqual(['Zebra needle'])
     expect(pages.at(-1)).toMatchObject({ next: null, stopped: false })
-  }, 120_000)
+  })
 
   it('ends a list whose credentials all have calls without pages that stopped empty', async () => {
     const t = newT({ transactionLimits: HALF })
     const f = await withOrg(t)
-    // 2,000 personal tokens of 40 people, every one with calls this month
+    // 200 personal tokens of 10 people, every one with calls this month,
+    // four times the lowered candidates
     const people = await t.run(async (ctx) => {
       const made: Doc<'profiles'>[] = []
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < 10; i++) {
         const _id = await ctx.db.insert('profiles', {
           id: uuid(),
           org_id: f.org.id,
@@ -1182,9 +1197,9 @@ describe('apiAccess.page at scale', () => {
       }
       return made
     })
-    for (let from = 0; from < 2000; from += 250)
+    for (let from = 0; from < 200; from += 50)
       await t.run(async (ctx) => {
-        for (let i = from; i < from + 250; i++) {
+        for (let i = from; i < from + 50; i++) {
           const id = uuid()
           const owner = people[i % people.length]
           await plantToken(ctx, id, owner, `Called ${i}`)
@@ -1198,32 +1213,35 @@ describe('apiAccess.page at scale', () => {
           })
         }
       })
+    lowered()
     const pages = await walk(t, f)
     const listed = pages.flatMap((shown) => shown.rows)
-    expect(listed.length).toBe(2000)
-    expect(new Set(listed.map((r) => r.id)).size).toBe(2000)
+    expect(listed.length).toBe(200)
+    expect(new Set(listed.map((r) => r.id)).size).toBe(200)
     // the credentials without calls follow on no page of their own: every
     // page before the end lists rows, and none stopped
     expect(pages.filter((shown) => shown.stopped)).toEqual([])
     expect(pages.slice(0, -1).every((shown) => shown.rows.length > 0)).toBe(true)
-  }, 180_000)
+  })
 
   it('stops a scan over large rows on bytes before Convex’s limits', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // connected apps with about 700 KB of requested scopes each
-    const scopes = Array.from({ length: 700 }, (_, i) => `scope:${i}:${'s'.repeat(1000)}`)
+    // connected apps with about 2 KB of requested scopes each, past a byte
+    // share lowered to 16 KiB, as 30 apps of about 700 KB passed 8 MiB
+    const scopes = Array.from({ length: 20 }, (_, i) => `scope:${i}:${'s'.repeat(100)}`)
     for (let i = 0; i < 30; i++)
       await t.run((ctx) =>
         plantConnection(ctx, uuid(), f.user, `Wide ${i}`, { requested_scopes: scopes }),
       )
+    API_ACCESS_SCAN.read.bytes = 16 * 1024
     const first = await ready(page(t, f, { search: 'nowhere' }))
     expect(first).toMatchObject({ rows: [], stopped: true })
     expect(first.next).not.toBeNull()
     const pages = await walk(t, f, { search: 'nowhere' })
     expect(pages.length).toBeGreaterThan(2)
     expect(pages.at(-1)).toMatchObject({ next: null })
-  }, 120_000)
+  })
 })
 
 describe('apiAccess.people', () => {
