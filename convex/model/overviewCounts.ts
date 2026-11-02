@@ -817,6 +817,40 @@ export async function subProjectCounts(
   return countsOfRows(await subProjectRows(db, project.id), project)
 }
 
+/**
+ * The leaf counts of each of `subProjects`, live sub-projects of top-level
+ * project `familyId` in organization `orgId` that the caller may read, by
+ * project id, or null while the family's counts are not whole (countsReady)
+ * or a row went negative: never a partial figure. It asks countsReady once,
+ * three ranges, then reads each sub-project's OVERVIEW_SHARDS rows, a range
+ * and up to OVERVIEW_SHARDS documents each, all at once, so a caller that
+ * bounds its reads takes room for them first. The Overview's project scope
+ * reads it (lib/overview.ts). It is the reader REST's and MCP's project
+ * completion (lib/core.ts projectCompletion) can switch to, Completion
+ * being leaves.done over the sum of the leaves of the family's readable
+ * live sub-projects: 3 + n ranges and at most 4n documents for n of them,
+ * whatever their tasks.
+ */
+export async function familyCounts(
+  db: Reader,
+  orgId: string,
+  familyId: string,
+  subProjects: readonly Doc<'projects'>[],
+): Promise<Map<string, LeafCounts> | null> {
+  // an archived sub-project's rows wait for a restore's regroup, and one of
+  // another family is not this family's to answer
+  if (subProjects.some((p) => p.archived_at !== undefined || p.parent_id !== familyId)) return null
+  if (!(await countsReady(db, orgId, familyId))) return null
+  const rows = await Promise.all(subProjects.map((p) => subProjectRows(db, p.id)))
+  const out = new Map<string, LeafCounts>()
+  for (const [i, p] of subProjects.entries()) {
+    const counts = countsOfRows(rows[i], p)
+    if (counts === null) return null
+    out.set(p.id, counts)
+  }
+  return out
+}
+
 /** Every count row of person `ownerId`, by sub-project, up to
  * OVERVIEW_SHARDS rows each, in one range. A caller keeps the rows of the
  * live sub-projects the person may see and whose counts are whole

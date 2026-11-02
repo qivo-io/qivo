@@ -35,6 +35,7 @@ import {
   StatusDot,
 } from '../components/qivo'
 import { type IssueVM, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
+import { healthRows, overviewFigures, statusCounts } from './overviewFigures'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
 import './Overview.css'
 import '../styles/mobile-views.css'
@@ -158,13 +159,13 @@ function OvStatusBar({
   items: IssueVM[]
   height?: keyof typeof statusBarSizeClasses
 }) {
-  const tasks = items.filter((it) => !P.isGroup(it))
-  const total = tasks.length
+  const counts = statusCounts(items)
+  const total = Object.values(counts).reduce((sum, n) => sum + n, 0)
   if (!total) return <div className={cn('bg-surface-3', statusBarSizeClasses[height])} />
   return (
     <div className={cn('flex overflow-hidden bg-surface-3', statusBarSizeClasses[height])}>
       {P.STATUSES.map((s) => {
-        const n = tasks.filter((i) => i.status === s.id).length
+        const n = counts[s.id]
         return n ? (
           <HoverTooltip key={s.id} content={`${s.name}, ${n}`}>
             <div
@@ -181,6 +182,7 @@ function OvStatusBar({
 }
 
 function OvStatusLegend({ items }: { items: IssueVM[] }) {
+  const counts = statusCounts(items)
   return (
     <div className="[display:flex] [flex-wrap:wrap] [gap:4px_16px]">
       {P.STATUSES.map((s) => (
@@ -189,10 +191,7 @@ function OvStatusLegend({ items }: { items: IssueVM[] }) {
           className="[display:inline-flex] [align-items:center] [gap:5px] [font-size:var(--fs-xs)] [color:var(--text-2)]"
         >
           <StatusDot status={s.id} size={12} />
-          {s.name}{' '}
-          <span className="!font-mono [color:var(--text-3)]">
-            {items.filter((i) => !P.isGroup(i) && i.status === s.id).length}
-          </span>
+          {s.name} <span className="!font-mono [color:var(--text-3)]">{counts[s.id]}</span>
         </span>
       ))}
     </div>
@@ -926,27 +925,11 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   }
   if (emptyNote && info.milestones.length === 0) return emptyNote
 
-  const prog = P.progressIn(subIds, info.only)
-  const inProgress = scoped.filter((i) => !P.isGroup(i) && i.status === 'progress').length
-  const inReview = scoped.filter((i) => !P.isGroup(i) && i.status === 'review').length
-  const pausedIssues = scoped.filter((i) => P.isPaused(i))
-  /* The two halves of "at risk", counted apart for the summary sentence: a date
-     already lost reads differently from one the plan says is about to be. The
-     list below merges them because the ROWS are the same shape; the sentence
-     must not, because the advice differs. */
-  const overdueCount = scoped.filter((i) => !P.isDone(i) && i.due && i.due < P.TODAY_ISO).length
-  // deadlines lost or being lost: past-due (any project) plus, for
-  // delay-tracking projects, issues the capacity projection says will miss
-  // their due date (0064). A 'late' verdict implies a due date, so every
-  // row has one to sort and render by.
-  const atRiskIssues = scoped
-    .filter((i) => {
-      if (P.isDone(i)) return false
-      if (i.due && i.due < P.TODAY_ISO) return true
-      const d = P.tracksDelay(i) ? P.delayOf(i) : null
-      return !!(d && d.status === 'late')
-    })
-    .sort((a, b) => (a.due < b.due ? -1 : 1))
+  // the figures, in one place the server's parity test reads too
+  const { prog, inProgress, inReview, pausedIssues, overdueCount, atRiskIssues } = overviewFigures(
+    info,
+    scoped,
+  )
   const msSorted = info.milestones.slice().sort((a, b) => a.week - b.week)
   const nextMs = msSorted.find((m) => m.week >= P.TODAY_WEEK)
   const initial =
@@ -1014,50 +997,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
 
             {grouped ? (
               (() => {
-                /* A row per group, over the group's issues as this scope sees them.
-                 In My view a project I have nothing in gets no row at all — an
-                 all-zero health row would say "this project is stalled" when it
-                 only means the work there isn't mine. */
-                // one pass over the scope's tasks for every group, not one per group
-                const groupOf = new Map<string, number[]>()
-                info.groups.forEach((g, i) => {
-                  for (const id of g.subIds) groupOf.set(id, [...(groupOf.get(id) ?? []), i])
-                })
-                const held: IssueVM[][] = info.groups.map(() => [])
-                for (const it of scoped)
-                  for (const i of groupOf.get(it.project) ?? []) held[i].push(it)
-                const subIdLists = info.groups.map((g) => g.subIds)
-                const progress = P.progressByGroups(subIdLists, info.only)
-                const remaining = P.remainingByGroups(subIdLists, info.only)
-                const rows = info.groups
-                  .map((g, gi) => {
-                    const issues = held[gi]
-                    const gp = progress[gi]
-                    const leadId = P.leadOf(g.proj.id)
-                    /* Projected verdicts (0064), gated PER ISSUE: `delayOf` returns the
-                   raw projection for every issue — only `delayColor` consults the
-                   tracking toggle — so the gate has to be asked here, and asking it
-                   per issue is what a group spanning several sub-projects needs. */
-                    const delayCount = (s: string) =>
-                      issues.filter((i) => {
-                        if (!P.tracksDelay(i)) return false
-                        const d = P.delayOf(i)
-                        return d && d.status === s
-                      }).length
-                    return {
-                      proj: g.proj,
-                      issues,
-                      pct: gp.pct,
-                      done: gp.done,
-                      total: gp.total,
-                      remaining: remaining[gi],
-                      lead: leadId ? P.user(leadId) : null,
-                      late: delayCount('late'),
-                      behind: delayCount('behind'),
-                      paused: issues.filter((i) => P.isPaused(i)).length,
-                    }
-                  })
-                  .filter((r) => !mine || r.issues.length > 0)
+                const rows = healthRows(info, scoped, mine)
 
                 /* The sort. Name and lead compare as text, everything else as a
                  number, and NAME is always the last tiebreak so the order is total:

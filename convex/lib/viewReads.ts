@@ -1,6 +1,7 @@
-/* The reads the app's view queries share: the Board's (lib/board.ts), and
- * the Roadmap's, Team sync's and Overview's to come. They hold no rule of
- * one view, only what a view reads and how it stays within its budget:
+/* The reads the app's view queries share: the Board's (lib/board.ts), the
+ * Overview's (lib/overview.ts), and the Roadmap's and Team sync's to come.
+ * They hold no rule of one view, only what a view reads and how it stays
+ * within its budget:
  *
  * - viewBudget, the guard every read goes through, over the request's
  *   totals as Convex counts them, the caller's access rows included;
@@ -12,7 +13,8 @@
  *   sub-projects, or those one person owns by the Reviewer rule, read in
  *   steps;
  * - groupCheck and groupFacts, which tasks are groups and what a group
- *   shows of its subtasks;
+ *   shows of its subtasks, and firstSubtaskCheck, which tasks are groups
+ *   from each one's first subtask alone;
  * - shownParents, the ancestors of a view's rows that the reader is shown;
  * - viewRow, a task as a view sends it.
  *
@@ -133,15 +135,25 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
   // was taken since it, so another look would show no more
   let room: Reads = { bytes: 0, documents: 0, ranges: 0 }
   let looked = false
+  // the room kept through every look for reads the view makes later (hold)
+  let held: Reads = { bytes: 0, documents: 0, ranges: 0 }
   const look = async () => {
     const m = await ctx.meta.getTransactionMetrics()
     looked = true
     room = {
-      bytes: Math.min(reads.bytes - (m.bytesRead.used + extra), REAL_BYTES - m.bytesRead.used),
-      documents: reads.documents - m.documentsRead.used,
-      ranges: reads.ranges - m.databaseQueries.used,
+      bytes:
+        Math.min(reads.bytes - (m.bytesRead.used + extra), REAL_BYTES - m.bytesRead.used) -
+        held.bytes,
+      documents: reads.documents - m.documentsRead.used - held.documents,
+      ranges: reads.ranges - m.databaseQueries.used - held.ranges,
     }
   }
+  /* `held` with `n` more reads of `cost` */
+  const holding = (cost: Reads, n: number): Reads => ({
+    bytes: held.bytes + n * cost.bytes,
+    documents: held.documents + n * cost.documents,
+    ranges: held.ranges + n * cost.ranges,
+  })
   /* how many reads of `cost` the room holds beside `base`, -1 when it
    * does not hold `base` */
   const roomFor = (cost: Reads, base: Reads = NONE): number => {
@@ -189,7 +201,7 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
     spend(cost, n)
     return n
   }
-  const bytes = () => Math.min(reads.bytes - extra, REAL_BYTES)
+  const bytes = () => Math.min(reads.bytes - extra, REAL_BYTES) - held.bytes
   return {
     count,
     upTo,
@@ -200,6 +212,18 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
     /** Gives back the room of `n` reads of `cost` that a read took and did
      * not make. */
     giveBack: (cost: Reads, n: number): void => spend(cost, -n),
+    /** Takes room for `n` reads of `cost` the view makes later, and keeps it
+     * through every look until release gives it back just before them, or
+     * throws OverBudget. */
+    hold: async (cost: Reads, n = 1): Promise<void> => {
+      await upTo(cost, n, n)
+      held = holding(cost, n)
+    },
+    /** Gives back the room of `n` reads of `cost` that hold kept. */
+    release: (cost: Reads, n: number): void => {
+      held = holding(cost, -n)
+      spend(cost, -n)
+    },
     /** Drops the room taken from the last look, so the next read looks
      * again first, after reads made outside the guard, as the description
      * readers make them by the request's totals (ceiling). */
@@ -219,12 +243,16 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
       extra -= size - getDocumentSize(doc as Parameters<typeof getDocumentSize>[0])
     },
     /** The request's totals the reads keep under, with the fixed charges
-     * folded in as they stand when a check reads them, for the description
-     * readers that step by them (model/descriptions.ts descriptionsOf and
-     * projectTextReader). */
+     * folded in and the held room left out as they stand when a check reads
+     * them, for the readers that step by them (model/descriptions.ts
+     * descriptionsOf and projectTextReader, lib/overview.ts loadRoom). */
     ceiling: {
-      ranges: reads.ranges,
-      documents: reads.documents,
+      get ranges() {
+        return reads.ranges - held.ranges
+      },
+      get documents() {
+        return reads.documents - held.documents
+      },
       get bytes() {
         return bytes()
       },
@@ -272,7 +300,7 @@ export const PROJECT_ASK: Reads = {
 }
 
 /** One project row read by id, for whether it is live. */
-const PROJECT_READ: Reads = { bytes: PROJECT_ROW_MAX_BYTES, documents: 1, ranges: 1 }
+export const PROJECT_READ: Reads = { bytes: PROJECT_ROW_MAX_BYTES, documents: 1, ranges: 1 }
 
 /** One project row as a range of them returns it. */
 const PROJECT_ROW: Reads = { bytes: PROJECT_ROW_MAX_BYTES, documents: 1, ranges: 0 }
@@ -744,6 +772,23 @@ export async function* ownTasks(
           return from === undefined ? own : own.gte('_creationTime', from)
         }),
     })
+  yield* ownHeldTasks(guard, seat, ranges)
+}
+
+/**
+ * The tasks `ranges`, ranges of tasks of `seat`'s reader such as their
+ * assignee and reviewer ranges, hold in the reader's working set and in a
+ * sub-project, a step at a time (inSteps), each task once, as ownTasks
+ * reads them: a task read in a project the reader cannot see counts at
+ * lib/limits.ts TASK_ROW_MAX_BYTES each time a read returned it, and one
+ * they are shown at its real size. Which tasks the reader owns by the
+ * Reviewer rule is the caller's to settle.
+ */
+export async function* ownHeldTasks(
+  guard: ViewBudget,
+  seat: ViewAccess,
+  ranges: readonly StepRange<Doc<'issues'>>[],
+): AsyncGenerator<Doc<'issues'>[]> {
   // each task once, the tasks the reader is shown, and how often each read
   // returned a task not settled yet; a read of a task shown already, the
   // row a step goes on from or the same task in the assignee and the
@@ -905,6 +950,67 @@ export async function groupCheck(
         (found.get(t.id) ?? []).filter((kid) => live.get(kid.id) === true),
       )
   }
+}
+
+/** Whether the task with this id is a group, once groupCheck or
+ * firstSubtaskCheck read it, or it is the parent of a task the view read
+ * (Subtasks parents). */
+export const isGroupKnown = (known: Subtasks, id: string): boolean | undefined =>
+  known.parents.has(id) || isGroupIn(known, id)
+
+/**
+ * Reads into `known` whether each of `tasks`, active tasks in live projects,
+ * is a group from its first active subtask alone (issues by_parent_archived,
+ * one range and at most one document), where groupCheck reads every
+ * subtask of a group: a view that needs to know only which tasks are
+ * groups, not what a group shows, reads a range a task. A first subtask in
+ * a live project makes its task a group, kept in `known` as a parent so a
+ * later groupCheck or groupFacts reads its subtasks from the start; a task
+ * without one gets no subtasks; a task whose first subtask is in a project
+ * that is not live goes to groupCheck, which reads the rest. Tasks known
+ * already, and subtasks created under the rule of one level
+ * (withoutSubtasks), read nothing. Each first subtask counts at
+ * lib/limits.ts TASK_ROW_MAX_BYTES unless `known` says the reader is shown
+ * it, and so does its project (viewAccess). Answer with isGroupKnown.
+ */
+export async function firstSubtaskCheck(
+  ctx: QueryCtx,
+  guard: ViewBudget,
+  seats: ViewSeats,
+  tasks: readonly Doc<'issues'>[],
+  known: Subtasks,
+): Promise<void> {
+  for (const t of tasks)
+    if (!known.kids.has(t.id) && withoutSubtasks(t) && !known.parents.has(t.id))
+      known.kids.set(t.id, [])
+  const todo = [
+    ...new Map(
+      tasks.filter((t) => !known.kids.has(t.id) && !known.parents.has(t.id)).map((t) => [t.id, t]),
+    ).values(),
+  ]
+  const rest: Doc<'issues'>[] = []
+  for (let at = 0; at < todo.length; ) {
+    const step = todo.slice(at, at + (await guard.upTo(BY_ID, Math.min(CHECKS, todo.length - at))))
+    at += step.length
+    const firsts = await settled(step.map((t) => activeKids(ctx, t.id).first()))
+    const found: [Doc<'issues'>, Doc<'issues'>][] = []
+    for (const [i, kid] of firsts.entries()) {
+      if (kid === null) {
+        known.kids.set(step[i].id, [])
+        continue
+      }
+      if (known.shown.get(kid.id) !== true) guard.charge(kid, TASK_ROW_MAX_BYTES)
+      found.push([step[i], kid])
+    }
+    for (const [org, pairs] of groupBy(found, ([t]) => t.org_id)) {
+      const live = await seatOf(seats, { org_id: org }).live(pairs.map(([, kid]) => kid.project_id))
+      for (const [i, [t]] of pairs.entries()) {
+        if (live[i]) known.parents.add(t.id)
+        else rest.push(t)
+      }
+    }
+  }
+  if (rest.length > 0) await groupCheck(ctx, guard, seats, rest, known)
 }
 
 /** What a view shows of a group's subtasks. */

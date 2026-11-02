@@ -53,7 +53,9 @@ export function limitTables(surface, level, limits = LIMITS) {
 
 const GUIDE_INTRO = `Every limit in Qivo is the same in the app, the REST API and the MCP server. A refused change keeps nothing and says which limit it passed and what to do. The app keeps what you typed or pasted, shows how many characters a field holds as it nears its limit and turns Save off until the text fits.
 
-A character is one UTF-16 code unit, the count a browser's text field uses. Most letters count as one and most emoji as two. Qivo trims spaces and line breaks from both ends of a text before counting and stores the trimmed text. A task description or comment keeps the spaces that start its first line, because Markdown reads them.`
+A character is one UTF-16 code unit, the count a browser's text field uses. Most letters count as one and most emoji as two. Qivo trims spaces and line breaks from both ends of a text before counting and stores the trimmed text. A task description or comment keeps the spaces that start its first line, because Markdown reads them.
+
+A view never shows a number it could not count whole as if it were complete. Where a view cannot read everything a figure needs in one request, such as a count over a very large project, it shows that figure as unavailable or asks you to narrow the view, and the other figures stay.`
 
 /** The guide page's whole Markdown source. */
 export const guidePage = (limits = LIMITS) => `${GUIDE_INTRO}\n\n${limitTables(null, 2, limits)}\n`
