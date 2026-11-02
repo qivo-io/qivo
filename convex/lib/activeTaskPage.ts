@@ -65,32 +65,28 @@ import { ownerSettled, ROW_BYTES } from './viewReads'
  * the share their delays read once the rows are fixed
  * (lib/machineDelay.ts pageForecaster). A page also stops after looking at
  * `tasks` tasks, and opens at most `opening` projects' ranges at once. A
- * call whose request has no room for the whole budget, past the testing
- * envelope only, is refused with TASK_LIST_UNREADABLE. Tests lower these
+ * call whose request has no room for the whole budget, past the design
+ * size only, is refused with TASK_LIST_UNREADABLE. Tests lower these
  * and set them back with structuredClone.
  *
- * Measured in convex/tests/activeTaskPages.envelope.ts, which runs on
- * demand (its header has the command), an organization of 2,000 projects,
- * 1,000 people and 50,000 active tasks with real titles and texts, read
- * under Convex's limits; convex/tests/activeTaskPagesScale.test.ts checks
- * the same pages in every run with fewer tasks. Before the page, a member in 25 teams
- * that share every sub-project reads 55 ranges, 7,051 documents and
- * 1.77 MiB at ordinary name lengths, and 6.61 MiB with names, project
- * descriptions and titles at the caps in a three-byte script, where their
- * page reads 11.75 MiB in all. Their page of 200 rows across 2,000
- * projects reads 2,659 ranges, 11,458 documents and 4.34 MiB in all, an
- * organization admin's 2,615 ranges, 6,410 documents and 3.43 MiB, and a
- * page of a 199-project family 863 ranges. A search that matches some
- * tasks ends early, at 84 rows (2,964 ranges, 4.95 MiB), and one that
- * matches none answers no rows with a cursor (2,958 ranges, 4.46 MiB). The
- * delays' share holds the loads of about eight owners of 100 open tasks in
- * four sub-projects each, so a staff page whose 200 rows have 200 owners
- * judges eight of them and answers the rest unavailable (3,311 ranges); an
- * owner past the owner reader's bounds answers unavailable at once. That a
- * row of a person with very much open work says unavailable on every page,
- * while the task's own read judges it, is the agreed rule for figures that
- * depend on people's workloads (limits plan, "Testing and review
- * envelope", owner, 2026-11-01). */
+ * Measured on 2 November 2026 in convex/tests/activeTaskPagesScale.test.ts
+ * under convex-test's transaction limits, at the design size with ordinary
+ * text, one figure raised a case. Before the page, a member reads 11
+ * ranges, 2,018 documents and 0.9 MiB of a catalogue of 2,000 projects and
+ * sub-projects, live and archived. An organization admin's page of 200
+ * rows over its 700 live projects reads 2,099 ranges, 3,743 documents and
+ * 2.02 MiB in all, and a search that matches none ends at the budget with
+ * no rows and a cursor (2,910 ranges, 6,958 documents, 3.82 MiB). A
+ * member's page of 200 rows reads 1,545 ranges over 60 sub-projects and
+ * 1,780 over 200, a page of a family of 30 sub-projects 1,460, and an
+ * admin's page in an organization of 1,000 people 1,360. A staff page
+ * whose 200 rows have 25 owners of about 100 open tasks in four
+ * sub-projects each judges 53 rows' delays within the delays' share and
+ * answers 91 unavailable; an owner past the owner reader's bounds answers
+ * unavailable at once. That a row of a person with very much open work
+ * says unavailable on every page, while the task's own read judges it, is
+ * the agreed rule for figures that depend on people's workloads (limits
+ * plan, "Design size", owner, 2026-11-01). */
 export const ACTIVE_PAGE = {
   ranges: 3800,
   documents: 20_000,
@@ -112,7 +108,9 @@ export const ACTIVE_RESERVE: ReadCeiling = { ranges: 64, documents: 128, bytes: 
 /** The refusal of a list whose request cannot hold a page's whole budget
  * beside what the list read before it (the caller's projects and access),
  * or whose scope has more projects than one page can open side by side.
- * Only a list past the testing envelope meets it. */
+ * Only a list past the design size meets it
+ * (convex/tests/activeTaskPagesScale.test.ts pages each figure at its
+ * design size). */
 export const TASK_LIST_UNREADABLE =
   "the task list could not be read within the request's limits; pass project to list one project's tasks"
 
