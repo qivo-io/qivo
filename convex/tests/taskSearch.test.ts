@@ -356,8 +356,9 @@ describe('task search reads only the labels it can match', () => {
 
   it('ends a search page whose label reads pass its budget early, and the next goes on', async () => {
     const { fx, thermal } = await mixed()
+    // FW's 300 open tasks with the fixture's five, 297 of them Thermal
     const spares: Doc<'issues'>[] = []
-    for (let n = 0; n < 600; n++) {
+    for (let n = 0; n < 295; n++) {
       spares.push(
         await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id, title: `Spare ${n}` }),
       )
@@ -368,7 +369,7 @@ describe('task search reads only the labels it can match', () => {
         oldMatches(ctx, fx, { search: 'therm', stars: true, archived: false }),
       )
     ).map((i) => i.id)
-    expect(expected).toHaveLength(602)
+    expect(expected).toHaveLength(297)
     // a page budget of 300 documents, fewer than 200 matches read
     const budget = { page: { documents: 300, delays: { ...ACTIVE_PAGE.delays, documents: 50 } } }
     await lowered(budget, async () => {
@@ -430,7 +431,7 @@ describe('task search reads only the labels it can match', () => {
         }
       }
     }
-  }, 300_000)
+  })
 
   it('finds exactly what the matcher found when it read every label', async () => {
     const { fx } = await mixed()
