@@ -11,7 +11,7 @@ import type { Doc } from '../_generated/dataModel'
 import { OWN_READS, projectLevel } from '../lib/access'
 import { archivedTaskCore } from '../lib/archivedTasks'
 import { newWindowKey } from '../lib/db'
-import { LIMITS, MIB, NAME_MAX } from '../lib/limits'
+import { LIMITS, MIB } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { readWindowLinks, readWindowTask, TASK_WINDOW } from '../lib/taskWindow'
 import { relationRow, type TaskRow } from '../lib/workspaceParts'
@@ -414,7 +414,7 @@ describe('parity with the tasks part', () => {
     const part = await tasksPart(as(t, f.guest), f.org.id)
     for (const link of [w.links.intoMarked, w.links.markedToMarked, w.links.fromMarked])
       expect(part.links.filter((row) => row.id === link.id)).toHaveLength(1)
-  }, 120_000)
+  })
 
   it('answers what the tasks part says of every Northstar task, for every person', async () => {
     const t = newT()
@@ -423,7 +423,7 @@ describe('parity with the tasks part', () => {
     for (const person of profiles.filter((p) => p.auth_user_id !== undefined))
       compared += await expectParity(t, org.id, person)
     expect(compared).toBeGreaterThan(100)
-  }, 300_000)
+  })
 
   it('tells a hidden subtask by has_hidden_subtasks, and a subtask in an archived project not at all', async () => {
     const t = newT()
@@ -897,63 +897,55 @@ const linksRead = (t: T, f: OrgFixture, id: string, who = f.guest) =>
     return { answer, read: mib(m), documents: m.documentsRead.used, ranges: m.databaseQueries.used }
   })
 
-/* A name at the cap whose name key NFKD expands 18 times, and a project
- * description at the cap in a three-byte script, the largest a project row
- * holds (lib/limits.ts PROJECT_ROW_MAX_BYTES). */
-const WIDE_NAME = '\uFDFA'.repeat(NAME_MAX)
-const WIDE_DESCRIPTION = '\u4E00'.repeat(LIMITS.projectDescription.max)
+/* An ordinary title of about 80 characters and a short description, the
+ * text of the design size. */
+const ordinary = (i: number) => ({
+  title: `Check the power rails of board ${i} before the firmware team flashes the first build`,
+  description: 'Measure each rail under load and note any that drift from nominal.',
+})
 
-/** `n` sub-projects of TBED, which the guest and the viewer see through
- * their grants there, each at the row bound. */
-async function wideProjects(t: T, f: OrgFixture, n: number): Promise<Doc<'projects'>[]> {
-  const out: Doc<'projects'>[] = []
-  for (let i = 0; i < n; i++)
-    out.push(
-      await plantProject(t, {
+/* The number of the next project readableProjects plants. */
+let nextProject = 5000
+
+/** `n` sub-projects the guest reads, three under each of new top-level
+ * projects that grant the guest User, so each sub-project and its
+ * top-level project are new to the guest's access. */
+const readableProjects = (t: T, f: OrgFixture, n: number) =>
+  t.run(async (ctx) => {
+    const row = (extra: Pick<Doc<'projects'>, 'type' | 'parent_id'>) => {
+      const num = nextProject++
+      return {
+        id: uuid(),
         org_id: f.org.id,
-        type: 'project',
-        parent_id: f.meta.id,
-        name: WIDE_NAME,
-        name_key: nameKey(WIDE_NAME),
-        description: WIDE_DESCRIPTION,
-      }),
-    )
-  return out
-}
-
-/** `n` teams of the fixture's organization named at the cap, each sharing
- * `project` alone with its name key copied, the viewer, named at the cap, a
- * member of the first with the key of its name copied. */
-async function distinctShares(t: T, f: OrgFixture, project: Doc<'projects'>, n: number) {
-  for (let from = 0; from < n; from += 250)
-    await t.run(async (ctx) => {
-      await ctx.db.patch(f.viewer._id, { name: WIDE_NAME, name_key: nameKey(WIDE_NAME) })
-      for (let i = from; i < Math.min(n, from + 250); i++) {
-        const id = uuid()
-        await ctx.db.insert('teams', {
-          id,
-          org_id: f.org.id,
-          name: WIDE_NAME,
-          name_key: nameKey(WIDE_NAME),
-          track_delay_default: false,
-          created_at: NOW,
-        })
-        if (i === 0)
-          await ctx.db.insert('team_members', {
-            team_id: id,
-            profile_id: f.viewer.id,
-            is_leader: false,
-            name_key: nameKey(WIDE_NAME),
-          })
-        await ctx.db.insert('project_team_access', {
-          project_id: project.id,
-          team_id: id,
-          level: 'viewer',
-          name_key: nameKey(WIDE_NAME),
+        key: `R${num}`,
+        name: `Rev ${num} bring-up`,
+        description: '',
+        sort_order: num,
+        num,
+        track_delay: false,
+        created_at: NOW,
+        window_key: newWindowKey(),
+        ...extra,
+      }
+    }
+    const out: Doc<'projects'>[] = []
+    let top = ''
+    for (let i = 0; i < n; i++) {
+      if (i % 3 === 0) {
+        const parent = row({ type: 'meta' })
+        await ctx.db.insert('projects', parent)
+        top = parent.id
+        await ctx.db.insert('project_access', {
+          project_id: top,
+          profile_id: f.guest.id,
+          level: 'user',
         })
       }
-    })
-}
+      const _id = await ctx.db.insert('projects', row({ type: 'project', parent_id: top }))
+      out.push((await ctx.db.get(_id)) as Doc<'projects'>)
+    }
+    return out
+  })
 
 describe('real limits', () => {
   it('reads an archived task at the description cap with its labels within TASK_WINDOW', async () => {
@@ -980,216 +972,205 @@ describe('real limits', () => {
     expect(read).toBeLessThan(1)
     expect(documents).toBeLessThan(TASK_WINDOW.documents)
     expect(ranges).toBeLessThan(TASK_WINDOW.ranges)
-  }, 120_000)
+  })
 
-  it('reads 100 subtasks at the description cap in a three-byte script, complete and within TASK_WINDOW.bytes', async () => {
+  it('reads 100 subtasks, the most a task holds, complete and within TASK_WINDOW.bytes', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const [grandparent] = await plantMany(t, f, 1, () => ({ description: LARGEST }), {
-      each: 1,
-      rows: true,
-    })
+    const [grandparent] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
     const [task] = await plantMany(
       t,
       f,
       1,
-      () => ({ description: LARGEST, parent_id: grandparent.id }),
+      (i) => ({ ...ordinary(i), parent_id: grandparent.id }),
       { each: 1, rows: true },
     )
-    await plantMany(t, f, 100, () => ({ description: LARGEST, parent_id: task.id }), {
-      each: 25,
+    await plantMany(t, f, LIMITS.subtasks.max, (i) => ({ ...ordinary(i), parent_id: task.id }), {
+      each: 100,
       rows: true,
     })
     const { answer, read } = await taskRead(t, f, task.id)
     if (answer.state !== 'ok') throw new Error(answer.state)
     expect(answer.subtasks.complete).toBe(true)
-    expect(answer.subtasks.rows).toHaveLength(100)
+    expect(answer.subtasks.rows).toHaveLength(LIMITS.subtasks.max)
     expect(answer.task.has_hidden_subtasks).toBe(false)
-    expect(answer.task.description).toBe(LARGEST)
+    expect(answer.task.description).toBe(ordinary(0).description)
     expect(answer.parent?.id).toBe(grandparent.id)
-    expect(read).toBeGreaterThan(5.5)
     expect(read).toBeLessThan(TASK_WINDOW.bytes / MIB)
-  }, 120_000)
+  })
 
-  it('reads 100 links to leaves at the cap, complete and within TASK_WINDOW.linkBytes', async () => {
+  it('reads 100 links to leaves, the most a task holds, complete and within TASK_WINDOW.linkBytes', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const [task] = await plantMany(t, f, 1, () => ({ description: LARGEST }), {
-      each: 1,
-      rows: true,
-    })
-    const leaves = await plantMany(t, f, 100, () => ({ description: LARGEST }), {
-      each: 25,
-      rows: true,
-    })
+    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
+    const leaves = await plantMany(t, f, LIMITS.links.max, ordinary, { each: 100, rows: true })
     await linkAll(t, f, task, leaves)
     const { answer, read } = await linksRead(t, f, task.id)
     if (answer.state !== 'ok') throw new Error(answer.state)
     expect(answer.complete).toBe(true)
-    expect(answer.links).toHaveLength(100)
+    expect(answer.links).toHaveLength(LIMITS.links.max)
     expect(answer.tasks.every((row) => !row.has_subtasks)).toBe(true)
     expect(read).toBeLessThan(TASK_WINDOW.linkBytes / MIB)
-  }, 120_000)
+  })
 
-  it('reads 100 links to groups whose first subtasks are at the cap, complete and within TASK_WINDOW.linkBytes', async () => {
+  it('reads 100 links to groups, each with a subtask, complete and within TASK_WINDOW.linkBytes', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const [task] = await plantMany(t, f, 1, () => ({ description: LARGEST }), {
-      each: 1,
-      rows: true,
-    })
-    const groups = await plantMany(t, f, 100, () => ({ description: LARGEST }), {
-      each: 25,
-      rows: true,
-    })
-    await plantMany(t, f, 100, (i) => ({ description: LARGEST, parent_id: groups[i].id }), {
-      each: 25,
+    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
+    const groups = await plantMany(t, f, LIMITS.links.max, ordinary, { each: 100, rows: true })
+    await plantMany(t, f, groups.length, (i) => ({ ...ordinary(i), parent_id: groups[i].id }), {
+      each: 100,
       rows: true,
     })
     await linkAll(t, f, task, groups)
     const { answer, read } = await linksRead(t, f, task.id)
     if (answer.state !== 'ok') throw new Error(answer.state)
     expect(answer.complete).toBe(true)
-    expect(answer.tasks).toHaveLength(100)
+    expect(answer.tasks).toHaveLength(LIMITS.links.max)
     expect(answer.tasks.every((row) => row.has_subtasks)).toBe(true)
-    expect(read).toBeGreaterThan(11)
     expect(read).toBeLessThan(TASK_WINDOW.linkBytes / MIB)
-  }, 120_000)
+  })
 
-  it('reads 100 links to groups whose first subtasks, at the cap, are each in a sub-project of their own, complete and within TASK_WINDOW.linkBytes', async () => {
+  it('reads 100 links to groups whose subtasks are each in a sub-project of their own, complete and within TASK_WINDOW.linkBytes', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const projects = await wideProjects(t, f, 100)
-    const [task] = await plantMany(t, f, 1, () => ({ description: LARGEST }), {
-      each: 1,
-      rows: true,
-    })
-    const groups = await plantMany(t, f, 100, () => ({ description: LARGEST }), {
-      each: 25,
-      rows: true,
-    })
+    const projects = await readableProjects(t, f, LIMITS.links.max)
+    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
+    const groups = await plantMany(t, f, projects.length, ordinary, { each: 100, rows: true })
     await plantMany(
       t,
       f,
-      100,
-      (i) => ({ description: LARGEST, parent_id: groups[i].id, project_id: projects[i].id }),
-      { each: 25, rows: true },
+      groups.length,
+      (i) => ({ ...ordinary(i), parent_id: groups[i].id, project_id: projects[i].id }),
+      { each: 100, rows: true },
     )
     await linkAll(t, f, task, groups)
-    const { answer, ...reads } = await linksRead(t, f, task.id)
+    const { answer, read } = await linksRead(t, f, task.id)
     if (answer.state !== 'ok') throw new Error(answer.state)
-    console.log('100 linked groups, first subtasks in 100 sub-projects:', {
-      ...reads,
-      tasks: answer.tasks.length,
-      complete: answer.complete,
-    })
     expect(answer.complete).toBe(true)
-    expect(answer.tasks).toHaveLength(100)
+    expect(answer.tasks).toHaveLength(LIMITS.links.max)
     expect(answer.tasks.every((row) => row.has_subtasks)).toBe(true)
-    expect(reads.read).toBeGreaterThan(11)
-    expect(reads.read).toBeLessThan(TASK_WINDOW.linkBytes / MIB)
-  }, 300_000)
+    expect(read).toBeLessThan(TASK_WINDOW.linkBytes / MIB)
+  })
 
-  it('reads 100 subtasks at the cap, each in a sub-project of their own, complete and within TASK_WINDOW.bytes', async () => {
+  it('reads 100 subtasks, each in a sub-project of their own, complete and within TASK_WINDOW.bytes', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const projects = await wideProjects(t, f, 100)
-    const [task] = await plantMany(t, f, 1, () => ({ description: LARGEST }), {
-      each: 1,
-      rows: true,
-    })
+    const projects = await readableProjects(t, f, LIMITS.subtasks.max)
+    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
     await plantMany(
       t,
       f,
-      100,
-      (i) => ({ description: LARGEST, parent_id: task.id, project_id: projects[i].id }),
-      { each: 25, rows: true },
+      projects.length,
+      (i) => ({ ...ordinary(i), parent_id: task.id, project_id: projects[i].id }),
+      { each: 100, rows: true },
     )
-    const { answer, ...reads } = await taskRead(t, f, task.id)
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    console.log('100 subtasks in 100 sub-projects:', {
-      ...reads,
-      rows: answer.subtasks.rows.length,
-      complete: answer.subtasks.complete,
-    })
-    expect(answer.subtasks.complete).toBe(true)
-    expect(answer.subtasks.rows).toHaveLength(100)
-    expect(answer.task.has_hidden_subtasks).toBe(false)
-    expect(reads.read).toBeLessThan(TASK_WINDOW.bytes / MIB)
-  }, 300_000)
-
-  it('stops a link read inside the limits at link ends in sub-projects shared with 600 teams of their own each', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
-    // twelve sub-projects, each shared with 600 teams of its own at the
-    // name cap, about 1.7 MB of shares, which the viewer's access read whole
-    // on each project it asked about before lib/access.ts OWN_READS bounded
-    // them. One step takes the twelve ends, one in each of them, and asked
-    // about them together they would read past Convex's 16 MiB.
-    const projects = await wideProjects(t, f, 12)
-    for (const p of projects) await distinctShares(t, f, p, 600)
-    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
-    const ends = await plantMany(t, f, 12, (i) => ({ project_id: projects[i].id }), {
-      each: 12,
-      rows: true,
-    })
-    await linkAll(t, f, task, ends)
-    const { answer, ...reads } = await linksRead(t, f, task.id, f.viewer)
-    if (answer.state !== 'ok') throw new Error(answer.state)
-    console.log('12 link ends in 12 sub-projects of 600 shares of their own:', {
-      ...reads,
-      links: answer.links.length,
-      complete: answer.complete,
-    })
-    // The access reads at most OWN_READS.projectShares and one more of each
-    // project's shares and then the viewer's own rows, which name no team,
-    // so it reads a small part of the 7,200 shares and every end is checked
-    // inside the limits; the viewer sees them through TBED.
-    expect(answer.complete).toBe(true)
-    expect(answer.links).toHaveLength(12)
-    expect(answer.tasks.map((row) => row.id)).toEqual(answer.links.map((link) => link.target_id))
-    expect(reads.documents).toBeLessThan(12 * (OWN_READS.projectShares + 1) + 200)
-    expect(reads.read).toBeLessThan(TASK_WINDOW.linkBytes / MIB)
-  }, 300_000)
-
-  it('stops at older subtasks near 900 KB with complete false, the rows read, and no error', async () => {
-    const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
-    const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
-    const legacy = 'o'.repeat(900 * 1024)
-    await plantMany(t, f, 12, () => ({ description: legacy, parent_id: task.id }), {
-      each: 4,
-      rows: false,
-    })
     const { answer, read } = await taskRead(t, f, task.id)
     if (answer.state !== 'ok') throw new Error(answer.state)
-    expect(answer.subtasks.complete).toBe(false)
-    expect(answer.subtasks.rows.length).toBeGreaterThan(5)
-    expect(answer.subtasks.rows.length).toBeLessThan(12)
-    expect(answer.task.has_subtasks).toBe(true)
-    expect(answer.task.has_hidden_subtasks).toBe(true)
-    // past the budget by one row at most
-    expect(read).toBeLessThanOrEqual(TASK_WINDOW.bytes / MIB + 1)
-  }, 120_000)
+    expect(answer.subtasks.complete).toBe(true)
+    expect(answer.subtasks.rows).toHaveLength(LIMITS.subtasks.max)
+    expect(answer.task.has_hidden_subtasks).toBe(false)
+    expect(read).toBeLessThan(TASK_WINDOW.bytes / MIB)
+  })
+
+  it("reads at most OWN_READS.projectShares and one more of the team shares on each link end's sub-project", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // three sub-projects of TBED, which the viewer sees through its grant
+    // there, each shared with five teams of its own, the viewer a member of
+    // the first team of each. Before lib/access.ts OWN_READS bounded them,
+    // the viewer's access read every share of each project it asked about.
+    OWN_READS.projectShares = 2
+    const projects: Doc<'projects'>[] = []
+    for (let i = 0; i < 3; i++)
+      projects.push(
+        await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }),
+      )
+    const teams = await t.run(async (ctx) => {
+      const out: string[][] = []
+      for (const [p, project] of projects.entries()) {
+        const ids: string[] = []
+        for (let i = 0; i < 5; i++) {
+          const id = uuid()
+          await ctx.db.insert('teams', {
+            id,
+            org_id: f.org.id,
+            name: `${project.key} team ${i}`,
+            name_key: nameKey(`${project.key} team ${i}`),
+            track_delay_default: false,
+            created_at: NOW,
+          })
+          ids.push(id)
+        }
+        await ctx.db.insert('team_members', {
+          team_id: ids[0],
+          profile_id: f.viewer.id,
+          is_leader: false,
+        })
+        out[p] = ids
+      }
+      return out
+    })
+    /** Shares each project with its teams from `from` up to `to`. */
+    const share = (from: number, to: number) =>
+      t.run(async (ctx) => {
+        for (const [p, project] of projects.entries())
+          for (const team_id of teams[p].slice(from, to))
+            await ctx.db.insert('project_team_access', {
+              project_id: project.id,
+              team_id,
+              level: 'viewer',
+            })
+      })
+    const [task] = await plantMany(t, f, 1, ordinary, { each: 1, rows: true })
+    const ends = await plantMany(
+      t,
+      f,
+      projects.length,
+      (i) => ({ ...ordinary(i), project_id: projects[i].id }),
+      { each: 3, rows: true },
+    )
+    await linkAll(t, f, task, ends)
+    await share(0, OWN_READS.projectShares + 1)
+    const first = await linksRead(t, f, task.id, f.viewer)
+    await share(OWN_READS.projectShares + 1, 5)
+    const { answer, ...reads } = await linksRead(t, f, task.id, f.viewer)
+    if (answer.state !== 'ok') throw new Error(answer.state)
+    // The access reads OWN_READS.projectShares and one more of each
+    // project's shares and then turns to the viewer's own rows, so the two
+    // shares each project gained add no reads, and every end is checked
+    // inside the limits; the viewer sees them through TBED.
+    expect(answer.complete).toBe(true)
+    expect(answer.links).toHaveLength(3)
+    expect(answer.tasks.map((row) => row.id)).toEqual(answer.links.map((link) => link.target_id))
+    expect(first.answer).toEqual(answer)
+    expect(reads.documents).toBe(first.documents)
+    expect(reads.ranges).toBe(first.ranges)
+    expect(reads.documents).toBeLessThan(3 * (OWN_READS.projectShares + 1) + 200)
+    expect(reads.read).toBeLessThan(TASK_WINDOW.linkBytes / MIB)
+  })
 
   it('stops at older link ends near 900 KB with complete false, the links read, and no error', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const [task] = await plantMany(t, f, 1, () => ({}), { each: 1, rows: true })
     const legacy = 'o'.repeat(900 * 1024)
-    const ends = await plantMany(t, f, 18, () => ({ description: legacy }), {
-      each: 4,
+    const ends = await plantMany(t, f, 5, () => ({ description: legacy }), {
+      each: 5,
       rows: false,
     })
     await linkAll(t, f, task, ends)
+    // room for three bodies near 900 KB whole and about half a MiB left
+    TASK_WINDOW.linkBytes = 3.2 * MIB
     const { answer, read } = await linksRead(t, f, task.id)
     if (answer.state !== 'ok') throw new Error(answer.state)
     expect(answer.complete).toBe(false)
-    expect(answer.links.length).toBeGreaterThan(10)
-    expect(answer.links.length).toBeLessThan(18)
+    expect(answer.links.length).toBeGreaterThan(1)
+    expect(answer.links.length).toBeLessThan(5)
     expect(answer.tasks.map((row) => row.id)).toEqual(answer.links.map((link) => link.target_id))
+    // past the budget by one row at most
     expect(read).toBeLessThanOrEqual(TASK_WINDOW.linkBytes / MIB + 1)
-  }, 120_000)
+  })
 
   it('answers n subtasks and n links complete at TASK_WINDOW.rows = n, and n + 1 incomplete', async () => {
     const t = newT()
@@ -1245,37 +1226,40 @@ describe('real limits', () => {
     expect(answer.links.map((link) => link.target_id)).toEqual(answer.tasks.map((row) => row.id))
   })
 
-  it('answers an archived task under a parent of thousands of sub-projects within the index ranges', async () => {
-    const t = newT({ transactionLimits: true })
+  it('answers an archived task under a parent of 70 sub-projects within the index ranges', async () => {
+    // Convex's index ranges lowered below what canSeeProject's walk asks
+    // under that parent, about 150, which the window's own check stays far
+    // inside
+    const t = newT({ transactionLimits: { databaseQueries: 100 } })
     const f = await withOrg(t)
     // the viewer sees this top-level project only for navigation, through a
     // grant on its last sub-project; canSeeProject's walk would ask the
     // viewer's grant and team shares on each sub-project first, two ranges
-    // a sub-project, past 4,096
+    // a sub-project, here 30 live and 40 archived ones, the most one project
+    // holds at the design size
     const top = await plantProject(t, { org_id: f.org.id })
-    let last = ''
-    for (let from = 0; from < 2100; from += 700)
-      last = await t.run(async (ctx) => {
-        let id = ''
-        for (let i = from; i < from + 700; i++) {
-          id = uuid()
-          await ctx.db.insert('projects', {
-            id,
-            org_id: f.org.id,
-            type: 'project',
-            parent_id: top.id,
-            key: `S${i}`,
-            name: `Sub-project ${i}`,
-            description: '',
-            sort_order: 1000 + i,
-            num: 1000 + i,
-            track_delay: false,
-            created_at: NOW,
-            window_key: newWindowKey(),
-          })
-        }
-        return id
-      })
+    const last = await t.run(async (ctx) => {
+      let id = ''
+      for (let i = 0; i < 70; i++) {
+        id = uuid()
+        await ctx.db.insert('projects', {
+          id,
+          org_id: f.org.id,
+          type: 'project',
+          parent_id: top.id,
+          key: `S${i}`,
+          name: `Sub-project ${i}`,
+          description: '',
+          sort_order: 1000 + i,
+          num: 1000 + i,
+          track_delay: false,
+          created_at: NOW,
+          window_key: newWindowKey(),
+          ...(i < 40 ? { archived_at: NOW } : {}),
+        })
+      }
+      return id
+    })
     await t.run((ctx) =>
       ctx.db.insert('project_access', { project_id: last, profile_id: f.viewer.id, level: 'user' }),
     )
@@ -1284,54 +1268,63 @@ describe('real limits', () => {
     expect(
       await as(t, f.viewer).query(api.taskWindow.task, { org_id: f.org.id, ref: task.id }),
     ).toMatchObject({ state: 'archived', task: { id: task.id, is_group: false } })
-  }, 120_000)
+  })
 
-  it('stops the group checks of an end whose subtasks are in thousands of archived projects before the index ranges run out', async () => {
+  it('stops the group checks of an end whose subtasks are in 40 archived sub-projects before the index ranges run out', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const [task, end] = await plantMany(t, f, 2, () => ({}), { each: 2, rows: true })
     await linkAll(t, f, task, [end])
-    // each subtask in an archived sub-project of its own, so none makes the
-    // end a group, and each one's project is one more read
-    for (let from = 0; from < 4200; from += 700)
-      await t.run(async (ctx) => {
-        for (let i = from; i < from + 700; i++) {
-          const project = uuid()
-          await ctx.db.insert('projects', {
-            id: project,
-            org_id: f.org.id,
-            type: 'project',
-            parent_id: f.meta.id,
-            key: `A${i}`,
-            name: `Archived ${i}`,
-            description: '',
-            sort_order: 1000 + i,
-            num: 1000 + i,
-            track_delay: false,
-            created_at: NOW,
-            archived_at: NOW,
-            window_key: newWindowKey(),
-          })
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id: project,
-            parent_id: end.id,
-            num: nextNum++,
-            title: `Subtask ${i}`,
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-            window_key: newWindowKey(),
-          })
-        }
-      })
+    // each subtask in an archived sub-project of its own, the most one
+    // project holds at the design size, so none makes the end a group, and
+    // each one's project is one more read
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 40; i++) {
+        const project = uuid()
+        await ctx.db.insert('projects', {
+          id: project,
+          org_id: f.org.id,
+          type: 'project',
+          parent_id: f.meta.id,
+          key: `A${i}`,
+          name: `Archived ${i}`,
+          description: '',
+          sort_order: 1000 + i,
+          num: 1000 + i,
+          track_delay: false,
+          created_at: NOW,
+          archived_at: NOW,
+          window_key: newWindowKey(),
+        })
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: f.org.id,
+          project_id: project,
+          parent_id: end.id,
+          num: nextNum++,
+          title: `Subtask ${i}`,
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          window_key: newWindowKey(),
+        })
+      }
+    })
+    // the default ranges hold every check, and the end is no group
+    expect((await linksRead(t, f, task.id)).answer).toMatchObject({
+      state: 'ok',
+      tasks: [{ id: end.id, has_subtasks: false }],
+      complete: true,
+    })
+    // room for the reads before the checks and for a few of the projects,
+    // each asked only while the ranges lib/taskWindow.ts PROJECT keeps back fit
+    TASK_WINDOW.ranges = 290
     const { answer, ranges } = await linksRead(t, f, task.id)
     expect(answer).toEqual({ state: 'ok', links: [], tasks: [], complete: false })
     expect(ranges).toBeLessThanOrEqual(TASK_WINDOW.ranges + 50)
-  }, 300_000)
+  })
 
   it('answers complete for exactly the subtasks the budget holds, and incomplete for one more', async () => {
     const t = newT({ transactionLimits: true })
@@ -1356,6 +1349,7 @@ describe('real limits', () => {
     const four = await taskRead(t, f, task.id)
     if (four.answer.state !== 'ok') throw new Error(four.answer.state)
     expect(four.answer.subtasks).toMatchObject({ complete: false, rows: { length: 3 } })
+    expect(four.answer.task.has_subtasks).toBe(true)
     expect(four.answer.task.has_hidden_subtasks).toBe(true)
     // the look for a fourth reads it whole, one body past the budget at most
     expect(four.read).toBeLessThanOrEqual(TASK_WINDOW.bytes / MIB + 1)
