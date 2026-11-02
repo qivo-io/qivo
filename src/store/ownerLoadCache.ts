@@ -12,13 +12,17 @@
    - A call names one organization. For the person's own staff seat there
      (an admin or user, convex/lib/access.ts isOrgStaff) the owners go into
      calls of at most CALL_OWNERS, each owner in a fixed group by a hash of
-     its id, so one new owner changes one call, and a change to one owner's
-     spans sends that call again, not all of them. The groups are the fewest
-     that hold the owners, a power of two, so 1,000 owners make 64 groups,
-     about 64 calls (a group the hash fills past CALL_OWNERS is cut into
-     calls of at most CALL_OWNERS each). A guest or Viewer gets one owner a
-     call (the server answers one), and a view gets at most GUEST_CALLS of
-     those, its owners with the most cards first; the others are `capped`.
+     its id, and a change to one owner's spans sends that owner's call
+     again, not all of them. The groups are the fewest that hold the
+     owners, a power of two, so 1,000 owners make 64 groups, about 64 calls
+     (a group the hash fills past CALL_OWNERS is cut into calls of at most
+     CALL_OWNERS each, in id order). One new owner usually changes one
+     call. In a cut group it changes the calls from its own to the group's
+     last, and when the owners pass CALL_OWNERS times the groups, the
+     groups double and almost every call changes. A guest or Viewer gets
+     one owner a call (the server answers one), and a view gets at most
+     GUEST_CALLS of those, its owners with the most cards first; the others
+     are `capped`.
    - An owner a call answered `not_read` (its room ran out) is asked again in
      a call of its own owners, which the server always starts reading.
    - The cache follows the hidden-tab gate (lib/viewVisibility.ts): while the
