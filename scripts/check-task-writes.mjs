@@ -1,7 +1,8 @@
 /* Fails when code in convex/ writes a task row, a task description or a
  * task's project or archived state anywhere but
  * convex/model/descriptions.ts, patches a task field the Overview's counts
- * read without that file's writers, or inserts a task or project without
+ * read and a write can change without that file's writers, or inserts a
+ * task or project without
  * the used_ids row of its id. Task descriptions are kept in
  * issue_descriptions beside the task rows (schema.ts), each row with copies
  * of its task's project and archived state, and that file writes both in
@@ -9,8 +10,9 @@
  * (model/overviewCounts.ts) follow a task write only in that file's
  * insertTask, patchTask and patchTaskRow and in model/deletedItems.ts
  * deleteLive, so a direct patch of a task's status, pause, remaining hours,
- * assignee, reviewer or parent would leave them wrong until a dry run of
- * internal/overviewCountsBackfill finds it. Every id a task or project
+ * assignee, reviewer or parent would leave them wrong, a parent's group
+ * until a recount, and only a dry run of internal/overviewCountsBackfill
+ * reports it. Every id a task or project
  * takes is recorded in used_ids (schema.ts) in the transaction that inserts
  * it, and only lib/db.ts writes those rows, through insertUnique and
  * insertUsed, so no new task or project takes an id once used. It reads
@@ -85,7 +87,9 @@ const writes = new Set(['insert', 'patch', 'replace'])
 const copied = ['description', 'project_id', 'archived_at']
 /* The other task fields the Overview's counts read (model/overviewCounts.ts
  * slotOf, lib/review.ts taskOwnerId, and tallyOverview for the parent),
- * which a patch changes only through patchTask or patchTaskRow. */
+ * which a patch changes only through patchTask or patchTaskRow. `org_id`
+ * and `num`, which slotOf reads too, are immutable (schema.ts), so the
+ * check leaves them out. */
 const counted = ['status', 'paused', 'remaining_hours', 'assignee_id', 'reviewer_id', 'parent_id']
 const writerNames = new Set([...writes, ...named.names])
 const convexPackage = /[/\\]node_modules[/\\]convex[/\\]/
@@ -338,7 +342,7 @@ await closeTypeScriptAPI(api)
 if (failures.length) {
   console.error(failures.join('\n'))
   console.error(
-    `\nTask rows and their description rows, which copy the task's project and archived state, are written together, by ${owner} (schema.ts issue_descriptions), every patch of a task field the Overview's counts read goes through its patchTask or patchTaskRow (model/overviewCounts.ts), and every task and project is written with the used_ids row of its id, by ${usedOwner} (schema.ts used_ids).`,
+    `\nTask rows and their description rows, which copy the task's project and archived state, are written together, by ${owner} (schema.ts issue_descriptions), every patch of a task field the Overview's counts read and a write can change goes through its patchTask or patchTaskRow (model/overviewCounts.ts), and every task and project is written with the used_ids row of its id, by ${usedOwner} (schema.ts used_ids).`,
   )
   process.exit(1)
 }

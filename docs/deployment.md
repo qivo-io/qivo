@@ -922,8 +922,8 @@ its paused leaves and the remaining hours of its leaves not Done, beside a
 row for each person with leaves in it, and each active task an
 `overview_tasks` row with what those rows hold for it
 (`convex/model/overviewCounts.ts`). The Overview's server queries
-(`convex/overview.ts`) read them, though nothing in the app calls those
-queries yet. Every task write keeps them, background steps keep them after
+(`convex/overview.ts`) read the `overview_counts` rows, though nothing in
+the app calls those queries yet. Every task write keeps them, background steps keep them after
 a project is archived, restored, moved to Deleted items or restored from
 there, and organizations created since the release that added them are
 counted from their creation.

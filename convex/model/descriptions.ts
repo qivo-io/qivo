@@ -535,8 +535,9 @@ export async function patchTask(
  * which it reads first, so a caller holding an older copy moves them
  * right. `stored` says `task` is the task as stored now, read in this
  * transaction and written since only through these helpers, so it is not
- * read again. Every writer of such fields patches through it or patchTask.
- * Answers the task as patched. */
+ * read again. Every writer of a task's status, pause, remaining hours,
+ * assignee, reviewer or parent patches through it or patchTask
+ * (scripts/check-task-writes.mjs). Answers the task as patched. */
 export async function patchTaskRow(
   db: Writer,
   task: Doc<'issues'>,
