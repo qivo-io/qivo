@@ -82,69 +82,55 @@ import {
  * 4,096 for what one step reads past the guard's last look. Measured under
  * convex-test's transaction limits with rows as the app writes them, each
  * task with its creator, reporter and status stamp and each team share and
- * membership with its copy of a name key, titles and names at the cap in a
- * three-byte script and, where the Board reads them, description rows of
- * 390 characters, the measured average, in a three-byte script
- * (tests/board.test.ts, real limits), in ranges, documents and MiB. A task
- * row at the title cap is then about 1.25 KB, a subtask's with its
- * assignee about 1.35. A real backend timed on 31 October 2026 read 6.41
- * MiB for the largest Board below and 10.99 for the search at the title
- * cap, with rows the app's own writers made.
+ * membership with its copy of a name key, in ordinary text: titles of about
+ * 80 characters and, where the Board reads them, description rows of 390
+ * characters, the measured average (tests/board.test.ts, real limits), in
+ * ranges, documents and MiB. On 31 October 2026 a real backend, with rows
+ * the app's own writers made, read the bytes these tests then measured to
+ * within 1 percent.
  *
- * - 1,000 tasks of one sub-project: 1,020, 1,018 and 1.21; 1,001 stop at
+ * - 1,000 tasks of one sub-project: 1,020, 1,018 and 0.55; 1,001 stop at
  *   the ceiling after about as much.
- * - 1,000 tasks over 200 sub-projects of one project: 1,239, 1,208 and
- *   1.37, under Focus 1,241.
- * - 1,000 tasks under 50 groups: 1,071, 2,069 and 2.56.
- * - My view of 600 and 400 tasks in two seats: 1,035, 1,021 and 1.26.
- * - The envelope's largest Board, 1,000 subtasks under 1,000 parents over
- *   200 sub-projects, each shared with each of the person's 25 teams: 2,475,
- *   9,288 and 6.39, with or without Focus, the 5,000 shares about 6,300 of
- *   those documents; the same subtasks as the person's own in My view,
- *   their parents read by id: 3,513, 9,293 and 6.40.
- * - A priority filter that keeps one subtask under each of 400 parents of
- *   ten, the selection's 4,400 tasks read whole and each parent's subtasks
- *   again: 473, 8,471 and 10.52; the same as the person's own in My view:
- *   816, 4,809 and 5.98.
- * - A search over 5,000 tasks with realistic titles, 40 to 60 characters:
- *   213, 10,159 and 9.81. The same search with every title at the cap does
- *   not fit and answers over_budget after 178, 8,802 and 10.99 (below).
- * - A search over 4,000 tasks for a word only the labels of 667 hold: 801,
- *   8,798 and 10.37; over 600 tasks of one sub-project for a word a label
- *   holds that 29,400 other tasks of the organization carry, read through
- *   each task's own rows: 1,235, 4,391 and 2.20.
+ * - 1,000 tasks over 30 sub-projects of one project, the design size:
+ *   1,093, 1,062 and 0.57, under Focus 1,123.
+ * - 1,000 tasks under 50 groups: 1,071, 2,069 and 1.21.
+ * - My view of 600 and 400 tasks in two seats: 1,035, 1,021 and 0.60.
+ * - The largest Board the ceiling allows, 1,000 subtasks under 1,000
+ *   parents over 20 sub-projects, each shared with each of the person's 3
+ *   teams: 3,049, 4,051 and 2.44 under Focus, 3,064, 4,086 and 2.46
+ *   without; the same subtasks as the person's own in My view, their
+ *   parents read by id: 3,091, 3,103 and 1.84.
+ * - A search over a project's 800 open tasks, the design size: 45, 1,629
+ *   and 0.91.
  *
  * Each task the filters keep costs about one range, its group check, and a
  * group one more for its subtasks. The subtasks of a shown group that the
  * filters drop cost nothing more where the group or the subtask was created
  * under the rule of one level (lib/viewReads.ts ONE_LEVEL_SINCE); data
  * stored before it gets a check of each such subtask, which a legacy nested
- * group may be, a range each, so for that data the priority filter above
- * answers over_budget at 3,600 ranges, and the largest Board's My view,
- * whose fixture data predates the rule, comes within 90 of them. Ranges
- * run out first at about 1,500 cards under as many parents; the ceiling
- * comes before.
+ * group may be, a range each, and the largest Board's My view, whose
+ * fixture data predates the rule, comes within 510 of the 3,600 ranges.
+ * Ranges would run out at about 1,150 cards under as many parents; the
+ * ceiling comes before.
  *
  * Bytes stop a selection whose tasks a filter must read whole: the search,
  * the people filter, Priority and Stale read every task of the selection's
  * ranges before they drop any (`take`), where My tasks and Focus read only
- * their own ranges. A search that reads every candidate's text, of 390
- * characters in a three-byte script, stops fitting at about 4,200 tasks
- * with titles at the cap and about 5,600 with realistic titles, and one
- * whose candidates hold texts near the cap fits far fewer. The people
- * filter, Priority and Stale stop at about 9,600 tasks at the title cap,
- * the people filter measured. A filter that keeps subtasks under many
- * parents stops sooner, as it reads each such parent's subtasks again: the
- * 400 parents of ten above take 10.52 of the 12 MiB. Each answers
+ * their own ranges. At the design size each fits with room to spare, the
+ * search over a project's 800 open tasks above in 0.91 of the 12 MiB. Past
+ * it, a selection of thousands of tasks or candidates with long texts
+ * reaches the budget, and a filter that keeps subtasks under many parents
+ * sooner, as it reads each such parent's subtasks again. Each answers
  * over_budget, and the owner chose on 31 October 2026 that the Board then
- * asks the person to narrow.
+ * asks the person to narrow. The tests reach those answers by lowering
+ * `reads`.
  *
  * `context` caps the groups among the rows and the shown parents together,
  * the rows a Board holds beside its BOARD_TASKS cards. They count in
  * `reads` already, so this bounds what the browser keeps: 2,000 rows at up
  * to about 1.6 KB of JSON, about 3.2 MB, so 1,000 cards under 1,000 parents
- * still fit. `owners` caps the ids the people filter may name, the
- * envelope's 1,000 people. `labelTasks` is how many candidates of one
+ * still fit. `owners` caps the ids the people filter may name, the design
+ * size's 1,000 people. `labelTasks` is how many candidates of one
  * organization a search reads labels for through their own rows, a range
  * each, before it tries each label that can finish their matches by its
  * assignments, many to a range, and `labelScan` how many assignments a
