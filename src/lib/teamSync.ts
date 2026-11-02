@@ -239,8 +239,8 @@ export function syncRoster<U extends SyncUser>(
 }
 
 /** The order inside every group, stable from day to day: no estimate first,
-    then the Estimates walk's order (planned start week, planned before
-    unplanned; then due date, undated last), then the key. */
+    then planned start week, planned before unplanned; then due date, undated
+    last; then the key. */
 export function syncRowOrder(a: SyncIssue, b: SyncIssue): number {
   const ea = a.remaining == null ? 0 : 1
   const eb = b.remaining == null ? 0 : 1

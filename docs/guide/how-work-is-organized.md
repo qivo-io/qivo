@@ -36,7 +36,7 @@ Tasks have these fields:
 - **Reviewer**. An optional person or agent who meets the Assignee rules and
   may also be the assignee. While a task is **In Review** with a reviewer,
   that reviewer owns its work for My view, filters, assignee lanes, workload,
-  planning, delay projections and **Update Estimate**. Task portraits show
+  planning, delay projections and **Team sync**. Task portraits show
   the reviewer, who also starts following the task ([Your inbox](./working-together.md#your-inbox)). Otherwise, the
   assignee owns it. Grouping parents have no reviewer of their own; set
   reviewers on their subtasks.

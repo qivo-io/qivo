@@ -1,8 +1,6 @@
-/* The pieces both person-by-person walks render: the weekly Update Estimate
-   modal (src/panels/UpdateEstimate.tsx, hooks `data-ue-*`) and the Team sync
-   page (src/views/TeamSync.tsx, hooks `data-sync-*`). One walk, two presets
-   (deviation #316): each piece takes the hook prefix of the walk it
-   sits in, so drives keep telling the two apart. */
+/* The pieces of Team sync's person-by-person walk (src/views/TeamSync.tsx,
+   hooks `data-sync-*`, deviation #316). Each piece takes the hook prefix of
+   the walk it sits in as a parameter. */
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,7 +12,7 @@ import { LIMITS } from '../../convex/lib/limits'
 import { Avatar, Icon } from './qivo'
 import type { WalkHook } from './walkRows'
 
-/* One data hook of a walk, e.g. `data-ue-jump="<profile uuid>"`. */
+/* One data hook of a walk, e.g. `data-sync-jump="<profile uuid>"`. */
 function hook(walk: WalkHook, name: string, value = '') {
   return { [`data-${walk}-${name}`]: value }
 }
@@ -70,8 +68,7 @@ export function WalkRail({
           variant="unstyled"
         >
           <Avatar id={u.id} size={28} />
-          {/* the done badge's ring knocks it out of whatever it sits on: the
-              dialog card in the Estimates walk (#77), the page panel in the sync */}
+          {/* the done badge's ring knocks it out of the page panel it sits on */}
           {allDone(u.id) && (
             <span
               {...hook(walk, 'done', u.id)}
@@ -156,13 +153,13 @@ export function ReviewTick({
   it,
   on,
   onToggle,
-  markTitle = 'Mark reviewed without changing hours',
+  markTitle,
 }: {
   hook: WalkHook
   it: IssueVM
   on: boolean
   onToggle: () => void
-  markTitle?: string
+  markTitle: string
 }) {
   return (
     <Button

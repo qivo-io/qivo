@@ -112,10 +112,8 @@ If the scope has milestones, the timeline stays behind that note and shows them.
 same Roadmap visit. Changes save immediately, including restored values.
 One Auto-move action counts as one undo step for all the tasks it moves.
 
-History includes task dates, milestone additions, edits and deletions, and
-Remaining edits in **Estimates**.
-Restoring an estimate also restores its measurement time. Display preferences,
-filters and the visible date window are unaffected.
+History includes task dates and milestone additions, edits and deletions.
+Display preferences, filters and the visible date window are unaffected.
 
 Changing projects or filters within Roadmap keeps history. On a phone,
 switching between the agenda and timeline also keeps it; Undo sits below
@@ -147,28 +145,11 @@ though they still count as blockers. A conflict stays red when fixing it
 would mean moving one of them. Cycles remain unresolved with red arrows, so you must remove or change
 those links.
 
-## Estimates. Refresh the numbers before you plan
+## Refresh remaining hours before you plan
 
-Open **Estimates** to update Remaining hours one person at a time. The window
-includes all visible projects, regardless of the Roadmap's current project.
-It lists To Do, In Progress and In Review tasks with an owner, including tasks
-with no estimate. The owner is the assignee, or the reviewer while a task is
-In Review with one ([Task ownership](./how-work-is-organized.md#the-task)). Groups with subtasks and tasks without owners are
-excluded.
-
-Rows show project, status, plan or due date, and Remaining. Scheduled tasks
-sort by start week, followed by unscheduled tasks by due date. Rows do not
-open the task window.
-
-Edit Remaining and press Enter or leave the field to save. Closing also saves
-the focused field. Each save refreshes the task's measurement time for delay
-projections ([Delay projections](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)) and clears its stale mark. Workload figures and heading totals
-update from the saved estimate.
-
-Editing or pressing a row's review tick marks it reviewed. The footer counts
-reviewed tasks, and a person gets a checkmark when all their rows are reviewed.
-Use **Previous**, **Next** or a portrait to change people. The last button is
-**Done**. Checkmarks last only while this window is open.
-
-**Team sync** ([Team sync](./planning-against-real-capacity.md#team-sync)) adds status and owner changes, delay warnings, completed
-work and a team summary.
+Workload figures and delay projections use each task's Remaining hours. Update
+them in the task window's details ([The task window](./the-task-window.md#the-details-column)), or one person at a time in
+**Team sync** ([Team sync](./planning-against-real-capacity.md#team-sync)). Team sync lists your own
+organization's projects, so if you only have guest access, or the project is
+shared from another organization, use the task window. Each saved Remaining
+starts a new measurement for delay projections ([Delay projections](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)).
