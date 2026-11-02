@@ -50,6 +50,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
+import { listActiveIssuesCore } from '../lib/activeTaskPage'
 import { archiveCursorText } from '../lib/archivedTasks'
 import { ORG_DELETING } from '../lib/billingAccess'
 import {
@@ -67,7 +68,6 @@ import {
   findIssue,
   findProjectRef,
   issueKey,
-  listActiveIssuesCore,
   listArchivedIssuesCore,
   listCommentsCore,
   listProjectsCore,
@@ -165,8 +165,8 @@ import { conflictRetrying, type MachineEntry, type Principal, runEntry } from '.
 import {
   REST_CALLER as CALLER,
   internalError,
-  listOffset,
   needJson,
+  offsetSent,
   optionalJson,
   pageLimit,
   restProvenance as provenanceOf,
@@ -186,8 +186,9 @@ type RestProjectDetailJson = Awaited<ReturnType<typeof projectDetailJson>>
 type RestUserJson = ReturnType<typeof userJson>
 type RestProjectUserJson = Awaited<ReturnType<typeof listProjectUsersCore>>[number]
 type RestTaskJson = RestIssueJson & TaskDetailJson & TaskAttachmentsJson
-/** A page of archived tasks; `next_cursor` is null on the last one. */
-type RestArchivedPage = { next_cursor: string | null; tasks: RestIssueJson[] }
+/** A page of active or archived tasks; `next_cursor` is null on the last
+ * one. */
+type RestTaskPage = { next_cursor: string | null; tasks: RestIssueJson[] }
 type RestLabelJson = ReturnType<typeof labelJson>
 
 /** The 403 for a readable project the caller cannot write. */
@@ -575,13 +576,13 @@ export const updateUser = internalMutation({
 /* --------------------------------------------------------------- issues -- */
 
 /* GET /v1/tasks — filters + scope expansion (rest:368-403). Query params
- * arrive as raw strings. `limit` and `offset` follow MCP list_tasks's rules
- * (shared.ts pageLimit, pageOffset), so a value out of range is refused
- * rather than changed. Active tasks answer an array paged with `offset`.
- * Archived tasks need `project` and answer `{next_cursor, tasks}`, paged
- * with `cursor` (lib/core.ts listArchivedIssuesCore), and refuse any
- * `offset` but 0. `today` is the HTTP action's UTC day, which active rows'
- * delay is judged by. */
+ * arrive as raw strings. `limit` follows MCP list_tasks's rule (shared.ts
+ * pageLimit), so a value out of range is refused rather than changed. Both
+ * active and archived tasks answer `{next_cursor, tasks}`, paged with
+ * `cursor` (lib/activeTaskPage.ts listActiveIssuesCore, lib/core.ts
+ * listArchivedIssuesCore), and refuse any `offset` but 0 (shared.ts
+ * offsetSent). Archived tasks need `project`. `today` is the HTTP action's
+ * UTC day, which active rows' delay is judged by. */
 export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
@@ -598,7 +599,7 @@ export const listIssues = internalQuery({
     offset: v.optional(v.string()),
     cursor: v.optional(v.string()),
   },
-  handler: async (ctx, a): Promise<RestIssueJson[] | RestArchivedPage> => {
+  handler: async (ctx, a): Promise<RestTaskPage> => {
     const { me, cat, readable } = await withAccess(ctx, a.callerId, a.access)
     const project = a.project ? findProjectRef(cat, a.project) : undefined
     if (a.project && (project === undefined || !readable(project.id))) {
@@ -619,7 +620,6 @@ export const listIssues = internalQuery({
     if (a.owner && !UUID.test(a.owner)) throw badRequest('owner must be a profile uuid')
     const limit = pageLimit(LIMITS.listTasks, a.limit)
     const archived = a.archived === 'true'
-    const offset = listOffset(a.offset, archived)
     const filters = {
       statuses: statuses as IssueStatus[],
       priority: a.priority ? (a.priority as IssuePriority) : undefined,
@@ -639,17 +639,18 @@ export const listIssues = internalQuery({
       flag: 'archived=true',
       archived,
       project,
-      offset,
+      offsetSent: offsetSent(a.offset),
       // an empty cursor, like any empty filter, counts as absent
       cursor: a.cursor ? a.cursor : undefined,
     })
     if (req.archived === false) {
-      return await listActiveIssuesCore(
+      const page = await listActiveIssuesCore(
         ctx,
         me,
-        { ...filters, scope: req.scope, offset: req.offset, today: a.today },
+        { ...filters, scope: req.scope, project: req.project, cursor: req.cursor, today: a.today },
         view,
       )
+      return { next_cursor: page.next, tasks: page.rows }
     }
     const page = await listArchivedIssuesCore(
       ctx,

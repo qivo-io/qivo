@@ -7,21 +7,17 @@
  *   2. A project's `completion`, the Completion of the app's Overview, on the
  *      single-project read and its write answers, checked the same way.
  *   3. `last_comment_at` on list rows, the single read and the REST write
- *      answers, and the read limit an active page keeps while it reads it. */
+ *      answers, and the read budget an active page keeps while it reads it
+ *      (lib/activeTaskPage.ts). */
 /// <reference types="vite/client" />
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { type GroupIssue, groupProgress, isIssueGroup } from '../../src/lib/issueGroups'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import {
-  ACTIVE_LIST_TOO_WIDE,
-  ACTIVE_TASKS_TOO_LARGE,
-  COMMENT_READS_RESERVE,
-  PAGE_TOO_LARGE,
-  SEARCH_TOO_LARGE,
-} from '../lib/core'
+import { ACTIVE_PAGE, TASK_LIST_UNREADABLE } from '../lib/activeTaskPage'
 import type { Refusal } from '../lib/functions'
+import { CURSOR_REFUSAL, offsetRefusal } from '../lib/listCursor'
 import {
   as,
   expectRefusal,
@@ -39,6 +35,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { lowered, mcpPages, restPage, restPages } from './taskPages.setup'
 
 type Fx = OrgFixture & {
   t: T
@@ -137,7 +134,7 @@ function appCompletion(view: Awaited<ReturnType<typeof appView>>, metaId: string
   const counted = view.rows.filter((r) => subs.has(r.project_id) && !isIssueGroup(view.byId[r.id]))
   const done = counted.filter((r) => r.status === 'done').length
   const total = counted.length
-  return { done, total, percent: total ? Math.round((done / total) * 100) : 0 }
+  return { status: 'ok', done, total, percent: total ? Math.round((done / total) * 100) : 0 }
 }
 
 const restGet = (fx: Fx, ref: string, callerId: string) =>
@@ -154,6 +151,9 @@ const mcpRead = async <Out>(
   ) as Out
 
 type Row = { id: string; progress: unknown; last_comment_at: unknown }
+
+/** A page of MCP list_tasks. */
+type McpPage = { next_cursor: string | null; tasks: Row[] }
 
 /* ------------------------------------------------------------ 1. progress */
 
@@ -212,9 +212,9 @@ describe('a group’s progress is the app task window’s Progress', () => {
     } as const
     for (const person of [fx.guest, fx.admin]) {
       const rest = await restTasks(fx.t, { callerId: person.id, access: 'read', limit: '200' })
-      const mcp = await mcpRead<Row[]>(fx, internal.machine.mcp.listIssues, person.id, {
-        limit: 200,
-      })
+      const mcp = (
+        await mcpRead<McpPage>(fx, internal.machine.mcp.listIssues, person.id, { limit: 200 })
+      ).tasks
       for (const [issue, progress] of expected[person.id === fx.guest.id ? 'guest' : 'admin']) {
         const label = `${person.name} ${issue.title}`
         expect((await restGet(fx, issue.id, person.id)).progress, label).toEqual(progress)
@@ -272,17 +272,19 @@ describe('a project’s completion is the app Overview’s Completion', () => {
     // the admin counts hiddenSib's two leaves too; ARC's task, the archived
     // ones and every group stay out
     expect((await restProject(fx, fx.admin, 'TBED')).completion).toEqual({
+      status: 'ok',
       done: 6,
       total: 11,
       percent: 55,
     })
     expect((await restProject(fx, fx.guest, 'TBED')).completion).toEqual({
+      status: 'ok',
       done: 6,
       total: 9,
       percent: 67,
     })
     // a sub-project counts its own tasks
-    const fw = { done: 3, total: 6, percent: 50 }
+    const fw = { status: 'ok', done: 3, total: 6, percent: 50 }
     expect((await restProject(fx, fx.admin, 'FW')).completion).toEqual(fw)
     const viaMcp = JSON.parse(
       await fx.t.query(internal.machine.projects.mcpGetProject, {
@@ -308,7 +310,7 @@ describe('a project’s completion is the app Overview’s Completion', () => {
   })
 
   it('answers a new project’s zero completion without reading tasks', async () => {
-    // the parent's own read passes this many documents, and creating does not
+    // the parent's tasks pass this many documents, which creating never reads
     const fx = await setup(newT({ transactionLimits: { documentsRead: 250 } }))
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 300; i++) {
@@ -335,14 +337,19 @@ describe('a project’s completion is the app Overview’s Completion', () => {
         parent: 'TBED',
       }),
     ) as { completion: unknown }
-    expect(created.completion).toEqual({ done: 0, total: 0, percent: 0 })
-    await expect(
-      fx.t.query(internal.machine.rest.getProject, {
-        callerId: fx.user.id,
-        access: 'read',
-        ref: 'TBED',
-      }),
-    ).rejects.toThrow()
+    expect(created.completion).toEqual({ status: 'ok', done: 0, total: 0, percent: 0 })
+    // the parent's own read answers, its completion past its budget unavailable
+    const parent = await fx.t.query(internal.machine.rest.getProject, {
+      callerId: fx.user.id,
+      access: 'read',
+      ref: 'TBED',
+    })
+    expect(parent.completion).toEqual({
+      status: 'unavailable',
+      done: null,
+      total: null,
+      percent: null,
+    })
   })
 })
 
@@ -375,7 +382,8 @@ describe('last_comment_at is when the newest comment was posted', () => {
     /* last_comment_at of `issue` on every read, which must agree. */
     const everywhere = async (issue: Doc<'issues'>) => {
       const rest = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read' })
-      const mcp = await mcpRead<Row[]>(fx, internal.machine.mcp.listIssues, fx.agent.id, {})
+      const mcp = (await mcpRead<McpPage>(fx, internal.machine.mcp.listIssues, fx.agent.id, {}))
+        .tasks
       const values = [
         rest.find((r) => r.id === issue.id)?.last_comment_at,
         mcp.find((r) => r.id === issue.id)?.last_comment_at,
@@ -425,18 +433,14 @@ describe('last_comment_at is when the newest comment was posted', () => {
 })
 
 describe('an active page keeps inside the request’s read limits', () => {
-  const reserve = { ...COMMENT_READS_RESERVE }
-  afterEach(() => {
-    Object.assign(COMMENT_READS_RESERVE, reserve)
-  })
-
-  it('refuses a page whose newest comments do not fit, and answers a smaller one', async () => {
+  it('ends a page whose newest comments pass its budget early, and the next goes on with no gap or repeat', async () => {
     const fx = await setup(newT({ transactionLimits: { bytesRead: 512 << 10 } }))
-    COMMENT_READS_RESERVE.bytes = 32 << 10
     // thirty tasks whose newest comments hold about 19 KB each, 570 KB in all
+    const ids: string[] = []
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 30; i++) {
         const id = uuid()
+        ids.push(id)
         await ctx.db.insert('issues', {
           id,
           org_id: fx.org.id,
@@ -459,74 +463,58 @@ describe('an active page keeps inside the request’s read limits', () => {
         })
       }
     })
-    const refusal = async (p: Promise<unknown>) => {
-      const e = await expectRefusal(p, 'bad_request')
-      expect((e.data as Refusal).message).toBe(PAGE_TOO_LARGE)
+    // a page budget of 300 KB that fits this request's 512 KB
+    const budget = {
+      page: { bytes: 300 << 10, delays: { ...ACTIVE_PAGE.delays, bytes: 50 << 10 } },
+      reserve: { bytes: 64 << 10 },
     }
-    await refusal(restTasks(fx.t, { callerId: fx.agent.id, access: 'read' }))
-    await refusal(
-      fx.t.query(internal.machine.mcp.listIssues, {
-        today: TODAY,
-        callerId: fx.agent.id,
-        access: 'read',
-      }),
-    )
-    const five = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '5' })
-    expect(five.map((r) => r.last_comment_at)).toEqual(Array(5).fill(NOW))
-    const viaMcp = await mcpRead<Row[]>(fx, internal.machine.mcp.listIssues, fx.agent.id, {
-      limit: 5,
-      offset: 25,
+    await lowered(budget, async () => {
+      const args = { callerId: fx.agent.id, access: 'read' as const }
+      const first = await restPage(fx.t, args)
+      expect(first.tasks.length).toBeGreaterThan(0)
+      expect(first.tasks.length).toBeLessThan(30)
+      expect(first.next_cursor).toEqual(expect.any(String))
+      const rest = await restPages(fx.t, args)
+      expect(rest.rows.map((r) => r.id)).toEqual(ids)
+      expect(rest.rows.map((r) => r.last_comment_at)).toEqual(Array(30).fill(NOW))
+      const mcp = await mcpPages(fx.t, args)
+      expect(mcp.rows.map((r) => r.id)).toEqual(ids)
+      expect(mcp.rows.map((r) => r.last_comment_at)).toEqual(Array(30).fill(NOW))
     })
-    expect(viaMcp.map((r) => r.last_comment_at)).toEqual(Array(5).fill(NOW))
   })
 
-  it('says a smaller limit cannot help when the reads before the comments fill the request', async () => {
-    const fx = await setup(newT({ transactionLimits: { bytesRead: 512 << 10 } }))
-    // the reserve stands in for active tasks that leave less than it unread
-    COMMENT_READS_RESERVE.bytes = 512 << 10
-    await task(fx, { title: 'Never discussed' })
-    const refusal = async (p: Promise<unknown>) => {
-      const e = await expectRefusal(p, 'bad_request')
-      expect((e.data as Refusal).message).toBe(ACTIVE_TASKS_TOO_LARGE)
+  it('refuses a request without room for a whole page, whatever the limit', async () => {
+    // short of the page's bytes, then of its index ranges
+    for (const transactionLimits of [{ bytesRead: 512 << 10 }, { databaseQueries: 64 }]) {
+      const fx = await setup(newT({ transactionLimits }))
+      await task(fx, { title: 'Never discussed' })
+      const refusal = async (p: Promise<unknown>) => {
+        const e = await expectRefusal(p, 'bad_request')
+        expect((e.data as Refusal).message, JSON.stringify(transactionLimits)).toBe(
+          TASK_LIST_UNREADABLE,
+        )
+      }
+      await refusal(restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }))
+      await refusal(
+        fx.t.query(internal.machine.mcp.listIssues, {
+          today: TODAY,
+          callerId: fx.agent.id,
+          access: 'read',
+          limit: 1,
+        }),
+      )
     }
-    await refusal(restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }))
-    await refusal(
-      fx.t.query(internal.machine.mcp.listIssues, {
-        today: TODAY,
-        callerId: fx.agent.id,
-        access: 'read',
-        limit: 1,
-      }),
-    )
-    // a page past the end reads no comment, so it still answers
-    expect(
-      await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', offset: '1000' }),
-    ).toEqual([])
-  })
-
-  it('names projects, teams and labels when the reads before the comments use up the ranges', async () => {
-    const fx = await setup(newT({ transactionLimits: { databaseQueries: 64 } }))
-    // the reserve stands in for team and label reads that leave less unread
-    COMMENT_READS_RESERVE.ranges = 64
-    await task(fx, { title: 'Never discussed' })
-    const e = await expectRefusal(
-      restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }),
-      'bad_request',
-    )
-    expect((e.data as Refusal).message).toBe(ACTIVE_LIST_TOO_WIDE)
   })
 })
 
 describe("an active list's refusals", () => {
   it('are the pinned sentences, which the public docs quote', () => {
     const sentences = {
-      [PAGE_TOO_LARGE]: 'this page of tasks is too large to read at once; ask for a smaller limit',
-      [ACTIVE_TASKS_TOO_LARGE]:
-        "this organization's active tasks are too large to list in one request; archive done tasks and finished projects so fewer stay active",
-      [ACTIVE_LIST_TOO_WIDE]:
-        'this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words',
-      [SEARCH_TOO_LARGE]:
-        'this search reads too many label assignments to answer in one request; name a project or add a filter',
+      [TASK_LIST_UNREADABLE]:
+        "the task list could not be read within the request's limits; pass project to list one project's tasks",
+      [CURSOR_REFUSAL]: 'cursor must be the next_cursor of an earlier page',
+      [offsetRefusal('active tasks')]:
+        'offset does not apply to active tasks; pass next_cursor as cursor',
     }
     for (const [sent, pinned] of Object.entries(sentences)) expect(sent).toBe(pinned)
     const docs = import.meta.glob(['../../docs/rest-api.md', '../../docs/mcp.md'], {

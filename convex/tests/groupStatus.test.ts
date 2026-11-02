@@ -99,9 +99,10 @@ describe('parent task status', () => {
         access: 'read',
         status: 'review',
       }),
-    ) as McpIssueOut[]
+    ) as { next_cursor: string | null; tasks: McpIssueOut[] }
     expect(rest.map((i) => i.id)).toEqual([leaf.id])
-    expect(mcp.map((i) => i.id)).toEqual([leaf.id])
+    expect(mcp.tasks.map((i) => i.id)).toEqual([leaf.id])
+    expect(mcp.next_cursor).toBeNull()
     expect(
       JSON.parse(
         await t.query(internal.machine.mcp.getIssue, {

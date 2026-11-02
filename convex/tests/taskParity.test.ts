@@ -5,7 +5,7 @@
  *      group's remaining hours name only tasks the caller can read
  *      (lib/workingSet.ts with the machine Shown), plus owner and link. A
  *      single-task read walks only the subtasks that can count.
- *   2. List filters: several statuses, the owner, MCP's offset.
+ *   2. List filters: several statuses, the owner, MCP's cursor.
  *   3. REST writes: a move with Edit on both ends, parent, labels, the
  *      archive reason, and the fields a body may not write.
  *   4. REST links and labels.
@@ -329,7 +329,9 @@ describe('the single-task read names only tasks the caller can read', () => {
       owner_id: fx.guest.id, // the reviewer owns it while in review
     })
     expect('subtasks' in rows[0]).toBe(false) // list rows stay lean
-    const mcpRows = await mcp<Record<string, unknown>[]>(fx, internal.machine.mcp.listIssues, {})
+    const mcpRows = (
+      await mcp<{ tasks: Record<string, unknown>[] }>(fx, internal.machine.mcp.listIssues, {})
+    ).tasks
     expect(mcpRows.find((r) => r.id === underHidden.id)).toMatchObject({
       parent_id: null,
       has_hidden_parent: true,
@@ -521,7 +523,7 @@ describe('a single-task read walks only the subtasks that can count', () => {
 /* --------------------------------------------------------- 2. list filters */
 
 describe('list filters', () => {
-  it('several statuses, the owner and the MCP offset', async () => {
+  it('several statuses, the owner and the MCP cursor', async () => {
     const fx = await setup()
     const todo = await task(fx, { status: 'todo', assignee_id: fx.user.id })
     const done = await task(fx, { status: 'done' })
@@ -546,13 +548,31 @@ describe('list filters', () => {
     ])
     expect(ids(await restList(fx, { owner: fx.user.id }))).toEqual([todo.id])
     await refused(restList(fx, { owner: 'leo' }), 'bad_request', 'owner must be a profile uuid')
-    const list = (args: Record<string, unknown>) =>
-      mcp<{ id: string }[]>(fx, internal.machine.mcp.listIssues, args)
+    const page = (args: Record<string, unknown>) =>
+      mcp<{ next_cursor: string | null; tasks: { id: string }[] }>(
+        fx,
+        internal.machine.mcp.listIssues,
+        args,
+      )
+    const list = async (args: Record<string, unknown>) => (await page(args)).tasks
     expect(ids(await list({ status: ['todo', 'done'] }))).toEqual([todo.id, done.id])
     expect(ids(await list({ status: 'review' }))).toEqual([review.id])
     expect(ids(await list({ owner_id: fx.guest.id }))).toEqual([review.id, group.id])
     const all = ids(await list({}))
-    expect(ids(await list({ offset: 2, limit: 2 }))).toEqual(all.slice(2, 4))
+    expect(all).toHaveLength(5)
+    // pages of two follow the cursor to the end, and offset 0 is no offset
+    const first = await page({ limit: 2, offset: 0 })
+    expect(ids(first.tasks)).toEqual(all.slice(0, 2))
+    const second = await page({ limit: 2, cursor: first.next_cursor ?? undefined })
+    expect(ids(second.tasks)).toEqual(all.slice(2, 4))
+    const third = await page({ limit: 2, cursor: second.next_cursor ?? undefined })
+    expect(third).toEqual({ next_cursor: null, tasks: [expect.objectContaining({ id: all[4] })] })
+    // any other offset is refused with the sentence that names the cursor
+    await refused(
+      list({ offset: 2, limit: 2 }),
+      'bad_request',
+      'offset does not apply to active tasks; pass next_cursor as cursor',
+    )
   })
 })
 
@@ -1262,9 +1282,10 @@ describe('MCP task parity', () => {
     // null arguments mean none
     const all = await result('list_tasks', null)
     expect(all.isError).toBeUndefined()
-    expect(JSON.parse(all.content[0].text)).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: t1.id })]),
-    )
+    expect(JSON.parse(all.content[0].text)).toEqual({
+      next_cursor: null,
+      tasks: expect.arrayContaining([expect.objectContaining({ id: t1.id })]),
+    })
     // known arguments alone run, and the answer carries nothing extra
     expect(await callJson('update_task', { ref: t1.id, title: 'Again' })).toEqual({
       id: t1.id,
@@ -1302,8 +1323,16 @@ describe('MCP task parity', () => {
     expect(await call('list_tasks', { status: [] })).toBe(
       'status must name at least one of backlog, todo, progress, review, done',
     )
-    expect(await call('list_tasks', { offset: -1 })).toBe(
-      'offset must be a whole number, 0 or more',
+    // an active list pages with a cursor, so a whole offset other than 0,
+    // negative or not, gets the server's sentence that names the cursor
+    for (const offset of [-1, 2]) {
+      expect(await call('list_tasks', { offset }), String(offset)).toBe(
+        'offset does not apply to active tasks; pass next_cursor as cursor',
+      )
+    }
+    // a fractional one is no whole number, which the schema refuses first
+    expect(await call('list_tasks', { offset: 1.5 })).toBe(
+      `${invalid} list_tasks: offset: Invalid input: expected int, received number`,
     )
     // null detaches, so it passes
     expect(await callJson('update_task', { ref: t1.id, parent: null })).toMatchObject({

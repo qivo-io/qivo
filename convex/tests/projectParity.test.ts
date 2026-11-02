@@ -244,7 +244,7 @@ describe('creating projects and sub-projects', () => {
       review_hours: null,
       effective_review_hours: 2,
       track_delay: true,
-      completion: { done: 0, total: 0, percent: 0 },
+      completion: { status: 'ok', done: 0, total: 0, percent: 0 },
       milestones: [],
       grants: { users: [], teams: [] },
     })
@@ -687,7 +687,7 @@ describe('changing a project', () => {
       name: 'Back',
       archived: false,
       archived_at: null,
-      completion: { done: 0, total: 0, percent: 0 },
+      completion: { status: 'ok', done: 0, total: 0, percent: 0 },
     })
     expect((await projectRow(fx.t, fx.sub.id))?.archived_at).toBeUndefined()
     const verbs = (await activityFor(fx.t, fx.org.id)).slice(-2).map((e) => e.verb)

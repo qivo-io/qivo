@@ -1,10 +1,11 @@
 /* The plan_* load family. Two walks disclose busy TIME from projects the
  * caller cannot see, while the projection strips the identity. The fence is
  * in the filter, the anonymization in the projection — kept distinct here.
- * orgLoadRows walks an organization's live tasks, for the REST and MCP
- * lists and workload. The owner reader (lib/ownerLoads.ts) walks one
- * owner's open tasks, for assigneeLoad, ownerLoads and the single-task
- * delay, within bounds past which an owner's load is unavailable.
+ * orgLoadRows walks an organization's live tasks, for REST and MCP
+ * workload (workloadCore). The owner reader (lib/ownerLoads.ts) walks one
+ * owner's open tasks, for assigneeLoad, ownerLoads, the single-task delay
+ * and the REST and MCP list delays, within bounds past which an owner's
+ * load is unavailable.
  *
  * Shared fence (both walks):
  *   scheduled (start_week set — the 0037 envelope CHECK means end_week too),
@@ -58,12 +59,10 @@ export type AssigneeLoadRow = {
 
 /* plan_org_load for one org, each task through the one fence
  * (lib/loadRows.ts loadRowFor). orgProfileIds = ALL profile ids of the org
- * (active + inactive + agents), the 0065 owner fence. The snapshot passes
+ * (active + inactive + agents), the 0065 owner fence. workloadCore passes
  * its live task read (lib/liveTasks.ts liveTasksOf) so planning and grouping
  * do not scan it again. A task's group state comes from those rows, which
- * hold every subtask that makes a task in an active project a group. The
- * REST and MCP delay verdicts (lib/machineDelay.ts) pass the machine
- * catalogue and access flags as `view`, the same projects and rule. */
+ * hold every subtask that makes a task in an active project a group. */
 export function orgLoadRows(
   me: Doc<'profiles'>,
   view: Pick<OrgProjectView, 'byUuid' | 'visible'>,

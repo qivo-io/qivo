@@ -120,6 +120,17 @@ export async function descriptionOf(db: Reader, task: TextOwner): Promise<string
   return (await shownRow(db, task))?.description ?? task.description ?? ''
 }
 
+/** The text of task `task` (descriptionOf) with the description rows it
+ * read, for a reader that counts every document it reads against its own
+ * budget (lib/activeTaskPage.ts). The same reads as descriptionOf. */
+export async function descriptionAndRows(
+  db: Reader,
+  task: TextOwner,
+): Promise<{ text: string; rows: Doc<'issue_descriptions'>[] }> {
+  const rows = await firstRows(db, task.id)
+  return { text: shownOf(rows, task)?.description ?? task.description ?? '', rows }
+}
+
 /** The text readers show for `task` (descriptionOf), and whether its task
  * row holds a different one, which only a rollback leaves: a release from
  * before the table that changed issues.description without the row. Only

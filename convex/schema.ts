@@ -287,6 +287,10 @@ const issuesTable = defineTable({
   .index('by_project', ['project_id'])
   // An access removal reads only the open tasks of the projects it touches.
   .index('by_project_archived', ['project_id', 'archived_at'])
+  // REST and MCP active task lists read each project's active tasks in their
+  // documented order, created_at and then number, from a cursor
+  // (lib/activeTaskPage.ts). Convex builds it at deploy; it needs no backfill.
+  .index('by_project_archived_created', ['project_id', 'archived_at', 'created_at', 'num'])
   .index('by_parent', ['parent_id'])
   // The nightly leaf guard asks whether a parent has an unarchived child.
   .index('by_parent_archived', ['parent_id', 'archived_at'])

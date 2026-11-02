@@ -48,6 +48,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { ActionCtx, QueryCtx } from '../_generated/server'
 import { internalMutation, internalQuery } from '../_generated/server'
 import { hasProjectLevel } from '../lib/access'
+import { listActiveIssuesCore } from '../lib/activeTaskPage'
 import { archiveCursorText } from '../lib/archivedTasks'
 import { ORG_DELETING } from '../lib/billingAccess'
 import {
@@ -65,7 +66,6 @@ import {
   findIssue,
   findProjectRef,
   issueKey,
-  listActiveIssuesCore,
   listArchivedIssuesCore,
   listCommentsCore,
   listProjectsCore,
@@ -168,9 +168,9 @@ import {
   hasLoneSurrogate,
   internalError,
   LONE_SURROGATE,
-  listOffset,
   MCP_NO_WRITE,
   NAMES_LISTED,
+  offsetSent,
   MCP_PROVENANCE as PROVENANCE,
   pageLimit,
   pretty,
@@ -386,7 +386,7 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'list_tasks',
       title: 'List tasks',
-      description: `Tasks you can see, optionally filtered, oldest first by creation. \`is_group: true\` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (\`reporter_id\`, \`reporter_name\`), assignee (\`assignee_id\`, \`assignee_name\`) and reviewer (\`reviewer_id\`, \`reviewer_name\`); while a task is in \`review\` with a reviewer set, it is the reviewer's to act on, and \`owner_id\` names whose work it is. A group's \`progress\` counts the done and total tasks without subtasks under it that you can see, \`delay\` is the app's projected delay when the task's project tracks it, and \`last_comment_at\` is when a task was last commented on. \`project\` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. \`status\` takes one status or a list. \`search\` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. \`limit\` sets how many tasks a page holds (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listTasks.max}) and \`offset\` skips that many results. Active tasks only by default. \`archived: true\` lists archived tasks instead and needs \`project\`, which then includes all its sub-projects you can read, archived ones too; to cover them all, name each top-level project that \`list_projects\` returns with and without \`archived: true\`. That answer is \`{next_cursor, tasks}\`, most recently archived first; pass \`next_cursor\` back as \`cursor\` until it is null, because a page may hold fewer than \`limit\` tasks, even none. Tasks in an ARCHIVED PROJECT are left out of active lists unless \`project\` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.`,
+      description: `Tasks you can see, optionally filtered, oldest first by creation. \`is_group: true\` identifies a parent whose stored status is dormant; status filters exclude groups. Every task identifies its reporter (\`reporter_id\`, \`reporter_name\`), assignee (\`assignee_id\`, \`assignee_name\`) and reviewer (\`reviewer_id\`, \`reviewer_name\`); while a task is in \`review\` with a reviewer set, it is the reviewer's to act on, and \`owner_id\` names whose work it is. A group's \`progress\` counts the done and total tasks without subtasks under it that you can see, \`delay\` is the app's projected delay when the task's project tracks it, \`unavailable\` where the page could not read the owner's other work (get_task reads it for one task), and \`last_comment_at\` is when a task was last commented on. \`project\` accepts a project number, a key like ENC, or a uuid; a meta project includes its sub-projects. \`status\` takes one status or a list. \`search\` matches every whitespace-separated fragment across task ID, title, description, status, priority, assignee name and label names, case-insensitively and in any order. The answer is \`{next_cursor, tasks}\`; pass \`next_cursor\` back as \`cursor\` until it is null, because a page may hold fewer than \`limit\` tasks (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listTasks.max}), even none. \`offset\` is refused unless 0. Active tasks only by default. \`archived: true\` lists archived tasks instead, most recently archived first, and needs \`project\`, which then includes all its sub-projects you can read, archived ones too; to cover them all, name each top-level project that \`list_projects\` returns with and without \`archived: true\`. Tasks in an ARCHIVED PROJECT are left out of active lists unless \`project\` names that project. Archiving a project and archiving a task are separate things, and only the second has a flag here.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -439,6 +439,7 @@ export const TOOLS: McpTool[] = [
           offset: {
             type: 'integer',
             minimum: 0,
+            maximum: 0,
           },
           cursor: {
             type: 'string',
@@ -1707,9 +1708,11 @@ export const updateUser = internalMutation({
   },
 })
 
-/* list_tasks answers active tasks as an array paged with `offset`, or with
- * `archived: true` one project's archived tasks as `{next_cursor, tasks}`,
- * paged with `cursor` (lib/core.ts listArchivedIssuesCore). */
+/* list_tasks answers active tasks, or with `archived: true` one project's
+ * archived tasks, as `{next_cursor, tasks}`, paged with `cursor`
+ * (lib/activeTaskPage.ts listActiveIssuesCore, lib/core.ts
+ * listArchivedIssuesCore), and refuses any `offset` but 0 (shared.ts
+ * offsetSent). */
 export const listIssues = internalQuery({
   args: {
     callerId: v.string(),
@@ -1759,18 +1762,18 @@ export const listIssues = internalQuery({
       flag: 'archived: true',
       archived: a.archived === true,
       project,
-      offset: listOffset(a.offset, a.archived === true),
+      offsetSent: offsetSent(a.offset),
       cursor: a.cursor,
     })
     if (req.archived === false) {
-      return pretty(
-        await listActiveIssuesCore(
-          ctx,
-          me,
-          { ...filters, scope: req.scope, offset: req.offset, today: a.today },
-          view,
-        ),
+      const page = await listActiveIssuesCore(
+        ctx,
+        me,
+        { ...filters, scope: req.scope, project: req.project, cursor: req.cursor, today: a.today },
+        view,
       )
+      // the cursor first, so a truncated tool result still shows it
+      return pretty({ next_cursor: page.next, tasks: page.rows })
     }
     const page = await listArchivedIssuesCore(
       ctx,

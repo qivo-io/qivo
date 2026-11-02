@@ -505,6 +505,18 @@ demo to a deployment of a commit before the release that replaced
 `snapshot.forMe` with the parts (the release after v0.1.52). Roll forward
 instead.
 
+REST `GET /v1/tasks` and MCP `list_tasks` page active tasks with a cursor
+from the release that made them answer `{next_cursor, tasks}`. Returning the
+backend to a commit before it makes active lists answer an array again,
+honors `offset` again and refuses a `cursor` without the archived flag
+(`cursor works only with archived=true`, or `archived: true` on MCP). A
+REST or MCP caller that pages active lists with `next_cursor` then stops
+working until the backend rolls forward. List rows' delays never say
+`unavailable`, and project completion loses `status`. Such a deploy drops
+the index `issues.by_project_archived_created`, and the deploy forward
+builds it again, with no change to data. This sets no floor for the app,
+which calls neither route.
+
 The app's Board, the phone's task list and My view's Board read which tasks
 they show from `tasks.board`, which v0.1.107 (`b7d2abac`) first shipped. An
 app from the release that switched them to it, against a backend before

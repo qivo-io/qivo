@@ -176,13 +176,16 @@ export function pageOffset(raw: string | number | undefined): number {
   return n
 }
 
-/** A task list's `offset`. An archived list takes none, so its raw value
- * goes to taskListRequest unchecked, which refuses any but 0 with the
- * sentence that says to pass a cursor instead. */
-export function listOffset(raw: string | number | undefined, archived: boolean): number {
-  if (!archived) return pageOffset(raw)
-  return raw === undefined ? 0 : numberOf(raw)
-}
+/** Whether a list that pages with a cursor was sent an `offset` other than
+ * 0, from a REST query parameter or an MCP argument. Absent is 0, and so is
+ * any text that reads as 0, such as `00`; anything else, text that is no
+ * number included, is an offset sent. The task lists refuse such an offset
+ * in lib/core.ts taskListRequest with lib/listCursor.ts offsetRefusal; REST
+ * GET /v1/inbox and MCP list_inbox (t3/limits-machine-inbox) and REST GET
+ * /v1/workload and MCP get_workload (t3/limits-workload-pages) are to do
+ * the same once they page with a cursor. */
+export const offsetSent = (raw: string | number | undefined): boolean =>
+  raw !== undefined && numberOf(raw) !== 0
 
 /** A REST request body that may be left out, such as a DELETE's. An empty
  * body reads as {}, and any other body as needJson reads it. */

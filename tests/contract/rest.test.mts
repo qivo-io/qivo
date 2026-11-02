@@ -442,11 +442,22 @@ describe('write round trip (creates only what it deletes)', () => {
     expect(await comments.json()).toEqual([comment])
 
     // The HTTP search parameter carries reordered fragments and captured IDs.
+    // The list answers {next_cursor, tasks} pages, which may be short or
+    // empty before a search finds its match, so it reads them to the end.
     for (const search of ['TRIP cont', `${String(row.key).toLowerCase()} tract`]) {
-      const found = await call('GET', `/v1/tasks?search=${encodeURIComponent(search)}`)
-      expect(found.status).toBe(200)
-      const matches = (await found.json()) as { id: string }[]
-      expect(matches.map((issue) => issue.id)).toEqual([row.id])
+      const matches: string[] = []
+      let cursor: string | null = null
+      for (let pages = 0; pages < 50; pages++) {
+        const after = cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`
+        const found = await call('GET', `/v1/tasks?search=${encodeURIComponent(search)}${after}`)
+        expect(found.status).toBe(200)
+        const page = (await found.json()) as { next_cursor: string | null; tasks: { id: string }[] }
+        matches.push(...page.tasks.map((issue) => issue.id))
+        cursor = page.next_cursor
+        if (cursor === null) break
+      }
+      expect(cursor).toBeNull()
+      expect(matches).toEqual([row.id])
     }
 
     // the FOLDED PATCH: fields + the archived toggle in one request

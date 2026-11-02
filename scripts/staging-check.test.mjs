@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HISTORY_PAGE_MAX, WINDOW_HISTORY_PAGE } from '../convex/lib/activityVisibility'
+import { CURSOR_REFUSAL, offsetRefusal } from '../convex/lib/listCursor'
 import { FOCUS_STATUSES } from '../convex/lib/viewReads'
 import {
   ACCESS_PUT_FIELDS,
@@ -17,6 +18,7 @@ import {
   hasTag,
   historyRows,
   isSiteOf,
+  LIST_REFUSALS,
   pace,
   parseArgs,
   RATE_BUDGET,
@@ -28,7 +30,9 @@ import {
   send,
   syncsWith,
   TAG_ANY,
+  TASK_PAGES_MAX,
   THREAD_PAGE,
+  taskPages,
   WAITS,
   WRITE_CONFLICT,
   weekOf,
@@ -50,6 +54,12 @@ describe('staging check REST contract', () => {
       comments: COMMENT_PAGE_MAX,
       history: HISTORY_PAGE_MAX,
       windowHistory: WINDOW_HISTORY_PAGE,
+    })
+  })
+  it("expects the server's sentences for a task list's offset and cursor", () => {
+    expect(LIST_REFUSALS).toEqual({
+      activeOffset: offsetRefusal('active tasks'),
+      cursor: CURSOR_REFUSAL,
     })
   })
 })
@@ -502,5 +512,41 @@ describe('thread pages', () => {
     expect(() => historyRows([all.slice(-500)], 500)).toThrow(/^pages before the empty one:/)
     const swapped = [...all.slice(0, 10), all[20], ...all.slice(10, 20), ...all.slice(21)]
     expect(() => historyRows(pages(swapped), 511)).toThrow(/^pages overlap or skip/)
+  })
+})
+
+describe('task list pages', () => {
+  /** A reader of `pages`, `{next_cursor, tasks}` each, that records the
+   *  cursor of every read. */
+  const reader = (pages) => {
+    const cursors = []
+    const read = async (cursor) => {
+      cursors.push(cursor)
+      return pages[cursors.length - 1]
+    }
+    return { read, cursors }
+  }
+  it('reads on through short and empty pages until next_cursor is null', async () => {
+    const { read, cursors } = reader([
+      { next_cursor: 'c1', tasks: [{ id: 'a' }] },
+      { next_cursor: 'c2', tasks: [] },
+      { next_cursor: null, tasks: [{ id: 'b' }, { id: 'c' }] },
+    ])
+    expect((await taskPages(read, 'the list')).map((t) => t.id)).toEqual(['a', 'b', 'c'])
+    expect(cursors).toEqual([null, 'c1', 'c2'])
+  })
+  it('refuses an answer that is no page, such as the array active lists answered before', async () => {
+    await expect(taskPages(reader([[{ id: 'a' }]]).read, 'the list')).rejects.toThrow(
+      'the list answered no {next_cursor, tasks} page',
+    )
+    await expect(taskPages(reader([{ tasks: [] }]).read, 'the list')).rejects.toThrow(
+      'the list answered no {next_cursor, tasks} page',
+    )
+  })
+  it('gives up on a next_cursor that never ends', async () => {
+    const endless = async () => ({ next_cursor: 'again', tasks: [] })
+    await expect(taskPages(endless, 'the list')).rejects.toThrow(
+      `the list still had a next_cursor after ${TASK_PAGES_MAX} pages`,
+    )
   })
 })

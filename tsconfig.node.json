@@ -20,5 +20,11 @@
     "allowImportingTsExtensions": true,
     "allowJs": true
   },
-  "include": ["tests", "vitest.config.mts", "vitest.contract.config.mts", "scripts/*.d.mts"]
+  "include": [
+    "tests",
+    "vitest.config.mts",
+    "vitest.contract.config.mts",
+    "vitest.envelope.config.mts",
+    "scripts/*.d.mts"
+  ]
 }

@@ -676,9 +676,23 @@ describe('write trip (modern leg, qva key — creates only what it deletes)', ()
     ])
 
     // Tool search carries reordered fragments and a task ID through the wire.
+    // list_tasks answers {next_cursor, tasks} pages, which may be short or
+    // empty before a search finds its match, so it reads them to the end.
     for (const search of ['TRIP cont', `${created.key.toLowerCase()} tract`]) {
-      const matches = JSON.parse(await callTool('list_tasks', { search }, 90)) as { id: string }[]
-      expect(matches.map((issue) => issue.id)).toEqual([created.id])
+      const matches: string[] = []
+      let cursor: string | null = null
+      for (let pages = 0; pages < 50; pages++) {
+        const args = cursor === null ? { search } : { search, cursor }
+        const page = JSON.parse(await callTool('list_tasks', args, 90)) as {
+          next_cursor: string | null
+          tasks: { id: string }[]
+        }
+        matches.push(...page.tasks.map((issue) => issue.id))
+        cursor = page.next_cursor
+        if (cursor === null) break
+      }
+      expect(cursor).toBeNull()
+      expect(matches).toEqual([created.id])
     }
 
     // Omission fixes the reporter as the authenticated caller.

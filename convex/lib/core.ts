@@ -42,7 +42,7 @@ import {
   postArchiveReason,
 } from '../model/comments'
 import type { Via } from '../model/deletedItems'
-import { descriptionOf, descriptionsOf, projectTextReader } from '../model/descriptions'
+import { descriptionOf } from '../model/descriptions'
 import {
   assertLive,
   assertTaskExpected,
@@ -75,17 +75,12 @@ import {
   archivedTaskMatcher,
   archivedTasksPage,
   ceilingGuard,
-  matchingLabels,
-  namesOf,
   parseArchiveCursor,
   projectsScope,
   type ReadCeiling,
   rangesLeft,
-  readsUnder,
   roomOf,
   rosterNames,
-  rosterOf,
-  searchFields,
 } from './archivedTasks'
 import {
   assertOrgAvailable,
@@ -107,13 +102,13 @@ import {
 } from './enums'
 import { badRequest, forbidden, notFound, type Refusal } from './functions'
 import { limitedText } from './limitRules'
-import { LIMITS } from './limits'
+import { LIMITS, MIB, TASK_ROW_MAX_BYTES } from './limits'
+import { CURSOR_REFUSAL, offsetRefusal } from './listCursor'
 import {
   countsAsSubtask,
   groupTest,
   layerOf,
   liveIn,
-  liveTasksOf,
   type ProjectLive,
   projectLiveness,
 } from './liveTasks'
@@ -121,15 +116,15 @@ import {
   type DelayJson,
   delayClock,
   type Forecaster,
-  listForecaster,
   noForecast,
   taskForecaster,
 } from './machineDelay'
+import { readTally, totalsOf } from './machineSubtree'
 import { canCreateProjects } from './projectCreators'
 import { taskOwnerId } from './review'
-import { allWordsMatcher, searchPieces, taskSearchText } from './search'
 import type { EventOwner } from './taskEvents'
 import { INT4_MAX, issueKey, parseIssueRef, UUID } from './taskRefs'
+import { withoutSubtasks } from './viewReads'
 import { groupRemainingHours, linkShown, parentLink, type Shown } from './workingSet'
 
 export { machineDetail }
@@ -416,8 +411,12 @@ export type ActiveListOpts = ListFilters & {
    *  is not archived (0106's two archive axes; naming the project is what
    *  asks for an archived one) */
   scope: string[] | null
+  /** the uuid of the project the call names, or null, which a cursor seals */
+  project: string | null
   limit: number
-  offset: number
+  /** the next_cursor of the previous page as the caller sent it, or null
+   *  for the first page (lib/activeTaskPage.ts) */
+  cursor: string | null
   /** the request's UTC day (YYYY-MM-DD), which delay verdicts are judged by */
   today: string
 }
@@ -442,7 +441,7 @@ export type ListView = {
 /** The names of `labels` that the task carries, in their order, read through
  * the task's own assignment of each (by_issue_label), archive marks
  * included. One index range and at most one document per label, however
- * many other labels the task carries. The Board's search reads them too
+ * many other labels the task carries. The Board's search reads them
  * (lib/board.ts). */
 export async function labelNamesOf(
   ctx: QueryCtx,
@@ -462,8 +461,7 @@ export async function labelNamesOf(
 
 /** The names of `labels` that the task carries, in their order, read through
  * all the task's own assignments (by_issue) in one index range, archive
- * marks included, for a task restored so recently that its assignments are
- * still marked, and by the Board's search where it starts fewer ranges than
+ * marks included, by the Board's search where it starts fewer ranges than
  * labelNamesOf (lib/board.ts). */
 export async function markedLabelNamesOf(
   ctx: QueryCtx,
@@ -476,272 +474,11 @@ export async function markedLabelNamesOf(
   return labels.filter((label) => held.has(label.id)).map((label) => label.name)
 }
 
-/** How many reads of one task's assignment of one matching label
- * (labelNamesOf) a search makes, within TEXT_TASK_READS, before it reads
- * each matching label's active assignments instead. Tests lower `reads`. */
-export const LABEL_TASK_READS = { reads: 1000 }
-
-/** What a search's label reads keep back from the request's limits for the
- * page after them, its parents, texts and newest comments, a range each for
- * up to LIMITS.listTasks.max rows. They check the request's reads before
- * each index range and every LABEL_ROWS_PER_CHECK rows, so the documents
- * and bytes also hold that many rows, or one restored task's assignments.
- * Tests lower these. */
-export const LABEL_READS_RESERVE = { ranges: 616, documents: 1024, bytes: 2 * DOCUMENT_MAX_BYTES }
-
-/* How many label assignments a search reads between two checks of the
- * request's reads. */
-const LABEL_ROWS_PER_CHECK = 256
-
-/** The refusal for a search whose label assignments do not fit in one
- * request. */
-export const SEARCH_TOO_LARGE =
-  'this search reads too many label assignments to answer in one request; name a project or add a filter'
-
-/** What a search's description reads keep back from the request's limits
- * when some label matches the search: LABEL_READS_RESERVE for the page
- * after the search, and as many ranges and documents again for the label
- * reads that may follow a description read (searchedTexts), the last of
- * which read each matching label's active assignments once a task's own
- * assignments are too many to read one by one (activeLabelNames).
- * Assignments are small, so one document at Convex's size limit
- * more holds their bytes. A search that no label matches reads no label, so
- * its description reads keep back LABEL_READS_RESERVE only. Tests lower
- * these. */
-export const DESCRIPTION_READS_RESERVE = {
-  ranges: 2 * LABEL_READS_RESERVE.ranges,
-  documents: 2 * LABEL_READS_RESERVE.documents,
-  bytes: LABEL_READS_RESERVE.bytes + DOCUMENT_MAX_BYTES,
-}
-
-/** How many index ranges a search reads one task at a time, in the order
- * the list answers, for a task's description rows (descriptionsOf) or its
- * assignment of one matching label (labelNamesOf), before it reads the
- * active description rows of the rest's projects in chunks
- * (model/descriptions.ts projectTextReader) and each matching label's
- * active assignments (activeLabelNames) instead. Tests lower it. */
+/** How many tasks the Board's search reads the texts of one at a time
+ * (model/descriptions.ts descriptionsOf) before it reads the rest by chunks
+ * of their projects' active description rows (projectTextReader) instead
+ * (lib/board.ts). Tests lower it. */
 export const TEXT_TASK_READS = { reads: 1000 }
-
-/** The refusal for a search whose task descriptions do not fit in one
- * request. */
-export const DESCRIPTIONS_TOO_LARGE =
-  'this search reads too many task descriptions to answer in one request; name a project or add a filter'
-
-/* The tasks of `found` that match the search, in the order the list
- * answers, up to `want` of them, with the texts read for them by task id.
- * Whether a task matches turns on its own fields, the names of the
- * `labels` the search names that it carries, and its text (`matches`).
- * More text never unmatches, so it settles the tasks in list order and
- * reads a task's label names only when its own fields miss, and its text
- * only when its labels miss too, and it stops once the tasks settled hold
- * `want` matches, so a page that labels complete stops as one that titles
- * complete does. It reads never more at a time than could still complete
- * the page with the matches among them.
- *
- * The first TEXT_TASK_READS reads it makes one task at a time: a task's
- * text in one range (model/descriptions.ts descriptionsOf), and its
- * assignment of each label in one range each (labelNamesOf) while those
- * stay within LABEL_TASK_READS and leave LABEL_READS_RESERVE ranges and
- * documents. Past them it reads the label names of every task left that
- * needs them through each label's active assignments, once
- * (activeLabelNames), then the active rows of the rest's
- * projects a step at a time, each from the project of the first task still
- * without a text, ending once the page is complete and reading little ahead
- * once the next task without a text is in another project
- * (projectTextReader), checking before it refuses whether the texts read
- * complete the page, and a task no range holds a row for on its own. The
- * texts are read within the request's room less DESCRIPTION_READS_RESERVE,
- * or LABEL_READS_RESERVE when it names no label, which a step of texts read
- * one by one may pass by one task's text, within COMMENT_READS_RESERVE. A
- * search whose texts do not fit is refused with DESCRIPTIONS_TOO_LARGE, so
- * no answer leaves a text unread, one whose label assignments do not fit
- * with SEARCH_TOO_LARGE, and one that has no room left for the first text
- * with the sentence of what the list read before (ACTIVE_TASKS_TOO_LARGE or
- * ACTIVE_LIST_TOO_WIDE). */
-async function searchedTexts(
-  ctx: QueryCtx,
-  found: readonly Doc<'issues'>[],
-  want: number,
-  matches: (task: Doc<'issues'>, description: string, labelNames: readonly string[]) => boolean,
-  labels: readonly Doc<'labels'>[],
-): Promise<{ matched: Doc<'issues'>[]; texts: Map<string, string> }> {
-  const texts = new Map<string, string>()
-  // the names of `labels` each task carries, once read; a search that names
-  // no label reads none
-  const held = new Map<string, readonly string[]>()
-  /* whether `task` matches, or what it needs read before that is known */
-  const answer = (task: Doc<'issues'>): boolean | 'labels' | 'text' => {
-    const names = labels.length === 0 ? [] : held.get(task.id)
-    if (matches(task, '', names ?? [])) return true
-    if (names === undefined) return 'labels'
-    const text = texts.get(task.id)
-    if (text === undefined) return 'text'
-    return matches(task, text, names)
-  }
-  const m = await ctx.meta.getTransactionMetrics()
-  const room = roomOf(m, labels.length > 0 ? DESCRIPTION_READS_RESERVE : LABEL_READS_RESERVE)
-  // a step of texts read one by one may pass `room` by one task's text,
-  // within what the page's own reads keep back (pageReads)
-  const steps = roomOf(m, COMMENT_READS_RESERVE)
-  // the tasks before `end` are settled, and those that match are `matched`
-  let end = 0
-  const matched: Doc<'issues'>[] = []
-  /* settles the tasks from `end` whose answer is known, and answers
-   * whether the page is complete or every task settled */
-  const settle = (): boolean => {
-    for (; end < found.length && matched.length < want; end++) {
-      const known = answer(found[end])
-      if (known === 'labels' || known === 'text') break
-      if (known) matched.push(found[end])
-    }
-    return end === found.length || matched.length >= want
-  }
-  /* the next tasks that need `fact` read, as many as could still complete
-   * the page with the matches between them */
-  const nextNeeding = (fact: 'labels' | 'text'): Doc<'issues'>[] => {
-    const next: Doc<'issues'>[] = []
-    for (
-      let at = end, between = 0;
-      at < found.length && next.length + between < want - matched.length;
-      at++
-    ) {
-      const known = answer(found[at])
-      if (known === true) between++
-      else if (known === fact) next.push(found[at])
-    }
-    return next
-  }
-  // the reads made one task at a time, `labelReads` of them of labels
-  let reads = 0
-  let labelReads = 0
-  /* reads the label names of `tasks`, one task's assignment of each label
-   * at a time while those reads fit, else those of every task left that
-   * needs them, through each label's assignments */
-  const readLabels = async (tasks: readonly Doc<'issues'>[]): Promise<void> => {
-    const pairs = tasks.length * labels.length
-    const now = await ctx.meta.getTransactionMetrics()
-    if (
-      reads + pairs <= TEXT_TASK_READS.reads &&
-      labelReads + pairs <= LABEL_TASK_READS.reads &&
-      pairs < now.databaseQueries.remaining - LABEL_READS_RESERVE.ranges &&
-      pairs < now.documentsRead.remaining - LABEL_READS_RESERVE.documents
-    ) {
-      reads += pairs
-      labelReads += pairs
-      const names = await Promise.all(tasks.map((task) => labelNamesOf(ctx, task.id, labels)))
-      for (const [i, task] of tasks.entries()) held.set(task.id, names[i])
-      return
-    }
-    const rest = found.slice(end).filter((task) => answer(task) === 'labels')
-    const names = await activeLabelNames(ctx, labels, rest)
-    for (const task of rest) held.set(task.id, names.get(task.id) ?? [])
-  }
-  let ranges: ReturnType<typeof projectTextReader> | null = null
-  // the first read is checked for room, so a search that never had any
-  // says what the list read before
-  let checked = false
-  while (!settle()) {
-    if (!checked) {
-      await assertTextRoom(ctx, room)
-      checked = true
-    }
-    if (answer(found[end]) === 'labels') {
-      await readLabels(nextNeeding('labels'))
-      continue
-    }
-    if (ranges !== null) {
-      const step = await ranges.step(settle)
-      if (step === 'read') continue
-      // a page the texts read so far complete needs no more
-      if (step === 'full') {
-        if (settle()) break
-        throw badRequest(DESCRIPTIONS_TOO_LARGE)
-      }
-      // no range holds the text of the task the page waits on
-      const read = await descriptionsOf(ctx, [found[end]], room, steps)
-      if (read === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)
-      for (const [id, text] of read) texts.set(id, text)
-      continue
-    }
-    const next = nextNeeding('text')
-    if (reads + next.length > TEXT_TASK_READS.reads) {
-      // the ranges read the texts of the tasks whose labels miss, so every
-      // task left has its label names first
-      const unlabelled = found.slice(end).filter((task) => answer(task) === 'labels')
-      if (unlabelled.length > 0) {
-        await readLabels(unlabelled)
-        continue
-      }
-      const rest = found.slice(end).filter((task) => answer(task) === 'text')
-      ranges = projectTextReader(ctx, rest, room, texts)
-      continue
-    }
-    const read = await descriptionsOf(ctx, next, room, steps)
-    if (read === null) throw badRequest(DESCRIPTIONS_TOO_LARGE)
-    reads += next.length
-    for (const [id, text] of read) texts.set(id, text)
-  }
-  return { matched, texts }
-}
-
-/* Refuses a list whose reads before its first description read leave no
- * room under `room` for one, with the sentence of what filled it, as
- * pageReads does: ACTIVE_TASKS_TOO_LARGE when documents or bytes ran out,
- * else ACTIVE_LIST_TOO_WIDE. */
-async function assertTextRoom(ctx: QueryCtx, room: ReadCeiling): Promise<void> {
-  const m = await ctx.meta.getTransactionMetrics()
-  if (
-    room.documents - m.documentsRead.used < 1 ||
-    room.bytes - m.bytesRead.used < DOCUMENT_MAX_BYTES
-  )
-    throw badRequest(ACTIVE_TASKS_TOO_LARGE)
-  if (room.ranges - m.databaseQueries.used < 1) throw badRequest(ACTIVE_LIST_TOO_WIDE)
-}
-
-/* The names of `labels` by task, for the active `tasks` a search still
- * needs them for, read through each label's assignments (by_label) without
- * the archive mark, so the read follows active work, not every task ever
- * archived with the label (schema.ts taskArchived), within the request's
- * room less LABEL_READS_RESERVE. A search reads them so once reading each
- * task's own assignments would pass LABEL_TASK_READS (searchedTexts). A
- * search whose assignments do not fit is refused with SEARCH_TOO_LARGE.
- * Assignments stored without an organization are found too. A task
- * restored from the archive keeps marked assignments until background steps
- * clear them and carries relations_marked meanwhile, so each such task is
- * read through its own assignments instead. */
-async function activeLabelNames(
-  ctx: QueryCtx,
-  labels: readonly Doc<'labels'>[],
-  tasks: readonly Doc<'issues'>[],
-): Promise<Map<string, string[]>> {
-  const out = new Map<string, string[]>()
-  if (labels.length === 0 || tasks.length === 0) return out
-  const ceiling = roomOf(await ctx.meta.getTransactionMetrics(), LABEL_READS_RESERVE)
-  const wanted = new Set(tasks.map((task) => task.id))
-  const restored = tasks.filter((task) => task.relations_marked === true)
-  const own = new Set(restored.map((task) => task.id))
-  let read = 0
-  for (const label of labels) {
-    if (!(await readsUnder(ctx, ceiling))) throw badRequest(SEARCH_TOO_LARGE)
-    const rows = ctx.db
-      .query('issue_labels')
-      .withIndex('by_label', (q) => q.eq('label_id', label.id).eq('task_archived', undefined))
-    for await (const row of rows) {
-      if (++read % LABEL_ROWS_PER_CHECK === 0 && !(await readsUnder(ctx, ceiling))) {
-        throw badRequest(SEARCH_TOO_LARGE)
-      }
-      if (!wanted.has(row.issue_id) || own.has(row.issue_id)) continue
-      const names = out.get(row.issue_id)
-      if (names === undefined) out.set(row.issue_id, [label.name])
-      else names.push(label.name)
-    }
-  }
-  for (const task of restored) {
-    if (!(await readsUnder(ctx, ceiling))) throw badRequest(SEARCH_TOO_LARGE)
-    out.set(task.id, await markedLabelNamesOf(ctx, task.id, labels))
-  }
-  return out
-}
 
 /* The list row of `task` in the reader's shape. */
 async function listRow(
@@ -752,265 +489,6 @@ async function listRow(
   return o.surface === 'rest'
     ? await issueOut(ctx, task, { ...o, surface: 'rest' })
     : await issueOut(ctx, task, { ...o, surface: 'mcp' })
-}
-
-/* Orders tasks by creation, oldest first, then by number. */
-const byCreation = (a: Doc<'issues'>, b: Doc<'issues'>): number =>
-  a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.num - b.num
-
-export { LIVE_PROJECT_READS } from './liveTasks'
-
-/* The active tasks an active list reads (listActiveIssuesCore), oldest
- * first by creation. Those of the active projects (lib/liveTasks.ts
- * liveTasksOf) hold every subtask that makes a task in an active project a
- * group and every task that carries load, so the active tasks that archived
- * projects keep forever are not read, until the organization has more
- * active projects than LIVE_PROJECT_READS. A
- * list that names an archived project reads all the organization's active
- * tasks (by_org_archived), because a task there counts every active
- * subtask, in any project (countsAsSubtask). */
-async function listedActiveTasks(
-  ctx: QueryCtx,
-  me: Caller,
-  cat: Catalogue,
-  scope: readonly string[] | null,
-): Promise<Doc<'issues'>[]> {
-  const archived = scope?.some((id) => cat.byUuid.get(id)?.archived_at !== undefined) ?? false
-  if (!archived) return await liveTasksOf(ctx, cat.projects)
-  return await ctx.db
-    .query('issues')
-    .withIndex('by_org_archived', (q) => q.eq('org_id', me.org_id).eq('archived_at', undefined))
-    .collect()
-}
-
-/**
- * One page of the active tasks a list asks for, as list rows, oldest first
- * by creation with ties by number, so `offset` pages through them. It reads
- * the active tasks once (listedActiveTasks), never an archived one. That
- * read also decides which rows are groups, their plan weeks and their
- * progress, because an active task's subtasks that count are active too,
- * and in an active project they are in active projects. It holds the rows'
- * parents too, except a parent in an archived project under a list of
- * active projects, which is read on its own before the comments. With the
- * roster it also holds every input of the rows' delay verdicts
- * (lib/machineDelay.ts listForecaster), judged on `o.today`. Each row's
- * text, from its description row (model/descriptions.ts descriptionOf), and
- * its newest comment are one more read each (lastCommentTimes). A page
- * whose texts and comments do not fit in what the request has left is
- * refused with PAGE_TOO_LARGE, and with ACTIVE_TASKS_TOO_LARGE or
- * ACTIVE_LIST_TOO_WIDE when the reads before them leave no room at all.
- *
- * In a search, each fragment may match any field of the app's task filter
- * (lib/search.ts taskSearchText), in any order. Those are the task ID,
- * title, description, status name (not on a task with subtasks), priority
- * name, assignee name and label names. REST retains explicit `*` wildcards;
- * all other punctuation stays literal. The search settles the tasks in list
- * order until the matches hold the page (searchedTexts). It reads a task's
- * label names only when its own fields miss, and its description only when
- * its labels miss too: one range a task for the first TEXT_TASK_READS, then
- * the active descriptions of the rest's projects in chunks, in list order.
- * A search whose descriptions do not fit in one request is refused with
- * DESCRIPTIONS_TOO_LARGE, and one whose label assignments do not fit with
- * SEARCH_TOO_LARGE. A search past LIMITS.search, once trimmed, is refused
- * first.
- */
-export async function listActiveIssuesCore(
-  ctx: QueryCtx,
-  me: Caller,
-  o: ActiveListOpts,
-  view: ListView & { surface: 'rest' },
-): Promise<RestIssueJson[]>
-export async function listActiveIssuesCore(
-  ctx: QueryCtx,
-  me: Caller,
-  o: ActiveListOpts,
-  view: ListView & { surface: 'mcp' },
-): Promise<McpIssueOut[]>
-export async function listActiveIssuesCore(
-  ctx: QueryCtx,
-  me: Caller,
-  o: ActiveListOpts,
-  view: ListView,
-): Promise<(RestIssueJson | McpIssueOut)[]> {
-  if (o.search !== undefined) limitedText(LIMITS.search, o.search)
-  const { cat, readable } = view
-  const scope = o.scope === null ? null : new Set(o.scope)
-  const active = await listedActiveTasks(ctx, me, cat, o.scope)
-  const children = childIndexOf(active)
-  const live = liveIn(cat.byUuid)
-  const isGroup = (task: Doc<'issues'>): boolean => isGroupIn(children, task, live)
-  const profiles = await rosterOf(ctx, me.org_id)
-  const names = namesOf(profiles)
-  const statuses = o.statuses !== undefined && o.statuses.length > 0 ? o.statuses : null
-  let found: Doc<'issues'>[] = []
-  for (const i of active) {
-    if (!readable(i.project_id)) continue // RLS's successor — always, scope or not
-    if (scope !== null) {
-      if (!scope.has(i.project_id)) continue
-    } else if (cat.byUuid.get(i.project_id)?.archived_at !== undefined) {
-      continue // an archived project's tasks are not the working set (0106)
-    }
-    if (statuses !== null && (isGroup(i) || !statuses.includes(i.status))) continue
-    if (o.priority && i.priority !== o.priority) continue
-    if (o.assignee && i.assignee_id !== o.assignee) continue
-    // a group stays with its assignee, as in the app
-    if (o.owner && taskOwnerId(i, isGroup(i)) !== o.owner) continue
-    found.push(i)
-  }
-  found.sort(byCreation)
-  // the texts the search read, which the page's rows reuse
-  let texts = new Map<string, string>()
-  if (o.search) {
-    const matches = allWordsMatcher(o.search, o.stars)
-    // the tasks up to the page that match, reading their labels and texts
-    // only as far as they need (searchedTexts)
-    const read = await searchedTexts(
-      ctx,
-      found,
-      o.offset + o.limit,
-      (i, description, labelNames) =>
-        matches(
-          taskSearchText({ ...searchFields(i, names), description, group: isGroup(i), labelNames }),
-        ),
-      await matchingLabels(ctx, me.org_id, searchPieces(o.search, o.stars)),
-    )
-    texts = read.texts
-    found = read.matched
-  }
-  const page = found.slice(o.offset, o.offset + o.limit)
-  const tasks = new Map(active.map((t) => [t.id, t]))
-  // parents outside the read, read within the room left like the comments
-  const absent = new Set<string>()
-  for (const task of page) {
-    if (task.parent_id !== undefined && !tasks.has(task.parent_id)) absent.add(task.parent_id)
-  }
-  const parents = await pageReads(ctx, [...absent], (id) => byId(ctx, 'issues', id), null)
-  for (const parent of parents) if (parent !== null) tasks.set(parent.id, parent)
-  const org = await byId(ctx, 'organizations', me.org_id)
-  const projectOf = (id: string) => cat.byUuid.get(id)
-  const forecast = listForecaster({
-    clock: delayClock(org, o.today),
-    me,
-    active,
-    view: { byUuid: cat.byUuid, visible: readable },
-    profiles,
-  })
-  // the rows' texts the search did not read, within the room left like the
-  // comments
-  const unread = page.filter((task) => !texts.has(task.id))
-  // a page of one row that the page's own reads fill cannot be smaller, so
-  // it gets the sentence of what the list read before (pageReads)
-  const smaller = page.length > 1 ? PAGE_TOO_LARGE : null
-  // a text can read two rows (model/descriptions.ts TEXT_DOCUMENTS)
-  const read = await pageReads(
-    ctx,
-    unread,
-    (task) => descriptionOf(ctx.db, task),
-    absent.size > 0 ? smaller : null,
-    2,
-  )
-  for (const [i, task] of unread.entries()) texts.set(task.id, read[i])
-  const lastComments = await lastCommentTimes(
-    ctx,
-    page,
-    absent.size > 0 || unread.length > 0 ? smaller : null,
-  )
-  return await Promise.all(
-    page.map((task) =>
-      listRow(ctx, task, {
-        surface: view.surface,
-        me,
-        readable,
-        project: projectOf(task.project_id),
-        projectOf,
-        names,
-        orgSlug: org?.slug,
-        tasks,
-        lastComments,
-        texts,
-        children,
-        forecast,
-        live,
-      }),
-    ),
-  )
-}
-
-/** What an active page's parent, text and newest-comment reads leave of
- * the request's limits, for the one document a read may take past its room
- * (pageReads). Tests lower these. */
-export const COMMENT_READS_RESERVE = { ranges: 16, documents: 16, bytes: DOCUMENT_MAX_BYTES }
-
-/** The refusal for an active page whose tasks' parents outside the active
- * read, texts and newest comments do not fit in what the request has left
- * to read. */
-export const PAGE_TOO_LARGE =
-  'this page of tasks is too large to read at once; ask for a smaller limit'
-
-/** The refusal for an active list whose reads before its rows' comments
- * leave no documents or bytes for even one, which the organization's active
- * tasks fill, so a smaller limit cannot help. */
-export const ACTIVE_TASKS_TOO_LARGE =
-  "this organization's active tasks are too large to list in one request; archive done tasks and finished projects so fewer stay active"
-
-/** The refusal for an active list whose reads before its rows' comments
- * leave no index ranges for even one. Ranges run out through the caller's
- * team memberships, the labels a search matches and the active projects,
- * not through the tasks themselves, so a smaller limit cannot help. */
-export const ACTIVE_LIST_TOO_WIDE =
-  'this organization has too many projects, teams or labels to list its tasks in one request; archive finished projects or search with fewer words'
-
-/* `read` of each of `items`, in order, for an active page. Each read is one
- * index range and at most `documents` documents, and they run a few at a
- * time, never more than the request's unspent room could hold with each
- * document at Convex's document size limit, so they pass that room by one
- * read at most, which `documents` times COMMENT_READS_RESERVE holds, and
- * the request stays inside its limits. When the room runs out first, the page is
- * refused with PAGE_TOO_LARGE, or with `first` when no room was left before
- * the first read. A null `first` names what the list read before the page:
- * ACTIVE_TASKS_TOO_LARGE when documents or bytes ran out, else
- * ACTIVE_LIST_TOO_WIDE. */
-async function pageReads<T, R>(
-  ctx: QueryCtx,
-  items: readonly T[],
-  read: (item: T) => Promise<R>,
-  first: string | null,
-  documents = 1,
-): Promise<R[]> {
-  const out: R[] = []
-  while (out.length < items.length) {
-    const m = await ctx.meta.getTransactionMetrics()
-    const ranges = m.databaseQueries.remaining - COMMENT_READS_RESERVE.ranges
-    const docs = m.documentsRead.remaining - documents * COMMENT_READS_RESERVE.documents
-    const bytes = m.bytesRead.remaining - documents * COMMENT_READS_RESERVE.bytes
-    if (ranges <= 0 || docs < documents || bytes <= 0) {
-      if (out.length > 0) throw badRequest(PAGE_TOO_LARGE)
-      const filled = docs < documents || bytes <= 0 ? ACTIVE_TASKS_TOO_LARGE : ACTIVE_LIST_TOO_WIDE
-      throw badRequest(first ?? filled)
-    }
-    const fits = Math.max(1, Math.floor(bytes / (documents * DOCUMENT_MAX_BYTES)))
-    const batch = items.slice(
-      out.length,
-      out.length + Math.min(fits, ranges, Math.floor(docs / documents)),
-    )
-    out.push(...(await Promise.all(batch.map(read))))
-  }
-  return out
-}
-
-/* When the newest comment on each of `tasks` was posted, or null for a task
- * without comments (model/comments.ts latestComment), by task id, read
- * within the request's room (pageReads), never answered with a wrong null.
- * `first` is the refusal when no room was left before the first read: null
- * for what the list read before (pageReads), or PAGE_TOO_LARGE once the
- * page read more of its own, such as parents. */
-async function lastCommentTimes(
-  ctx: QueryCtx,
-  tasks: readonly Doc<'issues'>[],
-  first: string | null,
-): Promise<Map<string, string | null>> {
-  const latest = await pageReads(ctx, tasks, (task) => latestComment(ctx, task.id), first)
-  return new Map(tasks.map((task, i) => [task.id, latest[i]?.created_at ?? null]))
 }
 
 /* The first subtask stored under `task`, whoever can read it. */
@@ -1199,22 +677,25 @@ export function taskListScope(
   return [project.id, ...subs.sort(byKeyOrder).map((c) => c.id)]
 }
 
-/** What a task list reads, either active tasks paged with `offset` or
- * archived ones paged with `cursor`, with the project ids it covers
- * (taskListScope), or null for every readable project that is not
- * archived. An archived list also names its project, whose list its cursors
- * belong to (archiveCursorText). */
+/** What a task list reads, active tasks or archived ones, both paged with a
+ * cursor, with the project ids it covers (taskListScope), or null for every
+ * readable project that is not archived. An active list keeps the cursor
+ * as the caller sent it, for lib/activeTaskPage.ts to open with the list's
+ * scope and filters, and names the project the call names. An archived
+ * list names its project, whose list its cursors belong to
+ * (archiveCursorText). */
 export type TaskListRequest =
-  | { archived: false; scope: string[] | null; offset: number }
+  | { archived: false; project: string | null; scope: string[] | null; cursor: string | null }
   | { archived: true; project: string; scope: string[]; cursor: ArchiveCursor | null }
 
 /**
  * A task list's paging arguments, checked by the rule REST and MCP share.
- * Archived tasks are listed one project at a time and page with a cursor,
- * so `archived` needs `project` and refuses an `offset` other than 0, and
- * only an archived list takes `cursor`. `flag` is how the surface spells
- * the archived flag in its refusals. `project` is already resolved and
- * readable.
+ * Both kinds page with `cursor` and refuse an `offset` other than 0
+ * (machine/shared.ts offsetSent) with the sentence that says
+ * to pass next_cursor as cursor (lib/listCursor.ts offsetRefusal). Archived
+ * tasks are listed one project at a time, so `archived` needs `project`,
+ * which it checks first. `flag` is how the surface spells the archived
+ * flag in its refusals. `project` is already resolved and readable.
  */
 export async function taskListRequest(
   view: Pick<ListView, 'cat' | 'readable'>,
@@ -1222,28 +703,24 @@ export async function taskListRequest(
     flag: 'archived=true' | 'archived: true'
     archived: boolean
     project: Doc<'projects'> | undefined
-    offset: number
+    offsetSent: boolean
     cursor: string | undefined
   },
 ): Promise<TaskListRequest> {
   if (!a.archived) {
-    if (a.cursor !== undefined) throw badRequest(`cursor works only with ${a.flag}`)
+    if (a.offsetSent) throw badRequest(offsetRefusal('active tasks'))
     const scope =
       a.project === undefined ? null : taskListScope(view.cat, a.project, view.readable, false)
-    return { archived: false, scope, offset: a.offset }
+    return { archived: false, project: a.project?.id ?? null, scope, cursor: a.cursor ?? null }
   }
   if (a.project === undefined) {
     throw badRequest(
       `${a.flag} needs project, because archived tasks are listed one project at a time`,
     )
   }
-  if (a.offset !== 0) {
-    throw badRequest('offset does not apply to archived tasks; pass next_cursor as cursor')
-  }
+  if (a.offsetSent) throw badRequest(offsetRefusal('archived tasks'))
   const cursor = a.cursor === undefined ? null : await parseArchiveCursor(a.cursor, a.project.id)
-  if (cursor === null && a.cursor !== undefined) {
-    throw badRequest('cursor must be the next_cursor of an earlier page')
-  }
+  if (cursor === null && a.cursor !== undefined) throw badRequest(CURSOR_REFUSAL)
   return {
     archived: true,
     project: a.project.id,
@@ -1605,13 +1082,15 @@ export function taskUrl(orgSlug: string, num: number): string | null {
 }
 
 /* How many tasks a single-task read of an active task walks, one by_parent
- * read at a time, before it reads the active tasks once instead
- * (activeTasksUnder), the read an active list makes anyway. The read walks
- * the subtree once (subtreeIndex) and every group total uses that one
- * index, which keeps both Convex limits in reach. Index ranges stay far
- * below 4,096, and only a group with more tasks that count under it than
- * this pays a full read. An archived task's walk stops at a ceiling instead
- * (TASK_READ_RESERVE). Tests lower `reads`. */
+ * read at a time with the caller's access asked project by project, before
+ * it answers that access for the whole organization at once (orgReach) and
+ * goes on from what it read, within what the request has left less
+ * TASK_READ_RESERVE, as an archived task's walk does (taskSubtree). The read walks the subtree
+ * once (subtreeIndex) and every group total uses that one index. Index
+ * ranges stay far below 4,096, and only a group stored before the rule of
+ * one level with more tasks that count under it than this goes on under a
+ * ceiling.
+ * Tests lower `reads`. */
 export const SUBTREE_WALK = { reads: 1000 }
 
 /** What a single-task read of an archived task keeps back from the
@@ -1647,14 +1126,15 @@ type Walk = { children: ChildIndex; whole: boolean; rootWhole: boolean }
  * enters takes one read. An active root's walk reads only active subtasks
  * (by_parent_archived), because an active group counts nothing else and
  * lists nothing else, so each read holds at most LIMITS.subtasks.max tasks however
- * many archived subtasks have gathered. An active root's walk that would
- * pass SUBTREE_WALK reads reads the organization's active tasks once
- * instead, as soon as a level shows it. It enters only active tasks, and
- * each decision about one needs only its active subtasks (isGroupIn), so
- * the organization's active tasks are all it needs.
+ * many archived subtasks have gathered. An active root's walk without a
+ * `ceiling` stops, as not whole, once a level shows it would pass
+ * SUBTREE_WALK reads, so its caller can go on under one (taskSubtree).
+ * `known` is the index such a walk read: a task it holds takes its subtasks
+ * from there, with no read, since a walk stops only between levels and so
+ * holds each task's subtasks whole.
  *
  * An archived root's walk needs a `ceiling`, because it can enter the
- * task's whole history, and it never reads the organization's tasks. It
+ * task's whole history, and no walk reads the organization's tasks. It
  * keeps the request's reads under the ceiling before each by_parent read
  * and after each task, since one read can hold many large tasks
  * (lib/archivedTasks.ts ceilingGuard, which needs a `counts` that reads
@@ -1668,11 +1148,12 @@ async function subtreeIndex(
   root: Doc<'issues'>,
   counts: GroupCounter,
   ceiling?: ReadCeiling,
+  known?: ChildIndex,
 ): Promise<Walk> {
   if (ceiling === undefined && root.archived_at !== undefined) {
     throw new Error('an archived task walks its subtree under a ceiling')
   }
-  const index = new Map<string, Doc<'issues'>[]>()
+  const index = new Map<string, readonly Doc<'issues'>[]>()
   // a walk that stops has read the root's own subtasks whole once their
   // range is in the index, unless it stopped inside that range
   const stopped = (): Walk => ({ children: index, whole: false, rootWhole: index.has(root.id) })
@@ -1681,20 +1162,28 @@ async function subtreeIndex(
   let frontier = [root.id]
   let reads = 0
   while (frontier.length > 0) {
-    // a level that cannot be read whole ends the walk before its first read
-    reads += frontier.length
+    // a level that cannot be read whole ends the walk before its first read;
+    // the subtasks an earlier walk read whole (`known`) take no read
+    const unread = frontier.filter((id) => known?.has(id) !== true).length
+    reads += unread
     if (ceiling !== undefined) {
-      if (frontier.length > (await rangesLeft(ctx, ceiling))) return stopped()
+      if (unread > (await rangesLeft(ctx, ceiling))) return stopped()
     } else if (reads > SUBTREE_WALK.reads) {
       // the root's own subtasks are read first, so they are in the index
-      return {
-        children: await activeTasksUnder(ctx, root, index.get(root.id) ?? []),
-        whole: true,
-        rootWhole: true,
-      }
+      return stopped()
     }
     const next: string[] = []
     for (const id of frontier) {
+      const earlier = known?.get(id)
+      if (earlier !== undefined) {
+        index.set(id, earlier)
+        for (const kid of earlier) {
+          if (seen.has(kid.id) || !(await counts(kid))) continue
+          seen.add(kid.id)
+          next.push(kid.id)
+        }
+        continue
+      }
       if (guard !== null && !(await guard.range())) return stopped()
       const kids: Doc<'issues'>[] = []
       const read =
@@ -1725,55 +1214,39 @@ async function subtreeIndex(
   return { children: index, whole: true, rootWhole: true }
 }
 
-/* The subtasks an active root's walk uses once it passes SUBTREE_WALK,
- * indexed by parent, with the root's own subtasks `kids`. Under a root in
- * an active project only subtasks in active projects count
- * (countsAsSubtask), so the active projects' tasks hold every one the walk
- * would enter, as an active list reads them (listedActiveTasks), and `kids`
- * keep the root's subtasks in archived projects for its subtask list. A
- * root in an archived project counts every active subtask, so it reads the
- * organization's active tasks. */
-async function activeTasksUnder(
-  ctx: QueryCtx,
-  root: Doc<'issues'>,
-  kids: readonly Doc<'issues'>[],
-): Promise<ChildIndex> {
-  const projects = await ctx.db
-    .query('projects')
-    .withIndex('by_org', (q) => q.eq('org_id', root.org_id))
-    .collect()
-  if (projects.some((p) => p.id === root.project_id && p.archived_at === undefined)) {
-    const index = new Map(childIndexOf(await liveTasksOf(ctx, projects)))
-    index.set(root.id, kids)
-    return index
-  }
-  const active = await ctx.db
-    .query('issues')
-    .withIndex('by_org_archived', (q) => q.eq('org_id', root.org_id).eq('archived_at', undefined))
-    .collect()
-  return childIndexOf(active)
-}
-
 /* The subtree index of a single-task read of `root` (subtreeIndex),
  * whether the group's facts went unread (Subtree.partial), and whether the
- * root has subtasks the index leaves out (`more`). An archived task's walk
- * takes what the request has left less TASK_READ_RESERVE, so no read of it,
- * a write's answer included, passes Convex's limits however many long
- * archived subtasks it has. When that stops the walk, the index keeps only
- * the root's own subtasks, which it reads first, as many as fit. When not
- * even one fit, it reads the first, within the reserve, so the read still
+ * root has subtasks the index leaves out (`more`). An active task walks
+ * first without a ceiling, up to SUBTREE_WALK reads, which reads its own
+ * active subtasks whole first, at most LIMITS.subtasks.max. Past them, and
+ * for an archived task at once, the walk takes what the request has left
+ * less TASK_READ_RESERVE, with a counter that reads nothing (`still`, the
+ * caller's access answered for the whole organization at once), so no read
+ * of it, a write's answer included, passes Convex's limits however large
+ * the subtree, an active task's walk going on from the first walk's index
+ * (subtreeIndex `known`). When that stops the walk, the index keeps only the root's
+ * own subtasks: an active root's from its first walk, all of them, and an
+ * archived root's as many as fit, which it reads first. When not even one
+ * of those fit, it reads the first, within the reserve, so the read still
  * tells a group from a leaf, and it asks whether one follows the last
  * listed (subtaskFollows), so `more` is set only when a subtask is left
- * out. Active subtasks number at
- * most LIMITS.subtasks.max, so an active task's read lists them all. */
+ * out. */
 async function taskSubtree(
   ctx: QueryCtx,
   root: Doc<'issues'>,
   counts: GroupCounter,
+  still: () => Promise<GroupCounter>,
 ): Promise<{ children: ChildIndex; partial: boolean; more: boolean }> {
   if (root.archived_at === undefined) {
-    const { children } = await subtreeIndex(ctx, root, counts)
-    return { children, partial: false, more: false }
+    const first = await subtreeIndex(ctx, root, counts)
+    if (first.whole) return { children: first.children, partial: false, more: false }
+    const room = roomOf(await ctx.meta.getTransactionMetrics(), TASK_READ_RESERVE)
+    // the first walk's index holds each task it read whole, so this one
+    // goes on from there rather than read them again
+    const walk = await subtreeIndex(ctx, root, await still(), room, first.children)
+    if (walk.whole) return { children: walk.children, partial: false, more: false }
+    const kids = first.children.get(root.id) ?? []
+    return { children: new Map([[root.id, kids]]), partial: true, more: false }
   }
   const room = roomOf(await ctx.meta.getTransactionMetrics(), TASK_READ_RESERVE)
   const walk = await subtreeIndex(ctx, root, counts, room)
@@ -1901,8 +1374,9 @@ const UNREAD_SUBTREE: GroupFacts = {
  * its stored dates and status are dormant. A leaf without an end counts as
  * its start week. Done leaves count. Both weeks are null when no such leaf
  * is scheduled. `children` holds the group's subtree by parent. An active
- * list passes the index of the active tasks it already read, and an
- * archived list and a single-task read pass the row's subtreeIndex. Each
+ * list passes the subtrees its page read (lib/machineSubtree.ts
+ * subtreeReads), and an archived list and a single-task read pass the
+ * row's subtreeIndex. Each
  * visited task's children decide whether it is a group (hasSubtasks' rule,
  * whoever can read them, with `live` telling which projects are active)
  * and what the walk enters next. */
@@ -1969,13 +1443,14 @@ type Reader = {
 }
 
 /** The tasks by parent that a row's group facts come from. An active list
- * passes the active tasks it read, and an archived list and a single-task
- * read the task's subtreeIndex with the groupCounter that walk used, which
- * the totals then share. `live` tells which of their projects are active.
- * `partial` says the subtree was too large to read and `children` holds
- * only the root's subtasks (a single-task read) or one of them (an archived
- * list), so a group answers null plan weeks and a partial progress that
- * counts nothing. */
+ * passes the subtrees its page read (lib/machineSubtree.ts subtreeReads),
+ * and an archived list and a single-task read the task's subtreeIndex with
+ * the groupCounter that walk used, which the totals then share. `live`
+ * tells which of their projects are active. `partial` says the subtree was
+ * too large to read and `children` holds only the root's subtasks (a
+ * single-task read or an active list) or one of them (an archived list), so
+ * a group answers null plan weeks and a partial progress that counts
+ * nothing. */
 type Subtree = {
   children: ChildIndex
   live: ProjectLive
@@ -2289,12 +1764,12 @@ export async function taskOut(
   // an archived task's walk can meet many projects, so their access is
   // answered for the whole organization at once, and the walk and the reads
   // after it check none of them one at a time
-  const reach =
+  let reach =
     issue.archived_at !== undefined && opts.readable === undefined
       ? await orgReach(ctx, opts.me)
       : undefined
-  const readable = opts.readable ?? reach?.readable
-  const projectOf = opts.projectOf ?? reach?.projectOf
+  let readable = opts.readable ?? reach?.readable
+  let projectOf = opts.projectOf ?? reach?.projectOf
   // what does not depend on the subtree is read first, so an archived
   // task's walk takes only the room those reads leave (taskSubtree)
   const relations = await taskRelations(ctx, opts.me, issue, readable)
@@ -2302,8 +1777,17 @@ export async function taskOut(
   const texts = new Map([[issue.id, await descriptionOf(ctx.db, issue)]])
   // one walk of the subtree serves the row's group facts and the detail,
   // and one counter its pruning and both totals
-  const counts = groupCounter(ctx, opts.me, issue, project, readable, projectOf)
-  const { children, partial, more } = await taskSubtree(ctx, issue, counts)
+  let counts = groupCounter(ctx, opts.me, issue, project, readable, projectOf)
+  const { children, partial, more } = await taskSubtree(ctx, issue, counts, async () => {
+    // an active task's walk past SUBTREE_WALK asks no project one at a time
+    if (readable === undefined || projectOf === undefined) {
+      reach ??= await orgReach(ctx, opts.me)
+      readable ??= reach.readable
+      projectOf ??= reach.projectOf
+      counts = groupCounter(ctx, opts.me, issue, project, readable, projectOf)
+    }
+    return counts
+  })
   const live = await indexLiveness(ctx, issue, children, projectOf)
   const subtree = { project, children, live, counts, partial }
   const org = await byId(ctx, 'organizations', issue.org_id)
@@ -2561,12 +2045,49 @@ export const projectJson = (
   access: { read: access.read, write: access.write },
 })
 
-/** A project's Completion as REST and MCP send it, `done` of `total` tasks
- * with `percent` rounded and 0 without tasks. */
-export type CompletionJson = { done: number; total: number; percent: number }
+/** A project's Completion as REST and MCP send it: `ok` with `done` of
+ * `total` tasks and `percent` rounded, 0 without tasks, or `unavailable`
+ * with all three null where its tasks did not fit the reads it may make
+ * (projectCompletion), never a partial count. */
+export type CompletionJson =
+  | { status: 'ok'; done: number; total: number; percent: number }
+  | { status: 'unavailable'; done: null; total: null; percent: null }
 
 /** The completion of a project that holds no tasks, such as a new one. */
-export const NO_TASKS: CompletionJson = { done: 0, total: 0, percent: 0 }
+export const NO_TASKS: CompletionJson = { status: 'ok', done: 0, total: 0, percent: 0 }
+
+/** The completion of a project whose tasks did not fit its reads. */
+export const UNAVAILABLE_COMPLETION: CompletionJson = {
+  status: 'unavailable',
+  done: null,
+  total: null,
+  percent: null,
+}
+
+/** What one project's completion may read, from where it starts, decided
+ * before it reads anything, and within the request's limits less
+ * COMPLETION_RESERVE. Past it the completion is unavailable. Tests lower
+ * these and set them back with structuredClone. */
+export const COMPLETION_READS: ReadCeiling = { ranges: 2500, documents: 14_000, bytes: 4 * MIB }
+
+/** What a completion keeps back from the request's limits for the reads of
+ * a project's detail after it (machine/projects.ts projectDetail): the
+ * profile of each user given access to the project, one range each, at
+ * most the organization's people, the team shares and their teams, and
+ * the milestones, with the documents a read may take past its last look.
+ * Tests lower these. */
+export const COMPLETION_RESERVE: ReadCeiling = { ranges: 1200, documents: 2400, bytes: 4 * MIB }
+
+/** What the checks of a whole reader's counted tasks may read past
+ * COMPLETION_READS once the rest of their family did not fit it
+ * (projectCompletion), within the request's limits less COMPLETION_RESERVE.
+ * A check reads one range and the task's active subtasks until one in a
+ * live project of the family, so these hold the checks of a sub-project of
+ * a few hundred tasks. Tests lower these. */
+export const COMPLETION_CHECK_READS: ReadCeiling = { ranges: 300, documents: 3000, bytes: MIB }
+
+/* How many tasks a completion checks for subtasks at once. */
+const COMPLETION_CHECKS = 32
 
 /**
  * The Completion the app's Overview shows for `project` (src/store/planner.ts
@@ -2574,15 +2095,34 @@ export const NO_TASKS: CompletionJson = { done: 0, total: 0, percent: 0 }
  * counts how many of the active tasks without subtasks are Done, in the
  * project, or for a top-level project in its sub-projects that the caller
  * can read (`view.readable`) and that are not archived. A task with an
- * active subtask in an active project is a group and does not count, even
- * when the caller cannot read the subtask, as in the app. Null for an archived
- * project, whose tasks are outside the working plan.
+ * active subtask in an active project of its family is a group and does
+ * not count, even when the caller cannot read the subtask, as in the app,
+ * and a subtask stored in another family makes no task a group. Null for an
+ * archived project, whose tasks are outside the working plan.
  *
- * Reads the active tasks of the project's family only, its top-level project
- * and that project's active sub-projects (lib/liveTasks.ts liveTasksOf),
- * because a subtask stays in its parent's top-level project. In an
- * update_project mutation the read conflicts only with writes to the
- * family's tasks.
+ * It reads within COMPLETION_READS, and answers UNAVAILABLE_COMPLETION once
+ * its reads would pass them, so a project's read and its updates never fail
+ * on it. It reads the active tasks of the projects counted first (issues
+ * by_project_archived). A caller who reads the family's top-level project
+ * and every live sub-project of it then reads the rest of the family's live
+ * projects, which hold every subtask that decides a group, within the same
+ * budget. Any other caller, and one whose family does not fit it, asks
+ * instead of each counted task not shown to be a group by the tasks read,
+ * and not a subtask created under the rule of one level (lib/viewReads.ts
+ * withoutSubtasks), whether it has an active subtask in a live project of
+ * the family, one range read until one does; a whole reader's checks read
+ * within COMPLETION_CHECK_READS more. So a family that fits always counts,
+ * and a small sub-project of one that does not counts by its own tasks. A subtask in a project that
+ * caller cannot read counts there at lib/limits.ts TASK_ROW_MAX_BYTES, so
+ * only how many such subtasks it reads before one that counts follows
+ * hidden data (lib/machineSubtree.ts). In an update_project mutation the
+ * read conflicts only with writes to the family's tasks.
+ *
+ * It is the interim reader: completion counts stored facts, which the
+ * limits plan wants complete at any size inside the testing envelope, so
+ * the counts every task writer keeps (t3/limits-overview-counts) are to
+ * replace it, and with them its unavailable answer. Keep it the one reader
+ * of REST and MCP completion until then.
  */
 export async function projectCompletion(
   ctx: QueryCtx,
@@ -2590,25 +2130,122 @@ export async function projectCompletion(
   view: Pick<ListView, 'cat' | 'readable'>,
 ): Promise<CompletionJson | null> {
   if (project.archived_at !== undefined) return null
+  const { cat, readable } = view
   const subs =
     project.type === 'meta'
-      ? view.cat.projects.filter((c) => c.parent_id === project.id && c.archived_at === undefined)
+      ? cat.projects.filter((c) => c.parent_id === project.id && c.archived_at === undefined)
       : [project]
-  const scope = new Set(subs.filter((p) => view.readable(p.id)).map((p) => p.id))
+  const scope = new Set(subs.filter((p) => readable(p.id)).map((p) => p.id))
   if (scope.size === 0) return NO_TASKS
   const root =
-    project.parent_id === undefined ? project : (view.cat.byUuid.get(project.parent_id) ?? project)
-  const family = [root, ...view.cat.projects.filter((c) => c.parent_id === root.id)]
-  const active = await liveTasksOf(ctx, family)
-  const isGroup = groupTest(active, liveIn(view.cat.byUuid))
+    project.parent_id === undefined ? project : (cat.byUuid.get(project.parent_id) ?? project)
+  const family = [root, ...cat.projects.filter((c) => c.parent_id === root.id)].filter(
+    (p) => p.archived_at === undefined,
+  )
+  const familyIds = new Set(family.map((p) => p.id))
+  const metrics = await ctx.meta.getTransactionMetrics()
+  const start = totalsOf(metrics)
+  const hard = roomOf(metrics, COMPLETION_RESERVE)
+  const ceiling: ReadCeiling = {
+    ranges: Math.min(start.ranges + COMPLETION_READS.ranges, hard.ranges),
+    documents: Math.min(start.documents + COMPLETION_READS.documents, hard.documents),
+    bytes: Math.min(start.bytes + COMPLETION_READS.bytes, hard.bytes),
+  }
+  const tally = await readTally(ctx, hard)
+  const active: Doc<'issues'>[] = []
+  /* reads the active tasks of `projects` into `active` while the reads keep
+   * under `limit`, and answers whether it read them all */
+  const readTasks = async (projects: readonly Doc<'projects'>[], limit: ReadCeiling) => {
+    for (const p of projects) {
+      if (!(await tally.under(limit))) return false
+      tally.range()
+      const range = ctx.db
+        .query('issues')
+        .withIndex('by_project_archived', (q) =>
+          q.eq('project_id', p.id).eq('archived_at', undefined),
+        )
+      for await (const task of range) {
+        tally.doc(task)
+        active.push(task)
+        if (!(await tally.under(limit))) return false
+      }
+    }
+    return true
+  }
+  // the counted projects' own tasks first
+  if (
+    !(await readTasks(
+      family.filter((p) => scope.has(p.id)),
+      ceiling,
+    ))
+  )
+    return UNAVAILABLE_COMPLETION
+  const counted = [...active]
+  // a task whose subtask a read holds is a group without a check
+  const parents = () =>
+    new Set(active.flatMap((task) => (task.parent_id === undefined ? [] : [task.parent_id])))
+  let whole = family.every((p) => readable(p.id))
+  // where the checks may read to: COMPLETION_READS for a partial reader,
+  // and past it for a whole reader whose family did not fit
+  let checksCeiling = ceiling
+  if (whole) {
+    /* The rest of the family holds every subtask that decides a group, and
+     * the caller reads all of it, within the whole budget. When it does not
+     * fit, the counted tasks' checks get COMPLETION_CHECK_READS more, so a
+     * small sub-project of a large family still counts. */
+    if (
+      !(await readTasks(
+        family.filter((p) => !scope.has(p.id)),
+        ceiling,
+      ))
+    ) {
+      whole = false
+      checksCeiling = {
+        ranges: Math.min(ceiling.ranges + COMPLETION_CHECK_READS.ranges, hard.ranges),
+        documents: Math.min(ceiling.documents + COMPLETION_CHECK_READS.documents, hard.documents),
+        bytes: Math.min(ceiling.bytes + COMPLETION_CHECK_READS.bytes, hard.bytes),
+      }
+    }
+  }
+  const live = liveIn(cat.byUuid)
+  let groups: Set<string>
+  if (whole) {
+    const isGroup = groupTest(active, live)
+    groups = new Set(counted.filter(isGroup).map((task) => task.id))
+  } else {
+    groups = parents()
+    const unknown = counted.filter((task) => !groups.has(task.id) && !withoutSubtasks(task))
+    for (let at = 0; at < unknown.length; at += COMPLETION_CHECKS) {
+      if (!(await tally.under(checksCeiling))) return UNAVAILABLE_COMPLETION
+      const step = unknown.slice(at, at + COMPLETION_CHECKS)
+      const found = await Promise.all(
+        step.map(async (task) => {
+          tally.range()
+          const kids = ctx.db
+            .query('issues')
+            .withIndex('by_parent_archived', (q) =>
+              q.eq('parent_id', task.id).eq('archived_at', undefined),
+            )
+          for await (const kid of kids) {
+            tally.doc(kid, readable(kid.project_id) ? undefined : TASK_ROW_MAX_BYTES)
+            if (familyIds.has(kid.project_id)) return true
+            if (!(await tally.under(checksCeiling))) return null
+          }
+          return false
+        }),
+      )
+      if (found.includes(null)) return UNAVAILABLE_COMPLETION
+      for (const [i, task] of step.entries()) if (found[i]) groups.add(task.id)
+    }
+  }
   let done = 0
   let total = 0
-  for (const task of active) {
-    if (!scope.has(task.project_id) || isGroup(task)) continue
+  for (const task of counted) {
+    if (groups.has(task.id)) continue
     total++
     if (task.status === 'done') done++
   }
-  return { done, total, percent: total === 0 ? 0 : Math.round((done / total) * 100) }
+  return { status: 'ok', done, total, percent: total === 0 ? 0 : Math.round((done / total) * 100) }
 }
 
 /* REST userJson (rest:229-234) == the MCP list_users row: NO email, auth id

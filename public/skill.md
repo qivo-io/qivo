@@ -59,21 +59,23 @@ own comments need only read access to the task.
   archive/restore. The endpoint is
   `https://api.qivo.io/mcp`. Use the client's discovered tools and current
   `tools/list` schemas for arguments. `list_tasks` defaults to 50 results and
-  allows at most 200, and refuses a `limit` outside 1 to 200 as REST does;
-  page active lists with `offset` until a shorter page arrives. Archived tasks need `project` and page with `cursor`; pass back
-  `next_cursor` until it is null. A tool refuses an argument it does not
-  know and names it. Refresh the tool list and retry with current names.
+  allows at most 200, and refuses a `limit` outside 1 to 200 as REST does.
+  It answers `{next_cursor, tasks}` for active and archived lists; pass
+  `next_cursor` back as `cursor` until it is null, even after an empty page.
+  `offset` is refused unless 0. Archived tasks need `project`. A tool
+  refuses an argument it does not know and names it. Refresh the tool list
+  and retry with current names.
 - **REST:** Use `https://api.qivo.io/v1` with an agent key or a personal
   token for scripts, large paginated reads or setting someone's plannable
   hours (`PATCH /v1/users/{id}`, an organization admin or team leader's
   token). A personal token acts as its person and its writes appear under
   their name. OAuth tokens work only on the REST webhook management routes,
   not these task and project routes.
-  `GET /v1/tasks?project=<ref>&limit=200&offset=0` returns an
-  array of at most 50 tasks when `limit` is left out; increment `offset` by
-  the page size until a shorter page arrives.
-  `archived=true` needs `project` and returns `{next_cursor, tasks}`; pass
-  `next_cursor` back as `cursor` until it is null, even after an empty page.
+  `GET /v1/tasks?project=<ref>&limit=200` returns `{next_cursor, tasks}`,
+  at most 50 tasks a page when `limit` is left out, for active and archived
+  lists; pass `next_cursor` back as `cursor` until it is null, even after a
+  short or empty page. `offset` is refused unless 0. `archived=true` needs
+  `project`.
 - **Browser:** Use it for the actions under
   [Stays in the app](#stays-in-the-app), which no MCP tool or REST route
   offers. Enter at `https://qivo.io/app` and use the user's signed-in
@@ -246,21 +248,21 @@ Useful field rules:
   takes a list on MCP and comma-separated values on REST.
 - A group's `progress` is the app's Progress, the done and total tasks
   without subtasks under it that you can read; `partial: true` means some
-  are hidden from you, or an archived group holds too many to read, so its
+  are hidden from you, or the group holds too many to read, so its
   completion is unknown. `delay` is the app's
   projected delay (`status` `ok`, `behind` or `late`, with
   `projected_end_week`), or `null` when the project does not track delay or
-  the app shows no verdict; it is judged on today's date in UTC. On a single
-  task its `status` can be `unavailable`, with no week, when the owner's
-  other open work is too large to read in one request; never read that as
-  free time.
+  the app shows no verdict; it is judged on today's date in UTC. Its
+  `status` can be `unavailable`, with no week, when the owner's other open
+  work is too large to read in one request, and on a list row also when the
+  page did not read that owner's work; never read that as free time. Read
+  the single task for its own verdict.
   `last_comment_at` is when the task was last commented on, or `null`. `get_project` and
   `GET /v1/projects/{ref}` add `completion`, the Overview's done and total
-  tasks. If a task list asks for a smaller limit, its rows' descriptions,
-  newest comments and parents were too large to read at once; retry with a
-  smaller `limit`. If it says
-  the organization's active tasks are too large to list, or that it has too
-  many projects, teams or labels, a smaller `limit` does not help.
+  tasks with `status: "ok"`, or `status: "unavailable"` with null counts
+  when the project's tasks are too many to count in one request. If a task
+  list says it could not be read within the request's limits, name a
+  `project` to list one project's tasks.
 
 ## Subtasks, moves, links and labels
 

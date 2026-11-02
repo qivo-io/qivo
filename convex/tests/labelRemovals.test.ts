@@ -177,13 +177,15 @@ describe('a label on more tasks than one delete removes', () => {
       })
       expect(detail.labels.map((l) => l.name)).toEqual(['Keep'])
     }
-    const search = (term: string) =>
-      t.query(internal.machine.rest.listIssues, {
-        today: TODAY,
-        callerId: f.admin.id,
-        access: 'read',
-        search: term,
-      })
+    const search = async (term: string) =>
+      (
+        await t.query(internal.machine.rest.listIssues, {
+          today: TODAY,
+          callerId: f.admin.id,
+          access: 'read',
+          search: term,
+        })
+      ).tasks
     expect(await search('Bug')).toEqual([])
     expect(await search('Keep')).toHaveLength(7)
 

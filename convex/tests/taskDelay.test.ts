@@ -3,9 +3,14 @@
  *
  *   1. Each reader's verdicts are the ones the app computes from the
  *      snapshot it serves the same person, on list rows and single reads
- *      of both surfaces, null where the project does not track delay.
- *   2. The single read's load, read through the owner's own tasks, is the
- *      list's, read from the organization's, for random organizations.
+ *      of both surfaces, null where the project does not track delay. A
+ *      list page reads its owners' loads as the single read does
+ *      (lib/machineDelay.ts pageForecaster), every owner for staff and the
+ *      first that needs one for a guest or Viewer, whose rows of other
+ *      owners say `unavailable`.
+ *   2. The owner reader's load, read through the owner's own tasks, is the
+ *      one planning reads from the organization's, and a list row's verdict
+ *      is the single read's, for random organizations.
  *   3. Today is the request's UTC day, and a verdict reads the owner's other
  *      work only when it can change the answer, and says `unavailable` where
  *      that work does not fit in the read.
@@ -31,7 +36,7 @@ import {
 } from '../../src/lib/workload'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { accessOf } from '../lib/access'
+import { accessOf, isOrgStaff } from '../lib/access'
 import { byId } from '../lib/db'
 import { type DelayJson, UNAVAILABLE_DELAY, utcToday } from '../lib/machineDelay'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
@@ -54,6 +59,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { mcpPage } from './taskPages.setup'
 
 /* A Wednesday at noon UTC, the same day in every likely time zone. */
 const NOW = '2026-10-14T12:00:00.000Z'
@@ -252,22 +258,67 @@ async function appDelays(fx: Fx, person: Doc<'profiles'>): Promise<Map<string, D
   )
 }
 
-type Row = { id: string; title: string; delay: DelayJson | null }
+type Row = { id: string; title: string; owner_id: string | null; delay: DelayJson | null }
 
 /* Every read of `ids` as `callerId`, REST and MCP list rows and single
- * reads, which must agree. */
+ * reads, which must agree. A guest's or Viewer's list page reads the load
+ * of one owner, the first in page order whose row needs one, so on its
+ * whole list a row may say `unavailable` where the single read judges, but
+ * only for an owner other than one the page read before it. Listed by owner,
+ * one owner a page, its rows agree with the single reads too. */
 async function everyRead(fx: Fx, callerId: string, ids: readonly string[], today = TODAY) {
   const read = { callerId, access: 'read', today } as const
-  const rest = await restTasks(fx.t, { ...read, limit: '200' })
-  const mcp = JSON.parse(await fx.t.query(internal.machine.mcp.listIssues, { ...read, limit: 200 }))
   const out = new Map<string, DelayJson | null>()
   for (const id of ids) {
     const restOne = await fx.t.query(internal.machine.rest.getIssue, { ...read, ref: id })
     const mcpOne = JSON.parse(await fx.t.query(internal.machine.mcp.getIssue, { ...read, ref: id }))
-    const listed = [rest.find((r) => r.id === id), (mcp as Row[]).find((r) => r.id === id)]
-    const values = [restOne.delay, mcpOne.delay, ...listed.filter((r) => r).map((r) => r?.delay)]
-    for (const v of values) expect(v, `${restOne.title} for ${callerId}`).toEqual(values[0])
+    expect(mcpOne.delay, `${restOne.title} for ${callerId}`).toEqual(restOne.delay)
     out.set(id, restOne.delay)
+  }
+  const reader = await fx.t.run((ctx) => byId(ctx, 'profiles', callerId))
+  const staff = reader !== null && isOrgStaff(reader)
+  /* Checks one page's rows against the single reads, strictly when the
+   * page read every owner's load. */
+  const agrees = (rows: readonly Row[], every: boolean, label: string) => {
+    const unread = new Set<string | null>()
+    let first = -1
+    for (const [at, row] of rows.entries()) {
+      if (!out.has(row.id)) continue
+      const single = out.get(row.id)
+      const same =
+        row.delay === single ||
+        (row.delay !== null &&
+          single != null &&
+          row.delay.status === single.status &&
+          row.delay.projected_end_week === single.projected_end_week)
+      if (every || same) {
+        expect(row.delay, `${row.title} for ${callerId} on ${label}`).toEqual(single)
+        continue
+      }
+      // a row whose owner's load the page did not read
+      expect(row.delay, `${row.title} for ${callerId} on ${label}`).toEqual(UNAVAILABLE_DELAY)
+      unread.add(row.owner_id)
+      if (first < 0) first = at
+    }
+    if (first < 0) return
+    // the page read the load of an owner with a row before the first it did
+    // not read
+    expect(
+      rows.slice(0, first).some((row) => row.owner_id !== null && !unread.has(row.owner_id)),
+      `${label} for ${callerId} read no owner before ${rows[first].title}`,
+    ).toBe(true)
+  }
+  const rest = await restTasks(fx.t, { ...read, limit: '200' })
+  const mcp = (await mcpPage(fx.t, { ...read, limit: 200 })).tasks
+  agrees(rest, staff, 'REST')
+  agrees(mcp, staff, 'MCP')
+  if (!staff) {
+    const owners = new Set(rest.flatMap((row) => (row.owner_id === null ? [] : [row.owner_id])))
+    for (const owner of owners) {
+      agrees(await restTasks(fx.t, { ...read, owner, limit: '200' }), true, `REST by ${owner}`)
+      const byOwner = await mcpPage(fx.t, { ...read, owner_id: owner, limit: 200 })
+      agrees(byOwner.tasks, true, `MCP by ${owner}`)
+    }
   }
   return out
 }
@@ -390,8 +441,8 @@ describe('a single read’s load is the list’s load', () => {
           planted.push(await task(fx, over))
         }
         for (const reader of [fx.admin, fx.guest, fx.agent]) {
-          // the verdicts agree on every read (everyRead), and the load
-          // behind them is the same rows
+          // a list row's verdict is the single read's (everyRead), and the
+          // owner reader's load behind them is the rows planning reads
           const listed = await restTasks(fx.t, {
             callerId: reader.id,
             access: 'read',
@@ -556,7 +607,7 @@ describe('a verdict reads the owner’s other work only when it can change it', 
     expect((await single(fx, estimated.id)).delay).toEqual(UNAVAILABLE_DELAY)
   })
 
-  it('says unavailable past the owner’s subtask checks, where the list still judges', async () => {
+  it('says unavailable past the owner’s subtask checks, on the list as on the single read', async () => {
     const fx = await setup()
     // 150 of the user's tasks in the task's own sub-project, so the read
     // asks about FW and TBED alone and its room holds every check
@@ -568,17 +619,20 @@ describe('a verdict reads the owner’s other work only when it can change it', 
       remaining_hours: 10,
       remaining_set_at: NOW,
     })
-    // the list read every active task anyway
-    const listed = await restTasks(fx.t, {
-      callerId: fx.admin.id,
-      access: 'read',
-      today: TODAY,
-      owner: fx.user.id,
-      // the task's number is the lowest of the user's, which orders
-      // tasks created at the same instant
-      limit: '1',
-    })
-    const judged = listed.find((r) => r.id === estimated.id)?.delay
+    // the list reads the owner's load through the same reader
+    const list = async () =>
+      (
+        await restTasks(fx.t, {
+          callerId: fx.admin.id,
+          access: 'read',
+          today: TODAY,
+          owner: fx.user.id,
+          // the task's number is the lowest of the user's, which orders
+          // tasks created at the same instant
+          limit: '1',
+        })
+      ).find((r) => r.id === estimated.id)?.delay
+    const judged = await list()
     expect(judged?.status).toBe('behind')
     const bounds = structuredClone(OWNER_LOADS)
     try {
@@ -586,9 +640,10 @@ describe('a verdict reads the owner’s other work only when it can change it', 
       // the list does
       OWNER_LOADS.checks = 200
       expect((await single(fx, estimated.id)).delay).toEqual(judged)
-      // fewer: the checks bound alone makes it unavailable
+      // fewer: the checks bound alone makes it unavailable, on the list too
       OWNER_LOADS.checks = 100
       expect((await single(fx, estimated.id)).delay).toEqual(UNAVAILABLE_DELAY)
+      expect(await list()).toEqual(UNAVAILABLE_DELAY)
       const mcp = JSON.parse(
         await fx.t.query(internal.machine.mcp.getIssue, {
           callerId: fx.admin.id,

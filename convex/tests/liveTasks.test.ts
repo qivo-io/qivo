@@ -12,7 +12,8 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { accessOf } from '../lib/access'
-import { ACCESS_POINT_CHECKS, taskOut } from '../lib/core'
+import { ACTIVE_PAGE } from '../lib/activeTaskPage'
+import { ACCESS_POINT_CHECKS, COMPLETION_READS, COMPLETION_RESERVE, taskOut } from '../lib/core'
 import { byId } from '../lib/db'
 import { countsAsSubtask, groupTest, LIVE_PROJECT_READS } from '../lib/liveTasks'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
@@ -39,6 +40,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { lowered, mcpPage, restPage } from './taskPages.setup'
 
 type Fx = OrgFixture & {
   t: T
@@ -184,13 +186,8 @@ describe('the group rule', () => {
     expect(await restGet(fx, parent.id)).toMatchObject({ is_group: false, progress: null })
     expect(await mcpGet(fx, parent.id)).toMatchObject({ is_group: false })
     // a status filter keeps it, as it keeps every task without subtasks
-    const todo = await fx.t.query(internal.machine.rest.listIssues, {
-      callerId: fx.agent.id,
-      access: 'read',
-      today: TODAY,
-      status: 'todo',
-    })
-    expect(Array.isArray(todo) && todo.map((r) => r.id)).toContain(parent.id)
+    const todo = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read', status: 'todo' })
+    expect(todo.map((r) => r.id)).toContain(parent.id)
     const snap = await workspaceOf(as(fx.t, fx.admin))
     expect(snap?.issues.find((i) => i.id === parent.id)?.has_hidden_subtasks).toBe(false)
     // and it takes a status, dates and hours of its own
@@ -338,39 +335,51 @@ describe('reading only live tasks', () => {
     const child = await task(fx, { parent_id: stranded.id, title: 'Child' })
     await plantMany(fx, 2000, { project_id: fx.shelf.id })
     const expected = [group.id, kid.id, shelvedOnly.id, child.id]
-    const rest = await restTasks(fx.t, { callerId: fx.agent.id, access: 'read' })
-    expect(rest.map((r) => r.id)).toEqual(expected)
-    expect(rest.map((r) => [r.is_group, r.parent_id])).toEqual([
-      [true, null],
-      [false, group.id],
-      [false, null],
-      [false, stranded.id],
-    ])
-    const mcp = JSON.parse(
-      await fx.t.query(internal.machine.mcp.listIssues, {
+    // a page budget and a completion budget that fit this request's 400
+    // documents, either of which the archived project's tasks would pass
+    const page = {
+      page: { documents: 200, delays: { ...ACTIVE_PAGE.delays, documents: 30 } },
+      reserve: { documents: 32 },
+    }
+    const reads = structuredClone(COMPLETION_READS)
+    const reserve = structuredClone(COMPLETION_RESERVE)
+    Object.assign(COMPLETION_READS, { documents: 150 })
+    Object.assign(COMPLETION_RESERVE, { documents: 64 })
+    try {
+      await lowered(page, async () => {
+        const rest = await restPage(fx.t, { callerId: fx.agent.id, access: 'read' })
+        expect(rest.tasks.map((r) => r.id)).toEqual(expected)
+        expect(rest.next_cursor).toBeNull()
+        expect(rest.tasks.map((r) => [r.is_group, r.parent_id])).toEqual([
+          [true, null],
+          [false, group.id],
+          [false, null],
+          [false, stranded.id],
+        ])
+        const mcp = await mcpPage(fx.t, { callerId: fx.agent.id, access: 'read', project: 'TBED' })
+        expect(mcp.tasks.map((r) => r.id)).toEqual(expected)
+        expect(mcp.next_cursor).toBeNull()
+      })
+      // the group's done subtask, the leaf without a group and the child
+      const completion = { status: 'ok', done: 1, total: 3, percent: 33 }
+      const project = await fx.t.query(internal.machine.rest.getProject, {
         callerId: fx.agent.id,
         access: 'read',
-        today: TODAY,
-        project: 'TBED',
-      }),
-    ) as { id: string }[]
-    expect(mcp.map((r) => r.id)).toEqual(expected)
-    // the group's done subtask, the leaf without a group and the child
-    const completion = { done: 1, total: 3, percent: 33 }
-    const project = await fx.t.query(internal.machine.rest.getProject, {
-      callerId: fx.agent.id,
-      access: 'read',
-      ref: 'TBED',
-    })
-    expect(project.completion).toEqual(completion)
-    const mcpProject = JSON.parse(
-      await fx.t.query(internal.machine.projects.mcpGetProject, {
-        callerId: fx.agent.id,
-        access: 'read',
-        project: 'TBED',
-      }),
-    ) as { completion: unknown }
-    expect(mcpProject.completion).toEqual(completion)
+        ref: 'TBED',
+      })
+      expect(project.completion).toEqual(completion)
+      const mcpProject = JSON.parse(
+        await fx.t.query(internal.machine.projects.mcpGetProject, {
+          callerId: fx.agent.id,
+          access: 'read',
+          project: 'TBED',
+        }),
+      ) as { completion: unknown }
+      expect(mcpProject.completion).toEqual(completion)
+    } finally {
+      Object.assign(COMPLETION_READS, reads)
+      Object.assign(COMPLETION_RESERVE, reserve)
+    }
   })
 
   it('a list that names an archived project still counts every active subtask of its tasks', async () => {
@@ -398,47 +407,6 @@ describe('reading only live tasks', () => {
       [shelved.id, true, '2026-09-07', '2026-09-07'],
       [atticGroup.id, true, '2026-10-05', '2026-10-12'],
     ])
-  })
-
-  it('a list past LIVE_PROJECT_READS answers as the per-project read does', async () => {
-    const fx = await setup()
-    const group = await task(fx, { title: 'Group', start_week: '2026-09-07' })
-    await task(fx, {
-      project_id: fx.sub2.id,
-      parent_id: group.id,
-      status: 'done',
-      start_week: '2026-09-07',
-      end_week: '2026-09-14',
-    })
-    const shelvedOnly = await task(fx, { title: 'Shelved only' })
-    await task(fx, { project_id: fx.shelf.id, parent_id: shelvedOnly.id })
-    const stranded = await task(fx, { project_id: fx.shelf.id, title: 'Stranded parent' })
-    await task(fx, { parent_id: stranded.id, title: 'Child' })
-    const read = async () => ({
-      rest: await restTasks(fx.t, { callerId: fx.agent.id, access: 'read' }),
-      mcp: await fx.t.query(internal.machine.mcp.listIssues, {
-        callerId: fx.agent.id,
-        access: 'read',
-        today: TODAY,
-        project: 'TBED',
-      }),
-      completion: (
-        await fx.t.query(internal.machine.rest.getProject, {
-          callerId: fx.agent.id,
-          access: 'read',
-          ref: 'TBED',
-        })
-      ).completion,
-    })
-    const perProject = await read()
-    expect(perProject.rest).toHaveLength(4)
-    const reads = LIVE_PROJECT_READS.reads
-    LIVE_PROJECT_READS.reads = 1
-    try {
-      expect(await read()).toEqual(perProject)
-    } finally {
-      LIVE_PROJECT_READS.reads = reads
-    }
   })
 
   it("a busy person's load past the subtask checks is unavailable, read in few ranges", async () => {
@@ -571,9 +539,14 @@ describe("a project's completion", () => {
     const tbed = await read('TBED')
     // Group's done subtask, Leaf and Legacy parent counted as a task without
     // subtasks, since its subtask in SKNK is not read
-    expect(tbed.completion).toEqual({ done: 1, total: 3, percent: 33 })
+    expect(tbed.completion).toEqual({ status: 'ok', done: 1, total: 3, percent: 33 })
     expect(tbed.documents).toBeLessThan(150)
-    expect((await read('FW')).completion).toEqual({ done: 0, total: 2, percent: 0 })
+    expect((await read('FW')).completion).toEqual({
+      status: 'ok',
+      done: 0,
+      total: 2,
+      percent: 0,
+    })
   })
 })
 
