@@ -1293,7 +1293,7 @@ describe('public Northstar provisioning and bounded deletion', () => {
     expect(phases.filter((phase) => phase === 'trash').length).toBeGreaterThan(3)
     for (const table of ['deleted_items', 'deleted_rows', 'deleted_tasks', 'comments'] as const)
       expect(await t.run((ctx) => ctx.db.query(table).collect()), table).toEqual([])
-  }, 120_000)
+  })
 
   it('keeps the receipt during an in-flight upload and resumes after its lease', async () => {
     const t = testBackend()
