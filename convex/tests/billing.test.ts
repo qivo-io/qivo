@@ -156,6 +156,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   Object.assign(STORAGE_PAGE, DEFAULT_STORAGE_PAGE)
+  Object.assign(REMOVAL_BUDGET, DEFAULT_REMOVAL_BUDGET)
   Object.assign(SYNC_PAGE, DEFAULT_SYNC_PAGE)
   Object.assign(REMINDER_PAGE, DEFAULT_REMINDER_PAGE)
   vi.useRealTimers()
@@ -225,6 +226,7 @@ const iso = (n: number) => new Date(Date.parse(NOW) + n * 60_000).toISOString()
 const minutesAfter = (ms: number) => (ms - SWEEP_INTERVAL_MS) / 60_000
 
 const DEFAULT_STORAGE_PAGE = { ...STORAGE_PAGE }
+const DEFAULT_REMOVAL_BUDGET = { ...REMOVAL_BUDGET }
 const DEFAULT_SYNC_PAGE = { ...SYNC_PAGE }
 const DEFAULT_REMINDER_PAGE = { ...REMINDER_PAGE }
 
@@ -780,48 +782,50 @@ describe('provider state, retries and billing snapshots', () => {
     expect(sent).toMatchObject({ attempts: 1, sent_at: NOW })
   })
 
-  /* An organization with the 5,000 tasks below, on transaction limits as the
-   * backend sets them. convex-test reads every stored document of a table
-   * for each index lookup on it, and counting the files looks up each task
-   * once, so each test below counts them once. */
-  async function fiveThousandTasks() {
-    const { t, f } = await fixture({ transactionLimits: true })
+  /* An organization with more files on its tasks than one transaction may
+   * look up, on transaction limits as the backend sets them except for index
+   * ranges. Those are lowered to 200, and the storage page to 50 rows, about
+   * as the backend's 4,096 ranges are to 1,000 rows, so the reads below take
+   * several pages. Counting the files in one transaction, as storageUsage
+   * does, reads a range for each task with a file, so it passes the limit
+   * here as it would past about 4,000 such tasks on the backend. */
+  async function pastOneTransaction() {
+    STORAGE_PAGE.rows = 50
+    const { t, f } = await fixture({ transactionLimits: { databaseQueries: 200 } })
     await t.mutation(apply, { payload: remote(f.org.id), event_id: 'first-period' })
-    // 5,000 tasks, 4,500 of them with a 2 MB file, a third of those in PCB.
+    // 250 tasks, 225 of them with a 40 MB file, a third of those in PCB.
     // The rows share one stored file; only their size_bytes count.
     const storage_id = await t.run((ctx) => ctx.storage.store(new Blob([])))
-    for (let from = 0; from < 5000; from += 1000) {
-      await t.run(async (ctx) => {
-        for (let i = from; i < from + 1000; i++) {
-          const project_id = i % 3 === 0 ? f.sub2.id : f.sub.id
-          const id = uuid()
-          await ctx.db.insert('issues', {
-            id,
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 250; i++) {
+        const project_id = i % 3 === 0 ? f.sub2.id : f.sub.id
+        const id = uuid()
+        await ctx.db.insert('issues', {
+          id,
+          org_id: f.org.id,
+          project_id,
+          num: i + 1,
+          title: `Task ${i}`,
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+        if (i < 225)
+          await ctx.db.insert('issue_attachments', {
             org_id: f.org.id,
-            project_id,
-            num: i + 1,
-            title: `Task ${i}`,
-            description: '',
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
+            id: uuid(),
+            issue_id: id,
+            storage_id,
+            name: `file-${i}.bin`,
+            size_bytes: 40_000_000,
+            inline: false,
             created_at: NOW,
-            updated_at: NOW,
           })
-          if (i < 4500)
-            await ctx.db.insert('issue_attachments', {
-              org_id: f.org.id,
-              id: uuid(),
-              issue_id: id,
-              storage_id,
-              name: `file-${i}.bin`,
-              size_bytes: 2_000_000,
-              inline: false,
-              created_at: NOW,
-            })
-        }
-      })
-    }
+      }
+    })
 
     // a row whose task is gone costs one lookup and counts nowhere
     await t.run((ctx) =>
@@ -836,11 +840,14 @@ describe('provider state, retries and billing snapshots', () => {
         created_at: NOW,
       }),
     )
+    await expect(t.run((ctx) => storageUsage(ctx, f.org.id))).rejects.toThrow(
+      /Too many index ranges read/,
+    )
     return { t, f }
   }
 
-  it('reports the storage of an organization with 5,000 tasks within the transaction limits', async () => {
-    const { t, f } = await fiveThousandTasks()
+  it('reports the storage of an organization with more files than one transaction may look up within the transaction limits', async () => {
+    const { t, f } = await pastOneTransaction()
     // the admin Billing page
     const report = await as(t, f.admin).action(usageReport, { org_id: f.org.id })
     expect(report.storage_bytes).toBe(9_000_000_000)
@@ -848,10 +855,10 @@ describe('provider state, retries and billing snapshots', () => {
       { project_id: f.sub.id, name: 'Firmware', storage_bytes: 6_000_000_000 },
       { project_id: f.sub2.id, name: 'Board rev', storage_bytes: 3_000_000_000 },
     ])
-  }, 120_000)
+  })
 
-  it('records the storage of an organization with 5,000 tasks at renewal within the transaction limits', async () => {
-    const { t, f } = await fiveThousandTasks()
+  it('records the storage of an organization with more files than one transaction may look up at renewal within the transaction limits', async () => {
+    const { t, f } = await pastOneTransaction()
     // the renewal into the next period samples the figure the Billing page shows
     const next = { start: END, end: '2026-11-01T12:00:00.000Z' }
     await t.mutation(apply, {
@@ -877,7 +884,7 @@ describe('provider state, retries and billing snapshots', () => {
     )
     // 9 GB against the 5 GB the plan includes for five seats
     expect(period).toMatchObject({ storage_bytes: 9_000_000_000, storage_blocks: 4 })
-  }, 120_000)
+  })
 
   it('records a renewal of 6,000 attachment rows at once and samples them under 4,000 documents a read', async () => {
     const { t, f } = await fixture({ transactionLimits: { documentsRead: 4000 } })
@@ -1915,10 +1922,11 @@ describe('when organizations are reconciled', () => {
   }
 
   it('marks the guest organizations of a deleted profile due over several steps, each within its budget', async () => {
-    const { t, f, email, guestOrgs, removal, step, left, marked, guests } = await guestInMany(300)
+    REMOVAL_BUDGET.rows = 32
+    const { t, f, email, guestOrgs, removal, step, left, marked, guests } = await guestInMany(40)
     // Each step reads a profile with the email and marks its organization
-    // due as two of its rows. Before, the first step read 601 profiles and
-    // marked all 300, more than twice its budget.
+    // due as two of its rows. Before, the first step read 81 profiles and
+    // marked all 40, more than twice its budget.
     const perStep: number[] = []
     while ((await marked()) < guestOrgs.length && perStep.length < 10) {
       const before = await marked()
@@ -1977,7 +1985,8 @@ describe('when organizations are reconciled', () => {
     // rounds away above 2^52 ms, so there the inserts share a time, as an
     // import can leave them
     const TIED = 2 ** 52
-    const { t, f, email, guestOrgs, step, left, marked, removal } = await guestInMany(300, TIED)
+    REMOVAL_BUDGET.rows = 32
+    const { t, f, email, guestOrgs, step, left, marked, removal } = await guestInMany(40, TIED)
     // one more guest organization, its profile a millisecond after the group
     const lastOrg = await guestAt(t, email, TIED + 1)
     const group = await t.run(async (ctx) =>
@@ -2225,11 +2234,12 @@ describe('when organizations are reconciled', () => {
   })
 
   it('sends the other reminders when the notices of one organization fail', async () => {
-    const { t, f } = await fixture({ transactionLimits: true })
-    // 1,001 more admins, whose notices pass the 1,000 calls one transaction
-    // may schedule; before, the page that held them failed every minute
+    // 21 more admins, whose notices pass the 20 calls one transaction may
+    // schedule here, as 1,001 pass Convex's 1,000; before, the page that
+    // held them failed every minute
+    const { t, f } = await fixture({ transactionLimits: { functionsScheduled: 20 } })
     await t.run(async (ctx) => {
-      for (let i = 0; i < 1001; i += 1)
+      for (let i = 0; i < 21; i += 1)
         await ctx.db.insert('profiles', {
           id: uuid(),
           org_id: f.otherOrg.id,
