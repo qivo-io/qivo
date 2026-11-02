@@ -2298,23 +2298,28 @@ describe('archiveDoneIssues and two runs that overlap', () => {
     expect((await issueRow(t, task.id))?.archived_at).toBe(night(3))
   })
 
-  it('every due task archives by the next night, however two runs and a writer interleave', async () => {
-    type Step = 'A find' | 'A hand' | 'A chain' | 'B find' | 'B hand' | 'B chain'
-    // every order of B's steps among A's after A's find phase, the older run first
-    const merges = (x: Step[], y: Step[]): Step[][] =>
-      x.length === 0 || y.length === 0
-        ? [[...x, ...y]]
-        : [
-            ...merges(x.slice(1), y).map((rest) => [x[0], ...rest]),
-            ...merges(x, y.slice(1)).map((rest) => [y[0], ...rest]),
-          ]
-    const orders = merges(['A hand', 'A chain'], ['B find', 'B hand', 'B chain']).map(
-      (rest): Step[] => ['A find', ...rest],
-    )
-    const failed: string[] = []
-    // before which step a person restores an archived project, or never
-    const writers = [null, 0, 1, 2, 3, 4, 5, 6]
-    for (const order of orders)
+  type Step = 'A find' | 'A hand' | 'A chain' | 'B find' | 'B hand' | 'B chain'
+  /* Every order of B's steps among A's after A's find phase, the older run
+   * first: ten orders. */
+  const merges = (x: Step[], y: Step[]): Step[][] =>
+    x.length === 0 || y.length === 0
+      ? [[...x, ...y]]
+      : [
+          ...merges(x.slice(1), y).map((rest) => [x[0], ...rest]),
+          ...merges(x, y.slice(1)).map((rest) => [y[0], ...rest]),
+        ]
+  const orders = merges(['A hand', 'A chain'], ['B find', 'B hand', 'B chain']).map(
+    (rest): Step[] => ['A find', ...rest],
+  )
+
+  // one case an order, each with both ends of B's chain and every writer
+  it.each(orders.map((order) => [order.join(', '), order] as const))(
+    'every due task archives by the next night, however a writer interleaves two runs in the order %s',
+    async (_, order) => {
+      expect(orders).toHaveLength(10)
+      const failed: string[] = []
+      // before which step a person restores an archived project, or never
+      const writers = [null, 0, 1, 2, 3, 4, 5, 6]
       for (const outcome of ['finishes', 'fails'] as const)
         for (const writer of writers) {
           const label = `${order.join(', ')}; B's chain ${outcome}; writer ${writer ?? 'never'}`
@@ -2377,9 +2382,9 @@ describe('archiveDoneIssues and two runs that overlap', () => {
             failed.push(`${label}: archived in an archived project`)
           if ((await rechecks(t)).length > 0) failed.push(`${label}: rows left`)
         }
-    expect(orders).toHaveLength(10)
-    expect(failed).toEqual([])
-  })
+      expect(failed).toEqual([])
+    },
+  )
 })
 
 describe('archiveDoneIssues runs what the release before queued', () => {
