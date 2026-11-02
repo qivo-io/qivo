@@ -1834,7 +1834,7 @@ describe('marketing demo Deleted items', () => {
     expect(await usedIds(t, org_id)).toHaveLength(
       MARKETING_DEMO.issues.length + MARKETING_DEMO.projects.length,
     )
-  }, 120_000)
+  })
 
   it('refuses at a check step, before it writes, a reserved task id a pending detach kept through the wipe', async () => {
     const t = newAuthT()
@@ -1877,7 +1877,7 @@ describe('marketing demo Deleted items', () => {
     expect(await usedIds(t, org_id)).toHaveLength(
       MARKETING_DEMO.issues.length + MARKETING_DEMO.projects.length,
     )
-  }, 120_000)
+  })
 
   it("refuses a reset before its wipe when another organization's row holds a reserved id the demo holds live", async () => {
     const t = newAuthT()
@@ -1973,7 +1973,7 @@ describe('marketing demo seed steps', () => {
     })
     while (answer.seed_done === false) answer = await apply(t, 'seed')
     await expectCountsSeeded(t, org_id, 'written to between steps')
-  }, 120_000)
+  })
 
   // first call, then the check parts: the next call is the setup step
   const toSetup = async (t: T, anchor = ANCHOR) => {
@@ -2046,7 +2046,7 @@ describe('marketing demo seed steps', () => {
     const tasks = (await t.query(inspectRef, TARGET)).counts.tasks
     await expectRefusal(seed(t), 'rule', /work changed during the seed; use reset/)
     expect((await t.query(inspectRef, TARGET)).counts.tasks).toBe(tasks)
-  }, 120_000)
+  })
 
   it('refuses a work step whose row the demo already holds, and a receipt from another step layout', async () => {
     const t = newAuthT()
@@ -2081,7 +2081,7 @@ describe('marketing demo seed steps', () => {
       await ctx.db.patch(receipt!._id, { seed: { ...receipt!.seed!, layout: 'another layout' } })
     })
     await expectRefusal(apply(t, 'seed'), 'rule', /use reset to change dates or dataset version/)
-  }, 120_000)
+  })
 
   it('refuses a task step whose label or parent task was deleted or moved since it was written', async () => {
     const t = newAuthT()
@@ -2146,7 +2146,7 @@ describe('marketing demo seed steps', () => {
     const written = (await t.query(inspectRef, TARGET)).counts.tasks
     await expectRefusal(apply(t, 'seed'), 'rule', /parent task moved to another project; use reset/)
     expect((await t.query(inspectRef, TARGET)).counts.tasks).toBe(written)
-  }, 180_000)
+  })
 
   it("passes the check for an owned link whose task is in the demo's own Deleted items", async () => {
     const t = newAuthT()
