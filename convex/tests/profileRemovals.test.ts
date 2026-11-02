@@ -237,11 +237,13 @@ const remove = (t: T, profile: Doc<'profiles'>, now = new Date().toISOString()) 
   })
 
 describe('the removal transaction under real limits', () => {
-  it('removes a fresh invite and cancels another in an organization with 4,200 tasks', async () => {
+  it('removes a fresh invite and cancels another in an organization with 600 tasks', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
+    // 300 open tasks in one sub-project, the design size, and 300 done and
+    // archived
     await t.run(async (ctx) => {
-      for (let i = 0; i < 4200; i++)
+      for (let i = 0; i < 600; i++)
         await ctx.db.insert('issues', {
           id: uuid(),
           org_id: f.org.id,
@@ -273,18 +275,24 @@ describe('the removal transaction under real limits', () => {
     await t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await jobOf(t, invited.id)).toBeNull()
     expect(await jobOf(t, cancelled.id)).toBeNull()
-  }, 120_000)
+  })
 
-  it('clears one budget of an agent with 3,000 open tasks and leaves the rest to the steps', async () => {
-    const t = newT({ transactionLimits: true })
+  it('clears one budget of an agent with 300 open tasks and leaves the rest to the steps', async () => {
+    // Convex's byte limit and REMOVAL_BUDGET at an eighth
+    const t = newT({ transactionLimits: { bytesRead: (16 * 1024 * 1024) / 8 } })
+    Object.assign(REMOVAL_BUDGET, {
+      rows: DEFAULT_BUDGET.rows / 8,
+      bytes: DEFAULT_BUDGET.bytes / 8,
+    })
     const f = await withOrg(t)
     const agent = f.agent.id
-    // The agent created, reports and is assigned every task. Clearing all
-    // 9,000 fields in one transaction reads each 2 KiB task twice per field,
-    // about 40 MiB against the 16 MiB limit.
-    const description = 'x'.repeat(2048)
+    // The agent created, reports and is assigned every task, 300 open tasks
+    // in one sub-project, the design size. Clearing all 900 fields in one
+    // transaction reads each 2 KB task twice per field, about 3.6 MB
+    // against the lowered 2 MiB limit, as 3,000 tasks passed the real one.
+    const description = 'Imported from the old tracker with its notes and checklists. '.repeat(34)
     await t.run(async (ctx) => {
-      for (let i = 0; i < 3000; i++)
+      for (let i = 0; i < 300; i++)
         await ctx.db.insert('issues', {
           id: uuid(),
           org_id: f.org.id,
@@ -318,14 +326,14 @@ describe('the removal transaction under real limits', () => {
     expect(await jobOf(t, agent)).not.toBeNull()
     // one budget of rows, assignee fields first
     expect(await held()).toEqual({
-      assignee_id: 3000 - REMOVAL_BUDGET.rows,
-      created_by: 3000,
-      reporter_id: 3000,
+      assignee_id: 300 - REMOVAL_BUDGET.rows,
+      created_by: 300,
+      reporter_id: 300,
     })
     await t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await held()).toEqual({ assignee_id: 0, created_by: 0, reporter_id: 0 })
     expect(await jobOf(t, agent)).toBeNull()
-  }, 120_000)
+  })
 })
 
 describe('background steps', () => {
@@ -748,43 +756,57 @@ const accessRows = (t: T, profileId: string) =>
   })
 
 describe('access rows past the first pass', () => {
-  it('removes a person holding 4,500 memberships, grants and tokens within the limits', async () => {
+  it('removes a person holding 134 memberships, grants and tokens within limits lowered to a sixteenth', async () => {
     // convex-test counts no range for a delete, which reads its row first,
-    // so the writes stand in for those ranges
-    const t = newT({ transactionLimits: { documentsWritten: 4096 } })
+    // so the writes stand in for those ranges. The first pass and the
+    // steps' budget are at a sixteenth, and the limit on documents written
+    // holds them but not all 134 rows at once, as 4,096 held them but not
+    // 4,500 rows.
+    const t = newT({ transactionLimits: { documentsWritten: 100 } })
+    ACCESS_FIRST_PASS.rows = DEFAULT_FIRST_PASS.rows / 16
+    REMOVAL_BUDGET.rows = DEFAULT_BUDGET.rows / 16
     const f = await withOrg(t)
     const user = f.user.id
-    for (let batch = 0; batch < 3; batch++)
+    // 100 tokens, 3 more teams beside the fixture's and grants on 30
+    // sub-projects, as many as the design size puts under one project,
+    // planted in transactions under the lowered limit
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 3; i++) {
+        const team = uuid()
+        await ctx.db.insert('teams', {
+          id: team,
+          org_id: f.org.id,
+          name: `Team ${i}`,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', { team_id: team, profile_id: user, is_leader: false })
+      }
+      for (let i = 0; i < 30; i++) {
+        const project = uuid()
+        await ctx.db.insert('projects', {
+          id: project,
+          org_id: f.org.id,
+          type: 'project',
+          parent_id: f.meta.id,
+          key: `PX${i}`,
+          name: `Project ${i}`,
+          description: '',
+          sort_order: i,
+          num: nextNum++,
+          track_delay: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('project_access', {
+          project_id: project,
+          profile_id: user,
+          level: 'user',
+        })
+      }
+    })
+    for (let batch = 0; batch < 2; batch++)
       await t.run(async (ctx) => {
-        for (let i = 0; i < 500; i++) {
-          const team = uuid()
-          await ctx.db.insert('teams', {
-            id: team,
-            org_id: f.org.id,
-            name: `Team ${batch}-${i}`,
-            track_delay_default: false,
-            created_at: NOW,
-          })
-          await ctx.db.insert('team_members', { team_id: team, profile_id: user, is_leader: false })
-          const project = uuid()
-          await ctx.db.insert('projects', {
-            id: project,
-            org_id: f.org.id,
-            type: 'project',
-            parent_id: f.meta.id,
-            key: `P${batch}X${i}`,
-            name: `Project ${batch}-${i}`,
-            description: '',
-            sort_order: i,
-            num: nextNum++,
-            track_delay: false,
-            created_at: NOW,
-          })
-          await ctx.db.insert('project_access', {
-            project_id: project,
-            profile_id: user,
-            level: 'user',
-          })
+        for (let i = 0; i < 50; i++)
           await ctx.db.insert('mcp_tokens', {
             id: uuid(),
             profile_id: user,
@@ -794,7 +816,6 @@ describe('access rows past the first pass', () => {
             access: 'write',
             created_at: NOW,
           })
-        }
       })
 
     await as(t, f.admin).mutation(api.profiles.remove, { org_id: f.org.id, id: user })
@@ -802,9 +823,9 @@ describe('access rows past the first pass', () => {
     // tokens go first, so the first pass leaves only some of them
     expect(await accessRows(t, user)).toEqual({
       agent_keys: 0,
-      mcp_tokens: 1500 - ACCESS_FIRST_PASS.rows,
-      team_members: 1501,
-      project_access: 1500,
+      mcp_tokens: 100 - ACCESS_FIRST_PASS.rows,
+      team_members: 4,
+      project_access: 30,
       user_prefs: 0,
     })
     await t.finishAllScheduledFunctions(vi.runAllTimers)
@@ -816,7 +837,7 @@ describe('access rows past the first pass', () => {
       user_prefs: 0,
     })
     expect(await jobOf(t, user)).toBeNull()
-  }, 240_000)
+  })
 
   it('leaves rows that grant nothing and that no reader shows until the steps delete them', async () => {
     ACCESS_FIRST_PASS.rows = 1
@@ -999,7 +1020,7 @@ describe('access rows past the first pass', () => {
         .first(),
     )
     expect(led).toBeNull()
-  }, 120_000)
+  })
 })
 
 describe('the reserved id and its end states', () => {
