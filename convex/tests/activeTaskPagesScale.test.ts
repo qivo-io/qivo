@@ -224,15 +224,12 @@ describe('active pages at the design size', () => {
       expect(p.figures.rows).toBe(0)
       expect(p.figures.next).toBe(true)
     }
-    // the same tolerances as the plain page above
-    expect(
-      Math.abs(lRare.figures.ranges - lBefore.ranges - (sRare.figures.ranges - sBefore.ranges)),
-    ).toBeLessThan(30)
-    expect(
-      Math.abs(
-        lRare.figures.documents - lBefore.documents - (sRare.figures.documents - sBefore.documents),
-      ),
-    ).toBeLessThan(150)
+    // it answers no rows, and both organizations plant the 300 oldest tasks
+    // it looks at alike, so the page's own reads match exactly
+    expect(lRare.figures.ranges - lBefore.ranges).toBe(sRare.figures.ranges - sBefore.ranges)
+    expect(lRare.figures.documents - lBefore.documents).toBe(
+      sRare.figures.documents - sBefore.documents,
+    )
   })
 
   it('pages an admin past the oldest active tasks of an archived sub-project to the end, reading none of them', async () => {
