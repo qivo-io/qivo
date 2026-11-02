@@ -1,8 +1,8 @@
 /* The Board's read behind tasks.ts board: one Board selection with the app's
  * filter row applied on the server, within the Board's budgets (BOARD) and
- * its ceiling of lib/limits.ts BOARD_TASKS matching tasks. It reads through
- * the shared view reader (lib/viewReads.ts) and holds the Board's own
- * rules: the filters as the app's passesFilters applies them
+ * its ceiling of BOARD.ceiling matching tasks, lib/limits.ts BOARD_TASKS. It
+ * reads through the shared view reader (lib/viewReads.ts) and holds the
+ * Board's own rules: the filters as the app's passesFilters applies them
  * (src/store/planner.ts), the order its search reads in, the ceiling, the
  * lanes that stay without cards, and its states.
  *
@@ -26,9 +26,9 @@
  * cards, and a parent heading repeats in each cell as context without
  * adding to the counts (design specification section 4). A matching group,
  * which the phone list shows as a row, and each shown parent count toward
- * BOARD.reads and BOARD.context instead. More than BOARD_TASKS is claimed
- * only once the reads found BOARD_TASKS + 1 of them; a budget reached first
- * answers over_budget, and no answer holds part of a Board. */
+ * BOARD.reads and BOARD.context instead. More than BOARD.ceiling is claimed
+ * only once the reads found BOARD.ceiling + 1 of them; a budget reached
+ * first answers over_budget, and no answer holds part of a Board. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -85,21 +85,23 @@ import {
  * membership with its copy of a name key, in ordinary text: titles of about
  * 80 characters and, where the Board reads them, description rows of 390
  * characters, the measured average (tests/board.test.ts, real limits), in
- * ranges, documents and MiB. On 31 October 2026 a real backend, with rows
- * the app's own writers made, read the bytes these tests then measured to
- * within 1 percent.
+ * ranges, documents and MiB, on 2 November 2026. On 31 October 2026 a real
+ * backend, with rows the app's own writers made, read the bytes the tests
+ * of that day measured, then at the text caps, to within 1 percent.
  *
- * - 1,000 tasks of one sub-project: 1,020, 1,018 and 0.55; 1,001 stop at
- *   the ceiling after about as much.
- * - 1,000 tasks over 30 sub-projects of one project, the design size:
- *   1,093, 1,062 and 0.57, under Focus 1,123.
- * - 1,000 tasks under 50 groups: 1,071, 2,069 and 1.21.
- * - My view of 600 and 400 tasks in two seats: 1,035, 1,021 and 0.60.
- * - The largest Board the ceiling allows, 1,000 subtasks under 1,000
- *   parents over 20 sub-projects, each shared with each of the person's 3
- *   teams: 3,049, 4,051 and 2.44 under Focus, 3,064, 4,086 and 2.46
- *   without; the same subtasks as the person's own in My view, their
- *   parents read by id: 3,091, 3,103 and 1.84.
+ * - 1,000 tasks over 30 sub-projects of one project, the design size
+ *   under one project: 1,093, 1,062 and 0.57, under Focus 1,123; 1,001
+ *   stop at the ceiling after about as much.
+ * - 1,000 tasks under 50 groups over 25 sub-projects: 1,128, 2,102 and
+ *   1.22.
+ * - My view of 600 and 400 tasks in two seats over four sub-projects:
+ *   1,039, 1,023 and 0.60.
+ * - The largest My view the ceiling allows, 1,000 of the person's subtasks
+ *   under 1,000 parents over 21 sub-projects of 3 projects, each shared
+ *   with each of the person's 3 teams, their parents read by id: 3,100,
+ *   3,109 and 1.84, under Focus 3,099. One of those projects at its design
+ *   size, 800 open and 200 Done tasks over 7 sub-projects with 342 of the
+ *   groups among them: 1,072, 1,429 and 0.83, under Focus 872.
  * - A search over a project's 800 open tasks, the design size: 45, 1,629
  *   and 0.91.
  *
@@ -108,11 +110,10 @@ import {
  * filters drop cost nothing more where the group or the subtask was created
  * under the rule of one level (lib/viewReads.ts ONE_LEVEL_SINCE); data
  * stored before it gets a check of each such subtask, which a legacy nested
- * group may be, a range each, and the largest Board's My view, whose
- * fixture data predates the rule, comes within 510 of the 3,600 ranges.
- * At the 3.1 ranges a card that My view of the largest Board reads, ranges
- * would run out at about 1,150 cards under as many parents; the ceiling
- * comes before.
+ * group may be, a range each, and the largest My view, whose fixture data
+ * predates the rule, comes within 500 of the 3,600 ranges. At its 3.1
+ * ranges a card, ranges would run out at about 1,150 cards under as many
+ * parents; the ceiling comes before.
  *
  * Bytes stop a selection whose tasks a filter must read whole: the search,
  * the people filter, Priority and Stale read every task of the selection's
@@ -127,7 +128,7 @@ import {
  * `reads`.
  *
  * `context` caps the groups among the rows and the shown parents together,
- * the rows a Board holds beside its BOARD_TASKS cards. They count in
+ * the rows a Board holds beside its BOARD.ceiling cards. They count in
  * `reads` already, so this bounds what the browser keeps: 2,000 rows at up
  * to about 1.6 KB of JSON, about 3.2 MB, so 1,000 cards under 1,000 parents
  * still fit. `owners` caps the ids the people filter may name, the design
@@ -136,13 +137,16 @@ import {
  * each, before it tries each label that can finish their matches by its
  * assignments, many to a range, and `labelScan` how many assignments a
  * candidate that try reads before it goes back to the own rows, as a label
- * may be on thousands of other tasks (boardSearch). */
+ * may be on thousands of other tasks (boardSearch). `ceiling` is the most
+ * matching tasks without subtasks a Board answers, lib/limits.ts
+ * BOARD_TASKS, which the app reads too; tests lower it here alone. */
 export const BOARD = {
   reads: { bytes: 12 * MIB, documents: 24_000, ranges: 3_600 },
   context: 2000,
   owners: 1000,
   labelTasks: 64,
   labelScan: 4,
+  ceiling: BOARD_TASKS,
 }
 
 /** A Board selection: a project of one organization, a top-level project
@@ -229,7 +233,7 @@ function filtersOf(f: BoardFilters): Filters {
   }
 }
 
-/** What the read throws once it found BOARD_TASKS + 1 matching tasks. */
+/** What the read throws once it found BOARD.ceiling + 1 matching tasks. */
 class OverCeiling extends Error {}
 
 /**
@@ -239,7 +243,7 @@ class OverCeiling extends Error {}
  * - `ok` with every matching task (`rows`), the shown parents above them
  *   (`parents`), the lanes that stay without cards (`held_projects`) and,
  *   for a project selection, its sub-projects (`projects`);
- * - `over_ceiling` once BOARD_TASKS + 1 matching tasks without subtasks
+ * - `over_ceiling` once BOARD.ceiling + 1 matching tasks without subtasks
  *   were found, whatever the budget says after;
  * - `over_budget` when the reads reach BOARD.reads before the count is
  *   known, or the groups and parents pass BOARD.context;
@@ -267,7 +271,7 @@ export async function readBoard(
   } catch (e) {
     const projects = known.projects === undefined ? {} : { projects: known.projects }
     if (e instanceof OverCeiling)
-      return { state: 'over_ceiling', ceiling: BOARD_TASKS, ...projects }
+      return { state: 'over_ceiling', ceiling: BOARD.ceiling, ...projects }
     if (isOverBudget(e)) return { state: 'over_budget', ...projects }
     if (isAccessUnchecked(e))
       return { state: 'unavailable', reason: ACCESS_UNCHECKED, message: e.data.message }
@@ -478,7 +482,7 @@ function boardRead(
           if (!stale) continue
         }
         rows.set(t.id, t)
-        if (!group && ++cards > BOARD_TASKS) throw new OverCeiling()
+        if (!group && ++cards > BOARD.ceiling) throw new OverCeiling()
       }
     }
   }
@@ -491,7 +495,7 @@ function boardRead(
     /** Takes the tasks `batches` yields, each in the reader's working set,
      * and applies the filters to those `keep` holds: those their rows tell
      * as they come, and the rest, which need group checks, once more than
-     * BOARD_TASKS wait, so the read can stop at the ceiling. */
+     * BOARD.ceiling wait, so the read can stop at the ceiling. */
     async take(
       batches: AsyncIterable<Doc<'issues'>[]>,
       keep: (t: Doc<'issues'>) => boolean = () => true,
@@ -509,7 +513,7 @@ function boardRead(
         pending.push(...(search === null ? passing : search.add(passing)))
         // the group checks wait until a ceiling's worth of tasks does, so a
         // parent whose subtasks the selection holds is known as one first
-        if (pending.length > BOARD_TASKS) await decide(pending.splice(0))
+        if (pending.length > BOARD.ceiling) await decide(pending.splice(0))
       }
     },
 

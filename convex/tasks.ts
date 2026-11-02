@@ -27,19 +27,19 @@
  *   assignments, by_label). Only that last read takes rows of tasks outside
  *   the selection; no read takes the organization's tasks.
  *
- * It answers `ok`, `over_ceiling` once more than lib/limits.ts BOARD_TASKS
- * matching tasks were found, `over_budget` when its reads reach
- * lib/board.ts BOARD before that is known, and `unavailable` for a
- * selection the caller does not hold, alike for every reason, or with
- * `reason: 'access_unchecked'` where a bound of the caller's own access
- * reads stopped a check (lib/access.ts accessUnchecked). A live query: a
- * change to a document one of those reads returned or would now return
- * reruns it, such as a task of a selected sub-project or of the person, a
- * subtask or parent it read, a project or access row it asked about, and
- * for a search a profile, text, label or label row it read; edits to other
- * projects' tasks do not. authedQuery, not orgQuery, as My view spans seats
- * and a project selection whose seat goes away answers `unavailable`
- * instead of throwing in a subscription. */
+ * It answers `ok`, `over_ceiling` once more than lib/board.ts BOARD.ceiling
+ * (lib/limits.ts BOARD_TASKS) matching tasks were found, `over_budget` when
+ * its reads reach lib/board.ts BOARD before that is known, and
+ * `unavailable` for a selection the caller does not hold, alike for every
+ * reason, or with `reason: 'access_unchecked'` where a bound of the
+ * caller's own access reads stopped a check (lib/access.ts
+ * accessUnchecked). A live query: a change to a document one of those reads
+ * returned or would now return reruns it, such as a task of a selected
+ * sub-project or of the person, a subtask or parent it read, a project or
+ * access row it asked about, and for a search a profile, text, label or
+ * label row it read; edits to other projects' tasks do not. authedQuery,
+ * not orgQuery, as My view spans seats and a project selection whose seat
+ * goes away answers `unavailable` instead of throwing in a subscription. */
 
 import { v } from 'convex/values'
 import { readBoard } from './lib/board'
