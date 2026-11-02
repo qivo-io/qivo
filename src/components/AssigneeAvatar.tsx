@@ -51,7 +51,8 @@ export function OwnerPickList({
             value={user.id || 'unassigned'}
             keywords={[user.name]}
             onSelect={() => {
-              const live = P.issueById[issue.id]
+              // a task only the Board's answer brings is changed there too
+              const live = P.anyTask(issue.id)
               if (!live) return
               // Recheck the live roster in case access changed while the menu was open.
               if (
@@ -60,7 +61,7 @@ export function OwnerPickList({
               )
                 return
               onClose(() => {
-                const task = P.issueById[issue.id]
+                const task = P.anyTask(issue.id)
                 if (!task) return
                 const f = field ?? task.ownerField
                 if ((task[f] || null) === user.id) return

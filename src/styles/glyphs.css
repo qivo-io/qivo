@@ -63,6 +63,9 @@
 .delay-banner[data-delay="behind"]::after {
   background-color: var(--delay-banner-behind-block);
 }
+.delay-banner[data-delay="unknown"]::after {
+  background-color: var(--delay-banner-unknown-block);
+}
 
 /* Lucide's pause (the paused mark's, at stroke 2) and user (Unassigned's
    portrait, at 1.75) in the text color, one element each

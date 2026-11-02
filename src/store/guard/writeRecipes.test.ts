@@ -11,7 +11,9 @@ import {
 } from './writeRecipes.setup'
 
 /* Every write recipe (writeRecipes.setup.ts) in four scenarios, against the
-   Convex double that keeps Convex's order (convexOrder.setup.ts):
+   Convex double that keeps Convex's order (convexOrder.setup.ts). A write on
+   a task only the Board's answer brings runs with the Board's read open
+   (P.watchBoard), its answer delivered with the snapshot's:
 
    1. Paused, by the snapshot trouble that pauses its class and by the pause
       while Qivo cannot save, it paints nothing and sends nothing.
@@ -116,6 +118,18 @@ async function boot(recipe: Recipe) {
     },
   })
   await settle()
+  if (recipe.view) {
+    d.publish('tasks:board', recipe.view.answer(), false)
+    P().watchBoard(recipe.view.slot, '{}')
+    await settle()
+    if (!P().viewTask(recipe.view.slot, 'task-v')) throw new Error('the Board brought no task-v')
+  }
+}
+
+/* Delivers the Board's answer after the write, for a write on a task only
+   the Board's answer brings. */
+function publishView(recipe: Recipe, args: Record<string, unknown>) {
+  if (recipe.view) server().publish('tasks:board', recipe.view.answer(args))
 }
 
 /* Runs the act and answers its writes with `answer` until no new write
@@ -205,7 +219,8 @@ afterEach(() => {
 })
 
 /** Whether `recipe`'s write paints when it is sent, not only once accepted. */
-const paintsAtSend = (recipe: Recipe) => !!(recipe.truth || recipe.thread) && !recipe.paintsOnAccept
+const paintsAtSend = (recipe: Recipe) =>
+  !!(recipe.truth || recipe.thread || recipe.view) && !recipe.paintsOnAccept
 
 describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, recipe] as const))(
   '%s',
@@ -277,6 +292,7 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
       // the server's rows end the trouble and hold every accepted write
       if (thread) server().publish('snapshot:threadComments', threadOf(recipe, args))
       else server().publish('workspace:whole', truthOf(recipe, args))
+      publishView(recipe, args)
       await settle()
       expect(P().snapshotTrouble()).toBeNull()
       expect(probe().layerCount()).toBe(0)
@@ -298,6 +314,7 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
       // Convex delivers the write before it answers
       if (recipe.thread) server().publish('snapshot:threadComments', threadOf(recipe, pending))
       else server().publish('workspace:whole', truthOf(recipe, pending))
+      publishView(recipe, pending)
       await settle()
       const painted = probe().rows(true)
       ;(answer as () => void)()

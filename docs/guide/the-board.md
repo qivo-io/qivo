@@ -81,19 +81,38 @@ with a reviewer, its portrait picker changes the reviewer and offers
 **No reviewer** to clear it.
 
 Paused tasks show an amber mark. Delay banners identify slipping or delayed
-tasks. When the last active subtask leaves a parent, it returns to a normal
-card in its saved status column.
+tasks ([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). A
+muted **Delay unknown** banner marks a task your browser has not loaded yet
+whose delay depends on its owner's other work when Qivo could not read that
+work, so such a task never looks on track without a check. When the last
+active subtask leaves a parent, it returns to a normal card in its saved
+status column.
 
 ## Which tasks a Board shows
 
 Qivo's server works out which tasks a Board shows, with its filters
-applied. Until it answers, as when the Board opens, after you change a
-filter or when you come back to the Board, the Board shows the tasks your
-browser already holds, before it has checked them: its counts show **…**
-until the answer arrives. Your own changes show at once. Other people's
-changes take a task off the Board at once, and add one once the server
-answers. While the browser tab or the desktop window is hidden, the Board
-stops updating, and it checks its tasks again when you return.
+applied, and sends each of them with the Board's answer. So a Board shows
+all of its tasks once the answer arrives, also while a large workspace is
+still loading its other tasks, and you can move such a task to another
+column or change its owner at once. Its task window opens read-only until
+the task has loaded. Until the server answers, as when the Board opens or
+after you change a filter, the Board shows the tasks your browser already
+holds, before it has checked them: its counts show **…** until the answer
+arrives. Your own changes show at once. Other people's changes take a task
+off the Board at once, and add one once the server answers. With a text
+filter, a task you move or give to someone else before your browser has
+loaded it stays on the Board until the server has checked it again, as
+only the server holds all of its text. If your change may have removed the
+words the filter found it by, the counts show **…** meanwhile. While the
+browser tab or the desktop window is hidden, the Board stops updating.
+When you return, it shows the tasks it had, with its counts at **…**,
+until it has checked them again.
+
+Delays on tasks your browser has not loaded yet come from Qivo's server,
+which reads each owner's other work, so they show while a large workspace
+is still loading. The Board shows no banner while that read is on its way.
+Tasks your browser has already loaded show their delay once loading
+finishes.
 
 A Board shows at most 1,000 tasks, subtasks included, across its project
 or sub-project with its filters, or across My view
@@ -110,12 +129,8 @@ row and the layout switcher stay usable beside every message. The phone's
 task list also shows parent tasks as rows, so it can list more than 1,000
 rows.
 
-If some tasks the server named have not reached your browser a minute after
-the rest, the Board says so and keeps the counts at **…**. **Try again** asks
-the server for the Board once more; if the tasks still do not show, reload
-the page. When a Board is not available, for
-example after your access to its project ended, it says so instead of
-showing an empty Board.
+When a Board is not available, for example after your access to its
+project ended, it says so instead of showing an empty Board.
 
 ## Showing a task on the Board
 

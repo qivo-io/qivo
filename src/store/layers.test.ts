@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createLayers, type View } from './layers'
 
 const paint = () => {}
-const seen = { snapshot: 0, thread: 0 }
+const seen = { snapshot: 0, thread: 0, view: 0 }
 
 describe('the layer registry', () => {
   it('orders saved layers by acceptance, then the rest by creation', () => {
@@ -41,6 +41,26 @@ describe('the layer registry', () => {
     layers.send(c, seen)
     layers.dropSaved('workspace')
     expect(layers.has(c)).toBe(true)
+  })
+
+  it('drops saved view parts and keeps their workspace parts', () => {
+    const layers = createLayers()
+    // a write on a task only a view holds paints both (store/planner.ts
+    // updateViewTask)
+    const both: View = { workspace: paint, view: paint }
+    const a = layers.open('a', both)
+    layers.save(a, both)
+    layers.dropSaved('view')
+    expect(a.view).toEqual({ workspace: paint, view: undefined })
+    layers.dropSaved('workspace')
+    expect(layers.has(a)).toBe(false)
+    // and the other way round: the workspace's delivery first
+    const b = layers.open('b', both)
+    layers.save(b, both)
+    layers.dropSaved('workspace')
+    expect(layers.has(b)).toBe(true)
+    layers.dropSaved('view')
+    expect(layers.has(b)).toBe(false)
   })
 
   it('drops saved thread parts of one task, or of every other task', () => {

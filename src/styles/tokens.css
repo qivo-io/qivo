@@ -158,6 +158,9 @@
   --delay-banner: color-mix(in oklab, var(--text-1) 8%, transparent);
   --delay-banner-behind-block: #d49a00;
   --delay-banner-late-block: #e04448;
+  /* An unknown delay (the owner's load could not be read) is the same band
+     with a muted block, as the task window's Delay unknown is muted. */
+  --delay-banner-unknown-block: color-mix(in oklab, var(--text-3) 70%, transparent);
 
   /* Milestone — a date marker, not a status. Shares the violet with "in
      review" and meets it nowhere: one is a diamond on the roadmap's header

@@ -5,6 +5,7 @@ import { vi } from 'vitest'
 import type { BoardAnswer } from '../../convex/lib/board'
 import type { RevealRequest } from '../lib/reveal'
 import { type BoardArgs, boardStandIn, type ForcedBoard } from '../store/boardStandIn.setup'
+import { type OwnerLoadsArgs, ownerLoadsStandIn } from '../store/ownerLoadsStandIn.setup'
 import type { IssueFilters, ScopeInfo } from '../store/planner'
 import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
@@ -14,7 +15,9 @@ import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFix
    Writes never answer, so an edit stays applied locally. The Board's query
    (tasks:board) answers from the snapshot through the shared stand-in
    (store/boardStandIn.setup.ts), at once and again on each delivery, unless
-   a test holds, forces or fails it (`server`). */
+   a test holds, forces or fails it (`server`), and so do the owner loads
+   the delays of tasks only its answer brings read (planning:ownerLoads,
+   store/ownerLoadsStandIn.setup.ts), past `server.unavailable`. */
 
 type Network = {
   mutation: ReturnType<typeof vi.fn>
@@ -82,7 +85,20 @@ export async function loadBoard(
     asked: BoardArgs[]
     /** the subscriptions open now */
     open: Set<{ args: BoardArgs; next: (value: unknown) => void; fail?: (e: unknown) => void }>
-  } = { hold: false, force: null, fail: undefined, edit: null, asked: [], open: new Set() }
+    /** the owners whose loads answer unavailable */
+    unavailable: string[]
+    /** the owner-load calls open now */
+    loads: Set<{ args: OwnerLoadsArgs; next: (value: unknown) => void }>
+  } = {
+    hold: false,
+    force: null,
+    fail: undefined,
+    edit: null,
+    asked: [],
+    open: new Set(),
+    unavailable: [],
+    loads: new Set(),
+  }
   // the store's canSee, once the store loaded
   let sees: (id: string) => boolean = () => true
   const answerOf = (args: BoardArgs): BoardAnswer => {
@@ -95,6 +111,8 @@ export async function loadBoard(
     for (const sub of server.open)
       if (server.fail !== undefined) sub.fail?.(server.fail)
       else sub.next(structuredClone(answerOf(sub.args)))
+    for (const call of server.loads)
+      call.next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
   }
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -111,6 +129,12 @@ export async function loadBoard(
         if (server.fail !== undefined) fail?.(server.fail)
         else next(structuredClone(answerOf(sub.args)))
       return () => server.open.delete(sub)
+    }
+    if (name === 'planning:ownerLoads') {
+      const call = { args: args as OwnerLoadsArgs, next }
+      server.loads.add(call)
+      next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
+      return () => server.loads.delete(call)
     }
     return () => {}
   })
@@ -209,11 +233,17 @@ export async function loadBoard(
     P,
     snapshot,
     /** The Board's row for the task stored as `uuid`; the Board names a
-        task by its key. */
-    card: (uuid: string) =>
-      document.querySelector<HTMLElement>(
-        `[data-card="${P.issues.find((it) => it.uuid === uuid)?.id}"]`,
-      ),
+        task by its key, also one only the Board's answer brings
+        (P.handleNow). */
+    card: (uuid: string) => {
+      const row = snapshot.issues.find((it) => it.id === uuid)
+      const handle =
+        P.handleOf(uuid) ??
+        P.viewTask('board:desktop', uuid)?.id ??
+        P.viewTask('board:phone', uuid)?.id ??
+        (row ? P.handleNow(uuid, row.org_id, row.num) : undefined)
+      return document.querySelector<HTMLElement>(`[data-card="${handle}"]`)
+    },
     /** Asks the Board to reveal the task `id`, as App does for a jump;
         `atOnce` as the phone's crumb does. */
     reveal: (id: string, atOnce?: boolean) =>

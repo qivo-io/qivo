@@ -4,13 +4,14 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { staleCutoff } from './board/boardArgs'
-import { BOARD_TEST_TIMEOUT, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, cell, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
 
 /* The Board from the server's answer (board/useBoardView.ts): the answer
-   decides which tasks show, each as the store's own card; the filter row
-   on screen narrows at once; the person's own pending writes show as
-   painted; until the answer for the arguments on screen arrives the store's
-   own result shows, marked; a Board that cannot show its tasks says why. */
+   decides which tasks show, each as the store's own card, or as its row
+   where the store lacks the task (store/viewRows.ts); the filter row on
+   screen narrows at once; the person's own pending writes show as painted;
+   until the answer for the arguments on screen arrives the store's own
+   result shows, marked; a Board that cannot show its tasks says why. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -84,6 +85,16 @@ const plan = (snap: Snapshot) => {
   snap.projects.push({ ...base, id: 'two', key: 'TWO', num: 3, name: 'Two', parent_id: 'plan' })
   snap.issues.push(taskRow(snap, 'one-1', 'todo', 1))
   snap.issues.push({ ...taskRow(snap, 'two-1', 'todo', 2), project_id: 'two' })
+}
+
+/** Makes the Board's row source bring no row for the tasks `uuids` (as a
+    source that brings rows in batches could, which useBoardView counts as
+    missing), while the answer still names them. */
+function withoutRows(P: { viewTask: (slot: string, uuid: string) => unknown }, uuids: string[]) {
+  const original = P.viewTask.bind(P)
+  vi.spyOn(P, 'viewTask').mockImplementation((slot: string, uuid: string) =>
+    uuids.includes(uuid) ? undefined : original(slot, uuid),
+  )
 }
 
 /** Sets the page's visibility, as the browser does when a tab hides. */
@@ -200,6 +211,38 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(state()).toBe('ok')
   })
 
+  it("keeps the answer's order for the person's own pending writes among cards of one priority", async () => {
+    const board = await loadBoard(network, (snap) => {
+      three(snap)
+      snap.orgs[0].next_issue_num = 3
+    })
+    await board.render(root)
+    board.server.hold = true
+    const { P } = board
+    const handle = (uuid: string) => P.issues.find((it) => it.uuid === uuid)?.id ?? ''
+    const order = () =>
+      [...(cell('todo')?.querySelectorAll<HTMLElement>('[data-card]') ?? [])].map(
+        (card) => card.dataset.card,
+      )
+    const keys = ['a', 'b', 'c'].map(handle)
+    expect(order()).toEqual(keys)
+    // a pending edit keeps its card in its number's place…
+    await act(async () => void P.updateIssue(handle('b'), { title: 'Task b, renamed' }))
+    expect(order()).toEqual(keys)
+    // …and a pending new task, numbered after them, lands last
+    let created: string | null = null
+    await act(async () => {
+      created = P.addIssue({
+        project: board.snapshot.projects[0].id,
+        title: 'New one',
+        status: 'todo',
+        priority: 'medium',
+      })
+    })
+    expect(created).not.toBeNull()
+    expect(order()).toEqual([...keys, created])
+  })
+
   it('takes a refused create away again', async () => {
     const board = await loadBoard(network, three)
     let refuse: (error: unknown) => void = () => {}
@@ -226,27 +269,55 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(board.card(uuid)).toBeNull()
   })
 
-  it('stays loading while the store lacks a parent heading the answer names', async () => {
+  it('shows a parent heading the answer names before the store holds it', async () => {
     const board = await loadBoard(network, three)
     await board.render(root)
     await board.filter({ priority: 'high' })
-    const a = board.snapshot.issues.find((t) => t.id === 'a')
-    if (!a) throw new Error('no task a')
-    a.priority = 'high'
-    await board.deliver()
     expect(state()).toBe('ok')
-    // the server holds a parent of a, which the filter leaves a heading
-    board.snapshot.issues.push(taskRow(board.snapshot, 'par', 'todo', 9))
-    a.parent_id = 'par'
+    // the server holds a new subtask and its parent, which the filter
+    // leaves a heading; the workspace has brought neither
+    board.snapshot.issues.push(taskRow(board.snapshot, 'par', 'todo', 9), {
+      ...taskRow(board.snapshot, 'kid', 'todo', 10),
+      parent_id: 'par',
+      priority: 'high',
+    })
     await board.answer()
-    expect(state()).toBe('loading')
-    expect(count('todo')).toBe('…')
+    // the heading and the card are the answer's rows, and the count stands
+    expect(board.P.handleOf('par')).toBeNull()
+    expect(state()).toBe('ok')
+    expect(document.querySelector('[data-parent-heading]')?.textContent).toContain('Task par')
+    expect(board.card('kid')).not.toBeNull()
+    expect(count('todo')).toBe('1')
     await board.deliver()
     expect(state()).toBe('ok')
-    expect(document.body.textContent).toContain('Task par')
+    expect(document.querySelector('[data-parent-heading]')?.textContent).toContain('Task par')
   })
 
-  it('never looks empty or unmatched while tasks the answer names are missing', async () => {
+  it("shows a task the store lacks from its answer row at once, and the store's once it arrives", async () => {
+    const board = await loadBoard(network, three)
+    await board.render(root)
+    expect(state()).toBe('ok')
+    // the server holds a task the workspace has not brought yet
+    board.snapshot.issues.push(taskRow(board.snapshot, 'late', 'todo', 4))
+    await board.answer()
+    expect(board.P.handleOf('late')).toBeNull()
+    expect(state()).toBe('ok')
+    expect(busy()).toBe(false)
+    expect(board.card('late')).not.toBeNull()
+    expect(count('todo')).toBe('4')
+    // a card the answer brings is the same object while its row holds
+    const model = board.P.viewTask('board:desktop', 'late')
+    await board.answer()
+    expect(board.P.viewTask('board:desktop', 'late')).toBe(model)
+    // the workspace brings it, and the card is the store's own
+    await board.deliver()
+    expect(board.P.handleOf('late')).not.toBeNull()
+    expect(board.P.viewTask('board:desktop', 'late')).toBeUndefined()
+    expect(board.card('late')).not.toBeNull()
+    expect(count('todo')).toBe('4')
+  })
+
+  it('never looks empty or unmatched while a row the answer names has not arrived', async () => {
     const board = await loadBoard(network, () => {})
     const { STALL } = await import('../store/liveParts')
     const stall = STALL.ms
@@ -254,13 +325,15 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     try {
       await board.render(root)
       expect(document.body.textContent).toContain('No tasks yet')
+      withoutRows(board.P, ['late'])
       board.snapshot.issues.push({
         ...taskRow(board.snapshot, 'late', 'todo', 1),
         priority: 'high',
       })
       await board.answer()
       expect(state()).toBe('loading')
-      expect(document.body.textContent).toContain('Loading tasks…')
+      expect(count('todo')).toBe('…')
+      expect(document.body.textContent).not.toContain('No tasks yet')
       await wait(100)
       expect(state()).toBe('incomplete')
       expect(document.body.textContent).not.toContain('No tasks yet')
@@ -277,7 +350,7 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     }
   })
 
-  it('says tasks are missing on side-boards, not that nothing matches', async () => {
+  it('says rows are missing on side-boards, not that nothing matches', async () => {
     const board = await loadBoard(network, plan, { scope: 'plan', metaViz: 'sideboards' })
     const { STALL } = await import('../store/liveParts')
     const stall = STALL.ms
@@ -285,6 +358,7 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     try {
       await board.render(root)
       expect(state()).toBe('ok')
+      withoutRows(board.P, ['late'])
       board.snapshot.issues.push({
         ...taskRow(board.snapshot, 'late', 'todo', 9),
         project_id: 'two',
@@ -352,6 +426,7 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     STALL.ms = 40
     try {
       await board.render(root)
+      withoutRows(board.P, ['late', 'urgent'])
       board.snapshot.issues.push(taskRow(board.snapshot, 'late', 'todo', 4))
       await board.answer()
       await wait(100)
@@ -380,7 +455,7 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     }
   })
 
-  it('stays loading while the store lacks a task the answer names, then says so past the bound', async () => {
+  it('stays loading while a row the answer names has not arrived, then says so past the bound', async () => {
     const board = await loadBoard(network, three)
     const { STALL } = await import('../store/liveParts')
     const stall = STALL.ms
@@ -388,7 +463,9 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     try {
       await board.render(root)
       expect(state()).toBe('ok')
-      // the server holds a task the workspace has not brought yet
+      // the server holds a task the workspace has not brought yet, whose
+      // row the source has not brought either
+      withoutRows(board.P, ['late'])
       board.snapshot.issues.push(taskRow(board.snapshot, 'late', 'todo', 4))
       await board.answer()
       expect(state()).toBe('loading')
@@ -620,9 +697,13 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     board.server.hold = false
     await board.filter({ focus: true })
     await board.answer()
+    // while a write waits, the answer paints a timer turn later, with the
+    // workspace (store/planner.ts owe)
+    await wait(1)
     expect(state()).toBe('ok')
     await act(async () => void board.P.updateIssue(a, { assignee: me }))
     await board.answer()
+    await wait(1)
     expect(lanes()).toEqual([`assignee:${me}`])
   })
 })
@@ -717,12 +798,18 @@ describe('what the Board says in place of its columns', { timeout: BOARD_TEST_TI
     expect(document.querySelector('[data-card]')).toBeNull()
     expect(message()?.textContent).toBe('The Board could not be loaded')
     board.server.fail = undefined
+    board.server.hold = true
     const asked = board.server.asked.length
     const retry = [...document.querySelectorAll('button')].find(
       (b) => b.textContent === 'Try again',
     )
     await act(async () => retry?.click())
     expect(board.server.asked.length).toBe(asked + 1)
+    // the error goes at once, and the Board waits for the fresh answer
+    expect(state()).toBe('loading')
+    expect(busy()).toBe(true)
+    expect(message()).toBeNull()
+    await board.answer()
     expect(state()).toBe('ok')
     expect(board.card('a')).not.toBeNull()
   })

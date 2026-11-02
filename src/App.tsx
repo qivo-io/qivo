@@ -99,6 +99,7 @@ import {
 } from './lib/workspaceChunks'
 import { P } from './store/planner'
 import { usePlannerVersion } from './store/usePlannerVersion'
+import { BOARD_SLOTS } from './views/board/useBoardView'
 import type { SyncPlace } from './views/TeamSync'
 
 const Overview = lazyFromModule(loadOverview, (module) => module.Overview)
@@ -1022,6 +1023,13 @@ function App() {
   })
   if (keep !== kept) setKept(keep)
   useInputIdle(KEEP_IDLE_MS, () => setKept(releasePages(keep, shownPage)))
+  // a Board page that is no longer kept takes the rows its read kept with
+  // it (store/viewRows.ts)
+  const boardKept = keep.pages.includes('kanban')
+  useEffect(() => {
+    if (boardKept) return
+    for (const slot of Object.values(BOARD_SLOTS)) P.releaseView(slot)
+  }, [boardKept])
   /** The id a page's ViewKeeper keeps it under: its scope for a page that
       shows one, so a new scope mounts it anew; null once it is not kept. */
   const keptId = (page: MainPage) =>
