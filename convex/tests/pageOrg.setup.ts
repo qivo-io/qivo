@@ -126,7 +126,7 @@ export type PageOrg = OrgFixture & {
  * withOrg adds two live top-level projects, two live sub-projects and six
  * people. */
 export type PageOrgSizes = {
-  /** live top-level projects */
+  /** live top-level projects, at least 2 when `subs` passes `family` */
   tops: number
   /** live sub-projects, `family` under the first top-level project and the
    * rest spread over the others */
@@ -134,13 +134,23 @@ export type PageOrgSizes = {
   /** sub-projects under the first top-level project, 3 by default */
   family?: number
   /** archived top-level projects, with `archivedSubs` sub-projects spread
-   * over them, none by default */
+   * over them, none by default; `archivedSubs` needs some */
   archivedTops?: number
   archivedSubs?: number
-  /** how many sub-projects `member` reads at least: three teams of theirs
-   * share whole top-level projects, from the first, until they hold that
-   * many. Every live one by default. */
+  /** how many sub-projects `member` reads at least: the member's teams
+   * share whole top-level projects in turn, from the first, until they
+   * hold that many. Every live one by default. */
   memberSubs?: number
+  /** the member's teams, 3 by default */
+  teams?: number
+  /** teams the member is not in that share each top-level project the
+   * member's teams share too, none by default, so a project is shared with
+   * one team more than this */
+  projectTeams?: number
+  /** the member's first team shares every top-level project, live and
+   * archived, instead of the turns above, and the member's other teams
+   * share none */
+  oneTeam?: boolean
   /** people besides withOrg's, `owners` by default */
   people?: number
   /** active tasks spread over the live sub-projects */
@@ -183,11 +193,12 @@ const subDoc = (orgId: string, lead: string, top: Doc<'projects'>, i: number) =>
 
 /**
  * An organization at `o`'s sizes: the live top-level projects and their
- * sub-projects, the archived ones, `member` in three teams that share
- * top-level projects, the people, and the tasks spread over the live
- * sub-projects, a tenth of them groups of five subtasks stored before the
- * rule of one level, planned and owned by `owners` people in projects that
- * track delay, with archived tasks beside them. No project_reach rows: a
+ * sub-projects, the archived ones, `member` in teams that share top-level
+ * projects, the people, and the tasks spread over the live sub-projects,
+ * every fiftieth of them the parent of a group of five subtasks stored
+ * before the rule of one level, which adds a tenth to the count, planned
+ * and owned by `owners` people in projects that track delay, with archived
+ * tasks beside them. No project_reach rows: a
  * list takes the caller's access from their grants and team shares
  * (lib/core.ts accessFlags), so active pages never read them.
  */
@@ -196,6 +207,7 @@ export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
   const t = newT({ transactionLimits: true })
   const f = await withOrg(t)
   const tops: Doc<'projects'>[] = []
+  const archived: Doc<'projects'>[] = []
   const subs: Doc<'projects'>[] = []
   await phase('projects', async () => {
     for (let i = 0; i < o.tops; i++)
@@ -209,7 +221,6 @@ export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
           archive_state: 'live',
         }),
       )
-    const archived: Doc<'projects'>[] = []
     for (let i = 0; i < (o.archivedTops ?? 0); i++)
       archived.push(
         await plantProject(t, {
@@ -241,38 +252,52 @@ export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
     auth_user_id: `auth_${uuid()}`,
     accepted_at: NOW,
   })
-  // the member's three teams share top-level projects in turn, from the
-  // first, until the member reads `memberSubs` sub-projects
+  // the member's teams share top-level projects in turn, from the first,
+  // until the member reads `memberSubs` sub-projects, each with the
+  // `projectTeams` other teams; or the first team shares them all
   const readable: Doc<'projects'>[] = []
   await phase('teams and shares', () =>
     t.run(async (ctx) => {
-      const teams: { id: string; name: string }[] = []
-      for (let i = 0; i < 3; i++) {
-        const team = { id: uuid(), name: `Team ${i}` }
-        teams.push(team)
+      const team = async (name: string, mine: boolean) => {
+        const id = uuid()
         await ctx.db.insert('teams', {
-          id: team.id,
+          id,
           org_id: f.org.id,
-          ...named(team.name),
+          ...named(name),
           track_delay_default: true,
           created_at: NOW,
         })
-        await ctx.db.insert('team_members', {
-          team_id: team.id,
-          profile_id: member.id,
-          is_leader: false,
-          name_key: nameKey(member.name),
+        if (mine)
+          await ctx.db.insert('team_members', {
+            team_id: id,
+            profile_id: member.id,
+            is_leader: false,
+            name_key: nameKey(member.name),
+          })
+        return { id, name }
+      }
+      const share = (project: Doc<'projects'>, by: { id: string; name: string }) =>
+        ctx.db.insert('project_team_access', {
+          project_id: project.id,
+          team_id: by.id,
+          level: 'user',
+          name_key: nameKey(by.name),
         })
+      const teams: { id: string; name: string }[] = []
+      for (let i = 0; i < (o.teams ?? 3); i++) teams.push(await team(`Team ${i}`, true))
+      const others: { id: string; name: string }[] = []
+      for (let i = 0; i < (o.projectTeams ?? 0); i++)
+        others.push(await team(`Other team ${i}`, false))
+      if (o.oneTeam === true) {
+        for (const top of [...tops, ...archived])
+          await share(top, teams[0] as { id: string; name: string })
+        readable.push(...subs)
+        return
       }
       for (const [i, top] of tops.entries()) {
         if (readable.length >= (o.memberSubs ?? subs.length)) break
-        const team = teams[i % teams.length] as { id: string; name: string }
-        await ctx.db.insert('project_team_access', {
-          project_id: top.id,
-          team_id: team.id,
-          level: 'user',
-          name_key: nameKey(team.name),
-        })
+        await share(top, teams[i % teams.length] as { id: string; name: string })
+        for (const other of others) await share(top, other)
         readable.push(...subs.filter((sub) => sub.parent_id === top.id))
       }
     }),
@@ -339,7 +364,8 @@ export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
             org_id: f.org.id,
             project_id: sub.id,
           })
-          // a tenth of the tasks are groups of five subtasks in their project
+          // every fiftieth task heads a group of five subtasks in its
+          // project, which adds a tenth to the count
           if (i % 50 === 0) {
             for (let k = 0; k < 5; k++) {
               const kid = uuid()

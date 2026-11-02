@@ -2,13 +2,15 @@
  * transaction limits at the design size (lib/activeTaskPage.ts
  * ACTIVE_PAGE), with ordinary text. Each case raises one figure: the
  * catalogue every list reads first, 2,000 projects and sub-projects live
- * and archived, the 200 sub-projects one person reads, or the 1,000 people
- * of the roster. Each case prints what its page read, the figures
- * ACTIVE_PAGE's docstring quotes.
+ * and archived, the 30 sub-projects under one project, the 200 sub-projects
+ * one person reads, the 1,000 people of the roster, the 5 teams a person
+ * belongs to, the 5 teams a project is shared with, or a team's shares on
+ * 50 live and 150 archived projects. Each case prints what its page read,
+ * the figures ACTIVE_PAGE's docstring quotes.
  *
  * A page's reads follow the projects it merges and the rows it answers,
- * not how many tasks the organization holds, as the fifth case shows, so
- * these organizations hold a few thousand tasks. */
+ * not how many tasks the organization holds, as the case of 1,000 and
+ * 10,000 tasks shows, so these organizations hold a few thousand tasks. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -25,11 +27,10 @@ const inside = (f: Figures) => {
 
 /* The catalogue every list reads first at its design size, 200 and 500
  * live, 300 and 1,000 archived, with withOrg's four, and a member who reads
- * 60 sub-projects, the first project's family of 30 among them. */
+ * 60 sub-projects, the everyday 3 teams of 20. */
 const CATALOGUE = {
   tops: 198,
   subs: 498,
-  family: 30,
   archivedTops: 300,
   archivedSubs: 1000,
   memberSubs: 60,
@@ -58,7 +59,7 @@ describe('active pages at the design size', () => {
     for (const page of [admin, rare, guest]) inside(page.figures)
   })
 
-  it('pages a member of 60 sub-projects over a catalogue of 2,000 projects, with a search, a family of 30 and a second page', async () => {
+  it('pages a member of 60 sub-projects over a catalogue of 2,000 projects, with a search and a second page', async () => {
     const e = await pageOrg(CATALOGUE)
     const before = await readBefore(e.t, e.member.id)
     console.log('active page figures, the member before the page:', JSON.stringify(before))
@@ -69,14 +70,7 @@ describe('active pages at the design size', () => {
     const searched = await readPage(e.t, { callerId: e.member.id, limit: '200', search: 'thermal' })
     record('a member, a search that finds every eighth task', searched.figures)
     expect(searched.figures.rows).toBeGreaterThan(0)
-    const family = await readPage(e.t, {
-      callerId: e.member.id,
-      limit: '200',
-      project: e.tops[0].key,
-    })
-    record('a member, a family of 30 sub-projects', family.figures)
-    expect(family.figures.rows).toBeGreaterThan(0)
-    for (const page of [member, searched, family]) inside(page.figures)
+    for (const page of [member, searched]) inside(page.figures)
     // the member's next page goes on where this one stopped
     const next = await readPage(e.t, {
       callerId: e.member.id,
@@ -89,10 +83,24 @@ describe('active pages at the design size', () => {
     expect(next.page.tasks.some((task) => first.has(task.id))).toBe(false)
   })
 
+  it('pages the family of 30 sub-projects under one project', async () => {
+    const e = await pageOrg({ tops: 7, subs: 47, family: 30, tasks: 600, archived: 0 })
+    const family = await readPage(e.t, {
+      callerId: e.member.id,
+      limit: '200',
+      project: e.tops[0].key,
+    })
+    record('a member, a family of 30 sub-projects', family.figures)
+    expect(family.figures.rows).toBe(200)
+    expect(family.figures.next).toBe(true)
+    inside(family.figures)
+  })
+
   it('pages a member who reads 200 sub-projects through three teams, with and without a search', async () => {
-    const e = await pageOrg({ tops: 70, subs: 210, memberSubs: 200, tasks: 1000, archived: 0 })
-    expect(e.readable.length).toBeGreaterThanOrEqual(200)
-    expect(e.readable.length).toBeLessThan(205)
+    // the first project's 3 sub-projects, 65 projects of 3 and one of 2
+    // shared, and 6 sub-projects beside them unread
+    const e = await pageOrg({ tops: 70, subs: 206, memberSubs: 200, tasks: 1000, archived: 0 })
+    expect(e.readable).toHaveLength(200)
     const before = await readBefore(e.t, e.member.id)
     console.log('active page figures, 200 sub-projects before the page:', JSON.stringify(before))
     const member = await readPage(e.t, { callerId: e.member.id, limit: '200' })
@@ -122,13 +130,60 @@ describe('active pages at the design size', () => {
     for (const page of [admin, member]) inside(page.figures)
   })
 
+  it('pages a member in 5 teams', async () => {
+    const e = await pageOrg({ tops: 21, subs: 60, teams: 5, tasks: 600, archived: 0 })
+    expect(e.readable).toHaveLength(60)
+    const before = await readBefore(e.t, e.member.id)
+    console.log('active page figures, a member in 5 teams before the page:', JSON.stringify(before))
+    const member = await readPage(e.t, { callerId: e.member.id, limit: '200' })
+    record('a member in 5 teams, 200 rows', member.figures)
+    expect(member.figures.rows).toBe(200)
+    inside(member.figures)
+  })
+
+  it('pages a member whose projects are each shared with 5 teams', async () => {
+    const e = await pageOrg({ tops: 21, subs: 60, projectTeams: 4, tasks: 600, archived: 0 })
+    expect(e.readable).toHaveLength(60)
+    const before = await readBefore(e.t, e.member.id)
+    console.log(
+      'active page figures, projects shared with 5 teams before the page:',
+      JSON.stringify(before),
+    )
+    const member = await readPage(e.t, { callerId: e.member.id, limit: '200' })
+    record('a member, projects shared with 5 teams, 200 rows', member.figures)
+    expect(member.figures.rows).toBe(200)
+    inside(member.figures)
+  })
+
+  it('pages a member whose team shares 50 live and 150 archived projects', async () => {
+    const e = await pageOrg({
+      tops: 50,
+      subs: 60,
+      archivedTops: 150,
+      oneTeam: true,
+      tasks: 600,
+      archived: 0,
+    })
+    const before = await readBefore(e.t, e.member.id)
+    console.log(
+      'active page figures, a team of 200 shares before the page:',
+      JSON.stringify(before),
+    )
+    const member = await readPage(e.t, { callerId: e.member.id, limit: '200' })
+    record('a member, a team sharing 50 live and 150 archived projects, 200 rows', member.figures)
+    expect(member.figures.rows).toBe(200)
+    inside(member.figures)
+  })
+
   it('reads the same page in an organization of 1,000 active tasks as in one of 10,000', async () => {
     /* Both hold tasks in every sub-project, so the page opens as many
      * heads. The delays' share is left out of the comparison, since what it
      * reads follows how much open work the page's owners hold, which the two
      * organizations spread over 50 owners differently. */
     const noDelays = { page: { delays: { ranges: 1, documents: 1, bytes: 1 } } }
-    const sizes = { tops: 33, subs: 100, people: 100 }
+    // 101 sub-projects, a count coprime with the 5 and 50 that pick Done
+    // tasks and groups, so both spread over every sub-project
+    const sizes = { tops: 33, subs: 101, people: 100 }
     const small = await pageOrg({ ...sizes, tasks: 1000, archived: 0 })
     const s = await lowered(noDelays, () =>
       readPage(small.t, { callerId: small.member.id, limit: '50' }),

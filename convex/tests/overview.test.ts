@@ -991,9 +991,10 @@ describe('real limits', () => {
       auth_user_id: `auth_${uuid()}`,
       accepted_at: BEFORE_RULE,
     })
-    // 67 projects of three sub-projects each, 22 or 23 shared with each of
+    // 100 projects of two sub-projects each, 33 or 34 shared with each of
     // the reader's three teams
-    const { subs } = await plantShared(t, f.org.id, f.user, me, { tops: 67, subs: 3 })
+    const { subs } = await plantShared(t, f.org.id, f.user, me, { tops: 100, subs: 2 })
+    expect(subs).toHaveLength(200)
     for (const [i, sub] of subs.entries())
       await plantTasks(t, sub, 2, (k) => ({
         assignee_id: me.id,

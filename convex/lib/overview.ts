@@ -156,9 +156,9 @@ import { canonicalLoad, DEFAULT_PLANNABLE_HOURS, type LoadSpan, plannableHoursOf
  *   shares: the summary 549, 605 and 0.36, the projection 217, 125 and
  *   0.08, a first At-risk batch 166, 352 and 0.23, a first Paused batch
  *   158, 140 and 0.08.
- * - My view of 400 of the reader's own tasks over the 201 sub-projects
- *   their three teams share: the summary 497, 904 and 0.35, the projection
- *   559, 570 and 0.25, a first At-risk batch 115 ranges and a first Paused
+ * - My view of 400 of the reader's own tasks over the 200 sub-projects
+ *   their three teams share: the summary 529, 967 and 0.37, the projection
+ *   581, 625 and 0.26, a first At-risk batch 113 ranges and a first Paused
  *   batch 126.
  *
  * `batch` is how many rows a list batch holds, the page's Load more step,

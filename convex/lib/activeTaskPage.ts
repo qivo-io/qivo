@@ -72,21 +72,23 @@ import { ownerSettled, ROW_BYTES } from './viewReads'
  * Measured on 2 November 2026 in convex/tests/activeTaskPagesScale.test.ts
  * under convex-test's transaction limits, at the design size with ordinary
  * text, one figure raised a case. Before the page, a member reads 11
- * ranges, 2,018 documents and 0.9 MiB of a catalogue of 2,000 projects and
- * sub-projects, live and archived. An organization admin's page of 200
+ * ranges, 2,027 documents and 0.91 MiB of a catalogue of 2,000 projects
+ * and sub-projects, live and archived. An organization admin's page of 200
  * rows over its 700 live projects reads 2,099 ranges, 3,743 documents and
  * 2.02 MiB in all, and a search that matches none ends at the budget with
  * no rows and a cursor (2,910 ranges, 6,958 documents, 3.82 MiB). A
- * member's page of 200 rows reads 1,545 ranges over 60 sub-projects and
- * 1,780 over 200, a page of a family of 30 sub-projects 1,460, and an
- * admin's page in an organization of 1,000 people 1,360. A staff page
- * whose 200 rows have 25 owners of about 100 open tasks in four
- * sub-projects each judges 53 rows' delays within the delays' share and
- * answers 91 unavailable; an owner past the owner reader's bounds answers
- * unavailable at once. That a row of a person with very much open work
- * says unavailable on every page, while the task's own read judges it, is
- * the agreed rule for figures that depend on people's workloads (limits
- * plan, "Design size", owner, 2026-11-01). */
+ * member's page of 200 rows reads 1,556 ranges over 60 sub-projects in that
+ * catalogue and 1,779 over 200 sub-projects, a page of a family of 30
+ * sub-projects 1,364, an admin's page in an organization of 1,000 people
+ * 1,360, and a member's page 1,495 in 5 teams, 1,491 where each project is
+ * shared with 5 teams and 1,512 where a team shares 50 live and 150
+ * archived projects. A staff page whose 200 rows have 25 owners of about
+ * 100 open tasks in four sub-projects each judges 53 rows' delays within
+ * the delays' share and answers 91 unavailable; an owner past the owner
+ * reader's bounds answers unavailable at once. That a row of a person with
+ * very much open work says unavailable on every page, while the task's own
+ * read judges it, is the agreed rule for figures that depend on people's
+ * workloads (limits plan, "Design size", owner, 2026-11-01). */
 export const ACTIVE_PAGE = {
   ranges: 3800,
   documents: 20_000,
@@ -108,9 +110,12 @@ export const ACTIVE_RESERVE: ReadCeiling = { ranges: 64, documents: 128, bytes: 
 /** The refusal of a list whose request cannot hold a page's whole budget
  * beside what the list read before it (the caller's projects and access),
  * or whose scope has more projects than one page can open side by side.
- * Only a list past the design size meets it
- * (convex/tests/activeTaskPagesScale.test.ts pages each figure at its
- * design size). */
+ * Only a list past the design size meets it:
+ * convex/tests/activeTaskPagesScale.test.ts pages the catalogue of 2,000
+ * projects, the 30 sub-projects under one project, the 200 sub-projects
+ * one person reads, the 1,000 people, the 5 teams a person belongs to, the
+ * 5 teams a project is shared with and a team's 50 live and 150 archived
+ * shares, each at its design size. */
 export const TASK_LIST_UNREADABLE =
   "the task list could not be read within the request's limits; pass project to list one project's tasks"
 
