@@ -2,11 +2,11 @@
  * backend.
  * Usage: node scripts/phone-layout-smoke.mjs [--shots dir]
  * Builds the benchmark page (scripts/perf/page.mjs) from this checkout and
- * opens it at 390x844 and 360x640. On the Inbox, My tasks, Projects, Team
- * sync and Settings it checks that the page's content ends above the bottom
- * navigation, and that at the end of every scrolling area no control of
- * the page is left under it. --shots saves a screenshot of each page. Writes
- * go to the page's synthetic transport only. */
+ * opens it at 390x844 and 360x640. On the Inbox, My tasks, My view's
+ * Roadmap agenda, Projects, Team sync and Settings it checks that the page's
+ * content ends above the bottom navigation, and that at the end of every
+ * scrolling area no control of the page is left under it. --shots saves a
+ * screenshot of each page. Writes go to the page's synthetic transport only. */
 import assert from 'node:assert/strict'
 import { mkdirSync, rmSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -28,6 +28,8 @@ const SIZES = [
 const PAGES = [
   ['Inbox', '[data-inbox-nav]', '.inbox-layout, [data-inbox-list]'],
   ['My tasks', '[data-mine-nav]', '[data-workspace-view]'],
+  // its toolbar row holds Undo and Auto-move
+  ['Roadmap', '[data-view-switch] [role="radio"]:has-text("Roadmap")', '.mobile-roadmap-agenda'],
   ['Projects', '[data-projects-nav]', '.mobile-project-directory'],
   ['Team sync', '[data-sync-nav]', '[data-sync-page]'],
   ['Settings', '[data-mobile-settings]', '[data-settings-page]'],
