@@ -25,9 +25,10 @@
      shows its earlier answer until both answered. Two frozen batches next
      to each other whose rows fit OVERVIEW.split become one read.
    - A list keeps at most LIST_ROWS rows and LIST_READS reads, split halves
-     and merges included. Past either, it drops its first batches until
-     both fit and says that earlier tasks are not shown, with a way back to
-     the start, so every task stays reachable by going on.
+     and merges included. Past either, a merge still on its way gives way
+     first, then the list drops its first batches until both fit and says
+     that earlier tasks are not shown, with a way back to the start, so
+     every task stays reachable by going on.
    - A batch refused for its position, as after the server's secret
      rotated, starts its list again from the first batch, once for one
      list key; a second refusal is the list's error. A new day restarts
@@ -437,7 +438,10 @@ export function createOverviewReads(transport: OverviewTransport) {
       if (swap?.why === 'more') continue
       const settled = settledOf(b, a)
       if (settled === null) {
-        if (!swap)
+        // it gives way to its halves, also where it waited to merge, so only
+        // a split's batch shows an older answer (listView)
+        if (swap?.why === 'merge') cancel(list, swap)
+        if (swap?.why !== 'split')
           list.swaps.push({ from: [b], to: halves(list, b, a.value as OkList), why: 'split' })
         continue
       }
@@ -458,18 +462,20 @@ export function createOverviewReads(transport: OverviewTransport) {
       list.swaps.push({ from: [x, y], to: [newBatch(list, x.cursor, y.end)], why: 'merge' })
       i++
     }
-    cap(list, 0)
+    cap(list, 0, 0)
     return true
   }
 
-  /** Drops list `list`'s first batches until it holds `room` more rows
-      within LIST_ROWS and its reads fit LIST_READS. The open batch stays. */
-  function cap(list: List, room: number) {
-    while (list.shown.length > 1) {
-      const first = list.shown[0] as Batch
-      if (first.end === null) return
-      if (rowsOf(list) + room <= LIST_ROWS && readsOf(list) <= LIST_READS) return
-      drop(list, first)
+  /** Fits list `list` to LIST_ROWS with room for `rows` more rows and to
+      LIST_READS with room for `reads` more reads: a merge still on its way
+      gives way first, as it only saves reads, then the first batches on
+      screen. The open batch stays. */
+  function cap(list: List, rows: number, reads: number) {
+    const over = () => readsOf(list) + reads > LIST_READS
+    for (const s of list.swaps.filter((x) => x.why === 'merge')) if (over()) cancel(list, s)
+    while (list.shown.length > 1 && (list.shown[0] as Batch).end !== null) {
+      if (rowsOf(list) + rows <= LIST_ROWS && !over()) return
+      drop(list, list.shown[0] as Batch)
     }
   }
 
@@ -521,10 +527,12 @@ export function createOverviewReads(transport: OverviewTransport) {
   function listView(list: List): ListView {
     const batches: BatchView[] = []
     let refreshing = false
-    let busy = false
+    // a batch on screen shows an older answer while its halves load, so the
+    // list cannot say it reached its end; a merge's batches keep taking
+    // their answers (settleList), and Load more copes with either
+    let older = false
     for (const b of list.shown) {
-      const swap = list.swaps.find((s) => s.from.includes(b))
-      if (swap) busy = true
+      if (list.swaps.some((s) => s.why === 'split' && s.from.includes(b))) older = true
       const held = transport.read(b.slot)
       if (!held.current) refreshing = true
       const shown = b.shown
@@ -561,7 +569,7 @@ export function createOverviewReads(transport: OverviewTransport) {
     const end =
       open &&
       !pressed &&
-      !busy &&
+      !older &&
       lastShown?.kind === 'ok' &&
       lastShown.answer.next === null &&
       lastShown.answer.complete &&
@@ -587,7 +595,7 @@ export function createOverviewReads(transport: OverviewTransport) {
       end,
       more: pressed
         ? 'loading'
-        : open && lastShown?.kind === 'ok' && lastShown.answer.next !== null && !busy
+        : open && lastShown?.kind === 'ok' && lastShown.answer.next !== null
           ? 'ready'
           : null,
       failed: list.failed,
@@ -647,17 +655,17 @@ export function createOverviewReads(transport: OverviewTransport) {
         an Overview read. */
     settle,
     /** Load more on list `kind`: freezes its open batch and opens the next
-        one at its `next`, after dropping first batches the cap needs. */
+        one at its `next`, after the cap gave up a merge on its way or
+        dropped the first batches it needs to (cap). */
     more(kind: ListKind) {
       const list = lists[kind]
       const last = list.shown[list.shown.length - 1]
       if (!last || last.end !== null || last.shown?.kind !== 'ok') return
       const answer = last.shown.answer
       if (answer.next === null || list.swaps.some((s) => s.from.includes(last))) return
-      cap(list, OVERVIEW_BATCH)
-      // the reads both new batches take, beside the open batch's until then
-      while (list.shown.length > 1 && readsOf(list) + 2 > LIST_READS)
-        drop(list, list.shown[0] as Batch)
+      // room for the next batch's rows and the reads both new batches take,
+      // beside the open batch's until then
+      cap(list, OVERVIEW_BATCH, 2)
       list.swaps.push({
         from: [last],
         to: [newBatch(list, last.cursor, answer.end), newBatch(list, answer.next, null)],

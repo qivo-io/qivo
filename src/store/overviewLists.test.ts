@@ -234,6 +234,45 @@ describe('the first batch and Load more', () => {
     expect(view.more).toBeNull()
   })
 
+  it('offers Load more and the end while two frozen batches merge into one read', () => {
+    // the read that merges the two frozen batches after the second press
+    // waits: it has no cursor, as the first batch has none, and the second
+    // batch's end
+    const pressTwice = (tasks: number) => {
+      const snap = workspace(pausedTasks(tasks))
+      const s = server(snap)
+      s.lists.watch(BASE(snap), 1, 0)
+      s.deliver()
+      s.lists.more('paused')
+      s.deliver()
+      s.state.holding = (_slot, args) => args.cursor === undefined && args.end !== undefined
+      s.lists.more('paused')
+      s.deliver()
+      return { snap, s, view: s.lists.view().paused }
+    }
+    let { snap, s, view } = pressTwice(35)
+    expect(shown(view).map((b) => b.length)).toEqual([10, 10, 10])
+    expect(view.reads).toBe(4)
+    expect(view.more).toBe('ready')
+    expect(view.end).toBe(false)
+    // a press while the merge waits gives the merge up, not the first batch
+    s.lists.more('paused')
+    s.deliver()
+    view = s.lists.view().paused
+    expect(view.dropped).toBe(false)
+    expect(ids(view)).toEqual(wholeIds(snap, 'paused', BASE(snap)))
+    expect(view.end).toBe(true)
+    // the third batch ends the list
+    ;({ s, view } = pressTwice(25))
+    expect(shown(view).map((b) => b.length)).toEqual([10, 10, 5])
+    expect(view.reads).toBe(4)
+    expect(view.end).toBe(true)
+    expect(view.more).toBeNull()
+    s.state.holding = () => false
+    s.deliver()
+    expect(shown(s.lists.view().paused).map((b) => b.length)).toEqual([20, 5])
+  })
+
   it('keeps a row that moves into or out of a frozen batch once, with no gap', () => {
     const snap = workspace(pausedTasks(30))
     const s = server(snap)
