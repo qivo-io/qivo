@@ -2305,10 +2305,19 @@ function pay() {
    subscribes, takes each result in the transition that brings it and keeps
    a read's rows (store/viewRows.ts) while it stops, until the view asks for
    other arguments or its page leaves (P.releaseView, P.releaseOverview).
-   The rows' paint waits with the workspace's while a painted write waits
-   (owe), so one transition still renders once. */
+   A stopped read's rows never stand in for a live read's, as a kept
+   Overview's when it hides behind the Board of its scope: the live reads'
+   copies of a task lead in lookups, writes and delays, their deliveries
+   bring the stopped copies up to date, and they alone decide whether a
+   write is held (viewPartHeld). The rows' paint waits with the
+   workspace's while a painted write waits (owe), so one transition still
+   renders once. */
 
-const viewRows = createViewRows(isoToWeek)
+/* Whether view `slot`'s read is subscribed: its rows lead, and a stopped
+   read's copies follow them (store/viewRows.ts). */
+const viewLive = (slot: ViewSlot) => (viewReads.get(slot)?.live ?? null) !== null
+
+const viewRows = createViewRows(isoToWeek, viewLive)
 
 /** An answer whose rows a read keeps as they were (ViewQuery `rows`). */
 const KEEP_ROWS = Symbol('keep the rows')
@@ -2386,6 +2395,10 @@ type ViewRead = {
   /** the view delivery count (viewDeliveries) at its last live delivery
       that took rows, 0 for none, which holds the writes sent before it */
   delivered: number
+  /** whether its newest result kept the rows of an earlier one (KEEP_ROWS),
+      so its rows may lack a write that result held: it holds none until a
+      delivery takes rows again */
+  behind: boolean
 }
 const viewReads = new Map<ViewSlot, ViewRead>()
 /* The socket's newest connection count a view read's handler saw: after a
@@ -2406,15 +2419,28 @@ function viewPaint(uuids: readonly string[], paint: Paint): Paint {
   return paint
 }
 
+/** Whether `read`'s rows hold the writes sent when the view deliveries
+    counted `seen`: it is live, its newest result is a delivery on the
+    socket's current connection since the send, and that delivery took its
+    rows. */
+const readHolds = (read: ViewRead, seen: number) =>
+  read.live !== null &&
+  read.current &&
+  read.connection === latestConnection &&
+  read.delivered > seen &&
+  !read.behind
+
 /** Whether the views' rows hold saved view part `paint` of a write sent
     when the view deliveries counted `seen`: each read whose rows hold a
-    copy of a task it changes is live, and its newest result is a delivery
-    on the socket's current connection since the send. Convex delivers what
-    a write changed before the write resolves (lib/convexOrdering.test.ts),
-    so a write accepted then is in those deliveries (settleAccepted). A read
-    stopped with its rows kept, as a hidden tab's or a kept page's, holds
-    nothing until it reads again; a read whose rows hold none of the tasks,
-    or that brings no rows, such as the Overview's summary, holds nothing
+    copy of a task it changes holds the write (readHolds). Convex delivers
+    what a write changed before the write resolves
+    (lib/convexOrdering.test.ts), so a write accepted then is in those
+    deliveries (settleAccepted). A read stopped with its rows kept, as a
+    hidden tab's or a kept page's, holds nothing until it reads again,
+    except where a live read holds each of its copies of the tasks: those
+    copies follow the live read's deliveries (store/viewRows.ts take), so
+    the live read decides. A read whose rows hold none of the tasks, or
+    that brings no rows, such as the Overview's summary, holds nothing
     either way. A part no read holds rows for paints nothing, so nothing is
     left to hold. */
 function viewPartHeld(paint: Paint, seen: number): boolean {
@@ -2422,14 +2448,10 @@ function viewPartHeld(paint: Paint, seen: number): boolean {
   for (const [slot, read] of viewReads) {
     const rows = viewRows.rowsOf(slot)
     if (!rows || !read.query.rows) continue
-    if (tasks && ![...tasks].some((uuid) => rows.has(uuid))) continue
-    if (
-      read.live === null ||
-      !read.current ||
-      read.connection !== latestConnection ||
-      read.delivered <= seen
-    )
-      return false
+    const copies = tasks ? [...tasks].filter((uuid) => rows.has(uuid)) : null
+    if (copies?.length === 0) continue
+    if (read.live === null && copies?.every((uuid) => viewRows.liveHolds(uuid))) continue
+    if (!readHolds(read, seen)) return false
   }
   return true
 }
@@ -2461,10 +2483,12 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
     if (next.value !== undefined) read.answered = true
     const take = read.query.rows
     const rows = take && next.value !== undefined ? take(next.value) : null
-    if (take && rows !== KEEP_ROWS) {
+    if (take && rows === KEEP_ROWS) read.behind = true
+    else if (take && rows !== KEEP_ROWS) {
       if (rows) viewRows.take(slot, rows)
       else viewRows.release(slot)
       read.delivered = ++viewDeliveries
+      read.behind = false
       dropHeldViewParts()
     }
     viewReadsChanged = true
@@ -2509,7 +2533,10 @@ function syncViewRead(slot: ViewSlot) {
 function releaseViewRows(slot: ViewSlot) {
   const read = viewReads.get(slot)
   const held = !!read?.held
-  if (read) read.held = null
+  if (read) {
+    read.held = null
+    read.behind = false
+  }
   ownerLoads.release(slot)
   const rows = viewRows.holds(slot)
   if (rows) {
@@ -2552,6 +2579,7 @@ function watchView(
       answered: false,
       delays,
       delivered: 0,
+      behind: false,
     }
     viewReads.set(slot, read)
   }
@@ -2574,10 +2602,17 @@ function watchView(
     releaseViewRows(slot)
   }
   if (read.want === key && !retry && !other) return
+  const wasLive = read.live !== null
   read.want = key
   syncViewRead(slot)
   // a view whose read stops keeps its owners' loads without reading them
   ownerLoads.setLive(slot, key !== null)
+  // which view's copies of a task lead follows which reads are live
+  // (store/viewRows.ts), so the views repaint where another view holds rows
+  if (wasLive !== (read.live !== null) && viewRows.holds(slot) && viewRows.shared()) {
+    viewReadsChanged = true
+    owe('view')
+  }
 }
 
 /** What view `slot`'s read holds: the arguments' key its result answers
