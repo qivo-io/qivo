@@ -127,7 +127,9 @@ export type PageOrg = OrgFixture & {
  * people of the organization and a team, and pageOrg adds `member`. Before
  * it plants anything, pageOrg refuses with a sentence any sizes that put a
  * figure it builds past its design size (AGENTS.md, assertDesignSize),
- * those rows and each group's subtasks counted:
+ * those rows and each group's subtasks counted, or that put an archived
+ * task figure at its design size, since tests never seed the full archived
+ * task figures:
  *
  * - top-level projects (`tops`, `archivedTops`): 200 live and 300 archived;
  * - sub-projects (`subs`, `archivedSubs`): 500 live and 1,000 archived,
@@ -146,7 +148,7 @@ export type PageOrg = OrgFixture & {
  * - tasks (`tasks`, `archived`), open, Done and archived: 300, 150 and
  *   3,000 in one sub-project, 800, 200 and 10,000 in one top-level project
  *   with its sub-projects, and 10,000, 5,000 and 100,000 in the
- *   organization.
+ *   organization, the archived ones always below those figures.
  *
  * It does not check that a case raises one figure at a time and keeps the
  * others at everyday values; each case keeps to that itself. */
@@ -182,7 +184,8 @@ export type PageOrgSizes = {
   people?: number
   /** active tasks spread over the live sub-projects */
   tasks: number
-  /** archived tasks beside them, which no page reads */
+  /** archived tasks beside them, which no active page reads, below each
+   * archived task figure */
   archived: number
   /** the people who own the tasks, 50 by default, each owning every 50th
    * task; given, each owns the tasks of a few sub-projects. At least 1
@@ -289,15 +292,22 @@ function assertSizes(o: PageOrgSizes, family: number): void {
     )
 }
 
-/* Throws a sentence naming the figure `o` would put past its design size
- * (PageOrgSizes), before pageOrg plants anything. It runs after
- * assertSizes, so the projects, people and teams every size needs are
- * there. */
+/* Throws a sentence naming the figure `o` would put past its design size,
+ * or an archived task figure it would reach (PageOrgSizes), before pageOrg
+ * plants anything. It runs after assertSizes, so the projects, people and
+ * teams every size needs are there. */
 function assertDesignSize(o: PageOrgSizes, family: number): void {
   const most = (figure: string, size: number, design: number) => {
     if (size > design)
       throw new Error(
         `pageOrg builds at most the design size, and ${figure} would be ${size}, past ${design}`,
+      )
+  }
+  // tests never seed the full archived task figures (AGENTS.md)
+  const below = (figure: string, size: number, design: number) => {
+    if (size >= design)
+      throw new Error(
+        `pageOrg never seeds the full archived task figures, and ${figure} would be ${size}, not below ${design}`,
       )
   }
   const archivedTops = o.archivedTops ?? 0
@@ -380,7 +390,7 @@ function assertDesignSize(o: PageOrgSizes, family: number): void {
     most('the open tasks of the organization', allOpen, DESIGN.open.org)
     most('the Done tasks of the organization', allDone, DESIGN.done.org)
   }
-  most('the archived tasks of the organization', o.archived, DESIGN.archived.org)
+  below('the archived tasks of the organization', o.archived, DESIGN.archived.org)
   // the archived tasks go to the live sub-projects in turn, so the first
   // `rest` of them hold one more than the others
   const each = o.subs > 0 ? Math.floor(o.archived / o.subs) : 0
@@ -388,7 +398,7 @@ function assertDesignSize(o: PageOrgSizes, family: number): void {
   const archived = Array.from({ length: o.subs }, (_, s) => each + (s < rest ? 1 : 0))
   most('the open tasks of one sub-project', Math.max(0, ...open), DESIGN.open.subProject)
   most('the Done tasks of one sub-project', Math.max(0, ...done), DESIGN.done.subProject)
-  most(
+  below(
     'the archived tasks of one sub-project',
     Math.max(0, ...archived),
     DESIGN.archived.subProject,
@@ -408,7 +418,7 @@ function assertDesignSize(o: PageOrgSizes, family: number): void {
     byTop(done),
     DESIGN.done.project,
   )
-  most(
+  below(
     'the archived tasks of one top-level project with its sub-projects',
     byTop(archived),
     DESIGN.archived.project,
