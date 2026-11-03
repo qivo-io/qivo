@@ -582,11 +582,9 @@ function SyncCardView({ it, ctx, later }: SyncCardProps) {
     !!reviewFor
   const tick = (
     <ReviewTick
-      hook="sync"
       it={it}
       on={ctx.reviewed.has(it.uuid)}
       onToggle={() => ctx.reviewed.toggle(it.uuid)}
-      markTitle="Mark reviewed"
     />
   )
   const scope = useCardScope(ctx, it.uuid)
@@ -666,7 +664,6 @@ function SyncCardView({ it, ctx, later }: SyncCardProps) {
               className={cn('inline-flex shrink-0 items-center', ctx.mobile ? 'gap-1' : 'gap-2')}
             >
               <RemainingInput
-                hook="sync"
                 it={it}
                 title={canWrite ? 'Remaining hours. Leave empty for no estimate' : READ_ONLY}
                 disabled={!canWrite}

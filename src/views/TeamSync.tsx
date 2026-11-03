@@ -522,7 +522,7 @@ export function TeamSync({
   }, [P.loaded, scopeKey, step, place.scope, place.step])
 
   const go = (next: string, nextScope = scopeKey) => {
-    flushWalkInput('sync')
+    flushWalkInput()
     setPrompt(null)
     onPlace({ scope: nextScope, step: next })
   }
@@ -532,7 +532,7 @@ export function TeamSync({
      cards it takes away (cardsClosedBy). */
   const pickScope = (key: string) => {
     const closes = cardsClosedBy(cards, step, walkOf(key, world))
-    flushWalkInput('sync')
+    flushWalkInput()
     setPrompt(null)
     onPlace({ scope: key, step }, closes)
   }
@@ -543,7 +543,7 @@ export function TeamSync({
     } else go(id)
   }
   const close = () => {
-    flushWalkInput('sync')
+    flushWalkInput()
     onClose()
   }
 
@@ -663,7 +663,6 @@ export function TeamSync({
               </span>
               <div className="flex-1" />
               <WalkRail
-                hook="sync"
                 people={[...humans, ...agents]}
                 gapAt={humans.length}
                 isCurrent={(id) =>
@@ -702,10 +701,8 @@ export function TeamSync({
             )}
             <div className="mt-6 flex items-center gap-2 border-t border-border pt-4">
               <WalkFooter
-                hook="sync"
                 reviewed={reviewed.count(counted)}
                 total={counted.length}
-                showPrev
                 atStart={idx <= 0}
                 last={last}
                 onPrev={() => go(steps[Math.max(0, idx - 1)])}

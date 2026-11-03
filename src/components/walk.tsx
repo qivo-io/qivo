@@ -1,6 +1,6 @@
 /* The pieces of Team sync's person-by-person walk (src/views/TeamSync.tsx,
-   hooks `data-sync-*`, deviation #316). Each piece takes the hook prefix of
-   the walk it sits in as a parameter. */
+   deviation #316). Their data hooks read `data-sync-*`, which
+   scripts/smoke.mjs, scripts/phone-layout-smoke.mjs and the tests select. */
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,11 +10,10 @@ import { cn } from '@/lib/utils'
 import { type IssueVM, P, type UserVM } from '@/store/planner'
 import { LIMITS } from '../../convex/lib/limits'
 import { Avatar, Icon } from './qivo'
-import type { WalkHook } from './walkRows'
 
-/* One data hook of a walk, e.g. `data-sync-jump="<profile uuid>"`. */
-function hook(walk: WalkHook, name: string, value = '') {
-  return { [`data-${walk}-${name}`]: value }
+/* One data hook of the walk, e.g. `data-sync-jump="<profile uuid>"`. */
+function hook(name: string, value = '') {
+  return { [`data-sync-${name}`]: value }
 }
 
 /** The person rail: jump anywhere, the current person ringed, a check on
@@ -22,7 +21,6 @@ function hook(walk: WalkHook, name: string, value = '') {
     sync's team button); `gapAt` opens a gap before that index (the sync's
     agents). */
 export function WalkRail({
-  hook: walk,
   people,
   isCurrent,
   allDone,
@@ -32,7 +30,6 @@ export function WalkRail({
   gapAt,
   className,
 }: {
-  hook: WalkHook
   people: readonly Pick<UserVM, 'id' | 'name'>[]
   isCurrent: (id: string) => boolean
   allDone: (id: string) => boolean
@@ -45,7 +42,7 @@ export function WalkRail({
 }) {
   return (
     <div
-      {...hook(walk, 'rail')}
+      {...hook('rail')}
       className={cn(
         '[display:flex] [gap:4px] [flex-wrap:wrap] [justify-content:flex-end]',
         className,
@@ -56,7 +53,7 @@ export function WalkRail({
         <Button
           type="button"
           key={u.id}
-          {...hook(walk, 'jump', u.id)}
+          {...hook('jump', u.id)}
           onClick={() => onPick(u.id, i)}
           title={u.name}
           aria-label={label(u.name)}
@@ -71,7 +68,7 @@ export function WalkRail({
           {/* the done badge's ring knocks it out of the page panel it sits on */}
           {allDone(u.id) && (
             <span
-              {...hook(walk, 'done', u.id)}
+              {...hook('done', u.id)}
               className="[position:absolute] [right:-2px] [bottom:-2px] [width:11px] [height:11px] [border-radius:50%] [background:var(--success)] [border:1.5px_solid_var(--background)] [display:grid] [place-items:center]"
             >
               <Icon name="check" size={7} color="#fff" strokeWidth={3.5} />
@@ -95,14 +92,12 @@ export function WalkRail({
     server accepts the write, so a refused value (whose refusal the store
     shows) leaves the row unreviewed. */
 export function RemainingInput({
-  hook: walk,
   it,
   title,
   onCommit,
   disabled,
   className,
 }: {
-  hook: WalkHook
   it: IssueVM
   title: string
   onCommit?: (it: IssueVM) => void
@@ -127,7 +122,7 @@ export function RemainingInput({
   }
   return (
     <Input
-      {...hook(walk, 'input')}
+      {...hook('input')}
       aria-label={`Remaining hours for ${it.title}`}
       type="number"
       min={LIMITS.remainingHours.min}
@@ -149,30 +144,26 @@ export function RemainingInput({
 
 /** The review tick: marks a row looked at without an edit. */
 export function ReviewTick({
-  hook: walk,
   it,
   on,
   onToggle,
-  markTitle,
 }: {
-  hook: WalkHook
   it: IssueVM
   on: boolean
   onToggle: () => void
-  markTitle: string
 }) {
   return (
     <Button
       type="button"
       variant="ghost"
       size="icon"
-      {...hook(walk, 'tick', it.id)}
-      {...hook(walk, 'reviewed', on ? '1' : '0')}
+      {...hook('tick', it.id)}
+      {...hook('reviewed', on ? '1' : '0')}
       aria-label={`${on ? 'Unmark' : 'Mark'} ${it.title} as reviewed`}
       aria-pressed={on}
       onClick={onToggle}
       className="w-control-sm h-control-sm [flex-shrink:0]"
-      title={on ? 'Unmark reviewed' : markTitle}
+      title={on ? 'Unmark reviewed' : 'Mark reviewed'}
     >
       <Icon
         name="check"
@@ -187,19 +178,15 @@ export function ReviewTick({
 /** The walk's foot: "n of m tasks reviewed", Previous, Next or Done. The
     caller supplies the row it sits in. */
 export function WalkFooter({
-  hook: walk,
   reviewed,
   total,
-  showPrev,
   atStart,
   last,
   onPrev,
   onNext,
 }: {
-  hook: WalkHook
   reviewed: number
   total: number
-  showPrev: boolean
   atStart: boolean
   /** the last step: Next reads Done */
   last: boolean
@@ -208,26 +195,24 @@ export function WalkFooter({
 }) {
   return (
     <>
-      <span {...hook(walk, 'progress')} className="[font-size:var(--fs-sm)] [color:var(--text-1)]">
+      <span {...hook('progress')} className="[font-size:var(--fs-sm)] [color:var(--text-1)]">
         {total ? `${reviewed} of ${total} task${total === 1 ? '' : 's'} reviewed` : ''}
       </span>
       <div className="[flex:1]" />
-      {showPrev && (
-        <Button
-          type="button"
-          variant="ghost"
-          {...hook(walk, 'prev')}
-          disabled={atStart}
-          onClick={onPrev}
-          className={atStart ? 'cursor-default opacity-40' : undefined}
-        >
-          <Icon name="chevronLeft" size={16} />
-          Previous
-        </Button>
-      )}
       <Button
         type="button"
-        {...hook(walk, 'next')}
+        variant="ghost"
+        {...hook('prev')}
+        disabled={atStart}
+        onClick={onPrev}
+        className={atStart ? 'cursor-default opacity-40' : undefined}
+      >
+        <Icon name="chevronLeft" size={16} />
+        Previous
+      </Button>
+      <Button
+        type="button"
+        {...hook('next')}
         onClick={onNext}
         className="[background:var(--primary)] [border-color:var(--primary)] [color:#fff] [font-weight:600]"
       >

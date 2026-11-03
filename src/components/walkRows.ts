@@ -3,9 +3,6 @@
 import { useState } from 'react'
 import { type IssueVM, P } from '@/store/planner'
 
-/** The prefix of a walk piece's data hooks: they read `data-<hook>-…`. */
-export type WalkHook = 'sync'
-
 /** Review ticks: session-local, keyed by task uuid, stored nowhere. An edit
     ticks a row, the tick button toggles it. `count` intersects the caller's
     LIVE rows, so the total adjusts when a task leaves the walk. */
@@ -37,10 +34,10 @@ export function planHint(it: IssueVM) {
   return null
 }
 
-/** Blur a focused Remaining box of this walk so it commits: closing or
+/** Blur a focused Remaining box of the walk so it commits: closing or
     stepping away unmounts the box, and React fires no blur on unmount, so a
     typed-but-uncommitted number would vanish. */
-export function flushWalkInput(walk: WalkHook) {
+export function flushWalkInput() {
   const el = document.activeElement
-  if (el instanceof HTMLElement && el.hasAttribute(`data-${walk}-input`)) el.blur()
+  if (el instanceof HTMLElement && el.hasAttribute('data-sync-input')) el.blur()
 }
