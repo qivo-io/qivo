@@ -56,16 +56,17 @@
      from the scope's reads, so a new sort, search or Load more asks the
      health read alone. It asks only while the page asks and has a table,
      OVERVIEW_BATCH rows at first and as many more for each Load more. A new
-     sort or search starts again at the first rows. A new scope does too,
-     with no search and the same sort, so the health read never asks the
-     new scope with the old scope's search. While an answer for new table
-     arguments is on its way, the last answer shown for the same scope and
-     clock stays as `kept`, as the store's view read drops what it held for
-     other arguments, and offers no Load more; a new scope or clock shows
-     nothing until its own answer. A Load more that fails goes back to the
-     rows it showed, asking their arguments again so they keep updating,
-     and offers Retry. Where those rows fail too, the table shows its
-     error, whose Try again asks it afresh. */
+     sort or search starts again at the first rows. A new scope forgets the
+     table and asks no health read until the page registers its own for
+     it, so the health read never asks the new scope with the old scope's
+     sort or search. While an answer for new table arguments is on its way,
+     the last answer shown for the same scope and clock stays as `kept`, as
+     the store's view read drops what it held for other arguments, and
+     offers no Load more; a new scope or clock shows nothing until its own
+     answer. A Load more that fails goes back to the rows it showed, asking
+     their arguments again so they keep updating, and offers Retry. Where
+     those rows fail too, the table shows its error, whose Try again asks
+     it afresh. */
 
 import { ConvexError, type Value } from 'convex/values'
 import type {
@@ -898,8 +899,9 @@ export function createOverviewReads(transport: OverviewTransport) {
         or the tab is hidden, which stops every read and keeps what they
         held. `by` names the mounted page: one that leaves after the next
         one asked stops nothing. A new `tries` (the page's Try again) asks
-        the summary and the delays afresh. A new scope starts the health
-        table at its first rows with no search. */
+        the summary and the delays afresh. A new scope forgets the health
+        table, so the health read asks nothing until the page registers
+        the new scope's table (watchTable). */
     watch(next: OverviewBase | null, by: number, tries: number) {
       if (next === null && by !== owner) return
       owner = by
@@ -912,16 +914,17 @@ export function createOverviewReads(transport: OverviewTransport) {
       const key = overviewKey(next)
       const sameAsk = asking && key === baseKey && tries === attempt
       if (sameAsk) return
-      // a new scope starts the health table at its first rows with no
-      // search, as the page starts its search again there, and keeps the
-      // sort; a new clock keeps them all
+      // a new scope asks no health read until the page registers its table
+      // in the same commit, as App mounts the page anew for each scope with
+      // its own sort and no search, so no read asks the new scope with the
+      // old one's; a new clock keeps the table and its rows
       if (
         base === null ||
         JSON.stringify(scopeArgs(base.scope)) !== JSON.stringify(scopeArgs(next.scope))
       ) {
+        table = null
         limit = OVERVIEW_BATCH
         failedMore = null
-        if (table !== null) table = { ...table, search: '' }
       }
       attempt = tries
       base = next

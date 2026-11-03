@@ -1049,25 +1049,35 @@ describe('the health table', () => {
     s.state.holding = (slot) => slot === HEALTH
     s.lists.watch({ scope: { kind: 'mine' }, clock: clock('2026-11-05') }, 1, 0)
     expect(s.lists.view().health).toBeNull()
+    // until the page registers the new scope's table
+    expect(healthArgs(s)).toBeNull()
+    s.lists.watchTable(BY_NAME, 1)
     expect(healthArgs(s)).toMatchObject({ scope: { kind: 'mine' }, limit: OVERVIEW_BATCH })
   })
 
-  it('asks a new scope with no search and the same sort, never with the search of the scope before', () => {
+  it('asks a new scope only with the table its page registers, never with the sort or search of the scope before', () => {
     const { snap, base } = programOf(3)
     const s = server(snap)
     s.lists.watch(base, 1, 0)
-    s.lists.watchTable({ sort: 'late', dir: 'desc', search: 'sub' }, 1)
+    s.lists.watchTable({ sort: 'name', dir: 'asc', search: 'sub' }, 1)
     s.deliver()
     const asked = s.state.asked.length
-    s.lists.watch(null, 1, 0)
-    s.lists.watch({ ...base, scope: { kind: 'mine' } }, 1, 0)
-    // the page then asks the new scope's table, with its search started again
-    s.lists.watchTable({ sort: 'late', dir: 'desc', search: '' }, 1)
+    // App mounts a page anew for each scope, which registers the scope's
+    // reads and then its own table in one commit: My view, then the
+    // project again
+    s.lists.watch({ ...base, scope: { kind: 'mine' } }, 2, 0)
+    expect(healthArgs(s)).toBeNull()
+    expect(s.lists.view().health).toBeNull()
+    s.lists.watchTable({ sort: 'late', dir: 'desc', search: '' }, 2)
+    s.lists.watch(base, 3, 0)
+    expect(healthArgs(s)).toBeNull()
+    s.lists.watchTable({ sort: 'progress', dir: 'desc', search: '' }, 3)
     const health = s.state.asked.slice(asked).filter((a) => a.slot === HEALTH)
     expect(health.map((a) => JSON.parse(a.key))).toEqual([
       expect.objectContaining({ scope: { kind: 'mine' }, sort: 'late', dir: 'desc' }),
+      expect.objectContaining({ scope: base.scope, sort: 'progress', dir: 'desc' }),
     ])
-    expect(healthArgs(s)).not.toHaveProperty('search')
+    expect(health.every((a) => !('search' in JSON.parse(a.key)))).toBe(true)
   })
 
   it('takes a table only from the page that owns the reads, which a page that mounted hidden registers again once it asks', () => {

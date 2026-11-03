@@ -1051,6 +1051,20 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.activeElement).toBe(input)
   })
 
+  it('starts the search again on a return to a scope typed in before, also on a page that stays mounted', async () => {
+    const { board, Overview, actions, render } = await overview(parts(25))
+    await typeSearch('part 2')
+    const plan = board.P.scopeInfo('plan') as ScopeInfo
+    const mine = board.P.scopeInfo('mine') as ScopeInfo
+    await render(() => <Overview info={mine} actions={actions} />)
+    await render(() => <Overview info={plan} actions={actions} />)
+    expect(document.querySelector<HTMLInputElement>('[data-ov-health-search]')?.value).toBe('')
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 300)))
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'desc', limit: 10 })
+    expect(healthAsked(board).at(-1)).not.toHaveProperty('search')
+    expect(cards()).toHaveLength(10)
+  })
+
   it('loads 10 more rows on Load more to the end, keeping focus while they load and leaving it on the table at the end', async () => {
     const { board } = await overview(parts(25))
     const more = () => document.querySelector<HTMLButtonElement>('[data-ov-health-more]')

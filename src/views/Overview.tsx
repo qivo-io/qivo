@@ -1118,13 +1118,17 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
      "which of these is in trouble" is the question the section exists to
      answer, and a table that opens alphabetically makes you click to ask it.
      Held here rather than inside the table so it survives the table
-     re-rendering under a store update, and a new scope keeps it. */
+     re-rendering under a store update. App mounts the page anew for each
+     scope (ViewKeeper), so a new scope opens on the worst first again, and
+     the store asks the new scope's health read only with this order. */
   const [sort, setSort] = useStateO<HealthOrder>({ key: 'late', dir: 'desc' })
-  /* The health table's search as typed, for the scope it was typed in, so a
-     new scope starts with none, and the text it asks once typing rests.
-     A search past LIMITS.search asks nothing new: the table keeps the last
-     one it could ask. */
+  /* The health table's search as typed, for the scope it was typed in, so
+     a new scope starts with none, also on a return to a scope typed in
+     before, and the text it asks once typing rests. A search past
+     LIMITS.search asks nothing new: the table keeps the last one it could
+     ask. */
   const [typed, setTyped] = useStateO({ scope: info.id, text: '' })
+  if (typed.scope !== info.id) setTyped({ scope: info.id, text: '' })
   const search = typed.scope === info.id ? typed.text : ''
   const searchOver = search.trim().length > LIMITS.search.max
   const lastSearch = useRef('')
