@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
+import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, underProgram } from './store/plannerFixture.setup'
 import { taskRow } from './views/boardFixture.setup'
 
@@ -106,10 +107,11 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   snap.issues[0].title = 'Write the release notes'
   prepare(snap)
   threads.length = 0
-  network.onUpdate.mockImplementation((ref, args, next) => {
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
+    else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     else if (name === 'teamSync:lastComments')
       next({ rows: [{ issue_id: 't1', at: '2026-09-10T08:00:00.000Z' }], complete: true })
     else if (name === 'snapshot:threadComments') {
@@ -408,9 +410,10 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     const org = await boot((snap) => {
       snap.orgs[0].next_issue_num = 64 * 200
     }, 'fc000000')
-    await go(`/app/${org}/overview/all`)
-    const overview = await shownPage('overview')
-    expect(overview.textContent).toContain('opens once every task has loaded')
+    // the Roadmap waits for every task; the Overview no longer does
+    await go(`/app/${org}/roadmap/all`)
+    const roadmap = await shownPage('roadmap')
+    expect(roadmap.textContent).toContain('opens once every task has loaded')
     await go(`/app/${org}/inbox`)
     await shownPage('inbox')
     await act(async () => {
@@ -419,13 +422,13 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     })
     const { P } = await import('./store/planner')
     expect(P.stillLoading()).toBeNull()
-    // the Overview's code, which the app loads in the background
-    await (await import('./lib/workspaceChunks')).loadOverview()
+    // the Roadmap's code, which the app loads in the background
+    await (await import('./lib/workspaceChunks')).loadRoadmap()
     // the commit that shows it holds no notice, before any frame paints
     vi.stubGlobal('requestAnimationFrame', () => 0)
-    await go(`/app/${org}/overview/all`)
-    expect(await shownPage('overview')).toBe(overview)
-    expect(overview.textContent).not.toContain('opens once every task has loaded')
+    await go(`/app/${org}/roadmap/all`)
+    expect(await shownPage('roadmap')).toBe(roadmap)
+    expect(roadmap.textContent).not.toContain('opens once every task has loaded')
   })
 
   it('mounts the pages of a new scope anew, and keeps the Inbox', async () => {
