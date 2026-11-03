@@ -28,7 +28,7 @@ import {
   useState as useStateO,
 } from 'react'
 import { relativeWeek, weekToISO } from '@/lib/dates'
-import { focusAround } from '@/lib/focusWhenGone'
+import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { shownEmptyState } from '@/lib/taskFocus'
 import { useLatest } from '@/lib/useLatest'
@@ -861,7 +861,9 @@ function BatchNote({
     leaves the list loading, and STALL.ms after the workspace loaded,
     incomplete, never at its end. Load more keeps keyboard focus while its
     batch loads, and a button that goes with its press (Show from the
-    start, Try again, Retry) leaves focus on the list. */
+    start, Try again, Retry) leaves focus on the list. Where Load more
+    leaves, as the list ends or its next batch fails, focus it left nowhere
+    goes to that batch's Retry or Try again, else to the list. */
 function OvList({
   kind,
   list,
@@ -884,6 +886,13 @@ function OvList({
     step()
     root.current?.focus()
   }
+  // Load more leaves with the list's last batch, or where its next batch
+  // failed and that batch's note offers Retry or Try again in its place
+  useFocusWhenGone(list.more !== null, () => {
+    const batches = root.current?.querySelectorAll<HTMLElement>('[data-ov-batch]')
+    const last = batches?.[batches.length - 1]
+    return last?.querySelector<HTMLElement>('[data-ov-batch-note] button') ?? root.current
+  })
   const own = P.ownPaintedTasks()
   let missing = 0
   let shown = 0

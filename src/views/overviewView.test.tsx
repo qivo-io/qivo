@@ -699,19 +699,50 @@ describe('keyboard focus in the lists', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(rows('paused')).toHaveLength(20)
     expect(more.getAttribute('aria-disabled')).toBeNull()
     expect(document.activeElement).toBe(more)
-    // the next batch fails; its Retry goes with its press, and focus stays
-    // in the list
+    // the next batch fails: Load more leaves and its focus goes to the
+    // Retry in its place, which goes with its press, so focus stays in the
+    // list
     board.server.overview.fail = new Error('network')
     board.server.overview.failing = (query, args) =>
       query === 'paused' && args.cursor !== undefined && args.end === undefined
     await click(more)
+    expect(list('paused')?.querySelector('[data-ov-more]')).toBeNull()
     const retry = button('paused', 'Retry')
     if (!retry) throw new Error('no Retry')
-    retry.focus()
+    expect(document.activeElement).toBe(retry)
     board.server.overview.fail = undefined
     await click(retry)
     expect(rows('paused')).toHaveLength(25)
     expect(document.activeElement).toBe(list('paused'))
+  })
+
+  it('moves focus from Load more to the list where its batch ends the list, unless it moved on', async () => {
+    const { board } = await overview(work(15))
+    const more = list('paused')?.querySelector<HTMLButtonElement>('[data-ov-more]')
+    if (!more) throw new Error('no Load more')
+    more.focus()
+    board.server.overview.hold = true
+    await click(more)
+    expect(document.activeElement).toBe(more)
+    board.server.overview.hold = false
+    await board.answer()
+    // the last batch came: Load more leaves, and focus stays in the list
+    expect(rows('paused')).toHaveLength(15)
+    expect(list('paused')?.querySelector('[data-ov-more]')).toBeNull()
+    expect(document.activeElement).toBe(list('paused'))
+    // focus that moved on while the last batch loaded stays where it went
+    const other = list('attention')?.querySelector<HTMLButtonElement>('[data-ov-more]')
+    if (!other) throw new Error('no Load more')
+    other.focus()
+    board.server.overview.hold = true
+    await click(other)
+    const away = list('paused')
+    away?.focus()
+    board.server.overview.hold = false
+    await board.answer()
+    expect(rows('attention')).toHaveLength(16)
+    expect(list('attention')?.querySelector('[data-ov-more]')).toBeNull()
+    expect(document.activeElement).toBe(away)
   })
 
   it('moves focus to the list after Try again and Show from the start', async () => {
