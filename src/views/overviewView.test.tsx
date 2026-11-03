@@ -464,6 +464,21 @@ describe('All projects and My view', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(actions.setScope).toHaveBeenCalledWith('plan')
   })
 
+  it("lets go of a project's reads and rows when the page moves to All projects", async () => {
+    const { board, Overview, actions, render } = await overview(work())
+    const { __layerProbe } = await import('../store/planner')
+    if (!__layerProbe) throw new Error('the layer probe is test-only')
+    const slots = () =>
+      Object.keys(__layerProbe.rows()).filter((section) => section.startsWith('view:overview:'))
+    expect(slots().length).toBeGreaterThan(0)
+    // App mounts the page anew for All projects, which asks for no read
+    const all = board.P.scopeInfo('all') as ScopeInfo
+    await render(() => <Overview key="all" info={all} actions={actions} />)
+    expect(state()).toBe('choose')
+    expect(board.server.overview.open.size).toBe(0)
+    expect(slots()).toEqual([])
+  })
+
   it("shows My view's own tasks, with their projects, and its notes once the answer decides them", async () => {
     await overview(
       (snap) => {

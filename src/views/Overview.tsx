@@ -1346,7 +1346,10 @@ let overviewReaders = 0
 
 /** The Overview's reads for `info`, which the page registers with the store
     while it and the tab show, with Try again; the store's answers for the
-    arguments on screen. Renders again on the store's `views` news. */
+    arguments on screen. Renders again on the store's `views` news. In All
+    projects, which asks for none, it releases the reads and rows of the
+    page it replaced, which only stopped them: App mounts one Overview page
+    for one scope, so no other page holds them. */
 function useOverviewRead(info: ScopeInfo) {
   const { visible } = useViewVisibility()
   const [attempt, setAttempt] = useStateO(0)
@@ -1357,9 +1360,13 @@ function useOverviewRead(info: ScopeInfo) {
   const key = request.kind === 'ask' ? request.key : null
   const ask = visible ? key : null
   useEffect(() => {
+    if (request.kind === 'choose') {
+      P.releaseOverview()
+      return
+    }
     P.watchOverview(ask, owner, attempt)
     return () => P.watchOverview(null, owner, attempt)
-  }, [ask, owner, attempt])
+  }, [ask, owner, attempt, request.kind])
   const view: OverviewView = P.overviewRead()
   // answers count only for the arguments on screen
   const mine = key !== null && view.key === key
