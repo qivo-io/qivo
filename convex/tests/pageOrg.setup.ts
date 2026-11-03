@@ -1,15 +1,18 @@
-/* The organization of the active task page measurements
- * (convex/tests/activeTaskPagesScale.test.ts), built at the sizes a case
- * asks for, at most the design size, with ordinary text, and the reads of
- * one page with what it read. Named *.setup.ts so the Convex CLI skips it
- * (see helpers.setup.ts). */
+/* The organization of the active and archived task page measurements
+ * (convex/tests/activeTaskPagesScale.test.ts and
+ * archivedTaskPagesScale.test.ts), built at the sizes a case asks for, at
+ * most the design size, with ordinary text, and the reads of one page with
+ * what it read. Named *.setup.ts so the Convex CLI skips it (see
+ * helpers.setup.ts). */
 /// <reference types="vite/client" />
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { newWindowKey } from '../lib/db'
+import { rosterNames } from '../lib/archivedTasks'
+import { byId, newWindowKey } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
+import { listIssues as mcpListIssues } from '../machine/mcp'
 import { listIssues, listProjects } from '../machine/rest'
 import {
   NOW,
@@ -22,6 +25,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import type { McpArgs } from './taskPages.setup'
 
 /* What one page read, as Convex counts it, and what it answered. */
 export type Figures = {
@@ -33,9 +37,20 @@ export type Figures = {
   next: boolean
 }
 
-/* Prints what a page read, the figures ACTIVE_PAGE's docstring quotes. */
-export const record = (name: string, figures: Figures) =>
-  console.log(`active page figures, ${name}:`, JSON.stringify(figures))
+/* Prints what a page read, the figures ACTIVE_PAGE's docstring quotes, or
+ * ARCHIVE_PAGE's for an archived page. */
+export const record = (name: string, figures: Figures, list: 'active' | 'archived' = 'active') =>
+  console.log(`${list} page figures, ${name}:`, JSON.stringify(figures))
+
+/* What the query has read so far, as Convex counts it. */
+async function readsSoFar(ctx: QueryCtx) {
+  const m = await ctx.meta.getTransactionMetrics()
+  return {
+    ranges: m.databaseQueries.used,
+    documents: m.documentsRead.used,
+    mib: Math.round((m.bytesRead.used / MIB) * 100) / 100,
+  }
+}
 
 /* A query's handler, run inside a test's own transaction so its metrics
  * can be read after it. */
@@ -51,6 +66,7 @@ export type RestArgs = {
   limit?: string
   cursor?: string
   status?: string
+  archived?: string
 }
 export type RestPage = { next_cursor: string | null; tasks: { id: string; delay: unknown }[] }
 
@@ -63,13 +79,30 @@ export async function readPage(t: T, args: Omit<RestArgs, 'today' | 'access'>) {
       access: 'read',
       ...args,
     })
-    const m = await ctx.meta.getTransactionMetrics()
     const figures: Figures = {
-      ranges: m.databaseQueries.used,
-      documents: m.documentsRead.used,
-      mib: Math.round((m.bytesRead.used / MIB) * 100) / 100,
+      ...(await readsSoFar(ctx)),
       rows: page.tasks.length,
       answer_kb: Math.round(JSON.stringify(page).length / 1024),
+      next: page.next_cursor !== null,
+    }
+    return { page, figures }
+  })
+}
+
+/* One MCP list_tasks page read in a query of its own, as readPage reads a
+ * REST page, the answer parsed. */
+export async function readMcpPage(t: T, args: Omit<McpArgs, 'today' | 'access'>) {
+  return await t.query(async (ctx) => {
+    const text = await handlerOf<McpArgs, string>(mcpListIssues)(ctx, {
+      today: TODAY,
+      access: 'read',
+      ...args,
+    })
+    const page = JSON.parse(text) as RestPage
+    const figures: Figures = {
+      ...(await readsSoFar(ctx)),
+      rows: page.tasks.length,
+      answer_kb: Math.round(text.length / 1024),
       next: page.next_cursor !== null,
     }
     return { page, figures }
@@ -84,12 +117,22 @@ export async function readBefore(t: T, callerId: string) {
       callerId,
       access: 'read',
     })
-    const m = await ctx.meta.getTransactionMetrics()
-    return {
-      ranges: m.databaseQueries.used,
-      documents: m.documentsRead.used,
-      mib: Math.round((m.bytesRead.used / MIB) * 100) / 100,
-    }
+    return await readsSoFar(ctx)
+  })
+}
+
+/* The reads before an archived page without a search: readBefore's, and
+ * the organization's roster and row, which lib/core.ts
+ * listArchivedIssuesCore reads before the page's budget starts. */
+export async function readArchivedBefore(t: T, caller: Doc<'profiles'>) {
+  return await t.query(async (ctx) => {
+    await handlerOf<{ callerId: string; access: 'read' }, unknown[]>(listProjects)(ctx, {
+      callerId: caller.id,
+      access: 'read',
+    })
+    await rosterNames(ctx, caller.org_id)
+    await byId(ctx, 'organizations', caller.org_id)
+    return await readsSoFar(ctx)
   })
 }
 
