@@ -460,8 +460,8 @@ export function overviewStandIn(
       }
     }
     let order: Extract<HealthAnswer, { state: 'ok' }>['sort'] =
-      COUNT_SORTS.includes(sort) && !counted
-        ? { key: 'name', dir: 'asc', by_name: 'counts' }
+      COUNT_SORTS.includes(sort) && h.counts !== undefined
+        ? { key: 'name', dir: 'asc', by_name: 'counts', missing: h.counts }
         : { key: sort, dir }
     const ordered = () =>
       [...items].sort((a, b) => {
@@ -514,7 +514,12 @@ export function overviewStandIn(
     }
     if (byDelays) {
       if (judged.some((r) => delays.get(r.project.id)?.state !== 'ok'))
-        order = { key: 'name', dir: 'asc', by_name: 'delays' }
+        order = {
+          key: 'name',
+          dir: 'asc',
+          by_name: 'delays',
+          missing: h.delays === 'budget' ? 'budget' : 'loads',
+        }
       rows = ordered()
     }
     return {

@@ -660,7 +660,7 @@ describe('the name fallback', () => {
     const scope = scopeOf(f.guest, f.meta)
     for (const sort of ['late', 'behind'] as const) {
       const got = okOf(await health(t, f.guest, scope, { sort }))
-      expect(got.sort).toEqual({ key: 'name', dir: 'asc', by_name: 'delays' })
+      expect(got.sort).toEqual({ key: 'name', dir: 'asc', by_name: 'delays', missing: 'loads' })
       expect(got.rows.map((r) => r.name)).toEqual(['Board rev', 'Firmware'])
       // the row that needs the lower owner's load is judged, the other not
       expect(rowOf(got, 'Firmware').delays).toEqual({ state: 'ok', late: 1, behind: 0 })
@@ -676,6 +676,12 @@ describe('the name fallback', () => {
       { state: 'ok', late: 1, behind: 0 },
       { state: 'ok', late: 1, behind: 0 },
     ])
+    // the order says why also where the row without its delays is past the
+    // rows returned
+    await t.run((ctx) => ctx.db.patch(f.sub2._id, { name: 'Zulu rev' }))
+    const cut = okOf(await health(t, f.guest, scope, { limit: 1 }))
+    expect(cut.rows.map((r) => [r.name, r.delays.state])).toEqual([['Firmware', 'ok']])
+    expect(cut.sort).toEqual({ key: 'name', dir: 'asc', by_name: 'delays', missing: 'loads' })
   })
 
   it("sorts staff's table by name where an owner's load passes the owner reader's bounds", async () => {
@@ -683,7 +689,7 @@ describe('the name fallback', () => {
     await projectedLate(t, f.sub, low, 'More of the lower owner’s')
     Object.assign(OWNER_LOADS, { open: 1 })
     const got = okOf(await health(t, f.admin, scopeOf(f.admin, f.meta)))
-    expect(got.sort).toEqual({ key: 'name', dir: 'asc', by_name: 'delays' })
+    expect(got.sort).toEqual({ key: 'name', dir: 'asc', by_name: 'delays', missing: 'loads' })
     expect(got.rows.map((r) => r.delays.state)).toEqual(['unavailable', 'unavailable'])
   })
 
@@ -695,7 +701,12 @@ describe('the name fallback', () => {
     const scope = scopeOf(f.admin, f.meta)
     for (const sort of ['progress', 'done', 'left', 'paused'] as const) {
       const got = okOf(await health(t, f.admin, scope, { sort }))
-      expect(got.sort, sort).toEqual({ key: 'name', dir: 'asc', by_name: 'counts' })
+      expect(got.sort, sort).toEqual({
+        key: 'name',
+        dir: 'asc',
+        by_name: 'counts',
+        missing: 'counting',
+      })
       expect(got.rows.map((r) => r.counts)).toEqual([
         { state: 'unavailable', reason: 'counting' },
         { state: 'unavailable', reason: 'counting' },
@@ -723,7 +734,12 @@ describe('the name fallback', () => {
     const ask = () => health(t, f.user, MINE, { sort: 'progress' })
     const counting = okOf(await ask())
     expect(counting.rows).toHaveLength(2)
-    expect(counting.sort).toEqual({ key: 'name', dir: 'asc', by_name: 'counts' })
+    expect(counting.sort).toEqual({
+      key: 'name',
+      dir: 'asc',
+      by_name: 'counts',
+      missing: 'counting',
+    })
     expect(counting.rows.map((r) => r.counts)).toEqual([
       { state: 'unavailable', reason: 'counting' },
       { state: 'unavailable', reason: 'counting' },
@@ -748,7 +764,7 @@ describe('the name fallback', () => {
     // a budget that holds the rows and the counts but not the delays
     Object.assign(OVERVIEW.reads, { ranges: whole.took.ranges - 20 })
     const got = okOf((await read()).answer)
-    expect(got.sort).toEqual({ key: 'name', dir: 'asc', by_name: 'delays' })
+    expect(got.sort).toEqual({ key: 'name', dir: 'asc', by_name: 'delays', missing: 'budget' })
     expect(got.rows.map((r) => [r.counts.state, r.delays])).toEqual([
       ['ok', { state: 'unavailable', reason: 'budget' }],
       ['ok', { state: 'unavailable', reason: 'budget' }],

@@ -2001,8 +2001,17 @@ export type HealthAnswer =
       /** how many rows the table holds with the search applied */
       total: number
       /** the order of `rows`: the one asked, or name ascending where the
-       * asked column needs a figure some row lacks, `by_name` naming it */
-      sort: { key: HealthSort; dir: 'asc' | 'desc'; by_name?: 'delays' | 'counts' }
+       * asked column needs a figure some row lacks, `by_name` naming it
+       * and `missing` why it is not given, also where the rows that lack
+       * it are past `rows`. For the delays `missing` is `budget` where
+       * their reads did not fit, else `loads`; for the counts it is their
+       * reason. */
+      sort: {
+        key: HealthSort
+        dir: 'asc' | 'desc'
+        by_name?: 'delays' | 'counts'
+        missing?: Missing
+      }
       /** the most rows one answer holds (OVERVIEW.healthRows): past it, a
        * search finds the others */
       most: number
@@ -2250,7 +2259,9 @@ const COUNT_SORTS: readonly HealthSort[] = ['progress', 'done', 'left', 'paused'
  * id. A row without a lead sorts after every lead's name. Where the order
  * asked needs a figure some row lacks (Delayed's and Slipping's the judged
  * rows' delays, Progress's, Done's, Left's and Paused's the counts), the
- * rows are in name order and `sort` says so (`by_name`); Name and Lead
+ * rows are in name order and `sort` says so (`by_name`) and why
+ * (`missing`), from every judged row and not only the ones returned, so
+ * the page's note never depends on which rows the cut kept; Name and Lead
  * never fall back. Outside Delayed and Slipping the judged rows grow with
  * `limit`, so a Load more can turn a row's Delayed into unavailable: for a
  * guest or Viewer by the owner order, for staff by the budget. Refuses a
@@ -2318,7 +2329,7 @@ export async function readHealth(
     }
     let order: Extract<HealthAnswer, { state: 'ok' }>['sort'] =
       COUNT_SORTS.includes(sort) && counts.state !== 'ok'
-        ? { key: 'name', dir: 'asc', by_name: 'counts' }
+        ? { key: 'name', dir: 'asc', by_name: 'counts', missing: counts.reason }
         : { key: sort, dir }
     /* the kept rows in `order`, one total order */
     const ordered = () =>
@@ -2349,7 +2360,12 @@ export async function readHealth(
           )
     if (byDelays) {
       if (judged.some((r) => delays.get(r.project.id)?.state !== 'ok'))
-        order = { key: 'name', dir: 'asc', by_name: 'delays' }
+        order = {
+          key: 'name',
+          dir: 'asc',
+          by_name: 'delays',
+          missing: read.state === 'ok' ? 'loads' : read.reason,
+        }
       rows = ordered()
     }
     return {

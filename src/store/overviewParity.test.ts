@@ -440,7 +440,7 @@ async function expectParity(
     }
     expect(table.sort, `${label}: health order`).toEqual(
       loads.size > 0
-        ? { key: 'name', dir: 'asc', by_name: 'delays' }
+        ? { key: 'name', dir: 'asc', by_name: 'delays', missing: 'loads' }
         : { key: 'late', dir: 'desc' },
     )
     if (orders) {
