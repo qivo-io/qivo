@@ -72,8 +72,6 @@ async function persisted() {
         id,
         start: row.start_week ?? null,
         end: row.end_week ?? null,
-        remaining: row.remaining_hours ?? null,
-        measured: row.remaining_set_at ?? null,
       }
     }),
     milestones: snapshot.milestones
@@ -209,7 +207,6 @@ try {
           start_week: iso(today),
           end_week: iso(today + 1),
           ...(i === 1 ? { parent_id: tasks[0].id } : {}),
-          ...(i === 2 ? { assignee_id: P.CURRENT_USER, remaining_hours: 6 } : {}),
         })
       }
       await convex.mutation('issues:addLink', {
@@ -306,16 +303,6 @@ try {
   )
   await spanFollows(parent, child, 'Parent span did not follow the subtask after repeated Undo')
   log('Repeated Undo restores task dates and reverses milestone creation, edits and deletion')
-
-  // No Roadmap control edits Remaining any more, so this drives the store's
-  // path that still records a Remaining-only write in the Roadmap's history.
-  await page.evaluate((id) => window.PLANNER.updateIssue(id, { remaining: 11 }), leaf)
-  await settled(1)
-  assert.equal((await persisted()).tasks[2].remaining, 11)
-  await undo().click()
-  await settled(0)
-  assert.deepEqual(await persisted(), baseline, 'Remaining undo lost its original measurement time')
-  log('Remaining undo restores the hours and their original measurement timestamp')
 
   await dragWeeks(child, 1)
   await settled(1)

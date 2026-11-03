@@ -270,7 +270,7 @@ describe('a task storing hours above the cap', () => {
   /* Every write of remaining hours holds the cap, so hours above it that a
    * task still stores are refused when sent back, unchanged or not, and
    * `expected` cannot name them. Lowering them saves. */
-  it('refuses them sent back on the app, the roadmap, REST and MCP, and saves lower hours', async () => {
+  it('refuses them sent back on the app, REST and MCP, and saves lower hours', async () => {
     const t = newT()
     const org = await withOrg(t)
     const secret = `qva_${'over-cap'.repeat(6)}`
@@ -341,11 +341,6 @@ describe('a task storing hours above the cap', () => {
         id: row.id,
         patch: { remaining_hours },
       })
-    const roadmap = (remaining_hours: number) =>
-      as(t, org.admin).mutation(api.roadmap.change, {
-        session_id: uuid(),
-        operations: [{ kind: 'task', id: row.id, patch: { remaining_hours } }],
-      })
     const row = await plantIssue(t, {
       org_id: org.org.id,
       project_id: org.sub.id,
@@ -363,7 +358,6 @@ describe('a task storing hours above the cap', () => {
       refused(LIMITS.remainingHours.refusal),
     )
     await refusedHours(app(150_000))
-    await refusedHours(roadmap(150_000))
     // and `expected` cannot name them
     const EXPECTED = 'expected.remaining_hours must be a number from 0 to 99,999.9, or null'
     const stale = { remaining_hours: 8, expected: { remaining_hours: 150_000 } }

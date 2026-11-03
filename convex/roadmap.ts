@@ -20,12 +20,9 @@ import { logActivity } from './model/activity'
 import { patchTaskRow } from './model/descriptions'
 import { changedPrints, DELETES } from './model/expected'
 import {
-  assertOwnRemaining,
-  assertRemainingShape,
   assertTaskExpected,
   assertWeekPair,
   type BulkUpdate,
-  cleanRemaining,
   GROUP_DATES_RULE,
   hasSubtasks,
   TASK_FIELDS,
@@ -47,7 +44,11 @@ import { weekLabel, weekPhrase } from './model/orgs'
 type Context = MutationCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> }
 const TTL = 24 * 60 * 60 * 1000
 const LIMIT = 1000
-const taskFields = ['start_week', 'end_week', 'remaining_hours', 'remaining_set_at'] as const
+/* The task fields a visit journals and an undo restores: a task's dates.
+ * Releases before the one that left Remaining to the ordinary task write
+ * also journaled remaining_hours with remaining_set_at; restoreStep refuses
+ * such an entry as expired. */
+const taskFields = ['start_week', 'end_week'] as const
 type TaskField = (typeof taskFields)[number]
 type TaskValues = Pick<Doc<'issues'>, TaskField>
 type TaskChange = {
@@ -76,8 +77,6 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const taskValues = (row: Doc<'issues'>): TaskValues => ({
   start_week: row.start_week,
   end_week: row.end_week,
-  remaining_hours: row.remaining_hours,
-  remaining_set_at: row.remaining_set_at,
 })
 const milestoneValues = ({ _id, _creationTime, ...row }: Doc<'milestones'>): Milestone => row
 
@@ -260,10 +259,11 @@ export const expire = internalMutation({
   },
 })
 
+/* A task operation's dates. Remaining hours take the ordinary task write
+ * (issues.update), so a visit's history holds no estimate. */
 const planValues = v.object({
   start_week: v.optional(v.union(v.string(), v.null())),
   end_week: v.optional(v.union(v.string(), v.null())),
-  remaining_hours: v.optional(v.union(v.number(), v.null())),
 })
 
 /* One change of a batch. A task or milestone operation may carry
@@ -357,7 +357,6 @@ export const change = authedMutation({
         if (!row) throw notFound('task not found')
         const { me } = await writer(ctx, row.project_id)
         const patch = { ...op.patch }
-        assertRemainingShape(patch.remaining_hours)
         if ('start_week' in patch || 'end_week' in patch) {
           // A group takes its dates from its subtasks. Refused before the
           // no-op skip, so a group's date operation never passes silently.
@@ -375,9 +374,6 @@ export const change = authedMutation({
           expected: op.expected,
           next: patch,
         })
-        // the cap after the field check, so stale hours answer as changed
-        if ('remaining_hours' in patch)
-          patch.remaining_hours = cleanRemaining(patch.remaining_hours) ?? null
         if (
           Object.entries(patch).every(
             ([field, value]) => (row[field as keyof typeof patch] ?? null) === value,
@@ -461,17 +457,7 @@ export const change = authedMutation({
       await batch.room()
       const after = await byId(ctx, 'issues', before.id)
       if (!after) throw stale()
-      // Amount and measurement time form one value, including two writes
-      // landing in the same millisecond. A later re-estimate must conflict
-      // even if someone eventually returns to the recorded amount.
-      const estimateChanged =
-        before.remaining_hours !== after.remaining_hours ||
-        before.remaining_set_at !== after.remaining_set_at
-      const fields = taskFields.filter((field) =>
-        field === 'remaining_hours' || field === 'remaining_set_at'
-          ? estimateChanged
-          : before[field] !== after[field],
-      )
+      const fields = taskFields.filter((field) => before[field] !== after[field])
       if (!fields.length) continue
       changes.push({
         kind: 'task',
@@ -506,10 +492,10 @@ export const change = authedMutation({
   },
 })
 
-/* Exact restoration is deliberately internal to this endpoint. Calling the
- * ordinary update core would re-stamp estimates. Validate the complete
- * transaction, then send normal notifications and activity for the actual
- * reverse changes. Each step restores only the rows it journaled. */
+/* Exact restoration is deliberately internal to this endpoint: it writes
+ * back the journaled dates as they were. Validate the complete transaction,
+ * then send normal notifications and activity for the actual reverse
+ * changes. Each step restores only the rows it journaled. */
 async function restoreStep(
   ctx: Context,
   changes: Change[],
@@ -526,6 +512,11 @@ async function restoreStep(
       // no write changes any more. Receipts live 24 hours, so such a visit
       // simply expires.
       if ('authorities' in change) throw expired()
+      // A receipt from a release that still journaled Remaining names
+      // remaining_hours or remaining_set_at, which an undo no longer
+      // restores. It expires the same way, rather than undoing only part
+      // of the step.
+      if (change.fields.some((field) => !taskFields.includes(field))) throw expired()
       const row = await byId(ctx, 'issues', change.id)
       if (!row) throw stale()
       const me = await taskWriter(ctx, row)
@@ -578,16 +569,12 @@ async function restoreStep(
     for (const field of change.fields) Object.assign(patch, { [field]: change.before[field] })
     await patchTaskRow(ctx.db, before, { ...patch, updated_at: now })
   }
-  // Each restored row must still hold a valid plan of its own, with a
-  // complete week pair and restored hours only on a task without active
-  // subtasks.
-  for (const { change, before, me } of tasks) {
+  // Each restored row must still hold a complete week pair of its own.
+  for (const { before, me } of tasks) {
     await batch.room()
     const after = await byId(ctx, 'issues', before.id)
     if (!after) throw stale()
     assertWeekPair(after.start_week, after.end_week)
-    if (change.fields.includes('remaining_hours') && after.remaining_hours !== undefined)
-      await assertOwnRemaining(ctx, after)
     const { preload } = await batch.bulkOf(after.org_id)
     await notifyIssueUpdate(ctx, { before, after, actor: me, now, preload })
     await logActivity(ctx, {

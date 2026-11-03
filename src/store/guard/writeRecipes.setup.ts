@@ -268,6 +268,14 @@ const issue = (snap: Snapshot, id: string) => snap.issues.find((r) => r.id === i
 const profile = (snap: Snapshot, id: string) => snap.profiles.find((r) => r.id === id)!
 const str = (value: unknown) => String(value)
 
+/* The dates a Roadmap recipe plans a task on, as the server stores them,
+   and as the store's patch takes them. */
+const PLANNED = { start_week: '2026-11-02', end_week: '2026-11-09' }
+const planned = (P: Planner) => ({
+  start: P.isoToWeek(PLANNED.start_week),
+  end: P.isoToWeek(PLANNED.end_week),
+})
+
 /* A task the server creates: createIssueCore's defaults with the stamps of
    its clock. */
 const created = (snap: Snapshot, id: string, num: number, over: Partial<Row<'issues'>>) => {
@@ -1056,14 +1064,9 @@ export const recipes: Recipe[] = [
     what: 'a planning change on Roadmap',
     pause: 'P',
     prepare: (P) => P.roadmapContext(true, false),
-    act: (P) => P.updateIssue('QN-1', { remaining: 5 }),
+    act: (P) => P.updateIssue('QN-1', planned(P)),
     answers: { 'roadmap:change': () => ({ count: 1 }) },
-    truth: (snap) =>
-      Object.assign(issue(snap, 'task-a'), {
-        remaining_hours: 5,
-        remaining_set_at: SERVER,
-        updated_at: SERVER,
-      }),
+    truth: (snap) => Object.assign(issue(snap, 'task-a'), PLANNED, { updated_at: SERVER }),
   },
   {
     mutation: 'roadmap:undo',
@@ -1073,13 +1076,9 @@ export const recipes: Recipe[] = [
     // a saved Roadmap change to undo
     prepare: async (P, server) => {
       P.roadmapContext(true, false)
-      P.updateIssue('QN-1', { remaining: 5 })
+      P.updateIssue('QN-1', planned(P))
       await server.answer('roadmap:change', { count: 1 }, (snap) =>
-        Object.assign(issue(snap, 'task-a'), {
-          remaining_hours: 5,
-          remaining_set_at: SERVER,
-          updated_at: SERVER,
-        }),
+        Object.assign(issue(snap, 'task-a'), PLANNED, { updated_at: SERVER }),
       )
     },
     act: (P) => P.undoRoadmap(),

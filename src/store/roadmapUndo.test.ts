@@ -159,6 +159,12 @@ describe('roadmap undo through the client store', () => {
   const settled = () => vi.waitFor(() => expect(P.roadmapUndo.busy).toBe(false))
   const task = () => P.issues.find((item) => item.title === 'Planning task 1')!
   const latest = () => requests.at(-1)!
+  const iso = (week: number) => P.isoFromDate(P.weekToDate(week))
+  /** The dates `by` weeks after the ones `it` holds. */
+  const moved = (it: { start: number | null; end: number | null }, by: number) => ({
+    start: (it.start ?? 0) + by,
+    end: (it.end ?? 0) + by,
+  })
 
   it('expires a long-open visit without reviving its cleared server journal', async () => {
     await savePlan()
@@ -172,16 +178,19 @@ describe('roadmap undo through the client store', () => {
       'Roadmap undo history expired. Leave Roadmap and return to start a new history.',
       'info',
     )
-    P.updateIssue(task().id, { remaining: 16 })
+    P.updateIssue(task().id, moved(task(), 1))
     expect(latest().name).toBe('issues:update')
     latest().resolve(null)
     await settled()
   })
 
+  /** Saves a date change of the first task in the visit's history. */
   async function savePlan() {
-    P.updateIssue(task().id, { remaining: 12 })
+    const plan = moved(task(), 1)
+    P.updateIssue(task().id, plan)
     expect(latest().name).toBe('roadmap:change')
-    snap.issues[0].remaining_hours = 12
+    snap.issues[0].start_week = iso(plan.start)
+    snap.issues[0].end_week = iso(plan.end)
     publish(structuredClone(snap))
     latest().resolve({ count: 1 })
     await settled()
@@ -241,13 +250,13 @@ describe('roadmap undo through the client store', () => {
   })
 
   it('keeps a late response from an earlier visit out of a newly entered roadmap', async () => {
-    P.updateIssue(task().id, { remaining: 12 })
+    P.updateIssue(task().id, moved(task(), 1))
     const earlier = latest()
     expect(P.roadmapUndo).toEqual({ count: 0, busy: true, disabled: false })
 
     P.roadmapContext(false, false)
     P.roadmapContext(true, false)
-    P.updateIssue(task().id, { remaining: 16 })
+    P.updateIssue(task().id, moved(task(), 1))
     const current = latest()
     expect(current.args.session_id).not.toBe(earlier.args.session_id)
 
@@ -275,21 +284,22 @@ describe('roadmap undo through the client store', () => {
     expect(P.roadmapUndo.count).toBe(1)
 
     P.roadmapContext(true, true)
-    P.updateIssue(task().id, { remaining: 20 })
+    const planned = { start: task().start, end: task().end }
+    P.updateIssue(task().id, moved(planned, 1))
     expect(latest().name).toBe('issues:update')
-    expect(task().remaining).toBe(20)
+    expect(task()).toMatchObject(moved(planned, 1))
     // The refusal changes no server data, so there is no new snapshot to
     // rescue the optimistic value: rollback must use the last saved one.
     latest().reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
     await settled()
-    expect(task().remaining).toBe(12)
+    expect(task()).toMatchObject(planned)
     expect(showToast).toHaveBeenCalledWith(
       "You don't have permission for that. Change reverted.",
       'error',
     )
     expect(P.roadmapUndo).toEqual({ count: 1, busy: false, disabled: false })
 
-    P.updateIssue(task().id, { remaining: 24 })
+    P.updateIssue(task().id, moved(planned, 2))
     expect(latest().name).toBe('issues:update')
     latest().resolve(null)
     await settled()
@@ -299,7 +309,7 @@ describe('roadmap undo through the client store', () => {
     P.undoRoadmap(true)
     expect(requests).toHaveLength(sent)
 
-    P.updateIssue(task().id, { remaining: 28 })
+    P.updateIssue(task().id, moved(planned, 3))
     expect(latest().name).toBe('issues:update')
     latest().resolve(null)
     await settled()
@@ -348,25 +358,29 @@ describe('roadmap undo through the client store', () => {
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })
   })
 
-  it('sends the hours on screen as expected and paints them rounded', () => {
+  it('sends Remaining as an ordinary task write, which ends the history once it saves', async () => {
+    await savePlan()
     P.updateIssue(task().id, { remaining: 9.04 })
     expect(task().remaining).toBe(9)
-    expect(latest().name).toBe('roadmap:change')
-    expect(latest().args.operations).toEqual([
-      {
-        kind: 'task',
-        id: task().uuid,
-        patch: { remaining_hours: 9 },
-        expected: { remaining_hours: 8 },
-      },
+    expect(latest()).toMatchObject({ name: 'issues:update', args: { id: task().uuid } })
+    // rounded as the server stores them, with the hours on screen as expected
+    expect([latest().args.patch, latest().args.expected]).toEqual([
+      { remaining_hours: 9 },
+      { remaining_hours: 8 },
     ])
+    expect(P.roadmapUndo).toEqual({ count: 1, busy: true, disabled: false })
+    latest().resolve(null)
+    await settled()
+    expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: true })
   })
 
   it('drops a planning no-op during trouble and keeps a saved edit on screen', async () => {
-    // someone else stored these hours meanwhile, so the server changes
+    // someone else stored these dates meanwhile, so the server changes
     // nothing and answers the unchanged history count
-    P.updateIssue(task().id, { remaining: 9 })
+    const planned = { start: task().start, end: task().end }
+    P.updateIssue(task().id, moved(planned, 1))
     const change = latest()
+    expect(change.name).toBe('roadmap:change')
     const other = P.issues.find((item) => item.title === 'Planning task 2')!
     P.updateIssue(other.id, { title: 'Order the gaskets' })
     const rename = latest()
@@ -377,8 +391,8 @@ describe('roadmap undo through the client store', () => {
     change.resolve({ count: 0 })
     await settled()
     expect(P.issues.some((item) => item.title === 'Order the gaskets')).toBe(true)
-    // the server changed nothing, so the hours last delivered are right
-    expect(task().remaining).toBe(8)
+    // the server changed nothing, so the dates last delivered are right
+    expect(task()).toMatchObject(planned)
   })
 
   it('rolls back a refused roadmap change and the group span that followed it without another snapshot', async () => {
@@ -440,8 +454,8 @@ describe('roadmap undo through the client store', () => {
     let batched: Promise<boolean>[] = []
     P.batchRoadmapChanges(() => {
       batched = [
-        P.updateIssue(first.id, { remaining: 12 }),
-        P.updateIssue(second.id, { remaining: 16 }),
+        P.updateIssue(first.id, moved(first, 1)),
+        P.updateIssue(second.id, moved(second, 2)),
       ]
     })
     expect(requests).toHaveLength(2)
@@ -451,22 +465,26 @@ describe('roadmap undo through the client store', () => {
 
   it('groups a planning action into one step and waits for all saves before undo or revert all', async () => {
     const [first, second] = P.issues
+    const plan = (it: typeof first, by: number) => ({
+      start_week: iso(moved(it, by).start),
+      end_week: iso(moved(it, by).end),
+    })
     P.batchRoadmapChanges(() => {
-      P.updateIssue(first.id, { remaining: 12 })
-      P.updateIssue(second.id, { remaining: 16 })
+      P.updateIssue(first.id, moved(first, 1))
+      P.updateIssue(second.id, moved(second, 2))
     })
     expect(requests).toHaveLength(1)
     expect(latest()).toMatchObject({
       name: 'roadmap:change',
       args: {
         operations: [
-          { kind: 'task', id: first.uuid, patch: { remaining_hours: 12 } },
-          { kind: 'task', id: second.uuid, patch: { remaining_hours: 16 } },
+          { kind: 'task', id: first.uuid, patch: plan(first, 1) },
+          { kind: 'task', id: second.uuid, patch: plan(second, 2) },
         ],
       },
     })
     const batch = latest()
-    P.updateIssue(first.id, { remaining: 20 })
+    P.updateIssue(first.id, moved(first, 3))
     const next = latest()
     P.undoRoadmap()
     expect(requests).toHaveLength(2)
@@ -489,13 +507,13 @@ describe('roadmap undo through the client store', () => {
     expect(P.roadmapUndo.busy).toBe(true)
     P.undoRoadmap(true)
     expect(requests).toHaveLength(3)
-    snap.issues[0].remaining_hours = 12
-    snap.issues[1].remaining_hours = 16
+    Object.assign(snap.issues[0], plan(first, 1))
+    Object.assign(snap.issues[1], plan(second, 2))
     publish(structuredClone(snap))
     latest().resolve({ count: 1 })
     await settled()
-    expect(P.issueById[first.id].remaining).toBe(12)
-    expect(P.issueById[second.id].remaining).toBe(16)
+    expect(P.issueById[first.id]).toMatchObject(moved(first, 1))
+    expect(P.issueById[second.id]).toMatchObject(moved(second, 2))
     expect(P.roadmapUndo.count).toBe(1)
 
     P.undoRoadmap(true)
@@ -503,13 +521,13 @@ describe('roadmap undo through the client store', () => {
       name: 'roadmap:undo',
       args: { session_id: batch.args.session_id, all: true },
     })
-    snap.issues.forEach((item) => {
-      item.remaining_hours = 8
-    })
+    Object.assign(snap.issues[0], plan(first, 0))
+    Object.assign(snap.issues[1], plan(second, 0))
     publish(structuredClone(snap))
     latest().resolve({ count: 0 })
     await settled()
-    expect(P.issues.map((item) => item.remaining)).toEqual([8, 8])
+    expect(P.issueById[first.id]).toMatchObject(moved(first, 0))
+    expect(P.issueById[second.id]).toMatchObject(moved(second, 0))
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: false })
   })
 })

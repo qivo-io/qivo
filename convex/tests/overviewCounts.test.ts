@@ -171,16 +171,12 @@ describe('overview counts', () => {
     await machine(b.num, { archived: false })
     await exact('a machine restore')
 
-    // the Roadmap and its undo
+    // the Roadmap and its undo, which write a task's dates only
     const session_id = uuid()
     await as(t, f.user).mutation(api.roadmap.change, {
       session_id,
       operations: [
-        {
-          kind: 'task',
-          id: b.id,
-          patch: { start_week: '2026-01-05', end_week: '2026-01-12', remaining_hours: 7.5 },
-        },
+        { kind: 'task', id: b.id, patch: { start_week: '2026-01-05', end_week: '2026-01-12' } },
       ],
     })
     await exact('a Roadmap change')

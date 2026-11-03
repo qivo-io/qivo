@@ -7787,12 +7787,10 @@ export const PLANNER = {
         }
       },
     }
-    // No Roadmap control writes Remaining since Update estimates went, but a
-    // Remaining-only write made while the Roadmap records still joins its
-    // history, as it did for tabs loaded before that release.
-    const planningOnly = Object.keys(wire).every((key) =>
-      ['start_week', 'end_week', 'remaining_hours'].includes(key),
-    )
+    // Only a write of dates alone joins the Roadmap's history. Remaining
+    // takes the ordinary write like any other field, so a saved one ends
+    // the history (isTaskContentWrite).
+    const planningOnly = Object.keys(wire).every((key) => ['start_week', 'end_week'].includes(key))
     const over = overOf('issues', row, Object.keys(wire), opts.seen)
     const saved =
       (planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }, view, over)) ||

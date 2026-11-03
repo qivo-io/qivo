@@ -141,7 +141,7 @@ import { emitTaskEvent } from './taskEvents'
 import { assertWeekPair, cleanRemaining, cleanTaskDate, roundTenths } from './taskValues'
 
 export { ISSUE_PREFIX } from '../lib/taskRefs'
-export { assertRemainingShape, assertWeekPair, cleanRemaining } from './taskValues'
+export { assertWeekPair } from './taskValues'
 
 /* num and org_id are immutable — structural here (no public patch carries
  * them), but the sentence stays exported for the machine surface and tests. */
