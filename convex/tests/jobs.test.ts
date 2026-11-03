@@ -561,7 +561,8 @@ describe('archiveDoneIssues keeps every leg bounded', () => {
     const parents: Doc<'issues'>[] = []
     for (let n = 0; n < 20; n++) {
       const parent = await plantIssue(t, { ...done, done_at: ago(50) })
-      // its text in the task row too, as until the description backfill's clear
+      // its text in the task row too, as a rollback to the second release
+      // writes it
       await plantCopiedIssue(t, {
         org_id: f.org.id,
         project_id: f.sub.id,
@@ -1012,8 +1013,8 @@ describe('archiveDoneIssues bounds each dispatcher step', () => {
   it('stops a step once the due tasks it read pass ARCHIVE_LIMITS.bytes, and the next checks the rest of its page', async () => {
     ARCHIVE_LIMITS.bytes = 150_000
     // Each due task holds a description of 20,000 CJK characters, about
-    // 60 KB, in its task row too, as until the description backfill's
-    // clear. The 12 together are about 720 KB, more than one step may read.
+    // 60 KB, in its task row too, as a rollback to the second release writes
+    // it. The 12 together are about 720 KB, more than one step may read.
     const t = limitedT({ bytesRead: 400_000 })
     const description = '漢'.repeat(20_000)
     for (let n = 0; n < 3; n++) {
@@ -2530,8 +2531,8 @@ describe('archiveDoneIssues within Convex limits', () => {
     const description = 'Checked against the bench results and signed off by the reviewer.'
     const done_at = new Date(Date.parse(cutoffAt(night(0))) + DAY / 2).toISOString()
     const projects = await plantLiveProjects(t, 10, 10)
-    // a task row and its description row each hold the text, as every
-    // deployment's do until the description backfill's clear. The window
+    // a task row and its description row each hold the text, as a rollback
+    // to the second release writes them, the heaviest case. The window
     // takes three steps, two of them a full ARCHIVE_LIMITS.tasks.
     for (let from = 0; from < 1100; from += 550)
       await t.run(async (ctx) => {

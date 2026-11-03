@@ -673,7 +673,8 @@ describe('restoring a task item', () => {
     const task = await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: parent.id })
     await deleteTask(t, f, task.id)
     // three subtasks of about 6 KB each, the text in their task rows too,
-    // as until the description backfill's clear, past a count bound of 10 KB
+    // as a rollback to the second release writes it, past a count bound of
+    // 10 KB
     for (let i = 0; i < 3; i++)
       await plantCopiedIssue(t, {
         org_id,
@@ -2551,8 +2552,8 @@ describe('parents outside a restored project', () => {
   const QUARTER = { bytesRead: (16 * MIB) / 4, step: DEFAULT_BUDGET.bytes / 4 }
 
   /** A chain of `n` tasks in Firmware, each with `description` in its
-   * description row and its task row, as every deployment holds them until
-   * the description backfill's clear, top first. Answers its lowest task. */
+   * description row and its task row, as a rollback to the second release
+   * writes them, top first. Answers its lowest task. */
   async function chainOf(t: T, f: OrgFixture, n: number, description = '') {
     let low: Doc<'issues'> | undefined
     for (let i = 0; i < n; i++)

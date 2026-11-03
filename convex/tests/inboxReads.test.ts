@@ -489,8 +489,8 @@ describe('the unread summary', () => {
     const t = newT()
     const f = await withOrg(t)
     // 20,000 characters of three bytes each, about 60 KB a task, in the
-    // task row too, as every deployment holds them until the description
-    // backfill's clear
+    // task row too, as a rollback to the second release writes them, the
+    // heaviest case
     const description = '語'.repeat(20_000)
     await plantItems(t, f, f.guest, 100, f.sub.id, { description }, 10)
     await copyTaskTexts(t, f.org.id)

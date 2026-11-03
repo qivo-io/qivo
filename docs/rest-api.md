@@ -1137,10 +1137,12 @@ literal. A `search` holds at most 200 characters, on active and archived
 lists alike, and a longer one is a `400` with `a search must be at most 200
 characters. Search for fewer words.` A search of active tasks reads, in list
 order, the label names of the tasks their other fields do not match, then
-the descriptions of those their labels do not match either. It goes on
-across pages like any list, so a search that matches few tasks, such as one
-by task ID, may answer several short or empty pages with a `next_cursor`
-before it finds them.
+the descriptions of those their labels do not match either. It reads a
+task's labels only when one of the organization's label names contains a
+fragment of the search, or a part of one between `*` wildcards, or when the
+organization has more than 1,000 labels. It goes on across pages like any
+list, so a search that matches few tasks, such as one by task ID, may answer
+several short or empty pages with a `next_cursor` before it finds them.
 
 Active lists answer an object, the cursor first:
 
@@ -1186,7 +1188,8 @@ A page reads only the projects the list covers, side by side, and never
 tasks of projects you cannot read. In a very large organization a list can
 be refused when the request has no room for a page beside your projects and
 access, or when the list covers more projects than one page can open side
-by side. Name a project to list one project's tasks instead.
+by side. If the list covers too many projects, name a project to list one
+project's tasks instead.
 
 A `limit` that is not a whole number from 1 to 200 is a `400` with `limit
 must be a whole number of tasks from 1 to 200.` Until October 2026 a list
@@ -1200,8 +1203,10 @@ list are a `400`:
   next_cursor as cursor`
 - a `cursor` that is not the `next_cursor` of an earlier page of the same
   list: `cursor must be the next_cursor of an earlier page`
-- a list too large to read, as above: `the task list could not be read
-  within the request's limits; pass project to list one project's tasks`
+- a list too large to read, as above, for either cause: `the task list
+  could not be read within the request's limits; pass project to list one
+  project's tasks`. Naming a project helps only when the list covers too
+  many projects.
 
 Until November 2026 active lists answered an array paged with `offset`, a
 `cursor` without `archived=true` was a `400`, and every request read the
@@ -1231,11 +1236,9 @@ again from the first page. A page can hold fewer than `limit` tasks, or none,
 while `next_cursor` is set, because each page reads a bounded amount however
 large the archive is. Tasks archived after you start paging appear at the
 start of the list, so start again to see them. If an archived group has more
-tasks under it than one request can read, such as thousands of subtasks, or
-hundreds with very long descriptions until the deployment's operator has run
-the one-time description clear, its row has `start_week` and `end_week`
-set to `null` and a `progress` of `0` of `0` with `partial: true`, so paging
-still moves past it.
+tasks under it than one request can read, such as thousands of subtasks, its
+row has `start_week` and `end_week` set to `null` and a `progress` of `0` of
+`0` with `partial: true`, so paging still moves past it.
 
 To find every archived task you can read, take two steps. First list
 projects with `GET /v1/projects` and `GET /v1/projects?archived=true`.
@@ -1248,13 +1251,9 @@ one sub-project's archive alone, name that sub-project.
 A page reads only the projects it lists, side by side, and never tasks of
 projects you cannot read. Unless you are an organization admin, a project
 with more than 200 projects to list, itself and its sub-projects you can
-read, is refused, and so is one whose sub-projects' newest archived tasks
-are too large to read side by side, such as about 130 or more with very long
-descriptions until the deployment's operator has run the one-time
-description clear. Name its sub-projects one at a time instead. An
-organization
-admin's request can read the organization's whole archive for such a
-project.
+read, is refused. Name its sub-projects one at a time instead. An
+organization admin's request can read the organization's whole archive for
+such a project.
 
 These requests are a `400`:
 
@@ -1696,20 +1695,19 @@ the caller, such as a subtask it cannot read, so the true completion is
 unknown. The app then says "Completion unknown".
 
 An archived group can have more tasks under it than one request can read,
-such as thousands of subtasks, or hundreds with very long descriptions until
-the deployment's operator has run the one-time description clear. So can an
-active group stored before the rule of one level of subtasks, whose
-subtasks have subtasks of their own. Its single-task shape then still lists
-its direct `subtasks`, but `start_week` and `end_week` are `null`,
-`progress` is `0` of `0` with `partial: true` and `group_remaining_hours` is
-`null`. An active task has at most 100 active subtasks, so it always lists
-all of them. When even an archived group's direct subtasks do not all fit,
-`subtasks` lists those of the first ones that do which the caller can read,
-and `has_more_subtasks` is `true`. Find the rest in the archived list of the
-group's top-level project (`?archived=true&project=<ref>`), which covers its
-sub-projects, where each one's `parent_id` names the group.
-`has_more_subtasks` is `false` on every other task. The answer of a `PATCH`,
-such as one that archives such a group, takes the same shape.
+such as thousands of subtasks. So can an active group stored before the rule
+of one level of subtasks, whose subtasks have subtasks of their own. Its
+single-task shape then still lists its direct `subtasks`, but `start_week`
+and `end_week` are `null`, `progress` is `0` of `0` with `partial: true` and
+`group_remaining_hours` is `null`. An active task has at most 100 active
+subtasks, so it always lists all of them. When even an archived group's
+direct subtasks do not all fit, `subtasks` lists those of the first ones that
+do which the caller can read, and `has_more_subtasks` is `true`. Find the
+rest in the archived list of the group's top-level project
+(`?archived=true&project=<ref>`), which covers its sub-projects, where each
+one's `parent_id` names the group. `has_more_subtasks` is `false` on every
+other task. The answer of a `PATCH`, such as one that archives such a group,
+takes the same shape.
 
 `delay` is the app's projected delay, the verdict its Roadmap and task
 window show:

@@ -71,7 +71,6 @@ import { insertUnique, insertUsed } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { Refusal } from '../lib/functions'
 import { MIB } from '../lib/limits'
-import { DOCUMENT_MAX_BYTES } from './comments'
 import { countsKept, tallyOverview } from './overviewCounts'
 
 type Reader = QueryCtx['db']
@@ -163,12 +162,14 @@ export async function withText(db: Reader, task: Doc<'issues'>): Promise<TaskWit
 /** What descriptionsOf charges one task's text besides its index range.
  * `documents` is its first row and, when that row's copies are stale, the
  * next (shownRow), and `bytes` is both at Convex's 1 MiB document size
- * limit (model/comments.ts DOCUMENT_MAX_BYTES). The bytes are written with
- * lib/limits.ts MIB, a module without imports, because model/comments.ts
- * imports this module through model/issues.ts, so a value taken from it
- * while this module loads is unset when model/comments.ts loads first, and
- * the charge would be NaN (tests/budgetModules.test.ts). Tests lower
- * `bytes` with the transaction's read limit. */
+ * limit (model/comments.ts DOCUMENT_MAX_BYTES). projectTextReader charges
+ * each row it may read one document's share of it, `bytes` over
+ * `documents`, the same 1 MiB. The bytes are written with lib/limits.ts
+ * MIB, a module without imports, because model/comments.ts imports this
+ * module through model/issues.ts, so a value taken from it while this
+ * module loads is unset when model/comments.ts loads first, and the charge
+ * would be NaN (tests/budgetModules.test.ts). Tests lower `bytes` with the
+ * transaction's read limit, which lowers both readers' charges alike. */
 export const TEXT_READ = { documents: 2, bytes: 2 * MIB }
 
 /* How many tasks' texts, each one index range and TEXT_READ, the reads left
@@ -266,8 +267,10 @@ export type RangeStep = 'read' | 'missing' | 'done' | 'full'
  * `missing`, for the caller to read on its own.
  *
  * A step is one index range, read a row at a time, and it checks `room`
- * before the range and as its rows add up, so it passes `room` by one row
- * at most. */
+ * before the range and as its rows add up, charging each row it may read
+ * one document of TEXT_READ (`bytes` over `documents`, Convex's document
+ * size limit unless a test lowers it), so it passes `room` by one row at
+ * most while no row is larger than that charge. */
 export function projectTextReader(
   ctx: QueryCtx,
   tasks: readonly (TextOwner & Pick<Doc<'issues'>, '_creationTime'>)[],
@@ -305,15 +308,15 @@ export function projectTextReader(
       if (range.done) return 'missing'
       const m = await ctx.meta.getTransactionMetrics()
       if (room.ranges - m.databaseQueries.used < 1) return 'full'
-      // the rows the reads left under `room` hold at Convex's size limit,
-      // counted down and asked again once spent
+      // the rows the reads left under `room` hold at one document of
+      // TEXT_READ each, counted down and asked again once spent
       let allowance = 0
       const spend = async (): Promise<boolean> => {
         if (--allowance >= 0) return true
         const now = await ctx.meta.getTransactionMetrics()
         allowance = Math.min(
           room.documents - now.documentsRead.used,
-          Math.floor((room.bytes - now.bytesRead.used) / DOCUMENT_MAX_BYTES),
+          Math.floor((room.bytes - now.bytesRead.used) / (TEXT_READ.bytes / TEXT_READ.documents)),
         )
         return allowance-- > 0
       }

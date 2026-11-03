@@ -1614,8 +1614,8 @@ describe('projects.removalSummary', () => {
     REMOVAL_COUNT.bytes = DEFAULT_REMOVAL.bytes / 32
     const f = await withOrg(t)
     // 30 tasks at the 20,000-character description cap pass 512 KiB,
-    // their text in the task rows too, as until the description backfill's
-    // clear
+    // their text in the task rows too, as a rollback to the second release
+    // writes it
     const description = 'Measured on site. '.repeat(1112).slice(0, 20_000)
     for (let i = 0; i < 30; i++)
       await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description })

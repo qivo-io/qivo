@@ -1489,12 +1489,11 @@ describe('issues.archivedPage', () => {
         })
       }
     })
-    // each holds one archived task with a description of 2,000 characters,
-    // on its description row and in the copy on its task row that earlier
-    // releases wrote, as every deployment holds them until the description
-    // backfill's clear; the page's bytes are lowered to 48 KiB, which those
-    // copies pass as 200 descriptions at the cap in a three-byte script
-    // passed the real 8 MiB
+    // each holds one archived task with a description of 2,000 characters
+    // on its description row; the page's bytes are lowered to 48 KiB, which
+    // the copies a rollback to the second release writes on the task rows
+    // pass as 200 descriptions at the cap in a three-byte script passed the
+    // real 8 MiB
     const text = ORDINARY.repeat(25).slice(0, 2_000)
     ARCHIVE_PAGE.bytes = 48 * 1024
     const tasks: string[] = []
@@ -1542,11 +1541,14 @@ describe('issues.archivedPage', () => {
           bytes: m.bytesRead.used,
         }
       })
-    // once the backfill's clear has taken the text off the task rows, the
-    // 200 newest tasks read side by side well inside the page
+    // with the task rows as the backfill's clear leaves them, without the
+    // text, the newest tasks of TBED's 30 sub-projects read side by side
+    // well inside the page
     const cleared = await measured()
     expect(cleared).toMatchObject({ rows: 25, tooWide: false })
     expect(cleared.bytes).toBeLessThan(2 << 20)
+    // the copy a rollback to the second release writes on each task row,
+    // the heaviest case
     await copyTaskTexts(t, f.org.id, tasks)
     const full = await measured()
     // 30 newest tasks of about 2.3 KB pass the page's 48 KiB, so the page

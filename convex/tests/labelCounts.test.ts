@@ -413,9 +413,9 @@ describe('label counts', () => {
     const org_id = f.org.id
     Object.assign(COUNT_PAGE, { bytes: 100_000 })
     const label = await plantLabel(t, org_id, 'Long')
-    // descriptions over what the app takes now, in the task rows, as
-    // earlier releases stored them and every deployment holds them until
-    // the description backfill's clear
+    // descriptions over what the app takes now, as releases before the caps
+    // stored them, in the task rows too, the copy a rollback to the second
+    // release writes, the heaviest case
     for (let n = 0; n < 3; n++)
       await plantLabelled(t, f, [label], { description: 'x'.repeat(60_000) })
     await copyTaskTexts(t, org_id)

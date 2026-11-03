@@ -79,7 +79,7 @@ beforeEach(async () => {
   await act(async () =>
     root.render(
       <TooltipProvider>
-        <RemainingInput hook="sync" it={task} title="Remaining" onCommit={onCommit} />
+        <RemainingInput it={task} title="Remaining" onCommit={onCommit} />
       </TooltipProvider>,
     ),
   )

@@ -904,31 +904,44 @@ describe('a removal of many people', () => {
 })
 
 describe('working out sight for a removal', () => {
-  it("checks the room every 500 rows of one person's grants, not only before them", async () => {
+  it("checks the room every LEVELS_READ.guardRows rows of one person's grants, not only before them", async () => {
     const t = newT()
     const f = await withOrg(t)
-    // the read counts rows, so 1,200 grant rows on one project will do
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 1200; i++)
-        await ctx.db.insert('project_access', {
-          project_id: f.hidden.id,
-          profile_id: f.agent.id,
-          level: 'viewer',
+    // a Viewer grant on each of 12 sub-projects, 3 under each of 4 new
+    // top-level projects, the everyday count, read 5 rows between two
+    // checks instead of 500
+    for (let i = 0; i < 4; i++) {
+      const top = await plantProject(t, { org_id: f.org.id })
+      for (let s = 0; s < 3; s++) {
+        const sub = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: top.id })
+        await t.run((ctx) =>
+          ctx.db.insert('project_access', {
+            project_id: sub.id,
+            profile_id: f.agent.id,
+            level: 'viewer',
+          }),
+        )
+      }
+    }
+    const before = { ...LEVELS_READ }
+    LEVELS_READ.guardRows = 5
+    try {
+      const checks = await t.run(async (ctx) => {
+        const projects = await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+          .collect()
+        let n = 0
+        await projectLevelsForPeople(ctx, [f.agent], projects, async () => {
+          n++
         })
-    })
-    const checks = await t.run(async (ctx) => {
-      const projects = await ctx.db
-        .query('projects')
-        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
-        .collect()
-      let n = 0
-      await projectLevelsForPeople(ctx, [f.agent], projects, async () => {
-        n++
+        return n
       })
-      return n
-    })
-    // before the grants, after 500 and 1,000 of them, and before memberships
-    expect(checks).toBe(4)
+      // before the grants, after 5 and 10 of them, and before memberships
+      expect(checks).toBe(4)
+    } finally {
+      Object.assign(LEVELS_READ, before)
+    }
   })
 })
 

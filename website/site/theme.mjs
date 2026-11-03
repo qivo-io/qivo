@@ -299,14 +299,14 @@ button { font: inherit; cursor: pointer; }
 }
 .media-roadmap img {
   position: absolute;
-  width: 125%;
+  width: 126%;
   max-width: none;
   height: auto;
   top: -3%;
-  left: -25%;
+  left: -26%;
 }
 .media-capacity {
-  aspect-ratio: 2.1;
+  aspect-ratio: 3;
 }
 .media-capacity img {
   position: absolute;

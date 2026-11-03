@@ -596,8 +596,8 @@ describe('a move, archive or parent change too large for one transaction', () =>
     const short = await plantIssue(t, base)
     await plantIssue(t, { ...base, parent_id: short.id, description: 'Notes.' })
     const long = await plantIssue(t, base)
-    // its task row holds the text, as every deployment's do until the
-    // description backfill's clear
+    // its task row holds the text, as a rollback to the second release
+    // writes it
     await plantCopiedIssue(t, { ...base, parent_id: long.id, description: 'x'.repeat(7000) })
     const other = await plantIssue(t, { ...base, project_id: f.sub2.id })
     const another = await plantIssue(t, base)
@@ -625,8 +625,8 @@ describe('a move, archive or parent change too large for one transaction', () =>
 describe('a parent whose subtasks are too large to count', () => {
   it('refuses with the plain sentence under a real read limit, and changes nothing', async () => {
     // ten subtasks of about 6 KB, each description an ordinary text of 6,000
-    // characters in the task row too, as until the description backfill's
-    // clear, read within a limit of 66 KB with SUBTREE_ROOM.bytes at a
+    // characters in the task row too, as a rollback to the second release
+    // writes it, read within a limit of 66 KB with SUBTREE_ROOM.bytes at a
     // tenth: the count asks once the nine rows before it may hold those
     // bytes, and is past the room by then
     const t = newT({ transactionLimits: { bytesRead: 66_000 } })

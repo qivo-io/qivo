@@ -1838,18 +1838,16 @@ out subtasks in archived projects while the group's project is active, and
 stops at a subtask you cannot read.
 
 An archived group can have more tasks under it than one request can read,
-such as thousands of subtasks, or hundreds with very long descriptions until
-the deployment's operator has run the one-time description clear. So can an
-active group stored before the rule of one level of subtasks, whose
-subtasks have subtasks of their own. `get_task` then still lists its direct
-`subtasks`, but `start_week` and `end_week` are `null`, `progress` is `0` of
-`0` with `partial: true` and `group_remaining_hours` is `null`. An active
-task has at most 100 active subtasks, so it always lists all of them. When
-even an archived group's direct subtasks do not all fit, `subtasks` lists
-those of the first ones that do which you can read, and `has_more_subtasks`
-is `true`. Find the rest with `list_tasks` and
-`archived: true` for the group's top-level project, which covers its
-sub-projects, where each one's `parent_id` names the group.
+such as thousands of subtasks. So can an active group stored before the rule
+of one level of subtasks, whose subtasks have subtasks of their own.
+`get_task` then still lists its direct `subtasks`, but `start_week` and
+`end_week` are `null`, `progress` is `0` of `0` with `partial: true` and
+`group_remaining_hours` is `null`. An active task has at most 100 active
+subtasks, so it always lists all of them. When even an archived group's
+direct subtasks do not all fit, `subtasks` lists those of the first ones that
+do which you can read, and `has_more_subtasks` is `true`. Find the rest with
+`list_tasks` and `archived: true` for the group's top-level project, which
+covers its sub-projects, where each one's `parent_id` names the group.
 `has_more_subtasks` is `false` on every other task.
 
 `list_tasks` answers active tasks as an object, cursor first:
@@ -1885,9 +1883,12 @@ alike, and a longer one is refused with `a search must be at most 200
 characters. Search for fewer words.`, before the cursor or the page is
 read. A `search` of active tasks reads, in list order, the label names of
 the tasks their other fields do not match, then the descriptions of those
-their labels do not match either. It goes on across pages like any list, so
-a search that matches few tasks, such as one by task ID, may answer several
-short or empty pages with a `next_cursor` before it finds them.
+their labels do not match either. It reads a task's labels only when one of
+the organization's label names contains a fragment of the search, or when
+the organization has more than 1,000 labels. It goes on across pages like
+any list, so a search that matches few tasks, such as one by task ID, may
+answer several short or empty pages with a `next_cursor` before it finds
+them.
 
 A cursor works only for the organization, caller, project, filters and
 search it came from, whether you name the project by number, key or uuid. A
@@ -1906,15 +1907,18 @@ A page reads only the projects the list covers, side by side, and never
 tasks of projects you cannot read. In a very large organization a list can
 be refused when the call has no room for a page beside your projects and
 access, or when the list covers more projects than one page can open side
-by side. Name a project to list one project's tasks instead.
+by side. If the list covers too many projects, name a project to list one
+project's tasks instead.
 
 These active list calls are refused: an `offset` other than `0`, negative
 ones included (`offset does not apply to active tasks; pass next_cursor as
 cursor`), a `cursor` that is not the `next_cursor` of an earlier page of the
 same list (`cursor must be the next_cursor of an earlier page`) and a list
-too large to read, as above (`the task list could not be read within the
-request's limits; pass project to list one project's tasks`). A fractional
-`offset` is refused by the input schema before the tool runs.
+too large to read, as above, for either cause (`the task list could not be
+read within the request's limits; pass project to list one project's
+tasks`). Naming a project helps only when the list covers too many
+projects. A fractional `offset` is refused by the input schema before the
+tool runs.
 
 With `archived: true` it lists archived tasks one project at a time and
 needs `project`. Naming a project lists its archived tasks and those of all
@@ -1938,10 +1942,9 @@ hold fewer than `limit` tasks, or none, while `next_cursor` is set, because
 each page reads a bounded amount however large the archive is. Tasks archived
 after you start paging appear at the start of the list, so start again to see
 them. If an archived group has more tasks under it than one request can read,
-such as thousands of subtasks, or hundreds with very long descriptions until
-the deployment's operator has run the one-time description clear, its row
-has `start_week` and `end_week` set to `null` and a `progress` of `0` of `0`
-with `partial: true`, so paging still moves past it.
+such as thousands of subtasks, its row has `start_week` and `end_week` set to
+`null` and a `progress` of `0` of `0` with `partial: true`, so paging still
+moves past it.
 
 To find every archived task you can read, take two steps. First call
 `list_projects`, once without arguments and once with `archived: true`.
@@ -1954,12 +1957,9 @@ read one sub-project's archive alone, name that sub-project.
 A page reads only the projects it lists, side by side, and never tasks of
 projects you cannot read. Unless you are an organization admin, a project
 with more than 200 projects to list, itself and its sub-projects you can
-read, is refused, and so is one whose sub-projects' newest archived tasks
-are too large to read side by side, such as about 130 or more with very long
-descriptions until the deployment's operator has run the one-time
-description clear. Name its sub-projects one at a time instead. An
-organization
-admin's call can read the organization's whole archive for such a project.
+read, is refused. Name its sub-projects one at a time instead. An
+organization admin's call can read the organization's whole archive for such
+a project.
 
 These calls are refused: `archived: true` without `project` (`archived:
 true needs project, because archived tasks are listed one project at a

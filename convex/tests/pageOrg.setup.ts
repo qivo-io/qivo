@@ -1,15 +1,18 @@
-/* The organization of the active task page measurements
- * (convex/tests/activeTaskPagesScale.test.ts), built at the sizes a case
- * asks for, at most the design size, with ordinary text, and the reads of
- * one page with what it read. Named *.setup.ts so the Convex CLI skips it
- * (see helpers.setup.ts). */
+/* The organization of the active and archived task page measurements
+ * (convex/tests/activeTaskPagesScale.test.ts and
+ * archivedTaskPagesScale.test.ts), built at the sizes a case asks for, at
+ * most the design size, with ordinary text, and the reads of one page with
+ * what it read. Named *.setup.ts so the Convex CLI skips it (see
+ * helpers.setup.ts). */
 /// <reference types="vite/client" />
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { newWindowKey } from '../lib/db'
+import { rosterNames } from '../lib/archivedTasks'
+import { byId, newWindowKey } from '../lib/db'
 import { MIB } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
+import { listIssues as mcpListIssues } from '../machine/mcp'
 import { listIssues, listProjects } from '../machine/rest'
 import {
   NOW,
@@ -22,6 +25,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import type { McpArgs } from './taskPages.setup'
 
 /* What one page read, as Convex counts it, and what it answered. */
 export type Figures = {
@@ -33,9 +37,20 @@ export type Figures = {
   next: boolean
 }
 
-/* Prints what a page read, the figures ACTIVE_PAGE's docstring quotes. */
-export const record = (name: string, figures: Figures) =>
-  console.log(`active page figures, ${name}:`, JSON.stringify(figures))
+/* Prints what a page read, the figures ACTIVE_PAGE's docstring quotes, or
+ * ARCHIVE_PAGE's for an archived page. */
+export const record = (name: string, figures: Figures, list: 'active' | 'archived' = 'active') =>
+  console.log(`${list} page figures, ${name}:`, JSON.stringify(figures))
+
+/* What the query has read so far, as Convex counts it. */
+async function readsSoFar(ctx: QueryCtx) {
+  const m = await ctx.meta.getTransactionMetrics()
+  return {
+    ranges: m.databaseQueries.used,
+    documents: m.documentsRead.used,
+    mib: Math.round((m.bytesRead.used / MIB) * 100) / 100,
+  }
+}
 
 /* A query's handler, run inside a test's own transaction so its metrics
  * can be read after it. */
@@ -51,6 +66,7 @@ export type RestArgs = {
   limit?: string
   cursor?: string
   status?: string
+  archived?: string
 }
 export type RestPage = { next_cursor: string | null; tasks: { id: string; delay: unknown }[] }
 
@@ -63,13 +79,30 @@ export async function readPage(t: T, args: Omit<RestArgs, 'today' | 'access'>) {
       access: 'read',
       ...args,
     })
-    const m = await ctx.meta.getTransactionMetrics()
     const figures: Figures = {
-      ranges: m.databaseQueries.used,
-      documents: m.documentsRead.used,
-      mib: Math.round((m.bytesRead.used / MIB) * 100) / 100,
+      ...(await readsSoFar(ctx)),
       rows: page.tasks.length,
       answer_kb: Math.round(JSON.stringify(page).length / 1024),
+      next: page.next_cursor !== null,
+    }
+    return { page, figures }
+  })
+}
+
+/* One MCP list_tasks page read in a query of its own, as readPage reads a
+ * REST page, the answer parsed. */
+export async function readMcpPage(t: T, args: Omit<McpArgs, 'today' | 'access'>) {
+  return await t.query(async (ctx) => {
+    const text = await handlerOf<McpArgs, string>(mcpListIssues)(ctx, {
+      today: TODAY,
+      access: 'read',
+      ...args,
+    })
+    const page = JSON.parse(text) as RestPage
+    const figures: Figures = {
+      ...(await readsSoFar(ctx)),
+      rows: page.tasks.length,
+      answer_kb: Math.round(text.length / 1024),
       next: page.next_cursor !== null,
     }
     return { page, figures }
@@ -84,12 +117,22 @@ export async function readBefore(t: T, callerId: string) {
       callerId,
       access: 'read',
     })
-    const m = await ctx.meta.getTransactionMetrics()
-    return {
-      ranges: m.databaseQueries.used,
-      documents: m.documentsRead.used,
-      mib: Math.round((m.bytesRead.used / MIB) * 100) / 100,
-    }
+    return await readsSoFar(ctx)
+  })
+}
+
+/* The reads before an archived page without a search: readBefore's, and
+ * the organization's roster and row, which lib/core.ts
+ * listArchivedIssuesCore reads before the page's budget starts. */
+export async function readArchivedBefore(t: T, caller: Doc<'profiles'>) {
+  return await t.query(async (ctx) => {
+    await handlerOf<{ callerId: string; access: 'read' }, unknown[]>(listProjects)(ctx, {
+      callerId: caller.id,
+      access: 'read',
+    })
+    await rosterNames(ctx, caller.org_id)
+    await byId(ctx, 'organizations', caller.org_id)
+    return await readsSoFar(ctx)
   })
 }
 
@@ -122,9 +165,36 @@ export type PageOrg = OrgFixture & {
   readable: Doc<'projects'>[]
 }
 
-/** The sizes of an organization of pageOrg, each at most its design size.
- * withOrg adds two live top-level projects, two live sub-projects and six
- * people. */
+/** The sizes of an organization of pageOrg. withOrg adds two live
+ * top-level projects, two live sub-projects under the first of them, five
+ * people of the organization and a team, and pageOrg adds `member`. Before
+ * it plants anything, pageOrg refuses with a sentence any sizes that put a
+ * figure it builds past its design size (AGENTS.md, assertDesignSize),
+ * those rows and each group's subtasks counted, or that put an archived
+ * task figure at its design size, since tests never seed the full archived
+ * task figures:
+ *
+ * - top-level projects (`tops`, `archivedTops`): 200 live and 300 archived;
+ * - sub-projects (`subs`, `archivedSubs`): 500 live and 1,000 archived,
+ *   which with the top-level projects make the catalogue's 2,000;
+ * - sub-projects under one top-level project (`family`, and `subs` past it
+ *   spread over the others; `archivedSubs` spread over `archivedTops`): 30
+ *   live and 40 archived;
+ * - people (`people` or `owners`): 1,000;
+ * - teams (`teams` and `projectTeams`): 50, of them 5 that `member` belongs
+ *   to (`teams`) and 5 that share one project (`projectTeams` and one of
+ *   the member's);
+ * - projects one team shares (`oneTeam`, or the turns of `memberSubs`, all
+ *   of them for each of `projectTeams`): 50 live and 150 archived;
+ * - sub-projects `member` reads (`memberSubs`, or `subs` and
+ *   `archivedSubs` with `oneTeam`): 200 live and 500 archived;
+ * - tasks (`tasks`, `archived`), open, Done and archived: 300, 150 and
+ *   3,000 in one sub-project, 800, 200 and 10,000 in one top-level project
+ *   with its sub-projects, and 10,000, 5,000 and 100,000 in the
+ *   organization, the archived ones always below those figures.
+ *
+ * It does not check that a case raises one figure at a time and keeps the
+ * others at everyday values; each case keeps to that itself. */
 export type PageOrgSizes = {
   /** live top-level projects, at least 1 with any sub-project and at least
    * 2 when `subs` passes `family` */
@@ -157,7 +227,8 @@ export type PageOrgSizes = {
   people?: number
   /** active tasks spread over the live sub-projects */
   tasks: number
-  /** archived tasks beside them, which no page reads */
+  /** archived tasks beside them, which no active page reads, below each
+   * archived task figure */
   archived: number
   /** the people who own the tasks, 50 by default, each owning every 50th
    * task; given, each owns the tasks of a few sub-projects. At least 1
@@ -171,6 +242,41 @@ async function phase<R>(name: string, fn: () => Promise<R>): Promise<R> {
   const out = await fn()
   console.log(`page organization phase, ${name}: ${Date.now() - from} ms`)
   return out
+}
+
+/* The index among the live top-level projects of the one live sub-project
+ * `i` goes under: the first `family` under the first, the rest in turn
+ * under the others. */
+const topOf = (o: PageOrgSizes, family: number, i: number): number =>
+  i < family ? 0 : 1 + ((i - family) % Math.max(1, o.tops - 1))
+
+/* Whether active task `i` is Done, and whether it heads a group of
+ * GROUP_SIZE subtasks, which take its project and status. */
+const doneAt = (i: number): boolean => i % 5 === 0
+const groupAt = (i: number): boolean => i % 50 === 0
+const GROUP_SIZE = 5
+
+/* What withOrg plants in the organization beside pageOrg's rows: TBED and
+ * Skunkworks, Firmware and Board rev under TBED, five people and the team
+ * Hardware. pageOrg adds `member`. */
+const WITH_ORG = { tops: 2, subs: 2, people: 5, teams: 1 }
+
+/* The design size of each figure pageOrg builds, per organization (the
+ * design size paragraph of AGENTS.md), live and archived where both
+ * apply. */
+const DESIGN = {
+  projects: { live: 200, archived: 300 },
+  subProjects: { live: 500, archived: 1000 },
+  underOneProject: { live: 30, archived: 40 },
+  sharedWithOneTeam: { live: 50, archived: 150 },
+  readByOnePerson: { live: 200, archived: 500 },
+  people: 1000,
+  teams: 50,
+  teamsOfOnePerson: 5,
+  teamsOfOneProject: 5,
+  open: { subProject: 300, project: 800, org: 10_000 },
+  done: { subProject: 150, project: 200, org: 5_000 },
+  archived: { subProject: 3_000, project: 10_000, org: 100_000 },
 }
 
 /* A sub-project row of `top` numbered `i`, live or archived beneath an
@@ -229,6 +335,139 @@ function assertSizes(o: PageOrgSizes, family: number): void {
     )
 }
 
+/* Throws a sentence naming the figure `o` would put past its design size,
+ * or an archived task figure it would reach (PageOrgSizes), before pageOrg
+ * plants anything. It runs after assertSizes, so the projects, people and
+ * teams every size needs are there. */
+function assertDesignSize(o: PageOrgSizes, family: number): void {
+  const most = (figure: string, size: number, design: number) => {
+    if (size > design)
+      throw new Error(
+        `pageOrg builds at most the design size, and ${figure} would be ${size}, past ${design}`,
+      )
+  }
+  // tests never seed the full archived task figures (AGENTS.md)
+  const below = (figure: string, size: number, design: number) => {
+    if (size >= design)
+      throw new Error(
+        `pageOrg never seeds the full archived task figures, and ${figure} would be ${size}, not below ${design}`,
+      )
+  }
+  const archivedTops = o.archivedTops ?? 0
+  const archivedSubs = o.archivedSubs ?? 0
+  most(
+    "the live top-level projects, withOrg's 2 included,",
+    o.tops + WITH_ORG.tops,
+    DESIGN.projects.live,
+  )
+  most('the archived top-level projects', archivedTops, DESIGN.projects.archived)
+  most(
+    "the live sub-projects, withOrg's 2 included,",
+    o.subs + WITH_ORG.subs,
+    DESIGN.subProjects.live,
+  )
+  most('the archived sub-projects', archivedSubs, DESIGN.subProjects.archived)
+  const perTop = Array.from({ length: o.tops }, () => 0)
+  for (let i = 0; i < o.subs; i++) perTop[topOf(o, family, i)]++
+  most(
+    'the live sub-projects under one top-level project',
+    Math.max(0, ...perTop),
+    DESIGN.underOneProject.live,
+  )
+  most(
+    'the archived sub-projects under one top-level project',
+    archivedTops > 0 ? Math.ceil(archivedSubs / archivedTops) : 0,
+    DESIGN.underOneProject.archived,
+  )
+  most(
+    "the people, withOrg's 5 and the member included,",
+    Math.max(o.people ?? 0, o.owners ?? 50) + WITH_ORG.people + 1,
+    DESIGN.people,
+  )
+  const teams = o.teams ?? 3
+  const others = o.projectTeams ?? 0
+  most("the teams, withOrg's 1 included,", teams + others + WITH_ORG.teams, DESIGN.teams)
+  most('the teams the member belongs to', teams, DESIGN.teamsOfOnePerson)
+  if (o.oneTeam === true) {
+    most('the live projects one team shares', o.tops, DESIGN.sharedWithOneTeam.live)
+    most('the archived projects one team shares', archivedTops, DESIGN.sharedWithOneTeam.archived)
+    most('the live sub-projects the member reads', o.subs, DESIGN.readByOnePerson.live)
+    most(
+      'the archived sub-projects the member reads',
+      archivedSubs,
+      DESIGN.readByOnePerson.archived,
+    )
+  } else {
+    // the member's teams share top-level projects in turn, each with every
+    // one of the other teams, until the member reads memberSubs
+    let shared = 0
+    let reads = 0
+    for (const count of perTop) {
+      if (reads >= (o.memberSubs ?? o.subs)) break
+      shared++
+      reads += count
+    }
+    most('the teams that share one project', shared > 0 ? 1 + others : 0, DESIGN.teamsOfOneProject)
+    most(
+      'the live projects one team shares',
+      others > 0 ? shared : Math.ceil(shared / Math.max(1, teams)),
+      DESIGN.sharedWithOneTeam.live,
+    )
+    most('the live sub-projects the member reads', reads, DESIGN.readByOnePerson.live)
+  }
+  // the active tasks and their groups' subtasks, by sub-project, and the
+  // organization's totals as they add up
+  const open = Array.from({ length: o.subs }, () => 0)
+  const done = Array.from({ length: o.subs }, () => 0)
+  let allOpen = 0
+  let allDone = 0
+  for (let i = 0; i < o.tasks; i++) {
+    const n = 1 + (groupAt(i) ? GROUP_SIZE : 0)
+    if (doneAt(i)) {
+      done[i % o.subs] += n
+      allDone += n
+    } else {
+      open[i % o.subs] += n
+      allOpen += n
+    }
+    most('the open tasks of the organization', allOpen, DESIGN.open.org)
+    most('the Done tasks of the organization', allDone, DESIGN.done.org)
+  }
+  below('the archived tasks of the organization', o.archived, DESIGN.archived.org)
+  // the archived tasks go to the live sub-projects in turn, so the first
+  // `rest` of them hold one more than the others
+  const each = o.subs > 0 ? Math.floor(o.archived / o.subs) : 0
+  const rest = o.subs > 0 ? o.archived % o.subs : 0
+  const archived = Array.from({ length: o.subs }, (_, s) => each + (s < rest ? 1 : 0))
+  most('the open tasks of one sub-project', Math.max(0, ...open), DESIGN.open.subProject)
+  most('the Done tasks of one sub-project', Math.max(0, ...done), DESIGN.done.subProject)
+  below(
+    'the archived tasks of one sub-project',
+    Math.max(0, ...archived),
+    DESIGN.archived.subProject,
+  )
+  const byTop = (perSub: readonly number[]) => {
+    const sums = Array.from({ length: o.tops }, () => 0)
+    for (const [s, n] of perSub.entries()) sums[topOf(o, family, s)] += n
+    return Math.max(0, ...sums)
+  }
+  most(
+    'the open tasks of one top-level project with its sub-projects',
+    byTop(open),
+    DESIGN.open.project,
+  )
+  most(
+    'the Done tasks of one top-level project with its sub-projects',
+    byTop(done),
+    DESIGN.done.project,
+  )
+  below(
+    'the archived tasks of one top-level project with its sub-projects',
+    byTop(archived),
+    DESIGN.archived.project,
+  )
+}
+
 /**
  * An organization at `o`'s sizes: the live top-level projects and their
  * sub-projects, the archived ones, `member` in teams that share top-level
@@ -239,12 +478,14 @@ function assertSizes(o: PageOrgSizes, family: number): void {
  * tasks beside them. No project_reach rows: a
  * list takes the caller's access from their grants and team shares
  * (lib/core.ts accessFlags), so active pages never read them. Sizes that
- * PageOrgSizes rules out throw a sentence naming the constraint before
- * anything is planted (assertSizes).
+ * PageOrgSizes rules out, or that pass the design size, throw a sentence
+ * naming the constraint or the figure before anything is planted
+ * (assertSizes, assertDesignSize).
  */
 export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
   const family = o.family ?? 3
   assertSizes(o, family)
+  assertDesignSize(o, family)
   const t = newT({ transactionLimits: true })
   const f = await withOrg(t)
   const tops: Doc<'projects'>[] = []
@@ -275,9 +516,7 @@ export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
       )
     await t.run(async (ctx) => {
       for (let i = 0; i < o.subs; i++) {
-        const top = (
-          i < family ? tops[0] : tops[1 + ((i - family) % Math.max(1, o.tops - 1))]
-        ) as Doc<'projects'>
+        const top = tops[topOf(o, family, i)] as Doc<'projects'>
         const _id = await ctx.db.insert('projects', subDoc(f.org.id, f.user.id, top, i))
         subs.push((await ctx.db.get(_id)) as Doc<'projects'>)
       }
@@ -382,7 +621,7 @@ export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
             project_id: sub.id,
             num: num++,
             title: TITLES[i % TITLES.length] as string,
-            status: i % 5 === 0 ? ('done' as const) : ('progress' as const),
+            status: doneAt(i) ? ('done' as const) : ('progress' as const),
             priority: 'medium' as const,
             paused: false,
             assignee_id: owner.id,
@@ -407,8 +646,8 @@ export async function pageOrg(o: PageOrgSizes): Promise<PageOrg> {
           })
           // every fiftieth task heads a group of five subtasks in its
           // project, which adds a tenth to the count
-          if (i % 50 === 0) {
-            for (let k = 0; k < 5; k++) {
+          if (groupAt(i)) {
+            for (let k = 0; k < GROUP_SIZE; k++) {
               const kid = uuid()
               await ctx.db.insert('issues', {
                 ...doc,

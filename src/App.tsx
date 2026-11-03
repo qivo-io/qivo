@@ -1289,7 +1289,7 @@ function App() {
     const onPop = (event: PopStateEvent) => {
       // a Remaining number typed on Team sync and not yet committed: history
       // unmounts its box without a blur, so commit it before the page moves
-      flushWalkInput('sync')
+      flushWalkInput()
       // same two grammars as the boot read, same order — Back can land on a
       // legacy entry from earlier in this session's history
       const r = parsePath(location.pathname) || parseHash(location.hash)

@@ -521,11 +521,9 @@ describe('a move that carries archived subtasks', () => {
 
   /* Plants `active` and `archived` subtasks of `parent` with ordinary text,
    * an 80-character title and `description`, one line unless given. Every
-   * task row holds the copy of the text the releases before the third
-   * wrote, the heaviest case, so each read of a task row reads the text
-   * too. The copy lasts where the clear has not run, and a rollback to the
-   * second release writes it again on each task it creates or whose
-   * description it edits, until the next clear.
+   * task row holds the copy of the text a rollback to the second release
+   * writes (helpers.setup.ts copyTaskTexts), the heaviest case the fixtures
+   * plant, so each read of a task row reads the text too.
    * convex/tests/descriptions.test.ts checks long descriptions under a
    * lowered read limit. */
   const plantFamily = async (
@@ -728,7 +726,7 @@ describe('deleting a task with archived subtasks', () => {
   it('resumes a step that failed halfway with a smaller page', async () => {
     Object.assign(ARCHIVED_DETACH, { page: 4, room: 0.99 })
     // each subtask's description of 5,000 characters is written again in
-    // its task row too, as until the description backfill's clear, so a
+    // its task row too, as a rollback to the second release leaves it, so a
     // page of four detaches passes this lowered write limit and the step
     // fails; the delete itself fits
     const fx = await setup(newT({ transactionLimits: { bytesWritten: 12 * 1024 } }))
