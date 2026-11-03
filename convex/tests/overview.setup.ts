@@ -139,15 +139,15 @@ export async function plantPeople(t: T, orgId: string, n: number): Promise<Doc<'
 const named = (name: string) => ({ name, name_key: nameKey(name) })
 
 /** `tops` top-level projects of `orgId`, each with `subs` sub-projects
- * that track delay, and `me` in three teams that share the top-level
- * projects in turn, so `me` reads every sub-project through its project's
- * share. */
+ * that track delay (or as many as `subs(i)` gives the top-level project
+ * numbered `i`), and `me` in three teams that share the top-level projects
+ * in turn, so `me` reads every sub-project through its project's share. */
 export async function plantShared(
   t: T,
   orgId: string,
   lead: Doc<'profiles'>,
   me: Doc<'profiles'>,
-  o: { tops: number; subs: number },
+  o: { tops: number; subs: number | ((top: number) => number) },
 ): Promise<{ tops: Doc<'projects'>[]; subs: Doc<'projects'>[] }> {
   const tops: Doc<'projects'>[] = []
   const planted: Doc<'projects'>[] = []
@@ -158,7 +158,8 @@ export async function plantShared(
       ...named(`Programme ${i}`),
     })
     tops.push(top)
-    for (let k = 0; k < o.subs; k++)
+    const subs = typeof o.subs === 'number' ? o.subs : o.subs(i)
+    for (let k = 0; k < subs; k++)
       planted.push(
         await plantProject(t, {
           org_id: orgId,
