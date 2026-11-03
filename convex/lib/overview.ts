@@ -2,8 +2,9 @@
  * projected delays, and its two task lists, through the shared view reader
  * (lib/viewReads.ts) and the counts every task writer keeps
  * (model/overviewCounts.ts). It holds the Overview's own rules: what each
- * figure counts, as src/views/overviewFigures.ts derives it in the app, the
- * lists' order, batches and positions, and the states.
+ * figure counts, as the app's store derives it from the workspace's tasks
+ * (src/store/overviewOracle.setup.ts, which src/store/overviewParity.test.ts
+ * compares), the lists' order, batches and positions, and the states.
  *
  * A scope is a top-level project with its visible live sub-projects, one
  * sub-project, or My view, the person's own tasks by the Reviewer rule

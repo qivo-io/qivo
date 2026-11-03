@@ -1,11 +1,11 @@
 /* The Overview's live queries, which answer one scope's summary, its
- * projected delays and its two task lists on the server. Nothing in the app
- * calls them yet; t3/limits-overview-view moves src/views/Overview.tsx onto
- * them. Readers and budgets are in lib/overview.ts, on the shared view
- * reader lib/viewReads.ts and the counts every task writer keeps
- * (model/overviewCounts.ts). A scope is a top-level project with its
- * visible live sub-projects, one sub-project, or My view across every seat
- * of the login.
+ * projected delays and its two task lists on the server. The app's Overview
+ * page reads them through the store (src/store/overviewLists.ts), its lists
+ * a batch at a time with fixed ends. Readers and budgets are in
+ * lib/overview.ts, on the shared view reader lib/viewReads.ts and the
+ * counts every task writer keeps (model/overviewCounts.ts). A scope is a
+ * top-level project with its visible live sub-projects, one sub-project,
+ * or My view across every seat of the login.
  *
  * - summary: the leaves by status and the paused leaves, from the counts,
  *   whether the scope holds a task, and Overdue, the tasks not done for the
