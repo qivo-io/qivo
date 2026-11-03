@@ -109,7 +109,7 @@ the Roadmap, the Inbox, Team sync and Projects. Going back to one shows it at
 once, scrolled where you left it, and changes made while it was out of sight
 follow right after. The Board checks which tasks it shows again when it
 shows, and the Overview asks for its figures and lists again, showing the
-ones it had as refreshing meanwhile. Both do the same when you return to a
+ones it had meanwhile. Both do the same when you return to a
 browser tab or desktop window you had hidden or minimized, where they stop
 updating meanwhile. The Overview,
 the Board and the Roadmap belong to the

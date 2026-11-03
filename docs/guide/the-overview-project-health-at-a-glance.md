@@ -42,8 +42,10 @@ the table.
 projects with delay tracking, tasks projected to miss it. Hover “projected
 to miss” for the projected finish week. **Paused tasks** lists work on hold.
 Each list shows its first 10 tasks, earliest due date first and tasks
-without a due date last, and **Load more** adds the next 10. Rows that
-change while you read stay in place, and none shows twice. Where Qivo
+without a due date last, and **Load more** adds the next 10. When a task
+changes while you read, its row moves to its new place in the order, which
+can be past the rows loaded so far, or leaves the list when the task no
+longer belongs in it. No row shows twice or is skipped. Where Qivo
 checked only part of a list in one request, the list says so and **Load
 more** continues from there. A task marked **risk unknown** needs another
 person's work that Qivo could not read, so it may not be late. After many
@@ -58,8 +60,8 @@ work, Overview says they are not available ([Who sees what](./who-sees-what-the-
 
 Overview stops updating while its page is hidden behind another one or the
 browser tab or desktop window is hidden or minimized. Shown again, it keeps
-the figures and rows it had, marked as refreshing, until the server's
-fresh answer arrives. After midnight it counts again for the new day.
+the figures and rows it had until the server's fresh answer arrives. After
+midnight it counts again for the new day.
 
 **Milestones** shows names, projects, calendar weeks, dates and relative
 timing, with the next milestone highlighted. Select **+** or a row to open
