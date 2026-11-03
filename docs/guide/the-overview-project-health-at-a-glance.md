@@ -86,5 +86,7 @@ week whose dates differ from the ones shown.
 
 When a scope has no task to summarize, for example a project without
 sub-projects or My view with nothing assigned to you, Overview says why
-once the server has answered. If the scope has milestones, **Milestones**
-stays below that note, and below the All projects list too.
+once the server has answered. All projects says so when you can see no
+project. If there are milestones to show, **Milestones** stays below that
+note and below the All projects list. Otherwise the note or the list is the
+whole page.
