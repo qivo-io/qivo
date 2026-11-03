@@ -44,7 +44,7 @@ import { weekLabel, weekPhrase } from './model/orgs'
 type Context = MutationCtx & { authUserId: string; myProfiles: Map<string, Doc<'profiles'>> }
 const TTL = 24 * 60 * 60 * 1000
 const LIMIT = 1000
-/* The task fields a visit journals and an undo restores: a task's dates.
+/* A visit journals, and an undo restores, only a task's dates.
  * Releases before the one that left Remaining to the ordinary task write
  * also journaled remaining_hours with remaining_set_at; restoreStep refuses
  * such an entry as expired. */
@@ -492,7 +492,7 @@ export const change = authedMutation({
   },
 })
 
-/* Exact restoration is deliberately internal to this endpoint: it writes
+/* Exact restoration is deliberately internal to this endpoint. It writes
  * back the journaled dates as they were. Validate the complete transaction,
  * then send normal notifications and activity for the actual reverse
  * changes. Each step restores only the rows it journaled. */
