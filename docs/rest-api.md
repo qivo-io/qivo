@@ -1137,10 +1137,12 @@ literal. A `search` holds at most 200 characters, on active and archived
 lists alike, and a longer one is a `400` with `a search must be at most 200
 characters. Search for fewer words.` A search of active tasks reads, in list
 order, the label names of the tasks their other fields do not match, then
-the descriptions of those their labels do not match either. It goes on
-across pages like any list, so a search that matches few tasks, such as one
-by task ID, may answer several short or empty pages with a `next_cursor`
-before it finds them.
+the descriptions of those their labels do not match either. It reads a
+task's labels only when one of the organization's label names contains a
+fragment of the search, or a part of one between `*` wildcards, or when the
+organization has more than 1,000 labels. It goes on across pages like any
+list, so a search that matches few tasks, such as one by task ID, may answer
+several short or empty pages with a `next_cursor` before it finds them.
 
 Active lists answer an object, the cursor first:
 

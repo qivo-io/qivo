@@ -1883,9 +1883,12 @@ alike, and a longer one is refused with `a search must be at most 200
 characters. Search for fewer words.`, before the cursor or the page is
 read. A `search` of active tasks reads, in list order, the label names of
 the tasks their other fields do not match, then the descriptions of those
-their labels do not match either. It goes on across pages like any list, so
-a search that matches few tasks, such as one by task ID, may answer several
-short or empty pages with a `next_cursor` before it finds them.
+their labels do not match either. It reads a task's labels only when one of
+the organization's label names contains a fragment of the search, or when
+the organization has more than 1,000 labels. It goes on across pages like
+any list, so a search that matches few tasks, such as one by task ID, may
+answer several short or empty pages with a `next_cursor` before it finds
+them.
 
 A cursor works only for the organization, caller, project, filters and
 search it came from, whether you name the project by number, key or uuid. A
