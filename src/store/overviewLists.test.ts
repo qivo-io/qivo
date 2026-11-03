@@ -127,8 +127,9 @@ function server(snap: Snapshot) {
   }
   const reads2 = createOverviewReads(transport)
   /** Answers every live read whose answer does not wait, and lets the
-      lists take them in, until nothing new is asked. */
-  const deliver = () => {
+      lists take them in, until nothing new is asked; `each` runs after
+      every round. */
+  const deliver = (each: () => void = () => {}) => {
     for (let round = 0; round < 20; round++) {
       let any = false
       for (const [slot, read] of reads) {
@@ -157,13 +158,14 @@ function server(snap: Snapshot) {
         any = true
       }
       reads2.settle()
+      each()
       if (!any) return
     }
   }
   /** Everything changed on the server: every live read answers again. */
-  const change = () => {
+  const change = (each?: () => void) => {
     for (const read of reads.values()) read.current = false
-    deliver()
+    deliver(each)
   }
   return { state, reads, transport, lists: reads2, deliver, change }
 }
@@ -524,6 +526,32 @@ describe('the retained cap', () => {
     const all = wholeIds(snap, 'paused', BASE(snap))
     const at = all.indexOf(ids(view)[0] as string)
     expect(ids(view)).toEqual(all.slice(at, at + ids(view).length))
+  })
+
+  it('gives a Load more up when its frozen read keeps splitting past the reads, offering it again', () => {
+    const snap = workspace(pausedTasks(95))
+    const s = server(snap)
+    s.lists.watch(BASE(snap), 1, 0)
+    s.deliver()
+    // the press's frozen read and next batch wait while a bulk edit moves
+    // 60 tasks into the pressed batch's span, so each half splits again
+    s.state.holding = () => true
+    s.lists.more('paused')
+    for (const t of snap.issues.slice(35)) t.due_date = '2026-11-05'
+    s.state.holding = () => false
+    const reads: number[] = []
+    s.change(() => reads.push(s.lists.view().paused.reads))
+    expect(Math.max(...reads)).toBeLessThanOrEqual(LIST_READS)
+    const view = s.lists.view().paused
+    // the open batch shows its current answer, and Load more goes on from it
+    expect(view.batches).toHaveLength(1)
+    expect(ids(view)).toEqual(wholeIds(snap, 'paused', BASE(snap)).slice(0, OVERVIEW_BATCH))
+    expect(view.more).toBe('ready')
+    s.lists.more('paused')
+    s.deliver()
+    expect(ids(s.lists.view().paused)).toEqual(
+      wholeIds(snap, 'paused', BASE(snap)).slice(0, 2 * OVERVIEW_BATCH),
+    )
   })
 })
 

@@ -28,7 +28,10 @@
      and merges included. Past either, a merge still on its way gives way
      first, then the list drops its first batches until both fit and says
      that earlier tasks are not shown, with a way back to the start, so
-     every task stays reachable by going on.
+     every task stays reachable by going on. Where only the open batch is
+     left and a Load more's frozen read keeps splitting past the reads, the
+     Load more gives way: the open batch takes its current answer and
+     offers Load more again.
    - A batch refused for its position, as after the server's secret
      rotated, starts its list again from the first batch, once for one
      list key; a second refusal is the list's error. A new day restarts
@@ -469,7 +472,9 @@ export function createOverviewReads(transport: OverviewTransport) {
   /** Fits list `list` to LIST_ROWS with room for `rows` more rows and to
       LIST_READS with room for `reads` more reads: a merge still on its way
       gives way first, as it only saves reads, then the first batches on
-      screen. The open batch stays. */
+      screen. The open batch stays. Where it is the only one left and a
+      Load more's frozen read split past LIST_READS, the Load more gives
+      way, and the open batch takes its current answer in the next pass. */
   function cap(list: List, rows: number, reads: number) {
     const over = () => readsOf(list) + reads > LIST_READS
     for (const s of list.swaps.filter((x) => x.why === 'merge')) if (over()) cancel(list, s)
@@ -477,6 +482,10 @@ export function createOverviewReads(transport: OverviewTransport) {
       if (rowsOf(list) + rows <= LIST_ROWS && !over()) return
       drop(list, list.shown[0] as Batch)
     }
+    const pressed = over() ? list.swaps.find((s) => s.why === 'more') : undefined
+    if (!pressed) return
+    cancel(list, pressed)
+    again = true
   }
 
   /** Takes every read's news in, until nothing more changes. */
