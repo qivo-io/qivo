@@ -850,7 +850,9 @@ function BatchNote({
     own pending archive or delete took away leaves at once; every other
     change waits for the answers. A row whose task has no model to show
     leaves the list loading, and STALL.ms after the workspace loaded,
-    incomplete, never at its end. */
+    incomplete, never at its end. Load more keeps keyboard focus while its
+    batch loads, and a button that goes with its press (Show from the
+    start, Try again, Retry) leaves focus on the list. */
 function OvList({
   kind,
   list,
@@ -868,6 +870,11 @@ function OvList({
   onOpen: (id: string) => void
 }) {
   const root = useRef<HTMLDivElement>(null)
+  /** `step` for a button that goes with its press, with focus on the list. */
+  const inList = (step: () => void) => () => {
+    step()
+    root.current?.focus()
+  }
   const own = P.ownPaintedTasks()
   let missing = 0
   let shown = 0
@@ -925,7 +932,7 @@ function OvList({
             note={batch.note}
             first={i === 0 && !list.dropped}
             last={i === list.batches.length - 1}
-            onRetry={() => P.overviewRetry(kind, batch.id)}
+            onRetry={inList(() => P.overviewRetry(kind, batch.id))}
           />
         )}
       </div>
@@ -961,6 +968,7 @@ function OvList({
   return (
     <div
       ref={root}
+      tabIndex={-1}
       data-ov-list={kind}
       data-ov-list-state={state}
       data-ov-list-end={end ? '' : undefined}
@@ -981,7 +989,7 @@ function OvList({
             variant="ghost"
             data-ov-from-start
             className="h-control-sm text-sm"
-            onClick={() => P.overviewFromStart(kind)}
+            onClick={inList(() => P.overviewFromStart(kind))}
           >
             Show from the start
           </Button>
@@ -997,7 +1005,7 @@ function OvList({
             type="button"
             variant="ghost"
             className="h-control-sm text-sm"
-            onClick={() => P.overviewFromStart(kind)}
+            onClick={inList(() => P.overviewFromStart(kind))}
           >
             Try again
           </Button>
@@ -1020,14 +1028,18 @@ function OvList({
         <div className={listNoteClass}>{emptyText}</div>
       )}
       {list.more !== null && (
+        // while its batch loads it stays, with no action, so keyboard focus
+        // stays on it
         <Button
           type="button"
           variant="outline"
           data-ov-more
-          disabled={list.more === 'loading'}
+          aria-disabled={list.more === 'loading' || undefined}
           aria-busy={list.more === 'loading' || undefined}
-          className="self-start"
-          onClick={() => P.overviewMore(kind)}
+          className={cn('self-start', list.more === 'loading' && 'pointer-events-none italic')}
+          onClick={() => {
+            if (list.more === 'ready') P.overviewMore(kind)
+          }}
         >
           {list.more === 'loading' ? 'Loading…' : 'Load more'}
         </Button>

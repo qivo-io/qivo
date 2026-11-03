@@ -667,6 +667,69 @@ describe('hidden, kept and a new day', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 })
 
+describe('keyboard focus in the lists', { timeout: BOARD_TEST_TIMEOUT }, () => {
+  /** The button of list `kind` that reads `text`. */
+  const button = (kind: 'attention' | 'paused', text: string) =>
+    [...(list(kind)?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find(
+      (b) => b.textContent === text,
+    )
+
+  it('keeps focus on Load more while its batch loads, and on the list after a Retry', async () => {
+    const { board } = await overview(work(25))
+    const more = list('paused')?.querySelector<HTMLButtonElement>('[data-ov-more]')
+    if (!more) throw new Error('no Load more')
+    more.focus()
+    board.server.overview.hold = true
+    await click(more)
+    // it stays a button focus can stay on, with no action while it loads
+    expect(list('paused')?.querySelector('[data-ov-more]')).toBe(more)
+    expect(more.disabled).toBe(false)
+    expect(more.getAttribute('aria-disabled')).toBe('true')
+    expect(more.textContent).toBe('Loading…')
+    expect(document.activeElement).toBe(more)
+    const asked = board.server.overview.asked.length
+    await click(more)
+    expect(board.server.overview.asked).toHaveLength(asked)
+    board.server.overview.hold = false
+    await board.answer()
+    expect(rows('paused')).toHaveLength(20)
+    expect(more.getAttribute('aria-disabled')).toBeNull()
+    expect(document.activeElement).toBe(more)
+    // the next batch fails; its Retry goes with its press, and focus stays
+    // in the list
+    board.server.overview.fail = new Error('network')
+    board.server.overview.failing = (query, args) =>
+      query === 'paused' && args.cursor !== undefined && args.end === undefined
+    await click(more)
+    const retry = button('paused', 'Retry')
+    if (!retry) throw new Error('no Retry')
+    retry.focus()
+    board.server.overview.fail = undefined
+    await click(retry)
+    expect(rows('paused')).toHaveLength(25)
+    expect(document.activeElement).toBe(list('paused'))
+  })
+
+  it('moves focus to the list after Try again and Show from the start', async () => {
+    const { board } = await overview(work(70), { force: { list: 'over_budget' } })
+    const again = button('paused', 'Try again')
+    if (!again) throw new Error('no Try again')
+    again.focus()
+    board.server.overview.force = {}
+    await click(again)
+    expect(rows('paused')).toHaveLength(10)
+    expect(document.activeElement).toBe(list('paused'))
+    // past the cap, Show from the start goes with its press too
+    for (let i = 0; i < 5; i++) await click(list('paused')?.querySelector('[data-ov-more]'))
+    const start = list('paused')?.querySelector<HTMLButtonElement>('[data-ov-from-start]')
+    if (!start) throw new Error('no Show from the start')
+    start.focus()
+    await click(start)
+    expect(list('paused')?.querySelector('[data-ov-from-start]')).toBeNull()
+    expect(document.activeElement).toBe(list('paused'))
+  })
+})
+
 describe('the health table and the reading position', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('says the health table waits for every task while the workspace loads', async () => {
     const { board, render } = await overview(work())
