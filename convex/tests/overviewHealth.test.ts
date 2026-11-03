@@ -1291,33 +1291,35 @@ describe('real limits', () => {
   })
 })
 
-/* The organization's open tasks held by the scope's owners, outside the
- * normal suite: planting up to 10,000 tasks takes minutes in convex-test.
- * Run on demand with QIVO_HEALTH_ORG_OPEN=1. Each case keeps an everyday
- * project (3 sub-projects of 30 open tasks, 10 owners, read through a
- * team's share) and raises one figure, the organization's open tasks, all
- * held by those 10 owners, half of them scheduled, in projects the reader
- * is not shared. It logs what the table read sorted by Delayed and by
- * Name, and whether Delayed was given, for the size OVERVIEW documents. */
+/* The organization's open tasks held by the scope's owners, the
+ * measurement behind the size OVERVIEW documents. It runs outside the
+ * normal suite because past that size it reaches `loads` by planting more
+ * tasks, where the normal suite lowers OWNER_LOADS ("the name fallback").
+ * Run on demand with QIVO_HEALTH_ORG_OPEN=1, one size with `-t`. Each case
+ * keeps an everyday project (3 sub-projects of 30 open tasks, 10 owners,
+ * read through a team's share) and raises one figure, the organization's
+ * open tasks, all held by those 10 owners, half of them scheduled, in
+ * projects the reader is not shared. That work keeps everyday values, in
+ * sub-projects of 30 open tasks, three to a project, so each owner's
+ * scheduled work spans every one of them. It logs what the table read
+ * sorted by Delayed and by Name, and whether Delayed was given. On a large
+ * Boat sandbox each case takes 1 to 12 s. */
 describe.runIf(process.env.QIVO_HEALTH_ORG_OPEN === '1')(
   "the organization's open tasks, on demand",
   () => {
-    for (const each of [300, 500, 600, 700, 800, 900, 1000])
-      it(`reads an everyday project whose 10 owners hold ${each * 10} open tasks`, {
-        timeout: 900_000,
-      }, async () => {
+    for (const each of [300, 400, 500, 550, 600, 610, 700, 1000])
+      it(`reads an everyday project whose 10 owners hold ${each * 10} open tasks`, async () => {
         const c = await sharedCase({ tops: 1, subs: 3 })
         for (const sub of c.subs) await plantOpen(c.t, sub, 30, c.owners)
         await withReach(c.t)
         await countOrg(c.t, c.f.org.id)
         // the owners' other open work, planted after the count, as it moves
-        // no count of the scope: sub-projects of at most 236 tasks, three to
-        // a project, each owner's tasks half scheduled
+        // no count of the scope
         let left = each * 10 - 90
         for (let i = 0; left > 0; i++) {
           const top = await plantProject(c.t, { org_id: c.f.org.id, name: `Elsewhere ${i}` })
           for (let k = 0; k < 3 && left > 0; k++) {
-            const n = Math.min(236, left)
+            const n = Math.min(30, left)
             left -= n
             await plantTasks(c.t, await subOf(c.t, top, `Elsewhere ${i}-${k}`), n, (j) => ({
               ...openMix(j, c.owners, 'plain', BEFORE_RULE),
@@ -1336,7 +1338,7 @@ describe.runIf(process.env.QIVO_HEALTH_ORG_OPEN === '1')(
           expect(ok.rows.every((r) => r.counts.state === 'ok')).toBe(true)
           // never a partial order: a row without its delays sorts by name
           if (sort === 'late' && ok.rows.some((r) => r.delays.state !== 'ok'))
-            expect(ok.sort).toEqual({ key: 'name', dir: 'asc', by_name: 'delays' })
+            expect(ok.sort).toMatchObject({ key: 'name', dir: 'asc', by_name: 'delays' })
         }
       })
   },

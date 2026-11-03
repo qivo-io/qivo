@@ -198,15 +198,19 @@ import { canonicalLoad, DEFAULT_PLANNABLE_HOURS, type LoadSpan, plannableHoursOf
  * Delayed and Slipping read the loads of the owners the order needs, so,
  * by the owner's rule of 1 November 2026 for figures that follow
  * workloads, they answer unavailable past this measured size inside the
- * design size: with an everyday project's 10 owners holding the
- * organization's open tasks, half of them scheduled (the on-demand cases,
- * QIVO_HEALTH_ORG_OPEN=1), 5,000 read 1,521, 3,193 and 2.08 and 7,000 read
- * 2,033, 4,409 and 2.88, whole; from 8,000 the owners' loads pass the room
- * the owner reader has for one organization's owners
- * (lib/ownerLoads.ts OWNER_LOADS.call, 2,000 ranges), and at 10,000 each
- * owner's 500 or so scheduled tasks reach OWNER_LOADS.checks. The rows then
- * answer `loads` and the table sorts by name. overview.risk and the
- * At-risk list read the same loads.
+ * design size. An everyday project's 10 owners hold the organization's
+ * open tasks, half of them scheduled. Beside the project's own 90, those
+ * tasks are in sub-projects of 30 open tasks, three to a project, so each
+ * owner's scheduled work spans every sub-project (the on-demand cases,
+ * QIVO_HEALTH_ORG_OPEN=1). 3,000 such tasks read 1,171, 2,183 and 1.39,
+ * 5,000 read 1,792, 3,536 and 2.25 and 6,000 read 2,104, 4,216 and 2.69,
+ * whole. From 6,100 each owner's scheduled work is in more than the 200
+ * live projects the owner reader reads for one owner (lib/ownerLoads.ts
+ * OWNER_LOADS.projects), and with that bound raised the owners' loads pass
+ * the reader's room for one organization's owners there too
+ * (OWNER_LOADS.call, 2,000 ranges). The rows then answer `loads` and the
+ * table sorts by name. overview.risk and the At-risk list read the same
+ * loads.
  *
  * `batch` is how many rows a list batch holds, the page's Load more step,
  * and `split` how many a batch with a fixed end may hold before it answers
