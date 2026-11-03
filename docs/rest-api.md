@@ -1203,8 +1203,10 @@ list are a `400`:
   next_cursor as cursor`
 - a `cursor` that is not the `next_cursor` of an earlier page of the same
   list: `cursor must be the next_cursor of an earlier page`
-- a list too large to read, as above: `the task list could not be read
-  within the request's limits; pass project to list one project's tasks`
+- a list too large to read, as above, for either cause: `the task list
+  could not be read within the request's limits; pass project to list one
+  project's tasks`. Naming a project helps only when the list covers too
+  many projects.
 
 Until November 2026 active lists answered an array paged with `offset`, a
 `cursor` without `archived=true` was a `400`, and every request read the

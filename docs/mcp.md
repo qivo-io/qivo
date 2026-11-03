@@ -1914,9 +1914,11 @@ These active list calls are refused: an `offset` other than `0`, negative
 ones included (`offset does not apply to active tasks; pass next_cursor as
 cursor`), a `cursor` that is not the `next_cursor` of an earlier page of the
 same list (`cursor must be the next_cursor of an earlier page`) and a list
-too large to read, as above (`the task list could not be read within the
-request's limits; pass project to list one project's tasks`). A fractional
-`offset` is refused by the input schema before the tool runs.
+too large to read, as above, for either cause (`the task list could not be
+read within the request's limits; pass project to list one project's
+tasks`). Naming a project helps only when the list covers too many
+projects. A fractional `offset` is refused by the input schema before the
+tool runs.
 
 With `archived: true` it lists archived tasks one project at a time and
 needs `project`. Naming a project lists its archived tasks and those of all
