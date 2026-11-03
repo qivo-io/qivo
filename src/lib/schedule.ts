@@ -112,7 +112,9 @@ export type ScheduleTask = GroupIssue &
 export type AutoMove = { id: string; start: number; end: number }
 
 /** Auto-move's tooltip for `moves` pending moves, on the Roadmap's toolbar
-    and the phone's agenda. With none it says why the button is disabled. */
+    and the phone's agenda. With none it says why the button is disabled. A
+    touch opens no tooltip, so on a phone the button shows only its count
+    and the guide explains Auto-move. */
 export function autoMoveTitle(moves: number): string {
   if (!moves) return 'No task starts before its blocker ends'
   const tasks = moves > 1 ? `${moves} blocked tasks` : '1 blocked task'
