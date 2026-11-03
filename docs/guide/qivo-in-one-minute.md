@@ -176,10 +176,11 @@ you own work in its scope. It appears when you belong to an organization.
 
 Use the search icon in the header to find tasks and projects. Phone pages
 have no separate text filter and ignore desktop text queries, including in
-the landscape Roadmap. The exceptions are **Archived tasks** and **Deleted
-items** in Settings, which keep their search boxes. Status and other filters
-remain available, as do searches inside people, label and relationship
-pickers.
+the landscape Roadmap. The exceptions are the **Overview**'s health cards,
+which show a search once there are more than 10, and **Archived tasks** and
+**Deleted items** in Settings, which keep their search boxes. Status and
+other filters remain available, as do searches inside people, label and
+relationship pickers.
 
 **My tasks** lists active work before backlog and completed tasks. Choose a
 status or open **Filters** to narrow the list. In a very long list, rows
