@@ -531,6 +531,21 @@ From that release on, never return the backend to a commit before v0.1.107
 before that one is safe against a later backend, because that app filters
 the Board's tasks in the browser.
 
+The app's Overview reads its summary, its projected delays and its two
+lists from `overview.summary`, `overview.risk`, `overview.attention` and
+`overview.paused`, which v0.1.112 (`9dd4ef7f`) first shipped. An app from
+the release that switched the Overview to them, against a backend before
+v0.1.112, says on every Overview that it could not be loaded, also in a tab
+that was open when the backend went back, until the backend rolls forward.
+From that release on, never return the backend to a commit before v0.1.112
+(`9dd4ef7f`); roll forward instead. Returning the app alone to a release
+before that one is safe against a later backend, because that app derives
+the Overview in the browser. The Overview's figures read the counts that
+v0.1.110 (`b38c4e1c`) added and its release step backfilled
+(`internal/overviewCountsBackfill`), so this release adds no step; an
+organization whose counts are not whole shows its counts as counting until
+they are.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
