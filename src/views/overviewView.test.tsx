@@ -891,6 +891,22 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(actions.setView).toHaveBeenCalledWith('kanban')
   })
 
+  it('shows Left from whole tenths: 1.5h in a row and 1.5h left on a phone card', async () => {
+    const tenths = (snap: Snapshot) => {
+      work()(snap)
+      const task = snap.issues.find((t) => t.id === 'two-late')
+      if (task) task.remaining_hours = 1.5
+    }
+    const two = () => cards().find((c) => c.dataset.ovcard === 'two')
+    await overview(tenths)
+    expect(cell(two(), 'left')?.textContent).toBe('1.5h')
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    phone = true
+    await overview(tenths)
+    expect(cell(two(), 'left')?.textContent).toBe('1.5h left')
+  })
+
   it('asks only the health read for a new order, keeping the rows shown, dimmed, until the answer', async () => {
     const { board } = await overview(work())
     const open = [...board.server.overview.open].filter((sub) => sub.query !== 'health')
