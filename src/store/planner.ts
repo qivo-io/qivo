@@ -52,6 +52,7 @@ import {
 } from '../../convex/lib/limits'
 import { tooManyMentions } from '../../convex/lib/mentions'
 import { roundTenths } from '../../convex/lib/numbers'
+import type { ListAnswer } from '../../convex/lib/overview'
 import {
   canCreateProjects,
   isProjectCreators,
@@ -153,6 +154,13 @@ import {
   type SideName,
   type SideNews,
 } from './liveParts'
+import {
+  baseOfKey,
+  createOverviewReads,
+  type ListKind,
+  type OverviewQuery,
+  type OverviewView,
+} from './overviewLists'
 import { createOwnerLoadCache } from './ownerLoadCache'
 import { createPreferences } from './preferences'
 import { createWorkspaceRows, RowMap, rowCopies } from './rowMap'
@@ -162,6 +170,7 @@ import { createTaskIndex, type TaskChanges, type TaskSources } from './taskIndex
 
 export type { UIPrefs } from './preferences'
 
+import type { ViewRow } from '../../convex/lib/viewReads'
 import type { Seatless, Workspace } from '../../convex/lib/workspaceJoin'
 import {
   BULK_SEATS,
@@ -2288,18 +2297,71 @@ function pay() {
 }
 
 /* ---- The task rows the open views' answers bring ----
-   The Board registers its read here (P.watchBoard) from an effect, with the
-   arguments on screen, or none while its page or the tab is hidden. The
-   store subscribes, takes each result in the transition that brings it and
-   keeps a view's rows (store/viewRows.ts) while its read stops, until the
-   view asks for other arguments or its page leaves (P.releaseView). The
-   rows' paint waits with the workspace's while a painted write waits
+   A view registers each read it shows here from an effect, with the
+   arguments on screen, or none while its page or the tab is hidden: the
+   Board its answer (P.watchBoard), the Overview its summary, its delays and
+   its lists' batches (P.watchOverview, store/overviewLists.ts). Each read
+   names its query and the rows its answer brings (ViewQuery). The store
+   subscribes, takes each result in the transition that brings it and keeps
+   a read's rows (store/viewRows.ts) while it stops, until the view asks for
+   other arguments or its page leaves (P.releaseView, P.releaseOverview).
+   The rows' paint waits with the workspace's while a painted write waits
    (owe), so one transition still renders once. */
 
 const viewRows = createViewRows(isoToWeek)
 
+/** An answer whose rows a read keeps as they were (ViewQuery `rows`). */
+const KEEP_ROWS = Symbol('keep the rows')
+
+/** What a view read subscribes, and the rows its answer brings: `rows`
+    answers the rows of a value, null for a value that brings none (the
+    read's rows go) or KEEP_ROWS for one whose rows stay as they were, as a
+    fixed Overview batch that split keeps its last rows until its halves
+    answer. A read without `rows`, such as the Overview's summary, holds no
+    rows, and its deliveries hold no write. */
+type ViewQuery = {
+  ref: FunctionReference<'query'>
+  rows?: (value: unknown) => readonly ViewRow[] | null | typeof KEEP_ROWS
+}
+
+/** The Board's read: an ok answer brings its rows and its parents. */
+const BOARD_QUERY: ViewQuery = {
+  ref: api.tasks.board,
+  rows: (value) => {
+    const answer = value as BoardAnswer
+    return answer.state === 'ok' ? [...answer.rows, ...answer.parents] : null
+  },
+}
+
+/** An Overview list batch's read: an ok answer brings its rows, without
+    the At-risk marker, which the Overview keeps with the batch
+    (store/overviewLists.ts). A batch with a fixed end that split or
+    stopped keeps its rows until the batches that replace it answer. */
+const listQuery = (ref: FunctionReference<'query'>, fixed: boolean): ViewQuery => ({
+  ref,
+  rows: (value) => {
+    const answer = value as ListAnswer
+    if (answer.state !== 'ok') return null
+    if (fixed && (answer.split !== undefined || !answer.complete)) return KEEP_ROWS
+    return answer.rows.map(({ at_risk: _risk, ...row }) => row)
+  },
+})
+
+/** The Overview's reads by query, a list batch's by whether it has a fixed
+    end. */
+const OVERVIEW_QUERIES: Record<OverviewQuery | `${ListKind}:fixed`, ViewQuery> = {
+  summary: { ref: api.overview.summary },
+  risk: { ref: api.overview.risk },
+  attention: listQuery(api.overview.attention, false),
+  paused: listQuery(api.overview.paused, false),
+  'attention:fixed': listQuery(api.overview.attention, true),
+  'paused:fixed': listQuery(api.overview.paused, true),
+}
+
 /** One view's read. */
 type ViewRead = {
+  /** what it subscribes and the rows its answer brings */
+  query: ViewQuery
   /** the arguments' key the view asks for, null while it reads nothing */
   want: string | null
   /** which mounted view asked last: a leaving page's late cleanup must not
@@ -2311,7 +2373,7 @@ type ViewRead = {
   live: string | null
   stop: (() => void) | null
   /** the last result, for the arguments `key`: a value or an error */
-  held: { key: string; value?: BoardAnswer; error?: unknown } | null
+  held: { key: string; value?: unknown; error?: unknown } | null
   /** whether `held` came from the live subscription on the connection the
       socket holds now (latestConnection) */
   current: boolean
@@ -2321,6 +2383,9 @@ type ViewRead = {
   /** whether the view shows its cards' delays, which only then read the
       owner-load cache (the desktop Board does, the phone's list does not) */
   delays: boolean
+  /** the view delivery count (viewDeliveries) at its last live delivery
+      that took rows, 0 for none, which holds the writes sent before it */
+  delivered: number
 }
 const viewReads = new Map<ViewSlot, ViewRead>()
 /* The socket's newest connection count a view read's handler saw: after a
@@ -2330,47 +2395,82 @@ let latestConnection = 0
 /* Whether a view read changed what its view shows outside its rows, such
    as a failure, so the next view repaint renders it. */
 let viewReadsChanged = false
+/* The tasks each `view` paint changes (viewPaint). */
+const viewPaintTasks = new WeakMap<Paint, ReadonlySet<string>>()
 
-/** Whether every view read that is live or keeps rows has a newest result
-    that is a live delivery on the socket's current connection, so a write
-    accepted now, with a view delivery since it was sent, is held by every
-    view's rows (settleAccepted). A read stopped with its rows kept, as a
-    hidden tab's, is not: no delivery of it can hold the write until it
-    reads again. */
-function viewsCurrent(): boolean {
-  for (const [slot, read] of viewReads)
+/** A layer's `view` part, `paint`, which changes the views' rows of tasks
+    `uuids` (store/layers.ts View), so a delivery of a read whose rows hold
+    none of them does not hold it (viewPartHeld). */
+function viewPaint(uuids: readonly string[], paint: Paint): Paint {
+  viewPaintTasks.set(paint, new Set(uuids))
+  return paint
+}
+
+/** Whether the views' rows hold saved view part `paint` of a write sent
+    when the view deliveries counted `seen`: each read whose rows hold a
+    copy of a task it changes is live, and its newest result is a delivery
+    on the socket's current connection since the send. Convex delivers what
+    a write changed before the write resolves (lib/convexOrdering.test.ts),
+    so a write accepted then is in those deliveries (settleAccepted). A read
+    stopped with its rows kept, as a hidden tab's or a kept page's, holds
+    nothing until it reads again; a read whose rows hold none of the tasks,
+    or that brings no rows, such as the Overview's summary, holds nothing
+    either way. A part no read holds rows for paints nothing, so nothing is
+    left to hold. */
+function viewPartHeld(paint: Paint, seen: number): boolean {
+  const tasks = viewPaintTasks.get(paint)
+  for (const [slot, read] of viewReads) {
+    const rows = viewRows.rowsOf(slot)
+    if (!rows || !read.query.rows) continue
+    if (tasks && ![...tasks].some((uuid) => rows.has(uuid))) continue
     if (
-      (read.live !== null || viewRows.holds(slot)) &&
-      !(read.current && read.connection === latestConnection)
+      read.live === null ||
+      !read.current ||
+      read.connection !== latestConnection ||
+      read.delivered <= seen
     )
       return false
+  }
   return true
 }
 
+/** Drops every saved view part the views' rows hold now (viewPartHeld). */
+const dropHeldViewParts = () =>
+  layers.dropSavedIf(
+    'view',
+    (layer) => !!layer.view.view && viewPartHeld(layer.view.view, layer.seen.view),
+  )
+
 /** Takes view `slot`'s result of its live subscription `token`: its rows
-    become the view's anchor, a live delivery holds every write accepted
-    before it, and the views repaint when the waiting writes allow. */
+    become the view's anchor, a delivery that brings rows holds the writes
+    it changed (dropHeldViewParts), the Overview's lists take it in, and the
+    views repaint when the waiting writes allow. */
 function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: string) {
-  let next: ViewRead['held']
+  let next: NonNullable<ViewRead['held']>
   try {
-    const value = live.read(token) as BoardAnswer | undefined
+    const value = live.read(token)
     if (value === undefined) return
     next = { key, value: anchor(value) }
   } catch (error) {
     next = { key, error }
   }
-  read.held = next
-  read.current = true
-  read.connection = latestConnection
-  if (next.value) read.answered = true
-  viewDeliveries++
-  const ok = next.value?.state === 'ok' ? next.value : null
-  if (ok) viewRows.take(slot, [...ok.rows, ...ok.parents])
-  else viewRows.release(slot)
-  // a live delivery holds every write accepted before it, in every live view
-  layers.dropSaved('view')
-  viewReadsChanged = true
-  owe('view')
+  together(() => {
+    read.held = next
+    read.current = true
+    read.connection = latestConnection
+    if (next.value !== undefined) read.answered = true
+    const take = read.query.rows
+    const rows = take && next.value !== undefined ? take(next.value) : null
+    if (take && rows !== KEEP_ROWS) {
+      if (rows) viewRows.take(slot, rows)
+      else viewRows.release(slot)
+      read.delivered = ++viewDeliveries
+      dropHeldViewParts()
+    }
+    viewReadsChanged = true
+    if (overview.owns(slot)) overview.settle()
+    owe('view')
+  })
 }
 
 /** Brings view `slot`'s subscription in line with what it asks for. */
@@ -2385,7 +2485,7 @@ function syncViewRead(slot: ViewSlot) {
   }
   if (read.want === null || read.live !== null) return
   const key = read.want
-  const watch = live.watch(api.tasks.board, JSON.parse(key) as Record<string, Value>)
+  const watch = live.watch(read.query.ref, JSON.parse(key) as Record<string, Value>)
   read.live = key
   read.current = false
   const stopTransitions = live.onTransition(
@@ -2414,12 +2514,127 @@ function releaseViewRows(slot: ViewSlot) {
   const rows = viewRows.holds(slot)
   if (rows) {
     viewRows.release(slot)
-    // no delivery of a released view holds a write over its rows again
-    if (!viewRows.any()) layers.dropSaved('view')
+    // a write whose tasks only these rows held has none left to hold
+    dropHeldViewParts()
   }
   if (!rows && !held) return
   viewReadsChanged = true
   owe('view')
+}
+
+/**
+ * Registers view `slot`'s read of `query` for the arguments `key`, JSON in
+ * a fixed key order, or none with null, as the view's effect runs: the
+ * rules of P.watchBoard, which every view read follows. Another query or
+ * other arguments, or a new `attempt`, drop what the read held.
+ */
+function watchView(
+  slot: ViewSlot,
+  query: ViewQuery,
+  key: string | null,
+  attempt = 0,
+  owner = 0,
+  delays = true,
+) {
+  let read = viewReads.get(slot)
+  if (read && key === null && read.owner !== owner) return
+  if (!read) {
+    read = {
+      query,
+      want: null,
+      owner,
+      attempt,
+      live: null,
+      stop: null,
+      held: null,
+      current: false,
+      connection: 0,
+      answered: false,
+      delays,
+      delivered: 0,
+    }
+    viewReads.set(slot, read)
+  }
+  if (key !== null) read.delays = delays
+  if (key !== null && read.owner !== owner) {
+    // another mounted view takes the read over, with its own Try again
+    read.owner = owner
+    read.attempt = attempt
+  }
+  const retry = attempt !== read.attempt
+  read.attempt = attempt
+  const other =
+    key !== null && (read.query !== query || (read.held !== null && read.held.key !== key))
+  if (key !== null && (retry || other)) {
+    read.stop?.()
+    read.stop = null
+    read.live = null
+    read.current = false
+    read.query = query
+    releaseViewRows(slot)
+  }
+  if (read.want === key && !retry && !other) return
+  read.want = key
+  syncViewRead(slot)
+  // a view whose read stops keeps its owners' loads without reading them
+  ownerLoads.setLive(slot, key !== null)
+}
+
+/** What view `slot`'s read holds: the arguments' key its result answers
+    (null for none), its value or error, whether it is the live
+    subscription's on the current connection, and whether the read held
+    a value before, so a wait is a refresh. */
+function viewRead(slot: ViewSlot) {
+  const read = viewReads.get(slot)
+  const held = read?.held ?? null
+  return {
+    key: held?.key ?? null,
+    ...(held && 'value' in held ? { value: held.value } : {}),
+    ...(held && 'error' in held ? { error: held.error } : {}),
+    current:
+      !!read && read.current && read.live === held?.key && read.connection === latestConnection,
+    answered: !!read?.answered,
+  }
+}
+
+/** Forgets view `slot`'s read and rows: its page left. */
+function releaseView(slot: ViewSlot) {
+  const read = viewReads.get(slot)
+  if (!read) return
+  read.want = null
+  syncViewRead(slot)
+  releaseViewRows(slot)
+  viewReads.delete(slot)
+}
+
+/* The Overview's reads, over the view reads (store/overviewLists.ts). A
+   list batch with a fixed end reads its list's query that keeps the rows of
+   an answer that split or stopped; a stopped read keeps the query it had. */
+const overview = createOverviewReads({
+  watch: (slot, query, key, attempt) => {
+    const held = viewReads.get(slot)
+    const list = query === 'attention' || query === 'paused' ? query : null
+    const fixed = list !== null && key !== null && 'end' in (JSON.parse(key) as object)
+    const q =
+      key === null && held
+        ? held.query
+        : list !== null && fixed
+          ? OVERVIEW_QUERIES[`${list}:fixed`]
+          : OVERVIEW_QUERIES[query]
+    watchView(slot, q, key, attempt, 0, false)
+  },
+  read: viewRead,
+  release: releaseView,
+})
+
+/** Runs `step`, an action on the Overview's reads, and shows what it
+    changed in one repaint of the views. */
+function overviewStep(step: () => void) {
+  together(() => {
+    step()
+    viewReadsChanged = true
+    owe('view')
+  })
 }
 
 /** What judging a task only a view holds reads from the store
@@ -2817,14 +3032,11 @@ function settleAccepted(layer: Layer, next: View | null | undefined) {
     !(threadCurrent && watchedComments === view.thread.task && threadDeliveries > layer.seen.thread)
       ? view.thread
       : undefined
-  // every view read live and current, with a delivery since the send,
-  // holds the write, as the snapshot does (viewsCurrent); with no view rows
-  // left, as after the view closed, it paints nothing and no delivery
-  // would ever end it
-  const viewPart =
-    view.view && viewRows.any() && !(viewsCurrent() && viewDeliveries > layer.seen.view)
-      ? view.view
-      : undefined
+  // every read whose rows hold a task the write changed, live and current
+  // with a delivery since the send, holds it, as the snapshot does
+  // (viewPartHeld); with no such rows left, as after the view closed, it
+  // paints nothing and no delivery would ever end it
+  const viewPart = view.view && !viewPartHeld(view.view, layer.seen.view) ? view.view : undefined
   layers.save(layer, { workspace, thread, view: viewPart })
   if (sent.workspace && !workspace) owed.workspace = true
   if (sent.thread && !thread && sent.thread.task === watchedComments) owed.thread = true
@@ -5394,9 +5606,9 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
   const at = new Date().toISOString()
   const uuid = it.uuid
   const view: View = {
-    view: () => {
+    view: viewPaint([uuid], () => {
       for (const copy of viewRows.edit(uuid)) stampTaskPatch(copy, paintDb, at)
-    },
+    }),
     // skips until the workspace holds the task, then paints it there too
     workspace: () => patchIssueRow(uuid, paintDb, at),
   }
@@ -7301,70 +7513,44 @@ export const PLANNER = {
       last owns the read, and another's null asks nothing. `delays` says
       whether the view shows its cards' delays, which then read owners'
       loads (store/ownerLoadCache.ts). */
-  watchBoard: (slot: ViewSlot, key: string | null, attempt = 0, owner = 0, delays = true) => {
-    let read = viewReads.get(slot)
-    if (read && key === null && read.owner !== owner) return
-    if (!read) {
-      read = {
-        want: null,
-        owner,
-        attempt,
-        live: null,
-        stop: null,
-        held: null,
-        current: false,
-        connection: 0,
-        answered: false,
-        delays,
-      }
-      viewReads.set(slot, read)
-    }
-    if (key !== null) read.delays = delays
-    if (key !== null && read.owner !== owner) {
-      // another mounted view takes the read over, with its own Try again
-      read.owner = owner
-      read.attempt = attempt
-    }
-    const retry = attempt !== read.attempt
-    read.attempt = attempt
-    if (key !== null && (retry || (read.held !== null && read.held.key !== key))) {
-      read.stop?.()
-      read.stop = null
-      read.live = null
-      read.current = false
-      releaseViewRows(slot)
-    }
-    if (read.want === key && !retry) return
-    read.want = key
-    syncViewRead(slot)
-    // a view whose read stops keeps its owners' loads without reading them
-    ownerLoads.setLive(slot, key !== null)
-  },
-  /** What view `slot`'s read holds: the arguments' key its result answers
-      (null for none), its value or error, whether it is the live
-      subscription's on the current connection, and whether the read held
-      a value before, so a wait is a refresh. */
+  watchBoard: (slot: ViewSlot, key: string | null, attempt = 0, owner = 0, delays = true) =>
+    watchView(slot, BOARD_QUERY, key, attempt, owner, delays),
+  /** What view `slot`'s read of the Board's answer holds: the arguments'
+      key its result answers (null for none), its value or error, whether
+      it is the live subscription's on the current connection, and whether
+      the read held a value before, so a wait is a refresh. */
   boardRead: (slot: ViewSlot) => {
-    const read = viewReads.get(slot)
-    const held = read?.held ?? null
-    return {
-      key: held?.key ?? null,
-      ...(held && 'value' in held ? { value: held.value } : {}),
-      ...(held && 'error' in held ? { error: held.error } : {}),
-      current:
-        !!read && read.current && read.live === held?.key && read.connection === latestConnection,
-      answered: !!read?.answered,
-    }
+    const { value, ...read } = viewRead(slot)
+    return { ...read, ...(value === undefined ? {} : { value: value as BoardAnswer }) }
   },
   /** Forgets view `slot`'s read and rows: its page left. */
-  releaseView: (slot: ViewSlot) => {
-    const read = viewReads.get(slot)
-    if (!read) return
-    read.want = null
-    syncViewRead(slot)
-    releaseViewRows(slot)
-    viewReads.delete(slot)
+  releaseView,
+  /** Registers the Overview's reads for `key` (store/overviewLists.ts
+      overviewKey: its scope and its clock), or none with null while its
+      page or the tab is hidden, which stops them and keeps what they held:
+      the summary, the delays and the batches each list holds, read again
+      with the same arguments when the page asks for them again. `owner`
+      names the mounted page, as P.watchBoard's does, and a new `attempt`
+      (the page's Try again) asks the summary and the delays afresh. A key
+      whose day is not the local day now asks for nothing: a kept page shown
+      again after midnight renders once with the day it held. */
+  watchOverview: (key: string | null, owner = 0, attempt = 0) => {
+    const base = key === null ? null : baseOfKey(key)
+    const today = base !== null && base.clock.day === isoFromDate(new Date())
+    overviewStep(() => overview.watch(today ? base : null, owner, attempt))
   },
+  /** What the Overview's reads hold (store/overviewLists.ts OverviewView):
+      the summary's and the delays' answers for the Overview asked now and
+      whether each is current, and each list's batches and state. */
+  overviewRead: (): OverviewView => overview.view(),
+  /** Load more on Overview list `list`. */
+  overviewMore: (list: ListKind) => overviewStep(() => overview.more(list)),
+  /** Shows Overview list `list` from its first batch again. */
+  overviewFromStart: (list: ListKind) => overviewStep(() => overview.fromStart(list)),
+  /** Asks batch `batch` of Overview list `list` afresh (Try again, Retry). */
+  overviewRetry: (list: ListKind, batch: number) => overviewStep(() => overview.retry(list, batch)),
+  /** Forgets the Overview's reads and rows: its page left. */
+  releaseOverview: () => overviewStep(() => overview.release()),
   /** Task `uuid` as the rows on screen show it to view `slot`, for a task
       the person's own pending writes changed (P.ownPaintedTasks): the
       workspace's where it holds the task, none where the workspace held it
@@ -11326,6 +11512,7 @@ export function disposeDemoStore() {
   for (const read of viewReads.values()) read.stop?.()
   viewReads.clear()
   viewRows.clear()
+  overview.clear()
   viewDelays = new Map()
   boardLookup = null
   ownerLoads.clear()

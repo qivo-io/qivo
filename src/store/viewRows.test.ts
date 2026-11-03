@@ -39,6 +39,8 @@ let deliver: (snap: Snapshot) => void
 let answer: BoardAnswer
 let board: ((value: BoardAnswer) => void) | null
 let loads: Map<string, (value: OwnerLoadsJson) => void>
+/* the Overview's reads, by query, the newest subscription of each */
+let overviews: Map<string, (value: unknown) => void>
 let writes: { name: string; resolve: (v: unknown) => void; reject: (e: unknown) => void }[]
 
 /** A turn for the double's microtasks and the store's 0 ms paint timer. */
@@ -112,6 +114,7 @@ beforeEach(async () => {
   answer = ok([])
   board = null
   loads = new Map()
+  overviews = new Map()
   writes = []
   network.query.mockResolvedValue(null)
   // the boot's seat claim answers at once; every other write waits for the test
@@ -133,6 +136,7 @@ beforeEach(async () => {
     } else if (name === 'planning:ownerLoads')
       loads.set((args.owner_ids as string[]).join(), receive as (v: OwnerLoadsJson) => void)
     else if (name === 'snapshot:threadComments') receive({ comments: [], earlier: false })
+    else if (name.startsWith('overview:')) overviews.set(name, receive)
     return () => {}
   })
   store = await import('./planner')
@@ -474,5 +478,108 @@ describe('the delays of tasks only a view brings', () => {
     answer = ok([{ ...planned('task-a', 1) }])
     await open()
     expect(loads.size).toBe(0)
+  })
+})
+
+describe("a write's view part while several views read", () => {
+  /** The Overview's key for My view on the store's day (P.watchOverview). */
+  const overviewKey = () =>
+    JSON.stringify({
+      scope: { kind: 'mine' },
+      day: store.P.TODAY_ISO,
+      week: store.P.isoFromDate(store.P.weekToDate(store.P.TODAY_WEEK)),
+      week_starts: Array.from({ length: 53 }, (_, i) =>
+        store.P.weekToDate(store.P.TODAY_WEEK - 52 + i).getTime(),
+      ),
+      week_end: store.P.weekToDate(store.P.TODAY_WEEK + 1).getTime(),
+    })
+
+  /** A Board write on a task only the Board's answer brings, accepted while
+      the Board's read is stopped with its rows kept, as a hidden Board's. */
+  async function stoppedBoardWrite() {
+    answer = ok([row('far', 9)])
+    await open()
+    const id = store.P.viewTask(SLOT, 'far')?.id ?? ''
+    void store.P.updateIssue(id, { status: 'progress' })
+    // an answer from before the write arrives after it was sent
+    await serve(ok([row('far', 9, { title: 'Echo' })]))
+    store.P.watchBoard(SLOT, null)
+    writes[0]?.resolve(null)
+    await turn()
+    expect(store.P.viewTask(SLOT, 'far')?.status).toBe('progress')
+    // the Overview reads beside it
+    store.P.watchOverview(overviewKey(), 1, 0)
+    await turn()
+  }
+
+  it("keeps a stopped Board's saved part past an Overview batch that brings other rows", async () => {
+    await stoppedBoardWrite()
+    overviews.get('overview:paused')?.({
+      state: 'ok',
+      rows: [row('other', 3, { paused: true })],
+      complete: true,
+      next: null,
+      end: 'op1~end',
+    })
+    await turn()
+    expect(store.P.overviewRead().paused.batches[0]?.rows).toHaveLength(1)
+    // the card does not snap back: no delivery of the Board's own read holds it
+    expect(store.P.viewTask(SLOT, 'far')?.status).toBe('progress')
+    expect(probe().layerCount()).toBe(1)
+    // shown again, the Board's fresh answer holds it and ends the paint
+    answer = ok([row('far', 9, { title: 'Echo', status: 'progress' })])
+    store.P.watchBoard(SLOT, KEY)
+    await turn()
+    await turn()
+    expect(store.P.viewTask(SLOT, 'far')?.status).toBe('progress')
+    expect(probe().layerCount()).toBe(0)
+  })
+
+  it("keeps a stopped Board's saved part past an Overview summary, which brings no rows", async () => {
+    await stoppedBoardWrite()
+    overviews.get('overview:summary')?.({
+      state: 'ok',
+      counts: {
+        state: 'ok',
+        leaves: { backlog: 0, todo: 1, progress: 0, review: 0, done: 0 },
+        paused: 0,
+      },
+      any_task: { state: 'ok', value: true },
+      overdue: { state: 'ok', count: 0 },
+    })
+    await turn()
+    expect(store.P.overviewRead().summary?.value).toMatchObject({ state: 'ok' })
+    expect(store.P.viewTask(SLOT, 'far')?.status).toBe('progress')
+    expect(probe().layerCount()).toBe(1)
+  })
+
+  it('ends a write held by the Overview batch that holds its task, once every read holding it delivered', async () => {
+    answer = ok([row('far', 9)])
+    await open()
+    store.P.watchOverview(overviewKey(), 1, 0)
+    await turn()
+    const batch = (status: ViewRow['status']) => ({
+      state: 'ok',
+      rows: [row('far', 9, { paused: true, status })],
+      complete: true,
+      next: null,
+      end: 'op1~end',
+    })
+    overviews.get('overview:paused')?.(batch('todo'))
+    await turn()
+    const id = store.P.viewTask(SLOT, 'far')?.id ?? ''
+    void store.P.updateIssue(id, { status: 'progress' })
+    // the Board's answer holds the write, then the server accepts it: the
+    // batch, which holds a copy of the task, has not delivered since
+    await serve(ok([row('far', 9, { status: 'progress' })]))
+    writes[0]?.resolve(null)
+    await turn()
+    expect(probe().layerCount()).toBe(1)
+    expect(store.P.viewTask('overview:paused:2', 'far')?.status).toBe('progress')
+    // the batch's delivery holds it too and ends the paint
+    overviews.get('overview:paused')?.(batch('progress'))
+    await turn()
+    expect(probe().layerCount()).toBe(0)
+    expect(store.P.overviewRead().paused.batches[0]?.rows[0]?.status).toBe('progress')
   })
 })

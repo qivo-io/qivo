@@ -1,10 +1,13 @@
-/* The task rows the open views' answers bring (store/planner.ts P.watchBoard,
-   the Board's tasks.board answer), and the view models shaped from them.
+/* The task rows the open views' answers bring (store/planner.ts view
+   reads: the Board's tasks.board answer, P.watchBoard, and each batch of the
+   Overview's two lists, P.watchOverview), and the view models shaped from
+   them.
 
-   - A view's read is its row source: today the whole answer of one live
-     query, which names each task with its row and a group with its facts
-     (convex/lib/viewReads.ts ViewRow). A batched source would hand rows the
-     same way (take), and nothing that reads the models would change.
+   - A view's read is its row source: the whole answer of one live query,
+     which names each task with its row and a group with its facts
+     (convex/lib/viewReads.ts ViewRow), one slot per read. The Overview's
+     lists are a source that brings rows in batches, each batch a slot of
+     its own (take), and nothing that reads the models changed for it.
    - Each view keeps its own rows, by uuid, as its last answer brought them
      (the anchor), and the store paints every live layer's `view` part over
      copies of them on each repaint (store/layers.ts), as it paints the
