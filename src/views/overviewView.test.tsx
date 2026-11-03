@@ -1164,6 +1164,18 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(healthState()).toBe('ok')
   })
 
+  it('asks the health read once a page that mounted in a hidden tab shows', async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    const { board } = await overview(work())
+    expect(board.server.overview.open.size).toBe(0)
+    expect(healthState()).toBe('loading')
+    await setVisibility('visible')
+    expect([...board.server.overview.open].some((sub) => sub.query === 'health')).toBe(true)
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'desc', limit: 10 })
+    expect(healthState()).toBe('ok')
+    expect(cards()).toHaveLength(2)
+  })
+
   it('shows the table from the server while the workspace still loads', async () => {
     const { board, render } = await overview(work())
     vi.spyOn(board.P, 'stillLoading').mockReturnValue(0.4)

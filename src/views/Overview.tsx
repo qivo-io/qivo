@@ -1062,8 +1062,12 @@ function useOverviewRead(info: ScopeInfo, table: HealthTable | null) {
     P.watchOverview(ask, owner, attempt)
     return () => P.watchOverview(null, owner, attempt)
   }, [ask, owner, attempt, request.kind])
-  // the table, after the scope's reads, which name this page as the owner;
-  // its reads stop with the scope's
+  /* The table, registered again after each registration of the scope's
+     reads. The store takes a table only from the page that owns the reads,
+     and a page that mounts while hidden, or on a day the store has not
+     reached yet, owns them only once it asks for a key. An unchanged table
+     asks nothing again, so a return keeps the rows loaded. Its reads stop
+     with the scope's. */
   const sort = table?.sort
   const dir = table?.dir
   const search = table?.search
@@ -1075,7 +1079,7 @@ function useOverviewRead(info: ScopeInfo, table: HealthTable | null) {
         : { sort, dir, search },
       owner,
     )
-  }, [sort, dir, search, owner, request.kind])
+  }, [sort, dir, search, owner, request.kind, ask])
   const view: OverviewView = P.overviewRead()
   // answers count only for the arguments on screen
   const mine = key !== null && view.key === key

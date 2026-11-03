@@ -1052,6 +1052,19 @@ describe('the health table', () => {
     expect(healthArgs(s)).toMatchObject({ scope: { kind: 'mine' }, limit: OVERVIEW_BATCH })
   })
 
+  it('takes a table only from the page that owns the reads, which a page that mounted hidden registers again once it asks', () => {
+    const { snap, base } = programOf(3)
+    const s = server(snap)
+    // mounted while hidden, the page asks for nothing and owns no reads yet
+    s.lists.watch(null, 1, 0)
+    s.lists.watchTable(BY_NAME, 1)
+    s.lists.watch(base, 1, 0)
+    expect(healthArgs(s)).toBeNull()
+    // the page registers its table again after the scope's reads
+    s.lists.watchTable(BY_NAME, 1)
+    expect(healthArgs(s)).toMatchObject({ sort: 'name', limit: OVERVIEW_BATCH })
+  })
+
   it('asks the same arguments on return and shows them refreshing until they answer, also after a reconnect', () => {
     const { snap, base } = programOf(3)
     const s = server(snap)
