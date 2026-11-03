@@ -411,6 +411,72 @@ describe('splits and stops', () => {
     },
   )
 
+  // the transition that answers a Load more's reads also has 15 tasks join
+  // the first batch's span, so it splits, and moves a task between its span
+  // and the pressed batch's; the halves and the Load more's batches would
+  // hold more reads than the list may, so the Load more gives way
+  it.each([
+    ['out of the first batch into the pressed one', '2026-11-03', '2026-11-15'],
+    ['out of the pressed batch into the first one', '2026-11-15', '2026-11-03'],
+  ] as const)(
+    'keeps one moment on screen where the first batch splits as a Load more answers, a task moving %s',
+    (_moves, from, to) => {
+      const snap = workspace(pausedTasks(30))
+      const s = server(snap)
+      s.lists.watch(BASE(snap), 1, 0)
+      s.deliver()
+      s.lists.more('paused')
+      s.deliver()
+      const before = ids(s.lists.view().paused)
+      expect(shown(s.lists.view().paused).map((b) => b.length)).toEqual([10, 10])
+      // Load more: its frozen read and the next batch wait for the change
+      const known = new Set(s.reads.keys())
+      s.state.holding = (slot) => !known.has(slot)
+      s.lists.more('paused')
+      const pressed = new Set(s.reads.keys())
+      for (let i = 0; i < 15; i++)
+        snap.issues.push(taskOf(snap, 100 + i, { paused: true, due_date: '2026-11-02' }))
+      const moved = snap.issues.find((t) => t.due_date === from) as Task
+      moved.due_date = to
+      const whole = wholeIds(snap, 'paused', BASE(snap))
+      // at every settle no row shows twice, and none is missing that both
+      // the press's answers and the current ones hold, up to the last row
+      // shown: one that the open batch's current answer pushes past its end
+      // waits for Load more
+      const kept = before.filter((id) => whole.includes(id))
+      const each = () => {
+        const view = ids(s.lists.view().paused)
+        expect(new Set(view).size).toBe(view.length)
+        const reach = Math.max(...view.map((id) => whole.indexOf(id)))
+        expect(kept.filter((id) => !view.includes(id) && whole.indexOf(id) < reach)).toEqual([])
+      }
+      // the batches on screen and the Load more's answer at once; the first
+      // batch splits and its halves wait
+      s.state.holding = (slot) => !pressed.has(slot)
+      s.change(each)
+      const waiting = s.lists.view().paused
+      expect(ids(waiting)).toEqual(before)
+      expect(waiting.reads).toBe(4)
+      expect(waiting.dropped).toBe(false)
+      expect(waiting.more).toBe('ready')
+      expect(waiting.end).toBe(false)
+      // the halves answer: every batch shows its current answer, and Load
+      // more goes on from there
+      s.state.holding = () => false
+      s.deliver(each)
+      let now = ids(s.lists.view().paused)
+      expect(now).toContain(moved.id)
+      expect(now).toEqual(whole.slice(0, now.length))
+      const halved = now.length
+      s.lists.more('paused')
+      s.deliver(each)
+      now = ids(s.lists.view().paused)
+      expect(now.length).toBeGreaterThan(halved)
+      expect(now).toEqual(whole.slice(0, now.length))
+      expect(s.lists.view().paused.dropped).toBe(false)
+    },
+  )
+
   it('gives a frozen batch whose reads stopped two reads that meet where it stopped', () => {
     const snap = workspace(pausedTasks(20))
     const s = server(snap)
