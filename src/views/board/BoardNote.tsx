@@ -3,16 +3,17 @@
    projects, the narrowing message of a selection past the Board's limits,
    a Board that is not available or did not load, a text filter past its
    limit and a wait too large to show tasks during. Each is an empty state
-   (data-empty-state), where focus goes once a task window closes over it
-   (lib/taskFocus.ts). The filter row stays usable beside every one. */
+   (components/ViewNote.tsx), where focus goes once a task window closes
+   over it (lib/taskFocus.ts). The filter row stays usable beside every
+   one. */
 
 import type { ReactNode } from 'react'
-import { Icon, ProjectName } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
 import { LIMITS } from '../../../convex/lib/limits'
 import { NoProjects } from '../../components/NoProjects'
+import { ViewNote } from '../../components/ViewNote'
 import { limitSentence } from '../../lib/fieldLimits'
-import type { ProjectVM, ScopeInfo } from '../../store/planner'
+import type { ScopeInfo } from '../../store/planner'
 import type { BoardVariant } from './boardArgs'
 import type { BoardView } from './useBoardView'
 
@@ -64,7 +65,8 @@ export function BoardNote({
           />
         )
       return (
-        <Note
+        <ViewNote
+          hooks="board"
           phone={phone}
           icon="layers"
           title="Choose a project"
@@ -76,7 +78,8 @@ export function BoardNote({
     case 'over_ceiling': {
       const { hint, projects } = narrowing()
       return (
-        <Note
+        <ViewNote
+          hooks="board"
           phone={phone}
           icon="filter"
           title={limitSentence(LIMITS.boardTasks)}
@@ -92,7 +95,8 @@ export function BoardNote({
       const sub = !info.wide && !info.isMeta
       const { hint, projects } = narrowing()
       return (
-        <Note
+        <ViewNote
+          hooks="board"
           phone={phone}
           icon="filter"
           title="This selection could not be loaded within the Board's limits."
@@ -109,7 +113,8 @@ export function BoardNote({
     }
     case 'unavailable':
       return (
-        <Note
+        <ViewNote
+          hooks="board"
           phone={phone}
           icon="eyeOff"
           title="This Board is not available"
@@ -122,7 +127,8 @@ export function BoardNote({
       )
     case 'error':
       return (
-        <Note
+        <ViewNote
+          hooks="board"
           phone={phone}
           icon="alert"
           title="The Board could not be loaded"
@@ -132,7 +138,8 @@ export function BoardNote({
       )
     case 'search_limit':
       return (
-        <Note
+        <ViewNote
+          hooks="board"
           phone={phone}
           icon="search"
           title={limitSentence(LIMITS.search)}
@@ -143,7 +150,8 @@ export function BoardNote({
     case 'refreshing':
       if (view.shows) return null
       return (
-        <Note
+        <ViewNote
+          hooks="board"
           phone={phone}
           icon="board"
           title="Loading tasks…"
@@ -153,78 +161,6 @@ export function BoardNote({
     default:
       return null
   }
-}
-
-/** One message in place of the Board: an icon, a title, a hint, the projects
-    it offers and one action. */
-function Note({
-  phone,
-  icon,
-  title,
-  hint,
-  projects,
-  onProject,
-  action,
-}: {
-  phone: boolean
-  icon: string
-  title: string
-  hint: string
-  projects?: readonly ProjectVM[]
-  onProject?: (id: string) => void
-  action?: { label: string; onClick: () => void }
-}) {
-  const list = projects && projects.length > 0 && onProject && (
-    <div data-board-choices className="flex max-w-[420px] flex-wrap justify-center gap-2">
-      {projects.map((p) => (
-        <Button key={p.id} type="button" data-board-choice={p.id} onClick={() => onProject(p.id)}>
-          <span className="truncate">
-            <ProjectName project={p} />
-          </span>
-        </Button>
-      ))}
-    </div>
-  )
-  const button = action && (
-    <Button type="button" onClick={action.onClick}>
-      {action.label}
-    </Button>
-  )
-  if (phone)
-    return (
-      <div className="mobile-task-empty" data-empty-state>
-        <Icon name={icon} size={24} />
-        <h2 data-empty-state-title>{title}</h2>
-        <p>{hint}</p>
-        {list}
-        {button}
-      </div>
-    )
-  // a list taller than the pane scrolls in the message, from its title on
-  return (
-    <div
-      data-empty-state
-      className="qivo-empty-state animate-in fade-in slide-in-from-bottom-1 flex min-h-[260px] flex-1 flex-col overflow-y-auto p-10"
-    >
-      {/* centered while it fits; auto margins, unlike centering, keep the
-          top of a taller message in reach of the scroll */}
-      <div className="m-auto flex flex-col items-center gap-1.5">
-        <div className="mb-2 grid size-[52px] place-items-center rounded-xl border border-border bg-surface-2 shadow-card">
-          <Icon name={icon} size={22} color="var(--text-3)" />
-        </div>
-        <div data-empty-state-title className="max-w-[460px] text-center text-md font-semibold">
-          {title}
-        </div>
-        <div className="max-w-[420px] text-center text-base leading-normal text-text-3">{hint}</div>
-        {(list || button) && (
-          <div className="mt-3 flex flex-col items-center gap-3">
-            {list}
-            {button}
-          </div>
-        )}
-      </div>
-    </div>
-  )
 }
 
 /** The note a Board shows above its tasks while its row source did not

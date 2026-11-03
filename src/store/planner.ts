@@ -7533,11 +7533,20 @@ export const PLANNER = {
       names the mounted page, as P.watchBoard's does, and a new `attempt`
       (the page's Try again) asks the summary and the delays afresh. A key
       whose day is not the local day now asks for nothing: a kept page shown
-      again after midnight renders once with the day it held. */
+      again after midnight renders once with the day it held, and where the
+      store has not reached the new day yet, as before its day watch ran
+      after sleep (lib/localDay.ts), it moves to it, so the page renders
+      again on the new day. */
   watchOverview: (key: string | null, owner = 0, attempt = 0) => {
     const base = key === null ? null : baseOfKey(key)
-    const today = base !== null && base.clock.day === isoFromDate(new Date())
-    overviewStep(() => overview.watch(today ? base : null, owner, attempt))
+    const now = new Date()
+    const today = isoFromDate(now)
+    const stale = base !== null && base.clock.day !== today
+    overviewStep(() => overview.watch(stale ? null : base, owner, attempt))
+    if (stale && PLANNER.loaded && PLANNER.TODAY_ISO !== today) {
+      rebuild(now)
+      emit()
+    }
   },
   /** What the Overview's reads hold (store/overviewLists.ts OverviewView):
       the summary's and the delays' answers for the Overview asked now and
