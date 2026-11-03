@@ -306,7 +306,7 @@ button { font: inherit; cursor: pointer; }
   left: -25%;
 }
 .media-capacity {
-  aspect-ratio: 2.1;
+  aspect-ratio: 3;
 }
 .media-capacity img {
   position: absolute;
