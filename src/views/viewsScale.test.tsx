@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { loadBoard, taskRow } from './boardFixture.setup'
 
-/* The Overview's task lists and the phone's task schedule mount their
-   first screen at once and the rest in slices, and the Overview's group
-   health reads every group's figures in one pass over the tasks. */
+/* The phone's task schedule mounts its first screen at once and the rest
+   in slices, the Overview's lists show the server's batches with Load
+   more, and the Overview's group health reads every group's figures in one
+   pass over the tasks. */
 
 /* A list of more than SYNC_LIMIT tasks mounts in slices. These tests lower
    it from 300, so a list of LONG tasks in one sub-project, well inside the

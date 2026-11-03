@@ -260,11 +260,11 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
           </Button>
         </div>
 
-        {/* All projects (deviation #47) — the Roadmap across every project this
-          login can reach, home organization and guest seats alike; the Board
-          and the Overview ask to choose one of them there. Sits above the
-          per-project list because it is the widest scope, not a page of its
-          own. */}
+        {/* All projects (deviation #47) shows the Roadmap across every
+          project this login can reach, home organization and guest seats
+          alike, and the Board and the Overview ask to choose one of them
+          there. It sits above the per-project list because it is the widest
+          scope, not a page of its own. */}
         <div className="[padding:0_12px_4px]">
           <Button
             variant="quiet"
