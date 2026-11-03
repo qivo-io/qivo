@@ -174,7 +174,16 @@ comment times, delay and project completion, and the rule that a subtask in
 an archived project makes no group. In the browser it then opens the Board of
 the project it made, waits for the deployment's answer for it (`tasks.board`)
 and checks that the cards of its two fixture tasks show, which it makes in
-To Do so that they show with **Focus** on or off. After that it checks the
+To Do so that they show with **Focus** on or off. It then makes a
+sub-project of its own under that project, with one To Do task due 70 days
+ago and one paused To Do task without a due date, opens the sub-project's
+Overview, waits for the deployment's answers (`overview.summary`,
+`overview.risk`, `overview.attention` and `overview.paused`) and checks that
+Completion, Paused, the opening sentence and both lists count exactly those
+two tasks. That needs a backend at v0.1.112 or later whose organization
+counts are whole, as `internal/overviewCountsBackfill` left them. Against
+an older backend, or while the counts read **Counting…**, the step fails.
+After that it checks the
 search on **Settings → Projects → Archived tasks** and main Search, where an
 active task the run made must show with **Include archived tasks** off and a
 task the run archived only with it on. That shows whether the deployment's
