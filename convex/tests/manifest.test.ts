@@ -611,6 +611,7 @@ orgRemovals:verifyNoCheckout action internal {"type":"object","value":{"org_id":
 orgs:setSlug mutation public {"type":"object","value":{"slug":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"slug":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgs:update mutation public {"type":"object","value":{"patch":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"date_format":{"fieldType":{"type":"union","value":[{"type":"literal","value":"YYYY-MM-DD"},{"type":"literal","value":"DD/MM/YYYY"},{"type":"literal","value":"MM/DD/YYYY"},{"type":"literal","value":"DD.MM.YYYY"},{"type":"literal","value":"D MMM YYYY"},{"type":"literal","value":"MMM D, YYYY"}]},"optional":true},"week_start":{"fieldType":{"type":"number"},"optional":true},"week_one_rule":{"fieldType":{"type":"union","value":[{"type":"literal","value":"jan1"},{"type":"literal","value":"first4day"},{"type":"literal","value":"firstfull"}]},"optional":true},"default_plannable_hours":{"fieldType":{"type":"number"},"optional":true},"max_attachment_mb":{"fieldType":{"type":"number"},"optional":true},"project_creators":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admins"},{"type":"literal","value":"users"},{"type":"literal","value":"selected"}]},"optional":true}}},"optional":false},"expected":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"date_format":{"fieldType":{"type":"string"},"optional":true},"week_start":{"fieldType":{"type":"number"},"optional":true},"week_one_rule":{"fieldType":{"type":"string"},"optional":true},"default_plannable_hours":{"fieldType":{"type":"number"},"optional":true},"max_attachment_mb":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true},"project_creators":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"slug":{"fieldType":{"type":"string"},"optional":true}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 overview:attention query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"day":{"fieldType":{"type":"string"},"optional":false},"week":{"fieldType":{"type":"string"},"optional":false},"week_starts":{"fieldType":{"type":"array","value":{"type":"number"}},"optional":false},"week_end":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"end":{"fieldType":{"type":"string"},"optional":true}}}
+overview:health query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"day":{"fieldType":{"type":"string"},"optional":false},"week":{"fieldType":{"type":"string"},"optional":false},"week_starts":{"fieldType":{"type":"array","value":{"type":"number"}},"optional":false},"week_end":{"fieldType":{"type":"number"},"optional":false},"sort":{"fieldType":{"type":"union","value":[{"type":"literal","value":"name"},{"type":"literal","value":"lead"},{"type":"literal","value":"progress"},{"type":"literal","value":"done"},{"type":"literal","value":"left"},{"type":"literal","value":"late"},{"type":"literal","value":"behind"},{"type":"literal","value":"paused"}]},"optional":false},"dir":{"fieldType":{"type":"union","value":[{"type":"literal","value":"asc"},{"type":"literal","value":"desc"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"limit":{"fieldType":{"type":"number"},"optional":false}}}
 overview:paused query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"end":{"fieldType":{"type":"string"},"optional":true}}}
 overview:risk query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"day":{"fieldType":{"type":"string"},"optional":false},"week":{"fieldType":{"type":"string"},"optional":false},"week_starts":{"fieldType":{"type":"array","value":{"type":"number"}},"optional":false},"week_end":{"fieldType":{"type":"number"},"optional":false}}}
 overview:summary query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"day":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1052,15 +1053,16 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     recordExport: 'authedMutation',
   },
   orgs: { update: 'adminMutation', setSlug: 'adminMutation' },
-  // The Overview's summary, delays and lists: any signed-in login reads a
-  // project scope with its seat in that organization, or My view across its
-  // seats, under ordinary access, and a scope it does not hold answers
-  // unavailable.
+  // The Overview's summary, delays, lists and health table: any signed-in
+  // login reads a project scope with its seat in that organization, or My
+  // view across its seats, under ordinary access, and a scope it does not
+  // hold answers unavailable.
   overview: {
     summary: 'authedQuery',
     risk: 'authedQuery',
     attention: 'authedQuery',
     paused: 'authedQuery',
+    health: 'authedQuery',
   },
   planning: { assigneeLoad: 'authedQuery', ownerLoads: 'orgQuery' },
   // Operator-only management of shared photo curation; org credentials cannot enter.
@@ -1203,7 +1205,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 214
+const PUBLIC_COUNT = 215
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
