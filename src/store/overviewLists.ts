@@ -58,10 +58,10 @@
      OVERVIEW_BATCH rows at first and as many more for each Load more. A new
      sort or search starts again at the first rows. A new scope does too,
      with no search and the same sort, so the health read never asks the
-     new scope with the old scope's search. While
-     an answer for new table arguments is on its way, the last answer shown
-     for the same scope and clock stays as `kept`, as the store's view read
-     drops what it held for other arguments; a new scope or clock shows
+     new scope with the old scope's search. While an answer for new table
+     arguments is on its way, the last answer shown for the same scope and
+     clock stays as `kept`, as the store's view read drops what it held for
+     other arguments, and offers no Load more; a new scope or clock shows
      nothing until its own answer. A Load more that fails goes back to the
      rows it showed, asking their arguments again so they keep updating,
      and offers Retry. */
@@ -279,7 +279,8 @@ export type HealthView = {
   /** whether the answer shown answers other table arguments than those
       asked now: a sort, a search or a Load more on its way */
   kept: boolean
-  /** Load more: `ready` to press, `loading` while its rows load, none */
+  /** Load more: `ready` to press, `loading` while its rows load, none,
+      also while the answer shown is kept for another sort or search */
   more: 'ready' | 'loading' | null
   /** whether a Load more failed, so the rows are the ones before it and
       Retry asks it again */
@@ -692,13 +693,10 @@ export function createOverviewReads(transport: OverviewTransport) {
     if (key === null || table === null) return null
     const held = transport.read(HEALTH_SLOT)
     const ask = { ...table, limit }
-    const more = (
-      value: HealthAnswer | undefined,
-      pressed: boolean,
-    ): NonNullable<HealthView>['more'] => {
+    const more = (value: HealthAnswer, pressed: boolean): NonNullable<HealthView>['more'] => {
       if (failedMore !== null) return null
       if (pressed) return 'loading'
-      return value?.state === 'ok' &&
+      return value.state === 'ok' &&
         value.rows.length < value.total &&
         value.rows.length < value.most
         ? 'ready'
@@ -740,14 +738,16 @@ export function createOverviewReads(transport: OverviewTransport) {
             more: null,
             moreFailed: false,
           }
-    // waiting: the last answer shown for this scope and clock
+    // waiting: the last answer shown for this scope and clock, which offers
+    // Load more only where it answers the table asked now, so a press never
+    // raises the rows of a sort or search on its way
     if (before === null) return null
     return {
       value: before.value,
       table: before.ask,
       current: false,
       kept: !same,
-      more: more(before.value, pressed),
+      more: same || pressed ? more(before.value, pressed) : null,
       moreFailed: failedMore !== null,
     }
   }

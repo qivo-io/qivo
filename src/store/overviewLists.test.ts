@@ -1139,6 +1139,33 @@ describe('the health table', () => {
     expect(healthNames(s)).toHaveLength(2 * OVERVIEW_BATCH)
   })
 
+  it('offers no Load more on rows kept for another sort or search, so a press there asks nothing', () => {
+    const { snap, base } = programOf(25)
+    const s = server(snap)
+    s.lists.watch(base, 1, 0)
+    s.lists.watchTable(BY_NAME, 1)
+    s.deliver()
+    expect(s.lists.view().health?.more).toBe('ready')
+    s.state.holding = (slot) => slot === HEALTH
+    const next: HealthTable[] = [
+      { ...BY_NAME, dir: 'desc' },
+      { ...BY_NAME, search: 'sub 1' },
+    ]
+    for (const table of next) {
+      s.lists.watchTable(table, 1)
+      expect(s.lists.view().health).toMatchObject({ kept: true, more: null })
+      const asked = s.state.asked.length
+      s.lists.moreHealth()
+      expect(s.state.asked.length).toBe(asked)
+      expect(healthArgs(s)).toMatchObject({ limit: OVERVIEW_BATCH })
+    }
+    // the answer for the table asked now offers it again
+    s.state.holding = () => false
+    s.deliver()
+    expect(s.lists.view().health).toMatchObject({ kept: false, more: 'ready' })
+    expect(healthNames(s)).toHaveLength(OVERVIEW_BATCH)
+  })
+
   it('forgets the health read on release and clear', () => {
     const { snap, base } = programOf(3)
     const s = server(snap)
