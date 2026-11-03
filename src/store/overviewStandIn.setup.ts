@@ -516,3 +516,30 @@ export function overviewStandIn(
     ...(split === undefined ? {} : { split }),
   }
 }
+
+/** Answers a test double's subscription to `name`, one of the Overview's
+    queries as Convex names it (`overview:summary` and so on), with `args`
+    over `workspace` through `next`, or through `fail` where the stand-in
+    refuses, as the app-level tests' network doubles answer the Board's. */
+export function answerOverview(
+  workspace: Workspace,
+  name: string,
+  args: unknown,
+  next: (value: unknown) => void,
+  fail?: (error: unknown) => void,
+  options?: { sees?: (projectId: string) => boolean; force?: ForcedOverview },
+) {
+  let answer: unknown
+  try {
+    answer = overviewStandIn(
+      workspace,
+      name.slice('overview:'.length) as OverviewQuery,
+      args as OverviewArgs,
+      options,
+    )
+  } catch (error) {
+    fail?.(error)
+    return
+  }
+  next(structuredClone(answer))
+}

@@ -1,43 +1,14 @@
-/* The Overview's figures over a scope's tasks as the page shows them, in
+/* The Overview's figures that still come from the workspace's tasks, in
  * one place that src/views/Overview.tsx renders from and the server's
  * parity test (src/store/overviewParity.test.ts) compares with: the
- * summary strip and sentence, the two lists, the status distribution and
- * the health rows. Pure reads of the store; nothing here renders. The
- * server's reads (convex/lib/overview.ts) answer the same figures without
- * loading every task. */
+ * health table's rows and its sparkbars' status distribution. Pure reads
+ * of the store; nothing here renders. The page reads its summary, its
+ * delays and its two lists from the server (convex/overview.ts), and the
+ * health stage (t3/limits-overview-health) moves these onto the per
+ * sub-project reader (convex/lib/overview.ts subProjectHealth) the same
+ * way, keeping them as the test's oracle. */
 
 import { type IssueVM, P, type ScopeInfo } from '../store/planner'
-
-/** The summary's figures over `scoped`, the scope's tasks
- * (P.scopedIssues(info)): Completion over the leaves, In progress and In
- * review leaves, the paused leaves (a group's own pause is dormant), the
- * tasks not done and due before today, and the Overdue & at risk list, the
- * overdue ones and, in projects that track delay, those projected late,
- * by due date. */
-export function overviewFigures(info: ScopeInfo, scoped: IssueVM[]) {
-  const prog = P.progressIn(info.subIds, info.only)
-  const inProgress = scoped.filter((i) => !P.isGroup(i) && i.status === 'progress').length
-  const inReview = scoped.filter((i) => !P.isGroup(i) && i.status === 'review').length
-  const pausedIssues = scoped.filter((i) => P.isPaused(i))
-  /* The two halves of "at risk", counted apart for the summary sentence: a date
-     already lost reads differently from one the plan says is about to be. The
-     list below merges them because the ROWS are the same shape; the sentence
-     must not, because the advice differs. */
-  const overdueCount = scoped.filter((i) => !P.isDone(i) && i.due && i.due < P.TODAY_ISO).length
-  // deadlines lost or being lost: past-due (any project) plus, for
-  // delay-tracking projects, issues the capacity projection says will miss
-  // their due date (0064). A 'late' verdict implies a due date, so every
-  // row has one to sort and render by.
-  const atRiskIssues = scoped
-    .filter((i) => {
-      if (P.isDone(i)) return false
-      if (i.due && i.due < P.TODAY_ISO) return true
-      const d = P.tracksDelay(i) ? P.delayOf(i) : null
-      return !!(d && d.status === 'late')
-    })
-    .sort((a, b) => (a.due < b.due ? -1 : 1))
-  return { prog, inProgress, inReview, pausedIssues, overdueCount, atRiskIssues }
-}
 
 /** The status distribution of `items`: how many of them without subtasks
  * hold each status. */
