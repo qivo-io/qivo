@@ -1907,7 +1907,8 @@ A page reads only the projects the list covers, side by side, and never
 tasks of projects you cannot read. In a very large organization a list can
 be refused when the call has no room for a page beside your projects and
 access, or when the list covers more projects than one page can open side
-by side. Name a project to list one project's tasks instead.
+by side. If the list covers too many projects, name a project to list one
+project's tasks instead.
 
 These active list calls are refused: an `offset` other than `0`, negative
 ones included (`offset does not apply to active tasks; pass next_cursor as

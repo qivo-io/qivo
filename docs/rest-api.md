@@ -1188,7 +1188,8 @@ A page reads only the projects the list covers, side by side, and never
 tasks of projects you cannot read. In a very large organization a list can
 be refused when the request has no room for a page beside your projects and
 access, or when the list covers more projects than one page can open side
-by side. Name a project to list one project's tasks instead.
+by side. If the list covers too many projects, name a project to list one
+project's tasks instead.
 
 A `limit` that is not a whole number from 1 to 200 is a `400` with `limit
 must be a whole number of tasks from 1 to 200.` Until October 2026 a list
