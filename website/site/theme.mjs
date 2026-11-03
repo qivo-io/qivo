@@ -299,11 +299,11 @@ button { font: inherit; cursor: pointer; }
 }
 .media-roadmap img {
   position: absolute;
-  width: 125%;
+  width: 126%;
   max-width: none;
   height: auto;
   top: -3%;
-  left: -25%;
+  left: -26%;
 }
 .media-capacity {
   aspect-ratio: 3;
