@@ -336,6 +336,21 @@ describe('roadmap undo through the client store', () => {
     expect(P.roadmapUndo).toEqual({ count: 0, busy: false, disabled: true })
   })
 
+  it('renders Undo busy while a write that paints nothing waits, and ready once it answers', async () => {
+    await savePlan()
+    // what Undo showed at each render the store asked for
+    const shown: boolean[] = []
+    const stop = P.subscribe(() => shown.push(P.roadmapUndo.busy))
+    P.saveUINow({ roadmapWin: P.DEFAULT_WIN })
+    expect(latest().name).toBe('prefs:save')
+    expect(shown).toEqual([true])
+    latest().resolve(null)
+    await settled()
+    expect(shown).toEqual([true, false])
+    stop()
+    expect(P.roadmapUndo).toEqual({ count: 1, busy: false, disabled: false })
+  })
+
   it('does not let an ordinary task write from an earlier visit disable the new visit', async () => {
     await savePlan()
     P.roadmapContext(true, true)
