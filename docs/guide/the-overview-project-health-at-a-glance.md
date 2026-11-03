@@ -71,10 +71,12 @@ waits In Review with one.
 
 A guest or organization Viewer sees other people's work one person at a
 time, so where the projected delays of a scope need more than one person's
-work, Overview says they are not available, and a health row that needs
-more than one person's work reads **unknown** under Delayed and Slipping. A
-guest's or Viewer's health table sorted by Delayed therefore often shows
-its rows by name ([Who sees what](./who-sees-what-the-access-model.md)).
+work, Overview says they are not available, and where the health table's
+rows need more than one person's work, Delayed and Slipping read
+**unknown** on each row that needs anyone but the one person Qivo reads
+for you. A guest's or Viewer's health table sorted by Delayed therefore
+often shows its rows by name
+([Who sees what](./who-sees-what-the-access-model.md)).
 
 Overview stops updating while its page is hidden behind another one or the
 browser tab or desktop window is hidden or minimized. Shown again, it keeps

@@ -105,10 +105,11 @@ person's task that depends on their other work says unavailable until the
 task itself is read. The Overview reads one person's other work at a time
 for them too, so where a scope's projected delays need more than one
 person's work, it says they are not available, and its Overdue & at risk
-list takes one person's projected tasks a **Load more** at a time. Its
-health table shows **Delayed** and **Slipping** as **unknown** on a row
-that needs more than one person's work, and then sorts by name where you
-sort by them.
+list takes one person's projected tasks a **Load more** at a time. Where
+its health table's rows need more than one person's work, it shows
+**Delayed** and **Slipping** as **unknown** on each row that needs anyone
+but the one person it reads, and then sorts by name where you sort by
+them.
 
 Change history follows the same rules. You see a task's changes only if you
 can access the task and every project a change involves, such as both ends of
