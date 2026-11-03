@@ -22,8 +22,14 @@
    - A frozen batch that grew past OVERVIEW.split rows answers `split`, and
      one whose reads stopped answers `complete: false` with the last
      position it judged: each gives way to two batches that meet there, and
-     shows its earlier answer until both answered. Two frozen batches next
-     to each other whose rows fit OVERVIEW.split become one read.
+     shows its earlier answer until both answered. Meanwhile the list's
+     other batches keep what they show as well, and take their new answers
+     with the halves' first ones, so the list shows the answers of one
+     moment: a row that moved out of that batch never shows twice, and one
+     that moved into it never goes missing. Reads that stopped at the
+     batch's own end judged every row in it, so it gives way to nothing.
+     Two frozen batches next to each other whose rows fit OVERVIEW.split
+     become one read.
    - A list keeps at most LIST_ROWS rows and LIST_READS reads, split halves
      and merges included. Past either, a merge still on its way gives way
      first, then the list drops its first batches until both fit and says
@@ -258,6 +264,22 @@ type List = {
   failed: boolean
 }
 
+/**
+ * Where fixed batch (`cursor`, `end`] gives way to two halves after its ok
+ * answer `v`: the position it split at, or the last one it judged where its
+ * reads stopped. Null where it gives way to nothing: an open batch (no
+ * `end`), an answer that fits, or reads that stopped at the batch's own end
+ * or cursor, where one half would ask again with the batch's own arguments
+ * and get the same answer. The store keeps a batch's rows exactly while it
+ * gives way (store/planner.ts listQuery).
+ */
+export function splitAt(cursor: string | null, end: string | null, v: OkList): string | null {
+  if (end === null) return null
+  if (v.split !== undefined) return v.split
+  if (v.complete || v.next === null || v.next === end || v.next === cursor) return null
+  return v.next
+}
+
 /** The refusal code of a query's error (convex/lib/functions.ts Refusal). */
 const codeOf = (error: unknown): string | undefined =>
   error instanceof ConvexError ? (error.data as { code?: string } | undefined)?.code : undefined
@@ -325,9 +347,14 @@ export function createOverviewReads(transport: OverviewTransport) {
     list.shown = [newBatch(list, null, null)]
   }
 
-  /** Drops batch `b`, the first on screen, and the swaps it is part of. */
+  /** Drops batch `b`, the first on screen, and the swaps it is part of.
+      Where that was a split the other batches waited for, they take their
+      answers in the next pass. */
   function drop(list: List, b: Batch) {
-    for (const s of list.swaps.filter((s) => s.from.includes(b))) cancel(list, s)
+    for (const s of list.swaps.filter((s) => s.from.includes(b))) {
+      if (s.why === 'split') again = true
+      cancel(list, s)
+    }
     transport.release(b.slot)
     list.shown = list.shown.filter((x) => x !== b)
     list.dropped = true
@@ -355,19 +382,26 @@ export function createOverviewReads(transport: OverviewTransport) {
     (b.cursor !== null || b.end !== null)
 
   /** What `a` shows, or null where batch `b` gives way to two halves: a
-      fixed batch that split, or whose reads stopped before its end. */
+      fixed batch that split, or whose reads stopped before its end
+      (splitAt). A fixed batch whose reads stopped at its end shows its
+      rows as the whole batch; one whose reads stopped at its cursor judged
+      nothing, which the server answers over_budget. */
   function settledOf(b: Batch, a: { value?: ListAnswer; error?: unknown }): Shown | null {
     if (a.error !== undefined) return { kind: 'error', error: a.error }
     const v = a.value as ListAnswer
     if (v.state !== 'ok') return { kind: 'refused', value: v }
-    if (b.end !== null && (v.split !== undefined || !v.complete)) return null
+    if (splitAt(b.cursor, b.end, v) !== null) return null
+    if (b.end !== null && !v.complete)
+      return v.next === b.end
+        ? { kind: 'ok', answer: { ...v, complete: true } }
+        : { kind: 'refused', value: { state: 'over_budget' } }
     return { kind: 'ok', answer: v }
   }
 
   /** The two batches that replace fixed batch `b`, whose answer `v` split
       or stopped, meeting where it split or the last position it judged. */
   function halves(list: List, b: Batch, v: OkList): Batch[] {
-    const at = v.split ?? v.next
+    const at = splitAt(b.cursor, b.end, v) as string
     return [newBatch(list, b.cursor, at), newBatch(list, at, b.end)]
   }
 
@@ -413,7 +447,13 @@ export function createOverviewReads(transport: OverviewTransport) {
           i--
         }
       }
-    // swaps whose batches all answered replace what they stood for
+    // swaps whose batches all answered replace what they stood for, all at
+    // once with every split's halves: while a batch on screen still shows
+    // its older answer for its halves, a current answer beside it could
+    // show a row that left it a second time
+    const splitting = list.swaps.some(
+      (s) => s.why === 'split' && !s.to.every((b) => b.shown !== null),
+    )
     for (const s of list.swaps) {
       if (!s.to.every((b) => b.shown !== null)) continue
       if (s.why === 'merge' && s.to.some((b) => b.shown?.kind !== 'ok')) {
@@ -422,6 +462,7 @@ export function createOverviewReads(transport: OverviewTransport) {
         cancel(list, s)
         continue
       }
+      if (splitting) continue
       const at = list.shown.indexOf(s.from[0] as Batch)
       if (at < 0) {
         cancel(list, s)
@@ -431,7 +472,9 @@ export function createOverviewReads(transport: OverviewTransport) {
       for (const b of s.from) transport.release(b.slot)
       list.swaps = list.swaps.filter((x) => x !== s)
     }
-    // the batches on screen take their new answers
+    // the batches on screen take their new answers, once no batch on
+    // screen waits for its halves, so the list shows one moment's answers
+    const fresh: [Batch, Shown][] = []
     for (const b of list.shown) {
       const a = answerOf(list, b)
       if (a === undefined) continue
@@ -441,17 +484,17 @@ export function createOverviewReads(transport: OverviewTransport) {
       if (swap?.why === 'more') continue
       const settled = settledOf(b, a)
       if (settled === null) {
-        // it gives way to its halves, also where it waited to merge, so only
-        // a split's batch shows an older answer (listView)
+        // it gives way to its halves, also where it waited to merge
         if (swap?.why === 'merge') cancel(list, swap)
         if (swap?.why !== 'split')
           list.swaps.push({ from: [b], to: halves(list, b, a.value as OkList), why: 'split' })
         continue
       }
-      b.shown = settled
+      fresh.push([b, settled])
       // an answer that fits again ends the split it started
       if (swap?.why === 'split') cancel(list, swap)
     }
+    if (!list.swaps.some((s) => s.why === 'split')) for (const [b, shown] of fresh) b.shown = shown
     // two frozen batches whose rows fit one read become one
     for (let i = 0; i + 1 < list.shown.length; i++) {
       const x = list.shown[i] as Batch
@@ -536,9 +579,10 @@ export function createOverviewReads(transport: OverviewTransport) {
   function listView(list: List): ListView {
     const batches: BatchView[] = []
     let refreshing = false
-    // a batch on screen shows an older answer while its halves load, so the
-    // list cannot say it reached its end; a merge's batches keep taking
-    // their answers (settleList), and Load more copes with either
+    // while a batch on screen waits for its halves the list shows older
+    // answers (settleList), so it cannot say it reached its end; nor while
+    // a batch waits for its answer, as after Try again; a merge's batches
+    // keep taking their answers, and Load more copes with either
     let older = false
     for (const b of list.shown) {
       if (list.swaps.some((s) => s.why === 'split' && s.from.includes(b))) older = true
@@ -579,6 +623,7 @@ export function createOverviewReads(transport: OverviewTransport) {
       open &&
       !pressed &&
       !older &&
+      !batches.some((b) => b.waiting) &&
       lastShown?.kind === 'ok' &&
       lastShown.answer.next === null &&
       lastShown.answer.complete &&

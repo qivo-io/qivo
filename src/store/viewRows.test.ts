@@ -16,7 +16,7 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
-  live: null as null | { reconnect(): void },
+  live: null as null | { reconnect(): void; batch(step: () => void): void },
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
@@ -670,6 +670,42 @@ describe("a write's view part while several views read", () => {
     const half = store.P.overviewRead().paused.batches[0]
     expect(half?.rows.map((r) => r.id)).toEqual(['far'])
     expect(store.P.viewTask(half?.slot ?? '', 'far')?.status).toBe('progress')
+  })
+
+  it("takes one transition's batch answers in together, so a row that left a batch waiting for its halves shows once", async () => {
+    store.P.watchOverview(overviewKey(), 1, 0)
+    await turn()
+    const held = (id: string, num: number) => row(id, num, { paused: true })
+    paused({}, batch([held('a', 1), held('b', 2)], { next: 'p2', end: 'p2' }))
+    await turn()
+    store.P.overviewMore('paused')
+    await turn()
+    paused({ end: 'p2' }, batch([held('a', 1), held('b', 2)], { next: 'p2', end: 'p2' }))
+    paused({ cursor: 'p2' }, batch([held('c', 3)], { end: 'p3' }))
+    await turn()
+    // the frozen batch splits into two, which then merge into one read,
+    // subscribed after the open batch's
+    paused({ end: 'p2' }, batch([held('a', 1)], { next: 'p2', end: 'p2', split: 'p1' }))
+    await turn()
+    paused({ end: 'p1' }, batch([held('a', 1)], { next: 'p1', end: 'p1' }))
+    paused({ cursor: 'p1', end: 'p2' }, batch([held('b', 2)], { next: 'p2', end: 'p2' }))
+    await turn()
+    paused({ end: 'p2' }, batch([held('a', 1), held('b', 2)], { next: 'p2', end: 'p2' }))
+    await turn()
+    expect(pausedIds()).toEqual([['a', 'b'], ['c']])
+    // one server state: b moves into the open batch, and the merged batch,
+    // grown meanwhile, splits; the open batch's read hears it first
+    double.live?.batch(() => {
+      paused({ cursor: 'p2' }, batch([held('b', 2), held('c', 3)], { end: 'p3' }))
+      paused({ end: 'p2' }, batch([held('a', 1)], { next: 'p2', end: 'p2', split: 'p1' }))
+    })
+    await turn()
+    // while its halves load, the list shows the answers of before
+    expect(pausedIds()).toEqual([['a', 'b'], ['c']])
+    paused({ end: 'p1' }, batch([held('a', 1)], { next: 'p1', end: 'p1' }))
+    paused({ cursor: 'p1', end: 'p2' }, batch([], { next: 'p2', end: 'p2' }))
+    await turn()
+    expect(pausedIds().flat()).toEqual(['a', 'b', 'c'])
   })
 
   it('ends a write held by the Overview batch that holds its task, once every read holding it delivered', async () => {

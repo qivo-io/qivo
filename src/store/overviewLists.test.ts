@@ -329,6 +329,37 @@ describe('splits and stops', () => {
     expect(after.batches.some((b) => b.rows.length > OVERVIEW_SPLIT)).toBe(false)
   })
 
+  it('shows the answers of before while a frozen batch waits for its halves, so a row that left it shows once', () => {
+    const snap = workspace(pausedTasks(20))
+    const s = server(snap)
+    s.lists.watch(BASE(snap), 1, 0)
+    s.deliver()
+    s.lists.more('paused')
+    s.deliver()
+    const before = ids(s.lists.view().paused)
+    expect(shown(s.lists.view().paused).map((b) => b.length)).toEqual([10, 10])
+    // 15 tasks join the frozen batch's span, so it splits, and one of its
+    // own moves into the open batch's
+    for (let i = 0; i < 15; i++)
+      snap.issues.push(taskOf(snap, 100 + i, { paused: true, due_date: '2026-11-02' }))
+    const moved = snap.issues.find((t) => t.due_date === '2026-11-05') as Task
+    moved.due_date = '2026-11-15'
+    const slots = new Set(s.reads.keys())
+    s.state.holding = (slot) => !slots.has(slot)
+    s.change()
+    const waiting = s.lists.view().paused
+    expect(ids(waiting).filter((id) => id === moved.id)).toHaveLength(1)
+    expect(ids(waiting)).toEqual(before)
+    expect(waiting.end).toBe(false)
+    // the halves answer: every batch shows its current answer at once
+    s.state.holding = () => false
+    s.deliver()
+    const after = ids(s.lists.view().paused)
+    expect(new Set(after).size).toBe(after.length)
+    expect(after).toContain(moved.id)
+    expect(after).toEqual(wholeIds(snap, 'paused', BASE(snap)).slice(0, after.length))
+  })
+
   it('gives a frozen batch whose reads stopped two reads that meet where it stopped', () => {
     const snap = workspace(pausedTasks(20))
     const s = server(snap)
@@ -389,6 +420,33 @@ describe('refusals and failures', () => {
     view = s.lists.view().paused
     expect(view.failed).toBe(true)
     expect(view.state).toBe('error')
+  })
+
+  it('says no end while a batch on screen waits for its answer after Try again', () => {
+    const snap = workspace(pausedTasks(11))
+    const s = server(snap)
+    s.lists.watch(BASE(snap), 1, 0)
+    s.deliver()
+    s.lists.more('paused')
+    s.deliver()
+    expect(shown(s.lists.view().paused).map((b) => b.length)).toEqual([10, 1])
+    expect(s.lists.view().paused.end).toBe(true)
+    // the frozen batch cannot be checked; the open one at the end still can
+    s.state.forceOf = (_slot, args) => (args.end !== undefined ? { list: 'over_budget' } : {})
+    s.change()
+    let view = s.lists.view().paused
+    expect(view.batches[0]?.note).toEqual({ kind: 'over_budget' })
+    expect(view.end).toBe(false)
+    // Try again: its answer is on its way, and the list is not at its end
+    s.state.forceOf = () => ({})
+    s.state.holding = (_slot, args) => args.end !== undefined
+    s.lists.retry('paused', view.batches[0]?.id as number)
+    view = s.lists.view().paused
+    expect(view.batches[0]?.waiting).toBe(true)
+    expect(view.end).toBe(false)
+    s.state.holding = () => false
+    s.deliver()
+    expect(s.lists.view().paused.end).toBe(true)
   })
 
   it('answers over_budget in place, never as an end, and keeps the place of a failed Load more for Retry', () => {
@@ -552,6 +610,110 @@ describe('the retained cap', () => {
     expect(ids(s.lists.view().paused)).toEqual(
       wholeIds(snap, 'paused', BASE(snap)).slice(0, 2 * OVERVIEW_BATCH),
     )
+  })
+})
+
+describe('a fixed batch whose reads stopped at its own end', () => {
+  it('shows it whole and asks no half with its own arguments, over a transport that joins equal reads', () => {
+    // positions p01 to p40 of one list, answered as the server answers them
+    const POS = Array.from({ length: 40 }, (_, i) => `p${String(i + 1).padStart(2, '0')}`)
+    const row = (id: string) => ({ id }) as OverviewRow
+    let stopAtEnd = false
+    const answer = (args: { cursor?: string; end?: string }): ListAnswer => {
+      const after = POS.filter((p) => args.cursor === undefined || p > args.cursor)
+      if (args.end === undefined) {
+        const rows = after.slice(0, OVERVIEW_BATCH)
+        const last = rows.at(-1) ?? null
+        const more = after.length > OVERVIEW_BATCH
+        return {
+          state: 'ok',
+          rows: rows.map(row),
+          complete: true,
+          next: more ? last : null,
+          end: last,
+        }
+      }
+      const rows = after.filter((p) => p <= (args.end as string)).map(row)
+      // the batch's reads stopped on the first candidate past its end, the
+      // last position they judged being the end itself
+      return { state: 'ok', rows, complete: !stopAtEnd, next: args.end, end: args.end }
+    }
+    // the store's subscriptions: equal arguments share one, and a watch
+    // that joins one whose answer arrived takes it at once and settles
+    // (store/planner.ts syncViewRead `joined`, lib/liveQueries.ts)
+    type Sub = { count: number; value?: ListAnswer }
+    const subs = new Map<string, Sub>()
+    const slots = new Map<
+      string,
+      { live: string | null; held: { key: string; value: ListAnswer } | null }
+    >()
+    let watches = 0
+    const stop = (slot: string) => {
+      const s = slots.get(slot)
+      if (!s || s.live === null) return
+      const sub = subs.get(s.live)
+      if (sub && --sub.count === 0) subs.delete(s.live)
+      s.live = null
+    }
+    const lists = createOverviewReads({
+      watch(slot, query, key) {
+        // a guard of the test's own: without the module's, settle never ends
+        if (++watches > 500) throw new Error('the lists asked for reads without end')
+        if (query !== 'paused') return
+        const s = slots.get(slot) ?? { live: null, held: null }
+        slots.set(slot, s)
+        if (key === null) return stop(slot)
+        if (s.live === key) return
+        stop(slot)
+        const sub: Sub = subs.get(key) ?? { count: 0 }
+        sub.count++
+        subs.set(key, sub)
+        s.live = key
+        if (sub.value !== undefined) {
+          s.held = { key, value: sub.value }
+          lists.settle()
+        }
+      },
+      read(slot) {
+        const s = slots.get(slot)
+        return s?.held
+          ? { key: s.held.key, value: s.held.value, current: s.live === s.held.key }
+          : { key: null, current: false }
+      },
+      release(slot) {
+        stop(slot)
+        slots.delete(slot)
+      },
+    })
+    /** The server answers every subscription whose answer changed. */
+    const deliver = () => {
+      for (const [key, sub] of subs) {
+        const value = answer(JSON.parse(key) as { cursor?: string; end?: string })
+        if (JSON.stringify(sub.value) === JSON.stringify(value)) continue
+        sub.value = value
+        for (const s of slots.values()) if (s.live === key) s.held = { key, value }
+        lists.settle()
+      }
+    }
+    const base: OverviewBase = {
+      scope: { kind: 'project', org_id: 'org', project_id: 'project' },
+      clock: clock(),
+    }
+    lists.watch(base, 1, 0)
+    deliver()
+    lists.more('paused')
+    deliver()
+    deliver()
+    const ready = lists.view().paused
+    expect(shown(ready)).toEqual([POS.slice(0, 10), POS.slice(10, 20)])
+    watches = 0
+    stopAtEnd = true
+    expect(() => deliver()).not.toThrow()
+    const view = lists.view().paused
+    expect(shown(view)).toEqual([POS.slice(0, 10), POS.slice(10, 20)])
+    expect(view.batches[0]?.note).toBeNull()
+    expect(view.reads).toBe(2)
+    expect(view.more).toBe('ready')
   })
 })
 

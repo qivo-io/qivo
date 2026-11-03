@@ -160,6 +160,7 @@ import {
   type ListKind,
   type OverviewQuery,
   type OverviewView,
+  splitAt,
 } from './overviewLists'
 import { createOwnerLoadCache } from './ownerLoadCache'
 import { createPreferences } from './preferences'
@@ -2323,14 +2324,14 @@ const viewRows = createViewRows(isoToWeek, viewLive)
 const KEEP_ROWS = Symbol('keep the rows')
 
 /** What a view read subscribes, and the rows its answer brings: `rows`
-    answers the rows of a value, null for a value that brings none (the
-    read's rows go) or KEEP_ROWS for one whose rows stay as they were, as a
-    fixed Overview batch that split keeps its last rows until its halves
-    answer. A read without `rows`, such as the Overview's summary, holds no
-    rows, and its deliveries hold no write. */
+    answers the rows of a value for the arguments `key` (JSON), null for a
+    value that brings none (the read's rows go) or KEEP_ROWS for one whose
+    rows stay as they were, as a fixed Overview batch that split keeps its
+    last rows until its halves answer. A read without `rows`, such as the
+    Overview's summary, holds no rows, and its deliveries hold no write. */
 type ViewQuery = {
   ref: FunctionReference<'query'>
-  rows?: (value: unknown) => readonly ViewRow[] | null | typeof KEEP_ROWS
+  rows?: (value: unknown, key: string) => readonly ViewRow[] | null | typeof KEEP_ROWS
 }
 
 /** The Board's read: an ok answer brings its rows and its parents. */
@@ -2344,27 +2345,26 @@ const BOARD_QUERY: ViewQuery = {
 
 /** An Overview list batch's read: an ok answer brings its rows, without
     the At-risk marker, which the Overview keeps with the batch
-    (store/overviewLists.ts). A batch with a fixed end that split or
-    stopped keeps its rows until the batches that replace it answer. */
-const listQuery = (ref: FunctionReference<'query'>, fixed: boolean): ViewQuery => ({
+    (store/overviewLists.ts). A batch with a fixed end that gives way to two
+    halves, as it split or its reads stopped (splitAt), keeps its rows
+    until the batches that replace it answer. */
+const listQuery = (ref: FunctionReference<'query'>): ViewQuery => ({
   ref,
-  rows: (value) => {
+  rows: (value, key) => {
     const answer = value as ListAnswer
     if (answer.state !== 'ok') return null
-    if (fixed && (answer.split !== undefined || !answer.complete)) return KEEP_ROWS
+    const { cursor = null, end = null } = JSON.parse(key) as { cursor?: string; end?: string }
+    if (splitAt(cursor, end, answer) !== null) return KEEP_ROWS
     return answer.rows.map(({ at_risk: _risk, ...row }) => row)
   },
 })
 
-/** The Overview's reads by query, a list batch's by whether it has a fixed
-    end. */
-const OVERVIEW_QUERIES: Record<OverviewQuery | `${ListKind}:fixed`, ViewQuery> = {
+/** The Overview's reads by query. */
+const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
   summary: { ref: api.overview.summary },
   risk: { ref: api.overview.risk },
-  attention: listQuery(api.overview.attention, false),
-  paused: listQuery(api.overview.paused, false),
-  'attention:fixed': listQuery(api.overview.attention, true),
-  'paused:fixed': listQuery(api.overview.paused, true),
+  attention: listQuery(api.overview.attention),
+  paused: listQuery(api.overview.paused),
 }
 
 /** One view's read. */
@@ -2463,10 +2463,30 @@ const dropHeldViewParts = () =>
     (layer) => !!layer.view.view && viewPartHeld(layer.view.view, layer.seen.view),
   )
 
+/* Whether the Overview's lists take the reads' news in once the transition
+   that brought it is over (settleOverview). */
+let overviewSettling = false
+
+/** Has the Overview's lists take their reads' news in once every view read
+    of the transition that brought it took its result: the store hears each
+    read's result on its own (syncViewRead), and a batch that took its
+    answer before a neighbour's answer told that the neighbour splits would
+    show a row that moved between them twice (store/overviewLists.ts). */
+function settleOverview() {
+  if (overviewSettling) return
+  overviewSettling = true
+  const epoch = storeEpoch
+  queueMicrotask(() => {
+    overviewSettling = false
+    if (epoch === storeEpoch) overviewStep(() => overview.settle())
+  })
+}
+
 /** Takes view `slot`'s result of its live subscription `token`: its rows
     become the view's anchor, a delivery that brings rows holds the writes
-    it changed (dropHeldViewParts), the Overview's lists take it in, and the
-    views repaint when the waiting writes allow. */
+    it changed (dropHeldViewParts), the Overview's lists take it in once the
+    transition is over (settleOverview), and the views repaint when the
+    waiting writes allow. */
 function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: string) {
   let next: NonNullable<ViewRead['held']>
   try {
@@ -2482,7 +2502,7 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
     read.connection = latestConnection
     if (next.value !== undefined) read.answered = true
     const take = read.query.rows
-    const rows = take && next.value !== undefined ? take(next.value) : null
+    const rows = take && next.value !== undefined ? take(next.value, key) : null
     if (take && rows === KEEP_ROWS) read.behind = true
     else if (take && rows !== KEEP_ROWS) {
       if (rows) viewRows.take(slot, rows)
@@ -2492,7 +2512,7 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
       dropHeldViewParts()
     }
     viewReadsChanged = true
-    if (overview.owns(slot)) overview.settle()
+    if (overview.owns(slot)) settleOverview()
     owe('view')
   })
 }
@@ -2642,22 +2662,10 @@ function releaseView(slot: ViewSlot) {
   viewReads.delete(slot)
 }
 
-/* The Overview's reads, over the view reads (store/overviewLists.ts). A
-   list batch with a fixed end reads its list's query that keeps the rows of
-   an answer that split or stopped; a stopped read keeps the query it had. */
+/* The Overview's reads, over the view reads (store/overviewLists.ts). */
 const overview = createOverviewReads({
-  watch: (slot, query, key, attempt) => {
-    const held = viewReads.get(slot)
-    const list = query === 'attention' || query === 'paused' ? query : null
-    const fixed = list !== null && key !== null && 'end' in (JSON.parse(key) as object)
-    const q =
-      key === null && held
-        ? held.query
-        : list !== null && fixed
-          ? OVERVIEW_QUERIES[`${list}:fixed`]
-          : OVERVIEW_QUERIES[query]
-    watchView(slot, q, key, attempt, 0, false)
-  },
+  watch: (slot, query, key, attempt) =>
+    watchView(slot, OVERVIEW_QUERIES[query], key, attempt, 0, false),
   read: viewRead,
   release: releaseView,
 })
