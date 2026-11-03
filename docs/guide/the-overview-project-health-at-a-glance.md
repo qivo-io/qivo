@@ -25,17 +25,32 @@ overdue tasks Qivo counted, or says that Qivo could not check every
 deadline, and it never says that nothing is late.
 
 **Sub-project health** lists each sub-project's lead, progress, Done count,
-remaining hours, Delayed, Slipping and Paused counts. Select a heading to sort
-and select it again to reverse the order. The default is Delayed, highest
-first. Select a row to open that sub-project's Board. Delayed, Slipping and
-Paused show “—” when zero. Narrow desktop windows scroll horizontally;
-phones show sortable cards. The table still reads every task of the scope,
-so while a large workspace loads it says that it opens once every task has
-loaded.
+remaining hours, Delayed, Slipping and Paused counts. It shows the first 10
+sub-projects in the chosen order, and **Load more** adds the next 10. Select
+a heading to sort the whole table by it and select it again to reverse the
+order. The default is Delayed, highest first, then by name. Once the table
+holds more than 10 sub-projects, a search box above it finds any of them by
+name, not only the rows shown. Qivo works out every row on the server, so
+the table no longer waits for your browser to load every task. Select a row
+to open that sub-project's Board. Delayed, Slipping and Paused show “—” when
+zero. Narrow desktop windows scroll horizontally; phones show sortable
+cards, 10 at a time. Past 200 sub-projects the table shows the first 200
+and asks you to search for the others.
 
-In My view, **Project health** shows one row per project. My view counts
-only your tasks and keeps that restriction when you open a project from its
-health row. A single sub-project shows **Status distribution** instead of
+Delayed and Slipping depend on the other work of each task's owner. Where
+Qivo could not work that out, as when the owners have more open work than
+it reads at once, the cell reads **unknown**, never zero, and a line under
+the table says so. A table sorted by Delayed or Slipping then sorts by name
+and says why. **Load more** can turn a row's Delayed into **unknown**, as
+Qivo then works out more rows in one request. While Qivo is counting an
+organization's tasks, Progress reads **Counting…** and the other counts
+**…**, and a sort by Progress, Done, Left or Paused sorts by name until the
+counts are whole.
+
+In My view, **Project health** shows one row per project that holds tasks
+of yours, with only your tasks counted, and keeps that restriction when you
+open a project from its health row. Its search box says **Search
+projects**. A single sub-project shows **Status distribution** instead of
 the table.
 
 **Overdue & at risk** lists unfinished tasks past their due date and, for
@@ -56,7 +71,10 @@ waits In Review with one.
 
 A guest or organization Viewer sees other people's work one person at a
 time, so where the projected delays of a scope need more than one person's
-work, Overview says they are not available ([Who sees what](./who-sees-what-the-access-model.md)).
+work, Overview says they are not available, and a health row that needs
+more than one person's work reads **unknown** under Delayed and Slipping. A
+guest's or Viewer's health table sorted by Delayed therefore often shows
+its rows by name ([Who sees what](./who-sees-what-the-access-model.md)).
 
 Overview stops updating while its page is hidden behind another one or the
 browser tab or desktop window is hidden or minimized. Shown again, it keeps
