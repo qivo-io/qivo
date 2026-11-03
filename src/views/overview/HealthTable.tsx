@@ -254,12 +254,13 @@ export function OvHealthTable({
     )
   const overLimit = search.trim().length > LIMITS.search.max
 
+  /* Why the rows are in name order, from the answer's order, which names
+     why for every row the order needed, also those past the rows shown. */
   const notes: ReactNode[] = []
   if (ok?.sort.by_name === 'delays')
     notes.push(
       <p key="by-name" data-ov-health-by-name="delays">
-        {onePerson &&
-        rows.some((r) => r.delays.state === 'unavailable' && r.delays.reason === 'loads')
+        {onePerson && ok.sort.missing === 'loads'
           ? 'Sorted by name, because your access shows other people’s work one person at a time.'
           : `Sorted by name, because Qivo could not work out the delays of every ${thing} here.`}
       </p>,
@@ -267,7 +268,7 @@ export function OvHealthTable({
   else if (ok?.sort.by_name === 'counts')
     notes.push(
       <p key="by-name" data-ov-health-by-name="counts">
-        {rows.some((r) => r.counts.state === 'unavailable' && r.counts.reason === 'counting')
+        {ok.sort.missing === 'counting'
           ? 'Sorted by name while Qivo counts the tasks here.'
           : 'Sorted by name, because Qivo could not count the tasks here in one request.'}
       </p>,

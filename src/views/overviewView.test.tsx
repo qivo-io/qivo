@@ -3,7 +3,7 @@ import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ListAnswer, OverviewRow } from '../../convex/lib/overview'
+import type { HealthAnswer, ListAnswer, OverviewRow } from '../../convex/lib/overview'
 import type { ForcedOverview } from '../store/overviewStandIn.setup'
 import type { ScopeInfo } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
@@ -957,7 +957,7 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'desc' })
     await act(async () => root.unmount())
     root = createRoot(container)
-    await overview(
+    const guest = await overview(
       (snap) => {
         work()(snap)
         snap.profiles[0].org_role = 'guest'
@@ -965,6 +965,22 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
       },
       { force: { health: { delays: 'loads' } } },
     )
+    expect(note()).toBe(
+      'Sorted by name, because your access shows other people’s work one person at a time.',
+    )
+    // the order says why, also where the rows without their delays are past
+    // the rows shown
+    guest.board.server.overview.edit = (query, answer) => {
+      const health = answer as HealthAnswer
+      return query === 'health' && health.state === 'ok'
+        ? {
+            ...health,
+            rows: health.rows.map((r) => ({ ...r, delays: { state: 'ok', late: 0, behind: 0 } })),
+          }
+        : answer
+    }
+    await guest.board.answer()
+    expect(cell(cards()[0], 'late')?.dataset.ovFigureState).toBe('ok')
     expect(note()).toBe(
       'Sorted by name, because your access shows other people’s work one person at a time.',
     )
