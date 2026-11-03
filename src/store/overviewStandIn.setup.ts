@@ -171,7 +171,7 @@ const PREFIX = { attention: 'soa~', paused: 'sop~' } as const
     another list, scope, reader or clock, as the server refuses it. */
 export function overviewStandIn(
   workspace: Workspace,
-  query: OverviewQuery | 'health',
+  query: OverviewQuery,
   args: OverviewArgs,
   { sees, force = {} }: { sees?: (projectId: string) => boolean; force?: ForcedOverview } = {},
 ): SummaryAnswer | RiskAnswer | ListAnswer | HealthAnswer {
@@ -740,7 +740,7 @@ export function answerOverview(
   try {
     answer = overviewStandIn(
       workspace,
-      name.slice('overview:'.length) as OverviewQuery | 'health',
+      name.slice('overview:'.length) as OverviewQuery,
       args as OverviewArgs,
       options,
     )

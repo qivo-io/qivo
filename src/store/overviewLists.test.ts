@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { ListAnswer, OverviewRow } from '../../convex/lib/overview'
 import {
   createOverviewReads,
+  type HealthTable,
   LIST_READS,
   LIST_ROWS,
   type ListKind,
@@ -17,12 +18,12 @@ import {
 import { type ForcedOverview, type OverviewArgs, overviewStandIn } from './overviewStandIn.setup'
 import { plannerFixture, type Snapshot, underProgram } from './plannerFixture.setup'
 
-/* The Overview's lists (store/overviewLists.ts) over a stand-in server: a
-   fake transport that registers reads as the store's view reads do
-   (store/planner.ts watchView) and answers each live read from the
-   Overview's stand-in (store/overviewStandIn.setup.ts) over a workspace the
-   test changes, when the test delivers, as ownerLoadCache.test.ts runs the
-   owner-load cache. */
+/* The Overview's lists and health table (store/overviewLists.ts) over a
+   stand-in server: a fake transport that registers reads as the store's
+   view reads do (store/planner.ts watchView) and answers each live read
+   from the Overview's stand-in (store/overviewStandIn.setup.ts) over a
+   workspace the test changes, when the test delivers, as
+   ownerLoadCache.test.ts runs the owner-load cache. */
 
 const AT = '2026-09-14T08:00:00.000Z'
 const DAY = '2026-11-04'
@@ -882,5 +883,273 @@ describe("a guest's At-risk list", () => {
     expect(view.reads).toBeLessThanOrEqual(LIST_READS)
     expect(view.dropped).toBe(true)
     expect(ids(view)).toEqual(wholeIds(snap, 'attention', BASE(snap)).slice(-ids(view).length))
+  })
+})
+
+// ------------------------------------------------------------- the health table
+
+const HEALTH = 'overview:health'
+
+/** A table by name, ascending, with no search. */
+const BY_NAME: HealthTable = { sort: 'name', dir: 'asc', search: '' }
+
+/** A workspace of a program with `n` sub-projects, Sub 01 the fixture's
+    own, each with one To do task, and the program's scope on DAY. */
+function programOf(n: number) {
+  const snap = workspace()
+  const first = snap.projects[0]
+  const program = snap.projects.find((p) => p.id === first.parent_id)
+  if (!program) throw new Error('no program')
+  first.name = 'Sub 01'
+  for (let i = 2; i <= n; i++)
+    snap.projects.push({
+      ...first,
+      id: `sub${i}`,
+      key: `S${i}`,
+      num: 100 + i,
+      name: `Sub ${String(i).padStart(2, '0')}`,
+    })
+  for (const [i, p] of snap.projects.filter((x) => x.parent_id === program.id).entries())
+    snap.issues.push(taskOf(snap, i + 1, { id: `task-${p.id}`, project_id: p.id }))
+  const base: OverviewBase = {
+    scope: { kind: 'project', org_id: snap.orgs[0].id, project_id: program.id },
+    clock: clock(),
+  }
+  return { snap, base }
+}
+
+/** The health read's arguments now, or null for none. */
+const healthArgs = (s: ReturnType<typeof server>) => {
+  const want = s.reads.get(HEALTH)?.want ?? null
+  return want === null ? null : (JSON.parse(want) as Record<string, unknown>)
+}
+
+/** The names of the rows the health table shows. */
+const healthNames = (s: ReturnType<typeof server>) => {
+  const value = s.lists.view().health?.value
+  return value?.state === 'ok' ? value.rows.map((r) => r.name) : []
+}
+
+describe('the health table', () => {
+  it('asks only with a table and while asking, its arguments in one key order', () => {
+    const { snap, base } = programOf(3)
+    const s = server(snap)
+    s.lists.watch(base, 1, 0)
+    expect(healthArgs(s)).toBeNull()
+    expect(s.lists.view().health).toBeNull()
+    s.lists.watchTable(BY_NAME, 1)
+    expect(Object.keys(healthArgs(s) ?? {})).toEqual([
+      'scope',
+      'day',
+      'week',
+      'week_starts',
+      'week_end',
+      'sort',
+      'dir',
+      'limit',
+    ])
+    expect(healthArgs(s)).toMatchObject({ sort: 'name', dir: 'asc', limit: OVERVIEW_BATCH })
+    s.lists.watchTable({ ...BY_NAME, search: 'sub' }, 1)
+    expect(Object.keys(healthArgs(s) ?? {})).toEqual([
+      'scope',
+      'day',
+      'week',
+      'week_starts',
+      'week_end',
+      'sort',
+      'dir',
+      'search',
+      'limit',
+    ])
+    s.deliver()
+    expect(healthNames(s)).toEqual(['Sub 01', 'Sub 02', 'Sub 03'])
+    // a page that is not the one asking changes nothing
+    s.lists.watchTable({ ...BY_NAME, sort: 'late' }, 2)
+    expect(healthArgs(s)).toMatchObject({ sort: 'name', search: 'sub' })
+    // hidden: no read, and the answer stays
+    s.lists.watch(null, 1, 0)
+    expect(healthArgs(s)).toBeNull()
+    expect(s.lists.view().health).toMatchObject({ current: false, kept: false })
+    // no table, as for one sub-project: no read, nothing shown
+    s.lists.watch(base, 1, 0)
+    s.lists.watchTable(null, 1)
+    expect(healthArgs(s)).toBeNull()
+    expect(s.lists.view().health).toBeNull()
+  })
+
+  it('asks the health read alone for a new sort, search or Load more, keeping the rows shown as kept until the new answer', () => {
+    const { snap, base } = programOf(25)
+    const s = server(snap)
+    s.lists.watch(base, 1, 0)
+    s.lists.watchTable(BY_NAME, 1)
+    s.deliver()
+    expect(s.lists.view().health).toMatchObject({ current: true, kept: false, more: 'ready' })
+    expect(healthNames(s)).toHaveLength(OVERVIEW_BATCH)
+    const asked = s.state.asked.length
+    s.state.holding = (slot) => slot === HEALTH
+    s.lists.watchTable({ ...BY_NAME, dir: 'desc' }, 1)
+    expect(s.state.asked.slice(asked).map((a) => a.slot)).toEqual([HEALTH])
+    // the rows of the order before stay, marked kept
+    expect(s.lists.view().health).toMatchObject({ kept: true, current: false })
+    expect(healthNames(s)[0]).toBe('Sub 01')
+    s.state.holding = () => false
+    s.deliver()
+    expect(s.lists.view().health).toMatchObject({ kept: false, current: true })
+    expect(healthNames(s)[0]).toBe('Sub 25')
+    // Load more: the rows stay until 20 answer
+    s.state.holding = (slot) => slot === HEALTH
+    s.lists.moreHealth()
+    expect(healthArgs(s)).toMatchObject({ limit: 2 * OVERVIEW_BATCH })
+    expect(s.lists.view().health).toMatchObject({ kept: true, more: 'loading' })
+    expect(healthNames(s)).toHaveLength(OVERVIEW_BATCH)
+    s.state.holding = () => false
+    s.deliver()
+    expect(healthNames(s)).toHaveLength(2 * OVERVIEW_BATCH)
+    s.lists.moreHealth()
+    s.deliver()
+    expect(healthNames(s)).toHaveLength(25)
+    expect(s.lists.view().health?.more).toBeNull()
+    // a new search starts again at the first rows: every word anywhere,
+    // so Sub 21 holds a 1 too
+    s.lists.watchTable({ ...BY_NAME, dir: 'desc', search: 'sub 1' }, 1)
+    expect(healthArgs(s)).toMatchObject({ search: 'sub 1', limit: OVERVIEW_BATCH })
+    s.deliver()
+    expect(healthNames(s)).toEqual([
+      'Sub 21',
+      'Sub 19',
+      'Sub 18',
+      'Sub 17',
+      'Sub 16',
+      'Sub 15',
+      'Sub 14',
+      'Sub 13',
+      'Sub 12',
+      'Sub 11',
+    ])
+    expect(s.lists.view().health?.value).toMatchObject({ total: 12 })
+    // nothing but the health read was asked again
+    expect(s.state.asked.slice(asked).every((a) => a.slot === HEALTH)).toBe(true)
+  })
+
+  it('shows nothing for a new scope or day until its answer; a new day keeps the rows asked, a new scope starts at the first', () => {
+    const { snap, base } = programOf(25)
+    const s = server(snap)
+    s.lists.watch(base, 1, 0)
+    s.lists.watchTable(BY_NAME, 1)
+    s.deliver()
+    s.lists.moreHealth()
+    s.deliver()
+    s.state.holding = (slot) => slot === HEALTH
+    s.lists.watch({ ...base, clock: clock('2026-11-05') }, 1, 0)
+    expect(s.lists.view().health).toBeNull()
+    expect(healthArgs(s)).toMatchObject({ day: '2026-11-05', limit: 2 * OVERVIEW_BATCH })
+    s.state.holding = () => false
+    s.deliver()
+    expect(healthNames(s)).toHaveLength(2 * OVERVIEW_BATCH)
+    s.state.holding = (slot) => slot === HEALTH
+    s.lists.watch({ scope: { kind: 'mine' }, clock: clock('2026-11-05') }, 1, 0)
+    expect(s.lists.view().health).toBeNull()
+    expect(healthArgs(s)).toMatchObject({ scope: { kind: 'mine' }, limit: OVERVIEW_BATCH })
+  })
+
+  it('asks the same arguments on return and shows them refreshing until they answer, also after a reconnect', () => {
+    const { snap, base } = programOf(3)
+    const s = server(snap)
+    s.lists.watch(base, 1, 0)
+    s.lists.watchTable(BY_NAME, 1)
+    s.deliver()
+    const want = s.reads.get(HEALTH)?.want
+    s.lists.watch(null, 1, 0)
+    expect(s.reads.get(HEALTH)?.want).toBeNull()
+    s.lists.watch(base, 1, 0)
+    expect(s.reads.get(HEALTH)?.want).toBe(want)
+    expect(s.lists.view().health).toMatchObject({ current: false, kept: false })
+    expect(healthNames(s)).toHaveLength(3)
+    s.deliver()
+    expect(s.lists.view().health?.current).toBe(true)
+    const read = s.reads.get(HEALTH)
+    if (read) read.current = false
+    expect(s.lists.view().health?.current).toBe(false)
+    s.deliver()
+    expect(s.lists.view().health?.current).toBe(true)
+  })
+
+  it('asks afresh on Try again, and takes a failed Load more back to its rows, live, with Retry', () => {
+    const { snap, base } = programOf(25)
+    const s = server(snap)
+    s.state.failing = (slot) => (slot === HEALTH ? new Error('down') : undefined)
+    s.lists.watch(base, 1, 0)
+    s.lists.watchTable(BY_NAME, 1)
+    s.deliver()
+    expect(s.lists.view().health).toMatchObject({ error: expect.any(Error), kept: false })
+    s.state.failing = () => undefined
+    const asked = s.state.asked.length
+    s.lists.retryHealth()
+    expect(s.state.asked.slice(asked).map((a) => a.slot)).toEqual([HEALTH])
+    s.deliver()
+    expect(healthNames(s)).toHaveLength(OVERVIEW_BATCH)
+    // the next 10 fail: back to the first 10, asked again so they stay live
+    s.state.failing = (slot, args) =>
+      slot === HEALTH && args.limit === 2 * OVERVIEW_BATCH ? new Error('down') : undefined
+    s.lists.moreHealth()
+    s.deliver()
+    expect(healthArgs(s)).toMatchObject({ limit: OVERVIEW_BATCH })
+    expect(s.lists.view().health).toMatchObject({
+      moreFailed: true,
+      more: null,
+      current: true,
+      kept: false,
+    })
+    expect(healthNames(s)).toHaveLength(OVERVIEW_BATCH)
+    s.state.failing = () => undefined
+    s.lists.retryHealth()
+    s.deliver()
+    expect(s.lists.view().health).toMatchObject({ moreFailed: false, more: 'ready' })
+    expect(healthNames(s)).toHaveLength(2 * OVERVIEW_BATCH)
+  })
+
+  it('forgets the health read on release and clear', () => {
+    const { snap, base } = programOf(3)
+    const s = server(snap)
+    s.lists.watch(base, 1, 0)
+    s.lists.watchTable(BY_NAME, 1)
+    s.deliver()
+    s.lists.release()
+    expect(s.reads.has(HEALTH)).toBe(false)
+    expect(s.lists.view().health).toBeNull()
+    s.lists.watch(base, 1, 0)
+    s.lists.watchTable(BY_NAME, 1)
+    s.deliver()
+    s.lists.clear()
+    expect(s.lists.view().health).toBeNull()
+  })
+
+  it(`holds at most ${3 + 2 * LIST_READS} reads for one Overview, the health table's among them`, () => {
+    const { snap, base } = programOf(3)
+    for (let i = 0; i < 90; i++)
+      snap.issues.push(
+        taskOf(snap, 300 + i, {
+          paused: true,
+          due_date: new Date(Date.parse('2026-10-01T00:00:00Z') + i * 86_400_000)
+            .toISOString()
+            .slice(0, 10),
+        }),
+      )
+    const s = server(snap)
+    s.lists.watch(base, 1, 0)
+    s.lists.watchTable(BY_NAME, 1)
+    s.deliver()
+    let most = 0
+    for (let press = 0; press < 8; press++) {
+      s.lists.more('paused')
+      s.lists.more('attention')
+      s.lists.moreHealth()
+      s.deliver(() => {
+        most = Math.max(most, [...s.reads.values()].filter((r) => r.want !== null).length)
+      })
+    }
+    expect(most).toBeGreaterThan(2 + LIST_READS)
+    expect(most).toBeLessThanOrEqual(3 + 2 * LIST_READS)
+    expect(healthArgs(s)).not.toBeNull()
   })
 })

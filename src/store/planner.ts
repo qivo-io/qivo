@@ -157,6 +157,7 @@ import {
 import {
   baseOfKey,
   createOverviewReads,
+  type HealthTable,
   type ListKind,
   type OverviewQuery,
   type OverviewView,
@@ -2300,9 +2301,11 @@ function pay() {
 /* ---- The task rows the open views' answers bring ----
    A view registers each read it shows here from an effect, with the
    arguments on screen, or none while its page or the tab is hidden: the
-   Board its answer (P.watchBoard), the Overview its summary, its delays and
-   its lists' batches (P.watchOverview, store/overviewLists.ts). Each read
-   names its query and the rows its answer brings (ViewQuery). The store
+   Board its answer (P.watchBoard), the Overview its summary, its delays,
+   its lists' batches and its health table (P.watchOverview and
+   P.watchOverviewTable, store/overviewLists.ts). Each read names its query
+   and the rows its answer brings (ViewQuery); the health table's brings
+   none. The store
    subscribes, takes each result in the transition that brings it and keeps
    a read's rows (store/viewRows.ts) while it stops, until the view asks for
    other arguments or its page leaves (P.releaseView, P.releaseOverview).
@@ -2359,12 +2362,15 @@ const listQuery = (ref: FunctionReference<'query'>): ViewQuery => ({
   },
 })
 
-/** The Overview's reads by query. */
+/** The Overview's reads by query. The health table's rows are projects
+    with figures, not tasks, so its answer brings no rows and holds no
+    write. */
 const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
   summary: { ref: api.overview.summary },
   risk: { ref: api.overview.risk },
   attention: listQuery(api.overview.attention),
   paused: listQuery(api.overview.paused),
+  health: { ref: api.overview.health },
 }
 
 /** One view's read. */
@@ -7591,16 +7597,28 @@ export const PLANNER = {
       emit()
     }
   },
+  /** Registers the health table the Overview asks for, `table` (its column,
+      direction and search), or none with null, for the page `owner` names,
+      as P.watchOverview's: apart from the scope's reads, so a new sort,
+      search or Load more asks the health read alone. It reads only while
+      the Overview's reads ask (P.watchOverview). */
+  watchOverviewTable: (table: HealthTable | null, owner = 0) =>
+    overviewStep(() => overview.watchTable(table, owner)),
   /** What the Overview's reads hold (store/overviewLists.ts OverviewView):
       the summary's and the delays' answers for the Overview asked now and
-      whether each is current, and each list's batches and state. */
+      whether each is current, each list's batches and state, and the
+      health table's answer. */
   overviewRead: (): OverviewView => overview.view(),
-  /** Load more on Overview list `list`. */
-  overviewMore: (list: ListKind) => overviewStep(() => overview.more(list)),
+  /** Load more on Overview list `list`, or on the health table. */
+  overviewMore: (list: ListKind | 'health') =>
+    overviewStep(() => (list === 'health' ? overview.moreHealth() : overview.more(list))),
   /** Shows Overview list `list` from its first batch again. */
   overviewFromStart: (list: ListKind) => overviewStep(() => overview.fromStart(list)),
-  /** Asks batch `batch` of Overview list `list` afresh (Try again, Retry). */
-  overviewRetry: (list: ListKind, batch: number) => overviewStep(() => overview.retry(list, batch)),
+  /** Asks batch `batch` of Overview list `list` afresh (Try again, Retry),
+      or the health table, with no batch (its Try again, or a failed Load
+      more's Retry). */
+  overviewRetry: (list: ListKind | 'health', batch = 0) =>
+    overviewStep(() => (list === 'health' ? overview.retryHealth() : overview.retry(list, batch))),
   /** Forgets the Overview's reads and rows: its page left. */
   releaseOverview: () => overviewStep(() => overview.release()),
   /** Task `uuid` as the rows on screen show it to view `slot`, for a task

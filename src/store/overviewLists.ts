@@ -1,8 +1,8 @@
 /* The Overview's reads (views/Overview.tsx): its summary, its projected
-   delays and its two lists in batches, over the store's view reads
-   (store/planner.ts watchView), which this module asks for through the
-   transport it is given, as store/ownerLoadCache.ts takes one. It holds no
-   React and reads nothing of the store's own.
+   delays, its two lists in batches and its health table, over the store's
+   view reads (store/planner.ts watchView), which this module asks for
+   through the transport it is given, as store/ownerLoadCache.ts takes one.
+   It holds no React and reads nothing of the store's own.
 
    - The page asks for one scope and clock at a time (`watch`), or for
      nothing while its page or the tab is hidden: every read stops, keeps
@@ -50,10 +50,24 @@
      list key; a second refusal is the list's error. A new day restarts
      the At-risk list, whose positions follow the day, and keeps Paused.
    - Any other failure, `unavailable` or `over_budget` shows in place of
-     that batch, with Try again, and the list shows no end while it stands. */
+     that batch, with Try again, and the list shows no end while it stands.
+   - The health table is one read (overview.health) of its first rows in
+     the order and with the search the page asks (`watchTable`), apart
+     from the scope's reads, so a new sort, search or Load more asks the
+     health read alone. It asks only while the page asks and has a table,
+     OVERVIEW_BATCH rows at first and as many more for each Load more. A new
+     sort or search, or a new scope, starts again at the first rows. While
+     an answer for new table arguments is on its way, the last answer shown
+     for the same scope and clock stays as `kept`, as the store's view read
+     drops what it held for other arguments; a new scope or clock shows
+     nothing until its own answer. A Load more that fails goes back to the
+     rows it showed, asking their arguments again so they keep updating,
+     and offers Retry. */
 
 import { ConvexError, type Value } from 'convex/values'
 import type {
+  HealthAnswer,
+  HealthSort,
   ListAnswer,
   OverviewRow,
   OverviewScope,
@@ -75,14 +89,21 @@ export const OVERVIEW_WEEKS = 53
     list's first batches. */
 export const LIST_ROWS = 50
 /** The reads one list holds at most, split halves and merges included: with
-    the summary and the delays an Overview holds at most 2 + 2 * LIST_READS
-    reads. */
+    the summary, the delays and the health table an Overview holds at most
+    3 + 2 * LIST_READS reads. */
 export const LIST_READS = 5
 
 /** The Overview's two lists. */
 export type ListKind = 'attention' | 'paused'
-/** The Overview's four queries (convex/overview.ts). */
-export type OverviewQuery = 'summary' | 'risk' | ListKind
+/** The Overview's five queries (convex/overview.ts). */
+export type OverviewQuery = 'summary' | 'risk' | ListKind | 'health'
+
+/** The health table the page asks for: the column it sorts by, the
+    direction and the search, trimmed, '' for none. */
+export type HealthTable = { sort: HealthSort; dir: 'asc' | 'desc'; search: string }
+
+/** One health read's table, with how many rows it asks for. */
+export type HealthAsk = HealthTable & { limit: number }
 
 /** The client's day and weeks the queries are judged by
     (convex/lib/overview.ts clockOf). */
@@ -113,13 +134,16 @@ const clockArgs = (c: OverviewClock): Record<string, Value> => ({
 /**
  * The arguments of `query` for `base`, in a fixed key order: the summary
  * takes the day, the delays and the At-risk list every clock field, the
- * Paused list none, and a list batch its `cursor` and `end` where set.
+ * Paused list none, and a list batch its `cursor` and `end` where set; the
+ * health table every clock field and `table`'s column, direction, search
+ * (left out when blank) and limit.
  */
 export function overviewArgs(
   query: OverviewQuery,
   base: OverviewBase,
   cursor: string | null = null,
   end: string | null = null,
+  table: HealthAsk | null = null,
 ): Record<string, Value> {
   const scope = scopeArgs(base.scope)
   const at = {
@@ -135,6 +159,17 @@ export function overviewArgs(
       return { scope, ...clockArgs(base.clock), ...at }
     case 'paused':
       return { scope, ...at }
+    case 'health': {
+      const t = table ?? { sort: 'late', dir: 'desc', search: '', limit: OVERVIEW_BATCH }
+      return {
+        scope,
+        ...clockArgs(base.clock),
+        sort: t.sort,
+        dir: t.dir,
+        ...(t.search === '' ? {} : { search: t.search }),
+        limit: t.limit,
+      }
+    }
   }
 }
 
@@ -224,6 +259,28 @@ export type ListView = {
   reads: number
 }
 
+/** What the health table shows: its answer, or nothing (null) before the
+    first one for the scope and clock asked now. */
+export type HealthView = {
+  /** the answer shown: the one for the table asked now, or while an answer
+      for new table arguments is on its way, the last one shown for this
+      scope and clock (`kept`) */
+  value?: HealthAnswer
+  /** the error of the first answer for the table asked now */
+  error?: unknown
+  /** whether the answer shown is the live subscription's for the table
+      asked now, arrived on this connection */
+  current: boolean
+  /** whether the answer shown answers other table arguments than those
+      asked now: a sort, a search or a Load more on its way */
+  kept: boolean
+  /** Load more: `ready` to press, `loading` while its rows load, none */
+  more: 'ready' | 'loading' | null
+  /** whether a Load more failed, so the rows are the ones before it and
+      Retry asks it again */
+  moreFailed: boolean
+} | null
+
 /** What the Overview's reads hold for the page. */
 export type OverviewView = {
   /** the Overview the reads are for, null for none */
@@ -232,6 +289,7 @@ export type OverviewView = {
   risk: FigureView<RiskAnswer>
   attention: ListView
   paused: ListView
+  health: HealthView
 }
 
 type OkList = Extract<ListAnswer, { state: 'ok' }>
@@ -293,6 +351,11 @@ const codeOf = (error: unknown): string | undefined =>
 
 const SUMMARY_SLOT = 'overview:summary'
 const RISK_SLOT = 'overview:risk'
+const HEALTH_SLOT = 'overview:health'
+
+/* Whether two health tables ask the same. */
+const sameTable = (a: HealthTable | null, b: HealthTable | null) =>
+  a !== null && b !== null && a.sort === b.sort && a.dir === b.dir && a.search === b.search
 
 /** Creates the Overview's reads over `transport`. */
 export function createOverviewReads(transport: OverviewTransport) {
@@ -309,6 +372,16 @@ export function createOverviewReads(transport: OverviewTransport) {
     attention: emptyList('attention'),
     paused: emptyList('paused'),
   }
+  // the health table the page asks for (null for none), how many rows it
+  // asks for and its Try again count
+  let table: HealthTable | null = null
+  let limit = OVERVIEW_BATCH
+  let healthTries = 0
+  // the last answer the table showed, with the Overview and the table
+  // arguments it answered
+  let shownHealth: { base: string; ask: HealthAsk; value: HealthAnswer } | null = null
+  // a Load more that failed: the limit it asked for, which Retry asks again
+  let failedMore: number | null = null
 
   function emptyList(kind: ListKind): List {
     return { kind, key: null, shown: [], swaps: [], dropped: false, restarted: null, failed: false }
@@ -563,9 +636,98 @@ export function createOverviewReads(transport: OverviewTransport) {
       do {
         again = false
         for (const list of Object.values(lists)) settleList(list)
+        settleHealth()
       } while (again)
     } finally {
       settling = false
+    }
+  }
+
+  /** The health read's arguments now, null where it asks for none. */
+  const healthKey = () =>
+    base === null || table === null
+      ? null
+      : JSON.stringify(overviewArgs('health', base, null, null, { ...table, limit }))
+
+  /** Registers the health read as the reads stand: live while asking with
+      a table. */
+  const watchHealth = () =>
+    transport.watch(HEALTH_SLOT, 'health', asking ? healthKey() : null, healthTries)
+
+  /** Takes the health read's news in: an answer for the table asked now is
+      the one it shows, and a Load more that failed goes back to the rows
+      it showed, asking their arguments again. */
+  function settleHealth() {
+    const key = healthKey()
+    if (key === null || baseKey === null || table === null) return
+    const held = transport.read(HEALTH_SLOT)
+    if (held.key !== key) return
+    if (held.error === undefined) {
+      if (held.value !== undefined)
+        shownHealth = { base: baseKey, ask: { ...table, limit }, value: held.value as HealthAnswer }
+      return
+    }
+    const before = shownHealth
+    if (
+      before !== null &&
+      before.base === baseKey &&
+      sameTable(before.ask, table) &&
+      before.ask.limit < limit &&
+      failedMore === null
+    ) {
+      failedMore = limit
+      limit = before.ask.limit
+      watchHealth()
+    }
+  }
+
+  /** What the health table shows (HealthView). */
+  function healthView(): HealthView {
+    const key = healthKey()
+    if (key === null || table === null) return null
+    const held = transport.read(HEALTH_SLOT)
+    const ask = { ...table, limit }
+    const more = (
+      value: HealthAnswer | undefined,
+      pressed: boolean,
+    ): NonNullable<HealthView>['more'] => {
+      if (failedMore !== null) return null
+      if (pressed) return 'loading'
+      return value?.state === 'ok' &&
+        value.rows.length < value.total &&
+        value.rows.length < value.most
+        ? 'ready'
+        : null
+    }
+    if (held.key === key && held.value !== undefined) {
+      const value = held.value as HealthAnswer
+      return {
+        value,
+        current: held.current,
+        kept: false,
+        more: more(value, false),
+        moreFailed: failedMore !== null,
+      }
+    }
+    if (held.key === key && held.error !== undefined && failedMore === null)
+      return {
+        error: held.error,
+        current: held.current,
+        kept: false,
+        more: null,
+        moreFailed: false,
+      }
+    // waiting: the last answer shown for this scope and clock
+    const before = shownHealth
+    if (before === null || before.base !== baseKey) return null
+    const same = sameTable(before.ask, ask) && before.ask.limit === ask.limit
+    const pressed = sameTable(before.ask, ask) && before.ask.limit < ask.limit
+    return {
+      value: before.value,
+      current: false,
+      kept: !same,
+      more: more(before.value, pressed),
+      moreFailed: failedMore !== null,
     }
   }
 
@@ -580,6 +742,7 @@ export function createOverviewReads(transport: OverviewTransport) {
       )
     figure(SUMMARY_SLOT, 'summary')
     figure(RISK_SLOT, 'risk')
+    watchHealth()
     for (const list of Object.values(lists)) {
       for (const b of list.shown) watchBatch(list, b)
       for (const s of list.swaps) for (const b of s.to) watchBatch(list, b)
@@ -692,6 +855,11 @@ export function createOverviewReads(transport: OverviewTransport) {
     attempt = 0
     lists.attention = emptyList('attention')
     lists.paused = emptyList('paused')
+    table = null
+    limit = OVERVIEW_BATCH
+    healthTries = 0
+    shownHealth = null
+    failedMore = null
   }
 
   return {
@@ -712,6 +880,15 @@ export function createOverviewReads(transport: OverviewTransport) {
       const key = overviewKey(next)
       const sameAsk = asking && key === baseKey && tries === attempt
       if (sameAsk) return
+      // a new scope starts the health table at its first rows; a new clock
+      // keeps them
+      if (
+        base === null ||
+        JSON.stringify(scopeArgs(base.scope)) !== JSON.stringify(scopeArgs(next.scope))
+      ) {
+        limit = OVERVIEW_BATCH
+        failedMore = null
+      }
       attempt = tries
       base = next
       baseKey = key
@@ -725,6 +902,41 @@ export function createOverviewReads(transport: OverviewTransport) {
         }
       }
       watchAll()
+      settle()
+    },
+    /** Asks for the health table `next` (null for none, as for one
+        sub-project), apart from the scope's reads, so only the health read
+        asks again. `by` names the mounted page, as `watch` takes it; a page
+        that is not the one asking changes nothing. A new sort or search
+        starts again at the first rows. */
+    watchTable(next: HealthTable | null, by: number) {
+      if (by !== owner) return
+      if (next === null ? table === null : sameTable(next, table)) return
+      // a new sort or search starts again at the first rows
+      limit = OVERVIEW_BATCH
+      failedMore = null
+      table = next
+      watchHealth()
+      settle()
+    },
+    /** Load more on the health table: asks OVERVIEW_BATCH more rows, at most
+        the answer's `most`, keeping the rows shown until they answer. */
+    moreHealth() {
+      const view = healthView()
+      if (view?.more !== 'ready' || view.value?.state !== 'ok') return
+      limit = Math.min(limit + OVERVIEW_BATCH, view.value.most)
+      watchHealth()
+      settle()
+    },
+    /** Asks the health table afresh (its Try again), or after a Load more
+        that failed, that Load more again (its Retry). */
+    retryHealth() {
+      if (failedMore !== null) {
+        limit = failedMore
+        failedMore = null
+      }
+      healthTries++
+      watchHealth()
       settle()
     },
     /** Takes the reads' news in: the store calls it after each delivery of
@@ -775,6 +987,7 @@ export function createOverviewReads(transport: OverviewTransport) {
         risk: figureOf<RiskAnswer>(RISK_SLOT, 'risk'),
         attention: listView(lists.attention),
         paused: listView(lists.paused),
+        health: healthView(),
       }
     },
     /** Whether view slot `slot` is one of the Overview's. */
@@ -783,6 +996,7 @@ export function createOverviewReads(transport: OverviewTransport) {
     release() {
       transport.release(SUMMARY_SLOT)
       transport.release(RISK_SLOT)
+      transport.release(HEALTH_SLOT)
       for (const list of Object.values(lists)) {
         for (const b of list.shown) transport.release(b.slot)
         for (const s of list.swaps) for (const b of s.to) transport.release(b.slot)
