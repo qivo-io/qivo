@@ -579,6 +579,34 @@ describe('hidden, kept and a new day', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(state()).toBe('ok')
   })
 
+  it('keeps an empty note while its answers refresh on return', async () => {
+    const hideAndShow = async (board: Board, note: string) => {
+      expect(message()).toBe(note)
+      await setVisibility('hidden')
+      board.server.overview.hold = true
+      await setVisibility('visible')
+      expect(state()).toBe('refreshing')
+      expect(message()).toBe(note)
+      board.server.overview.hold = false
+      await board.answer()
+      expect(state()).toBe('ok')
+      expect(message()).toBe(note)
+    }
+    // a top-level project with sub-projects and no task
+    let { board } = await overview(plan)
+    await hideAndShow(board, 'No tasks yet')
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    ;({ board } = await overview(
+      (snap) => {
+        work()(snap)
+        for (const t of snap.issues) t.assignee_id = undefined
+      },
+      { scope: 'mine' },
+    ))
+    await hideAndShow(board, 'Nothing assigned to you')
+  })
+
   it('holds no read while its kept page hides', async () => {
     const { board, Overview, actions, render } = await overview(work())
     const { KeptView } = await import('../components/KeptView')

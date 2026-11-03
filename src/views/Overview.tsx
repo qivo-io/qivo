@@ -1457,7 +1457,9 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
      Roadmap keeps its flags behind the same note. The note says why
      nothing is counted, not that the scope plans nothing. */
   let emptyNote: ReactNode = null
-  const noTasks = anyTask.state === 'ok' && !anyTask.value.value
+  // a kept answer still decides it while it refreshes, so the note stays
+  // through a return or a reconnect
+  const noTasks = given(anyTask)?.value === false
   if (mine) {
     // My view's projects are the ones the app holds (coordinator, 1 November 2026)
     if (info.metas.length === 0)
@@ -1476,7 +1478,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
           hint="Tasks live in sub-projects."
         />
       )
-    else if (state === 'ok' && noTasks)
+    else if ((state === 'ok' || state === 'refreshing') && noTasks)
       // My view can be empty while the projects around it are full — say which
       // of the two it is rather than claiming nobody has created anything
       emptyNote = <EmptyState icon="user" title="Nothing assigned to you" />
