@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HISTORY_PAGE_MAX, WINDOW_HISTORY_PAGE } from '../convex/lib/activityVisibility'
@@ -19,6 +20,8 @@ import {
   historyRows,
   isSiteOf,
   LIST_REFUSALS,
+  OVERVIEW_EXPECTED,
+  OVERVIEW_OVERDUE_DAYS,
   pace,
   parseArgs,
   RATE_BUDGET,
@@ -48,6 +51,19 @@ describe('staging check REST contract', () => {
   })
   it('makes its fixture tasks in a status Focus keeps, so the Board shows them either way', () => {
     expect(FOCUS_STATUSES).toContain(FIXTURE_STATUS)
+  })
+  it("checks its own sub-project's Overview on what its two tasks give, in the page's words", () => {
+    // overdue on every client's day, whatever its time zone
+    expect(Number.isInteger(OVERVIEW_OVERDUE_DAYS)).toBe(true)
+    expect(OVERVIEW_OVERDUE_DAYS).toBeGreaterThan(1)
+    const page = readFileSync(new URL('../src/views/Overview.tsx', import.meta.url), 'utf8')
+    expect(page).toMatch(/`\$\{done\} of \$\{leaves\} tasks done`/)
+    expect(page).toContain("{late === 1 ? 'is' : 'are'} overdue")
+    expect(OVERVIEW_EXPECTED).toEqual({
+      completion: '0 of 2 tasks done',
+      paused: '1',
+      sentence: '1 task is overdue.',
+    })
   })
   it('fills a task to the page sizes of its thread', () => {
     expect(THREAD_PAGE).toEqual({

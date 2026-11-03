@@ -28,7 +28,11 @@
  * answers an archived task's text and history (taskWindow.task,
  * snapshot.threadHistory). It opens the Board of the project it made and
  * waits for the deployment's answer for it (tasks.board), whose cards must
- * hold its two fixture tasks (ui/board). Every task, comment, grant and
+ * hold its two fixture tasks (ui/board). It makes a sub-project of its own
+ * with an overdue task and a paused one, opens its Overview and waits for
+ * the deployment's answers (overview.summary, risk, attention and paused),
+ * whose figures, sentence and lists must count exactly those two
+ * (ui/overview). Every task, comment, grant and
  * file lives
  * in projects the run creates and names with its run tag. It revokes every
  * credential in the app, checks that the next call is refused, and removes
@@ -3572,6 +3576,83 @@ async function boardCheck() {
   })
 }
 
+/** What the Overview of the run's own sub-project shows once the
+ *  deployment answered (overviewCheck): its two tasks, one To do and due
+ *  OVERVIEW_OVERDUE_DAYS ago, one paused with no due date, neither assigned,
+ *  so no projection reads anyone's work. */
+export const OVERVIEW_OVERDUE_DAYS = 70
+export const OVERVIEW_EXPECTED = {
+  completion: '0 of 2 tasks done',
+  paused: '1',
+  sentence: '1 task is overdue.',
+}
+
+/** The Overview of a sub-project the run makes under its project M, with an
+ *  overdue task and a paused one, opens on the deployment's answers
+ *  (convex/overview.ts): the root reaches its ok state, Completion reads 0
+ *  of 2 tasks done, Paused 1, the sentence names the one overdue task, the
+ *  At-risk list holds the overdue task marked overdue and the Paused list
+ *  the paused one, both at their end. It makes the sub-project and its
+ *  tasks over REST and pushes the tasks to run.created, so the cleanup,
+ *  which deletes M, removes them, and only reads in the app. It runs before
+ *  the run archives M. */
+async function overviewCheck() {
+  const w = run.creds.writeToken
+  const { M } = run.projects
+  await check('ui/overview', async () => {
+    const sub = await restOk(w, 'POST', '/projects', { name: `${run.tag} Overview`, parent: M.id })
+    expect(Number.isInteger(sub.num), 'the sub-project has no number')
+    const make = async (title, fields) => {
+      const t = await restOk(w, 'POST', '/tasks', {
+        project: sub.id,
+        title: `${run.tag} ${title}`,
+        status: 'todo',
+        ...fields,
+      })
+      eq(t.assignee_id, null, `${title} has no assignee`)
+      run.created.push(t)
+      return t
+    }
+    const late = await make('overview overdue', {
+      due_date: addDays(todayUtc(), -OVERVIEW_OVERDUE_DAYS),
+    })
+    const held = await make('overview paused', { paused: true })
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/overview/p/${sub.num}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const root = app.locator('[data-workspace-view] [data-overview-root][data-overview-state="ok"]')
+    await root.waitFor({ timeout: 60_000 })
+    const text = async (css) => ((await root.locator(css).first().textContent()) ?? '').trim()
+    const lists = async () =>
+      (await root.locator('[data-ov-list][data-ov-list-end]').count()) === 2 &&
+      (await root.locator('[data-ov-list][data-ov-list-state="ok"]').count()) === 2
+    expect(await until(lists), 'the lists did not reach their end')
+    expect(
+      (await text('[data-ov-strip] [data-ov-figure="completion"]')).includes(
+        OVERVIEW_EXPECTED.completion,
+      ),
+      `Completion does not read ${OVERVIEW_EXPECTED.completion}`,
+    )
+    const paused = root.locator('[data-ov-strip] [data-ov-figure="paused"] .font-mono')
+    eq(((await paused.first().textContent()) ?? '').trim(), OVERVIEW_EXPECTED.paused, 'Paused')
+    eq(await text('[data-ov-summary]'), OVERVIEW_EXPECTED.sentence, 'the sentence')
+    const row = root.locator(`[data-ov-list="attention"] [data-atrisk]`)
+    eq(await row.count(), 1, 'At-risk rows')
+    eq(await row.first().getAttribute('data-risk'), 'overdue', "the At-risk row's marker")
+    expect(
+      ((await row.first().textContent()) ?? '').includes(late.title),
+      `the At-risk row is not ${late.key}`,
+    )
+    const pausedRows = root.locator('[data-ov-list="paused"] [data-ovrow]')
+    eq(await pausedRows.count(), 1, 'Paused rows')
+    expect(
+      ((await pausedRows.first().textContent()) ?? '').includes(held.title),
+      `the Paused row is not ${held.key}`,
+    )
+    return `opened the Overview of ${sub.name} on the deployment's answers, with ${late.key} overdue and ${held.key} paused`
+  })
+}
+
 /** The Settings page Archived tasks opens with its search as the first
  *  control, focused, and the server search finds `target`, a task the run
  *  archived in its project (#143). Its key is the search, because a key
@@ -4969,6 +5050,8 @@ async function main() {
   await factChecks()
   // the Board of the run's project, while it is active
   await boardCheck()
+  // the Overview of a sub-project of its own, while the project is active
+  await overviewCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {
