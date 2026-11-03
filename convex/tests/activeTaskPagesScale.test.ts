@@ -200,14 +200,11 @@ describe('active pages at the design size', () => {
     const lBefore = await readBefore(large.t, large.member.id)
     record('50 rows of 1,000 tasks, no delays', s.figures)
     record('50 rows of 10,000 tasks and 5,000 archived, no delays', l.figures)
-    // the page itself reads the same ranges and documents, give or take the
-    // groups among its rows
-    expect(
-      Math.abs(l.figures.ranges - lBefore.ranges - (s.figures.ranges - sBefore.ranges)),
-    ).toBeLessThan(30)
-    expect(
-      Math.abs(l.figures.documents - lBefore.documents - (s.figures.documents - sBefore.documents)),
-    ).toBeLessThan(150)
+    // both organizations plant their oldest tasks alike, the head of each
+    // sub-project the page opens and its 50 rows, the first task's group of
+    // five among them, so the page's own reads match exactly
+    expect(l.figures.ranges - lBefore.ranges).toBe(s.figures.ranges - sBefore.ranges)
+    expect(l.figures.documents - lBefore.documents).toBe(s.figures.documents - sBefore.documents)
     // a search that matches nothing reads the text of every task it looks
     // at, here 300 a page, and reads the same in both
     const look = { page: { ...noDelays.page, tasks: 300 } }
