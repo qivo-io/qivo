@@ -1171,10 +1171,14 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.querySelector('[data-ov-health-note]')?.textContent).toBe(
       'The health table could not be loaded.Try again',
     )
+    // a keyboard user's Try again leaves focus on the table, not nowhere
+    const again = document.querySelector<HTMLButtonElement>('[data-ov-health-note] button')
+    again?.focus()
     failing.board.server.overview.failing = () => false
-    await click(document.querySelector('[data-ov-health-note] button'))
+    await click(again)
     await failing.board.answer()
     expect(healthState()).toBe('ok')
+    expect(document.activeElement).toBe(table())
   })
 
   it("shows the phone's cards with their figures, unknown delays and counting", async () => {

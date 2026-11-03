@@ -27,7 +27,7 @@
    blank: Delayed and Slipping it could not work out read a muted
    "unknown", and counts it is still counting read "Counting…" and "…". */
 
-import { type ReactNode, useRef } from 'react'
+import { type ReactNode, type RefObject, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -306,7 +306,7 @@ export function OvHealthTable({
     body = (
       <HealthNote>
         {answer.message ?? 'Qivo cannot show this table here.'}
-        {answer.reason === undefined && <TryAgain />}
+        {answer.reason === undefined && <TryAgain table={root} />}
       </HealthNote>
     )
   else if (state === 'over_budget')
@@ -316,14 +316,14 @@ export function OvHealthTable({
         {mine
           ? 'Open a project to see its sub-projects.'
           : 'Open a sub-project to see its figures.'}
-        <TryAgain />
+        <TryAgain table={root} />
       </HealthNote>
     )
   else if (state === 'error')
     body = (
       <HealthNote>
         The health table could not be loaded.
-        <TryAgain />
+        <TryAgain table={root} />
       </HealthNote>
     )
   else if (mobile)
@@ -534,14 +534,18 @@ function HealthNote({ children }: { children: ReactNode }) {
   )
 }
 
-/** The table's Try again, which asks the health read afresh. */
-function TryAgain() {
+/** The table's Try again, which asks the health read afresh and moves
+    focus to `table`, the table's root, as its note leaves with the press. */
+function TryAgain({ table }: { table: RefObject<HTMLDivElement | null> }) {
   return (
     <Button
       type="button"
       variant="ghost"
       className="h-control-sm text-sm"
-      onClick={() => P.overviewRetry('health')}
+      onClick={() => {
+        P.overviewRetry('health')
+        table.current?.focus()
+      }}
     >
       Try again
     </Button>
