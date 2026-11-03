@@ -383,26 +383,31 @@ export async function archivedTasksAfter(
  * the organization's archive instead, and the whole page for any other
  * scope, which has no other read (archivedTasksAfter). Tests lower these.
  *
- * Measured on 3 November 2026 on Boat with a temporary test under
- * convex-test's transaction limits, at the design size with ordinary text,
- * one figure raised a case. Before a REST or MCP page, a member reads 13
- * ranges, 2,084 documents and 0.92 MiB, nearly all of it the catalogue of
- * 2,000 projects and sub-projects, live and archived, that every caller
+ * Measured on 3 November 2026 in convex/tests/archivedTaskPagesScale.test.ts
+ * under convex-test's transaction limits, at the design size with ordinary
+ * text, one figure raised a case. Before a REST or MCP page, a member reads
+ * 13 ranges, 2,084 documents and 0.92 MiB, nearly all of it the catalogue
+ * of 2,000 projects and sub-projects, live and archived, that every caller
  * reads whole (a guest 6 ranges, an admin 9, each about 0.92 MiB), and
  * with a one-sentence description on every project 1.11 MiB, which leaves
  * the request's room 0.11 MiB short of `bytes` for the page. A roster of
  * 1,000 reads 0.29 MiB and 200 readable sub-projects 0.15 MiB. A member's
- * page of 200 rows over a project whose three sub-projects hold 350
- * archived tasks each reads 634 ranges, 618 documents and 0.34 MiB; a
- * search page that stops at `tasks` reads 1,232 ranges, 2,117 documents
- * and 1.31 MiB, and one that matches none 1,004, 2,003 and 1.27 MiB. Every
- * page ended at `limit` or at `tasks`, with the same rows and cursor with
- * and without the descriptions, so the REST and MCP lists keep reading
- * inside the request's room rather than refusing like the active lists
- * (activeTaskPage.ts TASK_LIST_UNREADABLE). Inside the design size the
- * room moves no page stop, and a refusal could give no advice that works,
- * because the reads before the page do not depend on the project named
- * (coordinator, 2026-11-03). */
+ * page of 200 rows over a project whose three sub-projects hold 70
+ * archived tasks each reads 604 ranges, 603 documents and 0.28 MiB past
+ * those reads, and a guest's or an admin's at most one range and one
+ * document fewer. With `tasks` lowered to 150, a search page that stops
+ * there reads 193 ranges, 322 documents and 0.18 MiB, and one that matches
+ * none 155, 303 and 0.17 MiB. That is at most about 1.3 ranges, 2.2
+ * documents and 1.2 KB a task looked at, which puts a search that looks at
+ * all 1,000 at about 1,300 ranges, 2,200 documents and 1.2 MiB, inside the
+ * page's budget. Every page ended at `limit` or at `tasks`, with the same
+ * rows, cursor, ranges and documents with and without the descriptions, so
+ * the REST and MCP lists keep reading inside the request's room rather
+ * than refusing like the active lists (activeTaskPage.ts
+ * TASK_LIST_UNREADABLE). Inside the design size the room moves no page
+ * stop, and a refusal could give no advice that works, because the reads
+ * before the page do not depend on the project named (coordinator,
+ * 2026-11-03). */
 export const ARCHIVE_PAGE = {
   tasks: 1000,
   ranges: 1500,
