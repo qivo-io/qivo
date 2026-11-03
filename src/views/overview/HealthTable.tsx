@@ -263,7 +263,8 @@ export function OvHealthTable({
   const overLimit = search.trim().length > LIMITS.search.max
 
   /* Why the rows are in name order, from the answer's order, which names
-     why for every row the order needed, also those past the rows shown. */
+     why for every row the order needed, also those past the rows shown,
+     and, unless that is the delays, why rows shown read unknown. */
   const notes: ReactNode[] = []
   if (ok?.sort.by_name === 'delays')
     notes.push(
@@ -281,7 +282,7 @@ export function OvHealthTable({
           : 'Sorted by name, because Qivo could not count the tasks here in one request.'}
       </p>,
     )
-  else if (rows.some((r) => r.delays.state !== 'ok'))
+  if (ok?.sort.by_name !== 'delays' && rows.some((r) => r.delays.state !== 'ok'))
     notes.push(
       <p key="unknown" data-ov-health-unknown>
         Qivo could not work out the delays of the {things} marked unknown.

@@ -999,6 +999,18 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     )
   })
 
+  it("says why rows read unknown under the counts' name-order note too", async () => {
+    await overview(work(), { force: { health: { counts: 'counting', delays: 'loads' } } })
+    await click(heading('Progress')?.querySelector('button'))
+    expect(document.querySelector('[data-ov-health-by-name]')?.textContent).toBe(
+      'Sorted by name while Qivo counts the tasks here.',
+    )
+    expect(cell(cards()[0], 'late')?.textContent).toBe('unknown')
+    expect(document.querySelector('[data-ov-health-unknown]')?.textContent).toBe(
+      'Qivo could not work out the delays of the sub-projects marked unknown.',
+    )
+  })
+
   it('searches the whole table once it holds more than one batch, rested, within its limit, saying when nothing matches', async () => {
     const { board } = await overview(parts(25))
     expect(cards()).toHaveLength(10)
