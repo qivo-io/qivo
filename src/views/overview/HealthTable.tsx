@@ -183,8 +183,10 @@ const nameOf = (row: HealthRow) => ({
 
 /** The health table's section: its search, its rows in the server's order
     with Load more, and its notes. `asked` is the order the page asks for;
-    the headings show the order the rows are in, which the server answers,
-    and a press compares with that. */
+    the headings show the order the rows are in, which the server answers.
+    A press, the phone's Sort by and its direction build on that order
+    where the rows answer the order asked, as in a name-order fallback,
+    and on `asked` while a new order is on its way. */
 export function OvHealthTable({
   view,
   mine,
@@ -233,7 +235,13 @@ export function OvHealthTable({
             : view.current && !view.kept
               ? 'ok'
               : 'refreshing'
+  // the order the rows are in, which the headings show
   const shown: HealthOrder = ok ? { key: ok.sort.key, dir: ok.sort.dir } : asked
+  // the order the controls build on: the rows' where they answer the order
+  // asked, else the one asked, so a pick on the phone stays and a second
+  // press reverses it while its rows are on their way
+  const current: HealthOrder =
+    ok && view?.table.sort === asked.key && view.table.dir === asked.dir ? shown : asked
   const more = view?.more ?? null
   const rows = ok?.rows ?? []
   const kept = !!view?.kept
@@ -243,13 +251,13 @@ export function OvHealthTable({
     more !== null,
     () => root.current?.querySelector<HTMLElement>('[data-ov-health-retry]') ?? root.current,
   )
-  /* A press on a heading sorts by it, a press on the one the rows are in
-     flips its direction: a table that always starts ascending makes you
-     click twice to ask the question you meant. */
+  /* A press on a heading sorts by it, a press on the one of the order the
+     controls build on flips its direction: a table that always starts
+     ascending makes you click twice to ask the question you meant. */
   const press = (c: (typeof HEALTH_COLS)[number]) =>
     onSort(
-      shown.key === c.id
-        ? { key: c.id, dir: shown.dir === 'asc' ? 'desc' : 'asc' }
+      current.key === c.id
+        ? { key: c.id, dir: current.dir === 'asc' ? 'desc' : 'asc' }
         : { key: c.id, dir: c.dir },
     )
   const overLimit = search.trim().length > LIMITS.search.max
@@ -325,7 +333,7 @@ export function OvHealthTable({
           <NativeSelect
             id="overview-health-sort"
             className="shadow-none"
-            value={shown.key}
+            value={current.key}
             onChange={(e) => {
               const col = HEALTH_COLS.find((c) => c.id === e.target.value)
               if (col) onSort({ key: col.id, dir: col.dir })
@@ -341,10 +349,10 @@ export function OvHealthTable({
             type="button"
             variant="ghost"
             size="icon"
-            aria-label={`Sort ${shown.dir === 'asc' ? 'descending' : 'ascending'}`}
-            onClick={() => onSort({ ...shown, dir: shown.dir === 'asc' ? 'desc' : 'asc' })}
+            aria-label={`Sort ${current.dir === 'asc' ? 'descending' : 'ascending'}`}
+            onClick={() => onSort({ ...current, dir: current.dir === 'asc' ? 'desc' : 'asc' })}
           >
-            <Icon name={shown.dir === 'asc' ? 'chevronUp' : 'chevronDown'} size={16} />
+            <Icon name={current.dir === 'asc' ? 'chevronUp' : 'chevronDown'} size={16} />
           </Button>
         </div>
         {state === 'loading' ? (

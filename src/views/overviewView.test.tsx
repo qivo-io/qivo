@@ -1176,6 +1176,35 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.querySelector<HTMLSelectElement>('#overview-health-sort')?.value).toBe('name')
   })
 
+  it("builds the phone's Sort by and direction button on the order asked while its rows load", async () => {
+    phone = true
+    const { board } = await overview(work())
+    const select = () => document.querySelector<HTMLSelectElement>('#overview-health-sort')
+    const direction = () =>
+      document.querySelector<HTMLButtonElement>('.mobile-health-sort button[aria-label^="Sort"]')
+    expect(select()?.value).toBe('late')
+    expect(direction()?.getAttribute('aria-label')).toBe('Sort ascending')
+    await click(direction())
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'asc' })
+    board.server.overview.hold = (query) => query === 'health'
+    await act(async () => {
+      const el = select()
+      if (!el) throw new Error('no Sort by')
+      el.value = 'done'
+      el.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'done', dir: 'desc' })
+    // while Done's rows load, the pick stays and the direction builds on it
+    expect(table()?.dataset.ovHealthKept).toBe('')
+    expect(select()?.value).toBe('done')
+    await click(direction())
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'done', dir: 'asc' })
+    board.server.overview.hold = false
+    await board.answer()
+    expect(select()?.value).toBe('done')
+    expect(direction()?.getAttribute('aria-label')).toBe('Sort descending')
+  })
+
   it('shows Status distribution for one sub-project and asks no health read', async () => {
     const { board } = await overview(work(), { scope: 'two' })
     expect(document.querySelector('[data-ov-health]')).toBeNull()
