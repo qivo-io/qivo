@@ -1032,6 +1032,25 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(cards()).toHaveLength(10)
   })
 
+  it('keeps the search box and its focus while a cleared search waits for its answer', async () => {
+    const { board } = await overview(parts(25))
+    const box = () => document.querySelector<HTMLInputElement>('[data-ov-health-search]')
+    await typeSearch('part 2')
+    expect(cards()).toHaveLength(7)
+    const input = box()
+    input?.focus()
+    board.server.overview.hold = (query) => query === 'health'
+    await typeSearch('')
+    expect(healthAsked(board).at(-1)).not.toHaveProperty('search')
+    expect(box()).toBe(input)
+    expect(document.activeElement).toBe(input)
+    board.server.overview.hold = false
+    await board.answer()
+    expect(cards()).toHaveLength(10)
+    expect(box()).toBe(input)
+    expect(document.activeElement).toBe(input)
+  })
+
   it('loads 10 more rows on Load more to the end, keeping focus while they load and leaving it on the table at the end', async () => {
     const { board } = await overview(parts(25))
     const more = () => document.querySelector<HTMLButtonElement>('[data-ov-health-more]')

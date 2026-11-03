@@ -1131,7 +1131,8 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   if (!searchOver) lastSearch.current = search.trim()
   const rested = useRested(searchOver ? lastSearch.current : search.trim(), BOARD_SEARCH_DELAY_MS)
   // the unsearched table's size for each scope, which shows the search box
-  // once it passes one batch
+  // once it passes one batch, taken only from an answer asked with no
+  // search, so the box stays while a cleared search waits for its answer
   const unsearched = useRef(new Map<string, number>())
   /* The Milestones window opened from a row can delete that milestone, and
      the row with it. Focus then goes to the next row, the previous one, the
@@ -1164,7 +1165,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
   )
   const health = read.health
   const healthAnswer = health?.value
-  if (healthAnswer?.state === 'ok' && rested === '' && !health?.kept)
+  if (healthAnswer?.state === 'ok' && health?.table.search === '')
     unsearched.current.set(info.id, healthAnswer.total)
 
   const summaryAnswer = read.summary?.value

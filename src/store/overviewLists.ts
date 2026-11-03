@@ -270,6 +270,9 @@ export type HealthView = {
   value?: HealthAnswer
   /** the error of the first answer for the table asked now */
   error?: unknown
+  /** the table arguments the answer or the error shown answers, so the
+      page tells an answer asked with no search from one with a search */
+  table: HealthAsk
   /** whether the answer shown is the live subscription's for the table
       asked now, arrived on this connection */
   current: boolean
@@ -705,6 +708,7 @@ export function createOverviewReads(transport: OverviewTransport) {
       const value = held.value as HealthAnswer
       return {
         value,
+        table: ask,
         current: held.current,
         kept: false,
         more: more(value, false),
@@ -720,12 +724,27 @@ export function createOverviewReads(transport: OverviewTransport) {
       // a Load more that failed shows the rows before it from the first
       // render, as settleHealth takes the read back to them
       return pressed && before !== null
-        ? { value: before.value, current: false, kept: false, more: null, moreFailed: true }
-        : { error: held.error, current: held.current, kept: false, more: null, moreFailed: false }
+        ? {
+            value: before.value,
+            table: before.ask,
+            current: false,
+            kept: false,
+            more: null,
+            moreFailed: true,
+          }
+        : {
+            error: held.error,
+            table: ask,
+            current: held.current,
+            kept: false,
+            more: null,
+            moreFailed: false,
+          }
     // waiting: the last answer shown for this scope and clock
     if (before === null) return null
     return {
       value: before.value,
+      table: before.ask,
       current: false,
       kept: !same,
       more: more(before.value, pressed),
