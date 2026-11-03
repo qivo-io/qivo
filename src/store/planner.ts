@@ -1986,10 +1986,10 @@ function sameShown(a: ReturnType<typeof shownWorkspace>) {
 }
 
 /** Emits when whether a write waits changed since the last workspace emit,
-    while a Roadmap visit records: its Undo reads it (P.roadmapUndo busy),
+    while a Roadmap visit records. Its Undo reads that (P.roadmapUndo busy),
     and no other view does. A write that paints nothing, such as a
-    preference save or a read mark, is sent and answered without a repaint,
-    so without this the button would keep the state it had before. */
+    preference save, is sent and answered without a repaint, so without
+    this the button would keep the state it had before. */
 function showWaiting() {
   if (!roadmapVisit || roadmapVisit.disabled || !lastShown) return
   if (lastShown.waiting === layers.waiting()) return
