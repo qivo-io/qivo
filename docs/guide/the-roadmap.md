@@ -117,9 +117,10 @@ Display preferences, filters and the visible date window are unaffected.
 
 Changing projects or filters within Roadmap keeps history. On a phone,
 switching between the agenda and timeline also keeps it; Undo sits below
-**Timeline & team**. Opening a task to read it keeps history, but saving a
-change there or changing an owner through a roadmap portrait clears history
-and stops recording until you leave Roadmap and return.
+**Timeline & team**, beside **Auto-move**. Opening a task to read it keeps
+history, but saving a change there or changing an owner through a roadmap
+portrait clears history and stops recording until you leave Roadmap and
+return.
 
 Leaving Roadmap or reloading clears history without reverting saved changes.
 History expires after 24 hours and holds up to 1,000 steps per visit. If an

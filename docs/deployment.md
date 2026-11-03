@@ -468,7 +468,11 @@ could not be loaded" while the period has API calls. The app from v0.1.84 to
 v0.1.106 reads the window of a task that left the board through
 `issues.archivedTask`, and from v0.1.103 also the window of a task Search
 opened that the workspace does not hold, so that window says it couldn't check
-the archive. The app before v0.1.15
+the archive. The app before v0.1.110 saves the hours its Update estimates
+window edits through `roadmap.change` while Roadmap records its undo history.
+From the release that left Remaining out of that history, `roadmap.change`
+refuses `remaining_hours`, so after such a rollback those saves fail and the
+hours go back. The app before v0.1.15
 reads Archived tasks through `issues.archivedFor`, the v0.1.15 app sends
 `access` and `team_access` maps to `projects.update`, and the app before
 v0.1.11 saves the Blue appearance through `appearance.save`, so their Archived

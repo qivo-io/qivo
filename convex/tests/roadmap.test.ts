@@ -59,7 +59,7 @@ describe('roadmap visit undo', () => {
     expect(await rows(t)).toEqual([])
   })
 
-  it('restores exact estimate measurement time and preserves independent task edits', async () => {
+  it('refuses Remaining in a task operation, which takes the ordinary task write', async () => {
     const t = newT(),
       f = await withOrg(t),
       user = as(t, f.user),
@@ -70,28 +70,19 @@ describe('roadmap visit undo', () => {
       remaining_hours: 12,
       remaining_set_at: NOW,
     })
-    await user.mutation(api.roadmap.change, {
-      session_id,
-      operations: [{ kind: 'task', id: a.id, patch: { remaining_hours: 6 } }],
-    })
-    expect((await task(t, a.id))?.remaining_set_at).not.toBe(NOW)
-    await as(t, f.admin).mutation(api.issues.update, {
-      org_id: f.org.id,
-      id: a.id,
-      patch: { title: 'An independent edit', priority: 'high' },
-    })
-    await user.mutation(api.roadmap.undo, { session_id, all: true })
-    expect(await task(t, a.id)).toMatchObject({
-      remaining_hours: 12,
-      remaining_set_at: NOW,
-      title: 'An independent edit',
-      priority: 'high',
-    })
+    for (const operation of [
+      { kind: 'task' as const, id: a.id, patch: { remaining_hours: 6 } },
+      { ...schedule(a.id, '2026-01-05'), expected: { remaining_hours: 12 } },
+    ])
+      await expect(
+        // @ts-expect-error a task operation no longer takes remaining_hours
+        user.mutation(api.roadmap.change, { session_id, operations: [operation] }),
+      ).rejects.toThrow(/remaining_hours/)
+    expect(await task(t, a.id)).toEqual(a)
+    expect(await rows(t)).toEqual([])
   })
 
-  it('refuses a newer estimate measurement even when the amount returns to the recorded value', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(NOW)
+  it('journals only the dates and keeps independent task edits, Remaining included', async () => {
     const t = newT(),
       f = await withOrg(t),
       user = as(t, f.user),
@@ -104,21 +95,33 @@ describe('roadmap visit undo', () => {
     })
     await user.mutation(api.roadmap.change, {
       session_id,
-      operations: [{ kind: 'task', id: a.id, patch: { remaining_hours: 6 } }],
+      operations: [schedule(a.id, '2026-01-05')],
     })
-    vi.setSystemTime('2026-01-02T00:00:00.000Z')
+    const [entry] = JSON.parse((await rows(t))[0].changes) as {
+      fields: string[]
+      before: Record<string, unknown>
+      after: Record<string, unknown>
+    }[]
+    // the task had no dates, and its hours stay out of the receipt
+    expect([entry.fields, entry.before, entry.after]).toEqual([
+      ['start_week', 'end_week'],
+      {},
+      { start_week: '2026-01-05', end_week: '2026-01-05' },
+    ])
     await as(t, f.admin).mutation(api.issues.update, {
       org_id: f.org.id,
       id: a.id,
-      patch: { remaining_hours: 8 },
+      patch: { title: 'An independent edit', remaining_hours: 6 },
     })
-    await as(t, f.admin).mutation(api.issues.update, {
-      org_id: f.org.id,
-      id: a.id,
-      patch: { remaining_hours: 6 },
+    const edited = await task(t, a.id)
+    expect(edited?.remaining_set_at).not.toBe(NOW)
+    await user.mutation(api.roadmap.undo, { session_id, all: true })
+    expect(await task(t, a.id)).toMatchObject({
+      title: 'An independent edit',
+      remaining_hours: 6,
+      remaining_set_at: edited?.remaining_set_at,
     })
-    await expectRefusal(user.mutation(api.roadmap.undo, { session_id, all: false }), 'conflict')
-    expect((await task(t, a.id))?.remaining_hours).toBe(6)
+    expect((await task(t, a.id))?.start_week).toBeUndefined()
   })
 
   it('journals and writes only the task an operation names, never its ancestors', async () => {
@@ -258,6 +261,52 @@ describe('roadmap visit undo', () => {
       /expired/,
     )
     expect((await task(t, a.id))?.start_week).toBe('2026-01-05')
+    expect(await rows(t)).toHaveLength(1)
+  })
+
+  it('expires a receipt an earlier release wrote with Remaining, and restores none of it', async () => {
+    const t = newT(),
+      f = await withOrg(t),
+      user = as(t, f.user),
+      session_id = uuid()
+    const a = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      remaining_hours: 12,
+      remaining_set_at: NOW,
+    })
+    await user.mutation(api.roadmap.change, {
+      session_id,
+      operations: [schedule(a.id, '2026-01-05')],
+    })
+    // that release journaled the hours and their measurement time as well
+    await t.run(async (ctx) => {
+      const entry = (await ctx.db.query('roadmap_history').collect())[0]
+      const changes = JSON.parse(entry.changes) as {
+        fields: string[]
+        before: Record<string, unknown>
+        after: Record<string, unknown>
+      }[]
+      for (const change of changes) {
+        change.fields.push('remaining_hours', 'remaining_set_at')
+        Object.assign(change.before, {
+          remaining_hours: 8,
+          remaining_set_at: '2025-12-01T00:00:00.000Z',
+        })
+        Object.assign(change.after, { remaining_hours: 12, remaining_set_at: NOW })
+      }
+      await ctx.db.patch(entry._id, { changes: JSON.stringify(changes) })
+    })
+    await expectRefusal(
+      user.mutation(api.roadmap.undo, { session_id, all: true }),
+      'conflict',
+      /expired/,
+    )
+    expect(await task(t, a.id)).toMatchObject({
+      start_week: '2026-01-05',
+      remaining_hours: 12,
+      remaining_set_at: NOW,
+    })
     expect(await rows(t)).toHaveLength(1)
   })
 
@@ -522,7 +571,7 @@ describe('roadmap visit undo', () => {
     expect((await task(t, b.id))?.start_week).toBeUndefined()
   })
 
-  it('refuses a date operation on a group even when it would change nothing; skips an unchanged estimate', async () => {
+  it('refuses a date operation on a group even when it would change nothing; skips an unchanged leaf', async () => {
     const t = newT(),
       f = await withOrg(t),
       user = as(t, f.user),
@@ -539,17 +588,15 @@ describe('roadmap visit undo', () => {
       parent_id: group.id,
       start_week: '2026-01-05',
       end_week: '2026-02-02',
-      remaining_hours: 12,
-      remaining_set_at: NOW,
     })
     const other = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     expect(
       await user.mutation(api.roadmap.change, {
         session_id,
-        operations: [{ kind: 'task', id: child.id, patch: { remaining_hours: 12 } }],
+        operations: [schedule(child.id, '2026-01-05', '2026-02-02')],
       }),
     ).toEqual({ count: 0 })
-    expect((await task(t, child.id))?.remaining_set_at).toBe(NOW)
+    expect(await task(t, child.id)).toEqual(child)
     for (const op of [
       schedule(group.id, '2026-01-12'), // a change
       schedule(group.id, '2026-01-05', '2026-02-02'), // its dormant stored dates

@@ -8,6 +8,7 @@ import { focusAround } from '../lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
 import { createMountScheduler, useMountGuards } from '../lib/mountScheduler'
 import { isRoadmapTaskVisible } from '../lib/roadmapVisibility'
+import { autoMoveTitle } from '../lib/schedule'
 import { useLatest } from '../lib/useLatest'
 import {
   type IssueFilters,
@@ -100,8 +101,9 @@ const MobileRoadmapRow = memo(function MobileRoadmapRow({
 
 /** The phone entry to the same roadmap. Dates, editing and access rules still
  * come from the planner; the timeline remains available for spatial planning.
+ * A toolbar row under Timeline & team holds Undo and Auto-move.
  * With `empty`, the agenda keeps what the desktop's empty roadmap keeps in its
- * toolbar (Undo, the planning tools and New milestone) and shows the note in
+ * toolbar (Undo, Auto-move and New milestone) and shows the note in
  * place of the timeline button, the section switch and the task schedule. The
  * scope's milestones stay listed under the note, as the desktop keeps their
  * flags. */
@@ -200,19 +202,20 @@ export function MobileRoadmap({
     </Button>
   )
 
-  const planningTools = (
-    <details className="mobile-roadmap-tools">
-      <summary>
-        <Icon name="cog" size={16} /> Planning tools
-      </summary>
-      <div className="mobile-roadmap-tool-actions">
-        <Button type="button" onClick={onAutoCorrect} disabled={corrections === 0}>
-          <Icon name="arrowRightFromLine" size={16} />
-          Auto-move{corrections > 0 ? ` (${corrections})` : ''}
-        </Button>
-      </div>
-      <p>Auto-move pushes planned tasks after their blockers.</p>
-    </details>
+  // Auto-move is disabled while no task starts before its blocker ends
+  const toolbar = (
+    <div className="mobile-roadmap-toolbar">
+      {undoControls}
+      <Button
+        type="button"
+        onClick={onAutoCorrect}
+        disabled={corrections === 0}
+        title={autoMoveTitle(corrections)}
+      >
+        <Icon name="arrowRightFromLine" size={16} />
+        Auto-move{corrections > 0 ? ` (${corrections})` : ''}
+      </Button>
+    </div>
   )
   const canAddMilestone = !info.wide && P.canAddMilestone(info.id)
   const milestoneSection = (
@@ -253,8 +256,7 @@ export function MobileRoadmap({
   if (empty)
     return (
       <div ref={scroller} data-scroll data-screen-label="Roadmap" className="mobile-roadmap-agenda">
-        {undoControls}
-        {planningTools}
+        {toolbar}
         {empty}
         {milestones.length > 0
           ? milestoneSection
@@ -277,7 +279,7 @@ export function MobileRoadmap({
         </Button>
       </div>
 
-      {undoControls}
+      {toolbar}
 
       <fieldset className="mobile-roadmap-sections" aria-label="Roadmap content">
         <Button
@@ -299,8 +301,6 @@ export function MobileRoadmap({
           Task schedule
         </Button>
       </fieldset>
-
-      {planningTools}
 
       {section === 'milestones' ? (
         milestoneSection

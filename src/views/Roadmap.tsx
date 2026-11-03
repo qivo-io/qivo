@@ -26,7 +26,7 @@ import { RoadmapUndo } from '../components/RoadmapUndo'
 import { WorkspaceToolbar } from '../components/WorkspaceShell'
 import { winWeeks } from '../lib/dates'
 import { groupSpan } from '../lib/issueGroups'
-import { autoMoves, dependencyPairs } from '../lib/schedule'
+import { autoMoves, autoMoveTitle, dependencyPairs } from '../lib/schedule'
 import { captureWeekDates, restoreWeekDates } from '../lib/weekDrafts'
 import { fitEndWeekAgainst, type LoadItem, plannableHoursOf } from '../lib/workload'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/planner'
@@ -1153,15 +1153,7 @@ function Roadmap({
             data-auto-correct
             onClick={() => autoArrange()}
             disabled={moves.length === 0}
-            title={
-              moves.length
-                ? 'Move ' +
-                  moves.length +
-                  ' blocked task' +
-                  (moves.length > 1 ? 's' : '') +
-                  ' after their blockers, including dependent tasks'
-                : 'No task starts before its blocker ends'
-            }
+            title={autoMoveTitle(moves.length)}
           >
             <Icon name="arrowRightFromLine" size={16} />
             Auto-move

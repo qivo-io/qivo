@@ -30,7 +30,11 @@ const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 const log = (message) => console.log(`[roadmap-undo] ${message}`)
 const undo = () => page.locator('[data-roadmap-undo]').filter({ visible: true })
-const bar = (id) => page.locator(`[data-bar="${id}"]`)
+/* A Roadmap of the scope the drive left stays in the page, hidden, until the
+   next view has painted and the page is idle (KeptView), and holds the same
+   task bars. Bars are looked up in the shown view, which alone has
+   data-workspace-view. */
+const bar = (id) => page.locator(`[data-workspace-view] [data-bar="${id}"]`)
 let initialUI
 let passed = false
 
@@ -48,6 +52,21 @@ async function settled(count) {
     return history && !history.busy && history.count === count
   }, count)
   await page.waitForFunction(() => window.__roadmapSmokeConnection().inflightMutations === 0)
+}
+
+/* Waits until the shown Undo button is enabled, or disabled, as `enabled`
+   says, and fails with `message` if it never is. The button renders the
+   store's history after the history changes, so a step waits for the button
+   itself rather than reading it once after settled(). */
+async function undoShows(enabled, message) {
+  await page
+    .locator(`[data-roadmap-undo]:${enabled ? 'enabled' : 'disabled'}`)
+    .filter({ visible: true })
+    .first()
+    .waitFor({ timeout: 10_000 })
+    .catch(() => {
+      throw new Error(message)
+    })
 }
 
 async function persisted() {
@@ -72,8 +91,6 @@ async function persisted() {
         id,
         start: row.start_week ?? null,
         end: row.end_week ?? null,
-        remaining: row.remaining_hours ?? null,
-        measured: row.remaining_set_at ?? null,
       }
     }),
     milestones: snapshot.milestones
@@ -209,7 +226,6 @@ try {
           start_week: iso(today),
           end_week: iso(today + 1),
           ...(i === 1 ? { parent_id: tasks[0].id } : {}),
-          ...(i === 2 ? { assignee_id: P.CURRENT_USER, remaining_hours: 6 } : {}),
         })
       }
       await convex.mutation('issues:addLink', {
@@ -243,7 +259,7 @@ try {
   await page.locator('[data-roadmap-toolbar]').waitFor()
   await page.getByPlaceholder('Filter tasks…').fill(prefix)
   await settled(0)
-  assert.equal(await undo().isDisabled(), true)
+  await undoShows(false, 'Undo is available before any change')
   assert.equal(await page.locator('[data-roadmap-revert-all]').count(), 0)
   const baseline = await persisted()
 
@@ -288,9 +304,14 @@ try {
   assert.equal((await persisted()).milestones.length, 1, 'Undo did not restore deleted milestone')
   await page.locator('[data-new-milestone]').click()
   const modal = page.locator('[data-modal-shell]')
-  await modal.getByRole('textbox', { name: 'New milestone', exact: true }).fill(`${prefix} added`)
+  const newName = modal.getByRole('textbox', { name: 'New milestone', exact: true })
+  await newName.fill(`${prefix} added`)
   await modal.getByRole('button', { name: 'Add', exact: true }).click()
   await modal.getByRole('button', { name: `Edit ${prefix} added`, exact: true }).waitFor()
+  // The row shows before the server answers, and the window keeps the typed
+  // name until the milestone is created; Done before then asks whether to
+  // discard that name.
+  await page.waitForFunction((input) => input.value === '', await newName.elementHandle())
   await modal.getByRole('button', { name: 'Done', exact: true }).click()
   await modal.waitFor({ state: 'detached' })
   await settled(3)
@@ -307,16 +328,6 @@ try {
   await spanFollows(parent, child, 'Parent span did not follow the subtask after repeated Undo')
   log('Repeated Undo restores task dates and reverses milestone creation, edits and deletion')
 
-  // No Roadmap control edits Remaining any more, so this drives the store's
-  // path that still records a Remaining-only write in the Roadmap's history.
-  await page.evaluate((id) => window.PLANNER.updateIssue(id, { remaining: 11 }), leaf)
-  await settled(1)
-  assert.equal((await persisted()).tasks[2].remaining, 11)
-  await undo().click()
-  await settled(0)
-  assert.deepEqual(await persisted(), baseline, 'Remaining undo lost its original measurement time')
-  log('Remaining undo restores the hours and their original measurement timestamp')
-
   await dragWeeks(child, 1)
   await settled(1)
   await page.locator('[data-all-nav]').click()
@@ -326,7 +337,7 @@ try {
   await readTask(child)
   await closeTask()
   await settled(1)
-  assert.equal(await undo().isEnabled(), true, 'Reading a task cleared undo history')
+  await undoShows(true, 'Reading a task cleared undo history')
   await readTask(child)
   await page.locator('h1[data-task-title]').click()
   const title = page.getByRole('textbox', { name: 'Task title', exact: true })
@@ -335,10 +346,10 @@ try {
   await page.waitForFunction(() => window.PLANNER.roadmapUndo.disabled)
   await closeTask()
   await settled(0)
-  assert.equal(await undo().isDisabled(), true, 'Task editing left undo available')
+  await undoShows(false, 'Task editing left undo available')
   await dragWeeks(leaf, 1)
   await settled(0)
-  assert.equal(await undo().isDisabled(), true, 'History restarted before leaving Roadmap')
+  await undoShows(false, 'History restarted before leaving Roadmap')
   log('Scope changes and task reading retain history; task editing disables it for the visit')
 
   await selectView('Board')

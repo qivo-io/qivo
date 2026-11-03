@@ -169,7 +169,7 @@
   margin-left: auto;
 }
 
-:is(.mobile-roadmap-open-timeline, .mobile-roadmap-tools, .mobile-roadmap-timeline-heading) p,
+:is(.mobile-roadmap-open-timeline, .mobile-roadmap-timeline-heading) p,
 .mobile-roadmap-note {
   margin: 8px 0 0;
   color: var(--text-2);
@@ -193,8 +193,18 @@
   min-width: 0;
 }
 
+/* Undo and Auto-move side by side under Timeline & team (MobileRoadmap). */
+.mobile-roadmap-toolbar {
+  display: flex;
+  gap: 8px;
+}
+
+.mobile-roadmap-toolbar > button {
+  flex: 1;
+  min-width: 0;
+}
+
 .mobile-roadmap-sections,
-.mobile-roadmap-agenda > .mobile-roadmap-tools,
 .mobile-roadmap-timeline-tools,
 .mobile-roadmap-timeline-heading {
   box-shadow: var(--workspace-panel-shadow);
@@ -213,20 +223,12 @@
   font-size: var(--fs-sm);
 }
 
-.mobile-roadmap-agenda > .mobile-roadmap-tools,
 .mobile-roadmap-timeline-tools {
+  margin: 0 16px 8px;
   padding: 0 12px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--workspace-panel, var(--surface-1));
-}
-
-.mobile-roadmap-agenda > .mobile-roadmap-tools[open] {
-  padding-bottom: 12px;
-}
-
-.mobile-roadmap-timeline-tools {
-  margin: 0 16px 8px;
 }
 
 .mobile-roadmap-tools > summary::after,
@@ -241,7 +243,6 @@
   content: "−";
 }
 
-.mobile-roadmap-tool-actions,
 .mobile-roadmap-filter-controls {
   display: flex;
   flex-wrap: wrap;

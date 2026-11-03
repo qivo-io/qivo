@@ -1985,6 +1985,19 @@ function sameShown(a: ReturnType<typeof shownWorkspace>) {
   )
 }
 
+/** Emits when whether a write waits changed since the last workspace emit,
+    while a Roadmap visit records. Its Undo reads that (P.roadmapUndo busy),
+    and no other view does. A write that paints nothing, such as a
+    preference save, is sent and answered without a repaint, so without
+    this the button would keep the state it had before. */
+function showWaiting() {
+  if (!roadmapVisit || roadmapVisit.disabled || !lastShown) return
+  if (lastShown.waiting === layers.waiting()) return
+  // inside together(), with the repaint at its end
+  if (heldRepaint) heldRepaint.emit = true
+  else emit()
+}
+
 export type { ToastTone }
 
 /* The two window hooks the app hangs globally: App mounts showToast for the
@@ -2719,6 +2732,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
   } catch (error) {
     sent = Promise.reject(error)
   }
+  showWaiting()
   return sent.then(
     (result) => {
       releaseUpdate()
@@ -2737,6 +2751,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
           }),
         )
         guarded(() => o.onSettled?.())
+        guarded(showWaiting)
       } else if (clearsHistory) clearRoadmapHistory(visit)
       return answer(result)
     },
@@ -2764,6 +2779,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
           if (o.keepUnsaved) guarded(() => o.keepUnsaved?.())
         }
         guarded(() => o.onSettled?.())
+        guarded(showWaiting)
       }
       return refusal(error)
     },
@@ -7787,12 +7803,10 @@ export const PLANNER = {
         }
       },
     }
-    // No Roadmap control writes Remaining since Update estimates went, but a
-    // Remaining-only write made while the Roadmap records still joins its
-    // history, as it did for tabs loaded before that release.
-    const planningOnly = Object.keys(wire).every((key) =>
-      ['start_week', 'end_week', 'remaining_hours'].includes(key),
-    )
+    // Only a write of dates alone joins the Roadmap's history. Remaining
+    // takes the ordinary write like any other field, so a saved one ends
+    // the history (isTaskContentWrite).
+    const planningOnly = Object.keys(wire).every((key) => ['start_week', 'end_week'].includes(key))
     const over = overOf('issues', row, Object.keys(wire), opts.seen)
     const saved =
       (planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }, view, over)) ||

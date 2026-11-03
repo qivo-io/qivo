@@ -503,9 +503,10 @@ describe('the phone Roadmap of a scope with nothing to schedule', () => {
     await shows('Nothing to schedule yet')
     expect(document.body.textContent).toContain('Tasks live in sub-projects.')
     expect(button('New sub-project')).toBeDefined()
-    // what the desktop's toolbar keeps, and no agenda of nothing
+    // what the desktop's toolbar keeps, and no agenda of nothing; with no
+    // task to move, Auto-move is there and disabled
     expect(button('New milestone')).toBeDefined()
-    expect(document.body.textContent).toContain('Planning tools')
+    expect(button('Auto-move')).toHaveProperty('disabled', true)
     expect(document.body.textContent).not.toContain('Upcoming milestones')
   })
 
