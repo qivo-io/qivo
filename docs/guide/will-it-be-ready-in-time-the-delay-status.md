@@ -68,8 +68,12 @@ due date.
   with subtasks takes its delay from its subtasks' dates, not from anyone's
   other work, so it says **Delay unknown** only while some of those dates
   have not loaded.
-- **Overview** includes projected misses in **Overdue & at risk** and counts
-  **Delayed** and **Slipping** tasks in the health table.
+- **Overview** includes projected misses in **Overdue & at risk**, which
+  Qivo works out on the server with each owner's other work. A row says
+  **risk unknown** where Qivo could not read that work, so the task may not
+  be late, and the projected count says it is not available where it could
+  not work out every projection. The health table counts **Delayed** and
+  **Slipping** tasks as before.
 - **REST and MCP** task results carry the same verdict as `delay`, judged on
   today's date in UTC. A task's verdict says it is unavailable when Qivo
   cannot read the owner's other open work in one request. A row of a task

@@ -1,32 +1,65 @@
-Overview summarizes the selected project, sub-project, All projects or
-My view. Its opening sentence reports overdue tasks, projected missed
-deadlines, blockers, completion or remaining work. It describes current
-signals, not a guarantee that deadlines are safe.
+Overview summarizes the selected project, sub-project or My view. Its
+opening sentence reports overdue tasks, projected missed deadlines, paused
+work, completion or remaining work. It describes current signals, not a
+guarantee that deadlines are safe. In **All projects**, Overview asks you to
+choose a project and lists your top-level projects, as the Board does.
 
 The status strip shows **Lead**, **Completion**, **In progress**, **Paused**
 and **Next milestone**. Grouping parents do not add to task counts;
-completion and status totals count tasks without active subtasks. All
-projects and My view omit Lead because neither has one lead.
+completion and status totals count tasks without active subtasks. My view
+omits Lead because it has no one lead.
+
+Qivo counts these figures on the server, so Overview shows them without
+waiting for your browser to load every task. Until the server's answer
+arrives the figures show **…**, which can take a moment or two in a busy
+organization. While Qivo is still counting an organization's tasks, as
+right after an update, each count reads **Counting…** and a line under the
+figures says so. A figure Qivo could not count in one request shows **—** with
+a line that says why, never a smaller number or zero
+([Limits](./limits.md)). Overdue reads every task due before today,
+including Done tasks the nightly archive has not taken yet, 30 days after
+they were done, so a scope with very many of them can show Overdue as not
+available. Open a sub-project to see its figures then. When Overdue or the
+projected delays are not available, the opening sentence names only the
+overdue tasks Qivo counted, or says that Qivo could not check every
+deadline, and it never says that nothing is late.
 
 **Sub-project health** lists each sub-project's lead, progress, Done count,
 remaining hours, Delayed, Slipping and Paused counts. Select a heading to sort
 and select it again to reverse the order. The default is Delayed, highest
 first. Select a row to open that sub-project's Board. Delayed, Slipping and
 Paused show “—” when zero. Narrow desktop windows scroll horizontally;
-phones show sortable cards.
+phones show sortable cards. The table still reads every task of the scope,
+so while a large workspace loads it says that it opens once every task has
+loaded.
 
-In All projects and My view, **Project health** shows one row per project.
-My view counts only your tasks and keeps that restriction when you open a
-project from its health row. A single sub-project shows **Status
-distribution** instead of the table.
+In My view, **Project health** shows one row per project. My view counts
+only your tasks and keeps that restriction when you open a project from its
+health row. A single sub-project shows **Status distribution** instead of
+the table.
 
 **Overdue & at risk** lists unfinished tasks past their due date and, for
 projects with delay tracking, tasks projected to miss it. Hover “projected
 to miss” for the projected finish week. **Paused tasks** lists work on hold.
-Select either list's rows to open tasks. Portraits show the reviewer while a
-task waits In Review with one. When the two lists hold many tasks, rows below
-the first screen appear in the first moments after the Overview opens, in
-shaded space; searching the page or printing loads them all first.
+Each list shows its first 10 tasks, earliest due date first and tasks
+without a due date last, and **Load more** adds the next 10. Rows that
+change while you read stay in place, and none shows twice. Where Qivo
+checked only part of a list in one request, the list says so and **Load
+more** continues from there. A task marked **risk unknown** needs another
+person's work that Qivo could not read, so it may not be late. After many
+**Load more** presses the list keeps the latest rows and says that earlier
+tasks are not shown; **Show from the start** goes back to the first ones.
+Select a row to open its task. Portraits show the reviewer while a task
+waits In Review with one.
+
+A guest or organization Viewer sees other people's work one person at a
+time, so where the projected delays of a scope need more than one person's
+work, Overview says they are not available ([Who sees what](./who-sees-what-the-access-model.md)).
+
+Overview stops updating while its page is hidden behind another one or the
+browser tab or desktop window is hidden or minimized. Shown again, it keeps
+the figures and rows it had, marked as refreshing, until the server's
+fresh answer arrives. After midnight it counts again for the new day.
 
 **Milestones** shows names, projects, calendar weeks, dates and relative
 timing, with the next milestone highlighted. Select **+** or a row to open
@@ -50,5 +83,6 @@ another day sees week labels in their own calendar, so a refusal can name a
 week whose dates differ from the ones shown.
 
 When a scope has no task to summarize, for example a project without
-sub-projects or My view with nothing assigned to you, Overview says why. If
-the scope has milestones, **Milestones** stays below that note.
+sub-projects or My view with nothing assigned to you, Overview says why
+once the server has answered. If the scope has milestones, **Milestones**
+stays below that note, and below the All projects list too.

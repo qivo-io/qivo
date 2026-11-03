@@ -45,18 +45,19 @@ Create tasks from the Board controls described in [Creating a task](./how-work-i
 
 ## All projects
 
-**All projects** shows Overview, Board and Roadmap across every project you
-can access, including projects shared by other organizations ([Guest access](./who-sees-what-the-access-model.md#people-outside-your-organization)).
+**All projects** shows the Roadmap across every project you can access,
+including projects shared by other organizations ([Guest access](./who-sees-what-the-access-model.md#people-outside-your-organization)).
 
-Roadmap tracks and Overview health rows represent projects, and Roadmap
-tracks contain collapsible sub-project bands. Select an Overview health row
-to open its project's Board. The Board shows one project at a time
-([Which tasks a Board shows](./the-board.md#which-tasks-a-board-shows)), so in
-All projects it lists your top-level projects, and choosing one opens its
-Board. A task link that names no project, such as `…/tasks/qn-12`, opens
-the Board of the task's sub-project instead when it would open on the All
-projects Board. A link that names All projects, such as
-`…/board/all/tasks/qn-12`, keeps it, with the task's window over the list.
+Roadmap tracks represent projects and contain collapsible sub-project bands.
+The Board and the Overview show one project at a time
+([Which tasks a Board shows](./the-board.md#which-tasks-a-board-shows),
+[The Overview](./the-overview-project-health-at-a-glance.md)), so in All
+projects they list your top-level projects, and choosing one opens its
+Board or its Overview. A task link that names no project, such as
+`…/tasks/qn-12`, opens the Board or the Overview of the task's sub-project
+instead when it would open on All projects. A link that names All projects,
+such as `…/board/all/tasks/qn-12`, keeps it, with the task's window over the
+list.
 
 To create a task, open its project first. On a desktop, the Board's project
 list and empty states offer no way to create a task; on a phone, **New
@@ -107,8 +108,10 @@ Each page you open stays loaded while you use Qivo: the Overview, the Board,
 the Roadmap, the Inbox, Team sync and Projects. Going back to one shows it at
 once, scrolled where you left it, and changes made while it was out of sight
 follow right after. The Board checks which tasks it shows again when it
-shows. It does the same when you return to a browser tab or desktop window
-you had hidden or minimized, where it stops updating meanwhile. The Overview,
+shows, and the Overview asks for its figures and lists again, showing the
+ones it had as refreshing meanwhile. Both do the same when you return to a
+browser tab or desktop window you had hidden or minimized, where they stop
+updating meanwhile. The Overview,
 the Board and the Roadmap belong to the
 sidebar choice, such as a project or All projects. Choosing another one loads
 them again for it. Settings loads each time you open it.
