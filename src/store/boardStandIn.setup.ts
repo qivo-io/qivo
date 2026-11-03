@@ -258,10 +258,11 @@ export function boardStandIn(
   }
 }
 
-/* A group's dates: the earliest start to the latest end of the leaves
-   under it, a leaf without an end counted at its start (lib/viewReads.ts
-   groupFacts). */
-function spanOf(
+/** A group's dates: the earliest start to the latest end of the leaves
+    under it, a leaf without an end counted at its start (lib/viewReads.ts
+    groupFacts). The Overview's stand-in reads it too
+    (store/overviewStandIn.setup.ts). */
+export function spanOf(
   group: Task,
   children: ReadonlyMap<string, string[]>,
   byId: ReadonlyMap<string, Task>,

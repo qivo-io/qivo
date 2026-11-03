@@ -6,6 +6,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
+import { answerOverview } from '../store/overviewStandIn.setup'
 import { plannerFixture } from '../store/plannerFixture.setup'
 
 /* A new task's window when the server refuses the create, on the real
@@ -33,6 +34,8 @@ let toast: MockInstance
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
+  // the Overview's panels read their animations while it loads
+  Element.prototype.getAnimations = () => []
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal(
     'matchMedia',
@@ -95,10 +98,12 @@ async function openNewTask() {
     { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: snap.profiles[0].id },
     { ...base, id: 'work', key: 'WORK', num: 2, name: 'Work', parent_id: 'plan' },
   ]
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    // the Overview's empty note, with New task, waits for its answer
+    else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     return () => {}
   })
   network.query.mockResolvedValue(null)

@@ -174,7 +174,16 @@ comment times, delay and project completion, and the rule that a subtask in
 an archived project makes no group. In the browser it then opens the Board of
 the project it made, waits for the deployment's answer for it (`tasks.board`)
 and checks that the cards of its two fixture tasks show, which it makes in
-To Do so that they show with **Focus** on or off. After that it checks the
+To Do so that they show with **Focus** on or off. It then makes a
+sub-project of its own under that project, with one To Do task due 70 days
+ago and one paused To Do task without a due date, opens the sub-project's
+Overview, waits for the deployment's answers (`overview.summary`,
+`overview.risk`, `overview.attention` and `overview.paused`) and checks that
+Completion, Paused, the opening sentence and both lists count exactly those
+two tasks. That needs a backend at v0.1.112 or later whose organization
+counts are whole, as `internal/overviewCountsBackfill` left them. Against
+an older backend, or while the counts read **Counting…**, the step fails.
+After that it checks the
 search on **Settings → Projects → Archived tasks** and main Search, where an
 active task the run made must show with **Include archived tasks** off and a
 task the run archived only with it on. That shows whether the deployment's
@@ -530,6 +539,21 @@ From that release on, never return the backend to a commit before v0.1.107
 (`b7d2abac`); roll forward instead. Returning the app alone to a release
 before that one is safe against a later backend, because that app filters
 the Board's tasks in the browser.
+
+The app's Overview reads its summary, its projected delays and its two
+lists from `overview.summary`, `overview.risk`, `overview.attention` and
+`overview.paused`, which v0.1.112 (`9dd4ef7f`) first shipped. An app from
+the release that switched the Overview to them, against a backend before
+v0.1.112, says on every Overview that it could not be loaded, also in a tab
+that was open when the backend went back, until the backend rolls forward.
+From that release on, never return the backend to a commit before v0.1.112
+(`9dd4ef7f`); roll forward instead. Returning the app alone to a release
+before that one is safe against a later backend, because that app derives
+the Overview in the browser. The Overview's figures read the counts that
+v0.1.110 (`b38c4e1c`) added and its release step backfilled
+(`internal/overviewCountsBackfill`), so this release adds no step; an
+organization whose counts are not whole shows its counts as counting until
+they are.
 
 ## Node.js version
 
@@ -926,11 +950,11 @@ its paused leaves and the remaining hours of its leaves not Done, beside a
 row for each person with leaves in it, and each active task an
 `overview_tasks` row with what those rows hold for it
 (`convex/model/overviewCounts.ts`). The Overview's server queries
-(`convex/overview.ts`) read the `overview_counts` rows, though nothing in
-the app calls those queries yet. Every task write keeps them, background steps keep them after
-a project is archived, restored, moved to Deleted items or restored from
-there, and organizations created since the release that added them are
-counted from their creation.
+(`convex/overview.ts`), which the app's Overview calls, read the
+`overview_counts` rows. Every task write keeps them, background steps keep
+them after a project is archived, restored, moved to Deleted items or
+restored from there, and organizations created since the release that
+added them are counted from their creation.
 An organization stored before has no counts until the one-time
 `internal/overviewCountsBackfill` counts it, and the readers answer that its
 counts are not ready, never zero. Run it on every hosted deployment once it

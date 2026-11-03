@@ -121,6 +121,19 @@ export function createLayers() {
     },
     /** Removes `layer`, refused or ended. */
     remove,
+    /** Drops the saved `part` of each saved layer `held` says a live
+        delivery holds. Answers whether it dropped any. */
+    dropSavedIf(part: 'workspace' | 'view', held: (layer: Layer) => boolean): boolean {
+      let dropped = false
+      // remove() replaces `saved`, so this walks the list as it was
+      for (const layer of saved) {
+        if (!layer.view[part] || !held(layer)) continue
+        layer.view = { ...layer.view, [part]: undefined }
+        dropped = true
+        if (!paints(layer.view)) remove(layer)
+      }
+      return dropped
+    },
     /** Whether `layer` is still in the registry. */
     has: (layer: Layer) => live.includes(layer) || saved.includes(layer),
     /** Drops the saved `part` of every saved layer, once a live delivery

@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
+import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 
 /* The pages of a person who can see no active project, on the real store
@@ -96,7 +97,7 @@ async function app(snap: Snapshot, path = '/app/testbed') {
   let publish = (_: Snapshot) => {}
   // what the server holds: the workspace last published
   let server = snap
-  network.onUpdate.mockImplementation((ref, args, next) => {
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
       publish = (value) => {
@@ -106,6 +107,7 @@ async function app(snap: Snapshot, path = '/app/testbed') {
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
+    else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     return () => {}
   })
   network.query.mockResolvedValue(null)
@@ -176,6 +178,8 @@ describe('a person who can see no project', () => {
     expect(document.body.textContent).toContain(MEMBER)
     expect(location.pathname).toBe('/app/~/overview/all')
     expect(newProject()).toBeDefined()
+    // with no milestone to show, the note is the whole page
+    expect(document.body.textContent).not.toContain('No milestones in any of your projects yet.')
   })
 
   it('offers no New project to a person who may not create one', async () => {
@@ -259,7 +263,8 @@ describe('a person with a project', () => {
   it('keeps All projects that the person chose, after a reload while they see none', async () => {
     const snap = member()
     const publish = await app(snap, '/app/~/overview/all')
-    await shows('No tasks yet')
+    // All projects asks to choose a project
+    await shows('Choose a project')
     await publish({ ...snap, access: [], delivered_at: '2026-09-15T09:00:00.000Z' })
     await shows(MEMBER)
     await reload()
@@ -310,7 +315,7 @@ describe('a person with a project', () => {
   it('keeps All projects when the person opened it', async () => {
     const snap = member()
     const publish = await app(snap, '/app/~/overview/all')
-    await shows('No tasks yet')
+    await shows('Choose a project')
     await publish({ ...snap, access: [], delivered_at: '2026-09-15T09:00:00.000Z' })
     await shows(MEMBER)
     await publish({ ...snap, delivered_at: '2026-09-15T10:00:00.000Z' })
@@ -463,21 +468,22 @@ describe('the Overview of a scope with nothing to summarize', () => {
     await app(plan, '/app/~/overview/mine')
     await shows('Nothing assigned to you')
     expect(milestoneRows()).toHaveLength(1)
+    // All projects asks to choose a project, its milestones under it
     await reload()
     await app(plan, '/app/~/overview/all')
-    await shows('No tasks yet')
+    await shows('Choose a project')
     expect(milestoneRows()).toHaveLength(1)
     await reload()
     await app(plan, '/app/testbed/overview/p/2')
     await shows('No tasks yet')
     expect(button('New task')).toBeDefined()
     expect(milestoneRows()).toHaveLength(1)
-    // All projects, when no project the person sees has a sub-project
+    // All projects, also when no project the person sees has a sub-project
     await reload()
     const only = withMilestone(bare(), 'bare', 'Bare launch')
     only.access = only.access.filter((grant) => grant.project_id === 'bare')
     await app(only, '/app/~/overview/all')
-    await shows('Tasks live in sub-projects.')
+    await shows('Choose a project')
     expect(milestoneRows()).toHaveLength(1)
   })
 

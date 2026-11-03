@@ -39,6 +39,16 @@
 //   board                a state tasks:board answers whatever the tasks say
 //                        (over_ceiling, over_budget, unavailable or
 //                        access_unchecked), for checks by hand
+//   overview             a state the Overview's queries answer whatever the
+//                        tasks say, for screenshots of states a seeded
+//                        backend cannot reach: counting, counts-budget,
+//                        overdue-budget, projected-budget, loads (a guest's
+//                        or Viewer's projection), incomplete (each list
+//                        batch stops after half a batch), unknown (every
+//                        owner's load unreadable, so projected candidates
+//                        show as risk unknown), list-over-budget,
+//                        over_budget, unavailable or access_unchecked;
+//                        several joined by commas
 //   shownload=1          also send the load rows of the tasks the person is
 //                        shown, as the server did before the app derived
 //                        them from the task rows (an older baseline)
@@ -49,6 +59,9 @@
 //   mbps (8)             bandwidth every result waits for
 //   appearance (dark)    the signed-in person's appearance mode, dark or
 //                        light, which the app reads from appearance:get
+//   role (user)          the signed-in person's organization role, user or
+//                        viewer; a Viewer's Overview reads one owner's
+//                        load a query, as a guest's does
 //
 // Main Search (search:page) is a stand-in too (searchPage): it matches the
 // visible tasks and projects with the server's word rules and ranks them
@@ -58,12 +71,16 @@
 // held here, with no access or read budget, and the ceiling of 1,000 tasks.
 // So are the owner loads the delays of tasks only the Board's answer brings
 // read (planning:ownerLoads, src/store/ownerLoadsStandIn.setup.ts), from the
-// same workspace, with no bounds.
+// same workspace, with no bounds. So are the Overview's queries
+// (overview:summary, risk, attention and paused), through the stand-in the
+// jsdom tests use (src/store/overviewStandIn.setup.ts), with no access or
+// read budget.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
+import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
@@ -89,9 +106,27 @@ const hiddenCount = option('hidden', 4)
 const programCount = Math.max(1, option('programs', 1))
 const subprojectCount = Math.max(1, option('subprojects', 10))
 const forcedBoard = parameters.get('board') ?? undefined
+/* The Overview's forced states (the `overview` parameter), as the
+   stand-in's `force` takes them. */
+const forcedOverview = (() => {
+  const force = {}
+  for (const state of (parameters.get('overview') ?? '').split(',').filter(Boolean)) {
+    if (state === 'counting') force.counts = 'counting'
+    else if (state === 'counts-budget') force.counts = 'budget'
+    else if (state === 'overdue-budget') force.overdue = 'budget'
+    else if (state === 'projected-budget') force.projected = 'budget'
+    else if (state === 'loads') force.projected = 'loads'
+    else if (state === 'incomplete') force.list = 'incomplete'
+    else if (state === 'list-over-budget') force.list = 'over_budget'
+    else if (state === 'unknown') force.unknown = 'everyone'
+    else if (['over_budget', 'unavailable', 'access_unchecked'].includes(state)) force.scope = state
+  }
+  return force
+})()
 const varied = parameters.get('shape') === 'varied'
 const shownLoad = parameters.get('shownload') === '1'
 const appearance = parameters.get('appearance') === 'light' ? 'light' : 'dark'
+const viewer = parameters.get('role') === 'viewer'
 const fixtureTime = new Date()
 const now = fixtureTime.toISOString()
 const day = (offset) => {
@@ -137,8 +172,9 @@ const profiles = Array.from({ length: peopleCount }, (_, n) => ({
   name: `${['Planner', 'Åsa', 'Jörg', 'Zoë'][n % 4]} ${n + 1}`,
   initials: `P${n + 1}`,
   color: '#335577',
-  // staff, so hidden projects show as anonymized load like a real member's
-  org_role: n === 1 ? 'admin' : 'user',
+  // staff, so hidden projects show as anonymized load like a real member's,
+  // unless the page asks for a Viewer
+  org_role: n === 0 && viewer ? 'viewer' : n === 1 ? 'admin' : 'user',
   active: true,
   kind: 'person',
   plannable_hours: 40,
@@ -788,6 +824,16 @@ const read = (name, args = {}) => {
       return searchPage(args)
     case 'tasks:board':
       return boardStandIn(snapshot, args, { force: forcedBoard })
+    case 'overview:summary':
+    case 'overview:risk':
+    case 'overview:attention':
+    case 'overview:paused':
+      return overviewStandIn(snapshot, name.slice('overview:'.length), args, {
+        force:
+          forcedOverview.unknown === 'everyone'
+            ? { ...forcedOverview, unknown: snapshot.profiles.map((p) => p.id) }
+            : forcedOverview,
+      })
     // the owner loads the delays of tasks only the Board's answer brings
     // read (src/store/ownerLoadsStandIn.setup.ts)
     case 'planning:ownerLoads':

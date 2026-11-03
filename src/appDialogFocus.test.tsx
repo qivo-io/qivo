@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { CONFIRM_IGNORE_MS } from './lib/useConfirmArm'
+import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 
 /* Where focus goes as App's New sub-project and Milestones dialogs close,
@@ -114,15 +115,23 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}) {
     { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: snap.profiles[0].id },
   ]
   prepare(snap)
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  /* The workspace is delivered once and never again, so a write's paint is
+     the only copy of what it changed. The Overview's reads answer from it
+     until the first write: an answer after one would be a transition the
+     store takes for a delivery that holds the write, which this double
+     never sends, and the paint would end. */
+  let wrote = false
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    else if (name.startsWith('overview:') && !wrote) answerOverview(snap, name, args, next, fail)
     return () => {}
   })
   network.query.mockResolvedValue(null)
   network.mutation.mockImplementation((ref) => {
     const name = getFunctionName(ref)
+    if (name !== 'identity:claimMySeats') wrote = true
     if (name === 'projects:create')
       return new Promise((resolve, reject) => {
         saved = () => resolve({ num: 2, key: 'DOCS' })
@@ -448,6 +457,13 @@ describe('Milestones', { timeout: 30_000 }, () => {
         snap.issues = []
       })
       if (onPhone) await openOnPhone('Roadmap')
+      // the Overview's note waits for the answer that says it has no
+      // sub-project, which comes before the first write
+      else
+        await waitFor(
+          () => document.querySelector('[data-overview-root][data-overview-state="ok"]'),
+          "the Overview's answer",
+        )
       vi.useFakeTimers({ toFake: ['Date'] })
       const row = (id: string) =>
         waitFor(() => document.querySelector<HTMLElement>(`[${attr}="${id}"]`), id)

@@ -312,6 +312,10 @@ describe('archiving the task from its window', { timeout: BOARD_TEST_TIMEOUT }, 
     await renderOverview(board)
     await archiveFrom(pausedRow(pausedRows()[0]))
     expect(document.querySelector('[data-ovrow]')).toBeNull()
-    expect(focused()).toBe('Paused tasks')
+    // the row leaves at once; the count is the server's summary, which waits
+    // for the answer that holds the archive, and the list shows no empty
+    // line before its answer ends with no row
+    expect(focused()).toBe('Paused tasks, 1')
+    expect(document.body.textContent).not.toContain('Nothing is paused right now.')
   })
 })

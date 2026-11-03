@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { loadBoard, taskRow } from './boardFixture.setup'
 
-/* The Overview's task lists and the phone's task schedule mount their
-   first screen at once and the rest in slices, and the Overview's group
-   health reads every group's figures in one pass over the tasks. */
+/* The phone's task schedule mounts its first screen at once and the rest
+   in slices, the Overview's lists show the server's batches with Load
+   more, and the Overview's group health reads every group's figures in one
+   pass over the tasks. */
 
 /* A list of more than SYNC_LIMIT tasks mounts in slices. These tests lower
    it from 300, so a list of LONG tasks in one sub-project, well inside the
@@ -105,20 +106,24 @@ const paused = (n: number) => (snap: Snapshot) => {
 }
 
 describe('a long list on another view', () => {
-  it('mounts the first screen of the Overview, then the rest in slices', async () => {
+  it("shows the first batch of each of the Overview's lists at once, and the next on Load more", async () => {
     const board = await loadBoard(network, paused(LONG))
     const { Overview } = await import('./Overview')
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
       typeof Overview
     >[0]['actions']
     await board.renderView(root, (info) => <Overview info={info} actions={actions} />)
-    // each list mounts its first 900px of rows; every task is in both
-    expect(count('[data-ovrow]')).toBeGreaterThan(0)
-    expect(count('[data-ovrow]')).toBeLessThanOrEqual(20)
-    expect(count('[data-atrisk]')).toBeLessThanOrEqual(20)
+    // every task is in both lists, which show a batch of 10 each, with
+    // nothing left to mount in slices
+    expect(count('[data-ovrow]')).toBe(10)
+    expect(count('[data-atrisk]')).toBe(10)
     await finish()
-    expect(count('[data-ovrow]')).toBe(LONG)
-    expect(count('[data-atrisk]')).toBe(LONG)
+    expect(count('[data-ovrow]')).toBe(10)
+    await act(async () =>
+      document.querySelector<HTMLElement>('[data-ov-list="paused"] [data-ov-more]')?.click(),
+    )
+    expect(count('[data-ovrow]')).toBe(20)
+    expect(count('[data-atrisk]')).toBe(10)
   })
 
   it("mounts the first screen of the phone's task schedule, then the rest", async () => {
@@ -351,9 +356,9 @@ describe("the Overview's group health", () => {
     const remaining = vi.spyOn(board.P, 'remainingIn')
     await board.renderView(root, (info) => <Overview info={info} actions={actions} />)
     expect(count('[data-ov-strip]')).toBe(1)
-    // only for the scope's own completion; no group row asks
-    expect(progress).toHaveBeenCalled()
-    for (const [subIds] of progress.mock.calls) expect(subIds).toHaveLength(30)
+    expect(count('[data-ovcard]')).toBe(30)
+    // the scope's completion is the server's summary, and no group row asks
+    expect(progress).not.toHaveBeenCalled()
     expect(remaining).not.toHaveBeenCalled()
   })
 })

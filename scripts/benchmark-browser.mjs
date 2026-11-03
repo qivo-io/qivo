@@ -324,19 +324,34 @@ async function openPage(origin, tasks, metrics, query = '') {
   return { context, page, cdp, errors, settle, appRenders, timed }
 }
 
-/* The Board counts as complete when nothing on it waits to mount and, in a
-   build whose Board asks the server, its answer arrived (data-board-state
-   ok). A Board that mounts in slices marks its pending part with
-   data-board-mount; one that mounts whole never sets it. Only the shown
-   view counts: a Board kept hidden while another view shows (KeptView)
-   waits until it shows again. */
+/* The shown view counts as complete when nothing on it waits to mount and,
+   in a build whose views ask the server, their answers arrived: the
+   Board's (data-board-state ok), and the Overview's summary
+   (data-overview-state ok) with the first batch of each of its lists
+   (data-ov-list-state no longer loading or refreshing). A view that mounts
+   in slices marks its pending part with data-board-mount; one that mounts
+   whole never sets it. Only the shown view counts: a view kept hidden
+   while another one shows (KeptView) waits until it shows again. On main
+   the Overview mounted every row of its lists in slices, so there its
+   complete means every row mounted, and here the first batches answered. */
 const boardComplete = () => {
   const state = document.querySelector('[data-workspace-view] [data-board-root]')
+  const overview = document.querySelector('[data-workspace-view] [data-overview-root]')
+  const lists = [...document.querySelectorAll('[data-workspace-view] [data-ov-list]')]
   return (
     !document.querySelector('[data-workspace-view] [data-board-mount="pending"]') &&
-    (state === null || state.getAttribute('data-board-state') === 'ok')
+    (state === null || state.getAttribute('data-board-state') === 'ok') &&
+    (overview === null || overview.getAttribute('data-overview-state') === 'ok') &&
+    lists.every(
+      (list) => !['loading', 'refreshing'].includes(list.getAttribute('data-ov-list-state')),
+    )
   )
 }
+
+/* What shows once the Overview's summary answered, on this branch, or its
+   status strip on a build from before it asked the server. */
+const OVERVIEW_SHOWN =
+  '[data-workspace-view] [data-overview-root][data-overview-state="ok"], [data-workspace-view] [data-ov-strip]:not([data-overview-root] *)'
 
 /** How many cards the Board must show, as the stand-in server counts them:
     every task of the top-level project it opens but the parents, whose
@@ -906,7 +921,7 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
      that stays loaded (KeptView) keeps hidden: the memory the page holds,
      and another person's change and one of this person's own on each. */
   await (await viewButton(page, 'Overview')).click({ timeout: timeout * 10 })
-  await shows(page, '[data-ov-strip]')
+  await shows(page, OVERVIEW_SHOWN)
   await page.waitForFunction(boardComplete, null, { timeout: timeout * 10 })
   const afterBoard = await pageSize(page, cdp)
   metrics.afterBoardHeapMb.push(afterBoard.heapMb)
@@ -1000,7 +1015,7 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
     metrics,
     'variedOverview',
     'Overview',
-    '[data-ov-strip]',
+    OVERVIEW_SHOWN,
     '[data-atrisk], [data-ovrow]',
   )
   await switchTo(
@@ -1012,7 +1027,7 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
   )
   // the phone's Roadmap below starts from the Overview, as before
   await (await viewButton(page, 'Overview')).click({ timeout: timeout * 10 })
-  await shows(page, '[data-ov-strip]')
+  await shows(page, OVERVIEW_SHOWN)
   // The phone's Roadmap: its task schedule until the first row shows, then
   // until every row is in.
   await page.setViewportSize({ width: 390, height: 844 })

@@ -1,7 +1,8 @@
 /* The tasks the app opened that the workspace may not hold, by the task's
    uuid: a task main Search opened (panels/Palette.tsx openTaskResult),
-   which Search finds on the server, a task a Board card or list row opened
-   that only the Board's answer brings (store/planner.ts P.noteViewTask), a
+   which Search finds on the server, a task a Board card or list row, or an
+   Overview row, opened that only the view's answer brings (store/planner.ts
+   P.noteViewTask), a
    task a task window opened from its Parent, Subtasks or Linked tasks that
    the workspace does not hold (panels/IssueDetail.tsx MiniIssueRow), as
    while a large workspace still loads, and a task a window shows that the

@@ -5,6 +5,12 @@ import { vi } from 'vitest'
 import type { BoardAnswer } from '../../convex/lib/board'
 import type { RevealRequest } from '../lib/reveal'
 import { type BoardArgs, boardStandIn, type ForcedBoard } from '../store/boardStandIn.setup'
+import type { OverviewQuery } from '../store/overviewLists'
+import {
+  type ForcedOverview,
+  type OverviewArgs,
+  overviewStandIn,
+} from '../store/overviewStandIn.setup'
 import { type OwnerLoadsArgs, ownerLoadsStandIn } from '../store/ownerLoadsStandIn.setup'
 import type { IssueFilters, ScopeInfo } from '../store/planner'
 import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
@@ -17,7 +23,11 @@ import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFix
    (store/boardStandIn.setup.ts), at once and again on each delivery, unless
    a test holds, forces or fails it (`server`), and so do the owner loads
    the delays of tasks only its answer brings read (planning:ownerLoads,
-   store/ownerLoadsStandIn.setup.ts), past `server.unavailable`. */
+   store/ownerLoadsStandIn.setup.ts), past `server.unavailable`. The
+   Overview's queries (overview:summary, risk, attention and paused) answer
+   through their stand-in (store/overviewStandIn.setup.ts) the same way,
+   unless a test holds, forces, fails or edits them (`server.overview`), so
+   renderView can show the Overview over the same store. */
 
 type Network = {
   mutation: ReturnType<typeof vi.fn>
@@ -89,6 +99,25 @@ export async function loadBoard(
     unavailable: string[]
     /** the owner-load calls open now */
     loads: Set<{ args: OwnerLoadsArgs; next: (value: unknown) => void }>
+    /** the Overview's queries: `hold` keeps their answers back, `force`
+        answers states the workspace cannot reach, `fail` fails a query
+        `failing` names, `edit` changes an answer, `asked` is every
+        subscription's query and arguments, newest last, and `open` those
+        open now */
+    overview: {
+      hold: boolean
+      force: ForcedOverview
+      fail: unknown
+      failing: (query: OverviewQuery, args: OverviewArgs) => boolean
+      edit: ((query: OverviewQuery, answer: unknown, args: OverviewArgs) => unknown) | null
+      asked: { query: OverviewQuery; args: OverviewArgs }[]
+      open: Set<{
+        query: OverviewQuery
+        args: OverviewArgs
+        next: (value: unknown) => void
+        fail?: (e: unknown) => void
+      }>
+    }
   } = {
     hold: false,
     force: null,
@@ -98,6 +127,15 @@ export async function loadBoard(
     open: new Set(),
     unavailable: [],
     loads: new Set(),
+    overview: {
+      hold: false,
+      force: {},
+      fail: undefined,
+      failing: () => true,
+      edit: null,
+      asked: [],
+      open: new Set(),
+    },
   }
   // the store's canSee, once the store loaded
   let sees: (id: string) => boolean = () => true
@@ -105,14 +143,34 @@ export async function loadBoard(
     const answer = boardStandIn(snapshot, args, { sees, force: server.force ?? undefined })
     return server.edit ? server.edit(answer) : answer
   }
+  /** Answers Overview subscription `sub` from the snapshot as it is now,
+      or fails it: as the test says, or where its stand-in refuses a
+      position. */
+  const answerOverview = (sub: {
+    query: OverviewQuery
+    args: OverviewArgs
+    next: (value: unknown) => void
+    fail?: (e: unknown) => void
+  }) => {
+    const o = server.overview
+    if (o.fail !== undefined && o.failing(sub.query, sub.args)) return sub.fail?.(o.fail)
+    let answer: unknown
+    try {
+      answer = overviewStandIn(snapshot, sub.query, sub.args, { sees, force: o.force })
+    } catch (error) {
+      return sub.fail?.(error)
+    }
+    sub.next(structuredClone(o.edit ? o.edit(sub.query, answer, sub.args) : answer))
+  }
   /** Answers every open subscription of the Board's query from the
-      snapshot as it is now. */
+      snapshot as it is now, and the Overview's. */
   const answerBoards = () => {
     for (const sub of server.open)
       if (server.fail !== undefined) sub.fail?.(server.fail)
       else sub.next(structuredClone(answerOf(sub.args)))
     for (const call of server.loads)
       call.next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
+    for (const sub of server.overview.open) answerOverview(sub)
   }
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -135,6 +193,18 @@ export async function loadBoard(
       server.loads.add(call)
       next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
       return () => server.loads.delete(call)
+    }
+    if (name.startsWith('overview:')) {
+      const sub = {
+        query: name.slice('overview:'.length) as OverviewQuery,
+        args: args as OverviewArgs,
+        next,
+        fail,
+      }
+      server.overview.asked.push({ query: sub.query, args: sub.args })
+      server.overview.open.add(sub)
+      if (!server.overview.hold) answerOverview(sub)
+      return () => server.overview.open.delete(sub)
     }
     return () => {}
   })

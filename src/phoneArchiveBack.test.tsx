@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
+import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
 
 /* Archiving a task on a phone, on App and the real store: the task leaves
@@ -121,7 +122,7 @@ async function openArchive() {
   let publish = (_: Snapshot) => {}
   // what the server holds: the workspace last published
   let server = snap
-  network.onUpdate.mockImplementation((ref, args, next) => {
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
       publish = (value) => {
@@ -131,6 +132,7 @@ async function openArchive() {
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
+    else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     return () => {}
   })
   let answer = () => {}

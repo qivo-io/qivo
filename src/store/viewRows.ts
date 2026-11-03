@@ -1,14 +1,24 @@
-/* The task rows the open views' answers bring (store/planner.ts P.watchBoard,
-   the Board's tasks.board answer), and the view models shaped from them.
+/* The task rows the open views' answers bring (store/planner.ts view
+   reads: the Board's tasks.board answer, P.watchBoard, and each batch of the
+   Overview's two lists, P.watchOverview), and the view models shaped from
+   them.
 
-   - A view's read is its row source: today the whole answer of one live
-     query, which names each task with its row and a group with its facts
-     (convex/lib/viewReads.ts ViewRow). A batched source would hand rows the
-     same way (take), and nothing that reads the models would change.
+   - A view's read is its row source: the whole answer of one live query,
+     which names each task with its row and a group with its facts
+     (convex/lib/viewReads.ts ViewRow), one slot per read. The Overview's
+     lists are a source that brings rows in batches, each batch a slot of
+     its own (take), and nothing that reads the models changed for it.
    - Each view keeps its own rows, by uuid, as its last answer brought them
      (the anchor), and the store paints every live layer's `view` part over
      copies of them on each repaint (store/layers.ts), as it paints the
      workspace's rows. A paint changes every copy of a task, in every view.
+   - A view whose read stopped keeps its rows, as a kept page hidden behind
+     another view, but they never stand in for a live view's: the live
+     views' copies come first wherever one copy of a task is read (peek,
+     byHandle, views), and each live answer brings a stopped view's copies
+     of its tasks up to date (take), so the two never disagree and the
+     live view's deliveries decide whether a write is held
+     (store/planner.ts viewPartHeld).
    - The rows never enter the workspace's rows, the task index, P.issues or
      P.issueById. A task the workspace holds shows as the workspace's view
      model; the store asks this module only for the others (`unheld`).
@@ -63,8 +73,13 @@ const weekOf = (iso: string | undefined, toWeek: (iso: string) => number) =>
   iso === undefined ? null : toWeek(iso)
 
 /** Creates an empty registry. `toWeek` turns an ISO date into a week index
-    (lib/dates.ts isoToWeek), passed in so the module holds no grid. */
-export function createViewRows(toWeek: (iso: string) => number) {
+    (lib/dates.ts isoToWeek), passed in so the module holds no grid. `live`
+    says whether a view's read is subscribed; the store's repaint follows
+    its changes, as each repaint ranks the views (beginPaint). */
+export function createViewRows(
+  toWeek: (iso: string) => number,
+  live: (slot: ViewSlot) => boolean = () => true,
+) {
   // each view's last answer, by uuid, frozen in tests (the anchor)
   const anchors = new Map<ViewSlot, ReadonlyMap<string, ViewRow>>()
   // the rows on screen: each view's anchor with the layers painted over
@@ -78,7 +93,8 @@ export function createViewRows(toWeek: (iso: string) => number) {
   // whether a release took models away since the last reshape
   let released = false
 
-  /** The row of `uuid` a view shows, in the first view that holds it. */
+  /** The row of `uuid` a view shows, in the first view that holds it, a
+      live one before a stopped one. */
   const peek = (uuid: string): ViewRow | undefined => {
     for (const rows of painted.values()) {
       const row = rows.get(uuid)
@@ -152,9 +168,22 @@ export function createViewRows(toWeek: (iso: string) => number) {
 
   return {
     /** Takes view `slot`'s answer rows, `rows` (each task once), as its new
-        anchor. The caller repaints. */
+        anchor, and as the anchor of every stopped view's copy of one of
+        these tasks. The caller repaints. */
     take(slot: ViewSlot, rows: readonly ViewRow[]) {
-      anchors.set(slot, new Map(rows.map((row) => [row.id, row])))
+      const next = new Map(rows.map((row) => [row.id, row]))
+      anchors.set(slot, next)
+      for (const [other, held] of anchors) {
+        if (other === slot || live(other)) continue
+        let copy: Map<string, ViewRow> | null = null
+        for (const uuid of (held.size < next.size ? held : next).keys()) {
+          const row = next.get(uuid)
+          if (!row || !held.has(uuid) || held.get(uuid) === row) continue
+          copy ??= new Map(held)
+          copy.set(uuid, row)
+        }
+        if (copy) anchors.set(other, copy)
+      }
     },
     /** Forgets view `slot`'s rows and models. The caller repaints, and
         the next reshape answers that the models changed. */
@@ -168,9 +197,18 @@ export function createViewRows(toWeek: (iso: string) => number) {
     holds: (slot: ViewSlot) => anchors.has(slot),
     /** Whether any view holds rows. */
     any: () => anchors.size > 0,
-    /** Starts a repaint: every view's rows as its anchor holds them. */
+    /** Whether more than one view holds rows. */
+    shared: () => anchors.size > 1,
+    /** Whether a live view holds task `uuid`. */
+    liveHolds(uuid: string): boolean {
+      for (const [slot, rows] of anchors) if (live(slot) && rows.has(uuid)) return true
+      return false
+    },
+    /** Starts a repaint: every view's rows as its anchor holds them, the
+        live views first. */
     beginPaint() {
-      painted = new Map([...anchors].map(([slot, rows]) => [slot, new Map(rows)]))
+      const ranked = [...anchors].sort(([a], [b]) => Number(live(b)) - Number(live(a)))
+      painted = new Map(ranked.map(([slot, rows]) => [slot, new Map(rows)]))
       copies = new Set()
     },
     /** The copies of task `uuid` a paint may change, one in each view that
@@ -252,8 +290,8 @@ export function createViewRows(toWeek: (iso: string) => number) {
     /** The model of task `uuid` in view `slot`, when the workspace does not
         hold it. */
     model: (slot: ViewSlot, uuid: string): IssueVM | undefined => shaped.get(slot)?.get(uuid)?.it,
-    /** The model a handle names, in any view, when the workspace does not
-        hold its task. */
+    /** The model a handle names, in any view, a live one first, when the
+        workspace does not hold its task. */
     byHandle: (handle: string): IssueVM | undefined => byHandle.get(handle),
     /** Every model the views hold, by handle. */
     handles: (): ReadonlyMap<string, IssueVM> => byHandle,

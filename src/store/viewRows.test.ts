@@ -16,7 +16,7 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
-  live: null as null | { reconnect(): void },
+  live: null as null | { reconnect(): void; batch(step: () => void): void },
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('./guard/liveDouble.setup')
@@ -39,6 +39,10 @@ let deliver: (snap: Snapshot) => void
 let answer: BoardAnswer
 let board: ((value: BoardAnswer) => void) | null
 let loads: Map<string, (value: OwnerLoadsJson) => void>
+/* the Overview's reads, by query, the newest subscription of each */
+let overviews: Map<string, (value: unknown) => void>
+/* the Overview's reads, by query and arguments (JSON), the newest of each */
+let overviewsByArgs: Map<string, (value: unknown) => void>
 let writes: { name: string; resolve: (v: unknown) => void; reject: (e: unknown) => void }[]
 
 /** A turn for the double's microtasks and the store's 0 ms paint timer. */
@@ -112,6 +116,8 @@ beforeEach(async () => {
   answer = ok([])
   board = null
   loads = new Map()
+  overviews = new Map()
+  overviewsByArgs = new Map()
   writes = []
   network.query.mockResolvedValue(null)
   // the boot's seat claim answers at once; every other write waits for the test
@@ -133,6 +139,10 @@ beforeEach(async () => {
     } else if (name === 'planning:ownerLoads')
       loads.set((args.owner_ids as string[]).join(), receive as (v: OwnerLoadsJson) => void)
     else if (name === 'snapshot:threadComments') receive({ comments: [], earlier: false })
+    else if (name.startsWith('overview:')) {
+      overviews.set(name, receive)
+      overviewsByArgs.set(`${name} ${JSON.stringify(args)}`, receive)
+    }
     return () => {}
   })
   store = await import('./planner')
@@ -474,5 +484,257 @@ describe('the delays of tasks only a view brings', () => {
     answer = ok([{ ...planned('task-a', 1) }])
     await open()
     expect(loads.size).toBe(0)
+  })
+})
+
+describe("a write's view part while several views read", () => {
+  /** The Overview's key for My view on the store's day (P.watchOverview). */
+  const overviewKey = () =>
+    JSON.stringify({
+      scope: { kind: 'mine' },
+      day: store.P.TODAY_ISO,
+      week: store.P.isoFromDate(store.P.weekToDate(store.P.TODAY_WEEK)),
+      week_starts: Array.from({ length: 53 }, (_, i) =>
+        store.P.weekToDate(store.P.TODAY_WEEK - 52 + i).getTime(),
+      ),
+      week_end: store.P.weekToDate(store.P.TODAY_WEEK + 1).getTime(),
+    })
+
+  /** A Board write on a task only the Board's answer brings, accepted while
+      the Board's read is stopped with its rows kept, as a hidden Board's. */
+  async function stoppedBoardWrite() {
+    answer = ok([row('far', 9)])
+    await open()
+    const id = store.P.viewTask(SLOT, 'far')?.id ?? ''
+    void store.P.updateIssue(id, { status: 'progress' })
+    // an answer from before the write arrives after it was sent
+    await serve(ok([row('far', 9, { title: 'Echo' })]))
+    store.P.watchBoard(SLOT, null)
+    writes[0]?.resolve(null)
+    await turn()
+    expect(store.P.viewTask(SLOT, 'far')?.status).toBe('progress')
+    // the Overview reads beside it
+    store.P.watchOverview(overviewKey(), 1, 0)
+    await turn()
+  }
+
+  it("keeps a stopped Board's saved part past an Overview batch that brings other rows", async () => {
+    await stoppedBoardWrite()
+    overviews.get('overview:paused')?.({
+      state: 'ok',
+      rows: [row('other', 3, { paused: true })],
+      complete: true,
+      next: null,
+      end: 'op1~end',
+    })
+    await turn()
+    expect(store.P.overviewRead().paused.batches[0]?.rows).toHaveLength(1)
+    // the card does not snap back: no delivery of the Board's own read holds it
+    expect(store.P.viewTask(SLOT, 'far')?.status).toBe('progress')
+    expect(probe().layerCount()).toBe(1)
+    // shown again, the Board's fresh answer holds it and ends the paint
+    answer = ok([row('far', 9, { title: 'Echo', status: 'progress' })])
+    store.P.watchBoard(SLOT, KEY)
+    await turn()
+    await turn()
+    expect(store.P.viewTask(SLOT, 'far')?.status).toBe('progress')
+    expect(probe().layerCount()).toBe(0)
+  })
+
+  it("keeps a stopped Board's saved part past an Overview summary, which brings no rows", async () => {
+    await stoppedBoardWrite()
+    overviews.get('overview:summary')?.({
+      state: 'ok',
+      counts: {
+        state: 'ok',
+        leaves: { backlog: 0, todo: 1, progress: 0, review: 0, done: 0 },
+        paused: 0,
+      },
+      any_task: { state: 'ok', value: true },
+      overdue: { state: 'ok', count: 0 },
+    })
+    await turn()
+    expect(store.P.overviewRead().summary?.value).toMatchObject({ state: 'ok' })
+    expect(store.P.viewTask(SLOT, 'far')?.status).toBe('progress')
+    expect(probe().layerCount()).toBe(1)
+  })
+
+  /** A batch answer of the Overview's lists holding `rows`. */
+  const batch = (rows: ViewRow[], at: Record<string, unknown> = {}) => ({
+    state: 'ok',
+    rows,
+    complete: true,
+    next: null,
+    end: 'op1~end',
+    ...at,
+  })
+  /** Delivers `value` to the Paused list's read with `at`'s cursor and end,
+      in My view (the Overview's key above). */
+  const paused = (at: { cursor?: string; end?: string }, value: unknown) => {
+    const receive = overviewsByArgs.get(
+      `overview:paused ${JSON.stringify({ scope: { kind: 'mine' }, ...at })}`,
+    )
+    if (!receive) throw new Error(`no Paused read at ${JSON.stringify(at)}`)
+    receive(value)
+  }
+  /** The tasks the Paused list shows, batch by batch. */
+  const pausedIds = () => store.P.overviewRead().paused.batches.map((b) => b.rows.map((r) => r.id))
+  /** The Paused list's first batch, as P.watchOverview opens it. */
+  const OVERVIEW_SLOT = 'overview:paused:2'
+
+  it("lets a live read's copy of a task lead over a stopped read's, which follows the live one", async () => {
+    store.P.watchOverview(overviewKey(), 1, 0)
+    await turn()
+    overviews.get('overview:paused')?.(batch([row('far', 9, { paused: true })]))
+    await turn()
+    // the Overview hides behind the Board, which answers the task moved on
+    store.P.watchOverview(null, 1, 0)
+    answer = ok([row('far', 9, { paused: true, status: 'progress' })])
+    await open()
+    const P = store.P
+    const id = P.viewTask(SLOT, 'far')?.id ?? ''
+    // lookups find the Board's model, and the Overview's copy follows it
+    expect(P.anyTask(id)).toBe(P.viewTask(SLOT, 'far'))
+    expect(P.viewTask(OVERVIEW_SLOT, 'far')?.status).toBe('progress')
+    // a drop back to To do is a change, sent over the Board's row
+    void P.updateIssue(id, { status: 'todo' })
+    expect(writes.map((w) => w.name)).toEqual(['issues:update'])
+    expect(network.mutation.mock.calls.at(-1)?.[1]).toMatchObject({ patch: { status: 'todo' } })
+  })
+
+  it('ends a Board write the Board holds while a stopped Overview keeps a copy, and shows a later change on both', async () => {
+    answer = ok([row('far', 9, { paused: true })])
+    await open()
+    store.P.watchOverview(overviewKey(), 1, 0)
+    await turn()
+    overviews.get('overview:paused')?.(batch([row('far', 9, { paused: true })]))
+    await turn()
+    // the Overview hides behind the Board: its reads stop, its rows stay
+    store.P.watchOverview(null, 1, 0)
+    await turn()
+    const P = store.P
+    const id = P.viewTask(SLOT, 'far')?.id ?? ''
+    void P.updateIssue(id, { status: 'progress' })
+    await serve(ok([row('far', 9, { paused: true, status: 'progress' })]))
+    writes[0]?.resolve(null)
+    await turn()
+    // the Board's answer holds it, and the Overview's copy follows the Board
+    expect(probe().layerCount()).toBe(0)
+    expect(P.viewTask(OVERVIEW_SLOT, 'far')?.status).toBe('progress')
+    // someone else moves it on: the Board shows it, and so does the copy
+    await serve(ok([row('far', 9, { paused: true, status: 'review' })]))
+    expect(P.viewTask(SLOT, 'far')?.status).toBe('review')
+    expect(P.viewTask(OVERVIEW_SLOT, 'far')?.status).toBe('review')
+    // shown again, the Overview shows that while it refreshes
+    P.watchOverview(overviewKey(), 1, 0)
+    await turn()
+    expect(P.overviewRead().paused.state).toBe('refreshing')
+    expect(P.viewTask(OVERVIEW_SLOT, 'far')?.status).toBe('review')
+  })
+
+  it('keeps a write painted on a frozen batch whose answer holding it split, until its halves answer', async () => {
+    store.P.watchOverview(overviewKey(), 1, 0)
+    await turn()
+    const far = (over: Partial<ViewRow> = {}) => [row('far', 9, { paused: true, ...over })]
+    paused({}, batch(far(), { next: 'p1', end: 'p1' }))
+    await turn()
+    store.P.overviewMore('paused')
+    await turn()
+    paused({ end: 'p1' }, batch(far(), { next: 'p1', end: 'p1' }))
+    paused({ cursor: 'p1' }, batch([], { end: null }))
+    await turn()
+    const frozen = store.P.overviewRead().paused.batches[0]
+    expect(pausedIds()).toEqual([['far'], []])
+    const slot = frozen?.slot ?? ''
+    const id = store.P.viewTask(slot, 'far')?.id ?? ''
+    void store.P.updateIssue(id, { status: 'progress' })
+    // an answer from before the write, then the one that holds it, which
+    // split: the batch keeps the rows of the one before
+    paused({ end: 'p1' }, batch(far({ title: 'Echo' }), { next: 'p1', end: 'p1' }))
+    await turn()
+    paused(
+      { end: 'p1' },
+      batch(far({ status: 'progress' }), { next: 'p1', end: 'p1', split: 'p0' }),
+    )
+    await turn()
+    writes[0]?.resolve(null)
+    await turn()
+    // the kept rows lack the write, so it stays painted on them
+    expect(store.P.viewTask(slot, 'far')?.status).toBe('progress')
+    expect(probe().layerCount()).toBe(1)
+    // its halves answer holding it, and the paint ends
+    paused({ end: 'p0' }, batch(far({ status: 'progress' }), { next: 'p0', end: 'p0' }))
+    paused({ cursor: 'p0', end: 'p1' }, batch([], { next: 'p1', end: 'p1' }))
+    await turn()
+    expect(probe().layerCount()).toBe(0)
+    const half = store.P.overviewRead().paused.batches[0]
+    expect(half?.rows.map((r) => r.id)).toEqual(['far'])
+    expect(store.P.viewTask(half?.slot ?? '', 'far')?.status).toBe('progress')
+  })
+
+  it("takes one transition's batch answers in together, so a row that left a batch waiting for its halves shows once", async () => {
+    store.P.watchOverview(overviewKey(), 1, 0)
+    await turn()
+    const held = (id: string, num: number) => row(id, num, { paused: true })
+    paused({}, batch([held('a', 1), held('b', 2)], { next: 'p2', end: 'p2' }))
+    await turn()
+    store.P.overviewMore('paused')
+    await turn()
+    paused({ end: 'p2' }, batch([held('a', 1), held('b', 2)], { next: 'p2', end: 'p2' }))
+    paused({ cursor: 'p2' }, batch([held('c', 3)], { end: 'p3' }))
+    await turn()
+    // the frozen batch splits into two, which then merge into one read,
+    // subscribed after the open batch's
+    paused({ end: 'p2' }, batch([held('a', 1)], { next: 'p2', end: 'p2', split: 'p1' }))
+    await turn()
+    paused({ end: 'p1' }, batch([held('a', 1)], { next: 'p1', end: 'p1' }))
+    paused({ cursor: 'p1', end: 'p2' }, batch([held('b', 2)], { next: 'p2', end: 'p2' }))
+    await turn()
+    paused({ end: 'p2' }, batch([held('a', 1), held('b', 2)], { next: 'p2', end: 'p2' }))
+    await turn()
+    expect(pausedIds()).toEqual([['a', 'b'], ['c']])
+    // one server state: b moves into the open batch, and the merged batch,
+    // grown meanwhile, splits; the open batch's read hears it first
+    double.live?.batch(() => {
+      paused({ cursor: 'p2' }, batch([held('b', 2), held('c', 3)], { end: 'p3' }))
+      paused({ end: 'p2' }, batch([held('a', 1)], { next: 'p2', end: 'p2', split: 'p1' }))
+    })
+    await turn()
+    // while its halves load, the list shows the answers of before
+    expect(pausedIds()).toEqual([['a', 'b'], ['c']])
+    paused({ end: 'p1' }, batch([held('a', 1)], { next: 'p1', end: 'p1' }))
+    paused({ cursor: 'p1', end: 'p2' }, batch([], { next: 'p2', end: 'p2' }))
+    await turn()
+    expect(pausedIds().flat()).toEqual(['a', 'b', 'c'])
+  })
+
+  it('ends a write held by the Overview batch that holds its task, once every read holding it delivered', async () => {
+    answer = ok([row('far', 9)])
+    await open()
+    store.P.watchOverview(overviewKey(), 1, 0)
+    await turn()
+    const batch = (status: ViewRow['status']) => ({
+      state: 'ok',
+      rows: [row('far', 9, { paused: true, status })],
+      complete: true,
+      next: null,
+      end: 'op1~end',
+    })
+    overviews.get('overview:paused')?.(batch('todo'))
+    await turn()
+    const id = store.P.viewTask(SLOT, 'far')?.id ?? ''
+    void store.P.updateIssue(id, { status: 'progress' })
+    // the Board's answer holds the write, then the server accepts it: the
+    // batch, which holds a copy of the task, has not delivered since
+    await serve(ok([row('far', 9, { status: 'progress' })]))
+    writes[0]?.resolve(null)
+    await turn()
+    expect(probe().layerCount()).toBe(1)
+    expect(store.P.viewTask('overview:paused:2', 'far')?.status).toBe('progress')
+    // the batch's delivery holds it too and ends the paint
+    overviews.get('overview:paused')?.(batch('progress'))
+    await turn()
+    expect(probe().layerCount()).toBe(0)
+    expect(store.P.overviewRead().paused.batches[0]?.rows[0]?.status).toBe('progress')
   })
 })

@@ -279,6 +279,16 @@ describe('the benchmark server', () => {
     expect(await modeOf('&appearance=sepia')).toBe('dark')
   })
 
+  it('signs the person in as an organization Viewer only when the page asks for one', async () => {
+    const roleOf = async (params) => {
+      const { snapshot } = await snapshotOf(`tasks=20${params}`)
+      return snapshot.profiles.find((p) => p.id === snapshot.myProfileIds[0]).org_role
+    }
+    expect(await roleOf('&role=viewer')).toBe('viewer')
+    expect(await roleOf('')).toBe('user')
+    expect(await roleOf('&role=admin')).toBe('user')
+  })
+
   it('answers a scenario that fails with its failure', async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     // no comment thread is open

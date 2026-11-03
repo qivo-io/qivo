@@ -38,7 +38,7 @@
       "slug": "the-overview-project-health-at-a-glance",
       "title": "The Overview. Project health at a glance",
       "order": 5,
-      "description": "Overview summarizes the selected project, sub-project, All projects or My view. Its opening sentence reports overdue tasks, projected missed deadlines,…"
+      "description": "Overview summarizes the selected project, sub-project or My view from figures Qivo counts on the server. Its opening sentence reports overdue tasks, projected…"
     },
     {
       "file": "the-board.md",

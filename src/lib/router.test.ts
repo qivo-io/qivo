@@ -735,13 +735,13 @@ describe('scopeForIssue', () => {
 })
 
 describe('scopeForIssueOn', () => {
-  it("opens the issue's sub-project on the Board, which has no All projects", () => {
+  it("opens the issue's sub-project on the Board and the Overview, which have no All projects", () => {
     expect(scopeForIssueOn('kanban', 'QN-5', 'all')).toBe('p-home-1a')
     expect(scopeForIssueOn('kanban', 'uuid-acme-5', 'all')).toBe(scopeForIssue('uuid-acme-5', null))
+    expect(scopeForIssueOn('overview', 'QN-5', 'all')).toBe('p-home-1a')
   })
 
-  it('keeps All projects on the Overview and the Roadmap', () => {
-    expect(scopeForIssueOn('overview', 'QN-5', 'all')).toBe('all')
+  it('keeps All projects on the Roadmap', () => {
     expect(scopeForIssueOn('roadmap', 'QN-5', 'all')).toBe('all')
   })
 

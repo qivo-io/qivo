@@ -38,6 +38,8 @@
     "src/lib/workload.ts",
     "src/store/boardStandIn.setup.ts",
     "src/store/entityLookup.ts",
+    "src/store/overviewLists.ts",
+    "src/store/overviewStandIn.setup.ts",
     "src/store/preferences.ts",
     "src/store/updates.ts"
   ]

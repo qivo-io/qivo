@@ -260,10 +260,11 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
           </Button>
         </div>
 
-        {/* All projects (deviation #47) — the same Overview / Board / Roadmap across every
-          project this login can reach, home organization and guest seats alike.
-          Sits above the per-project list because it is the widest scope, not a
-          page of its own. */}
+        {/* All projects (deviation #47) shows the Roadmap across every
+          project this login can reach, home organization and guest seats
+          alike, and the Board and the Overview ask to choose one of them
+          there. It sits above the per-project list because it is the widest
+          scope, not a page of its own. */}
         <div className="[padding:0_12px_4px]">
           <Button
             variant="quiet"
@@ -1030,6 +1031,11 @@ function App() {
     if (boardKept) return
     for (const slot of Object.values(BOARD_SLOTS)) P.releaseView(slot)
   }, [boardKept])
+  // and so does an Overview page, its reads and the rows of its lists
+  const overviewKept = keep.pages.includes('overview')
+  useEffect(() => {
+    if (!overviewKept) P.releaseOverview()
+  }, [overviewKept])
   /** The id a page's ViewKeeper keeps it under: its scope for a page that
       shows one, so a new scope mounts it anew; null once it is not kept. */
   const keptId = (page: MainPage) =>
@@ -2177,12 +2183,10 @@ function App() {
           />
         )
       case 'overview':
+        // its figures and lists come from the server; its health table
+        // waits for every task on its own
         if (!scopeInfo) return null
-        return tasksLoading ? (
-          <TasksLoadingView what="The overview" />
-        ) : (
-          <Overview info={scopeInfo} actions={actions} />
-        )
+        return <Overview info={scopeInfo} actions={actions} />
       case 'roadmap':
         if (!scopeInfo) return null
         return tasksLoading ? (
@@ -2255,7 +2259,7 @@ function App() {
       it hides. */
   const pageVariant = (page: MainPage) => {
     // the pages that wait for every task show a notice until then
-    const waits = tasksLoading && (page === 'sync' || page === 'overview' || page === 'roadmap')
+    const waits = tasksLoading && (page === 'sync' || page === 'roadmap')
     const layout = `${mobile ? 'phone' : 'desktop'}${waits ? ':loading' : ''}`
     if (page === 'inbox') return `${layout}:${inboxTask ?? ''}`
     if (page === 'sync')
