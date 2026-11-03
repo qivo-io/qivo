@@ -7,8 +7,9 @@ import { loadBoard, taskRow } from './boardFixture.setup'
 
 /* The phone's task schedule mounts its first screen at once and the rest
    in slices, the Overview's lists show the server's batches with Load
-   more, and the Overview's group health reads every group's figures in one
-   pass over the tasks. */
+   more, the Overview's group health shows the server's rows 10 at a time,
+   and the store's figures for many groups read them in one pass over the
+   tasks. */
 
 /* A list of more than SYNC_LIMIT tasks mounts in slices. These tests lower
    it from 300, so a list of LONG tasks in one sub-project, well inside the
@@ -346,7 +347,7 @@ const groups = (snap: Snapshot) => {
 }
 
 describe("the Overview's group health", () => {
-  it('reads 30 groups without a pass over the tasks per group', async () => {
+  it('shows 30 groups 10 rows at a time from the server, with no pass over the tasks', async () => {
     const board = await loadBoard(network, groups, { scope: 'plan' })
     const { Overview } = await import('./Overview')
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
@@ -354,12 +355,22 @@ describe("the Overview's group health", () => {
     >[0]['actions']
     const progress = vi.spyOn(board.P, 'progressIn')
     const remaining = vi.spyOn(board.P, 'remainingIn')
+    const scoped = vi.spyOn(board.P, 'scopedIssues')
     await board.renderView(root, (info) => <Overview info={info} actions={actions} />)
     expect(count('[data-ov-strip]')).toBe(1)
-    expect(count('[data-ovcard]')).toBe(30)
-    // the scope's completion is the server's summary, and no group row asks
+    expect(count('[data-ovcard]')).toBe(10)
+    for (const rows of [20, 30]) {
+      await act(async () =>
+        document.querySelector<HTMLButtonElement>('[data-ov-health-more]')?.click(),
+      )
+      expect(count('[data-ovcard]')).toBe(rows)
+    }
+    expect(count('[data-ov-health-more]')).toBe(0)
+    // the scope's completion is the server's summary, the rows' figures the
+    // server's health table, and nothing on the page walks the tasks
     expect(progress).not.toHaveBeenCalled()
     expect(remaining).not.toHaveBeenCalled()
+    expect(scoped).not.toHaveBeenCalled()
   })
 })
 

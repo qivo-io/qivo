@@ -99,13 +99,14 @@ export async function loadBoard(
     unavailable: string[]
     /** the owner-load calls open now */
     loads: Set<{ args: OwnerLoadsArgs; next: (value: unknown) => void }>
-    /** the Overview's queries: `hold` keeps their answers back, `force`
-        answers states the workspace cannot reach, `fail` fails a query
-        `failing` names, `edit` changes an answer, `asked` is every
-        subscription's query and arguments, newest last, and `open` those
+    /** the Overview's queries: `hold` keeps their answers back, or those
+        of the queries it names, `force` answers states the workspace
+        cannot reach, `fail` fails a query `failing` names, `edit` changes
+        an answer, `asked` is every subscription's query and arguments,
+        newest last, and `open` those
         open now */
     overview: {
-      hold: boolean
+      hold: boolean | ((query: OverviewQuery) => boolean)
       force: ForcedOverview
       fail: unknown
       failing: (query: OverviewQuery, args: OverviewArgs) => boolean
@@ -203,7 +204,8 @@ export async function loadBoard(
       }
       server.overview.asked.push({ query: sub.query, args: sub.args })
       server.overview.open.add(sub)
-      if (!server.overview.hold) answerOverview(sub)
+      const hold = server.overview.hold
+      if (!(typeof hold === 'function' ? hold(sub.query) : hold)) answerOverview(sub)
       return () => server.overview.open.delete(sub)
     }
     return () => {}

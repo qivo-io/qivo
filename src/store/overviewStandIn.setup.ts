@@ -364,13 +364,16 @@ export function overviewStandIn(
     if (h.scope === 'access_unchecked')
       return { state: 'unavailable', reason: 'access_unchecked', message: ACCESS_UNCHECKED_MESSAGE }
     if (h.scope === 'over_budget') return { state: 'over_budget' }
-    const most = h.most ?? HEALTH_ROWS
-    const { sort = 'late', dir = 'desc', limit = OVERVIEW_BATCH } = args
-    if (!Number.isInteger(limit) || limit < 1 || limit > most)
+    // a lowered cap cuts the rows there, as the page's first ask of 10 rows
+    // stays one the server takes
+    const most = Math.min(h.most ?? HEALTH_ROWS, HEALTH_ROWS)
+    const { sort = 'late', dir = 'desc', limit: asked = OVERVIEW_BATCH } = args
+    if (!Number.isInteger(asked) || asked < 1 || asked > HEALTH_ROWS)
       throw new ConvexError({
         code: 'bad_request',
-        message: `limit must be a whole number from 1 to ${most}`,
+        message: `limit must be a whole number from 1 to ${HEALTH_ROWS}`,
       })
+    const limit = Math.min(asked, most)
     const text = (args.search ?? '').trim()
     if (text.length > LIMITS.search.max)
       throw new ConvexError({ code: 'rule', message: LIMITS.search.refusal })

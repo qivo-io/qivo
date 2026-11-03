@@ -709,19 +709,19 @@ export function createOverviewReads(transport: OverviewTransport) {
         moreFailed: failedMore !== null,
       }
     }
+    // the last answer shown for this scope and clock, and whether the
+    // arguments asked now are its table with more rows (a Load more)
+    const before = shownHealth !== null && shownHealth.base === baseKey ? shownHealth : null
+    const same = before !== null && sameTable(before.ask, ask) && before.ask.limit === ask.limit
+    const pressed = before !== null && sameTable(before.ask, ask) && before.ask.limit < ask.limit
     if (held.key === key && held.error !== undefined && failedMore === null)
-      return {
-        error: held.error,
-        current: held.current,
-        kept: false,
-        more: null,
-        moreFailed: false,
-      }
+      // a Load more that failed shows the rows before it from the first
+      // render, as settleHealth takes the read back to them
+      return pressed && before !== null
+        ? { value: before.value, current: false, kept: false, more: null, moreFailed: true }
+        : { error: held.error, current: held.current, kept: false, more: null, moreFailed: false }
     // waiting: the last answer shown for this scope and clock
-    const before = shownHealth
-    if (before === null || before.base !== baseKey) return null
-    const same = sameTable(before.ask, ask) && before.ask.limit === ask.limit
-    const pressed = sameTable(before.ask, ask) && before.ask.limit < ask.limit
+    if (before === null) return null
     return {
       value: before.value,
       current: false,

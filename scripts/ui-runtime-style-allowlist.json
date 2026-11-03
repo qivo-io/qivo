@@ -71,10 +71,6 @@
     "count": 1,
     "reason": "viewport-measured landscape frame dimensions, CSS geometry variables and portrait rotation transform"
   },
-  "src/views/Overview.tsx": {
-    "count": 1,
-    "reason": "status-distribution segment percentages calculated from task counts and colors supplied by status metadata"
-  },
   "src/views/Resources.tsx": {
     "count": 2,
     "reason": "shared timeline/panel geometry and data-derived heat intensity; weekly grid presentation is scoped in Resources.css"
@@ -82,6 +78,10 @@
   "src/views/Roadmap.tsx": {
     "count": 23,
     "reason": "timeline coordinates, active utilization week geometry, transforms, measured widths, the milestone flag band's computed height, and persisted colors"
+  },
+  "src/views/overview/StatusBar.tsx": {
+    "count": 1,
+    "reason": "status-distribution segment percentages calculated from task counts and colors supplied by status metadata"
   },
   "src/views/roadmap/PlanCard.tsx": {
     "count": 4,
