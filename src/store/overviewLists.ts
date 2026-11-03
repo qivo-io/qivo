@@ -64,7 +64,8 @@
      other arguments, and offers no Load more; a new scope or clock shows
      nothing until its own answer. A Load more that fails goes back to the
      rows it showed, asking their arguments again so they keep updating,
-     and offers Retry. */
+     and offers Retry. Where those rows fail too, the table shows its
+     error, whose Try again asks it afresh. */
 
 import { ConvexError, type Value } from 'convex/values'
 import type {
@@ -662,7 +663,9 @@ export function createOverviewReads(transport: OverviewTransport) {
 
   /** Takes the health read's news in: an answer for the table asked now is
       the one it shows, and a Load more that failed goes back to the rows
-      it showed, asking their arguments again. */
+      it showed, asking their arguments again. Where those rows fail too,
+      it forgets the Load more, so the table shows its error and Try again
+      asks it afresh. */
   function settleHealth() {
     const key = healthKey()
     if (key === null || baseKey === null || table === null) return
@@ -673,13 +676,18 @@ export function createOverviewReads(transport: OverviewTransport) {
         shownHealth = { base: baseKey, ask: { ...table, limit }, value: held.value as HealthAnswer }
       return
     }
+    // the rows a failed Load more went back to failed as well: while it is
+    // set, the table asks those rows' arguments
+    if (failedMore !== null) {
+      failedMore = null
+      return
+    }
     const before = shownHealth
     if (
       before !== null &&
       before.base === baseKey &&
       sameTable(before.ask, table) &&
-      before.ask.limit < limit &&
-      failedMore === null
+      before.ask.limit < limit
     ) {
       failedMore = limit
       limit = before.ask.limit
@@ -718,9 +726,11 @@ export function createOverviewReads(transport: OverviewTransport) {
     const before = shownHealth !== null && shownHealth.base === baseKey ? shownHealth : null
     const same = before !== null && sameTable(before.ask, ask) && before.ask.limit === ask.limit
     const pressed = before !== null && sameTable(before.ask, ask) && before.ask.limit < ask.limit
-    if (held.key === key && held.error !== undefined && failedMore === null)
+    if (held.key === key && held.error !== undefined)
       // a Load more that failed shows the rows before it from the first
-      // render, as settleHealth takes the read back to them
+      // render, as settleHealth takes the read back to them; any other
+      // error is the table's, also where the rows a failed Load more went
+      // back to failed, which settleHealth then forgets
       return pressed && before !== null
         ? {
             value: before.value,

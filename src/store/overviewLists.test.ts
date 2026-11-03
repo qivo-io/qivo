@@ -1166,6 +1166,45 @@ describe('the health table', () => {
     expect(healthNames(s)).toHaveLength(OVERVIEW_BATCH)
   })
 
+  it('shows the table’s error where the rows a failed Load more went back to fail too, and Try again asks those rows afresh', () => {
+    const { snap, base } = programOf(25)
+    const s = server(snap)
+    s.lists.watch(base, 1, 0)
+    s.lists.watchTable(BY_NAME, 1)
+    s.deliver()
+    // the next 10 fail, and the first 10 asked again are held back
+    s.state.failing = (slot) => (slot === HEALTH ? new Error('down') : undefined)
+    s.state.holding = (slot, args) => slot === HEALTH && args.limit === OVERVIEW_BATCH
+    s.lists.moreHealth()
+    s.deliver()
+    expect(healthArgs(s)).toMatchObject({ limit: OVERVIEW_BATCH })
+    expect(s.lists.view().health).toMatchObject({ moreFailed: true, kept: false })
+    expect(healthNames(s)).toHaveLength(OVERVIEW_BATCH)
+    // they fail too: the table's error from the first view, before the
+    // module takes the news in
+    const read = s.reads.get(HEALTH)
+    if (!read?.want) throw new Error('no health read')
+    read.held = { key: read.want, error: new Error('down') }
+    read.current = true
+    expect(s.lists.view().health).toMatchObject({ error: expect.any(Error), moreFailed: false })
+    s.lists.settle()
+    expect(s.lists.view().health).toMatchObject({
+      error: expect.any(Error),
+      moreFailed: false,
+      more: null,
+    })
+    expect(s.lists.view().health?.value).toBeUndefined()
+    // Try again asks the first rows afresh, not the Load more that failed
+    s.state.failing = () => undefined
+    s.state.holding = () => false
+    const asked = s.state.asked.length
+    s.lists.retryHealth()
+    expect(s.state.asked.slice(asked).map((a) => JSON.parse(a.key).limit)).toEqual([OVERVIEW_BATCH])
+    s.deliver()
+    expect(s.lists.view().health).toMatchObject({ current: true, moreFailed: false, more: 'ready' })
+    expect(healthNames(s)).toHaveLength(OVERVIEW_BATCH)
+  })
+
   it('forgets the health read on release and clear', () => {
     const { snap, base } = programOf(3)
     const s = server(snap)
