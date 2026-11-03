@@ -89,7 +89,6 @@ import {
   type LeafCounts,
   noCounts,
   orgCountState,
-  overviewRegroupOf,
   ownerRows,
 } from '../model/overviewCounts'
 import {
@@ -936,9 +935,6 @@ const UNKNOWN = 'unknown' as const
 /* One owner's load as the projection walks it, or unknown where it could
  * not be read. */
 type Load = LoadSpan[] | typeof UNKNOWN
-
-/** What verdicts answers: one query's verdicts, each owner's load read once. */
-export type Verdicts = ReturnType<typeof verdicts>
 
 /**
  * The verdicts of one query, on `clock`: each task's as lib/delay.ts gives
@@ -2379,99 +2375,4 @@ export async function readHealth(
       most: OVERVIEW.healthRows,
     }
   })
-}
-
-// --- one sub-project's health ---------------------------------------------------------------
-
-/** One health row piece: a sub-project's figures, or one person's in it. */
-export type HealthPiece = {
-  /** the leaves by status, the paused leaves and the remaining hours of the
-   * leaves not Done in whole tenths, unrounded: a row over several pieces
-   * adds them up and rounds once, as src/store/planner.ts remainingByGroups
-   * does */
-  counts: Figure<LeafCounts>
-  /** the tasks, groups included, whose verdict is late (Delayed) or behind
-   * (Slipping), in a project that tracks delay; zero in one that does not */
-  delays: Figure<{ late: number; behind: number }>
-}
-
-/**
- * The health figures of live sub-project `project`, or with `owner` of the
- * tasks that seat's person owns there by the Reviewer rule, for a health
- * row (src/views/Overview.tsx, the health table), within `guard`:
- *
- * - its counts: the family's readiness and the sub-project's rows, or the
- *   person's rows there (model/overviewCounts.ts), a few ranges whatever
- *   its tasks;
- * - its delays: every active task of the sub-project read (lib/viewReads.ts
- *   selectionTasks), which are groups and their group facts, and the
- *   verdicts `v` gives, whose owners' loads it reads in owner id order.
- *
- * A figure whose reads do not fit `guard` answers unavailable for `budget`,
- * one whose owner's load could not be read for `loads`. Pass one `v` for
- * all the rows of one query, so each owner's load is read once. A row of a
- * project scope is one piece; a top-level project's row in My view adds up
- * the person's pieces of its sub-projects. It is also the reader REST's and
- * MCP's project completion can switch to for one sub-project
- * (model/overviewCounts.ts familyCounts for a family).
- */
-export async function subProjectHealth(
-  ctx: QueryCtx,
-  guard: ViewBudget,
-  seats: ViewSeats,
-  project: Doc<'projects'>,
-  v: Verdicts,
-  owner?: Doc<'profiles'>,
-): Promise<HealthPiece> {
-  const family = project.parent_id
-  const counts = await bounded(async (): Promise<Figure<LeafCounts>> => {
-    if (family === undefined || project.archived_at !== undefined)
-      return { state: 'unavailable', reason: 'counting' }
-    if (owner === undefined) {
-      await guard.take(RANGE, 3)
-      await guard.take(SUB_COUNTS)
-      const got = (await familyCounts(ctx.db, project.org_id, family, [project]))?.get(project.id)
-      return got === undefined
-        ? { state: 'unavailable', reason: 'counting' }
-        : { state: 'ok', ...got }
-    }
-    await guard.take(RANGE, 3)
-    await guard.take(SUB_COUNTS)
-    const state = await orgCountState(ctx.db, project.org_id)
-    if (!state.stamped || state.run !== null || (await overviewRegroupOf(ctx.db, family)) !== null)
-      return { state: 'unavailable', reason: 'counting' }
-    const rows = await ctx.db
-      .query('overview_counts')
-      .withIndex('by_owner_project', (q) => q.eq('owner_id', owner.id).eq('project_id', project.id))
-      .collect()
-    const got = countsOfRows(rows, project)
-    return got === null ? { state: 'unavailable', reason: 'counting' } : { state: 'ok', ...got }
-  })
-  const delays = await bounded(async (): Promise<Figure<{ late: number; behind: number }>> => {
-    if (!tracks(project)) return { state: 'ok', late: 0, behind: 0 }
-    const tasks: Doc<'issues'>[] = []
-    for await (const step of selectionTasks(ctx, guard, [project])) tasks.push(...step)
-    const g = newGroups()
-    await readGroups(ctx, guard, seats, g, tasks, true)
-    const mine = tasks.filter(
-      (t) => owner === undefined || taskOwnerId(t, isGroup(g, t)) === owner.id,
-    )
-    const facts = (t: Doc<'issues'>) => (isGroup(g, t) ? (g.facts.get(t.id) ?? null) : null)
-    const owners: string[] = []
-    for (const t of mine) {
-      const needed = await v.needs(t, facts(t))
-      if (needed !== null) owners.push(needed)
-    }
-    if (!(await v.readAll(project.org_id, owners))) return { state: 'unavailable', reason: 'loads' }
-    let late = 0
-    let behind = 0
-    for (const t of mine) {
-      const verdict = await v.of(t, facts(t))
-      if (verdict === UNKNOWN) return { state: 'unavailable', reason: 'loads' }
-      if (verdict?.status === 'late') late++
-      if (verdict?.status === 'behind') behind++
-    }
-    return { state: 'ok', late, behind }
-  })
-  return { counts, delays }
 }

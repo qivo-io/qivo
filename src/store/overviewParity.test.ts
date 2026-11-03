@@ -9,11 +9,15 @@
  * the page's figures before it read the server's) and statusCounts, the
  * Overdue & at risk rows against its list, as a set and in due-date order,
  * the Paused rows against its paused tasks by due date, undated last, and
- * every health row against healthRows (src/views/overviewFigures.ts)
- * through the per-sub-project reader (lib/overview.ts subProjectHealth).
- * The stand-in the jsdom tests and the benchmark read
- * (store/overviewStandIn.setup.ts) answers the same summary and delays and
- * the same batches, rows, verdicts and fixed ends.
+ * the health table (overview.health) against the oracle's healthRows, its
+ * rows both ways, each row's name, lead, sparkbar, Completion, Left,
+ * Paused and Delayed and Slipping, with `loads` exactly where a guest's or
+ * Viewer's row needs an owner past the lowest one the table needs, and for
+ * Nora every column's order both ways against healthOrder, a cut and a
+ * search. The stand-in the jsdom tests and the benchmark read
+ * (store/overviewStandIn.setup.ts) answers the same summary and delays,
+ * the same batches, rows, verdicts and fixed ends and the same health
+ * table.
  *
  * The process runs in New York's time zone, so the client's local weeks
  * differ from UTC weeks near midnight; vitest runs each file in a process
@@ -25,17 +29,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
-import { byId } from '../../convex/lib/db'
-import type { ListAnswer, OverviewScope, SummaryAnswer } from '../../convex/lib/overview'
-import {
-  clockOf,
-  OVERVIEW,
-  subProjectHealth,
-  verdicts,
-  WEEK_STARTS,
+import { nameKey } from '../../convex/lib/nameKey'
+import type {
+  HealthAnswer,
+  HealthSort,
+  ListAnswer,
+  OverviewScope,
+  SummaryAnswer,
 } from '../../convex/lib/overview'
-import { viewAccess, viewBudget } from '../../convex/lib/viewReads'
-import { addCounts, noCounts } from '../../convex/model/overviewCounts'
+import { OVERVIEW, WEEK_STARTS } from '../../convex/lib/overview'
+import { taskOwnerId } from '../../convex/lib/review'
+import { allWordsMatcher } from '../../convex/lib/search'
+import { DEFAULT_PLANNABLE_HOURS, plannableHoursOf } from '../../convex/lib/workload'
 import { SHAPES } from '../../convex/tests/accessShapes.setup'
 import { projectScope } from '../../convex/tests/board.setup'
 import {
@@ -55,7 +60,12 @@ import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import { OVERVIEW_BATCH, OVERVIEW_SPLIT, OVERVIEW_WEEKS } from './overviewLists'
-import { type ForcedOverview, type OverviewArgs, overviewStandIn } from './overviewStandIn.setup'
+import {
+  type ForcedOverview,
+  HEALTH_ROWS,
+  type OverviewArgs,
+  overviewStandIn,
+} from './overviewStandIn.setup'
 import type { Snapshot } from './plannerFixture.setup'
 
 vi.hoisted(() => {
@@ -96,11 +106,10 @@ async function start(snap: Snapshot) {
   })
   const store = await import('./planner')
   await store.initStore()
-  // the oracle, the health figures and the page's clock read this store
-  const oracle = await import('./overviewOracle.setup')
-  const health = await import('../views/overviewFigures')
+  // the oracle and the page's clock read this store
+  const figures = await import('./overviewOracle.setup')
   const args = await import('../views/overview/overviewArgs')
-  return Object.assign(store.P, { figures: { ...oracle, ...health }, args, snapshot: snap })
+  return Object.assign(store.P, { figures, args, snapshot: snap })
 }
 
 type Store = Awaited<ReturnType<typeof start>>
@@ -180,10 +189,66 @@ const batchFacts = (batches: (ListAnswer & { state: 'ok' })[]) =>
 const dues = (items: { due?: string | null; due_date?: string }[]) =>
   items.map((it) => ('due_date' in it ? it.due_date : it.due) || '~')
 
-/** Compares the four queries and the health reader for `profile` over
- * `scope`, the store scope `scopeId`, with what store `P` derives. Answers
- * how many tasks the scope held, for a caller that checks its cases
- * compared something. */
+/** The health table's columns. */
+const HEALTH_SORTS: HealthSort[] = [
+  'name',
+  'lead',
+  'progress',
+  'done',
+  'left',
+  'late',
+  'behind',
+  'paused',
+]
+
+/** The rows of `rows`, the oracle's health rows, whose Delayed a guest or
+ * an organization Viewer cannot be given: those with a task in a project
+ * that tracks delay whose verdict needs an owner other than the lowest
+ * owner id any row needs in that organization, as the server reads one
+ * owner's load a query for them, in owner id order. An owner is needed by
+ * a task without subtasks, not Done, with a planned end or a due date and
+ * remaining hours, whose owner by the Reviewer rule is a profile with a
+ * finite capacity (convex/lib/overview.ts verdicts needs). */
+function needSecondOwner(P: Store, rows: ReturnType<Store['figures']['healthRows']>): Set<string> {
+  const raw = new Map(P.snapshot.issues.map((t) => [t.id, t]))
+  const people = new Map(P.snapshot.profiles.map((p) => [p.id, p]))
+  const needs = (it: Issue): string | null => {
+    const t = raw.get(it.uuid)
+    if (t === undefined || P.isGroup(it) || t.status === 'done') return null
+    if (t.end_week === undefined && t.due_date === undefined) return null
+    if (!((t.remaining_hours ?? 0) > 0)) return null
+    const id = taskOwnerId(t, false)
+    const owner = id === undefined ? undefined : people.get(id)
+    if (id === undefined || owner === undefined) return null
+    const capacity =
+      owner.org_id === t.org_id
+        ? plannableHoursOf({ plannableHours: owner.plannable_hours, kind: owner.kind })
+        : DEFAULT_PLANNABLE_HOURS
+    return Number.isFinite(capacity) && capacity > 0 ? id : null
+  }
+  const owners = new Map(
+    rows.map((r) => [
+      r.proj.id,
+      r.issues.filter((it) => P.tracksDelay(it)).flatMap((it) => needs(it) ?? []),
+    ]),
+  )
+  const lowest = new Map<string, string>()
+  for (const id of [...owners.values()].flat().sort()) {
+    const org = people.get(id)?.org_id ?? ''
+    if (!lowest.has(org)) lowest.set(org, id)
+  }
+  return new Set(
+    [...owners]
+      .filter(([, ids]) => ids.some((id) => lowest.get(people.get(id)?.org_id ?? '') !== id))
+      .map(([project]) => project),
+  )
+}
+
+/** Compares the five queries for `profile` over `scope`, the store scope
+ * `scopeId`, with what store `P` derives; with `orders`, every column of
+ * the health table both ways, a cut and a search too. Answers how many
+ * tasks the scope held, for a caller that checks its cases compared
+ * something. */
 async function expectParity(
   t: T,
   P: Store,
@@ -191,6 +256,7 @@ async function expectParity(
   scope: OverviewScope,
   scopeId: string,
   label: string,
+  orders = false,
 ): Promise<number> {
   const info = P.scopeInfo(scopeId)
   const days = clientDays(P)
@@ -308,74 +374,97 @@ async function expectParity(
   const pausedOrder = [...f.pausedIssues].sort((a, b) => order(a.due || '~', b.due || '~'))
   expect(dues(paused), `${label}: paused order`).toEqual(dues(pausedOrder))
 
-  // the health rows, through the per-sub-project reader
+  // the health table, through overview.health, each answer the stand-in's
   const mine = P.isMineScope(scopeId)
   if (info.isMeta || mine) {
     const rows = P.figures.healthRows(info, scoped, mine)
-    const pieces = await t.run(async (ctx) => {
-      const guard = viewBudget(ctx, OVERVIEW.reads)
-      const seats = new Map([[profile.org_id, viewAccess(ctx, guard, profile)]])
-      const v = verdicts(ctx, guard, seats, clockOf(days))
-      const out: Record<
-        string,
-        { counts: ReturnType<typeof noCounts>; late: number; behind: number; delays: boolean }
-      > = {}
-      for (const g of info.groups) {
-        let counts = noCounts()
-        let late = 0
-        let behind = 0
-        let delays = true
-        for (const id of g.subIds) {
-          const project = (await byId(ctx, 'projects', id)) as Doc<'projects'>
-          const piece = await subProjectHealth(
-            ctx,
-            guard,
-            seats,
-            project,
-            v,
-            mine ? profile : undefined,
-          )
-          if (piece.counts.state !== 'ok')
-            throw new Error(`${label}: health of ${project.name}: ${JSON.stringify(piece)}`)
-          counts = addCounts(counts, piece.counts)
-          if (piece.delays.state === 'ok') {
-            late += piece.delays.late
-            behind += piece.delays.behind
-          } else if (staff || piece.delays.reason !== 'loads')
-            throw new Error(`${label}: delays of ${project.name}: ${JSON.stringify(piece)}`)
-          else delays = false
-        }
-        out[g.proj.id] = { counts, late, behind, delays }
+    const byProject = new Map(rows.map((r) => [r.proj.id, r]))
+    const health = async (over: Partial<OverviewArgs> = {}) => {
+      const args = {
+        scope,
+        ...days,
+        sort: 'late' as HealthSort,
+        dir: 'desc' as 'asc' | 'desc',
+        limit: OVERVIEW.healthRows,
+        ...over,
       }
-      return out
-    })
-    for (const row of rows) {
-      const piece = pieces[row.proj.id]
-      if (piece === undefined) throw new Error(`${label}: no health row for ${row.proj.name}`)
-      const done = piece.counts.leaves.done
-      const all = Object.values(piece.counts.leaves).reduce((n, c) => n + c, 0)
-      // a guest's or Viewer's delays that need more than one owner's load
-      // are unavailable, and only those
-      const delays = (r: { late: number; behind: number }) =>
-        piece.delays ? { late: r.late, behind: r.behind } : {}
+      const got = await caller.query(api.overview.health, args)
+      expect(
+        overviewStandIn(P.snapshot, 'health', args, { sees: (id) => P.canSee(id) }),
+        `${label}: stand-in health ${JSON.stringify(over)}`,
+      ).toEqual(got)
+      if (got.state !== 'ok') throw new Error(`${label}: health ${JSON.stringify(got)}`)
+      return got
+    }
+    const table = await health()
+    // every row of the oracle and no other: My view leaves out a project
+    // with none of the person's tasks
+    expect(sorted(table.rows.map((r) => r.project_id)), `${label}: health rows`).toEqual(
+      sorted(byProject.keys()),
+    )
+    expect(table.total, `${label}: health total`).toBe(rows.length)
+    // a guest's or Viewer's rows that need a second owner answer loads
+    const loads = staff ? new Set<string>() : needSecondOwner(P, rows)
+    for (const row of table.rows) {
+      const o = byProject.get(row.project_id)
+      if (o === undefined || row.counts.state !== 'ok')
+        throw new Error(`${label}: health row ${JSON.stringify(row)}`)
+      const leaves = row.counts.leaves
+      const all = Object.values(leaves).reduce((n, c) => n + c, 0)
       expect(
         {
-          done,
+          name: row.name,
+          lead: row.lead_id,
+          leaves,
+          done: leaves.done,
           total: all,
-          pct: all ? Math.round((done / all) * 100) : 0,
-          remaining: piece.counts.left_tenths / 10,
-          paused: piece.counts.paused,
-          ...delays(piece),
+          pct: all ? Math.round((leaves.done / all) * 100) : 0,
+          remaining: row.counts.left_tenths / 10,
+          paused: row.counts.paused,
+          delays: row.delays,
         },
-        `${label}: health of ${row.proj.name}`,
+        `${label}: health of ${o.proj.name}`,
       ).toEqual({
-        done: row.done,
-        total: row.total,
-        pct: row.pct,
-        remaining: row.remaining,
-        paused: row.paused,
-        ...delays(row),
+        name: o.proj.name,
+        lead: P.leadOf(o.proj.id) ?? null,
+        leaves: P.figures.statusCounts(o.issues),
+        done: o.done,
+        total: o.total,
+        pct: o.pct,
+        remaining: o.remaining,
+        paused: o.paused,
+        delays: loads.has(o.proj.id)
+          ? { state: 'unavailable', reason: 'loads' }
+          : { state: 'ok', late: o.late, behind: o.behind },
       })
+    }
+    expect(table.sort, `${label}: health order`).toEqual(
+      loads.size > 0
+        ? { key: 'name', dir: 'asc', by_name: 'delays' }
+        : { key: 'late', dir: 'desc' },
+    )
+    if (orders) {
+      const ids = (a: HealthAnswer) => (a.state === 'ok' ? a.rows.map((r) => r.project_id) : [])
+      for (const sort of HEALTH_SORTS)
+        for (const dir of ['asc', 'desc'] as const) {
+          const want = P.figures.healthOrder(rows, sort, dir).map((r) => r.proj.id)
+          const whole = await health({ sort, dir })
+          expect(whole.sort, `${label}: ${sort} ${dir}`).toEqual({ key: sort, dir })
+          expect(ids(whole), `${label}: ${sort} ${dir}`).toEqual(want)
+          // a cut is the first rows of the same order
+          expect(
+            ids(await health({ sort, dir, limit: 2 })),
+            `${label}: ${sort} ${dir} cut`,
+          ).toEqual(want.slice(0, 2))
+        }
+      // a search of one word of a row's name
+      const word = rows[0]?.proj.name.split(/\s+/)[0]
+      if (word !== undefined) {
+        const matches = allWordsMatcher(nameKey(word))
+        expect(sorted(ids(await health({ search: word }))), `${label}: search ${word}`).toEqual(
+          sorted(rows.filter((r) => matches(nameKey(r.proj.name))).map((r) => r.proj.id)),
+        )
+      }
     }
   }
   return scoped.length
@@ -401,11 +490,12 @@ it('runs in a zone other than UTC', () => {
   expect(new Date('2026-11-04T12:00:00.000Z').getTimezoneOffset()).not.toBe(0)
 })
 
-it("keeps the app's batch, split and week figures the server's", () => {
-  expect([OVERVIEW_BATCH, OVERVIEW_SPLIT, OVERVIEW_WEEKS]).toEqual([
+it("keeps the app's batch, split and week figures and the stand-in's health cap the server's", () => {
+  expect([OVERVIEW_BATCH, OVERVIEW_SPLIT, OVERVIEW_WEEKS, HEALTH_ROWS]).toEqual([
     OVERVIEW.batch,
     OVERVIEW.split,
     WEEK_STARTS,
+    OVERVIEW.healthRows,
   ])
 })
 
@@ -425,7 +515,8 @@ describe('Northstar', () => {
     // two days into the dataset's anchor week, in the afternoon
     const now = Date.parse('2026-09-09T18:00:00.000Z')
     let held = 0
-    for (const profile of await Promise.all(['nora', 'leo', 'ben'].map(person))) {
+    const nora = await person('nora')
+    for (const profile of [nora, ...(await Promise.all(['leo', 'ben'].map(person)))]) {
       const P = await storeOf(t, profile, now)
       for (const [scopeLabel, scope, storeScope] of scopesOf(P, profile))
         held += await expectParity(
@@ -435,6 +526,7 @@ describe('Northstar', () => {
           scope,
           storeScope,
           `${profile.name}, ${scopeLabel}`,
+          profile === nora,
         )
     }
     expect(held).toBeGreaterThan(0)
@@ -636,6 +728,74 @@ describe('rules a drift would break', () => {
     const { P, scoped, summary } = await adminCase()
     const drifted = scoped.filter((it) => it.status !== 'done' && it.due && it.due < P.TODAY_ISO)
     expect(summary.overdue).not.toEqual({ state: 'ok', count: drifted.length })
+  })
+
+  it('differs from a rule that counts Delayed in a sub-project that does not track delay', async () => {
+    const { t, f, P, scope } = await adminCase()
+    const info = P.scopeInfo(f.meta.id)
+    if (info === null) throw new Error('no TBED')
+    const days = clientDays(P)
+    const got = await as(t, f.admin).query(api.overview.health, {
+      scope,
+      ...days,
+      sort: 'name',
+      dir: 'asc',
+      limit: 10,
+    })
+    if (got.state !== 'ok') throw new Error(JSON.stringify(got))
+    const pcb = got.rows.find((r) => r.project_id === f.sub2.id)
+    expect(pcb?.delays).toEqual({ state: 'ok', late: 0, behind: 0 })
+    // PCB holds an overdue task, which a rule without the tracking gate counts
+    const drifted = P.scopedIssues(info).filter(
+      (it) => it.project === f.sub2.id && P.delayOf(it)?.status === 'late',
+    ).length
+    expect(drifted).toBeGreaterThan(0)
+  })
+
+  it("differs from a My view Left added up in hours a sub-project, and from names in localeCompare's order", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const mine = { assignee_id: f.admin.id }
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, remaining_hours: 0.1, ...mine })
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, remaining_hours: 0.2, ...mine })
+    for (const name of ['Pilot', 'Ørsted'])
+      await plantProject(t, {
+        org_id: f.org.id,
+        type: 'project',
+        parent_id: f.meta.id,
+        name,
+        name_key: nameKey(name),
+      })
+    await countOrg(t, f.org.id)
+    const P = await storeOf(t, f.admin, NOW_CASE)
+    const ask = (scope: OverviewScope) =>
+      as(t, f.admin).query(api.overview.health, {
+        scope,
+        ...clientDays(P),
+        sort: 'name',
+        dir: 'asc',
+        limit: 10,
+      })
+    const view = await ask({ kind: 'mine' })
+    if (view.state !== 'ok' || view.rows[0]?.counts.state !== 'ok')
+      throw new Error(JSON.stringify(view))
+    const left = view.rows[0].counts.left_tenths / 10
+    expect(left).toBe(0.3)
+    const info = P.scopeInfo(P.MINE_SCOPE)
+    const group = info?.groups.find((g) => g.proj.id === f.meta.id)
+    if (!info || !group) throw new Error('no TBED in My view')
+    // the oracle rounds once, as the server does; hours added up a
+    // sub-project at a time do not
+    expect(P.figures.healthRows(info, P.scopedIssues(info), true)[0]?.remaining).toBe(left)
+    const drifted = group.subIds.reduce((sum, id) => sum + P.remainingIn([id], info.only), 0)
+    expect(drifted).not.toBe(left)
+    // names by their key's bytes put Ørsted after Pilot; the browser's
+    // localeCompare puts it before
+    const table = await ask(projectScope(f.admin, f.meta.id))
+    if (table.state !== 'ok') throw new Error(JSON.stringify(table))
+    const names = table.rows.map((r) => r.name)
+    expect(names).toEqual(['Board rev', 'Firmware', 'Pilot', 'Ørsted'])
+    expect([...names].sort((a, b) => a.localeCompare(b))).not.toEqual(names)
   })
 
   it('places an instant in the last hour of a fall-back week in that week', async () => {

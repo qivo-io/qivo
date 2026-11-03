@@ -1,11 +1,17 @@
 /* The Overview's figures as the page derived them from the workspace's
  * tasks before it read the server's (convex/overview.ts), kept unchanged
  * as the oracle store/overviewParity.test.ts compares the server's answers
- * with: the store's rules drive the Board and the Roadmap too, so a drift
- * between them and the server shows here while the workspace holds every
- * task. The stage that stops loading every task ends or rewrites it. The
- * test imports it after the store it boots, so it reads that store. */
+ * with: the page's former summary, its two lists and its health rows with
+ * their sparkbars' status distribution, and the health table's order as
+ * the server documents it (healthOrder). The store's rules drive the Board,
+ * the Roadmap and Team sync too, so a drift between them and the server
+ * shows here while the workspace holds every task. The stage that stops
+ * loading every task ends or rewrites it. The test imports it after the
+ * store it boots, so it reads that store. */
 
+import { compareValues, type Value } from 'convex/values'
+import { nameKey } from '../../convex/lib/nameKey'
+import type { HealthSort } from '../../convex/lib/overview'
 import { type IssueVM, P, type ScopeInfo } from './planner'
 
 /** The summary's figures over `scoped`, the scope's tasks
@@ -37,4 +43,108 @@ export function overviewFigures(info: ScopeInfo, scoped: IssueVM[]) {
     })
     .sort((a, b) => (a.due < b.due ? -1 : 1))
   return { prog, inProgress, inReview, pausedIssues, overdueCount, atRiskIssues }
+}
+
+/** The status distribution of `items`: how many of them without subtasks
+ * hold each status. */
+export function statusCounts(items: IssueVM[]): Record<string, number> {
+  const out: Record<string, number> = Object.fromEntries(P.STATUSES.map((s) => [s.id, 0]))
+  for (const it of items) if (!P.isGroup(it) && it.status in out) out[it.status]++
+  return out
+}
+
+/** The health table's rows, a row per group of `info` over the group's
+ * tasks among `scoped`, unsorted: Completion, Left, Delayed, Slipping and
+ * Paused. In My view a project holding none of the person's tasks has no
+ * row. */
+export function healthRows(info: ScopeInfo, scoped: IssueVM[], mine: boolean) {
+  /* A row per group, over the group's issues as this scope sees them.
+     In My view a project I have nothing in gets no row at all. An
+     all-zero health row would say "this project is stalled" when it
+     only means the work there isn't mine. */
+  // one pass over the scope's tasks for every group, not one per group
+  const groupOf = new Map<string, number[]>()
+  info.groups.forEach((g, i) => {
+    for (const id of g.subIds) groupOf.set(id, [...(groupOf.get(id) ?? []), i])
+  })
+  const held: IssueVM[][] = info.groups.map(() => [])
+  for (const it of scoped) for (const i of groupOf.get(it.project) ?? []) held[i].push(it)
+  const subIdLists = info.groups.map((g) => g.subIds)
+  const progress = P.progressByGroups(subIdLists, info.only)
+  const remaining = P.remainingByGroups(subIdLists, info.only)
+  return info.groups
+    .map((g, gi) => {
+      const issues = held[gi]
+      const gp = progress[gi]
+      const leadId = P.leadOf(g.proj.id)
+      /* Projected verdicts (0064), gated PER ISSUE: `delayOf` returns the
+       raw projection for every issue; only `delayColor` consults the
+       tracking toggle, so the gate has to be asked here, and asking it
+       per issue is what a group spanning several sub-projects needs. */
+      const delayCount = (s: string) =>
+        issues.filter((i) => {
+          if (!P.tracksDelay(i)) return false
+          const d = P.delayOf(i)
+          return d && d.status === s
+        }).length
+      return {
+        proj: g.proj,
+        issues,
+        pct: gp.pct,
+        done: gp.done,
+        total: gp.total,
+        remaining: remaining[gi],
+        lead: leadId ? P.user(leadId) : null,
+        late: delayCount('late'),
+        behind: delayCount('behind'),
+        paused: issues.filter((i) => P.isPaused(i)).length,
+      }
+    })
+    .filter((r) => !mine || r.issues.length > 0)
+}
+
+/** A health row of the oracle (healthRows). */
+export type OracleHealthRow = ReturnType<typeof healthRows>[number]
+
+/** `rows` in the order convex/lib/overview.ts readHealth documents for
+ * column `key` and direction `dir`: the column's value in `dir` (a name by
+ * its name key, a lead by its name's key with a row without one after
+ * every name, Progress as the rounded percent, Done as done over all,
+ * Left in tenths), then the name key and the project id ascending, as
+ * Convex orders values (strings by their UTF-8 bytes); for the name, the
+ * key in `dir` and then the id. The page's former comparator ordered names
+ * by `toLowerCase` with `<` and tied by localeCompare; the server's order
+ * replaces it. */
+export function healthOrder(
+  rows: readonly OracleHealthRow[],
+  key: HealthSort,
+  dir: 'asc' | 'desc',
+): OracleHealthRow[] {
+  const value = (r: OracleHealthRow): Value => {
+    switch (key) {
+      case 'name':
+        return nameKey(r.proj.name)
+      case 'lead':
+        return r.lead ? [0, nameKey(r.lead.name)] : [1]
+      case 'progress':
+        return r.pct
+      case 'done':
+        return r.total ? r.done / r.total : 0
+      case 'left':
+        return Math.round(r.remaining * 10)
+      case 'late':
+        return r.late
+      case 'behind':
+        return r.behind
+      case 'paused':
+        return r.paused
+    }
+  }
+  return [...rows].sort((a, b) => {
+    const d = compareValues(value(a), value(b))
+    const asked = dir === 'asc' ? d : -d
+    if (asked !== 0) return asked
+    const byName = key === 'name' ? 0 : compareValues(nameKey(a.proj.name), nameKey(b.proj.name))
+    return byName !== 0 ? byName : compareValues(a.proj.id, b.proj.id)
+  })
 }
