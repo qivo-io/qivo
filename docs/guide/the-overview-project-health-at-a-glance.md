@@ -44,8 +44,10 @@ the table says so. A table sorted by Delayed or Slipping then sorts by name
 and says why. **Load more** can turn a row's Delayed into **unknown**, as
 Qivo then works out more rows in one request. While Qivo is counting an
 organization's tasks, Progress reads **Counting…** and the other counts
-**…**, and a sort by Progress, Done, Left or Paused sorts by name until the
-counts are whole.
+**…**, a line under the table says so, and a sort by Progress, Done, Left
+or Paused sorts by name until the counts are whole. Where Qivo could not
+count the table's tasks in one request, the counts read **unknown** with a
+line that says why, and those sorts sort by name as well.
 
 In My view, **Project health** shows one row per project that holds tasks
 of yours, with only your tasks counted, and keeps that restriction when you

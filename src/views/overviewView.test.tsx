@@ -1027,6 +1027,35 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     )
   })
 
+  it('says why counts read counting or unknown in an order that needs none, unless its name-order note does', async () => {
+    const note = () => document.querySelector<HTMLElement>('[data-ov-health-counts]')
+    const { board } = await overview(work())
+    expect(note()).toBeNull()
+    // counting under the default order, Delayed, which needs no count
+    await reanswer(board, { health: { counts: 'counting' } })
+    expect(heading('Delayed')?.getAttribute('aria-sort')).toBe('descending')
+    expect(note()?.dataset.ovHealthCounts).toBe('counting')
+    expect(note()?.textContent).toBe(
+      'Qivo is counting the tasks of these sub-projects. Their figures show once it is done.',
+    )
+    // past their budget under Name, which never falls back to say why
+    await click(heading('Sub-project')?.querySelector('button'))
+    await reanswer(board, { health: { counts: 'budget' } })
+    expect(heading('Sub-project')?.getAttribute('aria-sort')).toBe('ascending')
+    expect(cell(cards()[0], 'progress')?.textContent).toBe('unknown')
+    expect(document.querySelector('[data-ov-health-by-name]')).toBeNull()
+    expect(note()?.dataset.ovHealthCounts).toBe('budget')
+    expect(note()?.textContent).toBe(
+      'Qivo could not count the tasks of the sub-projects marked unknown in one request.',
+    )
+    // Progress falls back to name order, whose note says it alone
+    await click(heading('Progress')?.querySelector('button'))
+    expect(document.querySelector('[data-ov-health-by-name]')?.textContent).toBe(
+      'Sorted by name, because Qivo could not count the tasks here in one request.',
+    )
+    expect(note()).toBeNull()
+  })
+
   it('searches the whole table once it holds more than one batch, rested, within its limit, saying when nothing matches', async () => {
     const { board } = await overview(parts(25))
     expect(cards()).toHaveLength(10)

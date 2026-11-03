@@ -264,8 +264,12 @@ export function OvHealthTable({
 
   /* Why the rows are in name order, from the answer's order, which names
      why for every row the order needed, also those past the rows shown,
-     and, unless that is the delays, why rows shown read unknown. */
+     and, unless that order already says it, why rows shown count or read
+     unknown, whatever the order. The counts are one figure for the whole
+     table, so an order that needs none (Name, Lead, Delayed, Slipping)
+     shows every count counting or unknown without falling back. */
   const notes: ReactNode[] = []
+  const uncounted = rows.find((r) => r.counts.state !== 'ok')?.counts
   if (ok?.sort.by_name === 'delays')
     notes.push(
       <p key="by-name" data-ov-health-by-name="delays">
@@ -280,6 +284,14 @@ export function OvHealthTable({
         {ok.sort.missing === 'counting'
           ? 'Sorted by name while Qivo counts the tasks here.'
           : 'Sorted by name, because Qivo could not count the tasks here in one request.'}
+      </p>,
+    )
+  if (ok?.sort.by_name !== 'counts' && uncounted?.state === 'unavailable')
+    notes.push(
+      <p key="uncounted" data-ov-health-counts={uncounted.reason}>
+        {uncounted.reason === 'counting'
+          ? `Qivo is counting the tasks of these ${things}. Their figures show once it is done.`
+          : `Qivo could not count the tasks of the ${things} marked unknown in one request.`}
       </p>,
     )
   if (ok?.sort.by_name !== 'delays' && rows.some((r) => r.delays.state !== 'ok'))
