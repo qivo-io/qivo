@@ -347,7 +347,7 @@ const boardComplete = () => {
   const health = document.querySelector('[data-workspace-view] [data-ov-health]')
   const healthSection = [
     ...document.querySelectorAll('[data-workspace-view] [data-overview-root] h2'),
-  ].some((title) => /health$/.test(title.textContent ?? ''))
+  ].some((title) => (title.textContent ?? '').endsWith('health'))
   const healthDone =
     health !== null
       ? !['loading', 'refreshing'].includes(health.getAttribute('data-ov-health-state')) &&

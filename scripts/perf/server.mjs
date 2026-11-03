@@ -52,8 +52,9 @@
 //                        counting), health-budget (its rows' delays past the
 //                        budget, so it sorts by name), health-loads (its
 //                        rows' delays needing a second owner's load),
-//                        health-over-budget and health-cap (at most 20 rows,
-//                        so the cap note shows); several joined by commas
+//                        health-over-budget, health-cap (at most 20 rows,
+//                        so the cap note shows) and health-error (its read
+//                        fails); several joined by commas
 //   shownload=1          also send the load rows of the tasks the person is
 //                        shown, as the server did before the app derived
 //                        them from the task rows (an older baseline)
@@ -131,6 +132,7 @@ const forcedOverview = (() => {
     else if (state === 'health-over-budget')
       force.health = { ...force.health, scope: 'over_budget' }
     else if (state === 'health-cap') force.health = { ...force.health, most: 20 }
+    else if (state === 'health-error') force.healthError = true
   }
   return force
 })()
@@ -840,6 +842,8 @@ const read = (name, args = {}) => {
     case 'overview:attention':
     case 'overview:paused':
     case 'overview:health':
+      if (name === 'overview:health' && forcedOverview.healthError)
+        throw new Error('the health table fails, as overview=health-error asks')
       return overviewStandIn(snapshot, name.slice('overview:'.length), args, {
         force:
           forcedOverview.unknown === 'everyone'
