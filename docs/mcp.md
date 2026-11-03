@@ -1838,18 +1838,16 @@ out subtasks in archived projects while the group's project is active, and
 stops at a subtask you cannot read.
 
 An archived group can have more tasks under it than one request can read,
-such as thousands of subtasks, or hundreds with very long descriptions until
-the deployment's operator has run the one-time description clear. So can an
-active group stored before the rule of one level of subtasks, whose
-subtasks have subtasks of their own. `get_task` then still lists its direct
-`subtasks`, but `start_week` and `end_week` are `null`, `progress` is `0` of
-`0` with `partial: true` and `group_remaining_hours` is `null`. An active
-task has at most 100 active subtasks, so it always lists all of them. When
-even an archived group's direct subtasks do not all fit, `subtasks` lists
-those of the first ones that do which you can read, and `has_more_subtasks`
-is `true`. Find the rest with `list_tasks` and
-`archived: true` for the group's top-level project, which covers its
-sub-projects, where each one's `parent_id` names the group.
+such as thousands of subtasks. So can an active group stored before the rule
+of one level of subtasks, whose subtasks have subtasks of their own.
+`get_task` then still lists its direct `subtasks`, but `start_week` and
+`end_week` are `null`, `progress` is `0` of `0` with `partial: true` and
+`group_remaining_hours` is `null`. An active task has at most 100 active
+subtasks, so it always lists all of them. When even an archived group's
+direct subtasks do not all fit, `subtasks` lists those of the first ones that
+do which you can read, and `has_more_subtasks` is `true`. Find the rest with
+`list_tasks` and `archived: true` for the group's top-level project, which
+covers its sub-projects, where each one's `parent_id` names the group.
 `has_more_subtasks` is `false` on every other task.
 
 `list_tasks` answers active tasks as an object, cursor first:
@@ -1938,10 +1936,9 @@ hold fewer than `limit` tasks, or none, while `next_cursor` is set, because
 each page reads a bounded amount however large the archive is. Tasks archived
 after you start paging appear at the start of the list, so start again to see
 them. If an archived group has more tasks under it than one request can read,
-such as thousands of subtasks, or hundreds with very long descriptions until
-the deployment's operator has run the one-time description clear, its row
-has `start_week` and `end_week` set to `null` and a `progress` of `0` of `0`
-with `partial: true`, so paging still moves past it.
+such as thousands of subtasks, its row has `start_week` and `end_week` set to
+`null` and a `progress` of `0` of `0` with `partial: true`, so paging still
+moves past it.
 
 To find every archived task you can read, take two steps. First call
 `list_projects`, once without arguments and once with `archived: true`.
@@ -1954,12 +1951,9 @@ read one sub-project's archive alone, name that sub-project.
 A page reads only the projects it lists, side by side, and never tasks of
 projects you cannot read. Unless you are an organization admin, a project
 with more than 200 projects to list, itself and its sub-projects you can
-read, is refused, and so is one whose sub-projects' newest archived tasks
-are too large to read side by side, such as about 130 or more with very long
-descriptions until the deployment's operator has run the one-time
-description clear. Name its sub-projects one at a time instead. An
-organization
-admin's call can read the organization's whole archive for such a project.
+read, is refused. Name its sub-projects one at a time instead. An
+organization admin's call can read the organization's whole archive for such
+a project.
 
 These calls are refused: `archived: true` without `project` (`archived:
 true needs project, because archived tasks are listed one project at a

@@ -1231,11 +1231,9 @@ again from the first page. A page can hold fewer than `limit` tasks, or none,
 while `next_cursor` is set, because each page reads a bounded amount however
 large the archive is. Tasks archived after you start paging appear at the
 start of the list, so start again to see them. If an archived group has more
-tasks under it than one request can read, such as thousands of subtasks, or
-hundreds with very long descriptions until the deployment's operator has run
-the one-time description clear, its row has `start_week` and `end_week`
-set to `null` and a `progress` of `0` of `0` with `partial: true`, so paging
-still moves past it.
+tasks under it than one request can read, such as thousands of subtasks, its
+row has `start_week` and `end_week` set to `null` and a `progress` of `0` of
+`0` with `partial: true`, so paging still moves past it.
 
 To find every archived task you can read, take two steps. First list
 projects with `GET /v1/projects` and `GET /v1/projects?archived=true`.
@@ -1248,13 +1246,9 @@ one sub-project's archive alone, name that sub-project.
 A page reads only the projects it lists, side by side, and never tasks of
 projects you cannot read. Unless you are an organization admin, a project
 with more than 200 projects to list, itself and its sub-projects you can
-read, is refused, and so is one whose sub-projects' newest archived tasks
-are too large to read side by side, such as about 130 or more with very long
-descriptions until the deployment's operator has run the one-time
-description clear. Name its sub-projects one at a time instead. An
-organization
-admin's request can read the organization's whole archive for such a
-project.
+read, is refused. Name its sub-projects one at a time instead. An
+organization admin's request can read the organization's whole archive for
+such a project.
 
 These requests are a `400`:
 
@@ -1696,20 +1690,19 @@ the caller, such as a subtask it cannot read, so the true completion is
 unknown. The app then says "Completion unknown".
 
 An archived group can have more tasks under it than one request can read,
-such as thousands of subtasks, or hundreds with very long descriptions until
-the deployment's operator has run the one-time description clear. So can an
-active group stored before the rule of one level of subtasks, whose
-subtasks have subtasks of their own. Its single-task shape then still lists
-its direct `subtasks`, but `start_week` and `end_week` are `null`,
-`progress` is `0` of `0` with `partial: true` and `group_remaining_hours` is
-`null`. An active task has at most 100 active subtasks, so it always lists
-all of them. When even an archived group's direct subtasks do not all fit,
-`subtasks` lists those of the first ones that do which the caller can read,
-and `has_more_subtasks` is `true`. Find the rest in the archived list of the
-group's top-level project (`?archived=true&project=<ref>`), which covers its
-sub-projects, where each one's `parent_id` names the group.
-`has_more_subtasks` is `false` on every other task. The answer of a `PATCH`,
-such as one that archives such a group, takes the same shape.
+such as thousands of subtasks. So can an active group stored before the rule
+of one level of subtasks, whose subtasks have subtasks of their own. Its
+single-task shape then still lists its direct `subtasks`, but `start_week`
+and `end_week` are `null`, `progress` is `0` of `0` with `partial: true` and
+`group_remaining_hours` is `null`. An active task has at most 100 active
+subtasks, so it always lists all of them. When even an archived group's
+direct subtasks do not all fit, `subtasks` lists those of the first ones that
+do which the caller can read, and `has_more_subtasks` is `true`. Find the
+rest in the archived list of the group's top-level project
+(`?archived=true&project=<ref>`), which covers its sub-projects, where each
+one's `parent_id` names the group. `has_more_subtasks` is `false` on every
+other task. The answer of a `PATCH`, such as one that archives such a group,
+takes the same shape.
 
 `delay` is the app's projected delay, the verdict its Roadmap and task
 window show:

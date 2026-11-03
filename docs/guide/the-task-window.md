@@ -279,12 +279,9 @@ instead. While one of them is in a project being moved to Deleted items, Qivo
 refuses it for everyone until that move finishes. Qivo also refuses the whole
 tree when the task and its subtasks are too large to change at once, such as
 several subtasks with very long descriptions saved before Qivo limited
-descriptions to 20,000 characters, or, until Qivo's one-time cleanup of
-stored descriptions has run after an upgrade, dozens of subtasks with very
-long descriptions. Clear the box to archive
-only the task. Its subtasks stay in their
-projects, those directly under it become top-level tasks, and restoring the
-task later does not bring them back under it.
+descriptions to 20,000 characters. Clear the box to archive only the task.
+Its subtasks stay in their projects, those directly under it become top-level
+tasks, and restoring the task later does not bring them back under it.
 
 Archiving unfinished work requires a reason, which becomes a task comment.
 Because it is a comment, it follows the comment limits above. On a task with
