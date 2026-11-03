@@ -109,12 +109,12 @@ export type OracleHealthRow = ReturnType<typeof healthRows>[number]
 /** `rows` in the order convex/lib/overview.ts readHealth documents for
  * column `key` and direction `dir`: the column's value in `dir` (a name by
  * its name key, a lead by its name's key with a row without one after
- * every name, Progress as the rounded percent, Done as done over all,
- * Left in tenths), then the name key and the project id ascending, as
- * Convex orders values (strings by their UTF-8 bytes); for the name, the
- * key in `dir` and then the id. The page's former comparator ordered names
- * by `toLowerCase` with `<` and tied by localeCompare; the server's order
- * replaces it. */
+ * every lead ascending and before them descending, Progress as the
+ * rounded percent, Done as done over all, Left in tenths), then the name
+ * key and the project id ascending, as Convex orders values (strings by
+ * their UTF-8 bytes); for the name, the key in `dir` and then the id. The
+ * page's former comparator ordered names by `toLowerCase` with `<` and
+ * tied by localeCompare; the server's order replaces it. */
 export function healthOrder(
   rows: readonly OracleHealthRow[],
   key: HealthSort,

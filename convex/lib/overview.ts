@@ -2260,17 +2260,19 @@ const COUNT_SORTS: readonly HealthSort[] = ['progress', 'done', 'left', 'paused'
  * One total order: the column's value in `dir`, then the name key and then
  * the project id ascending, as Convex orders values (strings in UTF-8 byte
  * order, never JavaScript's `<`); for Name the name key in `dir`, then the
- * id. A row without a lead sorts after every lead's name. Where the order
- * asked needs a figure some row lacks (Delayed's and Slipping's the judged
- * rows' delays, Progress's, Done's, Left's and Paused's the counts), the
- * rows are in name order and `sort` says so (`by_name`) and why
- * (`missing`), from every judged row and not only the ones returned, so
- * the page's note never depends on which rows the cut kept; Name and Lead
- * never fall back. Outside Delayed and Slipping the judged rows grow with
- * `limit`, so a Load more can turn a row's Delayed into unavailable: for a
- * guest or Viewer by the owner order, for staff by the budget. Refuses a
- * malformed clock, a `limit` that is not a whole number from 1 to
- * OVERVIEW.healthRows, and a search past LIMITS.search.
+ * id. A row without a lead, or whose lead's profile is gone or of another
+ * organization, sorts after every lead ascending and before them
+ * descending. Where the order asked needs a figure some row lacks
+ * (Delayed's and Slipping's the judged rows' delays, Progress's, Done's,
+ * Left's and Paused's the counts), the rows are in name order and `sort`
+ * says so (`by_name`) and why (`missing`), from every judged row and not
+ * only the ones returned, so the page's note never depends on which rows
+ * the cut kept; Name and Lead never fall back. Outside Delayed and
+ * Slipping the judged rows grow with `limit`, so a Load more can turn a
+ * row's Delayed into unavailable: for a guest or Viewer by the owner order,
+ * for staff by the budget. Refuses a malformed clock, a `limit` that is not
+ * a whole number from 1 to OVERVIEW.healthRows, and a search past
+ * LIMITS.search.
  */
 export async function readHealth(
   ctx: QueryCtx,
