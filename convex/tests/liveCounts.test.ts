@@ -218,9 +218,9 @@ describe('live counts', () => {
     const f = await withOrg(t)
     const org_id = f.org.id
     Object.assign(COUNT_PAGE, { bytes: 100_000 })
-    // descriptions over what the app takes now, in the task rows, as
-    // earlier releases stored them and every deployment holds them until
-    // the description backfill's clear
+    // descriptions over what the app takes now, as releases before the caps
+    // stored them, in the task rows too, the copy a rollback to the second
+    // release writes, the heaviest case
     const long = []
     for (let i = 0; i < 3; i++)
       long.push(

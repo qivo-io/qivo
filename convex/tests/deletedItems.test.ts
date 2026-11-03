@@ -127,8 +127,8 @@ async function plantChildren(
           },
           'restore',
         )
-        // the copy of the text an earlier release wrote, which every
-        // deployment's task rows hold until the description backfill's clear
+        // the copy of the text a rollback to the second release writes, the
+        // heaviest case
         await ctx.db.patch(_id, { description })
       }
     })

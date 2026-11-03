@@ -719,8 +719,8 @@ export async function plantProject(
  * used_ids row of its id, as every task has once internal/descriptionsBackfill
  * and internal/usedIdsBackfill ran. Its task row holds no copy of the text,
  * as every task the third release of the description move writes;
- * copyTaskTexts gives it the copy earlier releases wrote. It is unscheduled
- * and backlog-shaped unless overridden. */
+ * copyTaskTexts gives it the copy a rollback to the second release writes.
+ * It is unscheduled and backlog-shaped unless overridden. */
 export async function plantIssue(
   t: T,
   issue: { org_id: string; project_id: string } & Partial<WithoutSystemFields<Doc<'issues'>>>,
@@ -750,9 +750,10 @@ export async function plantIssue(
 }
 
 /* A task as plantIssue plants it, with the copy of its text in
- * issues.description too, which earlier releases wrote on every task and
- * every deployment's task rows hold until the description backfill's
- * clear. Tests whose budgets must hold for such rows plant them so. */
+ * issues.description too, which a rollback to the second release of the
+ * description move writes on each task it creates or whose description it
+ * edits, the heaviest task row. Tests whose budgets must hold for such rows
+ * plant them so. */
 export async function plantCopiedIssue(
   t: T,
   issue: { org_id: string; project_id: string } & Partial<WithoutSystemFields<Doc<'issues'>>>,
@@ -908,14 +909,15 @@ export const taskWithText = (t: T, id: string): Promise<TaskWithText | null> =>
   })
 
 /** Gives each live task of organization `orgId`, or only those of `ids`
- * among them, the copy of its text in issues.description that the releases
- * before the third wrote, equal to its first description row's text,
- * reading and patching ten tasks a transaction in creation order. That
- * state lasts where the clear has not run, and a rollback to the second
- * release writes the copy again on each task it creates or whose
- * description it edits, until the next clear. A test that measures that
- * state or needs the copy plants it here, and a copy on every task is the
- * heaviest case. Answers how many tasks it gave a copy. */
+ * among them, the copy of its text in issues.description, equal to its
+ * first description row's text, reading and patching ten tasks a
+ * transaction in creation order. Every deployment has run
+ * internal/descriptionsBackfill's clear, so only a rollback to the second
+ * release of the description move writes that copy, on each task it
+ * creates or whose description it edits, until the next clear. A test that
+ * measures that state or needs the copy plants it here, and a copy on every
+ * task is the heaviest case the fixtures plant. Answers how many tasks it
+ * gave a copy. */
 export async function copyTaskTexts(t: T, orgId: string, ids?: readonly string[]): Promise<number> {
   let copied = 0
   for (let after = 0; ; ) {

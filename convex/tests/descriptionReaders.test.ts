@@ -4,13 +4,14 @@
  * and only a task without a row reads issues.description
  * (model/descriptions.ts). In the third, writers leave issues.description
  * unset and internal/descriptionsBackfill's clear unsets the copies earlier
- * releases wrote. These cases clear issues.description as the backfill
- * does, plant copies that differ from the rows, leave a task without a row
- * and give one a second row, and check what each reader answers and what
- * each writer narrates, notifies and sends. The real-limit cases run under
- * Convex's transaction limits, some with an active page's budget lowered so
- * that 300 tasks with ordinary text pass it, and check the reads they
- * bound.
+ * releases wrote. Every deployment has run it, so only a rollback to the
+ * second release writes a copy again. These cases clear issues.description
+ * as the backfill does, plant copies that differ from the rows, leave a
+ * task without a row and give one a second row, and check what each reader
+ * answers and what each writer narrates, notifies and sends. The real-limit
+ * cases run under Convex's transaction limits, some with an active page's
+ * budget lowered so that 300 tasks with ordinary text pass it, and check
+ * the reads they bound.
  * scripts/check-task-reads.test.mjs covers the check that no other code
  * reads issues.description. */
 
@@ -320,7 +321,8 @@ for (const [way, reads] of [
       const f = await machineOrg(t)
       const texts: [string, string] = ['Calibrate the zephyr sensor', 'Archive the quokka notes']
       const pair = await plantPair(t, f, texts)
-      // the copies an earlier release wrote, which the clear unsets
+      // the copies a rollback to the second release writes, which the clear
+      // unsets
       await copyTaskTexts(t, f.org.id)
       expect(
         await t.action(internal.internal.descriptionsBackfill.run, { dry_run: false, clear: true }),
@@ -644,7 +646,8 @@ describe('the writers compare the text of the description row', () => {
           project_id: f.sub.id,
           description: old,
         })
-        // the copy an earlier release wrote, which a description save unsets
+        // the copy a rollback to the second release writes, which a
+        // description save unsets
         if (copied) await copyTaskTexts(t, f.org.id)
         const copy = async () => (await t.run((ctx) => ctx.db.get(task._id)))?.description
 

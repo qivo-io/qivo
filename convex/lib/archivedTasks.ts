@@ -872,11 +872,14 @@ export const ARCHIVED_PAGE_ROWS = 25
  * organization's archive instead, and anyone else's answers that the scope
  * is too wide (ArchiveScope). REST and MCP archived lists of more than
  * `subProjects` projects answer the same for anyone but an admin. A task
- * row at the description cap in a three-byte script is about 61 KB, so the
- * heads of about 130 such projects fill a page's bytes
- * (ARCHIVE_PAGE.bytes; convex/tests/archived.test.ts reaches that stop with
- * ordinary texts and the page's bytes lowered); 200 keeps ordinary scopes
- * whole and leaves the rest to that budget. `rows` counts rows by number
+ * row without its text is at most lib/limits.ts TASK_ROW_MAX_BYTES, so 200
+ * heads read about 400 KB of a page's bytes (ARCHIVE_PAGE.bytes). With the
+ * copy of its text a rollback to the second release writes, at the
+ * description cap in a three-byte script, a row is about 61 KB, and the
+ * heads of about 130 such projects fill those bytes
+ * (convex/tests/archived.test.ts reaches that stop with ordinary texts and
+ * the page's bytes lowered); 200 keeps ordinary scopes whole and leaves the
+ * rest to that budget. `rows` counts rows by number
  * only, and a read takes one row past it before it stops (counted): each
  * is at most lib/limits.ts PROJECT_ROW_MAX_BYTES, so 1,001 of them are at
  * most about 6.2 MB, about 4.9 MB at the largest project row the caps

@@ -189,9 +189,9 @@ const SLACK: ReadCeiling = { ranges: 64, documents: 256, bytes: 512 << 10 }
  * rows. With both projects at lib/limits.ts PROJECT_ROW_MAX_BYTES and a
  * task row as the third release of the description move writes it,
  * without its text, a lookup by a seat without team access reads about 13
- * KB (measured). A task row that still holds its text's copy until the
- * description backfill's clear, about 61 KB at the cap in a three-byte
- * script, makes it about 73 KB, and a seat in teams that share the projects
+ * KB (measured). A task row with the copy of its text a rollback to the
+ * second release writes, about 61 KB at the cap in a three-byte script,
+ * makes it about 73 KB, and a seat in teams that share the projects
  * reads about 9 KB more a share at the name caps; that difference falls to
  * the real limit, as coverageOf says of a lookup that reads more than
  * LOOKUP holds. Tests read it. */

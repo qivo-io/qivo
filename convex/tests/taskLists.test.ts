@@ -1166,7 +1166,7 @@ describe('archived task lists page one project with a cursor', () => {
       subs.push(sub.id)
     }
     // one 10 KB task per sub-project, 120 KB in all, a day apart, its text
-    // in the task row too, as until the description backfill's clear
+    // in the task row too, as a rollback to the second release writes it
     const tasks = []
     for (const [i, project_id] of subs.entries()) {
       tasks.push(

@@ -565,8 +565,8 @@ describe('seats', () => {
     }
     const without = await searchRun(t, seats, { text: 'gearbox' })
     // hidden matches in the first six organizations in seat order, with
-    // their text in the task rows too, as until the description backfill's
-    // clear
+    // their text in the task rows too, as a rollback to the second release
+    // writes it, the heaviest case
     for (const org of [...orgs].sort().slice(0, 6)) {
       const root = await plantProject(t, { org_id: org })
       const hidden = await plantProject(t, { org_id: org, type: 'project', parent_id: root.id })
@@ -749,7 +749,7 @@ describe('main Search across seats', () => {
     // the first seat's numbers name legacy rows near 1 MiB in a project none
     // of them sees, which spend the real limit while each lookup counts as
     // LOOKUP, so no later seat's first lookup fits. The task rows hold the
-    // text, as every deployment's do until the description backfill's clear.
+    // text, as a rollback to the second release writes it, the heaviest case.
     // Ranges for the ten or so lookups that spend the real limit, more than
     // the default budget gives each of eight seats.
     MAIN_SEARCH.ranges = 2_000
@@ -1400,8 +1400,8 @@ describe('main Search at Convex’s limits', () => {
       num: 60_000 + i,
       description: `${notes} gearbox`,
     }))
-    // with the text in the task rows too, as until the description
-    // backfill's clear, which reads the most
+    // with the text in the task rows too, as a rollback to the second
+    // release writes it, which reads the most
     await copyTaskTexts(t, f.org.id)
     for (const who of [f.admin, f.guest]) {
       const run = await searchRun(t, [who], { text: 'gearbox' })
@@ -1438,8 +1438,8 @@ describe('main Search at Convex’s limits', () => {
         }),
         1,
       )
-    // the task rows hold the text too, as until the description backfill's
-    // clear
+    // the task rows hold the text too, the heaviest case the fixtures plant
+    // (helpers.setup.ts copyTaskTexts)
     await copyTaskTexts(t, f.org.id)
     const run = await searchRun(t, [f.admin], { text: 'zebra' })
     console.log('24 rows near 1 MiB', run.read, run.searches, run.page.rows.length)

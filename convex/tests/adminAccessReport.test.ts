@@ -1719,8 +1719,8 @@ describe('within Convex limits', () => {
           'restore',
         )
     })
-    // with the copy of the text in each task row, as every deployment holds
-    // them until the description backfill's clear
+    // with the copy of the text in each task row, as a rollback to the
+    // second release writes it, the heaviest case
     await copyTaskTexts(t, f.org.id)
     const pages = await measuredPages(t, 'work', 2_000)
     expect(pages.length).toBeGreaterThan(1)
