@@ -169,7 +169,7 @@
   margin-left: auto;
 }
 
-:is(.mobile-roadmap-open-timeline, .mobile-roadmap-tools, .mobile-roadmap-timeline-heading) p,
+:is(.mobile-roadmap-open-timeline, .mobile-roadmap-timeline-heading) p,
 .mobile-roadmap-note {
   margin: 8px 0 0;
   color: var(--text-2);
