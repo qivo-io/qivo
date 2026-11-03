@@ -17,19 +17,21 @@
      batch is read again between its cursor and the end it answered, and
      the next one opens at its `next`. The frozen read and the new open one
      replace the open batch together, once both answered, and until then
-     the page shows the open batch's answer from the press, so no row shows
-     twice or drops out while they load (convex/lib/overview.ts listBatch).
+     the page shows the open batch's answer from the press
+     (convex/lib/overview.ts listBatch).
    - A frozen batch that grew past OVERVIEW.split rows answers `split`, and
      one whose reads stopped answers `complete: false` with the last
      position it judged: each gives way to two batches that meet there, and
-     shows its earlier answer until both answered. Meanwhile the list's
-     other batches keep what they show as well, and take their new answers
-     with the halves' first ones, so the list shows the answers of one
-     moment: a row that moved out of that batch never shows twice, and one
-     that moved into it never goes missing. Reads that stopped at the
-     batch's own end judged every row in it, so it gives way to nothing.
-     Two frozen batches next to each other whose rows fit OVERVIEW.split
-     become one read.
+     shows its earlier answer until both answered. A Load more's frozen
+     read that splits waits for its halves the same way. Reads that stopped
+     at the batch's own end judged every row in it, so it gives way to
+     nothing. Two frozen batches next to each other whose rows fit
+     OVERVIEW.split become one read.
+   - While a batch shows its earlier answer, for a Load more or for its
+     halves, the list's other batches keep what they show as well and take
+     their new answers with the batches that replace it, so the list shows
+     the answers of one moment. A row that moved out of that batch never
+     shows twice, and one that moved into it never goes missing.
    - A list keeps at most LIST_ROWS rows and LIST_READS reads, split halves
      and merges included. Past either, a merge still on its way gives way
      first, then the list drops its first batches until both fit and says
@@ -448,11 +450,12 @@ export function createOverviewReads(transport: OverviewTransport) {
         }
       }
     // swaps whose batches all answered replace what they stood for, all at
-    // once with every split's halves: while a batch on screen still shows
-    // its older answer for its halves, a current answer beside it could
-    // show a row that left it a second time
-    const splitting = list.swaps.some(
-      (s) => s.why === 'split' && !s.to.every((b) => b.shown !== null),
+    // once with every Load more's and split's batches, halves included:
+    // while a batch on screen still shows its older answer for them, a
+    // current answer beside it could show a row that left it a second time
+    // or miss one that moved into it
+    const waiting = list.swaps.some(
+      (s) => s.why !== 'merge' && !s.to.every((b) => b.shown !== null),
     )
     for (const s of list.swaps) {
       if (!s.to.every((b) => b.shown !== null)) continue
@@ -462,7 +465,7 @@ export function createOverviewReads(transport: OverviewTransport) {
         cancel(list, s)
         continue
       }
-      if (splitting) continue
+      if (waiting) continue
       const at = list.shown.indexOf(s.from[0] as Batch)
       if (at < 0) {
         cancel(list, s)
@@ -472,8 +475,9 @@ export function createOverviewReads(transport: OverviewTransport) {
       for (const b of s.from) transport.release(b.slot)
       list.swaps = list.swaps.filter((x) => x !== s)
     }
-    // the batches on screen take their new answers, once no batch on
-    // screen waits for its halves, so the list shows one moment's answers
+    // the batches on screen take their new answers once no batch on screen
+    // waits for a Load more's batches or for its halves, so the list shows
+    // one moment's answers
     const fresh: [Batch, Shown][] = []
     for (const b of list.shown) {
       const a = answerOf(list, b)
@@ -494,7 +498,7 @@ export function createOverviewReads(transport: OverviewTransport) {
       // an answer that fits again ends the split it started
       if (swap?.why === 'split') cancel(list, swap)
     }
-    if (!list.swaps.some((s) => s.why === 'split')) for (const [b, shown] of fresh) b.shown = shown
+    if (!list.swaps.some((s) => s.why !== 'merge')) for (const [b, shown] of fresh) b.shown = shown
     // two frozen batches whose rows fit one read become one
     for (let i = 0; i + 1 < list.shown.length; i++) {
       const x = list.shown[i] as Batch
@@ -582,7 +586,8 @@ export function createOverviewReads(transport: OverviewTransport) {
     // while a batch on screen waits for its halves the list shows older
     // answers (settleList), so it cannot say it reached its end; nor while
     // a batch waits for its answer, as after Try again; a merge's batches
-    // keep taking their answers, and Load more copes with either
+    // keep taking their answers, and a Load more on its way, which holds
+    // older answers too, says no end by itself (`pressed`)
     let older = false
     for (const b of list.shown) {
       if (list.swaps.some((s) => s.why === 'split' && s.from.includes(b))) older = true
