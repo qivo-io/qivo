@@ -799,6 +799,15 @@ function useStall(active: boolean, key: string): boolean {
 const listNoteClass =
   '[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]'
 
+/* Whether the browser keeps a scroller's reading position itself when
+   content above it goes (CSS scroll anchoring). Chromium, so the desktop
+   app, and Firefox do; where it does not, as in Safari, an Overview list
+   keeps its place by hand when the cap drops its first batches (OvList). */
+const SCROLL_ANCHORING =
+  typeof CSS !== 'undefined' &&
+  typeof CSS.supports === 'function' &&
+  CSS.supports('overflow-anchor', 'auto')
+
 /** What one batch says in place, after its rows: its reads stopped, or it
     failed, with Try again (a failed Load more's Retry keeps its place). */
 function BatchNote({
@@ -942,13 +951,27 @@ function OvList({
   const end = list.end && missing === 0
   const state = missing > 0 ? (stalled ? 'incomplete' : 'loading') : list.state
   // where earlier batches went, the first batch left on screen keeps its
-  // place in the pane, measured from the pane's top in its content
+  // place in the pane. The browser's scroll anchoring keeps it where it
+  // anchors, and a second correction would move the pane as far again.
+  // Elsewhere the pane moves by as much as that batch moved in its
+  // content, from where it stood before the commit (`scrolled`), since a
+  // pane that grew shorter clamps its scroll position first
   const first = list.batches[0]?.id
   const places = useRef(new Map<number, number>())
   const lastFirst = useRef(first)
+  const scrolled = useRef<number | null>(null)
+  useEffect(() => {
+    const pane = root.current?.closest<HTMLElement>('[data-scroll]')
+    if (SCROLL_ANCHORING || !pane) return
+    const note = () => {
+      scrolled.current = pane.scrollTop
+    }
+    pane.addEventListener('scroll', note, { passive: true })
+    return () => pane.removeEventListener('scroll', note)
+  }, [])
   useLayoutEffect(() => {
     const pane = root.current?.closest<HTMLElement>('[data-scroll]')
-    if (!root.current || !pane) return
+    if (SCROLL_ANCHORING || !root.current || !pane) return
     const top = pane.getBoundingClientRect().top - pane.scrollTop
     const measure = () => {
       const now = new Map<number, number>()
@@ -960,10 +983,12 @@ function OvList({
     if (first !== lastFirst.current && first !== undefined && list.dropped) {
       const was = places.current.get(first)
       const is = now.get(first)
-      if (was !== undefined && is !== undefined && was !== is) pane.scrollTop += is - was
+      if (was !== undefined && is !== undefined && was !== is)
+        pane.scrollTop = (scrolled.current ?? pane.scrollTop) + is - was
     }
     lastFirst.current = first
     places.current = measure()
+    scrolled.current = pane.scrollTop
   })
   return (
     <div

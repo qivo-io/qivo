@@ -744,14 +744,21 @@ describe('the health table and the reading position', { timeout: BOARD_TEST_TIME
   })
 
   it('keeps the first batch left on screen in its place when the cap drops earlier ones', async () => {
+    // jsdom has no scroll anchoring, as Safari has none, so the list keeps
+    // its place by hand
     await overview(work(70))
     const pane = rootOf() as HTMLElement
     let scrollTop = 0
+    // the pane grows shorter when the first batch goes, and clamps its
+    // scroll position to the new height until it scrolls again
+    let clamped = false
+    const dropped = () => !!list('paused')?.querySelector('[data-ov-dropped]')
     Object.defineProperty(pane, 'scrollTop', {
       configurable: true,
-      get: () => scrollTop,
+      get: () => (dropped() && !clamped ? Math.min(scrollTop, 1300) : scrollTop),
       set: (v: number) => {
         scrollTop = v
+        clamped = dropped()
       },
     })
     // each batch stands 600px below the one before, in the pane's content
@@ -760,7 +767,7 @@ describe('the health table and the reading position', { timeout: BOARD_TEST_TIME
     ) {
       const batches = [...document.querySelectorAll('[data-ov-list="paused"] [data-ov-batch]')]
       const i = batches.indexOf(this)
-      const top = (i < 0 ? 0 : 100 + i * 600) - (this === pane ? 0 : scrollTop)
+      const top = (i < 0 ? 0 : 100 + i * 600) - (this === pane ? 0 : pane.scrollTop)
       return new DOMRect(0, this === pane ? 0 : top, 100, 100)
     })
     const more = () => click(list('paused')?.querySelector('[data-ov-more]'))
@@ -768,7 +775,9 @@ describe('the health table and the reading position', { timeout: BOARD_TEST_TIME
     for (let i = 0; i < 4; i++) await more()
     expect(rows('paused')).toHaveLength(50)
     expect(list('paused')?.querySelector('[data-ov-dropped]')).toBeNull()
+    // the person scrolls down, as the browser tells the pane
     scrollTop = 2000
+    await act(async () => pane.dispatchEvent(new Event('scroll')))
     const keep = list('paused')
       ?.querySelectorAll('[data-ov-batch]')[1]
       ?.getAttribute('data-ov-batch')
@@ -780,7 +789,8 @@ describe('the health table and the reading position', { timeout: BOARD_TEST_TIME
       b.getAttribute('data-ov-batch'),
     )
     expect(now[0]).toBe(keep)
-    // the batch that is first now moved up by one batch: the pane follows
-    expect(scrollTop).toBe(2000 - 600)
+    // the batch that is first now moved up by one batch: the pane follows,
+    // from where it stood before the drop
+    expect(pane.scrollTop).toBe(2000 - 600)
   })
 })
