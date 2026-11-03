@@ -178,6 +178,8 @@ describe('a person who can see no project', () => {
     expect(document.body.textContent).toContain(MEMBER)
     expect(location.pathname).toBe('/app/~/overview/all')
     expect(newProject()).toBeDefined()
+    // with no milestone to show, the note is the whole page
+    expect(document.body.textContent).not.toContain('No milestones in any of your projects yet.')
   })
 
   it('offers no New project to a person who may not create one', async () => {

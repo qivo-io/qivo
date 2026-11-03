@@ -1612,8 +1612,10 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         action={{ label: 'Try again', onClick: read.retry }}
       />
     )
+  // without a milestone the note is the page, as the chooser of All
+  // projects and the note for a person who sees no project are too
   const replaced = note ?? emptyNote
-  const alone = replaced !== null && info.milestones.length === 0 && state !== 'choose'
+  const alone = replaced !== null && info.milestones.length === 0
 
   const msSorted = info.milestones.slice().sort((a, b) => a.week - b.week)
   const nextMs = msSorted.find((m) => m.week >= P.TODAY_WEEK)

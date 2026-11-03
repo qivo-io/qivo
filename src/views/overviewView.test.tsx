@@ -460,6 +460,10 @@ describe('All projects and My view', { timeout: BOARD_TEST_TIMEOUT }, () => {
     )
     expect(board.server.overview.asked).toEqual([])
     expect(document.querySelector('[data-board-choice]')).toBeNull()
+    // with no milestone to show, the chooser is the whole page
+    expect([...document.querySelectorAll('h2')].map((h) => h.textContent)).not.toContain(
+      'Milestones',
+    )
     await click(document.querySelector('[data-ov-choice="plan"]'))
     expect(actions.setScope).toHaveBeenCalledWith('plan')
   })
