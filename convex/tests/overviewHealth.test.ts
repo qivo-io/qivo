@@ -618,6 +618,24 @@ describe('order', () => {
       'Pilot',
     ])
   })
+
+  it("orders by no lead's name where a row's lead is another organization's profile", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a name that sorts first, on a profile of another organization
+    await t.run((ctx) => ctx.db.patch(f.otherAdmin._id, { name: 'Aaron' }))
+    const top = await plantProject(t, { org_id: f.org.id, name: 'Leads' })
+    await subOf(t, top, 'Theirs', { lead_id: f.otherAdmin.id })
+    await subOf(t, top, 'Ours', { lead_id: f.admin.id })
+    await countOrg(t, f.org.id)
+    const scope = scopeOf(f.admin, top)
+    expect(names(await health(t, f.admin, scope, { sort: 'lead', dir: 'asc' }))).toEqual([
+      'Ours',
+      'Theirs',
+    ])
+    // a rule that read the other organization's name would put Theirs first
+    expect(nameKey('Aaron') < nameKey(f.admin.name)).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------- the fallback
