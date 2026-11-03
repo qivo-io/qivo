@@ -1052,6 +1052,24 @@ describe('the health table', () => {
     expect(healthArgs(s)).toMatchObject({ scope: { kind: 'mine' }, limit: OVERVIEW_BATCH })
   })
 
+  it('asks a new scope with no search and the same sort, never with the search of the scope before', () => {
+    const { snap, base } = programOf(3)
+    const s = server(snap)
+    s.lists.watch(base, 1, 0)
+    s.lists.watchTable({ sort: 'late', dir: 'desc', search: 'sub' }, 1)
+    s.deliver()
+    const asked = s.state.asked.length
+    s.lists.watch(null, 1, 0)
+    s.lists.watch({ ...base, scope: { kind: 'mine' } }, 1, 0)
+    // the page then asks the new scope's table, with its search started again
+    s.lists.watchTable({ sort: 'late', dir: 'desc', search: '' }, 1)
+    const health = s.state.asked.slice(asked).filter((a) => a.slot === HEALTH)
+    expect(health.map((a) => JSON.parse(a.key))).toEqual([
+      expect.objectContaining({ scope: { kind: 'mine' }, sort: 'late', dir: 'desc' }),
+    ])
+    expect(healthArgs(s)).not.toHaveProperty('search')
+  })
+
   it('takes a table only from the page that owns the reads, which a page that mounted hidden registers again once it asks', () => {
     const { snap, base } = programOf(3)
     const s = server(snap)
