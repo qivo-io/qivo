@@ -4,13 +4,15 @@ import { getFunctionName } from 'convex/server'
 import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
+import { descriptionForm, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* The task window on a task the workspace does not hold, on the real store:
    from the window's own read of the task (convex/taskWindow.ts task,
-   P.taskDetail), answered by hand, read-only but for its comments, and an
-   archived task's read-only window. Mira leads Work, where the family task
+   P.taskDetail), answered by hand, editable from that answer, each write
+   sending the values the window showed, and an archived task's read-only
+   window. Mira leads Work, where the family task
    "Calibrate the sensor" (QN-27) lives, and only views Manuals. The far
    tasks (QN-40 on) are on the server but not in the workspace: in a task
    window still to arrive while it loads in stages (`loading`), else not in
@@ -45,9 +47,13 @@ type Live = {
 }
 
 const AT = '2026-09-14T08:00:00.000Z'
-const WAITS = 'Available once every task has loaded'
 const WAITS_FOR_IT = 'Available once this task has loaded'
+const WAITS_FOR_CHECK = 'Available once Qivo can check this task for changes'
+const FAMILY_UNKNOWN = 'Not available while Qivo cannot read every subtask of this task'
 const READ_ONLY = 'Read-only project access'
+const STALE_SAVE =
+  "Couldn't save yet. Saving is available once Qivo can check this task for changes."
+
 /* The family task, in the first task window, which a staged load brings
    first. */
 const FAM = '01000000-0000-4000-8000-000000000027'
@@ -205,6 +211,7 @@ function fixture(loading: boolean) {
    task window stays back until arrive(). */
 async function load(loading = false, edit?: (next: Snapshot) => void) {
   vi.resetModules()
+  network.mutation.mockClear()
   snap = fixture(loading)
   edit?.(snap)
   subs = []
@@ -388,6 +395,25 @@ function editorOf(label: string) {
   )
 }
 const delayChip = () => document.querySelector<HTMLElement>('[data-delay-chip]')
+/* The writes of mutation `name` the store sent, their arguments in order. */
+const sentArgs = (name: string) =>
+  network.mutation.mock.calls
+    .filter(([ref]) => getFunctionName(ref) === name)
+    .map(([, args]) => args as Record<string, unknown>)
+/* Types `value` into a field as a person does, which React hears. */
+const typeInto = (field: HTMLInputElement | HTMLTextAreaElement, value: string) =>
+  act(async () => {
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), 'value')?.set?.call(field, value)
+    field.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+/* Lets the next animation frame run, where a picker measures its place. */
+const nextFrame = () =>
+  act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+/* The window's relation controls, which wait for the task. */
+const relationButtons = () =>
+  ['Set parent', 'Add subtask', 'Link task'].map((label) =>
+    document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`),
+  )
 const dueText = () =>
   [...document.querySelectorAll('.task-field')]
     .find((f) => f.querySelector('.task-field-label')?.textContent === 'Due')
@@ -524,64 +550,196 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(stale()).toBeNull()
   })
 
-  it('shows a task from its answer read-only, saying why each control is off, with comments for an editor', async () => {
+  it('edits a task from its answer, each write sending the values the window showed', async () => {
     await load()
     const handle = await noteTask(far())
     await openWindow(handle)
     await answer(
       'taskWindow:task',
-      okAnswer(far(), {
-        task: { ...far(), has_subtasks: false, has_hidden_parent: true },
-        follow: { issue_id: FAR, profile_id: 'mira', created_at: AT },
-      }),
+      okAnswer(far(), { follow: { issue_id: FAR, profile_id: 'mira', created_at: AT } }),
     )
     await answer('snapshot:threadComments', {
-      comments: [
-        comment('c-1', FAR, 'mira', 'Measured at one metre'),
-        comment('c-2', FAR, 'leo', 'Try two'),
-      ],
+      comments: [comment('c-1', FAR, 'mira', 'Measured at one metre')],
       earlier: false,
     })
-    for (const label of ['Status', 'Priority', 'Assignee', 'Reviewer']) {
-      expect(field(label)?.disabled, label).toBe(true)
-      expect(await hintOf(field(label)), label).toBe(WAITS_FOR_IT)
-    }
-    const remaining = document.querySelector<HTMLInputElement>('[data-remaining-input]')
-    expect(remaining?.disabled).toBe(true)
-    expect(await hintOf(remaining)).toBe(WAITS_FOR_IT)
-    const roadmap = document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]')
-    expect(roadmap?.disabled).toBe(true)
-    expect(await hintOf(roadmap)).toBe(WAITS_FOR_IT)
-    // the title stays as it is, and the description reads, without a field
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    for (const label of ['Status', 'Priority', 'Assignee', 'Reviewer'])
+      expect(field(label)?.disabled, label).toBe(false)
+    const update = () => sentArgs('issues:update').at(-1)
+    // the title, from the one it began from
     await click(document.querySelector('[data-task-title]'))
-    expect(document.querySelector('[aria-label="Task title"]')).toBeNull()
-    expect(document.querySelector('[data-task-description] .descfield')).toBeNull()
-    expect(document.querySelector('[data-task-description]')?.textContent).toContain('three')
-    // the follow eye says Mira follows it, and waits for the task
+    const title = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
+    if (!title) throw new Error('the title field did not open')
+    await typeInto(title, 'Tune the antenna twice')
+    await act(async () => title.blur())
+    expect(update()).toEqual({
+      org_id: snap.orgs[0].id,
+      id: FAR,
+      patch: { title: 'Tune the antenna twice' },
+      expected: { title: printOf(trimmedForm('Tune the antenna')) },
+    })
+    expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna twice')
+    // the description, through its editor's Save
+    const description = await editorOf('Task description')
+    await act(async () => description.chain().focus('end').insertContent(' Twice.').run())
+    await click(buttonNamed('Save'))
+    expect(update()).toMatchObject({
+      patch: { description: 'Measure the gain at **three** heights. Twice.' },
+      expected: { description: printOf(descriptionForm('Measure the gain at **three** heights.')) },
+    })
+    // Remaining, as it blurs
+    const remaining = document.querySelector<HTMLInputElement>('[data-remaining-input]')
+    if (!remaining) throw new Error('missing the Remaining field')
+    expect(remaining.disabled).toBe(false)
+    await act(async () => remaining.focus())
+    await typeInto(remaining, '12')
+    await act(async () => remaining.blur())
+    expect(update()).toMatchObject({
+      patch: { remaining_hours: 12 },
+      expected: { remaining_hours: 400 },
+    })
+    // the due date, from its calendar
+    const due = [...document.querySelectorAll('.task-field')]
+      .find((f) => f.querySelector('.task-field-label')?.textContent === 'Due')
+      ?.querySelector<HTMLButtonElement>('[data-field-trigger]')
+    expect(due?.disabled).toBe(false)
+    await click(due)
+    const pick = [...document.querySelectorAll<HTMLButtonElement>('[data-cal-day]')].find(
+      (b) => b.dataset.calDay !== day(14) && !b.disabled,
+    )
+    await click(pick)
+    expect(update()).toMatchObject({
+      patch: { due_date: pick?.dataset.calDay },
+      expected: { due_date: day(14) },
+    })
+    // a label, from the picker
+    await click(document.querySelector('button[aria-label="Add label"]'))
+    await nextFrame()
+    await click(buttonNamed('Hardware'))
+    expect(sentArgs('labels:toggle')).toEqual([
+      { org_id: snap.orgs[0].id, issue_id: FAR, label_id: 'label-1', on: true },
+    ])
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+    )
+    // Plan on roadmap, for a task from a current answer
+    const roadmap = document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]')
+    expect(roadmap?.disabled).toBe(false)
+    // the relations wait for the task
+    expect(dialog()?.textContent).toContain('No parent task.')
+    for (const control of relationButtons()) {
+      expect(control?.disabled, control?.getAttribute('aria-label') ?? '').toBe(true)
+      expect(await hintOf(control)).toBe(WAITS_FOR_IT)
+    }
+    // the composer stays
+    expect(document.querySelector('[data-composer]')).not.toBeNull()
+    // Move and Archive or delete open, from the answer's whole subtask list
+    await act(async () =>
+      document.querySelector<HTMLElement>('[aria-label="Task actions"]')?.focus(),
+    )
+    const item = await taskActions()
+    for (const text of ['Move to sub-project…', 'Archive or delete…']) {
+      const control = item(text)
+      expect(control instanceof HTMLButtonElement && control.disabled, text).toBe(false)
+    }
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+    )
+    // the eye follows, and opens Subscribers from the answer
     const eye = document.querySelector<HTMLButtonElement>('[data-task-subscribe]')
     expect(eye?.dataset.taskSubscribe).toBe('on')
+    expect(eye?.disabled).toBe(false)
+    await click(eye)
+    expect(document.querySelector('[data-task-subscribers]')).not.toBeNull()
+    expect(one('issues:subscribers').args).toEqual({ org_id: snap.orgs[0].id, issue_id: FAR })
+  })
+
+  it('waits with the check sentence while its read fails, keeping comments and a typed title', async () => {
+    await load()
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    await answer('snapshot:threadComments', { comments: [], earlier: false })
+    await click(document.querySelector('[data-task-title]'))
+    const title = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
+    if (!title) throw new Error('the title field did not open')
+    await typeInto(title, 'Tune the antenna twice')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => one('taskWindow:task').fail(new Error('Server Error')))
+    expect(document.querySelector<HTMLElement>('[data-task-stale]')?.dataset.taskStale).toBe(
+      'failed',
+    )
+    // the title stays, and its save waits with the reason
+    await act(async () => title.blur())
+    expect(window.showToast).toHaveBeenCalledWith(STALE_SAVE, 'error')
+    expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')?.value).toBe(
+      'Tune the antenna twice',
+    )
+    for (const label of ['Status', 'Priority', 'Assignee']) {
+      expect(field(label)?.disabled, label).toBe(true)
+      expect(await hintOf(field(label)), label).toBe(WAITS_FOR_CHECK)
+    }
+    const eye = document.querySelector<HTMLButtonElement>('[data-task-subscribe]')
     expect(eye?.disabled).toBe(true)
-    expect(await hintOf(eye)).toBe(WAITS_FOR_IT)
-    // no label is added or removed
-    expect(document.querySelector('[aria-label="Add label"]')).toBeNull()
-    // Parent from the answer, exactly
-    expect(document.body.textContent).toContain('The parent task is outside this view.')
-    expect(document.body.textContent).not.toContain('still loading')
-    // the composer, and the edits of a comment's author and of a lead
+    expect(await hintOf(eye)).toBe(WAITS_FOR_CHECK)
+    const roadmap = document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]')
+    expect(roadmap?.disabled).toBe(true)
+    expect(await hintOf(roadmap)).toBe(WAITS_FOR_CHECK)
+    // comments still work
     expect(document.querySelector('[data-composer]')).not.toBeNull()
-    const commentRow = (id: string) => document.querySelector(`[data-comment="${id}"]`)
-    expect(commentRow('c-1')?.querySelector('[aria-label="Edit comment"]')).not.toBeNull()
-    expect(
-      commentRow('c-2')?.querySelector('[aria-label="Edit comment (project lead)"]'),
-    ).not.toBeNull()
-    // Move and Archive or delete show, waiting for every task
+    await act(async () =>
+      document.querySelector<HTMLElement>('[aria-label="Task actions"]')?.focus(),
+    )
     const item = await taskActions()
     for (const text of ['Move to sub-project…', 'Archive or delete…']) {
       const control = item(text)
       expect(control instanceof HTMLButtonElement && control.disabled, text).toBe(true)
-      expect(await hintOf(control), text).toBe(WAITS)
+      expect(await hintOf(control), text).toBe(WAITS_FOR_CHECK)
     }
-    expect(item('Copy link')).toBeDefined()
+    expect(sentArgs('issues:update')).toEqual([])
+  })
+
+  it('shows a task whose subtask list is not whole as a group, with its own fields still editable', async () => {
+    await load()
+    await openWindow(await noteTask(far()))
+    const kid = short(task(FAR_KID, 42, { parent_id: FAR }))
+    await answer(
+      'taskWindow:task',
+      okAnswer(far(), {
+        task: { ...far(), has_subtasks: true, has_hidden_subtasks: true },
+        subtasks: { rows: [kid], complete: false },
+      }),
+    )
+    // a group: no status or reviewer of its own
+    expect(field('Status')).toBeNull()
+    expect(field('Reviewer')).toBeNull()
+    for (const label of ['Priority', 'Assignee']) expect(field(label)?.disabled, label).toBe(false)
+    expect(document.querySelector('button[aria-label="Add label"]')).not.toBeNull()
+    expect(buttonNamed('browse')).toBeDefined()
+    // what Move and Archive or delete take along is unknown
+    const item = await taskActions()
+    for (const text of ['Move to sub-project…', 'Archive or delete…']) {
+      const control = item(text)
+      expect(control instanceof HTMLButtonElement && control.disabled, text).toBe(true)
+      expect(await hintOf(control), text).toBe(FAMILY_UNKNOWN)
+    }
+  })
+
+  it('says it cannot read every subtask where a whole list holds a group stored before the rule of one level', async () => {
+    await load()
+    await openWindow(await noteTask(far()))
+    await answer(
+      'taskWindow:task',
+      okAnswer(far(), {
+        task: { ...far(), has_subtasks: true },
+        subtasks: { rows: [short(task(FAR_KID, 42, { parent_id: FAR }), true)], complete: true },
+      }),
+    )
+    const item = await taskActions()
+    for (const text of ['Move to sub-project…', 'Archive or delete…']) {
+      const control = item(text)
+      expect(control instanceof HTMLButtonElement && control.disabled, text).toBe(true)
+      expect(await hintOf(control), text).toBe(FAMILY_UNKNOWN)
+    }
   })
 
   it('shows a task in a project the person views without a composer, saying it is read-only', async () => {
@@ -595,10 +753,11 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
       earlier: false,
     })
     expect(await hintOf(field('Priority'))).toBe(READ_ONLY)
-    // the Roadmap opens a task of a project the person views, once it loads
+    // the Roadmap opens a task of a project the person views
     const roadmap = document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]')
-    expect(roadmap?.disabled).toBe(true)
-    expect(await hintOf(roadmap)).toBe(WAITS_FOR_IT)
+    expect(roadmap?.disabled).toBe(false)
+    // the eye follows from the answer, which needs only sight
+    expect(document.querySelector<HTMLButtonElement>('[data-task-subscribe]')?.disabled).toBe(false)
     expect(document.querySelector('[data-composer]')).toBeNull()
     // an author edits their own comment; a viewer no one else's
     expect(
@@ -652,18 +811,25 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(document.querySelector('[data-plan-unknown]')?.textContent).toBe('Unknown')
   })
 
-  it('turns editable in place when the task arrives, keeping a comment typed meanwhile', async () => {
+  it('turns to the workspace’s view in place when the task arrives, keeping a title and a comment typed meanwhile', async () => {
     await load(true)
     const handle = await noteTask(far())
     await openWindow(handle)
     await answer('taskWindow:task', okAnswer(far()))
     await answer('snapshot:threadComments', { comments: [], earlier: false })
-    expect(field('Priority')?.disabled).toBe(true)
+    expect(field('Priority')?.disabled).toBe(false)
     const composer = await editorOf('Leave a comment')
     await act(async () => composer.commands.insertContent('Gain looks low'))
+    await click(document.querySelector('[data-task-title]'))
+    const title = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
+    if (!title) throw new Error('the title field did not open')
+    await typeInto(title, 'Tune the antenna twice')
     await arrive()
     expect(dialog()?.dataset.taskSource).toBe('workspace')
     expect(field('Priority')?.disabled).toBe(false)
+    expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')?.value).toBe(
+      'Tune the antenna twice',
+    )
     expect((await editorOf('Leave a comment')).getText()).toBe('Gain looks low')
     expect(composer.isDestroyed).toBe(false)
     // the read stops with no section to read it for; the details column's
@@ -745,6 +911,13 @@ describe('the task window as the workspace and the answer disagree', { timeout: 
     expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-composer]')).toBeNull()
     expect(leadEdit()).toBeNull()
+    // and every other control: read-only where the workspace says so
+    for (const label of ['Status', 'Priority', 'Assignee']) {
+      expect(field(label)?.disabled, label).toBe(true)
+      expect(await hintOf(field(label)), label).toBe(READ_ONLY)
+    }
+    expect(document.querySelector('button[aria-label="Add label"]')).toBeNull()
+    expect(document.querySelector<HTMLInputElement>('[data-remaining-input]')?.disabled).toBe(true)
     await answer('taskWindow:task', archivedAnswer(row, 'lead'))
     expect(note()?.textContent).toContain('was archived')
     expect(buttonNamed('Restore')).toBeUndefined()
@@ -761,12 +934,22 @@ describe('the task window as the workspace and the answer disagree', { timeout: 
     expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-composer]')).toBeNull()
     expect(leadEdit()).toBeNull()
+    // the answer's word holds for the fields too, and the eye needs sight
+    for (const label of ['Status', 'Priority', 'Assignee']) {
+      expect(field(label)?.disabled, label).toBe(true)
+      expect(await hintOf(field(label)), label).toBe(READ_ONLY)
+    }
+    expect(document.querySelector('button[aria-label="Add label"]')).toBeNull()
+    expect(document.querySelector<HTMLButtonElement>('[data-task-subscribe]')?.disabled).toBe(false)
     await answer('taskWindow:task', archivedAnswer(far(), 'viewer'))
     expect(buttonNamed('Restore')).toBeUndefined()
-    // both agree: all three
+    // both agree: all of them
     await answer('taskWindow:task', okAnswer(far()))
     expect(document.querySelector('[data-composer]')).not.toBeNull()
     expect(leadEdit()).not.toBeNull()
+    for (const label of ['Status', 'Priority', 'Assignee'])
+      expect(field(label)?.disabled, label).toBe(false)
+    expect(document.querySelector('button[aria-label="Add label"]')).not.toBeNull()
     await answer('taskWindow:task', archivedAnswer(far()))
     expect(buttonNamed('Restore')).toBeDefined()
   })
@@ -784,20 +967,38 @@ describe('the task window as the workspace and the answer disagree', { timeout: 
     expect(window.showToast).toHaveBeenCalledWith('Unsaved comment discarded', 'error')
   })
 
-  it('discards a title typed for a task that leaves the workspace and stays shown from its answer', async () => {
+  it('keeps a title typed for a task that leaves the workspace, and saves it through an answer that gives Edit', async () => {
     await load()
     await openWindow('QN-27')
     await answer('taskWindow:task', okAnswer(fam()))
     await click(document.querySelector('[data-task-title]'))
     const title = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
     if (!title) throw new Error('the title field did not open')
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(title), 'value')?.set?.call(
-        title,
-        'Calibrate the sensor twice',
-      )
-      title.dispatchEvent(new Event('input', { bubbles: true }))
-    })
+    await typeInto(title, 'Calibrate the sensor twice')
+    await act(async () => publish(withoutFam()))
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    const kept = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
+    expect(kept?.value).toBe('Calibrate the sensor twice')
+    expect(window.showToast).not.toHaveBeenCalledWith('Unsaved title discarded')
+    await act(async () => kept?.blur())
+    expect(sentArgs('issues:update')).toEqual([
+      {
+        org_id: snap.orgs[0].id,
+        id: FAM,
+        patch: { title: 'Calibrate the sensor twice' },
+        expected: { title: printOf(trimmedForm('Calibrate the sensor')) },
+      },
+    ])
+  })
+
+  it('discards a title typed for a task that leaves the workspace when its answer gives no Edit', async () => {
+    await load()
+    await openWindow('QN-27')
+    await answer('taskWindow:task', okAnswer(fam(), { level: 'viewer' }))
+    await click(document.querySelector('[data-task-title]'))
+    const title = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
+    if (!title) throw new Error('the title field did not open')
+    await typeInto(title, 'Calibrate the sensor twice')
     await act(async () => publish(withoutFam()))
     expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[aria-label="Task title"]')).toBeNull()

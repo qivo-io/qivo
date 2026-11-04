@@ -35,6 +35,9 @@ let root: Root
 /* How the server answers each mutation by name; unlisted ones resolve null. */
 let answers: Record<string, () => Promise<unknown>>
 let sent: string[]
+let org: string
+/* The window's read of a task the workspace does not hold. */
+let windowRead: ((value: unknown) => void) | null
 
 beforeEach(async () => {
   vi.resetModules()
@@ -68,9 +71,12 @@ beforeEach(async () => {
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
+  org = snap.orgs[0].id
+  windowRead = null
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, _args, next) => {
     if (getFunctionName(ref) === 'workspace:whole') next(structuredClone(snap))
+    if (getFunctionName(ref) === 'taskWindow:task') windowRead = next
     return () => {}
   })
   network.mutation.mockImplementation((ref) => {
@@ -125,6 +131,59 @@ const enter = (input: HTMLInputElement) =>
   act(async () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   })
+
+describe('the label picker of a task the window shows from its own answer', () => {
+  it('creates a label and puts it on the task from its answer', async () => {
+    P.watchComments('far', org)
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    await act(async () => {
+      windowRead?.({
+        state: 'ok',
+        task: {
+          id: 'far',
+          org_id: org,
+          project_id: P.projects[0].id,
+          num: 40,
+          title: 'Tune the antenna',
+          description: '',
+          status: 'todo',
+          priority: 'low',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          has_subtasks: false,
+          has_hidden_subtasks: false,
+          has_hidden_parent: false,
+        },
+        level: 'lead',
+        labels: [],
+        follow: null,
+        parent: null,
+        subtasks: { rows: [], complete: true },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const shown = P.taskDetail('far')?.view
+    if (!shown) throw new Error('the window shows no task from its answer')
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <detail.LabelPickerPopup it={shown} anchor={{ x: 0, y: 0 }} onDone={vi.fn()} />
+        </TooltipProvider>,
+      ),
+    )
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="Add labels…"]')
+    if (!input) throw new Error('no search field')
+    await type(input, 'Bench')
+    await enter(input)
+    expect(sent.filter((name) => name !== 'identity:claimMySeats')).toEqual([
+      'labels:create',
+      'labels:toggle',
+    ])
+    const label = P.labels.find((l) => l.name === 'Bench')
+    expect(P.taskDetail('far')?.view?.labels).toEqual([label?.id])
+  })
+})
 
 describe('the label picker', () => {
   it('ignores a second Enter in the emptied field after creating the first label', async () => {

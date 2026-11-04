@@ -46,6 +46,8 @@ let root: Root
 let answers: Record<string, () => Promise<null>>
 // the answers to projects.removalSummary, in order; none means it never settles
 let summaries: (() => Promise<ProjectRemovalSummary>)[]
+// the window's read of a task the workspace does not hold
+let windowRead: ((value: unknown) => void) | null
 
 function fixture() {
   const next = plannerFixture()
@@ -108,11 +110,13 @@ async function load() {
       ? (summaries.shift()?.() ?? new Promise(() => {}))
       : Promise.resolve(null),
   )
+  windowRead = null
   network.onUpdate.mockImplementation((ref, _args, next) => {
     if (getFunctionName(ref) === 'workspace:whole') {
       deliver = (snapshot) => next(structuredClone(snapshot))
       deliver(snap)
     }
+    if (getFunctionName(ref) === 'taskWindow:task') windowRead = next
     return () => {}
   })
   network.mutation.mockImplementation((ref) => {
@@ -542,6 +546,135 @@ describe('Archive or delete a task', () => {
         args: expect.objectContaining({
           subtask_ids: ['done-sub', 'todo-sub', 'busy-sub', 'late-sub'],
         }),
+      },
+    ])
+  })
+})
+
+describe('Archive or delete a task the window shows from its own answer', () => {
+  /* QN-40 in Work, which the workspace does not hold, with subtasks in
+     Work (Done) and Manuals (In review), which Mira only views, as the
+     window's answer sends them, and the ones `more` adds. */
+  const answer = (more: { id: string; num: number }[] = []) => {
+    const row = (id: string, num: number, extra: Record<string, unknown> = {}) => ({
+      id,
+      org_id: snap.orgs[0].id,
+      project_id: 'work',
+      num,
+      title: `Task ${id}`,
+      status: 'todo',
+      priority: 'low',
+      paused: false,
+      created_at: AT,
+      updated_at: AT,
+      ...extra,
+    })
+    const kid = (id: string, num: number, extra: Record<string, unknown> = {}) => ({
+      ...row(id, num, extra),
+      has_subtasks: false,
+      level: extra.project_id === 'manuals' ? 'viewer' : 'lead',
+    })
+    return {
+      state: 'ok',
+      task: {
+        ...row('far', 40, { status: 'progress' }),
+        description: '',
+        has_subtasks: true,
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+      },
+      level: 'lead',
+      labels: [],
+      follow: null,
+      parent: null,
+      subtasks: {
+        rows: [
+          kid('far-done', 41, { status: 'done' }),
+          kid('far-ro', 42, { project_id: 'manuals', status: 'review' }),
+          ...more.map((m) => kid(m.id, m.num)),
+        ],
+        complete: true,
+      },
+    }
+  }
+  const read = async (value: unknown) =>
+    act(async () => {
+      windowRead?.(value)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  async function openFromAnswer() {
+    P.watchComments('far', snap.orgs[0].id)
+    await settle()
+    await read(answer())
+    const task = P.taskDetail('far')?.view
+    if (!task) throw new Error('the window shows no task from its answer')
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <dialogs.ArchiveOrDeleteTaskModal
+            issueId={task.id}
+            task={task}
+            onClose={vi.fn()}
+            onArchive={async (reason, keep) => !!(await P.archiveIssue(task.id, reason, keep))}
+            onDelete={(subs, reason) => P.deleteIssue(task.id, subs, true, reason)}
+          />
+        </TooltipProvider>,
+      ),
+    )
+    await settle()
+  }
+
+  it('lists the answer’s subtasks, blocks the archive over one in a read-only project, and deletes the others by uuid', async () => {
+    answers['issues:deleteDeep'] = () => Promise.resolve(null)
+    await openFromAnswer()
+    expect(text('[data-fate-lead]')).toContain('QN-40 has 2 subtasks, 1 of them unfinished.')
+    expect(text('[data-task-fate]')).toContain(
+      "At least one is in a project you can't edit. Keep the subtasks, or ask an organization admin.",
+    )
+    expect(button('Archive').disabled).toBe(true)
+    await choose('delete')
+    expect(
+      [...document.querySelectorAll('[data-fate-subtask]')].map((r) => [
+        r.getAttribute('data-fate-subtask'),
+        r.textContent?.includes('View only'),
+      ]),
+    ).toEqual([
+      ['QN-41', false],
+      ['QN-42', true],
+    ])
+    await type('Done with it')
+    await click(button('Delete 2 tasks'))
+    await settle()
+    expect(writes()).toEqual([
+      {
+        name: 'issues:deleteDeep',
+        args: {
+          org_id: snap.orgs[0].id,
+          id: 'far',
+          subtask_ids: ['far-done'],
+          reason: 'Done with it',
+        },
+      },
+    ])
+  })
+
+  it('asks again when the answer’s subtasks change before the click', async () => {
+    answers['issues:deleteDeep'] = () => Promise.resolve(null)
+    await openFromAnswer()
+    await choose('delete')
+    await read(answer([{ id: 'far-late', num: 43 }]))
+    await click(button('Delete 2 tasks'))
+    expect(writes()).toEqual([])
+    expect(text('[data-task-fate]')).toContain(
+      'The subtasks changed while this window was open. Check them and choose again.',
+    )
+    vi.setSystemTime(Date.now() + 1000)
+    await click(button('Delete 3 tasks'))
+    await settle()
+    expect(writes()).toEqual([
+      {
+        name: 'issues:deleteDeep',
+        args: expect.objectContaining({ subtask_ids: ['far-done', 'far-late'] }),
       },
     ])
   })
