@@ -43,7 +43,6 @@ import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/owner
 import { taskOwnerId } from '../lib/review'
 import { orgProjectView } from '../lib/visibility'
 import { weekGrid } from '../lib/workload'
-import { orgLoadRows } from '../planning'
 import {
   appLoadRows,
   as,
@@ -59,6 +58,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { orgLoadRows } from './orgLoad.setup'
 import { mcpPage } from './taskPages.setup'
 
 /* A Wednesday at noon UTC, the same day in every likely time zone. */

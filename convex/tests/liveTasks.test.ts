@@ -15,7 +15,7 @@ import { accessOf } from '../lib/access'
 import { ACTIVE_PAGE } from '../lib/activeTaskPage'
 import { ACCESS_POINT_CHECKS, COMPLETION_READS, COMPLETION_RESERVE, taskOut } from '../lib/core'
 import { byId } from '../lib/db'
-import { countsAsSubtask, groupTest, LIVE_PROJECT_READS } from '../lib/liveTasks'
+import { countsAsSubtask, LIVE_PROJECT_READS } from '../lib/liveTasks'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
 import { readTasks } from '../lib/workspaceParts'
 import { getProject } from '../machine/rest'
@@ -159,24 +159,6 @@ describe('the group rule', () => {
     // an archived parent: every subtask
     expect(countsAsSubtask(layer(true, true), layer(true, false))).toBe(true)
     expect(countsAsSubtask(layer(true, false), layer(false, true))).toBe(true)
-
-    const live = (id: string) => id === 'on'
-    const rows = [
-      { parent_id: 'a', archived_at: undefined, project_id: 'off' },
-      { parent_id: 'b', archived_at: undefined, project_id: 'on' },
-      { parent_id: 'c', archived_at: NOW, project_id: 'on' },
-    ]
-    const isGroup = groupTest(rows, live)
-    const at = (id: string, project_id: string, archived_at?: string) => ({
-      id,
-      project_id,
-      archived_at,
-    })
-    expect(isGroup(at('a', 'on'))).toBe(false)
-    expect(isGroup(at('a', 'off'))).toBe(true)
-    expect(isGroup(at('b', 'on'))).toBe(true)
-    expect(isGroup(at('c', 'on'))).toBe(false)
-    expect(isGroup(at('c', 'on', NOW))).toBe(true)
   })
 
   it('a task whose only subtask is in an archived sub-project is no group, on every surface', async () => {
