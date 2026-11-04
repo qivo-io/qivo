@@ -503,6 +503,23 @@ describe('a write from the window’s own answer fails closed', { timeout: 30_00
     })
   })
 
+  it('sends the value the window draws as expected, not one a delivery brought that it has yet to draw', async () => {
+    await load()
+    await openFar()
+    // a write still waits, so the store draws the next delivery a moment
+    // after it arrives (owe)
+    void P.updateIssue(H, { priority: 'high' })
+    // Leo renames the task, and a write goes before the window draws it
+    one('taskWindow:task').deliver(structuredClone(okAnswer(far({ title: 'Tune the dish' }))))
+    for (let i = 0; i < 20; i++) await Promise.resolve()
+    expect(shown().title).toBe('Tune the antenna')
+    void P.updateIssue(H, { title: 'Tune the antenna twice' })
+    // so the server can refuse it as a change over Leo's
+    expect(last('issues:update').args.expected).toEqual({
+      title: print(trimmedForm, 'Tune the antenna'),
+    })
+  })
+
   it('sends nothing while the window’s read failed or runs again, and the editor keeps its draft', async () => {
     await load()
     await openFar()

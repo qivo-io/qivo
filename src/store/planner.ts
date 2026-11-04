@@ -537,6 +537,12 @@ const sectionFailure: Record<SectionSide, CommentsFailure> = {
    answer. At most one task's answer, so at most TASK_WINDOW.rows subtask
    rows a repaint copies while a write on it waits. */
 let detailRows: { from: TaskOk | null; task: TaskOk | null } = { from: null, task: null }
+/* The painted answer P.detail was built from last (rebuildSections), the
+   one the window draws. A delivery can bring a newer anchor that the
+   window draws only at the next repaint, which waits a moment while a
+   painted write waits (owe), and a write meanwhile sends what the person
+   saw (answerTaskOf). */
+let drawnAnswer: TaskOk | null = null
 
 /* The sections' side queries (store/liveParts.ts SIDE_NAMES). */
 const SECTION_SIDES = ['task', 'links', 'attachments'] as const satisfies readonly SideName[]
@@ -1599,6 +1605,7 @@ function rebuildSections(): boolean {
   const detailBefore = PLANNER.detail
   PLANNER.sections = keep(before, sectionsNow())
   PLANNER.detail = keep(detailBefore, taskDetailNow())
+  drawnAnswer = PLANNER.detail ? paintedAnswer() : null
   return PLANNER.sections !== before || PLANNER.detail !== detailBefore
 }
 
@@ -6203,9 +6210,9 @@ function deleteAnswerTask(a: AnswerTask, subtasks: string[], reason?: string): P
 }
 
 /** The watched task as a write from its window's own answer reads it: its
-    uuid and organization, its painted answer (paintedAnswer), whose row the
-    write sends as its expected values, and the window's view model of it
-    (P.detail). */
+    uuid and organization, its painted answer as the window draws it
+    (drawnAnswer), whose row the write sends as its expected values, and
+    the window's view model of it (P.detail), built from that answer. */
 type AnswerTask = { uuid: string; org: string; answer: TaskOk; model: IssueVM }
 
 /** The watched task, when handle or uuid `id` names it, the workspace does
@@ -6214,15 +6221,17 @@ type AnswerTask = { uuid: string; org: string; answer: TaskOk; model: IssueVM }
     known organization; else null, and a write on it answers false without
     sending. The answer must be the task side's own, so a window that shows
     the task from another read's answer, as t3/limits-direct-links adds,
-    edits nothing until the task side answered. */
+    edits nothing until the task side answered. It is the answer the window
+    draws, not a newer delivery the window has yet to draw, so the write
+    never sends another member's change as what the person saw. */
 function answerTaskOf(id: string): AnswerTask | null {
   const t = watchedComments
   const detail = PLANNER.detail
   if (!t || !detail || detail.task !== t || rows.issues.has(t)) return null
   if (detail.state !== 'ok' || !detail.view || sectionsWatched.task?.task !== t) return null
   if (id !== t && id !== detail.view.id) return null
-  const answer = paintedAnswer()
-  if (!answer || answer.task.org_id !== detail.org) return null
+  const answer = drawnAnswer
+  if (!answer || answer.task.id !== t || answer.task.org_id !== detail.org) return null
   return { uuid: t, org: detail.org, answer, model: detail.view }
 }
 
@@ -12527,6 +12536,7 @@ export function disposeDemoStore() {
   detailFresh = false
   detailConnection = 0
   detailRows = { from: null, task: null }
+  drawnAnswer = null
   preferences.dispose(myProfileSet)
   clearAvatarSources()
   minted.clear()
