@@ -40,16 +40,64 @@ export type LiveView<T> = {
 
 type Held<T> = { key: string; value?: T; error?: unknown }
 
+/** What a live watch took: the query's value, or the error it failed with. */
+export type LiveResult<T> = { value: T } | { error: unknown }
+
+/**
+ * Watches query `ref` with `args` on the app's live transport and hands
+ * `take` each result that counts for this subscription: one a transition
+ * names it in, with that transition's connection count, or one at once
+ * when the watch joined a subscription whose result had arrived
+ * (LiveQueries watch `joined`), with no count. A result Convex kept from an
+ * earlier subscription is never taken as current. `seen`, when given,
+ * hears the connection count of every transition, so a reader can tell a
+ * result from before a reconnect. Answers the way to stop, after which
+ * nothing is taken. useLiveView and lib/pagedList.ts read through it.
+ */
+export function watchLive<T>(
+  ref: FunctionReference<'query'>,
+  args: Record<string, Value>,
+  take: (result: LiveResult<T>, connection: number | null) => void,
+  seen?: (connection: number) => void,
+): () => void {
+  const watch = live.watch(ref, args)
+  let stopped = false
+  const read = (connection: number | null) => {
+    let result: LiveResult<T>
+    try {
+      const value = live.read(watch.token) as T | undefined
+      if (value === undefined) return
+      result = { value }
+    } catch (error) {
+      result = { error }
+    }
+    take(result, connection)
+  }
+  const stopTransitions = live.onTransition(
+    (transition) => {
+      if (stopped) return
+      seen?.(transition.connection)
+      if (transition.tokens.has(watch.token)) read(transition.connection)
+    },
+    { view: true },
+  )
+  if (watch.joined) read(null)
+  return () => {
+    stopped = true
+    stopTransitions()
+    watch.stop()
+  }
+}
+
 /**
  * The live result of query `ref` for the arguments `key` holds, the JSON of
  * the arguments in a fixed key order (null reads nothing). It subscribes
  * while the page shows, through the shared transport, so equal arguments
  * share one subscription, and stops while the page is hidden, on new
- * arguments and when the view's effects stop. A result is taken only from
- * a transition that names the subscription, or at once when the watch
- * joined one whose result arrived (LiveQueries watch `joined`), so a result
- * Convex kept from an earlier subscription is never taken as current. A
- * failed read holds its error until a result replaces it.
+ * arguments and when the view's effects stop. A result is taken as
+ * watchLive takes one, so a result Convex kept from an earlier
+ * subscription is never taken as current. A failed read holds its error
+ * until a result replaces it.
  */
 export function useLiveView<T>(ref: FunctionReference<'query'>, key: string | null): LiveView<T> {
   const { visible } = useViewVisibility()
@@ -63,32 +111,10 @@ export function useLiveView<T>(ref: FunctionReference<'query'>, key: string | nu
     // what came before answers an earlier subscription
     setHeld(null)
     if (key === null || !visible) return
-    const watch = live.watch(ref, JSON.parse(key) as Record<string, Value>)
-    let stopped = false
-    const take = () => {
-      let next: Held<T>
-      try {
-        const value = live.read(watch.token) as T | undefined
-        if (value === undefined) return
-        next = { key, value }
-      } catch (error) {
-        next = { key, error }
-      }
-      setHeld(next)
-      if ('value' in next) setAnswered(true)
-    }
-    const stopTransitions = live.onTransition(
-      (transition) => {
-        if (!stopped && transition.tokens.has(watch.token)) take()
-      },
-      { view: true },
-    )
-    if (watch.joined) take()
-    return () => {
-      stopped = true
-      stopTransitions()
-      watch.stop()
-    }
+    return watchLive<T>(ref, JSON.parse(key) as Record<string, Value>, (result) => {
+      setHeld('value' in result ? { key, value: result.value } : { key, error: result.error })
+      if ('value' in result) setAnswered(true)
+    })
   }, [name, key, visible, attempt])
   return {
     key: held?.key ?? null,
