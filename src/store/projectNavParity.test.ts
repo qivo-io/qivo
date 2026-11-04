@@ -183,7 +183,7 @@ describe('Northstar', () => {
       return p
     }
     const [nora, leo, ben] = await Promise.all(['nora', 'leo', 'ben'].map(person))
-    // Northstar has no stars yet: Leo stars two of his projects, and Ben
+    // Northstar has no stars yet, so Leo stars two of his projects, and Ben
     // one of Leo's he may not see
     const leos = (await storeOf(t, leo)).visibleProjects()
     for (const p of leos.slice(0, 2)) await star(t, leo, p)
@@ -195,9 +195,9 @@ describe('Northstar', () => {
     expect(sorted(leoPage.filter((r) => r.favorite).map((r) => r.id))).toEqual(
       sorted(leos.slice(0, 2).map((p) => p.id)),
     )
-    // the store gives Nora every project; the reads only her ordinary ones
-    const beyond = await compare(t, nora, 'Nora', true)
-    console.log(`the store shows Nora ${beyond} top-level projects her ordinary access does not`)
+    // the store gives Nora every project and the reads only her ordinary
+    // ones, which in Northstar reach every top-level project the store shows
+    expect(await compare(t, nora, 'Nora', true)).toBe(0)
   })
 })
 
