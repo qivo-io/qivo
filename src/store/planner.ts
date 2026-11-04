@@ -6116,21 +6116,40 @@ function moveAnswerTask(a: AnswerTask, projectId: string): string | null {
   return a.model.id
 }
 
+/** The uuids of the subtasks `keys` (handles) a delete takes along, each
+    found by `uuidOf`, or null when one of them is not found. The server
+    detaches every subtask a delete is not given (issues.deleteDeep), so a
+    delete that cannot name a subtask the person chose sends nothing,
+    rather than delete the task and detach that subtask. */
+function chosenSubtaskIds(
+  keys: readonly string[],
+  uuidOf: (key: string) => string | undefined,
+): string[] | null {
+  const ids: string[] = []
+  for (const key of keys) {
+    const uuid = uuidOf(key)
+    if (!uuid) return null
+    ids.push(uuid)
+  }
+  return ids
+}
+
 /** P.deleteIssue on the watched task the window shows from its own answer
     (answerTaskOf), with the subtasks `subtasks` (handles) the Archive or
     delete window listed as deletable, their uuids from the answer's whole
-    subtask list (P.familyOf), and no delete while that is unknown. It
-    waits for the server, as the window asks: nothing paints before it
-    accepts, and the workspace's paint then skips, since the window's
-    answer says the task is gone first. */
+    subtask list (P.familyOf), and no delete while that is unknown or no
+    longer holds one of them. It waits for the server, as the window asks:
+    nothing paints before it accepts, and the workspace's paint then skips,
+    since the window's answer says the task is gone first. */
 function deleteAnswerTask(a: AnswerTask, subtasks: string[], reason?: string): Promise<boolean> {
   const family = PLANNER.familyOf(a.model)
   if (!family || refusePausedEdit()) return Promise.resolve(false)
   const root = family.root
-  const subtaskIds = subtasks.flatMap((key) => {
+  const subtaskIds = chosenSubtaskIds(subtasks, (key) => {
     const kid = family.byId[key]
-    return kid && kid.parent === root.id ? [kid.uuid] : []
+    return kid && kid.parent === root.id ? kid.uuid : undefined
   })
+  if (!subtaskIds) return Promise.resolve(false)
   const gone = new Set([a.uuid, ...subtaskIds])
   const at = new Date().toISOString()
   const view: View = { workspace: () => dropDeletedTasks(gone, at) }
@@ -9199,9 +9218,12 @@ export const PLANNER = {
   },
 
   /* Move a task to Deleted items, and with it the `subtasks` (handles) the
-     Archive or delete window listed as deletable. Every other subtask under
-     a deleted task loses its parent and becomes a top-level task; the server
-     checks the subtasks again and refuses the whole delete if they changed.
+     Archive or delete window listed as deletable, from the task's family
+     (P.familyOf), so also subtasks the workspace does not hold yet. Every
+     other subtask under a deleted task loses its parent and becomes a
+     top-level task; the server checks the subtasks again and refuses the
+     whole delete if they changed, and a chosen subtask the family no longer
+     holds sends nothing and resolves false (chosenSubtaskIds).
      Resolves whether the server deleted it (a refusal is toasted). Normally
      the change paints at once and goes again on refusal; with `wait`, as the
      window asks, nothing changes here until the server accepts, so a refusal
@@ -9221,7 +9243,14 @@ export const PLANNER = {
       return shown ? deleteAnswerTask(shown, subtasks, reason) : Promise.resolve(false)
     }
     if (refusePausedEdit()) return Promise.resolve(false)
-    const subtaskIds = subtasks.flatMap((key) => keyToUuid.get(key) || [])
+    // While tasks still load, the window lists the subtasks from the task's
+    // own answer (P.familyOf), which can name subtasks the workspace does
+    // not hold yet, so each is found there too
+    const model = PLANNER.issueById[id]
+    const family = subtasks.length && model ? PLANNER.familyOf(model) : null
+    const uuidOf = (key: string) => keyToUuid.get(key) ?? family?.byId[key]?.uuid
+    const subtaskIds = chosenSubtaskIds(subtasks, uuidOf)
+    if (!subtaskIds) return Promise.resolve(false)
     const gone = new Set([uuid, ...subtaskIds])
     // the paint of the delete; the server moves the rows to Deleted items
     // (convex/model/deletedItems.ts) and keeps the attachment bytes there
