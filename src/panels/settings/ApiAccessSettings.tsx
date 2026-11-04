@@ -9,7 +9,8 @@
    current page on opening, on a period change, after a revoke and from
    Refresh (P.apiAccessSummary, P.apiAccessPage), the page alone when
    browsing with Previous and Next or changing a filter, and the person
-   filter's people as it opens and is searched (P.apiAccessPeople). Every API
+   filter's people as it opens and is searched, through the shared paged
+   list's one-shot source (P.apiAccessPeople, lib/pagedList.ts). Every API
    call changes a credential's last use and calls, so a live subscription
    would re-render on each one, as Billing's usage would. Nothing subscribes,
    so a hidden tab has nothing to pause, and leaving the page drops answers
@@ -32,7 +33,6 @@ import {
   type ApiAccessEntry,
   type ApiAccessFilters,
   type ApiAccessPageAnswer,
-  type ApiAccessPerson,
   type ApiAccessSummaryAnswer,
   type ApiCredentialRow,
   credentialEnded,
@@ -50,6 +50,13 @@ import {
 import { DEMO_MODE } from '../../lib/demoMode'
 import { limitSentence, overLimit } from '../../lib/fieldLimits'
 import { focusAround, useFocusWhenGone } from '../../lib/focusWhenGone'
+import {
+  type ListBatch,
+  listEnd,
+  SEARCH_DELAY_MS,
+  usePagedList,
+  useSettledSearch,
+} from '../../lib/pagedList'
 import { type ApiAccessPageArgs, P } from '../../store/planner'
 import { ModalShell } from '../Modals'
 import { DemoCapabilityNotice } from './controls'
@@ -77,10 +84,6 @@ const STATE_OPTIONS = [
   { value: 'active', label: 'Active' },
   { value: 'all', label: 'All' },
 ]
-
-/** How long typing rests before a search goes to the server, as on
-    Archived tasks. */
-const SEARCH_DELAY_MS = 250
 
 /** The most page starts Previous can step back through. Past it the
     oldest one after the first page's is dropped, so a long walk with Next
@@ -738,18 +741,19 @@ function PersonFilter({
   )
 }
 
-/** The people the person filter lists so far, and where reading stands. */
-type People = {
-  rows: ApiAccessPerson[]
-  next: string | null
-  stopped: boolean
-  phase: 'first' | 'ready' | 'more' | 'failed' | 'not_ready'
-}
-const NO_PEOPLE: People = { rows: [], next: null, stopped: false, phase: 'first' }
+/** One answer of the person filter's read (apiAccess.people). */
+type PeopleAnswer = NonNullable<Awaited<ReturnType<typeof P.apiAccessPeople>>>
+/** One person or agent the person filter lists. */
+type PeopleRow = Extract<PeopleAnswer, { state: 'ready' }>['rows'][number]
+
+/* The batch a people answer holds; one that is not ready holds none. */
+const peopleBatch = (answer: PeopleAnswer): ListBatch<PeopleRow> | null =>
+  answer.state === 'ready' ? answer : null
 
 /* The open person filter: Everyone, the viewer marked "(you)", then the
    organization's people and agents in name order, matching the search once
-   typing rests, with Load more for the next batch. */
+   typing rests, with Load more for the next batch. It reads its batches on
+   demand through the shared paged list (lib/pagedList.ts), never live. */
 function PersonChoices({
   chosen,
   me,
@@ -760,65 +764,18 @@ function PersonChoices({
   onPick: (person: ApiAccessFilters['person']) => void
 }) {
   const [text, setText] = useState('')
-  const [query, setQuery] = useState('')
-  const [list, setList] = useState<People>(NO_PEOPLE)
-  const [attempt, setAttempt] = useState(0)
-  const sequence = useRef(0)
-  // the list, by its sequence, whose Load more is on its way, so a second
-  // press or a Retry starts no second read of it
-  const reading = useRef<number | null>(null)
-  const typed = text.trim()
-  const tooLong = overLimit(LIMITS.search, typed)
-  useEffect(() => {
-    if (typed === '') return setQuery('')
-    if (tooLong) return
-    const timer = window.setTimeout(() => setQuery(typed), SEARCH_DELAY_MS)
-    return () => window.clearTimeout(timer)
-  }, [typed, tooLong])
-  useEffect(() => {
-    const n = ++sequence.current
-    setList(NO_PEOPLE)
-    void P.apiAccessPeople(query, null).then((answer) => {
-      if (n !== sequence.current) return
-      setList(
-        answer === null
-          ? { ...NO_PEOPLE, phase: 'failed' }
-          : answer.state === 'not_ready'
-            ? { ...NO_PEOPLE, phase: 'not_ready' }
-            : { rows: answer.rows, next: answer.next, stopped: answer.stopped, phase: 'ready' },
-      )
-    })
-    return () => {
-      sequence.current++
-    }
-  }, [query, attempt])
-  /* The next batch, after the rows listed: Load more, or Retry once a
-     Load more failed. */
-  const more = () => {
-    const n = sequence.current
-    if (list.next === null || reading.current === n) return
-    if (list.phase !== 'ready' && list.phase !== 'failed') return
-    reading.current = n
-    setList((current) => ({ ...current, phase: 'more' }))
-    void P.apiAccessPeople(query, list.next).then((answer) => {
-      if (reading.current === n) reading.current = null
-      if (n !== sequence.current) return
-      setList((current) =>
-        answer === null || answer.state !== 'ready'
-          ? { ...current, phase: 'failed' }
-          : {
-              rows: [...current.rows, ...answer.rows],
-              next: answer.next,
-              stopped: answer.stopped,
-              phase: 'ready',
-            },
-      )
-    })
-  }
+  const { tooLong, settled: query } = useSettledSearch(text, LIMITS.search)
+  const list = usePagedList({
+    key: query,
+    source: { kind: 'once', read: (at) => P.apiAccessPeople(query, at.after) },
+    batch: peopleBatch,
+    id: (person) => person.id,
+    most: PEOPLE_MOST,
+  })
+  const end = listEnd(list, query !== '')
   const myName = P.user(me)?.name ?? 'You'
   // the viewer leads the list without a search, and keeps their place in one
   const matches = query === '' ? list.rows.filter((person) => person.id !== me) : list.rows
-  const full = list.rows.length >= PEOPLE_MOST
   return (
     <div data-api-access-people="" className="flex flex-col gap-1">
       <LimitedInput
@@ -866,15 +823,15 @@ function PersonChoices({
         ))}
         {tooLong ? (
           <p className="px-2 py-1 text-sm text-text-2">{limitSentence(LIMITS.search)}</p>
-        ) : list.phase === 'first' ? (
+        ) : end === 'loading' ? (
           <p role="status" className="px-2 py-1 text-sm text-text-2">
             Loading people…
           </p>
-        ) : list.phase === 'not_ready' ? (
+        ) : end === 'held' ? (
           <p className="px-2 py-1 text-sm text-text-2">
             The people list is not ready yet. Try again in a few minutes.
           </p>
-        ) : list.phase === 'failed' ? (
+        ) : end === 'failed' ? (
           <div role="alert" className="flex items-center gap-2 px-2 py-1 text-sm text-danger">
             Couldn't load people.
             <Button
@@ -883,14 +840,14 @@ function PersonChoices({
               className="h-control-sm text-sm"
               // a failed Load more keeps its place, which a batch with no
               // match before it has too; a failed first batch starts again
-              onClick={() => (list.next === null ? setAttempt((n) => n + 1) : more())}
+              onClick={() => list.retry()}
             >
               Retry
             </Button>
           </div>
-        ) : list.next !== null && full ? (
+        ) : end === 'full' ? (
           <p className="px-2 py-1 text-sm text-text-2">Search to find more people.</p>
-        ) : list.next !== null ? (
+        ) : end === 'more' ? (
           <>
             {list.stopped && (
               <p className="px-2 py-1 text-sm text-text-2">
@@ -900,12 +857,12 @@ function PersonChoices({
             <MenuItem
               data-api-access-people-more=""
               disabled={list.phase === 'more'}
-              onClick={more}
+              onClick={list.more}
             >
               {list.phase === 'more' ? 'Loading…' : 'Load more'}
             </MenuItem>
           </>
-        ) : matches.length === 0 && query !== '' ? (
+        ) : end === 'none' ? (
           <p className="px-2 py-1 text-sm text-text-2">No people match.</p>
         ) : null}
       </div>
