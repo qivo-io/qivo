@@ -183,7 +183,8 @@ while Qivo cannot read every subtask of this task**. The **Parent**,
 **Available once this task has loaded**. With **Read-only project access**
 nothing but your own comments changes. Anyone who can see the task can
 follow it and open **Subscribers**, and plan it on the roadmap, which opens
-once every task has loaded. When the task arrives, the window shows it from
+once every task has loaded and then highlights it, unless you have left the
+roadmap meanwhile. When the task arrives, the window shows it from
 the workspace in place, and a title, hours or a comment you were typing
 stay. If Qivo cannot check such a task for changes, the window keeps showing
 it as it last loaded and says so, with **Retry**. Its changes then wait with

@@ -937,6 +937,19 @@ function App() {
     focusN.current += 1
     setRevealTask({ id, n: focusN.current, atOnce, ...(key ? { key } : {}) })
   }
+  /* A Plan on roadmap request waits while the Roadmap waits for every task
+     (TasksLoadingView). It holds only while the person stays on the
+     Roadmap. Leaving it drops the plan request, and a reveal planOnRoadmap
+     asked for (its nonce here), so a later visit starts no planning
+     session and writes no dates the person no longer asked for. */
+  const roadmapReveal = useRef<number | null>(null)
+  useEffect(() => {
+    if (view === 'roadmap') return
+    setFocusPlan(null)
+    const asked = roadmapReveal.current
+    roadmapReveal.current = null
+    if (asked !== null) setRevealTask((request) => (request?.n === asked ? null : request))
+  }, [view])
   // current scope and layout for the popstate handler (registered once, deps [])
   const scopeRef = useRef(scope)
   scopeRef.current = scope
@@ -1597,8 +1610,10 @@ function App() {
         setInboxOpen(false)
         setSync(null)
         setOpenIssue(null)
-        if (group) reveal(id, false, it.key)
-        else {
+        if (group) {
+          reveal(id, false, it.key)
+          roadmapReveal.current = focusN.current
+        } else {
           focusN.current += 1
           setFocusPlan({ id, n: focusN.current, key: it.key })
         }
