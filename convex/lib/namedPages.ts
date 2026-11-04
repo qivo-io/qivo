@@ -1,18 +1,27 @@
 /* Name-ordered lists read a batch at a time: Settings > Labels and the task
  * label picker (model/labels.ts labelBatch), API access's person filter
  * (apiAccess.ts people), a project's access lists and its access and lead
- * pickers (model/projectSettings.ts), and later the people and team lists
- * of Settings and the REST and MCP lists. A list is one index, or a merge
- * of several (mergeNamed), in the order of a name key (a label's
- * name_lower, a profile's or a team's name_key, lib/nameKey.ts) and then of
- * the fields the index orders equal keys by, the tie: the id or profile_id
- * for the name indexes that end in one, and _creationTime and _id, Convex's
- * implicit last fields, for an index that ends in nothing else. Convex does
- * not promise distinct creation times, so a tie on _creationTime alone could
- * skip a row. Positions compare as Convex orders values (compareNamed), with
- * strings in UTF-8 byte order, so the order differs from JavaScript's `<`
- * for characters past the Basic Multilingual Plane and from the browser's
- * localeCompare.
+ * pickers (model/projectSettings.ts), a person's projects for navigation
+ * and a project's sub-projects (model/projectNavReads.ts), and later the
+ * people and team lists of Settings and the REST and MCP lists. A list is
+ * one index, or a merge of several (mergeNamed), in the order of a name key
+ * (a label's name_lower, a profile's, a team's or a project's name_key,
+ * lib/nameKey.ts) and then of the fields the index orders equal keys by,
+ * the tie: the id or profile_id for the name indexes that end in one, and
+ * _creationTime and _id, Convex's implicit last fields, for an index that
+ * ends in nothing else. Convex does not promise distinct creation times, so
+ * a tie on _creationTime alone could skip a row. Positions compare as
+ * Convex orders values (compareNamed), with strings in UTF-8 byte order, so
+ * the order differs from JavaScript's `<` for characters past the Basic
+ * Multilingual Plane and from the browser's localeCompare. A list of
+ * several groups, such as a person's favorite projects before the rest,
+ * marks each group's keys with a one-character prefix (inGroup).
+ *
+ * A merge throws when two streams hand out one position, which would mean
+ * their ranges overlap. Only the project navigation lists merge streams
+ * whose rows at one position name one thing, the reach rows of a seat and
+ * of its teams on one project, and they ask the merge to hand out one of
+ * those rows (mergeNamed's `ties`).
  *
  * A position names a place in that order, just after the row with its key
  * and tie, so a batch reads only what follows it, however long the list, and
@@ -138,18 +147,54 @@ export function indexAfter<Row extends GenericDocument, Tie extends NamedTie>(
   }
 }
 
+/** `index` as one group of a list of several, each marked by a
+ * one-character ASCII prefix of its keys, such as model/projectSettings.ts
+ * TEAM_MARK and PERSON_MARK, so the groups come in the order of their marks
+ * (compareNamed compares the marks first). After a position of its own
+ * group it reads what follows it in the index; after a position of an
+ * earlier group, the whole index; after one of a later group, nothing. */
+export function inGroup<Row, Tie extends NamedTie>(
+  index: NamedIndex<Row, Tie>,
+  mark: string,
+): NamedIndex<Row, Tie> {
+  return {
+    all: index.all,
+    after: (at) => {
+      const group = at.key.slice(0, 1)
+      if (group === mark) return index.after({ key: at.key.slice(1), tie: at.tie })
+      return group < mark ? [index.all] : []
+    },
+    at: (row) => {
+      const at = index.at(row)
+      return { key: mark + at.key, tie: at.tie }
+    },
+  }
+}
+
+/** What mergeNamed does with rows of several streams at one position when
+ * asked (`ties: 'first'`): it hands out the row of the first of those
+ * streams once and moves each of them on. It counts every row it drops
+ * with `reads`, the batch's (readBatch), and hands out STOPPED after the
+ * row it handed out when the budget has no room left. Right only where rows
+ * at one position name one thing and are alike for the batch's `keep`, as
+ * the reach rows of one seat and of its teams on one project are for the
+ * project navigation lists (model/projectNavReads.ts). */
+export type MergeTies = { ties: 'first'; reads: NamedReads }
+
 /** The rows of `streams`, each in name order, as one stream in name order.
  * A position names one row, so no two streams may hand out the same one: a
  * batch that ended at the first would start after both and skip the other.
  * Equal positions mean the merged ranges overlap, and the merge throws when
- * two streams' next rows have one, before it hands out either. It reads every
- * stream's first row before it hands out one, and after that reads a
- * stream's next row only when the next row asked for may be it, so a batch
- * reads at most one row past its last from each stream. Once a stream hands
- * out STOPPED, its later rows are unknown, so the merge hands out STOPPED and
- * ends too: the rows it handed out are every row up to the last of them. */
-export async function* mergeNamed<Row>(
+ * two streams' next rows have one, before it hands out either, unless
+ * `ties` asks for one of them (MergeTies). It reads every stream's first
+ * row before it hands out one, and after that reads a stream's next row
+ * only when the next row asked for may be it, so a batch reads at most one
+ * row past its last from each stream. Once a stream hands out STOPPED, its
+ * later rows are unknown, so the merge hands out STOPPED and ends too: the
+ * rows it handed out are every row up to the last of them. */
+export async function* mergeNamed<Row extends GenericDocument>(
   streams: readonly NamedStream<Row>[],
+  ties?: MergeTies,
 ): AsyncGenerator<Named<Row> | typeof STOPPED> {
   const open = streams.map((stream) => stream[Symbol.asyncIterator]())
   // the next row of stream `i`, or null at its end
@@ -169,21 +214,42 @@ export async function* mergeNamed<Row>(
     }
     for (;;) {
       let best = -1
+      // the other streams whose next row is at the leader's position
+      let tied: number[] = []
       heads.forEach((head, i) => {
+        if (head === null) return
         const leader = best < 0 ? null : heads[best]
-        const order = head === null || leader === null ? -1 : compareNamed(head.at, leader.at)
-        if (order === 0) throw new Error('two merged streams hand out one position')
-        if (head !== null && order < 0) best = i
+        const order = leader === null ? -1 : compareNamed(head.at, leader.at)
+        if (order === 0 && ties === undefined)
+          throw new Error('two merged streams hand out one position')
+        if (order === 0) tied.push(i)
+        else if (order < 0) {
+          best = i
+          tied = []
+        }
       })
       const head = best < 0 ? null : heads[best]
       if (head === null) return
+      // the rows dropped beside it were read, so the budget counts them
+      let room = true
+      for (const i of tied) {
+        const dropped = heads[i]
+        if (ties !== undefined && dropped !== null && !(await ties.reads.skip(dropped.row)))
+          room = false
+      }
       yield head
-      const next = await pull(best)
-      if (next === STOPPED) {
+      if (!room) {
         yield STOPPED
         return
       }
-      heads[best] = next
+      for (const i of [best, ...tied]) {
+        const next = await pull(i)
+        if (next === STOPPED) {
+          yield STOPPED
+          return
+        }
+        heads[i] = next
+      }
     }
   } finally {
     for (const stream of open) await stream.return?.()
@@ -243,6 +309,11 @@ export type ReadGuard = {
    * It reads whatever the ceiling says, so a row's own reads always finish,
    * and `full` then tells the walk to stop. */
   lookup<D extends GenericDocument>(read: () => Promise<D | null>): Promise<D | null>
+  /** Looks at the transaction's metrics again after reads the walk could
+   * not count one at a time, such as an access check's (lib/access.ts
+   * accessOf), and answers whether the walk may go on. A look costs about
+   * as much as an index range, so a caller settles once a row. */
+  settle(): Promise<boolean>
   /** Whether a check found the ceiling reached. Every later check answers
    * no. */
   readonly full: boolean
@@ -281,6 +352,9 @@ export function readGuard(ctx: QueryCtx, ceiling: ReadCeiling): ReadGuard {
       if (doc !== null) await guard.document(doc)
       return doc
     },
+    async settle() {
+      return !full && (await look())
+    },
     get full() {
       return full
     },
@@ -314,9 +388,10 @@ export type NamedBatch<Out> = {
 
 /**
  * One batch of a name-ordered list. It reads `stream`'s rows in order and
- * passes each to `keep`, which answers what to send for it or null to leave
- * it out (a search miss, a person a list does not show), counting its own
- * reads with the guard it is given. It stops once `limit` rows are kept,
+ * passes each to `keep` with its position, which answers what to send for
+ * it or null to leave it out (a search miss, a person a list does not
+ * show), counting its own reads with the guard it is given. It stops once
+ * `limit` rows are kept,
  * when the next row lies past `through`, when the stream ends, or when the
  * guard on `ceiling` refuses the next read or finds the ceiling reached
  * after a row. The rows the stream reads and leaves out count too
@@ -338,7 +413,7 @@ export async function readBatch<Row extends GenericDocument, Out>(
   ctx: QueryCtx,
   o: {
     stream: (reads: NamedReads) => NamedStream<Row>
-    keep: (row: Row, guard: ReadGuard) => Promise<Out | null>
+    keep: (row: Row, guard: ReadGuard, at: NamedAt) => Promise<Out | null>
     limit: number
     through: NamedAt | null
     ceiling: ReadCeiling
@@ -378,7 +453,7 @@ export async function readBatch<Row extends GenericDocument, Out>(
       if (full && at !== null) return { rows, at, ended: false, stopped: false }
       moved = true
       at = step.value.at
-      const kept = await o.keep(step.value.row, guard)
+      const kept = await o.keep(step.value.row, guard, step.value.at)
       if (kept !== null) rows.push(kept)
       if (guard.full) {
         return { rows, at, ended: false, stopped: rows.length < o.limit && !reached(at) }
@@ -457,4 +532,59 @@ export async function openNamedCursor(
     fields.push(field)
   }
   return { key, tie: fields }
+}
+
+/* -------------------------------------------------------------- the lists */
+
+/** What one batch of an app list reads between, its cursors opened: the
+ * list's name and scope, which seal its cursors (namedCursor), the position
+ * of the batch's start (`after`, null for the first batch) and, to keep a
+ * loaded batch live, its end (`through`). model/projectSettings.ts listAsk
+ * opens one. */
+export type BatchAsk = {
+  list: string
+  scope: readonly string[]
+  after: NamedAt | null
+  through: NamedAt | null
+}
+
+/** One batch of an app list: the rows; `next`, a cursor at the position
+ * the batch reached, or null when nothing follows it; and `stopped`,
+ * whether the read budget ended the batch before it was full or reached
+ * `through`, so the rows are every match up to `next`, possibly none. */
+export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolean }
+
+/** One batch of `ask` over `stream` (readBatch), keeping what `keep`
+ * answers. Without `ask.through` it holds at most `limit` rows; with it,
+ * every match up to and including `through`, so a loaded batch stays live
+ * without its end moving, and one that would hold more than four times
+ * `limit` stops there as if the read budget stopped it, and the app splits
+ * it, as model/labels.ts labelBatch does. The project settings lists and
+ * pickers (model/projectSettings.ts) and the project navigation lists
+ * (model/projectNavReads.ts) answer through it. */
+export async function listBatch<Row extends GenericDocument, Out>(
+  ctx: QueryCtx,
+  ask: BatchAsk,
+  o: {
+    stream: (reads: NamedReads) => NamedStream<Row>
+    keep: (row: Row, guard: ReadGuard, at: NamedAt) => Promise<Out | null>
+    limit: number
+    ceiling: ReadCeiling
+  },
+): Promise<ListBatch<Out>> {
+  const batch = await readBatch(ctx, {
+    stream: o.stream,
+    keep: o.keep,
+    limit: ask.through === null ? o.limit : 4 * o.limit,
+    through: ask.through,
+    ceiling: o.ceiling,
+    after: ask.after,
+  })
+  // a batch under `through` that stopped short of it holds too many rows
+  const short = !batch.ended && ask.through !== null && compareNamed(batch.at, ask.through) < 0
+  return {
+    rows: batch.rows,
+    next: batch.ended ? null : await namedCursor(ask.list, ask.scope, batch.at),
+    stopped: batch.stopped || short,
+  }
 }

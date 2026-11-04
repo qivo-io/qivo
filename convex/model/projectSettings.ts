@@ -67,17 +67,17 @@ import { LIMITS, LIST_BATCH } from '../lib/limits'
 import {
   compareNamed,
   indexAfter,
+  inGroup,
+  type ListBatch,
+  listBatch,
   mergeNamed,
   type Named,
   type NamedAt,
-  type NamedIndex,
   type NamedReads,
   type NamedStream,
   namedCeiling,
-  namedCursor,
   openNamedCursor,
   type ReadGuard,
-  readBatch,
   STOPPED,
 } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
@@ -413,7 +413,8 @@ export type ListArgs = { search?: string; after?: string; through?: string }
 
 /** A name-ordered list asked for: the list's name and scope, which seal
  * its cursors (lib/namedPages.ts namedCursor), the search as typed, trimmed,
- * and the positions the batch reads between. */
+ * and the positions the batch reads between, a lib/namedPages.ts BatchAsk
+ * with the search. */
 export type ListAsk = {
   list: string
   scope: readonly string[]
@@ -459,46 +460,6 @@ export async function listAsk(
     throw badRequest('through must be a cursor after the one in after')
   }
   return { list, scope: sealed, search, after, through }
-}
-
-/** One batch of a name-ordered list: the rows; `next`, a cursor at the
- * position the batch reached, or null when nothing follows it; and
- * `stopped`, whether the read budget ended the batch before it was full or
- * reached `through`, so the rows are every match up to `next`, possibly
- * none. */
-export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolean }
-
-/* One batch of `ask` over `stream` (lib/namedPages.ts readBatch), keeping
- * what `keep` answers. Without `ask.through` it holds at most `limit` rows;
- * with it, every match up to and including `through`, so a loaded batch
- * stays live without its end moving, and one that would hold more than four
- * times `limit` stops there as if the read budget stopped it, and the app
- * splits it, as model/labels.ts labelBatch does. */
-async function listBatch<Row extends GenericDocument, Out>(
-  ctx: QueryCtx,
-  ask: ListAsk,
-  o: {
-    stream: (reads: NamedReads) => NamedStream<Row>
-    keep: (row: Row, guard: ReadGuard) => Promise<Out | null>
-    limit: number
-    ceiling: ReadCeiling
-  },
-): Promise<ListBatch<Out>> {
-  const batch = await readBatch(ctx, {
-    stream: o.stream,
-    keep: o.keep,
-    limit: ask.through === null ? o.limit : 4 * o.limit,
-    through: ask.through,
-    ceiling: o.ceiling,
-    after: ask.after,
-  })
-  // a batch under `through` that stopped short of it holds too many rows
-  const short = !batch.ended && ask.through !== null && compareNamed(batch.at, ask.through) < 0
-  return {
-    rows: batch.rows,
-    next: batch.ended ? null : await namedCursor(ask.list, ask.scope, batch.at),
-    stopped: batch.stopped || short,
-  }
 }
 
 /** What a grant reader answers: `not_ready` while the organization's rows
@@ -713,25 +674,6 @@ const refused = (message: string) => ({ state: 'refused' as const, message })
  * people (lib/namedPages.ts compareNamed compares the marks first). */
 const TEAM_MARK = '0'
 const PERSON_MARK = '1'
-
-/* `index` as one group of a list of several, each marked by a one-character
- * prefix of its keys (TEAM_MARK, PERSON_MARK). After a position of its own
- * group it reads what follows it in the index; after a position of an
- * earlier group, the whole index; after one of a later group, nothing. */
-function inGroup<Row>(index: NamedIndex<Row, IdTie>, mark: string): NamedIndex<Row, IdTie> {
-  return {
-    all: index.all,
-    after: (at) => {
-      const group = at.key.slice(0, 1)
-      if (group === mark) return index.after({ key: at.key.slice(1), tie: at.tie })
-      return group < mark ? [index.all] : []
-    },
-    at: (row) => {
-      const at = index.at(row)
-      return { key: mark + at.key, tie: at.tie }
-    },
-  }
-}
 
 /* Whether `key` is a position of the Add team or user picker. */
 const markedKey = (key: string): boolean => key.startsWith(TEAM_MARK) || key.startsWith(PERSON_MARK)
