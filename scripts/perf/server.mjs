@@ -24,6 +24,8 @@
 //   tasks (100)          visible tasks
 //   descriptions (300)   average description length in characters
 //   labels (2)           labels per task
+//   orglabels (12)       labels in the organization, with ordinary names,
+//                        which the tasks' labels spread over
 //   links (0.05)         share of tasks that link to another task
 //   attachments (0.1)    share of tasks with an attachment
 //   subtasks (0.2)       share of tasks that are subtasks
@@ -56,6 +58,15 @@
 //                        health-over-budget, health-cap (at most 20 rows,
 //                        so the cap note shows) and health-error (its read
 //                        fails); several joined by commas
+//   labelpage            a state Settings › Labels' batches answer whatever
+//                        the labels say, for screenshots of states a seeded
+//                        backend cannot reach: counting (every count being
+//                        prepared), uncounted (every third label not
+//                        counted yet), stopped (an open batch stops after
+//                        ten labels), small (batches of five, so
+//                        orglabels=60 reaches the eight batches the page
+//                        gathers at most) and error (every batch fails);
+//                        several joined by commas. Open it with role=admin
 //   shownload=1          also send the load rows of the tasks the person is
 //                        shown, as the server did before the app derived
 //                        them from the task rows (an older baseline)
@@ -66,9 +77,10 @@
 //   mbps (8)             bandwidth every result waits for
 //   appearance (dark)    the signed-in person's appearance mode, dark or
 //                        light, which the app reads from appearance:get
-//   role (user)          the signed-in person's organization role, user or
-//                        viewer; a Viewer's Overview reads one owner's
-//                        load a query, as a guest's does
+//   role (user)          the signed-in person's organization role, user,
+//                        viewer or admin; a Viewer's Overview reads one
+//                        owner's load a query, as a guest's does, and only
+//                        an admin opens Settings › Labels
 //   unheld (0)           leaves the N highest-numbered visible tasks without
 //                        a parent or subtasks out of the workspace's parts
 //                        and snapshot:forMe, with their labels, files,
@@ -96,12 +108,16 @@
 // same workspace, with no bounds. So are the Overview's queries
 // (overview:summary, risk, attention, paused and health), through the
 // stand-in the jsdom tests use (src/store/overviewStandIn.setup.ts), with no
-// access or read budget.
+// access or read budget. So are Settings › Labels' batches
+// (labels:settingsPage), through the stand-in the jsdom tests use
+// (src/store/labelPagesStandIn.setup.ts), which answers an admin only and
+// reads no read budget.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
+import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
 
@@ -119,6 +135,7 @@ const latency = option('latency', 100)
 const mbps = option('mbps', 8)
 const descriptionLength = option('descriptions', 300)
 const labelsPerTask = option('labels', 2)
+const orgLabelCount = Math.max(1, option('orglabels', 12))
 const linkShare = option('links', 0.05)
 const attachmentShare = option('attachments', 0.1)
 const subtaskShare = option('subtasks', 0.2)
@@ -152,10 +169,25 @@ const forcedOverview = (() => {
   }
   return force
 })()
+/* Settings › Labels' forced states (the `labelpage` parameter), as the
+   stand-in's `force` takes them; `uncounted` names its labels once they
+   exist. */
+const forcedLabels = (() => {
+  const force = {}
+  for (const state of (parameters.get('labelpage') ?? '').split(',').filter(Boolean)) {
+    if (state === 'counting') force.counting = true
+    else if (state === 'stopped') force.stop = 10
+    else if (state === 'small') force.batch = 5
+    else if (state === 'error') force.fail = true
+    else if (state === 'uncounted') force.uncounted = true
+  }
+  return force
+})()
 const varied = parameters.get('shape') === 'varied'
 const shownLoad = parameters.get('shownload') === '1'
 const appearance = parameters.get('appearance') === 'light' ? 'light' : 'dark'
 const viewer = parameters.get('role') === 'viewer'
+const admin = parameters.get('role') === 'admin'
 const unheldCount = option('unheld', 0)
 const forcedWindow = parameters.get('window') ?? undefined
 const fixtureTime = new Date()
@@ -205,7 +237,7 @@ const profiles = Array.from({ length: peopleCount }, (_, n) => ({
   color: '#335577',
   // staff, so hidden projects show as anonymized load like a real member's,
   // unless the page asks for a Viewer
-  org_role: n === 0 && viewer ? 'viewer' : n === 1 ? 'admin' : 'user',
+  org_role: n === 0 && viewer ? 'viewer' : (n === 0 && admin) || n === 1 ? 'admin' : 'user',
   active: true,
   kind: 'person',
   plannable_hours: 40,
@@ -274,11 +306,30 @@ const hidden = program(programCount, 'Hidden program', hiddenCount, hiddenNum)
 const projects = programs.flatMap((p) => p.children)
 // a grant on each program reaches its sub-projects; the hidden one has none
 const access = programs.map((p) => ({ project_id: p.meta.id, profile_id: me.id, level: 'user' }))
-const labels = Array.from({ length: 12 }, (_, n) => ({
+/* What the labels past the first twelve are about, as a team names its
+   labels; each is numbered, so no two share a name. */
+const LABEL_TOPICS = [
+  'Field test',
+  'Supplier review',
+  'Bench rig',
+  'Enclosure fit',
+  'Calibration',
+  'Certification',
+  'Packaging',
+  'Pilot site',
+  'Power budget',
+  'Release notes',
+]
+/** The name of label `n`: Label A to Label L, then a topic and a number. */
+const labelName = (n) =>
+  n < 12
+    ? `Label ${String.fromCharCode(65 + n)}`
+    : `${LABEL_TOPICS[(n - 12) % LABEL_TOPICS.length]} ${String(Math.floor((n - 12) / LABEL_TOPICS.length) + 1).padStart(2, '0')}`
+const labels = Array.from({ length: orgLabelCount }, (_, n) => ({
   id: id('8', n),
   org_id: org,
-  name: `Label ${String.fromCharCode(65 + n)}`,
-  name_lower: `label ${String.fromCharCode(97 + n)}`,
+  name: labelName(n),
+  name_lower: labelName(n).toLowerCase(),
   color: '#557733',
   created_at: now,
 }))
@@ -903,6 +954,19 @@ const read = (name, args = {}) => {
       return searchPage(args)
     case 'tasks:board':
       return boardStandIn(snapshot, args, { force: forcedBoard })
+    case 'labels:settingsPage': {
+      const { uncounted, ...force } = forcedLabels
+      return labelSettingsStandIn(snapshot, args, {
+        force: uncounted
+          ? {
+              ...force,
+              counts: Object.fromEntries(
+                snapshot.labels.filter((_, n) => n % 3 === 0).map((l) => [l.id, null]),
+              ),
+            }
+          : force,
+      })
+    }
     case 'overview:summary':
     case 'overview:risk':
     case 'overview:attention':
