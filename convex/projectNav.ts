@@ -15,12 +15,16 @@
  *
  * The reads are live queries, in model/projectNavReads.ts. Each judges every
  * project by the caller's ordinary access, so admin status alone adds
- * none; finds its candidates in the caller's own reach and favorite rows
- * and the projects they name, or, for the sub-projects of a project the
- * caller sees for a reason of its own, in that project's live
- * sub-projects; reads no task; and answers `not_ready`, `stopped` or the
- * access_unchecked refusal where it cannot finish, never a partial list as
- * complete. No app calls them or stars yet. */
+ * none, and reads no task. page and children find their candidates in the
+ * caller's own reach and favorite rows and the projects they name, or, for
+ * the sub-projects of a project the caller sees for a reason of its own,
+ * in that project's live sub-projects. They answer `not_ready` until the
+ * organization's reach rows and name keys are complete and `stopped` where
+ * the read budget ends a batch, never a partial list as complete. resolve
+ * judges only the project it is asked about and answers before those rows
+ * and keys are complete. Where a check a bound stopped, each read answers
+ * the access_unchecked refusal, never a loss of access. No app calls them
+ * or stars yet. */
 
 import { v } from 'convex/values'
 import { authedQuery, orgMutation } from './lib/functions'
