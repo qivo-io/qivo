@@ -12550,6 +12550,8 @@ export function disposeDemoStore() {
   detailConnection = 0
   detailRows = { from: null, task: null }
   drawnAnswer = null
+  parentShaped = null
+  familyShaped = null
   preferences.dispose(myProfileSet)
   clearAvatarSources()
   minted.clear()
