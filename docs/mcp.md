@@ -1586,11 +1586,12 @@ change, so they hold whatever the project's size. For a moment after one of
 the project's sub-projects is archived, restored, moved to Deleted items or
 brought back from it, and while Qivo counts an organization again, it is
 `{"status": "counting", "done": null, "total": null, "percent": null}`, so
-ask again later; an `update_project` that archives or restores a
-sub-project answers its own completion as `counting` too. In a project with
-so many sub-projects that the call has no room left to read their counts,
-it is `{"status": "unavailable", "done": null, "total": null, "percent":
-null}` instead. Neither ever fails the read or `update_project`.
+ask again later; an `update_project` that restores a sub-project answers
+its completion as `counting` too, and one that archives a project answers
+`null`. In a project with so many sub-projects that the call has no room
+left to read their counts, it is `{"status": "unavailable", "done": null,
+"total": null, "percent": null}` instead. Neither ever fails the read or
+`update_project`.
 `completion` is `null` for an archived project, and `create_project` answers
 `ok` with zeros, because a new project holds no tasks. `status` arrived in
 November 2026, and `counting` later that month, so treat a `status` you do

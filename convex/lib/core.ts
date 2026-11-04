@@ -2114,9 +2114,9 @@ const countsRead = (subProjects: number): ReadCeiling => ({
  * the organization (internal/overviewCountsBackfill.ts), while a regroup
  * of the family runs after one of its projects was archived, restored,
  * moved to Deleted items or brought back from it (startRegroup, in the
- * same transaction, so an update_project or PATCH that archives or
- * restores a sub-project answers it), or where a row went below zero until
- * a recount mends it. UNAVAILABLE_COMPLETION where the request has no room
+ * same transaction, so an update_project or PATCH that restores a
+ * sub-project answers it; one that archives a project answers null), or
+ * where a row went below zero until a recount mends it. UNAVAILABLE_COMPLETION where the request has no room
  * for those reads beside COMPLETION_RESERVE, which inside the design size
  * never happens. It keeps the public promise that completion never fails a
  * project's read or update (docs/rest-api.md, docs/mcp.md). In an
