@@ -549,7 +549,8 @@ describe('projects a person cannot open', () => {
      * its sub-projects, beside `hidden` sub-projects named `prefix` they
      * cannot see. It reads children whole, then under a budget a few ranges
      * short of the whole read, and a stand-in that reads the parent's live
-     * sub-projects under the same budget. */
+     * sub-projects under the same budget. The larger run holds 30 live
+     * sub-projects under the parent, the design size. */
     const run = async (hidden: number, prefix: string, short?: number) => {
       const t = newT()
       const f = await withOrg(t)
@@ -593,7 +594,7 @@ describe('projects a person cannot open', () => {
       }
     }
     const few = await run(2, 'Aaa ')
-    const many = await run(30, 'Mine c ', few.short)
+    const many = await run(27, 'Mine c ', few.short)
     expect(few.whole).toEqual(many.whole)
     expect(few.whole).toMatchObject({ rows: ['Mine b', 'Mine d', 'Mine f'], end: true })
     expect(few.low).toEqual(many.low)
@@ -633,7 +634,8 @@ describe('projects a person cannot open', () => {
       return { whole: shape(whole), low: shape(low), short: whole.read.ranges - 6, check }
     }
     const none = await run(0)
-    const many = await run(60, none.short)
+    // 5 teams share the lost project, the design size of a project's shares
+    const many = await run(5, none.short)
     expect(none.whole).toEqual(many.whole)
     expect(none.whole.rows).toHaveLength(LIST_BATCH)
     expect(none.whole.rows.every(([, favorite]) => favorite === false)).toBe(true)
@@ -641,7 +643,7 @@ describe('projects a person cannot open', () => {
     expect(none.low.stopped).toBe(true)
     // the access check the reach lookup spares reads the project's shares
     expect(none.check.out).toBe(false)
-    expect(many.check.read.documents).toBeGreaterThan(none.check.read.documents + 50)
+    expect(many.check.read.documents).toBeGreaterThan(none.check.read.documents + 4)
   })
 })
 
@@ -1117,6 +1119,8 @@ describe('tasks', () => {
     const t = newT()
     const f = await withOrg(t)
     const pia = await person(t, f.org.id, 'Pia')
+    // a third sub-project, so 800 open tasks keep each under 300
+    const subs = [f.sub, f.sub2, ...(await plantSubs(t, f.meta, ['Layout']))]
     await plantGrants(t, pia, [f.meta])
     await ready(t, f)
     const seats = mapOf([pia])
@@ -1136,7 +1140,7 @@ describe('tasks', () => {
             {
               id: uuid(),
               org_id: f.org.id,
-              project_id: (i % 2 === 0 ? f.sub : f.sub2).id,
+              project_id: subs[i % 3].id,
               num: 10_000 + i,
               title: `Task ${i}`,
               description: '',
@@ -1209,14 +1213,16 @@ describe('reads at the design size', () => {
     whole(walked.calls)
   })
 
-  it('reads none of 300 archived top-level projects the person reached, beside 200 live ones and one shown for navigation in the first batch', async () => {
-    /* The person's root rows, live and archived, are the 500 the access
-     * check's navigation would read at once (the sum rule); these reads ask
-     * no question that reads them. */
+  it('reads none of 300 archived top-level projects the person reached, beside 200 live ones with one shown for navigation in the first batch', async () => {
+    /* The person reaches the organization's 200 live top-level projects,
+     * withOrg's two and one shown for navigation among them, so her root
+     * rows, live and archived, are the 500 the access check's navigation
+     * would read at once (the sum rule); these reads ask no question that
+     * reads them. */
     const first = async (archived: number) => {
-      const { t, f, pia } = await topLevel(200, archived)
+      const { t, f, pia } = await topLevel(197, archived)
       const [nav] = await plantMetas(t, f.org.id, ['Aaa shown for navigation'])
-      await plantGrants(t, pia, await plantSubs(t, nav, ['Aaa nav sub']))
+      await plantGrants(t, pia, [f.meta, f.hidden, ...(await plantSubs(t, nav, ['Aaa nav sub']))])
       await ready(t, f)
       return await measured(t, (ctx) => navPageOf(ctx, mapOf([pia]), {}))
     }
@@ -1375,9 +1381,13 @@ describe('reads at the design size', () => {
     expect(beside.read.documents).toBe(without.read.documents)
   })
 
-  for (const [label, count, archived] of [
-    ['500 live', 500, false],
-    ['1,000 archived', 1000, true],
+  /* The organization's other sub-projects are 495 live ones, 3 a parent,
+   * which withOrg's two and the project's own 3 bring to 500, or 1,000
+   * archived ones, 30 a parent, under the 40 archived sub-projects of one
+   * project. Pia holds a grant on her project alone. */
+  for (const [label, count, each, archived] of [
+    ['500 live', 495, 3, false],
+    ['1,000 archived', 1000, 30, true],
   ] as const)
     it(`reads an everyday project's own sub-projects among ${label} sub-projects of the organization`, async () => {
       const run = async (others: number) => {
@@ -1386,15 +1396,15 @@ describe('reads at the design size', () => {
         const pia = await person(t, f.org.id, 'Pia')
         const [parent] = await plantMetas(t, f.org.id, ['Mine'])
         await plantSubs(t, parent, names('Mine ', 3))
-        const elsewhere = await plantMetas(t, f.org.id, names('Other ', Math.ceil(others / 30)))
+        const elsewhere = await plantMetas(t, f.org.id, names('Other ', Math.ceil(others / each)))
         for (const [i, p] of elsewhere.entries())
           await plantSubs(
             t,
             p,
-            names(`${p.name} sub `, Math.min(30, others - i * 30)),
+            names(`${p.name} sub `, Math.min(each, others - i * each)),
             archived ? { archived_at: NOW } : {},
           )
-        await plantGrants(t, pia, [parent, ...elsewhere])
+        await plantGrants(t, pia, [parent])
         await ready(t, f)
         return await measured(t, (ctx) =>
           navChildrenOf(ctx, mapOf([pia]), { project_id: parent.id }),
@@ -1455,7 +1465,7 @@ describe('reads at the design size', () => {
   })
 })
 
-/* -------------------------------------------------------- the public doors */
+/* ------------------------------------------------------ the public queries */
 
 describe('the public queries', () => {
   it('answer for the signed-in login across its active seats, leaving out an inactive seat and an organization being deleted', async () => {
