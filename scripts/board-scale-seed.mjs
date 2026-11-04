@@ -5,7 +5,8 @@
  *     node scripts/board-scale-seed.mjs --local --deployment local-<name>-<port> \
  *       --url http://127.0.0.1:<port> [--site-url http://localhost:5199] [--tasks 10000] \
  *       [--sub-project FW] [--archived 160] [--inbox 600] \
- *       [--credentials 45 --api-url http://127.0.0.1:<site port>] [--relations]
+ *       [--credentials 45 --api-url http://127.0.0.1:<site port>] [--relations] \
+ *       [--labels 60]
  *
  * It takes the same loopback-only target as `marketing-demo.mjs --local`, and
  * the same refusals: no deploy key, no staging, production or demo
@@ -68,6 +69,20 @@
  * ("(scale N, try 2)", then 3), with all its calls. The seed deletes and
  * changes no credential, so the short one, and any credential a person
  * named the same way, stay as they are.
+ *
+ * `--labels N` adds up to N labels to Northstar, for checking Settings >
+ * Labels past its first batch of 25 (LIST_BATCH): each made by Nora through
+ * labels:create, with a name a team would give one ("Field test 01",
+ * "Supplier review 01" and so on, ten topics in turn, then each again
+ * with the next number) and a color of the palette in turn, and put on a
+ * few tasks through labels:toggle, label n on n % 4 of them, so the counts
+ * differ and every fourth label is on none. The tasks are the seeded ones
+ * still active, or Northstar's own active tasks where the run holds none
+ * (--tasks 0), in their order, and a task never passes LIMITS.labels.max.
+ * Each label's id comes from its number, and a name Northstar holds in any
+ * case counts as made, so a second run adds only what is missing and puts
+ * a label on a task only once. It runs after the tasks and --relations and
+ * before --archived.
  *
  * `--relations` adds one task at both per-task caps, for checking the task
  * window's Subtasks, Linked tasks and Attachments at scale (planRelations):
@@ -184,6 +199,24 @@ const MOST_TASKS = 30_000
 /* The most seeded credentials: enough for many API access pages of 25,
    with every call well inside the per-profile request rate. */
 const MOST_CREDENTIALS = 500
+/* The most seeded labels: twenty batches of Settings > Labels, far past the
+   eight it gathers before it asks for a search. */
+const MOST_LABELS = 500
+/* What seeded labels are about, in turn, as a team names its labels. */
+const LABEL_TOPICS = [
+  'Field test',
+  'Supplier review',
+  'Bench rig',
+  'Enclosure fit',
+  'Calibration',
+  'Certification',
+  'Packaging',
+  'Pilot site',
+  'Power budget',
+  'Release notes',
+]
+/* The seeded labels' colors in turn, from the app's palette. */
+const LABEL_COLORS = ['#D97706', '#7C3AED', '#2563EB', '#DB2777', '#0F766E', '#0891B2', '#EA580C']
 /* Seeded credential names, by what each one is for, then its number. */
 const TOOLS = ['Cursor', 'Raycast', 'Zed', 'Sheets sync', 'Claude Code', 'Notion export']
 const JOBS = ['Nightly build', 'Release notes', 'Telemetry import', 'Backup check']
@@ -203,6 +236,7 @@ export function parseSeedArgs(args) {
     credentials: 0,
     relations: false,
     subProject: null,
+    labels: 0,
   }
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -223,6 +257,7 @@ export function parseSeedArgs(args) {
     else if (arg === '--api-url') options.apiUrl = value()
     else if (arg === '--relations') options.relations = true
     else if (arg === '--sub-project') options.subProject = value()
+    else if (arg === '--labels') options.labels = Number(value())
     else throw new DemoCliError(`Unknown option ${arg}.`)
   }
   if (options.target !== 'local')
@@ -239,6 +274,8 @@ export function parseSeedArgs(args) {
     throw new DemoCliError(`--credentials takes a whole number from 0 to ${MOST_CREDENTIALS}.`)
   if (credentials > 0 && !isLoopbackOrigin(options.apiUrl ?? ''))
     throw new DemoCliError('--credentials needs --api-url, the local backend site origin.')
+  if (!Number.isInteger(options.labels) || options.labels < 0 || options.labels > MOST_LABELS)
+    throw new DemoCliError(`--labels takes a whole number from 0 to ${MOST_LABELS}.`)
   return options
 }
 
@@ -255,6 +292,43 @@ export const inboxCommentId = (taskId) => uuidOf(`board-scale-seed inbox ${taskI
 
 /** The id of --relations row `what`, such as "project" or "link 40". */
 export const relationId = (what) => uuidOf(`board-scale-seed relations ${what}`)
+
+/** The name of seeded label `n`, from 0: a topic and a number, such as
+    "Field test 01", ten topics before the number moves on. */
+export const seededLabelName = (n) =>
+  `${LABEL_TOPICS[n % LABEL_TOPICS.length]} ${String(Math.floor(n / LABEL_TOPICS.length) + 1).padStart(2, '0')}`
+
+/**
+ * The --labels work still to do in organization `org` for the first
+ * `count` seeded labels: `create`, the labels:create calls of those whose
+ * name `present` (the organization's labels) lacks in any case, and
+ * `toggle`, the labels:toggle calls that put label n on n % 4 of `tasks`
+ * (task ids in a fixed order), the tasks from n * 3 on, skipping a task
+ * that carries it already in `on` (label ids by task id) and one that
+ * would pass LIMITS.labels.max.
+ */
+export function planLabels({ org, count, present, tasks, on }) {
+  const byName = new Map(present.map((label) => [label.name.toLowerCase(), label.id]))
+  const carried = new Map([...on].map(([task, labels]) => [task, new Set(labels)]))
+  const plan = { create: [], toggle: [] }
+  for (let n = 0; n < count; n++) {
+    const name = seededLabelName(n)
+    let id = byName.get(name.toLowerCase())
+    if (id === undefined) {
+      id = uuidOf(`board-scale-seed label ${n}`)
+      plan.create.push({ org_id: org, id, name, color: LABEL_COLORS[n % LABEL_COLORS.length] })
+    }
+    for (let k = 0; k < n % 4 && tasks.length > 0; k++) {
+      const task = tasks[(n * 3 + k) % tasks.length]
+      const labels = carried.get(task) ?? new Set()
+      if (labels.has(id) || labels.size >= LIMITS.labels.max) continue
+      labels.add(id)
+      carried.set(task, labels)
+      plan.toggle.push({ org_id: org, issue_id: task, label_id: id, on: true })
+    }
+  }
+  return plan
+}
 
 /* The --relations owners, by Northstar person key: of the subtasks, and
    of the linked tasks in Luma Sensor's sub-projects, in Luma Cloud's and
@@ -841,12 +915,56 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       target,
       log,
     })
+  if (options.labels > 0) await seedLabels(options.labels, { client, org, seeded, target, log })
   if (options.archived > 0) {
     const parents = new Set([...issues, ...archived].map((task) => task.parent_id).filter(Boolean))
     await seedArchive(planArchive(options.archived, seeded, parents), { client, org, target, log })
   }
   if (options.inbox > 0)
     await seedInbox(options.inbox, { client, target, people: people.page, actor, org, log })
+}
+
+/** Makes the --labels labels as Nora and puts them on tasks (planLabels):
+    the seeded tasks still active, by number, or Northstar's own active
+    tasks, by number, where the run holds none. */
+async function seedLabels(count, { client, org, seeded, target, log }) {
+  const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
+  const joined = (name) =>
+    [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
+  const active = joined('issues')
+  const live = new Set(active.map((task) => task.id))
+  const fromSeed = [...seeded.keys()]
+    .sort((a, b) => a - b)
+    .map((n) => seeded.get(n).task.id)
+    .filter((id) => live.has(id))
+  const tasks = fromSeed.length
+    ? fromSeed
+    : [...active].sort((a, b) => a.num - b.num).map((task) => task.id)
+  const on = new Map()
+  for (const { issue_id, label_id } of [
+    ...snapshot.issueLabels,
+    ...(snapshot.more?.issueLabels ?? []).flat(),
+  ]) {
+    if (!live.has(issue_id)) continue
+    on.set(issue_id, [...(on.get(issue_id) ?? []), label_id])
+  }
+  const plan = planLabels({ org, count, present: joined('labels'), tasks, on })
+  for (const [name, calls] of [
+    ['labels:create', plan.create],
+    ['labels:toggle', plan.toggle],
+  ])
+    for (const call of calls) {
+      try {
+        await client.mutation(ref(name), call)
+      } catch (error) {
+        throw new DemoCliError(
+          `${name} refused label ${call.name ?? call.label_id}: ${error.data?.message ?? error.message}`,
+        )
+      }
+    }
+  log(
+    `Done: ${plan.create.length} labels added and ${plan.toggle.length} put on tasks in Northstar on ${target.url}.`,
+  )
 }
 
 /** The ids of every link row of organization `org`, as the local admin
