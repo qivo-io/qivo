@@ -1383,8 +1383,9 @@ async function appMessages(call, arg) {
  *  1. OAuth connections, personal tokens and agent keys, which need only
  *     the signed-in app, so no credential of a run outlives a REST outage;
  *  2. with a temporary token for REST reads, projects (with their tasks,
- *     comments, files, grants and milestones), tasks elsewhere and teams,
- *     then labels, which only the app deletes;
+ *     comments, files, grants and milestones), tasks elsewhere and teams;
+ *     then, with or without that token, labels, which only the app
+ *     deletes;
  *  3. the agents, each confirmed gone;
  *  4. the temporary token, then a fresh read of every list to prove that
  *     nothing with the tag is left.

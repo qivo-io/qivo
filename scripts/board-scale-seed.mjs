@@ -71,7 +71,7 @@
  * named the same way, stay as they are.
  *
  * `--labels N` adds up to N labels to Northstar, for checking Settings >
- * Labels past its first batch of 25 (LIST_BATCH): each made by Nora through
+ * Labels past its first batch of 25 (LIST_BATCH). Each is made by Nora through
  * labels:create, with a name a team would give one ("Field test 01",
  * "Supplier review 01" and so on, ten topics in turn, then each again
  * with the next number) and a color of the palette in turn, and put on a
