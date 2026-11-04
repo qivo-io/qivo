@@ -597,6 +597,18 @@ no new rollback floor. An older app works against its backend, and this app
 works against any backend from v0.1.97 on, which the floors above already
 hold.
 
+The project navigation reads `projectNav.page`, `projectNav.children` and
+`projectNav.resolve` first ship in the release after v0.1.117. No app calls
+them yet, so that release sets no rollback floor and needs no step. The
+release whose app first calls them makes the release that shipped them the
+backend's floor, and its own paragraph here says so. The reads use only the
+reach rows and name keys every deployment holds since v0.1.97 and the
+favorites rows below, and answer `not_ready` for an organization without
+both of its `org_ready` stamps. They skip the favorites a rollback past the
+favorites release leaves, by the reader rule the favorites paragraph below
+describes, so such a row never shows and keeps its project, where the seat
+sees it, in the list of the rest.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
