@@ -1421,7 +1421,8 @@ export default defineSchema({
 
   // Which projects each seat and each team reaches through ordinary access,
   // so a person's projects page in name order across their seats and teams
-  // with reads bounded by the page, not by the grants (model/projectNav.ts).
+  // with reads bounded by the page, not by the grants (model/projectNav.ts
+  // writes them, model/projectNavReads.ts pages them).
   // A row is a presence fact that finds candidates and grants nothing:
   // every permission check keeps using lib/access.ts, and a reader checks
   // the live project of each row it returns. Admin status alone writes no

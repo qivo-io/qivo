@@ -219,6 +219,7 @@ import type * as model_people from "../model/people.js";
 import type * as model_projectAccess from "../model/projectAccess.js";
 import type * as model_projectFavorites from "../model/projectFavorites.js";
 import type * as model_projectNav from "../model/projectNav.js";
+import type * as model_projectNavReads from "../model/projectNavReads.js";
 import type * as model_projectSettings from "../model/projectSettings.js";
 import type * as model_projects from "../model/projects.js";
 import type * as model_removalPreview from "../model/removalPreview.js";
@@ -485,6 +486,7 @@ declare const fullApi: ApiFromModules<{
   "model/projectAccess": typeof model_projectAccess;
   "model/projectFavorites": typeof model_projectFavorites;
   "model/projectNav": typeof model_projectNav;
+  "model/projectNavReads": typeof model_projectNavReads;
   "model/projectSettings": typeof model_projectSettings;
   "model/projects": typeof model_projects;
   "model/removalPreview": typeof model_removalPreview;

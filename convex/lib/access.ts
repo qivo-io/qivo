@@ -107,8 +107,10 @@ export const receivesTeamAccess = (me: Doc<'profiles'>): boolean =>
  * A guest or a viewer stays as they are, because as a user a guest would
  * receive the shares of a team it still holds an old membership of, and a
  * viewer would lead a project whose lead_id still names it. The admin
- * access report (internal/adminAccessReport.ts) and a project favorite
- * (model/projectFavorites.ts) ask with it. tests/adminAccessReport.test.ts
+ * access report (internal/adminAccessReport.ts), a project favorite
+ * (model/projectFavorites.ts) and the project navigation reads, which
+ * judge every caller by ordinary access (model/projectNavReads.ts), ask
+ * with it. tests/adminAccessReport.test.ts
  * fails when those helpers start telling admins and users apart. Once the
  * admin access split removes all three branches, this changes nothing and
  * can go. */
@@ -1048,9 +1050,11 @@ type Held = { teams: string[]; onRoot: string[]; seat: boolean }
  * (lib/workspaceParts.ts), the inbox reads (model/inboxReads.ts), the task
  * window (lib/taskWindow.ts), main Search (lib/mainSearch.ts), the Board
  * (lib/board.ts, which answers it `unavailable` with access_unchecked), the
- * Overview's reads (lib/overview.ts, which answer it the same way) and
- * project settings (model/projectSettings.ts) apply this one rule, each with
- * its own answer for that refusal. */
+ * Overview's reads (lib/overview.ts, which answer it the same way),
+ * project settings (model/projectSettings.ts) and the project navigation
+ * reads (model/projectNavReads.ts, which answer it `unavailable` with
+ * access_unchecked as well) apply this one rule, each with its own answer
+ * for that refusal. */
 export function accessOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,

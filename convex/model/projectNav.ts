@@ -27,7 +27,12 @@
  * asks it with the name keys stamp, which name-ordered project lists need
  * too; reachReady asks it alone. projectSight judges a project a name
  * search found from these rows, without walking a top-level project's
- * sub-projects (main Search, lib/mainSearch.ts). */
+ * sub-projects (main Search, lib/mainSearch.ts).
+ *
+ * The readers beside these writers: projectNav.page, children and resolve
+ * page a person's projects, favorites first, and a project's sub-projects
+ * from these rows and judge one project for navigation
+ * (model/projectNavReads.ts). */
 
 import type { GenericDocument, WithoutSystemFields } from 'convex/server'
 import { getDocumentSize } from 'convex/values'
