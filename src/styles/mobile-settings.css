@@ -40,6 +40,27 @@
   }
 }
 
+/* A label's count of active tasks needs about 100px beside its name. A
+   narrower label list (a phone) puts each count on a line under the name
+   instead, so the name keeps its room. */
+[data-org-labels] {
+  container: org-labels / inline-size;
+}
+@container org-labels (max-width: 480px) {
+  [data-label-line] {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: 0;
+  }
+  /* under the name, where the name's text starts */
+  [data-label-line] > [data-label-count] {
+    grid-column: 2;
+    grid-row: 2;
+    padding-left: 7px;
+    text-align: left;
+  }
+}
+
 @media (max-width: 760px) {
   .settings-shell {
     grid-template-rows: auto minmax(0, 1fr);

@@ -154,7 +154,7 @@ function LabelRow({
       data-label-waiting={held ? undefined : ''}
       className="[display:flex] [flex-direction:column] [padding:8px] [border-radius:var(--r-md)] [border:1px_solid_var(--border)] [background:var(--surface-1)]"
     >
-      <div className="[display:flex] [align-items:center] [gap:8px]">
+      <div data-label-line="" className="[display:flex] [align-items:center] [gap:8px]">
         <Popover
           width={208}
           wrapStyle={{ display: 'flex', flexShrink: 0 }}
