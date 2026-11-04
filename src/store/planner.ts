@@ -532,9 +532,10 @@ const sectionFailure: Record<SectionSide, CommentsFailure> = {
 /* The watched task's own answer (sectionAnswers.task) with the detail part
    of every live layer painted over it (store/layers.ts View detail), as
    the window, its Subtasks and the caps read it (paintedAnswer): `from` is
-   the anchor it was painted from, `task` the painted copy, null while the
-   watched task has no ok answer. At most one task's answer, so at most
-   TASK_WINDOW.rows subtask rows a repaint copies. */
+   the anchor it was painted from, `task` the painted copy, or the anchor
+   itself while no layer paints it, null while the watched task has no ok
+   answer. At most one task's answer, so at most TASK_WINDOW.rows subtask
+   rows a repaint copies while a write on it waits. */
 let detailRows: { from: TaskOk | null; task: TaskOk | null } = { from: null, task: null }
 
 /* The sections' side queries (store/liveParts.ts SIDE_NAMES). */
@@ -1202,15 +1203,18 @@ function okAnswer(): TaskOk | null {
 
 /* Builds the watched task's painted answer again: a copy of its anchor
    with every live layer's detail part of the task painted over it, in the
-   order a repaint applies them (layers.ordered). */
+   order a repaint applies them (layers.ordered), or the anchor itself,
+   which nothing changes, while no live layer paints the task's answer. */
 function paintDetail() {
   const from = okAnswer()
-  detailRows = { from, task: from && structuredClone(from) }
-  if (!detailRows.task) return
-  for (const layer of layers.ordered()) {
-    const own = layer.view.detail
-    if (own && own.task === watchedComments) guarded(own.paint)
-  }
+  const own = from
+    ? layers.ordered().flatMap((layer) => {
+        const part = layer.view.detail
+        return part && part.task === watchedComments ? [part] : []
+      })
+    : []
+  detailRows = { from, task: from && own.length ? structuredClone(from) : from }
+  for (const part of own) guarded(part.paint)
 }
 
 /* The watched task's own answer as the window shows it, painted
@@ -2919,8 +2923,10 @@ function showPaint(view: View) {
     thread?.paint()
     view.view?.()
   })
+  // over the painted answer as it shows, or with every layer again when its
+  // anchor changed or it is the anchor itself, which no paint may change
   if (detail) {
-    if (detailRows.from !== okAnswer()) paintDetail()
+    if (detailRows.from !== okAnswer() || detailRows.task === detailRows.from) paintDetail()
     else if (detailRows.task) detail.paint()
   }
   if (view.workspace) {
