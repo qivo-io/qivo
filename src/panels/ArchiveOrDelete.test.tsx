@@ -46,8 +46,10 @@ let root: Root
 let answers: Record<string, () => Promise<null>>
 // the answers to projects.removalSummary, in order; none means it never settles
 let summaries: (() => Promise<ProjectRemovalSummary>)[]
-// the window's read of a task the workspace does not hold
+// the window's read of a task the workspace does not hold, its answers and
+// its failures
 let windowRead: ((value: unknown) => void) | null
+let windowFail: ((error: unknown) => void) | null
 
 function fixture() {
   const next = plannerFixture()
@@ -111,12 +113,16 @@ async function load() {
       : Promise.resolve(null),
   )
   windowRead = null
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  windowFail = null
+  network.onUpdate.mockImplementation((ref, _args, next, fail) => {
     if (getFunctionName(ref) === 'workspace:whole') {
       deliver = (snapshot) => next(structuredClone(snapshot))
       deliver(snap)
     }
-    if (getFunctionName(ref) === 'taskWindow:task') windowRead = next
+    if (getFunctionName(ref) === 'taskWindow:task') {
+      windowRead = next
+      windowFail = fail
+    }
     return () => {}
   })
   network.mutation.mockImplementation((ref) => {
@@ -606,6 +612,11 @@ describe('Archive or delete a task the window shows from its own answer', () => 
     P.watchComments('far', snap.orgs[0].id)
     await settle()
     await read(answer())
+    await showFate()
+  }
+  /* Renders the window over the task the task window shows now, as the
+     task window does each time the store changes. */
+  async function showFate() {
     const task = P.taskDetail('far')?.view
     if (!task) throw new Error('the window shows no task from its answer')
     await act(async () =>
@@ -677,6 +688,27 @@ describe('Archive or delete a task the window shows from its own answer', () => 
         args: expect.objectContaining({ subtask_ids: ['far-done', 'far-late'] }),
       },
     ])
+  })
+
+  it('says it waits for the task to be checked once the window’s read fails while it is open, and deletes nothing', async () => {
+    answers['issues:deleteDeep'] = () => Promise.resolve(null)
+    await openFromAnswer()
+    await choose('delete')
+    expect(has('[data-fate-family-unknown]')).toBe(false)
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => {
+      windowFail?.(new Error('Server Error'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    quiet.mockRestore()
+    expect(P.taskDetail('far')?.state).toBe('failed')
+    await showFate()
+    expect(text('[data-fate-family-unknown]')).toBe(
+      'Available once Qivo can check this task for changes.',
+    )
+    await click(button('Delete 2 tasks'))
+    await settle()
+    expect(writes()).toEqual([])
   })
 })
 

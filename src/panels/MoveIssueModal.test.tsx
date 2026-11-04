@@ -36,8 +36,10 @@ let container: HTMLDivElement
 let root: Root
 let ids: Record<'be' | 'fw' | 'fe', string>
 let orgId: string
-/* The window's read of a task the workspace does not hold. */
+/* The window's read of a task the workspace does not hold, its answers
+   and its failures. */
 let windowRead: ((value: unknown) => void) | null
+let windowFail: ((error: unknown) => void) | null
 /* The server's answer to moveCarriesSubtasks, and the arguments it was asked with. */
 let carries: boolean
 let asked: Record<string, unknown>[]
@@ -64,6 +66,7 @@ async function load() {
   ids = { be: be.id, fw: fw.id, fe: fe.id }
   orgId = org
   windowRead = null
+  windowFail = null
   // Pat edits WEB alone
   snap.profiles.push({
     ...snap.profiles[0],
@@ -88,9 +91,12 @@ async function load() {
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  network.onUpdate.mockImplementation((ref, _args, next, fail) => {
     if (getFunctionName(ref) === 'workspace:whole') next(structuredClone(snap))
-    if (getFunctionName(ref) === 'taskWindow:task') windowRead = next
+    if (getFunctionName(ref) === 'taskWindow:task') {
+      windowRead = next
+      windowFail = fail
+    }
     return () => {}
   })
   network.query.mockImplementation((ref, args) => {
@@ -195,6 +201,12 @@ async function openFromAnswer(answer: unknown) {
     windowRead?.(answer)
     await new Promise((resolve) => setTimeout(resolve, 0))
   })
+  await showMove()
+}
+
+/* Renders the Move window over the task the window shows now, as the task
+   window does each time the store changes. */
+async function showMove() {
   const task = P.taskDetail('far')?.view
   if (!task) throw new Error('the window shows no task from its answer')
   await act(async () =>
@@ -234,6 +246,27 @@ describe('the Move window over a task the window shows from its own answer', () 
     await openFromAnswer(farAnswer(false))
     await chooseTarget(ids.be)
     expect(notes()).toEqual(['Not available while Qivo cannot read every subtask of this task.'])
+    const move = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.textContent === 'Move',
+    )
+    expect(move?.disabled).toBe(true)
+  })
+
+  it('says it waits for the task to be checked once the window’s read fails while it is open, and moves nothing', async () => {
+    carries = false
+    await load()
+    await openFromAnswer(farAnswer())
+    await chooseTarget(ids.be)
+    expect(notes()).toEqual([])
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => {
+      windowFail?.(new Error('Server Error'))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    quiet.mockRestore()
+    expect(P.taskDetail('far')?.state).toBe('failed')
+    await showMove()
+    expect(notes()).toEqual(['Available once Qivo can check this task for changes.'])
     const move = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
       (b) => b.textContent === 'Move',
     )

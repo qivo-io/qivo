@@ -778,9 +778,12 @@ export const WAITS_FOR_CHECK = 'Available once Qivo can check this task for chan
 export const FAMILY_UNKNOWN = 'Not available while Qivo cannot read every subtask of this task'
 
 /** Why a task's Move or Archive or delete window cannot act, with no
-    family (P.familyOf): a task the workspace holds waits for every task,
-    one the window shows from its own read for its whole subtask list. */
-const familyWait = (it: IssueVM) => (P.issueById[it.id] ? WAITS_FOR_TASKS : FAMILY_UNKNOWN)
+    family (P.familyOf). A task the workspace holds waits for every task,
+    and one the window shows from its own read waits for that read to be
+    current again (P.answerSaveWaits), else for its whole subtask list, as
+    the task window's menu says (IssueDetail fateTip). */
+const familyWait = (it: IssueVM) =>
+  P.issueById[it.id] ? WAITS_FOR_TASKS : P.answerSaveWaits(it.id) ? WAITS_FOR_CHECK : FAMILY_UNKNOWN
 
 /* ---------- Move issue ----------
    The task is the window's (`task`), the workspace's or one shown from
