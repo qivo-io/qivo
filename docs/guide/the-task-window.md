@@ -181,7 +181,8 @@ at once, once the window has read every subtask of it; while it cannot,
 while Qivo cannot read every subtask of this task**. The **Parent**,
 **Subtasks** and **Linked tasks** buttons wait for the task with
 **Available once this task has loaded**. With **Read-only project access**
-nothing but your own comments changes. Anyone who can see the task can
+you cannot change it or comment on it, but you can still edit or delete
+your own comments. Anyone who can see the task can
 follow it and open **Subscribers**, and plan it on the roadmap, which opens
 once every task has loaded and then highlights it, unless you have left the
 roadmap meanwhile. When the task arrives, the window shows it from
