@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HISTORY_PAGE_MAX, WINDOW_HISTORY_PAGE } from '../convex/lib/activityVisibility'
+import { LIMITS } from '../convex/lib/limits'
 import { CURSOR_REFUSAL, offsetRefusal } from '../convex/lib/listCursor'
 import { FOCUS_STATUSES } from '../convex/lib/viewReads'
 import {
@@ -28,6 +29,7 @@ import {
   pace,
   parseArgs,
   RATE_BUDGET,
+  REGROUP_WAIT,
   REST_BODY_FIELDS,
   rateLimitWait,
   redact,
@@ -40,8 +42,11 @@ import {
   THREAD_PAGE,
   taskPages,
   WAITS,
+  WORKLOAD_PAGE,
+  WORKLOAD_REFUSALS,
   WRITE_CONFLICT,
   weekOf,
+  workloadPeople,
 } from './staging-check.mjs'
 
 describe('staging check REST contract', () => {
@@ -114,6 +119,21 @@ describe('staging check REST contract', () => {
       activeOffset: offsetRefusal('active tasks'),
       cursor: CURSOR_REFUSAL,
     })
+  })
+  it("expects the server's sentences for a workload page's offset, limit and cursor", () => {
+    expect(WORKLOAD_REFUSALS).toEqual({
+      offset: offsetRefusal('workload'),
+      limit: LIMITS.listWorkload.refusal,
+      cursor: CURSOR_REFUSAL,
+    })
+    // pages small enough to follow a cursor, within the server's range
+    for (const limit of Object.values(WORKLOAD_PAGE)) {
+      expect(limit).toBeGreaterThanOrEqual(LIMITS.listWorkload.min)
+      expect(limit).toBeLessThan(10)
+    }
+    expect(WORKLOAD_PAGE.rest).toBeGreaterThanOrEqual(2)
+    // a regroup's steps run in moments; the wait outlasts a busy deployment's
+    expect(REGROUP_WAIT).toBe(30_000)
   })
 })
 
@@ -601,5 +621,23 @@ describe('task list pages', () => {
     await expect(taskPages(endless, 'the list')).rejects.toThrow(
       `the list still had a next_cursor after ${TASK_PAGES_MAX} pages`,
     )
+  })
+  it('reads the workload’s people page by page, and refuses the array it answered before', async () => {
+    const pages = [
+      { next_cursor: 'p1', week_starts: [], people: [{ id: 'a' }] },
+      { next_cursor: 'p2', week_starts: [], people: [] },
+      { next_cursor: null, week_starts: [], people: [{ id: 'b' }] },
+    ]
+    const cursors = []
+    let at = 0
+    const read = async (cursor) => {
+      cursors.push(cursor)
+      return pages[at++]
+    }
+    expect((await workloadPeople(read, 'the workload')).map((p) => p.id)).toEqual(['a', 'b'])
+    expect(cursors).toEqual([null, 'p1', 'p2'])
+    await expect(
+      workloadPeople(async () => ({ week_starts: [], project: null, people: [] }), 'the workload'),
+    ).rejects.toThrow('the workload answered no {next_cursor, people} page')
   })
 })
